@@ -105,7 +105,7 @@ class PeerIdentity(
      * second derivation site the seam exists to prevent. This is not an
      * admission path; it is a process loading its own key.
      */
-    val peerId: PeerId = when (val resolution = PeerIdentityBinding.Interim.resolve(keyId)) {
+    val peerId: PeerId = when (val resolution = PeerIdentityBinding.Interim.resolve(keyId, emptyList())) {
         is IdentityResolution.Bound -> resolution.peer
         is IdentityResolution.Unbound -> error(
             "PeerIdentityBinding.Interim resolved this key to no identity (${resolution.reason}); " +

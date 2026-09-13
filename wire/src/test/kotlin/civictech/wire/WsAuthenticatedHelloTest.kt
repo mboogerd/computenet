@@ -177,10 +177,10 @@ class WsAuthenticatedHelloTest {
             // fingerprint of the presented key to — `.peer` is a PeerId and
             // `fingerprint` now returns a KeyId, so the two are compared where
             // the transport actually joins them ...
-            client.side.identityBinding.resolve(fingerprint(server.identity.publicKey)) shouldBe
-                IdentityResolution.Bound(requireNotNull(client.registry.remote(collector.ref).peer))
-            server.side.identityBinding.resolve(fingerprint(client.identity.publicKey)) shouldBe
-                IdentityResolution.Bound(requireNotNull(server.registry.remote(writer.ref).peer))
+            client.side.identityBinding.resolve(fingerprint(server.identity.publicKey), emptyList()) shouldBe
+                IdentityResolution.Bound(requireNotNull(client.registry.remote(collector.ref).peer), null, null)
+            server.side.identityBinding.resolve(fingerprint(client.identity.publicKey), emptyList()) shouldBe
+                IdentityResolution.Bound(requireNotNull(server.registry.remote(writer.ref).peer), null, null)
             // ... reached independently as the id each key store minted ...
             client.registry.remote(collector.ref).peer shouldBe server.identity.peerId
             server.registry.remote(writer.ref).peer shouldBe client.identity.peerId
@@ -416,8 +416,8 @@ class WsAuthenticatedHelloTest {
      * every other key — the smallest partial binding. No binding in production
      * behaves like this today; it exists to reach the refusal arm.
      */
-    private fun bindingWithoutIdentityFor(unbound: KeyId) = PeerIdentityBinding { key ->
-        if (key == unbound) IdentityResolution.Unbound(UnboundReason.NO_BINDING) else PeerIdentityBinding.Interim.resolve(key)
+    private fun bindingWithoutIdentityFor(unbound: KeyId) = PeerIdentityBinding { key, presented ->
+        if (key == unbound) IdentityResolution.Unbound(UnboundReason.NO_BINDING) else PeerIdentityBinding.Interim.resolve(key, presented)
     }
 
     /**

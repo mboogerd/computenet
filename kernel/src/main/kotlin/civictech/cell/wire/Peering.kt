@@ -8,6 +8,8 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IdentityStatement
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
@@ -305,7 +307,9 @@ const val DEFAULT_NONCE_RETENTION_MILLIS: Long = 600_000
  * exchanged is already known to be genuine and the only question left is
  * whether it is *present*. A direction whose sender and receiver both hold
  * [Peering.Side.credentials], and whose sender's [Peering.Side.peer] is the
- * fingerprint its own key derives, therefore stamps
+ * identity the *receiver's* binding resolves the sender's key to (under
+ * `PeerIdentityBinding.Interim`, the fingerprint that key derives; feature
+ * `computenet-5y8t.1`, decision D9), therefore stamps
  * `civictech.cell.link.AuthLevel.Authenticated` — the same principal a socket
  * peering with the same configuration yields. Every other loopback direction
  * stamps `TransportVouched`, exactly as before this feature.
@@ -394,6 +398,18 @@ interface PeerCredentials {
 
     /** A signature over exactly [message]; no framing, prefixing or hashing is added here. */
     fun sign(message: ByteArray): ByteArray
+
+    /**
+     * This side's **own evidence** for its name: the
+     * [civictech.cell.link.IdentityStatement]s it presents to a peer's
+     * [civictech.cell.link.PeerIdentityBinding] (feature `computenet-5y8t.1`).
+     * A list, because a peer may hold statements from several issuers.
+     *
+     * Defaults to empty, so every implementation that predates statements is
+     * unchanged; under [civictech.cell.link.PeerIdentityBinding.Interim] the
+     * list is ignored either way.
+     */
+    val statements: List<IdentityStatement> get() = emptyList()
 }
 
 /**
@@ -556,7 +572,9 @@ object Peering {
          * The resolution is partial (task `computenet-hbqvz`): every consumer
          * handles `IdentityResolution.Unbound` explicitly — the transports'
          * hello admission refuses the connection, [loopbackAuthLevel] does
-         * not promote — and none substitutes a name built from the key.
+         * not promote — and none substitutes a name built from the key. On
+         * both paths it is the **receiving** side's binding that resolves the
+         * peer's presented key (feature `computenet-5y8t.1`, decision D9).
          *
          * It is last in the constructor so every existing positional and
          * named `Side(...)` construction compiles unchanged.
@@ -811,12 +829,17 @@ object Peering {
      * - the sender holds [Side.credentials] — on a socket this is what lets it
      *   answer with a `PROOF`; without a keypair there is no `PROOF` row to
      *   reach;
-     * - the sender's [Side.peer] **is** the identity its own key resolves to
-     *   (`sender.identityBinding.resolve(credentials.keyId)` is
-     *   `IdentityResolution.Bound` to it) — the
-     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A key the
-     *   binding resolves to `IdentityResolution.Unbound` backs no name at all
-     *   and is never promoted (task `computenet-hbqvz`). A side
+     * - the sender's [Side.peer] **is** the identity its key resolves to on
+     *   the **relying** side — the sender presents, the receiver resolves:
+     *   `receiver.identityBinding.resolve(sender.credentials.keyId,
+     *   sender.credentials.statements)` is `IdentityResolution.Bound` to it
+     *   (feature `computenet-5y8t.1`, decision D9; task `computenet-5y8t.1.3`).
+     *   That is the socket's `[DSC1-HELLO-06]` derive-and-compare, as data,
+     *   and it is the socket's *admitting* side's binding that does it, so a
+     *   relying peer applies its own policy about which issuers it accepts.
+     *   The sender's own [Side.identityBinding] is not read here. A key the
+     *   receiver's binding resolves to `IdentityResolution.Unbound` backs no
+     *   name at all and is never promoted (task `computenet-hbqvz`). A side
      *   announcing itself under a name its key does
      *   not derive is exactly the `ID_MISMATCH` the socket refuses, and the
      *   name is what gets stamped on every delivery, so promoting it would
@@ -834,18 +857,47 @@ object Peering {
      * [PeerAuthPolicy]'s KDoc). A `RequireAuthenticated` loopback side is
      * neither promoted nor refused by this function; what decides is whether
      * the material a hello would have used is present on both sides.
+     *
+     * The issuer half of the verdict lives in [loopbackAdmission]; this is its
+     * level alone.
      */
-    internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel {
-        val senderKeys = sender.credentials ?: return AuthLevel.TransportVouched
-        if (receiver.credentials == null) return AuthLevel.TransportVouched
-        if (sender.peer == null) return AuthLevel.TransportVouched
-        // A sender whose own key resolves to no identity has no name its key
-        // backs, so there is nothing to promote — the same verdict as a name its
-        // key does not derive (task `computenet-hbqvz`). Never a fallback name.
-        return when (val resolution = sender.identityBinding.resolve(senderKeys.keyId)) {
+    internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel =
+        loopbackAdmission(sender, receiver).auth
+
+    /**
+     * A loopback direction's admission verdict: the [auth] level
+     * [loopbackAuthLevel] documents, and the [issuer] that vouched for the
+     * stamped name.
+     *
+     * [issuer] is the receiver's resolution's `IdentityResolution.Bound.issuer`
+     * **exactly when** [auth] is [AuthLevel.Authenticated], and null on every
+     * [AuthLevel.TransportVouched] verdict — a name no key backs has no
+     * vouching issuer (feature `computenet-5y8t.1`, decision D9). Under
+     * [PeerIdentityBinding.Interim] a promoted verdict still carries null,
+     * because a key-derived identity has no issuer.
+     */
+    internal data class LoopbackAdmission(val auth: AuthLevel, val issuer: IssuerId?)
+
+    private val NOT_PROMOTED = LoopbackAdmission(AuthLevel.TransportVouched, issuer = null)
+
+    /** See [loopbackAuthLevel] for the rule and [LoopbackAdmission] for the issuer half. */
+    internal fun loopbackAdmission(sender: Side, receiver: Side): LoopbackAdmission {
+        val senderKeys = sender.credentials ?: return NOT_PROMOTED
+        if (receiver.credentials == null) return NOT_PROMOTED
+        if (sender.peer == null) return NOT_PROMOTED
+        // The RELYING side resolves the sender's presented evidence (5y8t.1-D9),
+        // as the socket's admitting side does. A key that resolves to no
+        // identity has no name it backs, so there is nothing to promote — the
+        // same verdict as a name its key does not derive (task
+        // `computenet-hbqvz`). Never a fallback name.
+        return when (val resolution = receiver.identityBinding.resolve(senderKeys.keyId, senderKeys.statements)) {
             is IdentityResolution.Bound ->
-                if (sender.peer == resolution.peer) AuthLevel.Authenticated else AuthLevel.TransportVouched
-            is IdentityResolution.Unbound -> AuthLevel.TransportVouched
+                if (sender.peer == resolution.peer) {
+                    LoopbackAdmission(AuthLevel.Authenticated, resolution.issuer)
+                } else {
+                    NOT_PROMOTED
+                }
+            is IdentityResolution.Unbound -> NOT_PROMOTED
         }
     }
 
@@ -923,8 +975,8 @@ object Peering {
         // the socket path gets from binding the level at its admission row
         // ([DSC1-HELLO-13]): no delivery can observe a level that later
         // changes, because a `Side`'s configuration is read once, now.
-        val aToBLevel = loopbackAuthLevel(sender = a, receiver = b)
-        val bToALevel = loopbackAuthLevel(sender = b, receiver = a)
+        val aToBAdmission = loopbackAdmission(sender = a, receiver = b)
+        val bToAAdmission = loopbackAdmission(sender = b, receiver = a)
         // Each direction's egress borrows its *sending* side's signer, so a
         // loopback with keypairs signs its announcements with no socket
         // involved ([DSC1-WIRE-05]); a side without one is unchanged.
@@ -936,7 +988,8 @@ object Peering {
                         hostIngress(
                             b,
                             fromPeer = a.peer,
-                            fromPeerAuth = aToBLevel,
+                            fromPeerAuth = aToBAdmission.auth,
+                            fromPeerIssuer = aToBAdmission.issuer,
                             fromKey = a.presentedKeyId,
                             onSpawn = { ingressOnB = it },
                         ),
@@ -953,7 +1006,8 @@ object Peering {
                         hostIngress(
                             a,
                             fromPeer = b.peer,
-                            fromPeerAuth = bToALevel,
+                            fromPeerAuth = bToAAdmission.auth,
+                            fromPeerIssuer = bToAAdmission.issuer,
                             fromKey = b.presentedKeyId,
                             onSpawn = { ingressOnA = it },
                         ),
@@ -980,11 +1034,21 @@ object Peering {
      * [BridgeIngressCell.peerAuth]. It defaults to
      * [AuthLevel.TransportVouched], so a caller that never mentions
      * authentication gets exactly today's principals (`[DSC1-WIRE-06]`).
+     *
+     * [fromPeerIssuer] is who vouched for [fromPeer] on this connection
+     * (feature `computenet-5y8t.1`, decision D5/D12) — bound once, by the
+     * caller, the same way [fromPeerAuth] is; see [BridgeIngressCell.peerIssuer].
+     * Defaults to null, so a caller that never mentions an issuer gets
+     * exactly today's principals. [loopback] passes its admission verdict's
+     * issuer (task `computenet-5y8t.1.3`); the socket and iroh transports pass
+     * their hello admission's `IdentityResolution.Bound.issuer` on an
+     * `Authenticated` admission only (task `computenet-5y8t.1.4`).
      */
     fun hostIngress(
         side: Side,
         fromPeer: PeerId? = null,
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
+        fromPeerIssuer: IssuerId? = null,
         /**
          * The key identifier [side]'s allowlist judges this connection on
          * (feature `computenet-376c`). [fromPeer] is what gets *stamped*;
@@ -1010,6 +1074,7 @@ object Peering {
             InvocationSink(side.registry::deliver),
             peer = fromPeer,
             peerAuth = fromPeerAuth,
+            peerIssuer = fromPeerIssuer,
             peerKey = fromKey,
             admit = side::admits,
             // Borrowed from the Side, so every ingress this side ever hosts —

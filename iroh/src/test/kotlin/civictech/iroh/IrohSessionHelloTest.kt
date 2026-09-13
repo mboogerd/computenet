@@ -1,19 +1,38 @@
 package civictech.iroh
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
 import civictech.cell.DenialReason
+import civictech.cell.Propagate
+import civictech.cell.control.Attention
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.link.UnboundReason
+import civictech.cell.membrane.AuthLevel
+import civictech.cell.membrane.Principal
+import civictech.cell.membrane.currentPrincipal
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.registerPort
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.cell.wire.PortAddress
+import civictech.cell.wire.WireCodec
+import civictech.cell.wire.WireEdgeLink
 import civictech.identity.Ed25519
 import civictech.identity.fingerprint
 import org.junit.jupiter.api.Test
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -230,7 +249,7 @@ class IrohSessionHelloTest {
 
     @Test
     fun `the stamped and denied identity comes from the side's binding, never from the key itself`() {
-        val aliasing = PeerIdentityBinding { key -> IdentityResolution.Bound(PeerId("alias-of-" + key.name)) }
+        val aliasing = PeerIdentityBinding { key, _ -> IdentityResolution.Bound(PeerId("alias-of-" + key.name), null, null) }
         val remote = nodeId()
         val expected = PeerId("alias-of-" + keyOf(remote).name)
 
@@ -291,11 +310,11 @@ class IrohSessionHelloTest {
     @Test
     fun `a link whose key the binding holds no identity for is refused, and nothing stands in for the identity`() {
         val remote = nodeId()
-        val unbound = PeerIdentityBinding { key ->
+        val unbound = PeerIdentityBinding { key, presented ->
             if (key == keyOf(remote)) {
                 IdentityResolution.Unbound(UnboundReason.NO_BINDING)
             } else {
-                PeerIdentityBinding.Interim.resolve(key)
+                PeerIdentityBinding.Interim.resolve(key, presented)
             }
         }
 
@@ -327,6 +346,79 @@ class IrohSessionHelloTest {
         assertFalse(session.peered, "no ingress on a refused hello")
         assertEquals(null, session.mirrorRef, "a refused peer costs this side no mirror")
         assertTrue(sent.isEmpty(), "nothing is written to a refused link")
+    }
+
+    /** Records the ambient [Principal] of every attention assertion it is handed. */
+    private class PrincipalProbeCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val principals = CopyOnWriteArrayList<Principal>()
+
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<String>>())
+
+        init {
+            ProtocolSupport.of(outlet).handle(Protocols.Attention) { _, _ ->
+                principals += currentPrincipal()
+            }
+        }
+    }
+
+    /**
+     * Feature `computenet-5y8t.1`, this transport's half of the issuer rule:
+     * every iroh admission is `Authenticated` (the NodeId IS the proven key), so
+     * a delivery on an admitted link carries the issuer of the resolution its
+     * hello admission made. Attribution only — nothing here speaks to a stolen
+     * key or revocation (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
+     *
+     * Driven at Session level: a frame after an admitted hello goes straight to
+     * the installed ingress, which decodes and stamps it on the side's
+     * `bridgeHost` exactly as a sidecar-delivered frame would be.
+     */
+    @Test
+    fun `a delivery on an admitted link carries the issuer the hello admission resolved`() {
+        val issuerNaming = PeerIdentityBinding { k, _ ->
+            IdentityResolution.Bound(PeerId("issued-" + k.name), IssuerId("test-issuer"), null)
+        }
+        val remote = nodeId()
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry)
+        val local = Peering.Side(registry, host, peer = PeerId("local"), identityBinding = issuerNaming)
+        val probe = PrincipalProbeCell()
+        host.managementInlet.call.spawn(probe)
+
+        val session = IrohTransport.Session(
+            local,
+            remote,
+            send = { },
+            refuse = { throw AssertionError("an open side must admit a valid key") },
+        )
+        session.onData(hello())
+        assertTrue(session.peered)
+
+        val frame = HostedPortInvocation(
+            cellRef = probe.ref,
+            portName = "outlet",
+            type = HostedPortInvocation.Type.PORT_PROTOCOL,
+            invocation = Invocation("", emptyList(), emptyList()),
+            protocolId = Protocols.Attention,
+            protocolLink = WireEdgeLink(
+                id = UUID.randomUUID(),
+                from = PortRef.generate(),
+                to = PortRef.generate(probe.ref),
+                fromAddr = PortAddress(CellRef(UUID.randomUUID()), "inlet"),
+                toAddr = PortAddress(probe.ref, "outlet"),
+            ),
+            protocolMessage = Attention(1f),
+        )
+        session.onData(WireCodec.encode(frame))
+
+        val deadline = System.currentTimeMillis() + 30_000
+        while (probe.principals.isEmpty()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionError("timed out awaiting the delivery")
+            Thread.sleep(50)
+        }
+        assertEquals(
+            Principal.Peer(PeerId("issued-" + keyOf(remote).name), AuthLevel.Authenticated, IssuerId("test-issuer")),
+            probe.principals.last(),
+        )
     }
 
     @Test
@@ -387,7 +479,7 @@ class IrohSessionHelloTest {
  * expected value. Fails loudly on `Unbound` rather than substituting anything.
  */
 private fun PeerIdentityBinding.boundPeer(key: KeyId): PeerId =
-    when (val resolution = resolve(key)) {
+    when (val resolution = resolve(key, emptyList())) {
         is IdentityResolution.Bound -> resolution.peer
         is IdentityResolution.Unbound -> throw AssertionError("expected $key to be bound, got $resolution")
     }

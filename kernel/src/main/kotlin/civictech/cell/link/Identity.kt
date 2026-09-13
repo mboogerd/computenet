@@ -102,8 +102,16 @@ fun interface PeerIdentityBinding {
      * The durable identity of the peer that key [key] belongs to —
      * [IdentityResolution.Bound] — or [IdentityResolution.Unbound] when this
      * binding holds no identity for [key].
+     *
+     * [presented] is the evidence the key's holder presented for a name: the
+     * [IdentityStatement]s it carries (feature `computenet-5y8t.1`). It has
+     * **no default** on purpose — every caller states the evidence it holds,
+     * even when that is `emptyList()`, so a site that could forward statements
+     * and does not is visible at the call rather than hidden behind a default.
+     * A binding is free to ignore the list ([Interim] does); a binding that
+     * vouches names from statements reads it.
      */
-    fun resolve(key: KeyId): IdentityResolution
+    fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution
 
     companion object {
         /**
@@ -133,8 +141,14 @@ fun interface PeerIdentityBinding {
          * [IdentityResolution.Bound] and never answers
          * [IdentityResolution.Unbound], so no verdict anywhere changes before a
          * partial binding is injected.
+         *
+         * **Ignores `presented`** (feature `computenet-5y8t.1`): a statement
+         * naming some other peer or issuer changes nothing, and the result is
+         * always key-derived — `issuer` and `statement` are null.
          */
-        val Interim: PeerIdentityBinding = PeerIdentityBinding { IdentityResolution.Bound(PeerId(it.name)) }
+        val Interim: PeerIdentityBinding = PeerIdentityBinding { key, _ ->
+            IdentityResolution.Bound(PeerId(key.name), issuer = null, statement = null)
+        }
     }
 }
 
@@ -150,8 +164,22 @@ fun interface PeerIdentityBinding {
  * matching — the `civictech.wire.HelloMalformation` precedent.
  */
 sealed interface IdentityResolution {
-    /** [key][PeerIdentityBinding.resolve]'s durable identity is [peer]. */
-    data class Bound(val peer: PeerId) : IdentityResolution
+    /**
+     * [key][PeerIdentityBinding.resolve]'s durable identity is [peer], vouched
+     * for by [issuer] on the strength of [statement].
+     *
+     * **No defaults** (feature `computenet-5y8t.1`, decision D8): every
+     * producer says who vouched. [issuer] is null **exactly when the identity
+     * is key-derived** — [PeerIdentityBinding.Interim]'s answer — and non-null
+     * when a named issuer vouched for it; [statement] is the presented
+     * [IdentityStatement] the resolution rests on, or null when it rests on
+     * none.
+     */
+    data class Bound(
+        val peer: PeerId,
+        val issuer: IssuerId?,
+        val statement: IdentityStatement?,
+    ) : IdentityResolution
 
     /**
      * The binding holds **no identity** for the key. A caller must not invent
@@ -165,17 +193,88 @@ sealed interface IdentityResolution {
  * Why a key identifier resolved to no identity — the machine-readable half of
  * [IdentityResolution.Unbound].
  *
- * Deliberately one constant today: this task lands the refusal *arm*, and no
- * binding in the tree can yet produce it ([PeerIdentityBinding.Interim] is
- * total). The finer reasons a verifying binding distinguishes — no presented
- * statement, an unaccepted issuer, a bad signature, an expired window — belong
- * to the features that build that binding (`computenet-5y8t.1` onward) and are
- * added there, beside this one, rather than guessed at here.
+ * No production binding in the tree produces any of these today
+ * ([PeerIdentityBinding.Interim] is total); the kernel's only producer of
+ * [IdentityResolution.Unbound] is test code. The verifying binding that
+ * produces the finer reasons is built by feature `computenet-5y8t.2` (DSC4's
+ * anchor-signed statements).
+ *
+ * **Append new reasons; never reorder** (feature `computenet-5y8t.1`,
+ * decisions D4/D11). Nothing persists or transmits the ordinal, but the
+ * `AuthLevel` discipline is kept so that it never has to become a
+ * compatibility rule; `IdentityResolutionTest` pins the exact entries list.
  */
 enum class UnboundReason {
     /** The binding holds no identity for this key identifier. */
     NO_BINDING,
+
+    /** No [IdentityStatement] was presented for this key identifier. */
+    NO_STATEMENT,
+
+    /** A statement was presented, but its [IdentityStatement.issuer] is not one this binding accepts. */
+    ISSUER_NOT_ACCEPTED,
+
+    /** A statement from an accepted issuer was presented, but its signature does not verify. */
+    BAD_SIGNATURE,
+
+    /** A verified statement was presented, but it binds a different [KeyId] than the one resolved. */
+    KEY_MISMATCH,
+
+    /** The statement's validity window ended before the moment of resolution. */
+    EXPIRED,
+
+    /** The statement's validity window had not yet begun at the moment of resolution. */
+    NOT_YET_VALID,
 }
+
+/**
+ * **Who vouched** for a peer's name — the issuer an [IdentityResolution.Bound]
+ * is attributed to (feature `computenet-5y8t.1`).
+ *
+ * An opaque name to the kernel. Under DSC4's anchor binding it is the anchor
+ * public key's fingerprint (epic `computenet-5y8t`, decision D3); the kernel
+ * does not know that and draws nothing from it.
+ *
+ * Deliberately carries **no serialization annotation**: no wire frame,
+ * journal record or serializer carries an `IssuerId`.
+ */
+data class IssuerId(val name: String)
+
+/**
+ * The kernel-side **shape** of an issuer-signed binding of [name] to [keyId]
+ * (feature `computenet-5y8t.1`, decision D2) — kernel DATA like
+ * `civictech.cell.membrane.SignedDelta`: fields only.
+ *
+ * What this type deliberately does **not** have: canonical signed bytes, a
+ * verify step, or any cryptography. The bytes that are signed have one
+ * definition, in `:identity`, which the kernel does not depend on; this type
+ * only carries a statement from the peer that presents it to the binding that
+ * judges it. Nothing in the kernel checks [signature].
+ *
+ * [issuance], [notBefore] and [notAfter] are present from the first version of
+ * the format (epic `computenet-5y8t`, decision D4) so that a later
+ * supersession or revocation item never has to break it. **Nothing compares
+ * them today** (decision D3): carrying a validity window is not enforcing one,
+ * and this type claims nothing about stolen-key resistance or revocation —
+ * `[DSC1-NV-01]` remains EXPLICITLY UNVERIFIED.
+ *
+ * **Equality** is the data-class default over a [ByteArray] field (decision
+ * D13, the `SignedDelta` precedent): two instances with equal-content but
+ * distinct signature arrays are NOT equal. Compare instances you hold, never
+ * separately built copies.
+ *
+ * Deliberately carries **no serialization annotation**: no wire frame,
+ * journal record or serializer carries an `IdentityStatement` from the kernel.
+ */
+data class IdentityStatement(
+    val name: PeerId,
+    val keyId: KeyId,
+    val issuer: IssuerId,
+    val issuance: Long,
+    val notBefore: Long,
+    val notAfter: Long,
+    val signature: ByteArray,
+)
 
 /**
  * How strongly a peer's [PeerId] is vouched for (spec 40/43, DSC1
@@ -243,8 +342,17 @@ enum class AuthLevel { TransportVouched, Authenticated }
  * *from*, which outlives any particular key. The admitting side judges the
  * connection on its [KeyId] and stamps the [PeerId] it resolved through its
  * [PeerIdentityBinding]; a `KeyId` never reaches this slot.
+ *
+ * [issuer] rides the same stamp as [id] and [auth] — one stamp, not two
+ * ambients (DSC1 §3 seam 3; feature `computenet-5y8t.1`, decision D5/D12): it
+ * is bound once, by the caller, at the admission decision, and is never
+ * derived per message or read off a frame. It is null exactly when the
+ * identity is key-derived ([PeerIdentityBinding.Interim]) or the crossing is
+ * not [AuthLevel.Authenticated]. Like [AuthLevel] itself, it is not
+ * `@Serializable`: no wire frame, journal record or serializer carries an
+ * [IssuerId] (audited alongside the [AuthLevel] KDoc's audit note).
  */
-data class PeerStamp(val id: PeerId, val auth: AuthLevel = AuthLevel.TransportVouched)
+data class PeerStamp(val id: PeerId, val auth: AuthLevel = AuthLevel.TransportVouched, val issuer: IssuerId? = null)
 
 /**
  * Ambient identity of the delivery being executed (set by the host around
@@ -266,12 +374,13 @@ object CurrentPeer {
     fun stamp(): PeerStamp? = local.get()
 
     /**
-     * Run [block] under the stamp `(peer, auth)`. [auth] defaults to
-     * [AuthLevel.TransportVouched], so every pre-DSC1 call site — and every
-     * `with(null) { ... }` reset — keeps its exact previous meaning.
+     * Run [block] under the stamp `(peer, auth, issuer)`. [auth] defaults to
+     * [AuthLevel.TransportVouched] and [issuer] defaults to null, so every
+     * pre-DSC1 call site — and every `with(null) { ... }` reset — keeps its
+     * exact previous meaning.
      */
-    fun <R> with(peer: PeerId?, auth: AuthLevel = AuthLevel.TransportVouched, block: () -> R): R =
-        withStamp(peer?.let { PeerStamp(it, auth) }, block)
+    fun <R> with(peer: PeerId?, auth: AuthLevel = AuthLevel.TransportVouched, issuer: IssuerId? = null, block: () -> R): R =
+        withStamp(peer?.let { PeerStamp(it, auth, issuer) }, block)
 
     /**
      * [with] by whole stamp. A distinct name rather than an overload on

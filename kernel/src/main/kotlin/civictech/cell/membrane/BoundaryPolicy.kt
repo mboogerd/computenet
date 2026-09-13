@@ -2,6 +2,7 @@ package civictech.cell.membrane
 
 import civictech.cell.control.AttentionBand
 import civictech.cell.link.CurrentPeer
+import civictech.cell.link.IssuerId
 import civictech.cell.link.LinkPolicy
 import civictech.cell.link.PeerId
 import civictech.cell.protocol.ProtocolId
@@ -19,10 +20,16 @@ import civictech.cell.protocol.ProtocolId
  * resolved through its `civictech.cell.link.PeerIdentityBinding`, not the
  * `civictech.cell.link.KeyId` admission judged. Admission consumes the key
  * identifier; attribution consumes this.
+ *
+ * [Peer.issuer] carries who vouched for [Peer.id] on this crossing (feature
+ * `computenet-5y8t.1`, decision D5/D12) — null exactly when the identity is
+ * key-derived or the crossing is not [AuthLevel.Authenticated]. It rides the
+ * same stamp as [Peer.id] and [Peer.auth]; see
+ * `civictech.cell.link.PeerStamp.issuer`.
  */
 sealed interface Principal {
     data object LocalTrusted : Principal
-    data class Peer(val id: PeerId, val auth: AuthLevel) : Principal
+    data class Peer(val id: PeerId, val auth: AuthLevel, val issuer: IssuerId? = null) : Principal
 }
 
 /**
@@ -61,7 +68,7 @@ typealias AuthLevel = civictech.cell.link.AuthLevel
  * `civictech.cell.link.KeyId` it admitted on (feature `computenet-376c`).
  */
 fun currentPrincipal(): Principal =
-    CurrentPeer.stamp()?.let { Principal.Peer(it.id, it.auth) } ?: Principal.LocalTrusted
+    CurrentPeer.stamp()?.let { Principal.Peer(it.id, it.auth, it.issuer) } ?: Principal.LocalTrusted
 
 /**
  * Per-[ProtocolId] flow-time authority (spec 40/43 seam 3): a floor on
