@@ -306,17 +306,11 @@ class WorkspaceMirror private constructor(
                 checkpoint = checkpoint,
                 interval = pollInterval,
                 // Re-read the handle per batch: a re-baseline earlier in this
-                // very tick may have replaced the projector. Write-back's
-                // applyOnce runs SECOND, on the same poll-thread tick,
-                // immediately after applyAll — never before it, so an
-                // imposition always plans against this batch's own records,
-                // and never as a separate scheduling path (task
-                // computenet-6wc.1.5; see [writeBackApplier]'s KDoc for the
-                // one-writer consequence this composition carries).
+                // very tick may have replaced the projector.
                 // Write-back's applyOnce does NOT run here — see
                 // [WriteBackScheduler]'s KDoc for the measured reason a
                 // purely onBatch-driven composition cannot observe a
-                // gossip-only winner change at all.
+                // gossip-only winner change at all (task computenet-6wc.1.5).
                 onBatch = { records -> state.current.applyAll(records) },
                 onCondition = { condition ->
                     when (condition) {
