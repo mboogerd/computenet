@@ -235,8 +235,8 @@ enum class UnboundReason {
  * public key's fingerprint (epic `computenet-5y8t`, decision D3); the kernel
  * does not know that and draws nothing from it.
  *
- * Deliberately **not** `@Serializable`: no wire frame, journal record or
- * serializer carries an `IssuerId`.
+ * Deliberately carries **no serialization annotation**: no wire frame,
+ * journal record or serializer carries an `IssuerId`.
  */
 data class IssuerId(val name: String)
 
@@ -263,8 +263,8 @@ data class IssuerId(val name: String)
  * distinct signature arrays are NOT equal. Compare instances you hold, never
  * separately built copies.
  *
- * Deliberately **not** `@Serializable`: no wire frame, journal record or
- * serializer carries an `IdentityStatement` from the kernel.
+ * Deliberately carries **no serialization annotation**: no wire frame,
+ * journal record or serializer carries an `IdentityStatement` from the kernel.
  */
 data class IdentityStatement(
     val name: PeerId,
