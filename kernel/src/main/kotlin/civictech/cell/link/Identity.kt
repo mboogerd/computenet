@@ -342,8 +342,17 @@ enum class AuthLevel { TransportVouched, Authenticated }
  * *from*, which outlives any particular key. The admitting side judges the
  * connection on its [KeyId] and stamps the [PeerId] it resolved through its
  * [PeerIdentityBinding]; a `KeyId` never reaches this slot.
+ *
+ * [issuer] rides the same stamp as [id] and [auth] — one stamp, not two
+ * ambients (DSC1 §3 seam 3; feature `computenet-5y8t.1`, decision D5/D12): it
+ * is bound once, by the caller, at the admission decision, and is never
+ * derived per message or read off a frame. It is null exactly when the
+ * identity is key-derived ([PeerIdentityBinding.Interim]) or the crossing is
+ * not [AuthLevel.Authenticated]. Like [AuthLevel] itself, it is not
+ * `@Serializable`: no wire frame, journal record or serializer carries an
+ * [IssuerId] (audited alongside the [AuthLevel] KDoc's audit note).
  */
-data class PeerStamp(val id: PeerId, val auth: AuthLevel = AuthLevel.TransportVouched)
+data class PeerStamp(val id: PeerId, val auth: AuthLevel = AuthLevel.TransportVouched, val issuer: IssuerId? = null)
 
 /**
  * Ambient identity of the delivery being executed (set by the host around
@@ -365,12 +374,13 @@ object CurrentPeer {
     fun stamp(): PeerStamp? = local.get()
 
     /**
-     * Run [block] under the stamp `(peer, auth)`. [auth] defaults to
-     * [AuthLevel.TransportVouched], so every pre-DSC1 call site — and every
-     * `with(null) { ... }` reset — keeps its exact previous meaning.
+     * Run [block] under the stamp `(peer, auth, issuer)`. [auth] defaults to
+     * [AuthLevel.TransportVouched] and [issuer] defaults to null, so every
+     * pre-DSC1 call site — and every `with(null) { ... }` reset — keeps its
+     * exact previous meaning.
      */
-    fun <R> with(peer: PeerId?, auth: AuthLevel = AuthLevel.TransportVouched, block: () -> R): R =
-        withStamp(peer?.let { PeerStamp(it, auth) }, block)
+    fun <R> with(peer: PeerId?, auth: AuthLevel = AuthLevel.TransportVouched, issuer: IssuerId? = null, block: () -> R): R =
+        withStamp(peer?.let { PeerStamp(it, auth, issuer) }, block)
 
     /**
      * [with] by whole stamp. A distinct name rather than an overload on

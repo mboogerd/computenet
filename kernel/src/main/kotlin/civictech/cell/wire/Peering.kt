@@ -9,6 +9,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.IdentityResolution
 import civictech.cell.link.IdentityStatement
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
@@ -993,11 +994,19 @@ object Peering {
      * [BridgeIngressCell.peerAuth]. It defaults to
      * [AuthLevel.TransportVouched], so a caller that never mentions
      * authentication gets exactly today's principals (`[DSC1-WIRE-06]`).
+     *
+     * [fromPeerIssuer] is who vouched for [fromPeer] on this connection
+     * (feature `computenet-5y8t.1`, decision D5/D12) — bound once, by the
+     * caller, the same way [fromPeerAuth] is; see [BridgeIngressCell.peerIssuer].
+     * Defaults to null, so a caller that never mentions an issuer gets
+     * exactly today's principals. Neither the loopback nor the transports
+     * pass a non-null value yet (feature computenet-5y8t.1, tasks 3 and 4).
      */
     fun hostIngress(
         side: Side,
         fromPeer: PeerId? = null,
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
+        fromPeerIssuer: IssuerId? = null,
         /**
          * The key identifier [side]'s allowlist judges this connection on
          * (feature `computenet-376c`). [fromPeer] is what gets *stamped*;
@@ -1023,6 +1032,7 @@ object Peering {
             InvocationSink(side.registry::deliver),
             peer = fromPeer,
             peerAuth = fromPeerAuth,
+            peerIssuer = fromPeerIssuer,
             peerKey = fromKey,
             admit = side::admits,
             // Borrowed from the Side, so every ingress this side ever hosts —

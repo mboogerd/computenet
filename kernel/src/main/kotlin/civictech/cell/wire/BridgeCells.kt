@@ -11,6 +11,7 @@ import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanOutlet
@@ -117,6 +118,14 @@ class BridgeIngressCell(
      * (`[DSC1-WIRE-06]`).
      */
     private val peerAuth: AuthLevel = AuthLevel.TransportVouched,
+    /**
+     * Who vouched for [peer] on this connection (feature `computenet-5y8t.1`,
+     * decision D5/D12) — **bound once, by the caller, at the admission
+     * decision**, the same discipline [peerAuth]'s KDoc paragraph states above
+     * and which applies here verbatim. Null exactly when the identity is
+     * key-derived or [peerAuth] is not [AuthLevel.Authenticated].
+     */
+    private val peerIssuer: IssuerId? = null,
     /**
      * The **key identifier** this connection was admitted on, judged by
      * [admit] (feature `computenet-376c`). Null when the connection presented
@@ -408,9 +417,9 @@ class BridgeIngressCell(
                 }
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
-                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth)
+                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth, peerIssuer = peerIssuer)
                 } else {
-                    decoded.copy(peer = peer, peerAuth = peerAuth)
+                    decoded.copy(peer = peer, peerAuth = peerAuth, peerIssuer = peerIssuer)
                 }
                 deliverTo.deliver(withPeer)
             }
