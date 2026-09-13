@@ -310,6 +310,8 @@ class WsAnchorVouchedHelloTest {
         atAnchored.assertRefusedUnbound(DenialReason.UNVOUCHED, UnboundReason.NO_STATEMENT, null, anchored.registry)
 
         val interim = Side(null, PeerIdentityBinding.Interim)
+        val probe = WsPrincipalPromotionTest.PrincipalProbeCell()
+        interim.host.managementInlet.call.spawn(probe)
         val atInterim = Driven(interim)
         atInterim.session.hello()
         atInterim.session.onText("HELLO ${UUID.randomUUID()}")
@@ -317,6 +319,11 @@ class WsAnchorVouchedHelloTest {
         atInterim.refusals shouldBe 0
         atInterim.session.peered shouldBe true
         atInterim.session.achievedAuthLevel shouldBe AuthLevel.TransportVouched
+        // Still ANONYMOUS: the binding's answer for the empty assertion is
+        // never attribution, so no delivery is stamped with a `Principal.Peer`.
+        atInterim.session.onFrame(ByteBuffer.wrap(WireCodec.encode(attention(probe.ref))))
+        await("the delivery on the anonymous connection") { probe.principals.isNotEmpty() }
+        probe.principals.last() shouldBe Principal.LocalTrusted
     }
 
     /** Example 5, the stated break: an Interim side resolves the key-derived name, which the stable claim does not match. */
