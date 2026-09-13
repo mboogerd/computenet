@@ -200,7 +200,7 @@ LANE_CORES = 5
 
 
 RECENT_READ_MINUTES = 6
-# Where the last --capacity reading's timestamp is remembered: $SCRATCH when the
+# Where the last capacity reading's timestamp (--capacity, or a non-empty batch) is remembered: $SCRATCH when the
 # caller exports it, otherwise the per-user temp dir. THE FALLBACK IS THE ACTUAL
 # PATH at every documented call site — SKILL.md 5b/5e and merge-task.md invoke
 # this script bare, and `$SCRATCH` is a shell variable that does not survive
@@ -248,15 +248,28 @@ def recent_capacity_read(now=None, path=None):
             prev = float(fh.read().strip())
     except (OSError, ValueError):
         prev = None
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as fh:
-            fh.write(str(now))
-    except OSError:
-        pass                                # advisory: never take the read down
+    record_capacity_read(now, path)
     if prev is None or now < prev:
         return None
     return (now - prev) / 60.0
+
+
+def record_capacity_read(now=None, path=None):
+    """Remember a capacity read WITHOUT consulting the previous one.
+
+    The batch path's half of the memory (computenet-bydx4). A batch call is one
+    dispatch decision for a whole batch, so reading the memory there would warn
+    about the batch's own agents; but those agents are exactly the committed,
+    not-yet-visible load that the next `--capacity` reader (5e's reviewer
+    dispatch) has to be told about.
+    """
+    path = path or _recent_read_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(str(now if now is not None else time.time()))
+    except OSError:
+        pass                                # advisory: never take the read down
 
 
 def _join(*parts):
@@ -783,6 +796,9 @@ def main():
     cap = capacity_limit(cores, siblings)
     batch, skipped = cap_batch(batch, skipped, cap)
     load1, advice = load_advice(cores, cap)
+    if batch:
+        # ponytail: an empty batch dispatches nothing, so it leaves no lag to warn of
+        record_capacity_read()
 
     verdict, parked = _assess(feature, batch)
     warnings = []
