@@ -181,7 +181,7 @@ class FileAcceptedIssuerStoreTest {
     }
 
     @Test
-    fun `KeyStoreRefusal ends with the three new entries in order`() {
+    fun `KeyStoreRefusal issuer entries stay appended in order right after INCARNATION_EXHAUSTED`() {
         // Appended, contiguous and in order right after the entry that ended the
         // enum before them — without requiring them to stay the enum's tail, so a
         // later append (e.g. computenet-5y8t.3.2's STATEMENTS_*) does not break it.
