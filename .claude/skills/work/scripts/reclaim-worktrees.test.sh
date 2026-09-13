@@ -2,7 +2,7 @@
 # Tests for reclaim-worktrees.sh. Stubs `bd` and builds real git worktrees
 # against a real (local, bare) origin, because the load-bearing guard is
 # "HEAD is on origin" and it cannot be exercised without one.
-# Expect "34 passed, 0 failed".
+# Expect "37 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reclaim-worktrees.sh"}
@@ -163,7 +163,13 @@ mk computenet-deadkid closed; echo DEAD-1 > "$ROOT/holder.computenet-deadkid"
 out=$(run)
 check "DEAD holder falls through to the other guards" "removed $ROOT/computenet-worktrees/computenet-deadkid" "$out"
 gone computenet-deadkid "a DEAD holder must not block reclaim"
-rm -f "$ROOT/holder.computenet-sib" "$ROOT/holder.computenet-feat"
+mk computenet-oddkid closed; echo WEIRD-1 > "$ROOT/holder.computenet-oddkid"
+out=$(run)
+check "unrecognised verdict fails closed" "checker answered <WEIRD>" "$out"
+alive computenet-oddkid "an unrecognised liveness verdict must never remove"
+out=$(RECLAIM_HOLDER_CHECK="$ROOT/bin/absent" run --dry-run); rc=$?
+check "missing liveness checker -> nothing checked" "NOTHING was checked" "$out"
+rm -f "$ROOT/holder.computenet-sib" "$ROOT/holder.computenet-feat" "$ROOT/holder.computenet-oddkid"
 
 # ...and the happy path really does remove, so the guards above are not just
 # refusing everything.

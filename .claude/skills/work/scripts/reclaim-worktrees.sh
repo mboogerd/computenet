@@ -66,8 +66,9 @@
 # Usage: reclaim-worktrees.sh [--dry-run] [--min-age-minutes N]
 # Exit: 0 = nothing stranded, or all reclaimed; 1 = a removal failed, or a
 #       candidate was skipped as dirty, mid-operation, or not provably pushed
-#       (all need a human eye); 2 = bad usage; 3 = a precondition failed (bd
-#       or jq unusable, or origin unreachable) — nothing was checked.
+#       (all need a human eye); 2 = bad usage; 3 = a precondition failed (bd,
+#       jq or session-holder.sh unusable, or origin unreachable) — nothing
+#       was checked.
 #
 # NOT guarded: files matched by .gitignore are invisible to every check here
 # and go with the directory. That is build output by construction; nothing
@@ -88,6 +89,7 @@ command -v jq >/dev/null || { echo "reclaim-worktrees: jq unusable; NOTHING was 
 command -v bd >/dev/null || { echo "reclaim-worktrees: bd unusable; NOTHING was checked" >&2; exit 3; }
 # ponytail: the env override exists only so the test can stub liveness.
 HOLDER_CHECK=${RECLAIM_HOLDER_CHECK:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-holder.sh"}
+[ -x "$HOLDER_CHECK" ] || { echo "reclaim-worktrees: $HOLDER_CHECK unusable; NOTHING was checked" >&2; exit 3; }
 bead_json() { bd show "$1" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p'; }
 
 # One fetch, before the loop: `branch -r --contains` reads REMOTE-TRACKING refs,
@@ -121,13 +123,24 @@ while IFS= read -r line; do
   [ "$status" = "closed" ] || continue
   found=1
 
+  # Fail CLOSED: an unreadable parent or an unrecognised verdict is a SKIP,
+  # because the guards below are all satisfied by a live sibling.
   live=""
   parent=$(jq -r '.[0].parent // ""' <<<"$json" 2>/dev/null)
+  pjson=""; [ -n "$parent" ] && pjson=$(bead_json "$parent")
+  if [ -n "$parent" ] && [ -z "$(jq -r '.[0].id // ""' <<<"$pjson" 2>/dev/null)" ]; then
+    echo "SKIP $id: parent $parent unreadable — holder unprovable, nothing removed" >&2
+    rc=1
+    continue
+  fi
   for h in "$(jq -r '.[0].metadata.holder // ""' <<<"$json" 2>/dev/null)" \
-           "$([ -n "$parent" ] && bead_json "$parent" | jq -r '.[0].metadata.holder // ""' 2>/dev/null)"; do
+           "$(jq -r '.[0].metadata.holder // ""' <<<"$pjson" 2>/dev/null)"; do
     [ -n "$h" ] || continue
-    case "$("$HOLDER_CHECK" --check "$h" 2>/dev/null)" in
-      LIVE|FOREIGN) live=$h; break ;;
+    v=$("$HOLDER_CHECK" --check "$h" 2>/dev/null)
+    case "$v" in
+      LIVE|FOREIGN) live="$h, $v"; break ;;
+      MINE|DEAD|STALE|UNKNOWN) ;;
+      *) live="$h, checker answered <$v>"; break ;;
     esac
   done
   if [ -n "$live" ]; then
