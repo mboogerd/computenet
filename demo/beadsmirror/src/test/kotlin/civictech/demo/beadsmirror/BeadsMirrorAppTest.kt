@@ -66,6 +66,20 @@ class BeadsMirrorAppTest {
             value shouldBe null
             rest shouldBe arrayOf("port")
         }
+
+        @Test
+        fun `extractBareFlag reports present and strips the token`() {
+            val (present, rest) = arrayOf("--workspace", "/tmp/ws", "--write-back", "port").extractBareFlag("--write-back")
+            present shouldBe true
+            rest shouldBe arrayOf("--workspace", "/tmp/ws", "port")
+        }
+
+        @Test
+        fun `extractBareFlag reports absent and leaves the arguments untouched`() {
+            val (present, rest) = arrayOf("--workspace", "/tmp/ws", "port").extractBareFlag("--write-back")
+            present shouldBe false
+            rest shouldBe arrayOf("--workspace", "/tmp/ws", "port")
+        }
     }
 
     @Nested
@@ -261,6 +275,33 @@ class BeadsMirrorAppTest {
                 }
                 // Nothing of the mirror's own was created inside the refused
                 // workspace either — the default run dir is <workspace>/.beadsmirror.
+                Files.exists(repoRoot.resolve(".beadsmirror")) shouldBe false
+            } finally {
+                repoRoot.toFile().deleteRecursively()
+            }
+        }
+
+        /**
+         * Task computenet-6wc.1.5 clause 4: `--write-back` does not move the
+         * refusal — it still runs, for every configured workspace, BEFORE any
+         * [WorkspaceMirror] (and therefore any [WriteBackApplier]) is built,
+         * so a live-`.beads` workspace named with `writeBack = true` is
+         * refused before any `bd import` could ever run. No `bd`/`dolt`
+         * binary needs to be on PATH for this one either — the refusal is
+         * pure path logic, run before the applier's `BdExportReader`/`BdImport`
+         * seams are ever constructed.
+         */
+        @Test
+        fun `write-back does not move the live-beads refusal ahead of any import`() {
+            val repoRoot = Files.createTempDirectory("beadsmirror-fake-repo-writeback-")
+            try {
+                Files.createDirectories(repoRoot.resolve(".beads"))
+
+                shouldThrow<LiveBeadsWorkspaceException> {
+                    BeadsMirrorApp.start(
+                        BeadsMirrorConfig(workspace = repoRoot, repoSearchRoot = repoRoot, writeBack = true),
+                    )
+                }
                 Files.exists(repoRoot.resolve(".beadsmirror")) shouldBe false
             } finally {
                 repoRoot.toFile().deleteRecursively()
@@ -782,6 +823,31 @@ class BeadsMirrorAppTest {
             val (values, rest) = arrayOf("8080").extractFlagAll("--workspace")
             values shouldBe emptyList()
             rest shouldBe arrayOf("8080")
+        }
+    }
+
+    /**
+     * Task computenet-6wc.1.5 clause 2: `--write-back` is opt-in, so a
+     * [BeadsMirrorConfig] built with no `writeBack` argument at all — every
+     * caller before this parameter existed, and every real `--workspace`
+     * invocation with no `--write-back` on the command line — must default
+     * to it being off. A pure data-class check, no `bd`/`dolt` needed: this
+     * is the cheap, always-on half of "off by default", complementing
+     * [WriteBackTwoNodeTest]'s real end-to-end demonstration that an
+     * explicitly-off dialer never touches its own `bd` data after a peer
+     * edit.
+     */
+    @Nested
+    inner class WriteBackConfigDefault {
+
+        @Test
+        fun `a config built with no write-back argument defaults it to false`() {
+            BeadsMirrorConfig(workspace = Path.of("/tmp/beadsmirror-config-default-probe")).writeBack shouldBe false
+        }
+
+        @Test
+        fun `the multi-workspace constructor form also defaults write-back to false`() {
+            BeadsMirrorConfig(workspaces = listOf(Path.of("/tmp/a"), Path.of("/tmp/b"))).writeBack shouldBe false
         }
     }
 
