@@ -162,25 +162,31 @@ class TrustBoundaryTest {
     }
 
     /**
-     * The **positive** half of the same gate, and the one that pins
-     * `Peering.hostIngress`'s `fromKey` into `BridgeIngressCell.peerKey`
-     * (feature `computenet-376c`): a peer whose presented key identifier IS on
-     * the allowlist crosses it, on the very configuration the test above
-     * refuses.
+     * The **positive** half of the same gate, and the one that pins what
+     * `Peering.hostIngress` hands its `BridgeIngressCell`'s allowlist gate: a
+     * peer whose identity IS on the allowlist crosses it, on the very
+     * configuration the test above refuses. Allowlists name identities (epic
+     * `computenet-5y8t`); the gate judges the stamped `fromPeer`.
      *
      * Without it the allowlist half of this file is satisfied by refusing
-     * *everything*: measured 2026-09-02 by mutating `peerKey = fromKey` to
-     * `peerKey = null` in `Peering.hostIngress` — which makes every
-     * allowlisted ingress refuse every frame — and running `:kernel:test`,
-     * `:wire:test` and `:iroh:test -Piroh.enabled=true` in full: 1416 tests,
-     * 0 failures. The `control - open mode` test below cannot catch it either,
-     * because its side carries no allowlist at all (`allow == null` short-
-     * circuits before the key is looked at).
+     * *everything*. Measured 2026-09-02 against the pre-`computenet-5y8t`
+     * key-judged gate by mutating `peerKey = fromKey` to `peerKey = null` in
+     * `Peering.hostIngress` and running `:kernel:test`, `:wire:test` and
+     * `:iroh:test -Piroh.enabled=true` in full: 1416 tests, 0 failures. That
+     * mutation no longer changes any verdict — the key is judged by nothing.
+     * The equivalent refuse-everything mutation on the identity-judged gate is
+     * `admit = { side.admits(null) }` in `hostIngress`; measured 2026-09-13 on
+     * this class alone, it fails this test and no other in the class. The
+     * `control - open mode` test below cannot catch it, because its side
+     * carries no allowlist at all (`allow == null` short-circuits).
      *
-     * `Side.presentedKeyId` is what supplies the key here: `q` holds no
-     * credentials, so it presents `KeyId(q.peer.name)` — the transport-vouched
-     * assertion arm — which is exactly what a legacy name-only hello would put
-     * on a socket.
+     * What this test does **not** discriminate: a gate that judged a
+     * key-derived fallback (`admit = { side.admits(fromKey?.let { PeerId(it.name) }) }`)
+     * instead of the stamped identity passes it (also measured 2026-09-13),
+     * because `q` holds no credentials and so presents `KeyId(q.peer.name)` —
+     * the transport-vouched assertion arm, the same string as its identity.
+     * Key and identity only come apart under a non-interim binding, which is
+     * outside this file.
      */
     @Test
     fun `an allowlisted peer's traffic crosses the same boundary that refuses an unlisted one`() {
