@@ -4,7 +4,6 @@ import civictech.cell.BoundaryDenials
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.wire.PeerAuthPolicy
@@ -45,7 +44,7 @@ class WsHelloAdversarialTest {
 
     private class Stack(
         val identity: PeerIdentity,
-        allow: Set<KeyId>? = null,
+        allow: Set<PeerId>? = null,
         auth: PeerAuthPolicy = PeerAuthPolicy.RequireAuthenticated(),
     ) {
         val registry = LocationRegistry()
@@ -202,7 +201,7 @@ class WsHelloAdversarialTest {
         val requiring = Stack(identity("bs11-requiring"))
         val openWithAllowlist = Stack(
             identity("bs11-open-allowlisted"),
-            allow = setOf(KeyId("somebody-else")),
+            allow = setOf(PeerId("somebody-else")),
             auth = PeerAuthPolicy.Open,
         )
 

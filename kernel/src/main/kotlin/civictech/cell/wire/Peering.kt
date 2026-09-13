@@ -376,9 +376,11 @@ interface PeerCredentials {
      * This side's **key identifier** — `civictech.identity.fingerprint(publicKey)`,
      * the fingerprint of [publicKey] (feature `computenet-376c`).
      *
-     * This is the token boundary admission judges: an allowlist
-     * ([Peering.Side.allow]) names keys, and a hello is admitted on the key it
-     * presented.
+     * This is what a hello is **proven** on: the peer's signature verifies
+     * against this key. It is not what an allowlist names — since epic
+     * `computenet-5y8t` [Peering.Side.allow] names identities, judged after
+     * this key has been resolved to one through the receiving side's
+     * [civictech.cell.link.PeerIdentityBinding].
      */
     val keyId: KeyId
 
@@ -427,22 +429,30 @@ object Peering {
         /** This side's transport identity (M8.2); null = anonymous. */
         val peer: PeerId? = null,
         /**
-         * Deny-by-default admission (M8.3): the **keys** accepted at this
-         * boundary; null = open.
+         * Deny-by-default admission (M8.3): the **identities** accepted at
+         * this boundary; null = open.
          *
-         * Keyed on [KeyId] rather than [PeerId] since feature
-         * `computenet-376c`: admission asks "may this connection in front of
-         * me be let in", which is a property of the key on the wire right now,
-         * while the [PeerId] this side then stamps is attribution resolved
-         * through [identityBinding]. Under the interim binding the two hold the
-         * same string, so an allowlist configured before the split admits and
-         * refuses exactly the same connections after it.
+         * Allowlists name identities, not keys (epic `computenet-5y8t`). The
+         * key is what a hello is **proven** on; the order at every ingress is
+         * key proven → identity resolved through [identityBinding] → that
+         * resolved name judged against this set. On the transports' hello
+         * paths a binding that resolves no identity refuses the connection
+         * before the allowlist is reached; [loopback], which has no hello,
+         * judges the name its ingress stamps ([Side.peer]). A peer
+         * whose key changes but whose binding still resolves the same identity
+         * stays admitted with no edit to this set.
+         *
+         * Under the interim binding a key identifier and its identity hold the
+         * same string, so every allowlist configured before epic
+         * `computenet-5y8t` (when this set was keyed on
+         * `civictech.cell.link.KeyId`, feature `computenet-376c`) admits and
+         * refuses exactly the connections it did.
          *
          * Under `civictech.cell.link.AuthLevel.TransportVouched` no key exists:
-         * the entry then names the identifier a peer *asserted* and the
-         * transport vouched for — see [KeyId]'s own KDoc.
+         * the entry then names the identity a peer *asserted* and the
+         * transport vouched for.
          */
-        val allow: Set<KeyId>? = null,
+        val allow: Set<PeerId>? = null,
         /**
          * **Test-only seam** (computenet-dqy.45), null on every production path
          * and never set by kernel, `:wire` or any demo. [announceTo] invokes it
@@ -557,12 +567,13 @@ object Peering {
         val announcementVerification: AnnouncementVerification? = null,
         /**
          * The seam this side resolves an admitted connection's **identity**
-         * through, given the key identifier it admitted on (feature
+         * through, given the key identifier its hello was proven on (feature
          * `computenet-376c`).
          *
-         * Admission judges a `civictech.cell.link.KeyId`; attribution records
-         * a [PeerId]; this is the one named place that gets from the first to
-         * the second. The default,
+         * A hello is proven on a `civictech.cell.link.KeyId`; attribution and
+         * the allowlist ([allow], epic `computenet-5y8t`) use a [PeerId]; this
+         * is the one named place that gets from the first to the second. The
+         * default,
          * [PeerIdentityBinding.Interim][civictech.cell.link.PeerIdentityBinding.Companion.Interim],
          * maps a key identifier to the identity of the same name, which is
          * exactly the behaviour every side had before the two types existed.
@@ -620,8 +631,10 @@ object Peering {
         }
 
         /**
-         * The admission token this side would present to a peer — a keyed side
+         * The key token this side would present to a peer — a keyed side
          * presents its key's fingerprint, an unkeyed one the name it asserts.
+         * Informational at the receiving ingress (`hostIngress`'s `fromKey`):
+         * allowlists name identities (epic `computenet-5y8t`).
          *
          * Used by [loopback] as the in-process stand-in for what a hello would
          * carry on a socket. The `KeyId(peer.name)` arm is the **transport-
@@ -632,15 +645,20 @@ object Peering {
         val presentedKeyId: KeyId? get() = credentials?.keyId ?: peer?.let { KeyId(it.name) }
 
         /**
-         * Is the connection presenting key identifier [key] admitted here?
+         * Is the connection whose identity resolved to [peer] admitted here?
          *
-         * Judges the **key**, never the identity (feature `computenet-376c`).
-         * There is deliberately no [PeerId] overload: a `null` argument would
+         * Judges the **identity**, never the key (epic `computenet-5y8t`):
+         * the caller has already proven the hello on its key and resolved
+         * that key through [identityBinding], and passes the resolved name.
+         * Null — a caller with no identity — is admitted by an open side and
+         * refused by one with an allowlist.
+         *
+         * There is deliberately no [KeyId] overload: a `null` argument would
          * be ambiguous between the two, and `side::admits` — how
-         * [hostIngress] passes this gate to a `BridgeIngressCell` — would not
-         * resolve.
+         * [hostIngress] passes this gate to a `BridgeIngressCell` — must
+         * resolve to exactly one function.
          */
-        fun admits(key: KeyId?): Boolean = allow == null || key in allow
+        fun admits(peer: PeerId?): Boolean = allow == null || peer in allow
     }
 
     interface FrameInletProxy {
@@ -1050,14 +1068,14 @@ object Peering {
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
         fromPeerIssuer: IssuerId? = null,
         /**
-         * The key identifier [side]'s allowlist judges this connection on
-         * (feature `computenet-376c`). [fromPeer] is what gets *stamped*;
-         * this is what gets *admitted*, and the caller decides both — this
-         * function resolves nothing.
+         * The key identifier this connection was **proven** on — an
+         * informational record only, carried into the ingress's refusal
+         * detail and **judged by nothing** (epic `computenet-5y8t`).
+         * Allowlists name identities: [side]'s allowlist judges [fromPeer],
+         * the identity this ingress stamps, and the caller decides both —
+         * this function resolves nothing.
          *
-         * Null on a caller that names no key, which an open side admits and a
-         * side with an allowlist refuses, exactly as a null [fromPeer] did
-         * before the split.
+         * Null on a caller that names no key; that changes no verdict.
          */
         fromKey: KeyId? = null,
         /**

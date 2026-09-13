@@ -659,7 +659,7 @@ object IrohTransport {
                 )
                 return
             }
-            if (!admitted(peer, key)) return
+            if (!admitted(peer)) return
             // Our own hello first (see this method's KDoc), then bind + announce.
             openLocalHello()
             // Every iroh admission is Authenticated (the NodeId IS the proven
@@ -671,16 +671,20 @@ object IrohTransport {
          * `Peering.Side.admits`, with the refusal accounted — the same code, the
          * same stderr line and the same denial shape `WsTransport` writes.
          *
-         * [key] is what the allowlist judges and [peer] is the identity that key
-         * resolved to, which is what the denial record attributes the refusal to
-         * (feature `computenet-376c`, and `WsTransport.Session.admitted`'s KDoc
-         * for the whole argument).
+         * The allowlist judges the **resolved** identity (epic
+         * `computenet-5y8t`): [peer] is what this side's binding resolved the
+         * link's proven key (its NodeId) to, and it is both what the allowlist
+         * judges and what the denial record attributes the refusal to.
+         * Allowlists name identities; the key is what the hello is proven on
+         * and plays no part here. An `IdentityResolution.Unbound` key is
+         * refused before this is reached (`WsTransport.Session.admitted`'s
+         * KDoc for the whole argument).
          *
          * @return true when the peer is admitted; false after refusing it, in
          *   which case the caller must return without binding anything.
          */
-        private fun admitted(peer: PeerId, key: KeyId): Boolean {
-            if (side.admits(key)) return true
+        private fun admitted(peer: PeerId): Boolean {
+            if (side.admits(peer)) return true
             System.err.println("[IrohTransport] refusing peer $peer: not on the allowlist (spec 43)")
             // Seam 1 (spec 40/43, [SEC1-07]): accounted before the link is
             // refused. Nothing throws — a denial is not a cell fault (BS-14) —

@@ -8,10 +8,11 @@ interface Identity
  * durable identity (feature `computenet-376c`; maintainer decision on
  * `computenet-aimh`, 2026-08-29).
  *
- * Consumed by **boundary admission**: allowlists ([allowPeers],
- * `Peering.Side.allow`), refusals, and the self-assertion check on a hello.
- * The question it answers is "may this connection in front of me be let in",
- * which is a property of the key on the wire right now.
+ * The key is what a hello is **proven** on: the signature check and the
+ * self-assertion check on a hello consume it, and a refusal may name it. It is
+ * **not** what an allowlist names — allowlists ([allowPeers],
+ * `Peering.Side.allow`) name identities (epic `computenet-5y8t`), judged
+ * after the proven key has been resolved through [PeerIdentityBinding].
  *
  * **It MUST NOT be stored as attribution.** A key is replaceable under the
  * peer it belongs to: rotate it and every record keyed on the old
@@ -51,7 +52,10 @@ data class KeyId(val name: String)
  *   [CurrentPeer.get];
  * - `civictech.cell.location.LocationRegistry.Remote.peer` (mirrored
  *   attribution);
- * - `civictech.cell.wire.AnnouncementSigningInput.mintingPeerId`.
+ * - `civictech.cell.wire.AnnouncementSigningInput.mintingPeerId`;
+ * - boundary admission: `civictech.cell.wire.Peering.Side.allow` and
+ *   [allowPeers]. The key is what a hello is **proven** on; allowlists name
+ *   identities (epic `computenet-5y8t`).
  *
  * **It is NOT derived from key material anywhere except through
  * [PeerIdentityBinding].** That seam is the single place the derivation

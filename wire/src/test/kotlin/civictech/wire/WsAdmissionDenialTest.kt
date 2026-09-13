@@ -5,7 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
@@ -42,7 +41,7 @@ class WsAdmissionDenialTest {
         }
     }
 
-    private class Stack(name: String?, allow: Set<KeyId>? = null) {
+    private class Stack(name: String?, allow: Set<PeerId>? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -62,7 +61,7 @@ class WsAdmissionDenialTest {
 
     @Test
     fun `a hello from a peer not on the allowlist is refused and accounted, an admitted peer still connects unchanged`() {
-        val server = Stack(name = "server", allow = setOf(KeyId("good")))
+        val server = Stack(name = "server", allow = setOf(PeerId("good")))
         val collector = CollectingCell()
         server.host.managementInlet.call.spawn(collector)
 
