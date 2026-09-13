@@ -6,7 +6,10 @@ import civictech.cell.Propagate
 import civictech.cell.control.Attention
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IssuerId
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.membrane.Principal
 import civictech.cell.membrane.currentPrincipal
@@ -79,7 +82,11 @@ class WsPrincipalPromotionTest {
      * loopback parity case needs, and a no-op on the socket path, where the
      * bound id is derived from the presented key regardless.
      */
-    private inner class Stack(name: String, val keyed: Boolean) {
+    private inner class Stack(
+        name: String,
+        val keyed: Boolean,
+        binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
+    ) {
         val identity: PeerIdentity? =
             if (keyed) FilePeerKeyStore(keyDirs.resolve(name)).loadOrGenerate() else null
         val registry = LocationRegistry()
@@ -99,6 +106,7 @@ class WsPrincipalPromotionTest {
             // ingress rebinds this with the hello-bound key regardless.
             announcementVerification =
                 if (keyed) socketAnnouncementVerification(publicKeys = { knownKeys[it] }) else null,
+            identityBinding = binding,
         )
     }
 
@@ -191,6 +199,37 @@ class WsPrincipalPromotionTest {
 
         principalOverSocket(server, client) shouldBe
             Principal.Peer(PeerId("vouched-client"), AuthLevel.TransportVouched)
+    }
+
+    /**
+     * A binding that names an issuer while keeping the key-derived name, so
+     * HELLO2's key-derived-form check and the ID_MISMATCH compare still pass —
+     * the only thing it changes is WHO vouches for the resolution. It is a test
+     * of attribution, not of trust: nothing here reads as stolen-key resistance
+     * or revocation (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
+     */
+    private val issuerNaming = PeerIdentityBinding { k, _ ->
+        IdentityResolution.Bound(PeerId(k.name), IssuerId("test-issuer"), null)
+    }
+
+    @Test
+    fun `an Authenticated socket crossing stamps the issuer the listener's binding resolved`() {
+        val server = Stack("issuer-server", keyed = true, binding = issuerNaming)
+        val client = Stack("issuer-client", keyed = true)
+
+        principalOverSocket(server, client) shouldBe
+            Principal.Peer(client.identity!!.peerId, AuthLevel.Authenticated, IssuerId("test-issuer"))
+    }
+
+    @Test
+    fun `a TransportVouched socket crossing carries no issuer, even under an issuer-naming binding`() {
+        // The legacy hello row: an unproven key's binding statement vouches for
+        // nothing on this connection, so the stamp is literally the pre-feature one.
+        val server = Stack("issuer-vouched-server", keyed = false, binding = issuerNaming)
+        val client = Stack("issuer-vouched-client", keyed = false)
+
+        principalOverSocket(server, client) shouldBe
+            Principal.Peer(PeerId("issuer-vouched-client"), AuthLevel.TransportVouched)
     }
 
     @Test
