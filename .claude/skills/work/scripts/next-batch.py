@@ -200,7 +200,7 @@ LANE_CORES = 5
 
 
 RECENT_READ_MINUTES = 6
-# Where the last --capacity reading's timestamp is remembered: $SCRATCH when the
+# Where the last capacity reading's timestamp (--capacity, or a non-empty batch) is remembered: $SCRATCH when the
 # caller exports it, otherwise the per-user temp dir. THE FALLBACK IS THE ACTUAL
 # PATH at every documented call site — SKILL.md 5b/5e and merge-task.md invoke
 # this script bare, and `$SCRATCH` is a shell variable that does not survive

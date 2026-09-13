@@ -895,6 +895,8 @@ with _tf.TemporaryDirectory() as _d:
     nb._assess = lambda f, b: ("ok", [])
     nb.dir_claim_warnings = lambda *a: []
     nb.os.getloadavg = lambda: (1.0, 0, 0)
+    _saved_cpu, _saved_sib = nb.os.cpu_count, _os.environ.pop("WORK_SIBLINGS", None)
+    nb.os.cpu_count = lambda: 16                    # load 1.0 on 16 cores: a quiet box anywhere
     try:
         nb.record_capacity_read(path=_mem)          # a read seconds ago...
         sys.argv = ["next-batch.py", "feat", "--actor", "MacBoo"]
@@ -930,7 +932,9 @@ with _tf.TemporaryDirectory() as _d:
             print("FAIL: an empty batch must not seed the lag memory")
     finally:
         nb.bd, sys.argv, nb._assess, nb.dir_claim_warnings = _saved_bd, _saved_argv, _saved_assess, _saved_warn
-        nb.os.getloadavg = _real_getloadavg
+        nb.os.getloadavg, nb.os.cpu_count = _real_getloadavg, _saved_cpu
+        if _saved_sib is not None:
+            _os.environ["WORK_SIBLINGS"] = _saved_sib
         if _saved_scratch is None:
             _os.environ.pop("SCRATCH", None)
         else:
