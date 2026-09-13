@@ -36,16 +36,22 @@ states why that beats killing the listener.
 ## `--write-back`: opt-in, imposes the fold's winner onto `bd`
 
 `--write-back` is a bare flag, off by default. With it set, EVERY configured
-workspace's mirror runs its own `WriteBackApplier`: once per poll batch, on
-the poll thread, immediately after that batch has been folded, it reads the
-workspace's own `bd export`, compares it against the fold's dot-order winner
-for each issue, and imposes any difference with **one `bd import
---allow-stale` invocation per changed row** — never a bulk import, and never
-more than one row per invocation (feature computenet-6wc.1's clause 1). Before
-each import it emits a machine-readable pre-flight loss record naming exactly
-what that row is about to overwrite. A row whose winner already agrees with
-the workspace is left alone — no import runs for it at all — and a row whose
-import fails once is not retried until its winner changes.
+workspace's mirror runs its own `WriteBackApplier`, ticking once per poll
+interval on its own dedicated daemon thread (`WorkspaceMirror.WriteBackScheduler`)
+— not on the poll thread, and not gated on that workspace's own poll batch
+having produced anything. (The bead originally decided to compose `applyOnce`
+inside the poller's `onBatch`; that composition never re-evaluates a
+peer-only winner change, because the poller skips `onBatch` entirely when its
+own feed is empty, which is exactly what happens on gossip-only convergence
+in two-node mode — see `WriteBackScheduler`'s KDoc for the measurement.) Each
+tick reads the workspace's own `bd export`, compares it against the fold's
+dot-order winner for each issue, and imposes any difference with **one `bd
+import --allow-stale` invocation per changed row** — never a bulk import, and
+never more than one row per invocation (feature computenet-6wc.1's clause 1).
+Before each import it emits a machine-readable pre-flight loss record naming
+exactly what that row is about to overwrite. A row whose winner already
+agrees with the workspace is left alone — no import runs for it at all — and
+a row whose import fails once is not retried until its winner changes.
 
 Each workspace writes only to **its own** `bd` data; nothing here reads or
 writes a sibling workspace in the same process. The live-`.beads` refusal
