@@ -107,6 +107,13 @@ class IdentityDerivationRatchetTest {
     // as a whole for the interface name. Measured 2026-09-02 (computenet-6jkz).
     private val bindingHeaderWrapStart = Regex("""^\s*(?:\w+\s+)*(?:class|object)\s+\S.*:\s*$""")
 
+    // The LAST `class`/`object` keyword occurring on a wrap-start line — used
+    // to bound [sawBodyBrace] at the call site in
+    // [scanPeerIdentityBindingImplementations]. See that call site's comment
+    // for why the wrap-start line's own text can still carry this header's
+    // real body brace (PROBEs N1-N3, computenet-7s1p2).
+    private val classOrObjectKeyword = Regex("""\b(?:class|object)\b""")
+
     // The interface name, matched against a FOLDED header region rather than a
     // single line. Hoisted out of the scan loop; see
     // [scanPeerIdentityBindingImplementations].
@@ -237,14 +244,44 @@ class IdentityDerivationRatchetTest {
      * [bodyBraceFrom]: the walk still runs over the WHOLE folded text, so
      * paren/generic/string state opened on the wrap-start line carries into
      * the continuation lines, but a `{` at an offset before [bodyBraceFrom]
-     * (the wrap-start line's own text) never sets [sawBodyBrace] — that line
-     * ends in the header's colon, so no brace on it can be this header's
-     * body. The first form of this fix dropped the wrap-start line from the
-     * walk altogether, which reopened PROBE T1 for a primary constructor
-     * whose `(` opens on the wrap-start line ("class W(val x:\n    Int =
-     * run { 1 },\n) : Base(),\n    PeerIdentityBinding,\n    Marker {"):
-     * the lambda's brace was then seen at paren depth zero and ended the
-     * header early (computenet-ru92m review, PROBE V1).
+     * never sets [sawBodyBrace]. The first form of this fix dropped the
+     * wrap-start line from the walk altogether, which reopened PROBE T1 for a
+     * primary constructor whose `(` opens on the wrap-start line ("class
+     * W(val x:\n    Int = run { 1 },\n) : Base(),\n    PeerIdentityBinding,\n
+     * Marker {"): the lambda's brace was then seen at paren depth zero and
+     * ended the header early (computenet-ru92m review, PROBE V1).
+     *
+     * **Corrected premise (computenet-7s1p2):** it is NOT true that "no brace
+     * on the wrap-start line can be this header's body" — a class body CAN
+     * open on that very line ("class W : Base() { fun f(a:", where a nested
+     * member's own declaration wraps after its own colon on the same line).
+     * The U2 fix as first stated it (bodyBraceFrom = the wrap-start line's
+     * full length) treated the ENTIRE wrap-start line as incapable of
+     * carrying a body brace, which is only true of the portion before the
+     * header's own `class`/`object` keyword — text after that keyword is
+     * this header's own supertype/body region and CAN carry the real body
+     * brace. [bodyBraceFrom] is therefore the offset just past the LAST
+     * `class`/`object` keyword occurring on the wrap-start line (see
+     * [classOrObjectKeyword] at the call site), not the line's length: a
+     * brace before that keyword is taken to be an enclosing scope's (PROBE
+     * U2); a brace at or after it can be this header's own (PROBEs N1/N2 —
+     * a false positive under the line-length bound, since a nested member's
+     * parameter type mentioning `PeerIdentityBinding` was folded into this
+     * class's own supertype list after the true body brace had been
+     * excluded; PROBE N3 — a false negative under the line-length bound,
+     * since the fold ran past the true body brace on the wrap-start line,
+     * through a generic left open by `a < b` with no closing `>`, and
+     * swallowed a later real implementation to end of file).
+     *
+     * The keyword is found textually, so it is only a heuristic anchor:
+     * `class`/`object` text after the body brace that is not this header's
+     * keyword — inside a string or block comment, `W::class`, or a
+     * body-less object expression `object : Foo()` — moves the bound past
+     * the real body brace and reopens the N1-N3 shapes, and a `{` inside a
+     * block comment after the real keyword ("class Outer { class W /* { */
+     * :") ends the header early as U2 did. Measured 2026-09-13
+     * (computenet-7s1p2 review); unattested in production (29 wrap-start
+     * lines under src/main, none carrying a `{`).
      */
     private fun headerBracketDepths(text: String, bodyBraceFrom: Int = 0): Triple<Int, Int, Boolean> {
         var parenDepth = 0
@@ -375,18 +412,38 @@ class IdentityDerivationRatchetTest {
                         // balance and opens a runaway fold (PROBE T2,
                         // computenet-etm0u).
                         //
-                        // A `{` on the wrap-start line itself never counts as
-                        // the body brace: that line ends in the header's
-                        // colon, so a brace there belongs to an enclosing
-                        // scope sharing the line ("class Outer { class W :",
-                        // PROBE U2, computenet-ru92m). The depth walk still
+                        // A `{` on the wrap-start line BEFORE its last
+                        // `class`/`object` keyword never counts as the body
+                        // brace: that prefix belongs to an ENCLOSING scope
+                        // sharing the line ("class Outer { class W :", PROBE
+                        // U2, computenet-ru92m) — it is not true, and was
+                        // never true, that no brace on the wrap-start line
+                        // can be this header's own body brace: a class body
+                        // CAN open on the wrap-start line itself
+                        // ("class W : Base() { fun f(a:", PROBEs N1-N3,
+                        // computenet-7s1p2, where a nested member declared on
+                        // that same line wraps after its own colon and would
+                        // otherwise be folded into this class's supertype
+                        // list). [bodyBraceFrom] is therefore the offset
+                        // just past the wrap-start line's OWN LAST
+                        // `class`/`object` keyword, not the whole line's
+                        // length — a brace before that keyword is taken to be
+                        // an enclosing scope's; a brace at or after it can be
+                        // this header's real body brace (a textual anchor, so
+                        // a keyword in a string/comment/`::class`/object
+                        // expression misplaces it — see [headerBracketDepths]'s
+                        // KDoc). The depth walk still
                         // spans the WHOLE folded text — only the body-brace
-                        // test is bounded to continuation-line offsets — so a
-                        // primary constructor's `(` opened on the wrap-start
-                        // line still puts a later lambda brace at paren depth
-                        // > 0 (PROBE V1, computenet-ru92m review).
+                        // test is bounded by this offset — so a primary
+                        // constructor's `(` opened on the wrap-start line
+                        // still puts a later lambda brace at paren depth > 0
+                        // (PROBE V1, computenet-ru92m review), independently
+                        // of where [bodyBraceFrom] falls.
+                        val wrapStartLine = header.first()
+                        val bodyBraceFrom = classOrObjectKeyword.findAll(wrapStartLine).lastOrNull()
+                            ?.range?.last?.plus(1) ?: wrapStartLine.length
                         val (parenDepth, genericDepth, sawBodyBrace) =
-                            headerBracketDepths(folded, bodyBraceFrom = header.first().length)
+                            headerBracketDepths(folded, bodyBraceFrom = bodyBraceFrom)
                         val listContinues = trimmed.endsWith(",") ||
                             parenDepth > 0 ||
                             genericDepth > 0 ||
@@ -1544,8 +1601,9 @@ class IdentityDerivationRatchetTest {
      * filed): NOT flagged (should be flagged).
      *
      * Fixed by [headerBracketDepths]'s `bodyBraceFrom`: a `{` on the
-     * wrap-start line itself (which ends in the header's colon, so cannot
-     * carry this header's body brace) never sets `sawBodyBrace`, while the
+     * wrap-start line before its last `class`/`object` keyword never sets
+     * `sawBodyBrace` (a brace after that keyword still can — PROBEs N1-N3,
+     * computenet-7s1p2, where the class body opens on this line), while the
      * depth walk still spans the whole folded header — see PROBE V1's
      * fixture below for why the walk must not simply drop that line.
      */
@@ -1633,6 +1691,148 @@ class IdentityDerivationRatchetTest {
         assertEquals(setOf("fixture-v/src/main/kotlin/fixture/v/Wrapped.kt"), actual) {
             "a lambda brace inside a primary constructor call opened on the wrap-start line must not end the " +
                 "header early; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE N1 (computenet-7s1p2, second-reader review of computenet-ru92m's
+     * U2 fix): a class BODY opens on the wrap-start line itself, and a
+     * MEMBER declaration on that same line wraps after its own colon
+     * ("class W : Base() { fun f(a:"). The U2 fix's first form excluded the
+     * whole wrap-start line's text from [sawBodyBrace], so this class's own
+     * real body brace (right after `Base()`) was never seen and the fold ran
+     * on into the member's parameter list, reading `PeerIdentityBinding` as
+     * a supertype instead of a parameter type. Measured 2026-09-13 against
+     * 212c34320 (this bead's base commit): FLAGGED (should be empty — `W`
+     * does not implement `PeerIdentityBinding`, it merely has a member whose
+     * parameter is typed with it).
+     */
+    @Test
+    fun `fixture self-check - a class body opening on the wrap-start line is not folded into a nested member's wrapped parameter list`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n1")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n1/src/main/kotlin/fixture/n1").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.n1
+
+            private open class Base
+
+            class W : Base() { fun f(a:
+                Int,
+                b: PeerIdentityBinding) {
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a nested member's wrapped parameter list must not be folded into the enclosing class's own " +
+                "supertype list just because the class body opened on the wrap-start line; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE N2 (computenet-7s1p2), the same shape as N1 but the member that
+     * wraps is a `val` property whose initializer contains an unclosed `<`
+     * comparison ("val ok:\n    Boolean = a < b"). This additionally probes
+     * that ending the fold on the class's own body brace happens BEFORE the
+     * `a < b` is ever read as an open generic — at 212c34320 the whole
+     * wrap-start line was excluded from [sawBodyBrace], so the fold ran past
+     * the real body brace, the `<` opened a runaway generic depth with no
+     * closing `>` anywhere in the file, and a later unrelated
+     * `fun consume(b: PeerIdentityBinding)` was folded into the header as a
+     * false positive. Measured 2026-09-13 against 212c34320: FLAGGED (should
+     * be empty).
+     */
+    @Test
+    fun `fixture self-check - a class body opening on the wrap-start line does not let an unclosed generic in a nested member swallow a later unrelated usage`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n2")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n2/src/main/kotlin/fixture/n2").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.n2
+
+            private open class Base
+
+            class W : Base() { val ok:
+                Boolean = a < b
+            }
+
+            fun consume(b: PeerIdentityBinding) {
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "an unclosed generic inside a nested member's wrapped initializer must not open a runaway fold " +
+                "that sweeps a later unrelated function parameter into the match; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE N3 (computenet-7s1p2), the mirror of N2: the same class-body-
+     * on-wrap-start-line shape precedes a REAL implementation further down
+     * the file ("val impl = object : PeerIdentityBinding by delegate"). At
+     * 212c34320 the runaway fold from N2's `a < b` swallowed this real
+     * implementation to end of file instead of ever reaching it as a
+     * standalone declaration — a false NEGATIVE, the opposite direction from
+     * N1/N2. Measured 2026-09-13 against 212c34320: NOT flagged (should be
+     * flagged).
+     */
+    @Test
+    fun `fixture self-check - a class body opening on the wrap-start line does not let an unclosed generic in a nested member hide a later real implementation`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n3")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n3/src/main/kotlin/fixture/n3").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.n3
+
+            private open class Base
+
+            class W : Base() { val ok:
+                Boolean = a < b
+            }
+
+            val impl = object : PeerIdentityBinding by delegate
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-n3/src/main/kotlin/fixture/n3/Wrapped.kt"), actual) {
+            "an unclosed generic inside a nested member's wrapped initializer must not hide a later real " +
+                "implementation to end of file; found: $actual"
         }
     }
 }
