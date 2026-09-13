@@ -24,6 +24,11 @@ package civictech.cell.link
  * Under the default [PeerIdentityBinding.Interim] a key identifier and the
  * identity it resolves to hold the same string, so every pre-`376c` allowlist
  * admits and refuses exactly what it did before.
+ *
+ * A configured key the binding resolves to [IdentityResolution.Unbound]
+ * vouches for **nobody** (task `computenet-hbqvz`): it matches no stamped
+ * identity, so it can never be the entry that admits a request. The remaining
+ * keys are still consulted.
  */
 fun allowPeers(
     vararg keys: KeyId,
@@ -32,7 +37,12 @@ fun allowPeers(
     val identity = request.identity
     when {
         identity == null -> null
-        keys.any { binding.identityOf(it) == identity } -> null
+        keys.any { key ->
+            when (val resolution = binding.resolve(key)) {
+                is IdentityResolution.Bound -> resolution.peer == identity
+                is IdentityResolution.Unbound -> false
+            }
+        } -> null
         else -> LinkResult.Rejected("peer $identity is not on the allowlist (spec 43)")
     }
 }

@@ -3,9 +3,11 @@ package civictech.iroh
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerIdentityBinding
+import civictech.cell.link.UnboundReason
 import civictech.cell.wire.Peering
 import civictech.identity.Ed25519
 import civictech.identity.fingerprint
@@ -103,7 +105,7 @@ class IrohSessionHelloTest {
         // The identity stamped on the mirror is the binding's, resolved from the
         // NodeId-derived key — not the hello, which named nobody.
         assertEquals(
-            local.identityBinding.identityOf(keyOf(remote)),
+            local.identityBinding.boundPeer(keyOf(remote)),
             assertNotNull(session.mirrorCell).peer,
             "the mirror carries the identity this side's binding resolved for the link's key",
         )
@@ -162,7 +164,7 @@ class IrohSessionHelloTest {
         val denial = assertNotNull(mallory.lastAdmissionDenial)
         assertEquals(DenialReason.NOT_ADMITTED, denial.reason)
         assertEquals(
-            malloryServerSide.identityBinding.identityOf(keyOf(malloryNodeId)),
+            malloryServerSide.identityBinding.boundPeer(keyOf(malloryNodeId)),
             denial.principal,
             "the refusal is attributed to the identity of the key that actually dialled",
         )
@@ -195,7 +197,7 @@ class IrohSessionHelloTest {
             "a token that disagrees with the connection's own key is a mismatch, not an admission",
         )
         assertEquals(
-            forgingSide.identityBinding.identityOf(keyOf(forgingNodeId)),
+            forgingSide.identityBinding.boundPeer(keyOf(forgingNodeId)),
             forgedDenial.principal,
             "the denial names who was actually on the link, not who they claimed to be",
         )
@@ -212,7 +214,7 @@ class IrohSessionHelloTest {
     fun `a token equal to the resolved identity is redundant and admitted`() {
         val remote = nodeId()
         val local = side(name = "local")
-        val resolved = local.identityBinding.identityOf(keyOf(remote))
+        val resolved = local.identityBinding.boundPeer(keyOf(remote))
         val session = IrohTransport.Session(
             local,
             remote,
@@ -228,7 +230,7 @@ class IrohSessionHelloTest {
 
     @Test
     fun `the stamped and denied identity comes from the side's binding, never from the key itself`() {
-        val aliasing = PeerIdentityBinding { key -> PeerId("alias-of-" + key.name) }
+        val aliasing = PeerIdentityBinding { key -> IdentityResolution.Bound(PeerId("alias-of-" + key.name)) }
         val remote = nodeId()
         val expected = PeerId("alias-of-" + keyOf(remote).name)
 
@@ -271,6 +273,60 @@ class IrohSessionHelloTest {
         mismatching.onData(hello(name = keyOf(remote).name))
         assertEquals(1, mismatchRefusals)
         assertEquals(DenialReason.ID_MISMATCH, assertNotNull(mismatching.lastAdmissionDenial).reason)
+    }
+
+    /**
+     * Task `computenet-hbqvz`, this transport's admission path: a link whose
+     * NodeId-derived key the side's binding resolves to **no identity** is
+     * refused with a typed reason and the machine-readable `UnboundReason`,
+     * attributed to no principal, costs no mirror and is never written to —
+     * even on an open side, and even when the hello asserts the very name a
+     * `PeerId(key.name)` fallback would have produced.
+     *
+     * New coverage of a verdict the interim binding never produces; the control
+     * half is the same link under `PeerIdentityBinding.Interim`, admitted. What
+     * is refused is a key the binding does not bind — nothing here speaks to a
+     * stolen key (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
+     */
+    @Test
+    fun `a link whose key the binding holds no identity for is refused, and nothing stands in for the identity`() {
+        val remote = nodeId()
+        val unbound = PeerIdentityBinding { key ->
+            if (key == keyOf(remote)) {
+                IdentityResolution.Unbound(UnboundReason.NO_BINDING)
+            } else {
+                PeerIdentityBinding.Interim.resolve(key)
+            }
+        }
+
+        // Control: the interim binding admits this link.
+        val control = IrohTransport.Session(
+            side(),
+            remote,
+            send = { },
+            refuse = { throw AssertionError("the interim binding must admit a valid key") },
+        )
+        control.onData(hello(name = keyOf(remote).name))
+        assertTrue(control.peered)
+
+        val sent = mutableListOf<ByteArray>()
+        var refusals = 0
+        val session = IrohTransport.Session(side(binding = unbound), remote, send = { sent += it }, refuse = { refusals++ })
+
+        session.onData(hello(name = keyOf(remote).name))
+
+        assertEquals(1, refusals, "the link is closed")
+        assertEquals(1L, session.admissionDenialCount)
+        val denial = assertNotNull(session.lastAdmissionDenial)
+        assertEquals(DenialReason.NOT_ADMITTED, denial.reason)
+        assertEquals(null, denial.principal, "no identity means none to attribute the refusal to")
+        assertTrue(
+            assertNotNull(denial.detail).contains("UnboundReason.${UnboundReason.NO_BINDING.name}"),
+            "the detail carries the machine-readable reason: ${denial.detail}",
+        )
+        assertFalse(session.peered, "no ingress on a refused hello")
+        assertEquals(null, session.mirrorRef, "a refused peer costs this side no mirror")
+        assertTrue(sent.isEmpty(), "nothing is written to a refused link")
     }
 
     @Test
@@ -325,3 +381,13 @@ class IrohSessionHelloTest {
         assertFalse(session.peered)
     }
 }
+
+/**
+ * The identity [key] resolves to through this binding, for spelling an
+ * expected value. Fails loudly on `Unbound` rather than substituting anything.
+ */
+private fun PeerIdentityBinding.boundPeer(key: KeyId): PeerId =
+    when (val resolution = resolve(key)) {
+        is IdentityResolution.Bound -> resolution.peer
+        is IdentityResolution.Unbound -> throw AssertionError("expected $key to be bound, got $resolution")
+    }
