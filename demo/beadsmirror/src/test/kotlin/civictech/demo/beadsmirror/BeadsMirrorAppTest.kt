@@ -66,6 +66,20 @@ class BeadsMirrorAppTest {
             value shouldBe null
             rest shouldBe arrayOf("port")
         }
+
+        @Test
+        fun `extractBareFlag reports present and strips the token`() {
+            val (present, rest) = arrayOf("--workspace", "/tmp/ws", "--write-back", "port").extractBareFlag("--write-back")
+            present shouldBe true
+            rest shouldBe arrayOf("--workspace", "/tmp/ws", "port")
+        }
+
+        @Test
+        fun `extractBareFlag reports absent and leaves the arguments untouched`() {
+            val (present, rest) = arrayOf("--workspace", "/tmp/ws", "port").extractBareFlag("--write-back")
+            present shouldBe false
+            rest shouldBe arrayOf("--workspace", "/tmp/ws", "port")
+        }
     }
 
     @Nested
@@ -261,6 +275,33 @@ class BeadsMirrorAppTest {
                 }
                 // Nothing of the mirror's own was created inside the refused
                 // workspace either — the default run dir is <workspace>/.beadsmirror.
+                Files.exists(repoRoot.resolve(".beadsmirror")) shouldBe false
+            } finally {
+                repoRoot.toFile().deleteRecursively()
+            }
+        }
+
+        /**
+         * Task computenet-6wc.1.5 clause 4: `--write-back` does not move the
+         * refusal — it still runs, for every configured workspace, BEFORE any
+         * [WorkspaceMirror] (and therefore any [WriteBackApplier]) is built,
+         * so a live-`.beads` workspace named with `writeBack = true` is
+         * refused before any `bd import` could ever run. No `bd`/`dolt`
+         * binary needs to be on PATH for this one either — the refusal is
+         * pure path logic, run before the applier's `BdExportReader`/`BdImport`
+         * seams are ever constructed.
+         */
+        @Test
+        fun `write-back does not move the live-beads refusal ahead of any import`() {
+            val repoRoot = Files.createTempDirectory("beadsmirror-fake-repo-writeback-")
+            try {
+                Files.createDirectories(repoRoot.resolve(".beads"))
+
+                shouldThrow<LiveBeadsWorkspaceException> {
+                    BeadsMirrorApp.start(
+                        BeadsMirrorConfig(workspace = repoRoot, repoSearchRoot = repoRoot, writeBack = true),
+                    )
+                }
                 Files.exists(repoRoot.resolve(".beadsmirror")) shouldBe false
             } finally {
                 repoRoot.toFile().deleteRecursively()
