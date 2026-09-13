@@ -643,6 +643,13 @@ def plan_batch(candidates, feature=None, elsewhere=()):
         # sibling inflates the dispersion it measures into a result that reads
         # as a finding (computenet-42zc). So it runs alone, like a claimless task.
         dedicated = (task.get("metadata") or {}).get("compute") == "dedicated"
+        if dedicated and elsewhere:
+            # Any live unit contends, disjoint files or not — and the alone
+            # route below would skip the overlap check against it entirely.
+            # ponytail: sees only this actor's claimed units, not sibling sessions
+            skipped.append({"id": tid, "reason": "compute=dedicated; running outside this feature: "
+                            + ",".join(sorted(u["id"] for u in elsewhere))})
+            continue
         if not files or dedicated:
             why = "compute=dedicated" if dedicated else "no files claim"
             if batch:
