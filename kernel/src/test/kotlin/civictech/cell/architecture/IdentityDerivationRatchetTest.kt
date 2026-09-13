@@ -211,6 +211,16 @@ class IdentityDerivationRatchetTest {
      *   strings, no unicode escapes — because the file's own history is a
      *   sequence of heuristic patches each reopening a neighbouring escape;
      *   the two shapes actually filed are what this closes.
+     *
+     * Consequence of ending the fold only on a paren-depth-zero brace: an
+     * imbalance this walk does NOT model (a char literal `'('`, a string
+     * template nesting quotes) no longer ends at the next `{` — the fold
+     * runs to end of file and HIDES any later implementation in that file
+     * (false negative). Measured 2026-09-13 (computenet-etm0u review):
+     * "class W :\n    Base('(')" followed by
+     * "class Impl : PeerIdentityBinding {" is flagged at 6855cdc53 and not
+     * after this change. Unattested in production; filed as
+     * computenet-ru92m.
      */
     private fun headerBracketDepths(text: String): Triple<Int, Int, Boolean> {
         var parenDepth = 0
@@ -1424,6 +1434,52 @@ class IdentityDerivationRatchetTest {
         assertEquals(emptySet<String>(), actual) {
             "a '(' inside a string literal in a body-less header's supertype constructor call must not " +
                 "open a runaway fold into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * Pins [headerBracketDepths]'s string-literal skip (computenet-etm0u
+     * review). Fixture s does not: with the string skip removed, its
+     * runaway fold still never reaches a paren-depth-zero brace, so it runs
+     * to end of file and flags nothing — the expected empty set by accident
+     * — and every fixture stayed green with the skip disabled. The skip is
+     * load-bearing when a REAL implementation follows the body-less header:
+     * without it the fold swallows that implementation and the file goes
+     * unflagged. Expected value is the literal fixture path.
+     */
+    @Test
+    fun `fixture self-check - a paren inside a string literal does not swallow a later implementation`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-t")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-t/src/main/kotlin/fixture/t").apply { mkdirs() }
+
+        File(moduleDir, "Swallowed.kt").writeText(
+            """
+            package fixture.t
+
+            private open class Base(private val marker: String)
+
+            class W :
+                Base("(")
+
+            class Impl : PeerIdentityBinding {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-t/src/main/kotlin/fixture/t/Swallowed.kt"), actual) {
+            "a '(' inside a string literal in a body-less header must not leave the fold open and swallow a " +
+                "later implementation in the same file; found: $actual"
         }
     }
 }
