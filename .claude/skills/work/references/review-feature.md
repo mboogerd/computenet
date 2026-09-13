@@ -1113,6 +1113,14 @@ SELECTION reads ("A resumed feature carrying `metadata.review=passed` was
 certified last session ... don't re-review"), so an unset flag on merged,
 certified work sends a later session back over work already certified.
 
+**Ready, with follow-on work found in review.** Every criterion can be met and
+you can still find real work outside the claim — typically when the feature
+RECORDS A DECISION, which falsifies every cross-reference (a DISPUTES bullet, a
+KDoc) that called it pending, and those sit outside the claim by construction.
+The verdict stays READY; file the follow-on under the attachment rules in
+"Ready with residual" below, and name it in your verdict comment
+(computenet-cgdt: computenet-fzd3 and computenet-07vb, one session).
+
 ### Ready with residual — the honest negative result
 
 The diff is sound and mergeable **and** a named criterion is genuinely not
