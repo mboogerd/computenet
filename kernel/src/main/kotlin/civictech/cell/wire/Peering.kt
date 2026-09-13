@@ -1040,7 +1040,9 @@ object Peering {
      * caller, the same way [fromPeerAuth] is; see [BridgeIngressCell.peerIssuer].
      * Defaults to null, so a caller that never mentions an issuer gets
      * exactly today's principals. [loopback] passes its admission verdict's
-     * issuer (task `computenet-5y8t.1.3`); the socket transports are task 4's.
+     * issuer (task `computenet-5y8t.1.3`); the socket and iroh transports pass
+     * their hello admission's `IdentityResolution.Bound.issuer` on an
+     * `Authenticated` admission only (task `computenet-5y8t.1.4`).
      */
     fun hostIngress(
         side: Side,

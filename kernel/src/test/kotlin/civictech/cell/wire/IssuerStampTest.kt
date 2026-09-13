@@ -33,12 +33,14 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * Cases 1-2 pin [CurrentPeer.with]'s direct contract (the ambient half); case
  * 3 pins the whole chain through a wire-encoded [BridgeIngressCell] delivery
- * (the carrier half); case 4 is the non-vacuousness mutation.
+ * (the carrier half).
  *
- * Every case here leaves the loopback and both transports at their
- * pre-existing null-issuer default (tasks `.1.3`/`.1.4`); this file asserts
- * only that the carrier CAN carry a non-null issuer when a caller supplies
- * one directly to [CurrentPeer.with] or [Peering.hostIngress].
+ * No case here goes through the loopback or a transport's admission; this
+ * file asserts only that the carrier CAN carry a non-null issuer when a caller
+ * supplies one directly to [CurrentPeer.with] or [Peering.hostIngress]. Which
+ * issuer those admissions pass is pinned by `LoopbackIssuerAttributionTest`
+ * (task `.1.3`) and by `WsPrincipalPromotionTest` / `IrohSessionHelloTest`
+ * (task `.1.4`).
  */
 class IssuerStampTest {
 

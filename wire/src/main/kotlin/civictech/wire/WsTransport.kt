@@ -1464,7 +1464,7 @@ object WsTransport {
             // the PROOF row passes one, because the two TransportVouched rows
             // (legacy hello, uncredentialed HELLO2) never proved possession of
             // the key, so its binding statement vouches for nothing on this
-            // connection and they leave it null. Publishing it on the observable field first keeps the
+            // connection and they leave it null. Publishing the level on the observable field first keeps the
             // two readings — what a delivery is stamped with, and what
             // `achievedAuthLevel` reports — the same value by construction
             // rather than by two assignments agreeing.
