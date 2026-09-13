@@ -567,7 +567,7 @@ object Peering {
         val announcementVerification: AnnouncementVerification? = null,
         /**
          * The seam this side resolves an admitted connection's **identity**
-         * through, given the key identifier it admitted on (feature
+         * through, given the key identifier its hello was proven on (feature
          * `computenet-376c`).
          *
          * A hello is proven on a `civictech.cell.link.KeyId`; attribution and
@@ -631,8 +631,10 @@ object Peering {
         }
 
         /**
-         * The admission token this side would present to a peer — a keyed side
+         * The key token this side would present to a peer — a keyed side
          * presents its key's fingerprint, an unkeyed one the name it asserts.
+         * Informational at the receiving ingress (`hostIngress`'s `fromKey`):
+         * allowlists name identities (epic `computenet-5y8t`).
          *
          * Used by [loopback] as the in-process stand-in for what a hello would
          * carry on a socket. The `KeyId(peer.name)` arm is the **transport-

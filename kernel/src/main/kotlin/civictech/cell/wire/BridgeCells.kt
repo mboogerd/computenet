@@ -154,11 +154,11 @@ class BridgeIngressCell(
      * cell fault that triggers supervision RESTART or escalation — a denial is
      * not a fault (BS-14).
      *
-     * **Residual (feature `computenet-376c`):** the emitted
-     * `civictech.cell.BoundaryDenial.principal` stays a [PeerId] and grows no
-     * `KeyId` field, so a refusal records the identity that was refused and
-     * names the refused key only in its `detail`. Re-keying the denial record
-     * is DSC4's remaining work.
+     * The emitted `civictech.cell.BoundaryDenial.principal` is a [PeerId] and
+     * grows no `KeyId` field (feature `computenet-376c`, kept by epic
+     * `computenet-5y8t`): a refusal records the identity that was refused —
+     * the same identity this gate judged — and names the key the connection
+     * was proven on only in its `detail`.
      */
     private val admit: (PeerId?) -> Boolean = { true },
     /**
