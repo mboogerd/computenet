@@ -23,8 +23,12 @@ import org.junit.jupiter.api.Test
  * for this task at base `192539789`): [IssuerId], [IdentityStatement] and
  * [IdentityResolution] are not `@Serializable`, and no wire frame, journal
  * record or serializer carries any of them. The check is
- * `git grep -n '@Serializable' -- kernel/src/main/kotlin/civictech/cell/link/Identity.kt`,
- * which lists only the pre-existing [PeerId] annotation. Their shapes, and
+ * `git grep -nE '^[[:space:]]*@(kotlinx\.serialization\.)?Serializable' -- kernel/src/main/kotlin/civictech/cell/link/Identity.kt`,
+ * which lists only the pre-existing [PeerId] annotation (line 70 at base and
+ * after this task). The bare `git grep -n '@Serializable'` the task's criterion
+ * named cannot be that check: [PeerId]'s annotation is spelled
+ * `@kotlinx.serialization.Serializable`, so it does not match, and the hits it
+ * does return are KDoc prose. Their shapes, and
  * [UnboundReason]'s ordinals, are therefore local conventions with no
  * cross-version compatibility constraint — keep it that way.
  */
