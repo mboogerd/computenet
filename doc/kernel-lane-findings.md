@@ -2959,10 +2959,18 @@ final round). Here peer2 holds both dots, peer0 lacks exactly peer2's, on rounds
 **First question: what does "reproduce seed 145" mean on this rig?** Nothing, taken
 literally. Repeating ONE seed in one JVM on one host gives a DISTINCT trace digest
 almost every run: 20 of 20 on seeds 145 and 132 (both arms), then 300 of 300 on
-145 and 299-300 of 300 on 132. Seed 132's plan contains no `PARTITION_SUSPEND`
-(`EVICT_NO_CLOSE` plus joins), so the entropy reaches wider than `doc/dst-rig.md`
-section 4 scopes it on this graph. The schedule is not a function of the seed, and
-the entropy is not thread timing or host — it is drawn per run — so the ubuntu red
+145 and 299-300 of 300 on 132. Seed 132's churn plan contains no `PARTITION_SUSPEND`
+(`EVICT_NO_CLOSE` plus joins), which read at first as entropy wider than
+`doc/dst-rig.md` section 4 scopes. **Corrected at review (same day):** it is
+section 4's documented mechanism. This graph's fault plan carries three
+`PartitionFault.park` faults, and on the churn mesh a park is
+`LinkControl.severing` — `Peering.Loopback.partition()`/`heal()` — so EVERY seed
+re-opens a loopback; seed 145's churn plan additionally heals a
+`PARTITION_SUSPEND` at step 3341-3342. With the three parks commented out, seed 132
+gave 1 distinct digest in 20 runs on both SHARED and SHARED_NONE (20 of 20 with
+them); seed 145 stayed 20 of 20, from its own suspend-heal. The schedule is not a
+function of the seed, and the entropy is not thread timing or host — it is drawn
+per run — so the ubuntu red
 and the darwin 3/3 green on PR #788's tree say nothing about the host. The only
 reproducible quantity is a RATE per seed, measured by repetition.
 
@@ -2993,8 +3001,11 @@ Two readings make the attribution specific rather than analogical:
 
 - **`lacking=`: every missing dot was ABSENT** at the lacking replica, on every hit
   of both arms — never applied, not tombstoned, and not in its `ReclaimedDots`.
-  FENCED, the one state reclamation can cause, never occurred. (The check now
-  prints this per missing dot.)
+  FENCED, the one state the lacking replica's OWN reclaimer can cause, never
+  occurred. (The check now prints this per missing dot.) ABSENT does not exonerate
+  reclamation elsewhere — a sender whose compaction made it omit a dot from a reply
+  would leave it ABSENT at the receiver — and the attribution does not check which
+  source minted the lacking dot; the ceiling is the only bound on either.
 - **Every value-divergent run stranded a reorder frame.** 25 of 25 value-divergent
   runs in the table had `strandedFrames >= 1`, against ~50% of all runs (seed 145
   control, 900 runs: `{0=443, 1=272, 2=185}`); the pair is always peer0/peer2,

@@ -702,7 +702,10 @@ object OrMapGcSafetySweep {
                 // at one replica is in exactly one of three states there, and they are three
                 // different findings: ABSENT (never applied — a withheld frame), TOMBSTONED (applied
                 // and covered by a del-dot) or FENCED (in the replica's own `ReclaimedDots`, so the
-                // reclaimer's fence refused it — the only one of the three reclamation can cause).
+                // reclaimer's fence refused it — the only one of the three the LACKING replica's own
+                // reclaimer can cause). ABSENT does not exonerate reclamation ELSEWHERE: a sender whose
+                // compaction made it omit the dot from a reply would leave it ABSENT here too, and
+                // the clauses below do not check the dot's source — only the arm's ceiling bounds that.
                 val liveByPeer = cellsByPeer.associate { (name, cell) -> name to liveDotsOf(cell, key) }
                 val unionLive = liveByPeer.values.flatten().toSet()
                 // (lacking replica, dot, state) for every live dot some replica lacks.
@@ -1354,8 +1357,11 @@ class OrMapGcSafetySweepTest {
      *
      * Why repetition rather than one re-run: on this rig a seed does NOT fix the schedule. Every
      * repeat of one seed draws a distinct trace digest (measured: 300 of 300 on seed 145, 299 of 300
-     * on seed 132 — a plan with no `PARTITION_SUSPEND`, so the entropy is wider than
-     * `doc/dst-rig.md` section 4 scopes it), so "re-run seed N" answers nothing and a rate is the
+     * on seed 132). That is `doc/dst-rig.md` section 4's documented exception, not new entropy: the
+     * plan's three `PartitionFault.park` faults heal a `Peering.Loopback` (`LinkControl.severing`)
+     * on EVERY seed, and seed 145's churn plan adds a healed `PARTITION_SUSPEND` — with the three
+     * parks removed, seed 132 gave 1 digest in 20 runs on both arms (computenet-yjji2 review). So
+     * "re-run seed N" answers nothing and a rate is the
      * only reproducible quantity. Running the SHARED arm and its reclaimer-off control
      * (`SHARED_NONE`) on the same seed is what separates the adversary from reclamation.
      *
