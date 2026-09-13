@@ -225,6 +225,26 @@ class WsAnchorVouchedHelloTest {
         at.assertRefusedUnbound(DenialReason.UNVOUCHED, UnboundReason.KEY_MISMATCH, aliceName, l.registry)
     }
 
+    /**
+     * The order on the `HELLO3` path: the binding's verdict precedes the
+     * allowlist. `carol` is on no allowlist AND her only statement comes from
+     * an unaccepted anchor; the refusal must name the statement
+     * (`UNVOUCHED`), never the allowlist (`NOT_ADMITTED`). Example 2 cannot
+     * show this — its claimed `alice` is allowlisted, so an allowlist checked
+     * first would pass and the same `UNVOUCHED` would follow.
+     */
+    @Test
+    fun `an unvouched HELLO3 claiming a name off the allowlist is refused UNVOUCHED, not NOT_ADMITTED`() {
+        val carolKeys = keyed("carol")
+        val carol = PeerId("carol")
+        val l = listener()
+        val at = Driven(l)
+        at.session.hello()
+        at.session.onText(posedHello3(carolKeys, carol, listOf(anchorC.bind(carol, carolKeys.keyId, 1, fixedNow - day, fixedNow + day))))
+
+        at.assertRefusedUnbound(DenialReason.UNVOUCHED, UnboundReason.ISSUER_NOT_ACCEPTED, carol, l.registry)
+    }
+
     /** Example 3: an unaccepted issuer is UNVOUCHED; a window miss is STATEMENT_EXPIRED and names the clock. */
     @Test
     fun `an unaccepted issuer is UNVOUCHED, and an expired or not-yet-valid statement is STATEMENT_EXPIRED under this side's clock`() {
