@@ -53,7 +53,7 @@ import kotlin.test.fail
  *    binding.** L allowlists the [KeyId] fingerprinted from B's NodeId; B's
  *    invocation is delivered and a cell on L reading
  *    [civictech.cell.membrane.currentPrincipal] inside that delivery observes
- *    `Principal.Peer(<the peer L.side.identityBinding.resolve(key) is Bound to>, Authenticated)`.
+ *    `Principal.Peer(<the peer L.side.identityBinding.resolve(key, emptyList()) is Bound to>, Authenticated)`.
  *    The expected identity is spelled *through the binding* — writing it as
  *    `PeerId(fingerprint(...).name)` would make the assertion a restatement of
  *    the implementation rather than a check on it (feature `computenet-376c`).
@@ -421,7 +421,7 @@ class IrohKeyBoundAdmissionTest {
  * interim binding — rather than substituting anything.
  */
 private fun PeerIdentityBinding.boundPeer(key: KeyId): PeerId =
-    when (val resolution = resolve(key)) {
+    when (val resolution = resolve(key, emptyList())) {
         is IdentityResolution.Bound -> resolution.peer
         is IdentityResolution.Unbound -> throw AssertionError("expected $key to be bound, got $resolution")
     }

@@ -38,7 +38,9 @@ fun allowPeers(
     when {
         identity == null -> null
         keys.any { key ->
-            when (val resolution = binding.resolve(key)) {
+            // An allowlist entry is a bare key and presents no statement;
+            // feature computenet-5y8t.4 reconfigures allowlists in names.
+            when (val resolution = binding.resolve(key, emptyList())) {
                 is IdentityResolution.Bound -> resolution.peer == identity
                 is IdentityResolution.Unbound -> false
             }
