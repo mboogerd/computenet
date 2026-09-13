@@ -1114,12 +1114,16 @@ certified last session ... don't re-review"), so an unset flag on merged,
 certified work sends a later session back over work already certified.
 
 **Ready, with follow-on work found in review.** Every criterion can be met and
-you can still find real work outside the claim — typically when the feature
-RECORDS A DECISION, which falsifies every cross-reference (a DISPUTES bullet, a
-KDoc) that called it pending, and those sit outside the claim by construction.
-The verdict stays READY; file the follow-on under the attachment rules in
-"Ready with residual" below, and name it in your verdict comment
-(computenet-cgdt: computenet-fzd3 and computenet-07vb, one session).
+you can still find real work outside the claim. The structural case: a feature
+that RECORDS A DECISION falsifies every cross-reference (a DISPUTES bullet, a
+KDoc) that called it pending, and those sit outside its claim by construction
+— left unfiled, that stale prose, in the honesty ledger
+`concord/corpus/DISPUTES.md` too, is something no later reader is prompted to
+find. File it: the verdict stays READY, and filing is not a downgrade. Attach
+and record it per "Ready with residual" below, reading its "unmet criterion" as
+the follow-on itself — title and `--acceptance` name the stale reference and
+its correction — and name it in your verdict comment (computenet-cgdt:
+computenet-fzd3 and computenet-07vb, one session).
 
 ### Ready with residual — the honest negative result
 
