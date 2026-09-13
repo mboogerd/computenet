@@ -173,6 +173,14 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   path — fails in a way that looks like an unrelated bug. Brace it:
   `-v "${REPO}:${REPO}:ro"`. See `scripts/flake-loop/run-linux-loop.sh` for a
   worked case (computenet-yj6/computenet-m3iy).
+  **The rule is ANY `:` directly after an unbraced expansion, quoted or not** —
+  zsh has more modifiers than those four (`:c`, `:l`, `:u`, `:s`, `:q`, …).
+  The second spelling agents hit is the remote read:
+  `git show "$R:testkit/x"` hands git `mainestkit/x` (`:t`), and
+  `"$R:concord/x"` eats the `c` the same way, failing as a `fatal:` about a
+  nonexistent object that reads as "that file is not there". Write
+  `"${R}:testkit/x"`. A literal `origin/main:concord/x` is safe — modifiers
+  follow only an expansion (computenet-frgu1, computenet-wk53).
 - Same zsh family, different operator: **an unquoted glob in a `--flag=*.ext`
   argument is expanded by the shell before the command sees it**, so
   `grep -rln 'Foo' --include=*.kt .` dies with

@@ -1,0 +1,6 @@
+# computenet-frgu1 + computenet-wk53: the zsh history-modifier rule stated in
+# its general form (any `:` after an unbraced expansion) with the git show
+# "$R:testkit/..." spelling beside the docker one; one pointer line-group in
+# agent-execution.md, which every dispatched agent reads.
+AGENTS.md +8
+work +3
