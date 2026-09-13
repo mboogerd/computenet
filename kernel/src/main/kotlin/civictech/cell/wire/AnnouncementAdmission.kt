@@ -309,9 +309,9 @@ class AnnouncementAdmission private constructor(
         // `signerKeyId` IS the minting identity's name: on every :identity-backed
         // signer it defaults to `credentials.keyId.name`, which is the key's own
         // fingerprint ([DSC1-WIRE-01], AnnouncementSigningConfig.signerKeyId).
-        // Keying `mintingPeer` off that name rather than a key-independent
+        // Keying `mintingPeer` off that key name rather than a key-independent
         // identity is a decided DSC4 residual (computenet-t446/computenet-376c),
-        // not an oversight left for this file to fix.
+        // not an oversight: DSC4's remaining work re-keys this line.
         val mintingPeer = PeerId(signerKeyId)
         if (boundPeer == null) {
             return AnnouncementRejection(
