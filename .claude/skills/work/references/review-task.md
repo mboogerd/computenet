@@ -100,6 +100,12 @@ to discover by a failed command (computenet-e3my).
 what it decided, what it deliberately left — usually lives only there. Read
 both before the diff.
 
+**The bead may have been amended after you were dispatched.** If its title,
+description or acceptance differs from what your dispatch prompt quoted, or
+changes between your reads, do not reconcile it silently: say so in your
+report's first lines, quoting both versions, and state which one you scored
+against (computenet-7gxi).
+
 **An empty diff is not proof of no work — check the worktree first.**
 
 ```bash

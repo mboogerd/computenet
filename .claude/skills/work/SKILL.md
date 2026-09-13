@@ -1324,6 +1324,15 @@ exactly the moment an agent is finishing bookkeeping (computenet-ys7: a
 worktree removed under a live reviewer seconds after `gh pr ready`). Keep it
 as the second guard; never read it as "nobody is working here".
 
+**The same lock covers the bead's scoring fields.** While a dispatched agent
+is live, its bead's **comments** are always yours to add — append-only and
+timestamped — but its **title, description and acceptance wait for the
+verdict**: those are what the agent scores against, and it cannot tell your
+edit from a concurrent session's. An amendment that cannot wait goes in a
+comment plus a `SendMessage` to the agent saying what moved and why — never a
+silent edit (computenet-7gxi: a reviewer met its own finding in a title it had
+not written).
+
 A worktree already on disk that this session did not create may also belong
 to a *concurrent session* on this machine, not just a dead one — step 3's
 liveness check races a run that starts mid-slot. Before adopting one, check
@@ -1744,11 +1753,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
   **When the widening is for a task ALREADY DISPATCHED** — the
   report-and-widen case in the sentence above — "before anyone is dispatched"
-  has already been missed, and amending the acceptance under a live review
-  silently moves the standard the verdict is measured against
-  (computenet-7gxi, open). Do not amend it silently: comment the
-  reconciliation on the bead and `SendMessage` the implementer, so the text
-  the reviewer scores and the text the agent worked from stay the same one.
+  has already been missed — follow "the same lock covers the bead's scoring
+  fields" under step 5: comment the reconciliation and `SendMessage` the
+  implementer, never amend silently (computenet-7gxi).
 - **Disjoint paths are not enough — read each candidate's acceptance for a
   cross-reference into another candidate's claim.** `next-batch.py` proves the
   batch will not merge into a conflict; it cannot see that task A's acceptance

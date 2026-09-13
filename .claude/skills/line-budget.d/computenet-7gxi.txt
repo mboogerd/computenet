@@ -1,0 +1,6 @@
+# computenet-7gxi: the worktree lock extended to the bead's scoring fields
+# (comments free; title/description/acceptance wait for the verdict, else
+# comment + SendMessage), with the 5b local patch shortened to point at it;
+# plus a reviewer-side note in both review references to flag, not reconcile,
+# an amended bead.
+work +19
