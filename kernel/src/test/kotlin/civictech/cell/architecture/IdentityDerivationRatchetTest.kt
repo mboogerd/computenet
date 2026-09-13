@@ -1218,4 +1218,56 @@ class IdentityDerivationRatchetTest {
                 "not open a runaway fold into an unrelated type usage; found: $actual"
         }
     }
+
+    /**
+     * Pins [headerBracketDepths]'s paren-depth guard on a CLOSING '>'
+     * (computenet-zfdsw review). Fixture o does not: its operator '>' arrives
+     * while generic depth is still zero, so the zero clamp alone already
+     * ignores it, and every other fixture stayed green with the guard
+     * removed. The guard is load-bearing when a '>' inside parens arrives
+     * while a top-level generic is OPEN — a generic type argument inside a
+     * function-type parameter list ("Handler<" / "(List<Int>) -> Unit" /
+     * ">,"): its '<' is skipped at paren depth 1, so without the guard its
+     * '>' closes the OUTER generic, depth reads 0 on the middle line, and the
+     * fold ends before the later `PeerIdentityBinding` entry. Measured
+     * 2026-09-13: flagged with the guard, NOT flagged without it.
+     */
+    @Test
+    fun `fixture self-check - a generic inside a function-type parameter does not close the enclosing generic`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-q")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-q/src/main/kotlin/fixture/q").apply { mkdirs() }
+
+        File(moduleDir, "Nested.kt").writeText(
+            """
+            package fixture.q
+
+            private interface Handler<T>
+            private interface Marker
+
+            class Nested :
+                Handler<
+                    (List<Int>) -> Unit
+                >,
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-q/src/main/kotlin/fixture/q/Nested.kt"), actual) {
+            "a '>' inside a function-type parameter list must not close the enclosing top-level generic " +
+                "supertype; the fold must still see the interface name later in the same header; found: $actual"
+        }
+    }
 }
