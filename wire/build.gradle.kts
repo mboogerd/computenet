@@ -65,6 +65,9 @@ dependencies {
 // (`artifactSink()` is on the `@Test` path) and neither was forwarded, i.e.
 // `./gradlew :wire:test -Dwire.stress.artifacts=DIR` was silently ignored —
 // the same defect, found by the guard on its first run.
+//
+// `wire.vectors.strict` is `RegistrationCoverageTest`'s strict mode (an empty
+// `pending` list in wire/corpus/manifest.json is required when it is `true`).
 val forwardedSystemProperties = listOf(
     "wire.burst.iterations",
     "wire.burst.refs",
@@ -72,6 +75,7 @@ val forwardedSystemProperties = listOf(
     "wire.stress.injectFailureAt",
     "wire.stress.artifacts",
     "wire.stress.heapCeiling",
+    "wire.vectors.strict",
 )
 
 tasks.withType<Test>().configureEach {
