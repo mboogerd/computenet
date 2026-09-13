@@ -70,6 +70,31 @@ enum class KeyStoreRefusal {
 
     /** The next incarnation would not fit the bits a counter floor leaves for it. */
     INCARNATION_EXHAUSTED,
+
+    /**
+     * An [civictech.identity.anchor.AcceptedIssuerStore]'s configured directory
+     * does not exist (`computenet-5y8t.2`). Distinguished from an empty
+     * directory (which loads an empty, legitimately-trust-nobody map) so a
+     * mistyped path is loud rather than silently accepting nobody.
+     */
+    ISSUER_DIRECTORY_MISSING,
+
+    /**
+     * An [civictech.identity.anchor.AcceptedIssuerStore]'s directory holds a
+     * file that decodes as a PKCS#8 private key. A private key among accepted
+     * issuers is the configuration error that store exists to refuse
+     * (`computenet-5y8t.2`); the refusal names the path, never the bytes.
+     */
+    ISSUER_PRIVATE_KEY_PRESENT,
+
+    /**
+     * An [civictech.identity.anchor.AcceptedIssuerStore]'s `.pub` file's
+     * fingerprint does not match the file name it was loaded from
+     * (`computenet-5y8t.2`). The issuer id is always computed from the key
+     * bytes, never trusted from the name; this is what makes that check fail
+     * loudly instead of silently loading under the wrong id.
+     */
+    ISSUER_ID_MISMATCH,
 }
 
 /**
