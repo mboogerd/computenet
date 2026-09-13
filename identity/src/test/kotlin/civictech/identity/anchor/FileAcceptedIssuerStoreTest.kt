@@ -182,10 +182,14 @@ class FileAcceptedIssuerStoreTest {
 
     @Test
     fun `KeyStoreRefusal ends with the three new entries in order`() {
+        // Appended, contiguous and in order right after the entry that ended the
+        // enum before them — without requiring them to stay the enum's tail, so a
+        // later append (e.g. computenet-5y8t.3.2's STATEMENTS_*) does not break it.
         val names = KeyStoreRefusal.entries.map { it.name }
+        val start = names.indexOf("INCARNATION_EXHAUSTED")
         assertEquals(
-            listOf("ISSUER_DIRECTORY_MISSING", "ISSUER_PRIVATE_KEY_PRESENT", "ISSUER_ID_MISMATCH"),
-            names.takeLast(3),
+            listOf("INCARNATION_EXHAUSTED", "ISSUER_DIRECTORY_MISSING", "ISSUER_PRIVATE_KEY_PRESENT", "ISSUER_ID_MISMATCH"),
+            names.subList(start.coerceAtLeast(0), (start + 4).coerceIn(0, names.size)),
         )
     }
 
