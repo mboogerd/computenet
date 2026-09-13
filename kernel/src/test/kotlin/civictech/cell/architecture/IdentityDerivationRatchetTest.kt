@@ -185,19 +185,71 @@ class IdentityDerivationRatchetTest {
      * nothing rather than going negative) — not attested in any fixture or
      * production file, but a walk should not let one adversarial line poison
      * the running depth for the rest of the header.
+     *
+     * Two additions close the two LATENT shapes filed as computenet-etm0u
+     * (measured pre-existing at both 65756a102 and this walk's own
+     * introduction at 8c9beaeba/4e483e1e5 — neither introduced nor fixed by
+     * computenet-zfdsw):
+     *
+     * - **PROBE T1**: the caller used to end the fold on any line where
+     *   `trimmed.contains("{")`, with no regard for paren nesting — so a
+     *   brace belonging to a LAMBDA ARGUMENT inside a still-open supertype
+     *   constructor call ("Base({ a -> ... }),") ended the header before its
+     *   real body brace, losing a later `PeerIdentityBinding` entry in the
+     *   same list. [sawBodyBrace] answers "was an actual top-level `{` seen"
+     *   (paren depth zero at the point of the brace) instead of "did this
+     *   line contain any `{` at all", so a lambda's brace — always seen at
+     *   paren depth > 0 — no longer ends the header.
+     * - **PROBE T2**: every `(`/`)`/`<`/`>` character was counted regardless
+     *   of context, so one appearing inside a STRING LITERAL in a
+     *   body-less header's supertype call ("Base(\"(\")") threw off the
+     *   paren balance and left the header reading as still-open, opening a
+     *   runaway fold into later unrelated code. The walk now tracks whether
+     *   it is inside a double-quoted string (honoring a `\`-escape) and
+     *   ignores bracket characters while inside one. Deliberately narrow:
+     *   this is not a Kotlin lexer — no char literals, no triple-quoted raw
+     *   strings, no unicode escapes — because the file's own history is a
+     *   sequence of heuristic patches each reopening a neighbouring escape;
+     *   the two shapes actually filed are what this closes.
+     *
+     * Consequence of ending the fold only on a paren-depth-zero brace: an
+     * imbalance this walk does NOT model (a char literal `'('`, a string
+     * template nesting quotes) no longer ends at the next `{` — the fold
+     * runs to end of file and HIDES any later implementation in that file
+     * (false negative). Measured 2026-09-13 (computenet-etm0u review):
+     * "class W :\n    Base('(')" followed by
+     * "class Impl : PeerIdentityBinding {" is flagged at 6855cdc53 and not
+     * after this change. Unattested in production; filed as
+     * computenet-ru92m.
      */
-    private fun headerBracketDepths(text: String): Pair<Int, Int> {
+    private fun headerBracketDepths(text: String): Triple<Int, Int, Boolean> {
         var parenDepth = 0
         var genericDepth = 0
-        for (index in text.indices) {
-            when (text[index]) {
+        var sawBodyBrace = false
+        var inString = false
+        var index = 0
+        while (index < text.length) {
+            val c = text[index]
+            if (inString) {
+                if (c == '\\') {
+                    index += 2 // skip the escaped character, including an escaped '"'
+                    continue
+                }
+                if (c == '"') inString = false
+                index++
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
                 '(' -> parenDepth++
                 ')' -> if (parenDepth > 0) parenDepth--
                 '<' -> if (parenDepth == 0) genericDepth++
                 '>' -> if (parenDepth == 0 && genericDepth > 0 && (index == 0 || text[index - 1] != '-')) genericDepth--
+                '{' -> if (parenDepth == 0) sawBodyBrace = true
             }
+            index++
         }
-        return parenDepth to genericDepth
+        return Triple(parenDepth, genericDepth, sawBodyBrace)
     }
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
@@ -286,13 +338,25 @@ class IdentityDerivationRatchetTest {
                         // replaces three successive patches with. `by` and
                         // `->` remain plain trailing-token checks: neither is
                         // a bracket, so neither needs the depth walk.
-                        val (parenDepth, genericDepth) = headerBracketDepths(folded)
+                        //
+                        // The header now ends on [sawBodyBrace] — an actual
+                        // top-level `{` (paren depth zero) — rather than on
+                        // any `{` the line happens to contain: a brace inside
+                        // a still-open supertype constructor call's lambda
+                        // argument is not the class body and must not end the
+                        // fold early (PROBE T1, computenet-etm0u). The walk
+                        // also now skips string-literal content, so a `(`
+                        // written inside a string in a body-less header's
+                        // supertype call no longer throws off the paren
+                        // balance and opens a runaway fold (PROBE T2,
+                        // computenet-etm0u).
+                        val (parenDepth, genericDepth, sawBodyBrace) = headerBracketDepths(folded)
                         val listContinues = trimmed.endsWith(",") ||
                             parenDepth > 0 ||
                             genericDepth > 0 ||
                             bindingHeaderInfixContinuation.containsMatchIn(trimmed) ||
                             bindingHeaderArrowContinuation.containsMatchIn(trimmed)
-                        if (trimmed.contains("{") || !listContinues) {
+                        if (sawBodyBrace || !listContinues) {
                             if (bindingHeaderName.containsMatchIn(folded)) {
                                 paths += relativePath
                             }
@@ -1268,6 +1332,154 @@ class IdentityDerivationRatchetTest {
         assertEquals(setOf("fixture-q/src/main/kotlin/fixture/q/Nested.kt"), actual) {
             "a '>' inside a function-type parameter list must not close the enclosing top-level generic " +
                 "supertype; the fold must still see the interface name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE T1 (computenet-etm0u): a brace inside a supertype constructor
+     * call's LAMBDA ARGUMENT ("Base({ a -> ... }),") ends the header early,
+     * because the old continuation test ended the fold on any line where
+     * `trimmed.contains("{")`, with no regard for whether that brace sat
+     * inside an unbalanced constructor call. [headerBracketDepths] now also
+     * tracks whether a `{` was seen while paren depth was zero — the actual
+     * class-body brace, not a lambda's — so the fold survives the lambda and
+     * still reaches the later `PeerIdentityBinding` entry in the same
+     * supertype list. Measured 2026-09-13 against 6855cdc53 (this bead's
+     * base commit, unchanged from 8c9beaeba where the shape was filed): NOT
+     * flagged.
+     */
+    @Test
+    fun `fixture self-check - a lambda brace inside a supertype constructor call does not end the header early`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-r")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-r/src/main/kotlin/fixture/r").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.r
+
+            private interface Marker
+            private open class Base(private val predicate: (Int) -> Boolean)
+
+            class W :
+                Base({ a ->
+                    a > 0
+                }),
+                PeerIdentityBinding,
+                Marker {
+                fun x() = 1
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-r/src/main/kotlin/fixture/r/Wrapped.kt"), actual) {
+            "a lambda brace inside a supertype constructor call must not end the header early; the fold " +
+                "must still see the interface name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE T2 (computenet-etm0u): a `(` inside a STRING LITERAL, in a
+     * body-less header's supertype constructor call ("Base(\"(\")"), opens a
+     * runaway fold — because the old continuation test counted every `(`
+     * character naively, including one that is only literal text inside a
+     * string, so the call's own balanced parens read as unbalanced and the
+     * fold never closes, sweeping the unrelated `PeerIdentityBinding` type
+     * usage below into the match. [headerBracketDepths] now tracks whether
+     * it is inside a double-quoted string literal (honoring `\`-escapes) and
+     * ignores bracket characters while inside one. Measured 2026-09-13
+     * against 6855cdc53 (this bead's base commit, unchanged from 8c9beaeba
+     * where the shape was filed): FLAGGED (should be empty).
+     */
+    @Test
+    fun `fixture self-check - a paren inside a string literal in a body-less header's supertype call does not open a runaway fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-s")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-s/src/main/kotlin/fixture/s").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.s
+
+            private open class Base(private val marker: String)
+
+            class W :
+                Base("(")
+
+            fun consume(b: PeerIdentityBinding) {
+                println(b)
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a '(' inside a string literal in a body-less header's supertype constructor call must not " +
+                "open a runaway fold into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * Pins [headerBracketDepths]'s string-literal skip (computenet-etm0u
+     * review). Fixture s does not: with the string skip removed, its
+     * runaway fold still never reaches a paren-depth-zero brace, so it runs
+     * to end of file and flags nothing — the expected empty set by accident
+     * — and every fixture stayed green with the skip disabled. The skip is
+     * load-bearing when a REAL implementation follows the body-less header:
+     * without it the fold swallows that implementation and the file goes
+     * unflagged. Expected value is the literal fixture path.
+     */
+    @Test
+    fun `fixture self-check - a paren inside a string literal does not swallow a later implementation`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-t")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-t/src/main/kotlin/fixture/t").apply { mkdirs() }
+
+        File(moduleDir, "Swallowed.kt").writeText(
+            """
+            package fixture.t
+
+            private open class Base(private val marker: String)
+
+            class W :
+                Base("(")
+
+            class Impl : PeerIdentityBinding {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-t/src/main/kotlin/fixture/t/Swallowed.kt"), actual) {
+            "a '(' inside a string literal in a body-less header must not leave the fold open and swallow a " +
+                "later implementation in the same file; found: $actual"
         }
     }
 }
