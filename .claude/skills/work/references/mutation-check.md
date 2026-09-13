@@ -107,7 +107,12 @@ will not:
   grep` pathspec and POSIX-class traps in AGENTS.md — the failure reads as
   information about the code when it is information about the command. If you
   want the construct confirmed as well, that is a second command
-  (`grep -n '@Timeout' <file>`), not a filter on the first. Escape-
+  (`grep -n '@Timeout' <file>`), not a filter on the first.
+  **Non-empty proves it landed, not WHERE.** Read the hunk header's enclosing
+  declaration and confirm it is the one you aimed at; a scripted anchor must be
+  proven unique first (`grep -c '<anchor>' <file>` prints `1`). A non-unique
+  anchor put a probe into a neighbouring class, the landed-proof passed, and
+  the resulting compile error read as a detected red (computenet-1783). Escape-
   heavy perl patterns (`\Q…\E`) have arrived mangled through the Bash tool in
   at least one harness — for replacement of a metacharacter-heavy line, prefer
   line-addressed sed: `sed -i '' '<N>s|.*|<new line>|' <file>`.
@@ -133,6 +138,10 @@ a plausible result — a verdict for a run that never happened:
   > "$SCRATCH/mut.log" 2>&1
 grep -aE '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
 ```
+
+**A compile error on the mutated arm is not a detected mutation** — no test
+ran, so there is no red to score. Fix the mutation and run again
+(computenet-1783).
 
 **A `println` probe prints nothing here** — Gradle hides test stdout; read
 it from the JUnit XML's `<system-out>` ([gradle-evidence.md](gradle-evidence.md),
@@ -166,6 +175,15 @@ green. **The check is not complete until the assertion under test is shown to
 discriminate on its own** — disable the earlier assertions under the same
 mutation, or choose a mutation only that assertion can catch — and the report
 names the assertion, not just the test.
+
+**An exception thrown before the criterion assertion is the same trap.** A
+helper that extracts what the assertion inspects (`first()`, a regex match, a
+fixture's own `shouldBe`) can fail under the mutation, even inside the test file, and
+the criterion assertion never executes: the test noticed the change, nothing
+more. Build a second, narrower mutation that leaves the helper's input intact
+so the run reaches the criterion assertion and reddens there with its own
+message (computenet-0ff7: a `NoSuchElementException: Sequence is empty` stood
+in for the real assertion; a shared rig's `shouldBe` did the same twice).
 
 **5. Revert — and verify it, do not assume it.**
 
