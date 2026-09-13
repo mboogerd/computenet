@@ -110,9 +110,11 @@ will not:
   (`grep -n '@Timeout' <file>`), not a filter on the first.
   **Non-empty proves it landed, not WHERE.** Read the hunk header's enclosing
   declaration and confirm it is the one you aimed at; a scripted anchor must be
-  proven unique first (`grep -c '<anchor>' <file>` prints `1`). A non-unique
-  anchor put a probe into a neighbouring class, the landed-proof passed, and
-  the resulting compile error read as a detected red (computenet-1783). Escape-
+  proven unique first — `grep -cF '<anchor>' <file>` prints `1` (`-F`: the
+  motivating anchor, `/** Reporting only`, is an invalid regex to macOS grep,
+  which then prints no count at all). A non-unique anchor put a probe into a
+  neighbouring class, the landed-proof passed, and the resulting compile error
+  read as a detected red (computenet-1783). Escape-
   heavy perl patterns (`\Q…\E`) have arrived mangled through the Bash tool in
   at least one harness — for replacement of a metacharacter-heavy line, prefer
   line-addressed sed: `sed -i '' '<N>s|.*|<new line>|' <file>`.
@@ -176,14 +178,16 @@ discriminate on its own** — disable the earlier assertions under the same
 mutation, or choose a mutation only that assertion can catch — and the report
 names the assertion, not just the test.
 
-**An exception thrown before the criterion assertion is the same trap.** A
-helper that extracts what the assertion inspects (`first()`, a regex match, a
-fixture's own `shouldBe`) can fail under the mutation, even inside the test file, and
-the criterion assertion never executes: the test noticed the change, nothing
-more. Build a second, narrower mutation that leaves the helper's input intact
-so the run reaches the criterion assertion and reddens there with its own
-message (computenet-0ff7: a `NoSuchElementException: Sequence is empty` stood
-in for the real assertion; a shared rig's `shouldBe` did the same twice).
+**A red from anywhere but the criterion assertion is the same trap.** A
+helper that extracts what the assertion inspects (`first()`, a regex match)
+can throw under the mutation; a shared fixture can assert first with its own
+`shouldBe`; the mutation's blast radius can redden a DIFFERENT test. Each looks
+like a caught mutation, and in none does the criterion assertion execute: the
+test noticed the change, nothing more. Narrow the mutation so the setup
+survives and the run reddens at the criterion assertion with its own message
+(computenet-0ff7: `NoSuchElementException: Sequence is empty` stood in for the
+real assertion; in computenet-f7h a rig helper's `shouldBe` and a fixture's
+default-constructed peers did the same).
 
 **5. Revert — and verify it, do not assume it.**
 
