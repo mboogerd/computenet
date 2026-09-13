@@ -321,9 +321,13 @@ The smallest coherent change, and proof the tests actually executed.
      changed, and so shipped a stronger claim than their author believed
      (computenet-k9d.2, then k9d.7); both cost their reviewer a repair.
 6. Verify per AGENTS.md's "Verification" section — narrowest relevant test
-   first, then the affected module's suite. Don't report success on an
-   untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
-   replays cached results, so a green build is not evidence a test executed.
+   first, then the affected module's suite. **For a test whose verdict turns on
+   concurrency, scheduling or wall-clock timing, a green narrow `--tests` run is
+   not evidence** — it ran a different population; the module gate is
+   (computenet-5c1f: a narrow `:wire` run passed a design the full suite
+   failed, and vice versa). Don't report success on an untested claim, and
+   don't let `BUILD SUCCESSFUL` be the claim: Gradle replays cached results,
+   so a green build is not evidence a test executed.
 
    **Carry `--rerun` in the module gate itself**, not only in the narrow run:
 

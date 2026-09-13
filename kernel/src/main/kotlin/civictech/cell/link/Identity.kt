@@ -80,10 +80,30 @@ data class PeerId(val name: String) : Identity, java.io.Serializable
  * (DSC4's anchor-vouched names, supplied from `:identity`) is injected rather
  * than compiled in. Admission decides on the key; whatever it admits is
  * stamped with the identity this binding resolves.
+ *
+ * **Resolution is PARTIAL** (task `computenet-hbqvz`). [resolve] answers an
+ * [IdentityResolution], not a bare [PeerId], because a binding other than
+ * [Interim] can hold keys that have *no* identity — a key whose binding was
+ * superseded or whose validity window lapsed, under DSC4's anchor-vouched
+ * names. A total signature would force such a binding to invent one (a
+ * sentinel, an exception, or a fallback to `PeerId(key.name)`, which is the
+ * identity-is-the-key behaviour the split exists to end), or push the refusal
+ * into a second seam. Every caller therefore handles
+ * [IdentityResolution.Unbound] explicitly: an admission path refuses the
+ * connection, and nothing ever substitutes a name derived from the key.
+ *
+ * This is the shape only. No binding in the tree returns
+ * [IdentityResolution.Unbound] today, no revocation mechanism exists, and
+ * **`[DSC1-NV-01]` remains EXPLICITLY UNVERIFIED** — the refusal arm says
+ * nothing about stolen-key resistance.
  */
 fun interface PeerIdentityBinding {
-    /** The durable identity of the peer that key [key] belongs to. */
-    fun identityOf(key: KeyId): PeerId
+    /**
+     * The durable identity of the peer that key [key] belongs to —
+     * [IdentityResolution.Bound] — or [IdentityResolution.Unbound] when this
+     * binding holds no identity for [key].
+     */
+    fun resolve(key: KeyId): IdentityResolution
 
     companion object {
         /**
@@ -108,9 +128,53 @@ fun interface PeerIdentityBinding {
          * key is still that peer as far as this binding is concerned (epic
          * `computenet-5y8t` residual R4). Naming the derivation does not
          * strengthen it.
+         *
+         * **Total by construction**: it resolves every key identifier to
+         * [IdentityResolution.Bound] and never answers
+         * [IdentityResolution.Unbound], so no verdict anywhere changes before a
+         * partial binding is injected.
          */
-        val Interim: PeerIdentityBinding = PeerIdentityBinding { PeerId(it.name) }
+        val Interim: PeerIdentityBinding = PeerIdentityBinding { IdentityResolution.Bound(PeerId(it.name)) }
     }
+}
+
+/**
+ * The answer [PeerIdentityBinding.resolve] gives for one key identifier: the
+ * identity it is bound to, or a machine-readable statement that it has none
+ * (task `computenet-hbqvz`).
+ *
+ * **Sealed rather than a nullable [PeerId]** on purpose: the positive arm is
+ * where DSC4 attributes a resolution to the issuer that vouched for it
+ * (feature `computenet-5y8t.1`), which a bare `PeerId?` cannot carry, and the
+ * negative arm carries a *reason* a refusal can classify without string
+ * matching — the `civictech.wire.HelloMalformation` precedent.
+ */
+sealed interface IdentityResolution {
+    /** [key][PeerIdentityBinding.resolve]'s durable identity is [peer]. */
+    data class Bound(val peer: PeerId) : IdentityResolution
+
+    /**
+     * The binding holds **no identity** for the key. A caller must not invent
+     * one: an admission path refuses the connection, attribution records
+     * nothing, and in particular nothing falls back to `PeerId(key.name)`.
+     */
+    data class Unbound(val reason: UnboundReason) : IdentityResolution
+}
+
+/**
+ * Why a key identifier resolved to no identity — the machine-readable half of
+ * [IdentityResolution.Unbound].
+ *
+ * Deliberately one constant today: this task lands the refusal *arm*, and no
+ * binding in the tree can yet produce it ([PeerIdentityBinding.Interim] is
+ * total). The finer reasons a verifying binding distinguishes — no presented
+ * statement, an unaccepted issuer, a bad signature, an expired window — belong
+ * to the features that build that binding (`computenet-5y8t.1` onward) and are
+ * added there, beside this one, rather than guessed at here.
+ */
+enum class UnboundReason {
+    /** The binding holds no identity for this key identifier. */
+    NO_BINDING,
 }
 
 /**

@@ -113,20 +113,92 @@ class IdentityDerivationRatchetTest {
 
     // The fold's continuation test (see [scanPeerIdentityBindingImplementations])
     // originally recognised only a trailing comma or an unbalanced '(' as
-    // "the supertype list is not finished yet". Two further shapes end a
-    // continuation line without either of those: a multi-line generic type
-    // argument ("Comparable<\n    String\n>,") and a delegation split across
-    // the `by` keyword ("Base by\n    delegate,"). Both are caught the same
-    // way the paren check works — track whether the bracket/keyword that
-    // opens a continuation has been closed yet — rather than by scanning for
-    // the specific shape, so the fix generalises instead of special-casing
-    // computenet-3dt4t's two probes. Requiring opens to STRICTLY OUTNUMBER
-    // closes, rather than merely to differ, is what keeps a function-type
-    // supertype ("(Int) -> Unit", which contributes a lone '>' via `->` and
-    // no '<' at all) from ever registering as unbalanced. The two counts are
-    // unordered totals over the folded text, not a left-to-right nesting
-    // walk, which is where the residual below comes from.
+    // "the supertype list is not finished yet", then grew a run of
+    // special-cased bracket/keyword checks over three successive patches
+    // (computenet-3dt4t, computenet-s8ige, computenet-omm5p) — each closing
+    // one probe by adding another unordered total over the WHOLE folded
+    // text, which is why the paren-nested cases (a generic argument INSIDE a
+    // supertype constructor call, a comparison operator using '<'/'>')  kept
+    // reopening new escapes: an unordered count cannot tell a bracket seen
+    // while already inside a constructor call's arguments from one seen at
+    // the top level of the supertype list (computenet-zfdsw, replacing all
+    // three: PROBEs S1/S2/S3 below). [headerBracketDepths] replaces the
+    // bracket half of that history with one left-to-right walk that tracks
+    // real nesting instead of a running total; `by` and the function-type
+    // arrow `->` remain plain trailing-token checks below since neither is a
+    // bracket.
+    //
+    // Known residual, out of scope: a generic supertype whose OPEN bracket
+    // sits alone on its own line ("Handler\n    <\n        String\n    >,"),
+    // with no continuation cue at all on the line carrying just "Handler" —
+    // no trailing comma, bracket, `by` or `->` — reads as a complete
+    // body-less header and the fold stops before the '<' is ever seen
+    // (PROBE S4, pre-existing on both sides of this fix; not attested in any
+    // production file at 65756a102).
     private val bindingHeaderInfixContinuation = Regex("""\bby$""")
+
+    // A line ending in the function-type arrow ("(Int) ->") is a
+    // continuation exactly like one ending in `by` — the supertype list is
+    // not finished, it is split across the arrow itself (computenet-s8ige
+    // PROBE P3). Without this, a header whose FIRST continuation line ends
+    // bare at `->` reads as complete (no comma, no unbalanced bracket, no
+    // trailing `by`) and the fold stops one line early.
+    private val bindingHeaderArrowContinuation = Regex("""->$""")
+
+    /**
+     * Walks the folded header text left to right, tracking '(' nesting
+     * depth and, independently, a generic ('<'/'>') nesting depth that is
+     * only adjusted while paren depth is zero — i.e. at the top level of the
+     * supertype list, never inside a supertype constructor call's argument
+     * list. That single distinction is what an unordered bracket TOTAL over
+     * the whole folded text cannot make, and it is what every prior probe
+     * in this fold's history turns out to need:
+     *
+     * - A generic argument nested inside a constructor call
+     *   ("Base(\n    listOf<Int>(),\n),") never touches the generic depth at
+     *   all — its brackets are seen at paren depth > 0 — and the fold still
+     *   spans it correctly because the paren balance alone drives the
+     *   continuation.
+     * - A bare comparison operator inside a constructor call
+     *   ("Base(a < b)", "Base(a<b)", "Base(a< b)") likewise never touches
+     *   generic depth, REGARDLESS of spacing — closing PROBEs o4/o5
+     *   (computenet-omm5p) and S3 (computenet-zfdsw) together without a
+     *   spacing-based exclusion (the prior [genericOpenNotOperator] fix,
+     *   which is why that regex and [genericCloseNotArrow] are gone: the
+     *   depth walk supersedes both).
+     * - A top-level generic supertype opens and closes generic depth
+     *   whether its brackets are spaced or not ("Handler<", "Handler <"),
+     *   closing PROBE S1 — the prior fix's spacing requirement is exactly
+     *   what made it miss a spaced open.
+     * - An operator '>' occurring at paren depth > 0 ("Base(a > b),") never
+     *   decrements generic depth, so it can no longer end a LATER top-level
+     *   generic's fold early — closing PROBE S2.
+     * - A '>' immediately preceded by '-' (the function-type arrow) is
+     *   still excluded from the generic-close count, exactly as
+     *   [genericCloseNotArrow] did, so `(Int) -> Unit` contributes no real
+     *   generic close (PROBEs P2/P3/i, computenet-s8ige) — carried over
+     *   unchanged; the arrow was never the paren/generic-depth confusion
+     *   this walk fixes.
+     *
+     * Generic depth is clamped at zero on close (an operator '>' at paren
+     * depth 0 with no matching open, e.g. a bare `Base > Other`, decrements
+     * nothing rather than going negative) — not attested in any fixture or
+     * production file, but a walk should not let one adversarial line poison
+     * the running depth for the rest of the header.
+     */
+    private fun headerBracketDepths(text: String): Pair<Int, Int> {
+        var parenDepth = 0
+        var genericDepth = 0
+        for (index in text.indices) {
+            when (text[index]) {
+                '(' -> parenDepth++
+                ')' -> if (parenDepth > 0) parenDepth--
+                '<' -> if (parenDepth == 0) genericDepth++
+                '>' -> if (parenDepth == 0 && genericDepth > 0 && (index == 0 || text[index - 1] != '-')) genericDepth--
+            }
+        }
+        return parenDepth to genericDepth
+    }
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
     /** Repo-relative module `src/main/kotlin` roots, parsed from `settings.gradle.kts`. */
@@ -193,44 +265,33 @@ class IdentityDerivationRatchetTest {
                         // The header ends at the opening brace; short of that
                         // the supertype list only CONTINUES while it is
                         // visibly unfinished — a trailing comma, an unbalanced
-                        // supertype constructor call `(...)` or generic
-                        // argument `<...>` spanning lines, or a delegation
-                        // split across the `by` keyword. Anything else is a
-                        // body-less declaration that ended on this line, and
-                        // folding past it would sweep unrelated code into the
-                        // match: measured on "class Wrapped :\n    Base()"
-                        // followed by a plain "fun consume(b:
-                        // PeerIdentityBinding) {" type usage, which the
-                        // fold-until-brace form flagged as an implementation
-                        // (computenet-6jkz review). A ratchet that cries wolf
-                        // is weakened by the next agent, so the fold is
-                        // bounded by the header, not by the file. The
-                        // bracket counts are unordered totals over the folded
-                        // text, compared as opens STRICTLY OUTNUMBERING
-                        // closes rather than merely differing: a function-type
-                        // supertype ("(Int) -> Unit") contributes a lone '>'
-                        // via `->` with no '<' at all, and a bare inequality
-                        // check would misread that as an unbalanced generic
-                        // and fold past the header (computenet-3dt4t).
-                        // KNOWN RESIDUAL (computenet-s8ige): because `->`
-                        // feeds a '>' into that same total, the counts can
-                        // balance one line BEFORE the generic's real closing
-                        // '>', so a supertype list is still lost when a
-                        // multi-line generic argument holds a function type
-                        // ("Handler<" / "    (Int) -> Unit" / ">,", where the
-                        // fold dies on the "(Int) -> Unit" line at '<'=1
-                        // '>'=1) and when the list is split at the arrow
-                        // itself ("(Int) ->" / "    Unit,", dying at '<'=0
-                        // '>'=1). Either way the fold ends early and a later
-                        // PeerIdentityBinding entry in the same list is
-                        // missed. Both shapes were measured by probe in the
-                        // computenet-3dt4t review; neither occurs in
-                        // production today (scanned: 29 wrapped headers, none
-                        // with an arrow on a continuation line).
+                        // supertype constructor call `(...)` or top-level
+                        // generic argument `<...>` spanning lines, or a
+                        // continuation split across `by` or the function-type
+                        // arrow `->`. Anything else is a body-less declaration
+                        // that ended on this line, and folding past it would
+                        // sweep unrelated code into the match: measured on
+                        // "class Wrapped :\n    Base()" followed by a plain
+                        // "fun consume(b: PeerIdentityBinding) {" type usage,
+                        // which a fold-until-brace form flagged as an
+                        // implementation (computenet-6jkz review). A ratchet
+                        // that cries wolf is weakened by the next agent, so
+                        // the fold is bounded by the header, not by the file.
+                        //
+                        // The paren and generic depths come from
+                        // [headerBracketDepths]'s left-to-right walk over the
+                        // whole folded text (computenet-zfdsw) rather than
+                        // from unordered bracket totals — see that function's
+                        // KDoc for the probes (S1-S3, o4/o5, P2/P3) this
+                        // replaces three successive patches with. `by` and
+                        // `->` remain plain trailing-token checks: neither is
+                        // a bracket, so neither needs the depth walk.
+                        val (parenDepth, genericDepth) = headerBracketDepths(folded)
                         val listContinues = trimmed.endsWith(",") ||
-                            folded.count { it == '(' } > folded.count { it == ')' } ||
-                            folded.count { it == '<' } > folded.count { it == '>' } ||
-                            bindingHeaderInfixContinuation.containsMatchIn(trimmed)
+                            parenDepth > 0 ||
+                            genericDepth > 0 ||
+                            bindingHeaderInfixContinuation.containsMatchIn(trimmed) ||
+                            bindingHeaderArrowContinuation.containsMatchIn(trimmed)
                         if (trimmed.contains("{") || !listContinues) {
                             if (bindingHeaderName.containsMatchIn(folded)) {
                                 paths += relativePath
@@ -811,6 +872,402 @@ class IdentityDerivationRatchetTest {
 
         assertEquals(emptySet<String>(), actual) {
             "a function-type supertype must not fold forward into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE P2 (computenet-s8ige): a multi-line generic supertype argument
+     * whose closing '>' shares a physical line with a function-type arrow
+     * ("(Int) -> Unit"). The arrow's own '>' feeds the same unordered total
+     * as the generic's real closing bracket, so the counts can balance one
+     * line BEFORE the generic actually closes, and the fold dies early —
+     * losing the later `PeerIdentityBinding` entry in the same supertype
+     * list. Measured 2026-09-12 in the computenet-3dt4t review.
+     */
+    @Test
+    fun `fixture self-check - the header fold spans a multi-line generic supertype argument holding a function type`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-j")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-j/src/main/kotlin/fixture/j").apply { mkdirs() }
+
+        File(moduleDir, "Mixed.kt").writeText(
+            """
+            package fixture.j
+
+            private interface Handler<T>
+            private interface Marker
+
+            class Mixed :
+                Handler<
+                    (Int) -> Unit
+                >,
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-j/src/main/kotlin/fixture/j/Mixed.kt"), actual) {
+            "the fold must span a multi-line generic supertype argument whose closing '>' shares a line " +
+                "with a function-type arrow, and still see the interface name later in the same header; " +
+                "found: $actual"
+        }
+    }
+
+    /**
+     * PROBE P3 (computenet-s8ige): a supertype list split across the arrow
+     * of a function-type supertype itself ("(Int) ->" / "    Unit,"). The
+     * continuation test recognised a trailing comma or an unbalanced
+     * bracket/`by`, but not a line ending in `->` — so the fold dies on
+     * "(Int) ->" ('<'=0, '>'=1 from the arrow) and the later
+     * `PeerIdentityBinding` entry in the same list is never seen. Measured
+     * 2026-09-12 in the computenet-3dt4t review.
+     */
+    @Test
+    fun `fixture self-check - the header fold spans a supertype list split across the function arrow`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-k")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-k/src/main/kotlin/fixture/k").apply { mkdirs() }
+
+        File(moduleDir, "FnSplit.kt").writeText(
+            """
+            package fixture.k
+
+            private interface Marker
+
+            class FnSplit :
+                (Int) ->
+                    Unit,
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-k/src/main/kotlin/fixture/k/FnSplit.kt"), actual) {
+            "the fold must span a supertype list split across the function arrow itself, and still see " +
+                "the interface name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE o5 (computenet-omm5p): a body-less header whose supertype
+     * constructor call contains a LESS-THAN OPERATOR ("Base(a < b)"), not a
+     * generic. The continuation test counted every '<' in the folded text as
+     * if it opened a generic, so this header — which never carries a brace —
+     * never balances, and the fold runs forward into the unrelated
+     * `PeerIdentityBinding` type usage below. Measured 2026-09-13 in
+     * worktree computenet-s8ige (both halves of the s8ige fix reverted, and
+     * at d6be2ec35 alike): flagged.
+     */
+    @Test
+    fun `fixture self-check - a less-than operator in a body-less header's supertype call does not open a runaway fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-l")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-l/src/main/kotlin/fixture/l").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.l
+
+            private open class Base(a: Int, b: Int)
+
+            class Wrapped :
+                Base(a < b)
+
+            fun consume(binding: PeerIdentityBinding) {
+                println(binding)
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a less-than operator inside a body-less header's supertype constructor call must not open a " +
+                "runaway fold into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE o4 (computenet-omm5p): the same less-than operator alongside a
+     * function-type argument in the same constructor call
+     * ("Base(a < b, null as (() -> Unit)?)"). Before the arrow-aware
+     * generic-close exclusion ([genericCloseNotArrow], computenet-s8ige),
+     * the arrow's own '>' happened to balance the operator's '<' by
+     * coincidence; excluding it unmasks the same pre-existing escape as the
+     * o5 probe above, on a shape that also carries a function-type argument.
+     */
+    @Test
+    fun `fixture self-check - a less-than operator alongside a function-type argument does not open a runaway fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-m")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-m/src/main/kotlin/fixture/m").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.m
+
+            private open class Base(a: Int, b: Int, f: (() -> Unit)?)
+
+            class Wrapped :
+                Base(a < b, null as (() -> Unit)?)
+
+            fun consume(binding: PeerIdentityBinding) {
+                println(binding)
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a less-than operator alongside a function-type supertype argument must not open a runaway " +
+                "fold into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE S1 (computenet-zfdsw): a multi-line generic supertype argument
+     * whose open bracket is SPACED ("Handler <" rather than "Handler<"). The
+     * unordered-total heuristic's generic-open count ([genericOpenNotOperator]
+     * at the time this was measured) only credited a '<' immediately
+     * following an identifier character with no whitespace, so a spaced open
+     * never registered — the fold's counts stayed balanced (0 opens, 0 real
+     * closes) after the first continuation line and the header was read as
+     * closed one line early, losing the later `PeerIdentityBinding` entry in
+     * the same supertype list. A silent false negative introduced by
+     * computenet-omm5p; measured 2026-09-13 against 65756a102 (this bead's
+     * base commit): NOT flagged.
+     */
+    @Test
+    fun `fixture self-check - a spaced generic open still spans the fold to a later PeerIdentityBinding entry`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n/src/main/kotlin/fixture/n").apply { mkdirs() }
+
+        File(moduleDir, "Spaced.kt").writeText(
+            """
+            package fixture.n
+
+            private interface Marker
+
+            class Spaced :
+                Handler <
+                    String
+                >,
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-n/src/main/kotlin/fixture/n/Spaced.kt"), actual) {
+            "the fold must span a SPACED multi-line generic supertype open and still see the interface " +
+                "name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE S2 (computenet-zfdsw): a greater-than COMPARISON OPERATOR
+     * ("Base(a > b),") ahead of a later multi-line generic supertype
+     * argument in the same list. The unordered-total heuristic fed every
+     * '>' not immediately preceded by '-' into the generic-close count
+     * regardless of where it occurred, so the operator's '>' credited a
+     * close before the generic's own open had even been seen; by the time
+     * the real generic's '<' arrived the counts could read as balanced one
+     * line early, ending the fold before the later `PeerIdentityBinding`
+     * entry. Pre-existing (not introduced by computenet-omm5p); measured
+     * 2026-09-13 against 65756a102: NOT flagged.
+     */
+    @Test
+    fun `fixture self-check - a greater-than operator ahead of a later generic still spans the fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-o")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-o/src/main/kotlin/fixture/o").apply { mkdirs() }
+
+        File(moduleDir, "Mixed.kt").writeText(
+            """
+            package fixture.o
+
+            private interface Marker
+            private open class Base(a: Int, b: Int)
+
+            class Mixed :
+                Base(a > b),
+                Handler<
+                    String
+                >,
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-o/src/main/kotlin/fixture/o/Mixed.kt"), actual) {
+            "the fold must span a later multi-line generic even after an earlier greater-than operator " +
+                "entry, and still see the interface name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE S3 (computenet-zfdsw): an UNSPACED less-than operator inside a
+     * body-less header's supertype constructor call ("Base(a<b)",
+     * "Base(a< b)") still opens a runaway fold, exactly like PROBEs o5/o4
+     * but without the space before '<' that those relied on to distinguish
+     * the operator from a generic open under the old unordered-total
+     * heuristic — the heuristic never distinguished by paren nesting at
+     * all, only by whether '<' immediately followed an identifier
+     * character, so an unspaced operator use was indistinguishable from a
+     * real generic open either way. Deliberately does NOT end the header
+     * with "PeerIdentityBinding {" — that shape is caught directly by
+     * [bindingSamConversion] outside the fold and would mask whether the
+     * fold itself over-matches. Pre-existing on both sides of
+     * computenet-omm5p; measured 2026-09-13 against 65756a102: FLAGGED
+     * (should be empty).
+     */
+    @Test
+    fun `fixture self-check - an unspaced less-than operator does not open a runaway fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-p")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-p/src/main/kotlin/fixture/p").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.p
+
+            private open class Base(a: Int, b: Int)
+
+            class Wrapped1 :
+                Base(a<b)
+
+            class Wrapped2 :
+                Base(a< b)
+
+            fun consume(binding: PeerIdentityBinding) {
+                println(binding)
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "an unspaced less-than operator inside a body-less header's supertype constructor call must " +
+                "not open a runaway fold into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * Pins [headerBracketDepths]'s paren-depth guard on a CLOSING '>'
+     * (computenet-zfdsw review). Fixture o does not: its operator '>' arrives
+     * while generic depth is still zero, so the zero clamp alone already
+     * ignores it, and every other fixture stayed green with the guard
+     * removed. The guard is load-bearing when a '>' inside parens arrives
+     * while a top-level generic is OPEN — a generic type argument inside a
+     * function-type parameter list ("Handler<" / "(List<Int>) -> Unit" /
+     * ">,"): its '<' is skipped at paren depth 1, so without the guard its
+     * '>' closes the OUTER generic, depth reads 0 on the middle line, and the
+     * fold ends before the later `PeerIdentityBinding` entry. Measured
+     * 2026-09-13: flagged with the guard, NOT flagged without it.
+     */
+    @Test
+    fun `fixture self-check - a generic inside a function-type parameter does not close the enclosing generic`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-q")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-q/src/main/kotlin/fixture/q").apply { mkdirs() }
+
+        File(moduleDir, "Nested.kt").writeText(
+            """
+            package fixture.q
+
+            private interface Handler<T>
+            private interface Marker
+
+            class Nested :
+                Handler<
+                    (List<Int>) -> Unit
+                >,
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-q/src/main/kotlin/fixture/q/Nested.kt"), actual) {
+            "a '>' inside a function-type parameter list must not close the enclosing top-level generic " +
+                "supertype; the fold must still see the interface name later in the same header; found: $actual"
         }
     }
 }

@@ -230,6 +230,17 @@ payloads. Wire transport is designed, not implemented: one `WireFrame` type
 variant tagged with direction, upstream protocols riding the reverse bridge
 path a cross-host link already maintains (G-35 below).
 
+A generic protocol crossing a membrane is not exempt from boundary policy: a
+declared `BoundaryPolicy.protocolAuthority[protocolId]` (40/43 `BoundaryPolicy`)
+governs it at the Mediate seam — below its `minAuth` floor or over its
+`ratePerWindow` the invocation dead-letters — and a remotely asserted
+attention level riding this port is clamped to that entry's `ceiling` band
+before it reaches the ordinary attention fold (30/34 §Decisions 6 "Attention
+is a request, not an entitlement", placed in decision 5's authority lattice).
+A `LocalTrusted` (in-host) crossing passes every predicate unchecked, and
+absent a declared `BoundaryPolicy` this is a no-op (today's open behavior);
+see 40/43 for the full vocabulary and phasing.
+
 ⚠ GAP (G-35): Generic protocols (`PORT_PROTOCOL`) cannot cross the wire and
 peers cannot negotiate or version each other's protocol capability sets —
 attention, saturation, state-request, and taps all stop at a bridge.

@@ -1044,7 +1044,7 @@ def _entry(task, resumed, files, feature=None):
     on_feature = matched and not _never_worked(tid, task, branch)
     return {
         "id": tid,
-        "model": meta.get("model") or "",     # empty => breakdown omitted it
+        "model": meta.get("model") or "",     # empty => unstamped (breakdown omission, or a residual/direct-filed bead)
         "files": files,
         # Authorized writes to OTHER beads (computenet-eetn). Absent => none;
         # the orchestrator must relay this verbatim into the dispatch prompt,

@@ -183,6 +183,12 @@ bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the fil
 # both yield null, which reads as an empty thread rather than as a bad jq
 ```
 
+**The bead may have been amended after you were dispatched.** If its title,
+description or acceptance differs from what your dispatch prompt quoted, or
+changes between your reads, do not reconcile it silently: say so in your
+report's first lines, quoting both versions, and state which one you scored
+against (computenet-7gxi).
+
 **Read the comments — that third command is not optional.** `bd show --json`
 carries only `comment_count`, never the bodies, so a review that skips this
 has not seen the thread. On a long-lived item the thread is where the
@@ -1106,6 +1112,18 @@ route, and one literal heading is a token it can look for. The flag is not
 SELECTION reads ("A resumed feature carrying `metadata.review=passed` was
 certified last session ... don't re-review"), so an unset flag on merged,
 certified work sends a later session back over work already certified.
+
+**Ready, with follow-on work found in review.** Every criterion can be met and
+you can still find real work outside the claim. The structural case: a feature
+that RECORDS A DECISION falsifies every cross-reference (a DISPUTES bullet, a
+KDoc) that called it pending, and those sit outside its claim by construction
+— left unfiled, that stale prose, in the honesty ledger
+`concord/corpus/DISPUTES.md` too, is something no later reader is prompted to
+find. File it: the verdict stays READY, and filing is not a downgrade. Attach
+and record it per "Ready with residual" below, reading its "unmet criterion" as
+the follow-on itself — title and `--acceptance` name the stale reference and
+its correction — and name it in your verdict comment (computenet-cgdt:
+computenet-fzd3 and computenet-07vb, one session).
 
 ### Ready with residual — the honest negative result
 

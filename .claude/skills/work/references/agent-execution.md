@@ -228,6 +228,9 @@ not ask.
   skipping a repo-wide test run (computenet-l5rc). Write
   `--include='*.kt'`. This is the same family as AGENTS.md's zsh
   history-modifier trap.
+  Its commonest member here: **`git show "$R:testkit/x"` reads `:t` as a
+  modifier** and asks git for `mainestkit/x` — brace every revision variable
+  before a colon, `"${R}:path"` (computenet-frgu1).
   Same shell, loud variant: a word starting with `=` expands to a command
   path, so an unquoted `echo ===` separator dies (`== not found`) — quote it
   (`echo '==='`) or use `printf` (computenet-a49j).

@@ -9,6 +9,7 @@ import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -66,10 +67,12 @@ import kotlin.time.Duration.Companion.seconds
  * dialled `peerNodeId` on a dialled one). Nothing a peer writes can move it.
  *
  * The identity stamped on every delivery is
- * `Peering.Side.identityBinding.identityOf(key)` and nothing else (feature
- * `computenet-376c`): this module derives a *key identifier* from key material
- * and never an identity, so when DSC4's anchor-vouched names replace the interim
- * binding, no site here changes.
+ * `Peering.Side.identityBinding.resolve(key)`'s `IdentityResolution.Bound` peer
+ * and nothing else (feature `computenet-376c`): this module derives a *key
+ * identifier* from key material and never an identity, so when DSC4's
+ * anchor-vouched names replace the interim binding, no site here changes. A
+ * key that binding resolves to `IdentityResolution.Unbound` is refused at the
+ * hello (task `computenet-hbqvz`).
  *
  * **[Side.peer] is therefore no longer written to the wire over this
  * transport.** Over iroh a peer's name is not a claim anyone needs — the
@@ -611,7 +614,27 @@ object IrohTransport {
             // The ONE resolution on this path (feature `computenet-376c`): the
             // identity is whatever this side's binding maps the key to, never
             // the fingerprint read as a name and never a `PeerId` built here.
-            val peer = side.identityBinding.identityOf(key)
+            //
+            // A key the binding holds no identity for is refused right here
+            // (task `computenet-hbqvz`): nothing below may run without an
+            // identity to attribute it to, and none is invented. Accounted
+            // NOT_ADMITTED with the machine-readable `UnboundReason` in the
+            // detail — the same shape `WsTransport.Session.refuseUnbound`
+            // writes; a dedicated `DenialReason` is a kernel taxonomy change
+            // this task does not make. No principal: the hello asserts no name
+            // this side could attribute the refusal to.
+            val peer = when (val resolution = side.identityBinding.resolve(key)) {
+                is IdentityResolution.Bound -> resolution.peer
+                is IdentityResolution.Unbound -> {
+                    refuseHello(
+                        DenialReason.NOT_ADMITTED,
+                        null,
+                        "hello presenting key ${key.name} refused: this side's identity binding holds no " +
+                            "identity for it (UnboundReason.${resolution.reason.name})",
+                    )
+                    return
+                }
+            }
             val peerMirrorRef = runCatching { UUID.fromString(parts[0]) }.getOrNull()
             if (peerMirrorRef == null) {
                 refuseHello(

@@ -130,7 +130,7 @@ header.
 | `claim-epic.sh` | `<epic-id>` — Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | `<feature-id>` — Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | `(no arguments)` — Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
-| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--claim]` — THE create path for a ticket under a shared epic — unparented, then re-parented |
+| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--claim]` — THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | `(no arguments)` — Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `claim-item.sh` | `<id>` — `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
@@ -743,6 +743,10 @@ unpushed commits is deleted silently. Detached HEAD and commits on no origin
 branch are each a SKIP; an unreachable origin aborts everything at `rc=3`.
 The 15-minute quiet hold is a cheap filter on the close/write race, **not**
 a liveness test — an agent sitting on an idle worktree reads as quiet.
+Liveness is the **holder** guard: a bead or parent whose `metadata.holder` is
+LIVE or FOREIGN is a `SKIP … held by a LIVE or FOREIGN session` line — a
+sibling mid-feature, not a failure; leave it to that session and never
+remove it by hand (computenet-zgdt9).
 `rc=1` means a candidate was dirty, mid-operation, not provably pushed, or a
 removal failed: look, do not re-run.
 
@@ -1324,6 +1328,17 @@ exactly the moment an agent is finishing bookkeeping (computenet-ys7: a
 worktree removed under a live reviewer seconds after `gh pr ready`). Keep it
 as the second guard; never read it as "nobody is working here".
 
+**The same lock covers the bead's scoring fields.** While a dispatched agent
+is live, its bead's **comments** are always yours to add — append-only and
+timestamped — but its **title, description and acceptance wait for its
+completion notification**: those are what the agent scores against, and it
+cannot tell your edit from a concurrent session's. An amendment that cannot
+wait goes in a comment plus a `SendMessage` to the agent saying what moved and
+why, and the field follows once the notification arrives — never a silent
+edit. No `SendMessage` here (step 2) and the agent must work to the new text →
+`TaskStop` it and re-dispatch against the amended bead (computenet-7gxi: a
+reviewer met its own finding in a title it had not written).
+
 A worktree already on disk that this session did not create may also belong
 to a *concurrent session* on this machine, not just a dead one — step 3's
 liveness check races a run that starts mid-slot. Before adopting one, check
@@ -1621,8 +1636,10 @@ AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
 indistinguishable from the result being measured and can invert a verdict.
 
-An entry with empty `model` → dispatch at `sonnet`, comment on the task, log
-friction. **Empty batch** → read `verdict`, don't infer:
+An entry with empty `model` → dispatch at `sonnet`, stamp it (`bd update <id>
+--set-metadata model=sonnet`), comment on the task. Log friction only if a
+breakdown filed it: residuals and directly-filed beads arrive unstamped (file
+with `create-ticket.sh --model`). **Empty batch** → read `verdict`, don't infer:
 
 | `verdict` | Meaning | Do |
 |---|---|---|
@@ -1744,11 +1761,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
   **When the widening is for a task ALREADY DISPATCHED** — the
   report-and-widen case in the sentence above — "before anyone is dispatched"
-  has already been missed, and amending the acceptance under a live review
-  silently moves the standard the verdict is measured against
-  (computenet-7gxi, open). Do not amend it silently: comment the
-  reconciliation on the bead and `SendMessage` the implementer, so the text
-  the reviewer scores and the text the agent worked from stay the same one.
+  has already been missed; follow "the same lock covers the bead's scoring
+  fields" under step 5: comment the reconciliation and `SendMessage` the
+  implementer, never amend silently (computenet-7gxi).
 - **Disjoint paths are not enough — read each candidate's acceptance for a
   cross-reference into another candidate's claim.** `next-batch.py` proves the
   batch will not merge into a conflict; it cannot see that task A's acceptance
