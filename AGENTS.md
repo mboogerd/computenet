@@ -177,8 +177,11 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   zsh has more modifiers than those four (`:c`, `:l`, `:u`, `:s`, `:q`, …).
   The second spelling agents hit is the remote read:
   `git show "$R:testkit/x"` hands git `mainestkit/x` (`:t`), and
-  `"$R:concord/x"` eats the `c` the same way, failing as a `fatal:` about a
-  nonexistent object that reads as "that file is not there". Write
+  `"$R:concord/x"` eats the `c` the same way, failing as `fatal: ambiguous
+  argument '…': unknown revision or path not in the working tree` (or `Not a
+  valid object name` from `cat-file`/`rev-parse`) — which reads as "that file
+  is not there", so a not-found from `git show <rev>:<path>` is evidence about
+  the command before it is evidence about the repository. Write
   `"${R}:testkit/x"`. A literal `origin/main:concord/x` is safe — modifiers
   follow only an expansion (computenet-frgu1, computenet-wk53).
 - Same zsh family, different operator: **an unquoted glob in a `--flag=*.ext`

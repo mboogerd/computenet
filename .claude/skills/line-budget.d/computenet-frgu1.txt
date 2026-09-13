@@ -2,5 +2,5 @@
 # its general form (any `:` after an unbraced expansion) with the git show
 # "$R:testkit/..." spelling beside the docker one; one pointer line-group in
 # agent-execution.md, which every dispatched agent reads.
-AGENTS.md +8
+AGENTS.md +11
 work +3
