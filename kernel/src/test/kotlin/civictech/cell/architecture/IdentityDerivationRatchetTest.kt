@@ -34,15 +34,16 @@ import java.io.File
  *     name, is not a derivation from key material and is fine to baseline;
  *     constructing one from a `KeyId`, a fingerprint, or key bytes is exactly
  *     the second site this feature forbids.
- * (b) exactly one production file implements `PeerIdentityBinding` (a line
+ * (b) exactly two production files implement `PeerIdentityBinding` (a line
  *     matching `PeerIdentityBinding\s*\{` as a SAM conversion, or a
  *     `class`/`object` declaration line whose supertype list names
  *     `PeerIdentityBinding` after a colon, or a supertype colon written
  *     `\s:\s*PeerIdentityBinding` — the two supertype forms are
  *     complementary, see [bindingSupertypeSpacedColon] — excluding the
  *     interface's own `fun interface PeerIdentityBinding {` declaration
- *     line) — and it is
- *     `civictech.cell.link.Identity.kt`.
+ *     line) — and they are `civictech.cell.link.Identity.kt` (the Interim
+ *     derivation) and `civictech.identity.anchor.AnchorVouchedBinding.kt`
+ *     (DSC4's anchor-vouched binding, feature `computenet-5y8t.2`).
  * (c) exactly one production `fun fingerprint(` declaration exists, and its
  *     return type on that line is `KeyId`.
  */
@@ -461,10 +462,18 @@ class IdentityDerivationRatchetTest {
             }
         }
 
-        // (b) exactly one production PeerIdentityBinding implementation, and it is Identity.kt.
+        // (b) exactly two production PeerIdentityBinding implementations: Identity.kt's Interim and
+        // DSC4's AnchorVouchedBinding (feature computenet-5y8t.2).
         val implementations = scanPeerIdentityBindingImplementations(root, moduleRoots)
-        assertEquals(setOf("kernel/src/main/kotlin/civictech/cell/link/Identity.kt"), implementations) {
-            "expected exactly one PeerIdentityBinding implementation (Identity.kt's Interim); found: $implementations"
+        assertEquals(
+            setOf(
+                "kernel/src/main/kotlin/civictech/cell/link/Identity.kt",
+                "identity/src/main/kotlin/civictech/identity/anchor/AnchorVouchedBinding.kt",
+            ),
+            implementations,
+        ) {
+            "expected exactly two PeerIdentityBinding implementations (Identity.kt's Interim and " +
+                "DSC4's AnchorVouchedBinding); found: $implementations"
         }
 
         // (c) exactly one fingerprint() declaration, returning KeyId.
