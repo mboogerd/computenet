@@ -48,7 +48,7 @@ with `conn.send(session.hello())` — a `String`, which the Java-WebSocket
 library sends as a TEXT message (`wire/src/main/kotlin/civictech/wire/WsTransport.kt:2270`).
 Every subsequent `WireFrame` crosses as **UTF-8 JSON inside a BINARY WebSocket
 message** — `WireCodec.encode` returns a `ByteArray`
-(`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:596`), and the
+(`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:500,518`), and the
 listener's two `onMessage` overloads split on message kind: `onMessage(conn,
 String)` dispatches to `Session.onText` (handshake lines only) and
 `onMessage(conn, ByteBuffer)` dispatches to `Session.onFrame` (bridge-decoded
@@ -344,7 +344,7 @@ branch (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:522-543`):
 - **`routingEpoch` is write-disabled, read-tolerated.** The non-`PORT_PROTOCOL`
   encode branch explicitly sets `routingEpoch = null` with the comment "PN-6:
   no longer sniff a routed command's epoch onto the frame ... encode simply
-  stops populating it" (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:558-562`) —
+  stops populating it" (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:566-572`) —
   no encoder in this codec ever emits `routingEpoch`. The field stays in
   `WireFrame`'s schema and `decodeFrame` still accepts a legacy frame that
   carries it (the field has no `checkNotNull`, so absence and presence both
@@ -384,10 +384,15 @@ payload must never serialize at all (below).
 
 **`Interest` arms** (its own `polymorphic` block,
 `kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:257-266`): `Total`,
-`Empty`, `Union`, `Intersect`, `Complement`, `Ranges`, `Slots`. On the wire
-these are the bare simple names (no `@SerialName` override observed on these
-7 in the registration list), distinct from the `Any`-polymorphic namespace
-above.
+`Empty`, `Union`, `Intersect`, `Complement`, `Ranges`, `Slots`. **Not** bare
+simple names on the wire: each carries its own explicit `@SerialName`
+override in `kernel/src/main/kotlin/civictech/cell/link/Interest.kt`, and
+every one is prefixed — `Interest.Total` (line 83), `Interest.Empty` (96),
+`Interest.Union` (106), `Interest.Intersect` (114), `Interest.Complement`
+(122), `Interest.Ranges` (136), `Interest.Slots` (166). The discriminator
+string a reader must match is `Interest.<Name>`, not `<Name>` — distinct
+both from the bare simple name and from the `Any`-polymorphic namespace
+above (verify: `git grep -n 'SerialName("Interest\.' kernel/src/main/kotlin/civictech/cell/link/Interest.kt`).
 
 Every one of the 33+7 registrations except the 5 primitives and `Uuid`
 carries an explicit `@SerialName` equal to its simple name (verified by the
