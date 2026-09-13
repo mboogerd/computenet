@@ -87,3 +87,32 @@ tasks.withType<Test>().configureEach {
     // to keep in sync.
     systemProperty("wire.forwardedKeys", forwardedSystemProperties.joinToString(","))
 }
+
+// computenet-ncz.2.4: checks (and, with -Pwire.vectors.write=true, repairs)
+// wire/corpus's `encoded` blocks against the live codec and manifest.json
+// against the directory, via WireVectorsMain (test sources — it needs
+// VectorLoader/VectorDocument/NeutralValues/HandshakeLines, all test-only).
+// A JavaExec over the test runtime classpath is how a test-source `main`
+// becomes a Gradle task without promoting any of that vocabulary to
+// wire/src/main. Wired into `check` so CI's required `build-test-fast`
+// (`./gradlew build check ...`, ci.yml) runs it on every PR with no workflow
+// change.
+tasks.register<JavaExec>("wireVectors") {
+    group = "verification"
+    description = "Checks (or, with -Pwire.vectors.write=true, repairs) wire/corpus against the live codec and its own manifest.json."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("civictech.wire.vector.WireVectorsMain")
+    dependsOn("testClasses")
+    workingDir = projectDir
+    inputs.dir("corpus")
+    // A checker task with no declared outputs must run every time, never be
+    // treated UP-TO-DATE off `corpus`'s unchanged timestamp alone.
+    outputs.upToDateWhen { false }
+    if (project.hasProperty("wire.vectors.write")) {
+        args("--write")
+    }
+}
+
+tasks.named("check") {
+    dependsOn("wireVectors")
+}
