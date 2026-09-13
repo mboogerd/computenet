@@ -2864,6 +2864,11 @@ round back to 4950 (where the ordinal write script still generates traffic that
 flushes the buffer) removes it. "Drain window" implied a delta that would have
 arrived given more steps; no number of steps would have delivered it.
 
+*(computenet-yjji2, 2026-09-13: the paragraph below is SUPERSEDED IN PART — the
+floor it rests on was too coarse to see a ~1%-per-run class concentrated on a few
+seeds, and the assertion now splits that class out under a measured ceiling. Kept
+as written; see `### Three required-check reds, and the class under them` below.)*
+
 **The zero-tolerance VALUE assertion is KEPT, with this control as its stated
 justification**, rather than replaced by a measured ceiling: the rig's own floor
 under it is 0 of 200 on three runs, so a ceiling would be a tolerance for
@@ -2922,6 +2927,142 @@ NOT claimed: that the OR-map's add-wins pick is safe in general. This is a
 bounded-schedule check over 200 seeds with three peers, the same honesty clause
 `## KE3-42-ORMAP-BS13` and `GcSafetySweep` carry, filed under the same DISPUTES
 entry.
+
+### Three required-check reds, and the class under them (computenet-yjji2)
+
+Recorded by: `computenet-yjji2` (bug, unparented). Base commit `44023dda0`
+(`origin/main`), branch `feature/computenet-yjji2`. Host darwin/arm64, 16 cores,
+`MacBoo`, shared with two other work sessions — load1 is given per run because it
+ranged 8 to 130 over the session. Measured 2026-09-13.
+
+**The occurrences** (all three kept on the bead; the CI detail lines below were
+read from each run's `test-results-kernel` artifact, which the console log does
+not carry):
+
+```
+2026-09-10  f7h.1.2 review, MacBoo, local   crossReplica=[132]  (no detail kept)
+2026-09-10  PR #788, run 34444233253, ubuntu crossReplica=[145]
+  shared-45={peer0=peer0#4850, peer2=peer2#4850}
+  liveDots={peer0=[6ad7101a#31], peer2=[2aa3a97d#55, 6ad7101a#31]}; discarded=3
+  reorder stranded frames on VALUE-diverging seeds={145=1}
+2026-09-13  PR #847, run 34748370373, ubuntu crossReplica=[132]
+  shared-46={peer0=peer0#4950, peer2=peer2#4950}
+  liveDots={peer0=[6ad7101a#25], peer2=[2aa3a97d#40, 6ad7101a#25]}; discarded=6
+  reorder stranded frames on VALUE-diverging seeds={132=2}
+```
+
+This is NOT the shape `### The contended workload's own divergence floor` above
+reproduced for the 56-round seed 132 (each replica holding only its OWN dot on the
+final round). Here peer2 holds both dots, peer0 lacks exactly peer2's, on rounds
+43-46 — before the last round — with a handful of dots reclaimed.
+
+**First question: what does "reproduce seed 145" mean on this rig?** Nothing, taken
+literally. Repeating ONE seed in one JVM on one host gives a DISTINCT trace digest
+almost every run: 20 of 20 on seeds 145 and 132 (both arms), then 300 of 300 on
+145 and 299-300 of 300 on 132. Seed 132's churn plan contains no `PARTITION_SUSPEND`
+(`EVICT_NO_CLOSE` plus joins), which read at first as entropy wider than
+`doc/dst-rig.md` section 4 scopes. **Corrected at review (same day):** it is
+section 4's documented mechanism. This graph's fault plan carries three
+`PartitionFault.park` faults, and on the churn mesh a park is
+`LinkControl.severing` — `Peering.Loopback.partition()`/`heal()` — so EVERY seed
+re-opens a loopback; seed 145's churn plan additionally heals a
+`PARTITION_SUSPEND` at step 3341-3342. With the three parks commented out, seed 132
+gave 1 distinct digest in 20 runs on both SHARED and SHARED_NONE (20 of 20 with
+them); seed 145 stayed 20 of 20, from its own suspend-heal. The schedule is not a
+function of the seed, and the entropy is not thread timing or host — it is drawn
+per run — so the ubuntu red
+and the darwin 3/3 green on PR #788's tree say nothing about the host. The only
+reproducible quantity is a RATE per seed, measured by repetition.
+
+**The distinguishing measurement — route 1.** Both contended arms repeated on the
+two seeds that failed (JUnit `<system-out>`, `--rerun`, fresh timestamps):
+
+```
+                            SHARED (reclaimer on)      SHARED_NONE (reclaimer OFF)
+  seed 145   20 runs        1 value-div  (load 8-17)   0
+             300 runs       3 value-div  (load ~20)    0 value-div, 4 membership-div
+             900 runs       -                          8 value-div  (load 39-32)
+             900 runs       -                          7 value-div  (load 17-22, new classifier)
+  seed 132   20 runs        2 value-div                0
+             300 runs       2 value-div                2 value-div, 1 membership-div
+  seeds 1..200 x 5 (1000)   0 value-div  (load 24)     -
+```
+
+The CONTROL, with `discarded=0` on every run, produces the CI signatures
+byte-for-byte. Seed 145, 5 of its 8 control hits:
+`shared-45={peer0=peer0#4850, peer2=peer2#4850} liveDots={peer0=[6ad7101a#31],
+peer2=[2aa3a97d#55, 6ad7101a#31]} lacking={peer0=[2aa3a97d#55:ABSENT]};
+discarded=0` — the PR #788 red with the reclaimer switched off. Seed 132's control
+hit on `shared-42`/`#35` is identical to one of its SHARED hits. So the shape is
+the adversary's, not reclamation's: **route 1**. Route 2 (does not reproduce under
+the control → reclamation defect) is refuted for both seeds.
+
+Two readings make the attribution specific rather than analogical:
+
+- **`lacking=`: every missing dot was ABSENT** at the lacking replica, on every hit
+  of both arms — never applied, not tombstoned, and not in its `ReclaimedDots`.
+  FENCED, the one state the lacking replica's OWN reclaimer can cause, never
+  occurred. (The check now prints this per missing dot.) ABSENT does not exonerate
+  reclamation elsewhere — a sender whose compaction made it omit a dot from a reply
+  would leave it ABSENT at the receiver — and the attribution does not check which
+  source minted the lacking dot; the ceiling is the only bound on either.
+- **Every value-divergent run stranded a reorder frame.** 25 of 25 value-divergent
+  runs in the table had `strandedFrames >= 1`, against ~50% of all runs (seed 145
+  control, 900 runs: `{0=443, 1=272, 2=185}`); the pair is always peer0/peer2,
+  `ormap-gc-reorder`'s edge. Correlation, not frame identity: the fault does not
+  expose WHICH frames it holds, and `ReorderFault` is testkit, outside this claim.
+
+**Why the pa5l floor missed it.** "0 of 200 on three class runs" was a true
+measurement of a class that lives at ~0.6-1.3% per run on a few seeds and at ~0
+elsewhere (0 of 1000 sweep-wide): a class run meets it perhaps once in tens of
+runs, which is what three CI reds in five days across many PRs look like.
+
+**What was changed** (`OrMapGcSafetySweepTest.kt`):
+
+- The check splits `STRANDED_VALUE_DIVERGENCE_FAILURE` out of
+  `VALUE_DIVERGENCE_FAILURE`. A divergence is attributed only when EVERY clause
+  holds: some dot is lacking (identical dot sets resolving differently — the
+  mis-resolution class — are never attributed); every lacking dot is ABSENT; every
+  lacking replica is a reorder-edge endpoint and the dot is live at the other
+  endpoint; the run stranded at least one frame.
+- The SHARED arm keeps ZERO tolerance on unattributed value divergence and on
+  value-fold drift, and carries `MAX_STRANDED_VALUE_DIVERGING = 3` on the
+  attributed class. The STABLE arm counts both classes as harm, no tolerance
+  extended (its one-dot-per-key workload cannot reach the attributed shape).
+- A repeat-one-seed instrument, SKIPPED unless `ORMAP_SHARED_REPEAT_SEEDS` is set,
+  which the failure message names. One invocation of ~4000 runs died with
+  `Java heap space` (load 44-130); ~1200 is safe.
+
+**The ceiling, and its limits.** 3 is not read off a distribution — the attributed
+class is too rare to have one. What it rests on: 0 of 1000 SHARED seed-runs
+sweep-wide (a per-seed-run rate below ~0.3% at 95%, so at most ~0.6 per 200-seed
+sweep), at most 1 per class run in every run recorded on the bead, and ~1% on the
+worst two seeds. At the loose upper bound (0.6 per sweep) a class run exceeds 3
+with probability ~0.3%; at the rate the CI history suggests it is negligible. The
+ceiling's purpose is the other direction: a defect that makes replicas miss dots
+BROADLY could otherwise shelter behind the half of all seeds that strand a frame.
+
+**Mutation evidence** (`--rerun --no-build-cache`, each reverted by `cp`, `git
+diff HEAD` empty after):
+
+- M1, computenet-rjue's fold-order-dependent pick at the cross-replica read
+  (`cell.value(key)` -> `cell.values(key).firstOrNull()`): the SHARED arm FAILED on
+  the zero-tolerance assertion, `crossReplica=` 153 of 200 seeds (rjue recorded
+  153), `stranded-frame value-diverging seeds=[]`. The attribution swallows none of
+  the mis-resolution class.
+- M2, the ABSENT clause mutated to FENCED, repeat instrument on seed 145 control,
+  900 runs: 6 value divergences, ALL in the unattributed class and none attributed.
+  The clause is what admits the observed runs.
+- Not proven: that the attributed class's ceiling reddens on a broad miss-dots
+  defect. No deterministic mutation produces one, since the rig's schedule is not
+  reproducible.
+
+**What is NOT claimed.** That the reclaimer contributes nothing to the RATE: seed
+145 read 4 of 320 with it on against 15 of 2120 off, a difference these counts
+cannot separate from noise. That a stranded frame IS the missing dot on each run:
+correlation plus endpoint pairing, not frame identity. That no other schedule
+produces an attributed-looking divergence from a real defect: the ABSENT and
+endpoint clauses narrow it, and the ceiling bounds it.
 
 ## KE3-42-ORMAP — feature close-out: what the OR-map seam + reclaimer delivered, the three corrected premises, and the u7fi trigger check restated in code
 
