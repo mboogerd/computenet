@@ -26,7 +26,9 @@ import kotlin.test.assertTrue
  * name (`PeerId(keyOf(remote).name)`) the presented key would otherwise
  * resolve to under `Interim`. If the allowlist were reached with that
  * fallback name, the link below would be admitted; instead it is refused
- * with the `Unbound` detail, never the allowlist's.
+ * with the `Unbound` detail, never the allowlist's, and accounted
+ * `DenialReason.UNVOUCHED` (feature `computenet-5y8t.3`'s `denialReasonFor`
+ * table) rather than the allowlist's `NOT_ADMITTED`.
  *
  * Driven exactly as [IrohSessionHelloTest] drives `IrohTransport.Session` —
  * no sidecar, no iroh — so this class runs on the default `:iroh:test` lane
@@ -100,7 +102,7 @@ class IrohUnboundPrecedesAllowlistTest {
         assertEquals(1, refusals, "the link is closed")
         assertEquals(1L, session.admissionDenialCount)
         val denial = assertNotNull(session.lastAdmissionDenial)
-        assertEquals(DenialReason.NOT_ADMITTED, denial.reason)
+        assertEquals(DenialReason.UNVOUCHED, denial.reason)
         assertEquals(null, denial.principal, "no identity means none to attribute the refusal to")
         val detail = assertNotNull(denial.detail)
         assertTrue(
