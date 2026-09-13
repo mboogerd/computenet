@@ -486,6 +486,17 @@ so plainly in the PR body and in the session summary, or file it — never
 report CI green as verification of the behaviour. An `assumeTrue` guard that
 CI can never satisfy is a real finding about the test, not a detail.
 
+**A test filter at the lane's Gradle invocation leaves no `SKIPPED` line at
+all**, so neither grep sees it: `build-test-fast` runs `-PexcludeMultiJvm=true`,
+so a `@Tag("multi-jvm")` test is never selected there — only in
+`build-test-serial`. **And the admitting lane can be a different run.**
+`-Piroh.enabled` suites DO print `SKIPPED` in `build-test-fast` (an `assumeTrue`
+gate) and run only in the `iroh-sidecar` workflow, whose run id is not the one
+`ci.log` holds. Any lane that filters its tests is evidence only for the tests
+its filter admits: for a tagged or flag-gated diff, read the admitting lane's
+own log for the test's `PASSED` line, and name that lane when you cite it
+(computenet-3mkj).
+
 **A review finding that changes what a LATER task must do is written on that
 task's own thread, by you** — `bd comment <successor-id> --file …` — not
 only on the feature's. A task bead is written before its predecessors run;

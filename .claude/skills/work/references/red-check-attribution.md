@@ -200,7 +200,21 @@ guessing one here cost a reviewer 8 runs):
    --desc-contains` returned the 10 beads that name it in a description,
    including `computenet-8ru`, the one carrying the diagnosis. A bead naming
    this test, or an earlier run of the identical failure you can link, is
-   the artifact. "I have seen this before" is not. Nothing found in
+   the candidate. "I have seen this before" is not.
+
+   **A bead that names the test is a CANDIDATE, not yet the artifact.** Promote
+   it only after two checks, and say which way each fell: does its stated
+   MECHANISM still explain this failure (a "slow" bead does not cover a hang,
+   a timeout bead not a content assertion; a mitigated mechanism still
+   counts), and are its NUMBERS still true at this revision, on the lane that
+   failed (a local margin says nothing about CI)? When they disagree, measure
+   the test's current cost on the failing lane — never read a stale-looking
+   figure as proof of a first sighting. **Prior bead found but CLOSED**, with
+   nowhere open to count recurrences → it can still be the prior occurrence
+   (step 4 still reads it), but file a NEW bug bead to count on — the same
+   `create-ticket.sh` call and evidence as the first-sighting path below,
+   without its "not a flake" conclusion — carrying both occurrences and
+   linking the closed one (computenet-lt1b). Nothing found in
    **either** → this is a first sighting, not a flake: file it as an
    unparented bug bead — `create-ticket.sh --type bug --top-level --desc-file …` (the fix belongs on `main`, not on a feature branch,
    because every other PR is equally blocked) and treat the check as red
