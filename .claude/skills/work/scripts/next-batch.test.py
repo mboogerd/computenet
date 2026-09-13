@@ -76,6 +76,16 @@ plan_cases = [
     # The observed defect this convention exists to prevent: a descriptive
     # string is NOT claimless, so it batches like a path and the alone-rule
     # never protects it. Pinned so the divergence stays visible.
+    # compute=dedicated serialises the box, not just its files (computenet-42zc)
+    ([dict(t("m", "doc/bench/"), metadata={"files": "doc/bench/", "compute": "dedicated"}),
+      t("a", "src/A.kt")], ["m"], ["a"],
+     "a dedicated-compute task first defers every disjoint sibling behind it"),
+    ([t("a", "src/A.kt"),
+      dict(t("m"), metadata={"files": "bench/series/", "compute": "dedicated"})], ["a"], ["m"],
+     "a dedicated-compute task arriving after a batch is held, never co-scheduled"),
+    ([dict(t("m"), metadata={"files": "doc/bench/", "compute": "dedicated"}),
+      dict(t("n"), metadata={"files": "bench/series/", "compute": "dedicated"})], ["m"], ["n"],
+     "two dedicated-compute tasks with disjoint claims never share a batch"),
     ([t("d", "none (tracker mutations only; no repository files)"),
       t("a", "src/A.kt")], ["d", "a"], [],
      "a descriptive string in files reads as a path and batches normally"),
