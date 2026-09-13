@@ -3,6 +3,7 @@ package civictech.wire
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.IdentityStatement
 import civictech.cell.link.PeerId
 import civictech.cell.wire.DEFAULT_NONCE_RETENTION_MILLIS
 import civictech.cell.wire.PeerAuthPolicy
@@ -10,10 +11,18 @@ import civictech.cell.wire.Peering
 import civictech.identity.DeterministicKeySource
 import civictech.identity.Ed25519
 import civictech.identity.PeerIdentity
+import civictech.identity.anchor.AnchorIssuer
+import civictech.identity.anchor.IDENTITY_BINDING_DOMAIN_TAG
+import civictech.identity.anchor.decodeIdentityStatementToken
+import civictech.identity.anchor.encodeIdentityStatementToken
+import civictech.identity.anchor.statementSigningBytes
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
@@ -59,6 +68,39 @@ class HelloProtocolTest {
         signerMirrorRef = mirrorA,
         verifierMirrorRef = mirrorB,
     )
+
+    // ------------------------------------------------------------------
+    // HELLO3 fixture (feature computenet-5y8t.3): a third deterministic keypair
+    // as a dummy anchor, binding the opaque stable name `alice` to A's key.
+    // ------------------------------------------------------------------
+
+    private val anchor = AnchorIssuer(PeerIdentity(DeterministicKeySource.keyPairFromSeed("hello-protocol-anchor".toByteArray())))
+    private val alice = PeerId("alice")
+
+    private fun statementForAlice(issuance: Long = 1L): IdentityStatement =
+        anchor.bind(alice, identityA.keyId, issuance = issuance, notBefore = 0L, notAfter = 4_000_000_000_000L)
+
+    private val statementAlice: IdentityStatement = statementForAlice()
+
+    private fun hello3FromAlice(statements: List<IdentityStatement> = listOf(statementAlice), name: PeerId = alice) =
+        Hello3(
+            mirrorRef = mirrorA,
+            claimedPeerId = name,
+            publicKeySpki = identityA.publicKey.encoded,
+            nonce = nonceA,
+            statements = statements,
+        )
+
+    private val b64: java.util.Base64.Encoder = java.util.Base64.getUrlEncoder().withoutPadding()
+
+    /** A HELLO3 line assembled token by token, so a test can put any text in any position. */
+    private fun hello3Line(
+        mirror: String = mirrorA.toString(),
+        claimed: String = alice.name,
+        key: String = b64.encodeToString(identityA.publicKey.encoded),
+        nonce: String = b64.encodeToString(nonceA),
+        statements: List<String> = listOf(encodeIdentityStatementToken(statementAlice)),
+    ): String = HELLO3_PREFIX + (listOf(mirror, claimed, key, nonce) + statements).joinToString(" ")
 
     private fun <T> HelloParse<T>.ok(): T {
         check(this is HelloParse.Ok) { "expected a parsed message, got $this" }
@@ -201,6 +243,175 @@ class HelloProtocolTest {
     }
 
     @Test
+    fun `a HELLO3 line cannot be misparsed by the legacy or HELLO2 parser, nor they by it`() {
+        val hello3 = encodeHello3(hello3FromAlice())
+        val hello2 = encodeHello2(helloFromA())
+
+        // The sixth character is '3', not a space.
+        hello3[5] shouldBe '3'
+        helloBytesCannotBeMisparsedByLegacy(hello3) shouldBe true
+        parseHello2(hello3).malformation() shouldBe HelloMalformation.NOT_HELLO2
+        parseHello3(hello2).malformation() shouldBe HelloMalformation.NOT_HELLO3
+        parseHello3("HELLO $mirrorA jvm-a").malformation() shouldBe HelloMalformation.NOT_HELLO3
+
+        // The pre-DSC4 listener, reconstructed in the WsHelloMixedVersionTest
+        // shape: its `require` throws on the HELLO3 line before any split runs,
+        // so no PeerId is minted from these bytes.
+        var splitRan = false
+        shouldThrow<IllegalArgumentException> {
+            require(hello3.startsWith(LEGACY_HELLO_PREFIX)) { "unexpected text message" }
+            splitRan = true
+            hello3.removePrefix(LEGACY_HELLO_PREFIX).trim().split(" ", limit = 2)
+        }
+        splitRan shouldBe false
+    }
+
+    // ------------------------------------------------------------------
+    // (3b) HELLO3: the stable-name hello (feature computenet-5y8t.3)
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `HELLO3 encodes and parses back to exactly the same message, with one and with three statements`() {
+        val one = listOf(statementAlice)
+        val three = listOf(statementForAlice(1L), statementForAlice(2L), statementForAlice(3L))
+        for (statements in listOf(one, three)) {
+            val hello = hello3FromAlice(statements)
+            val line = encodeHello3(hello)
+
+            line.startsWith(HELLO3_PREFIX) shouldBe true
+            line shouldNotContain "="
+            line shouldNotContain "\n"
+            line.split(" ").size shouldBe 1 + HELLO3_FIXED_TOKEN_COUNT + statements.size
+
+            val parsed = parseHello3(line).ok()
+            // Content equality: the parsed statements are separately decoded
+            // copies, so this is Hello3's field-wise equals, not reference identity.
+            parsed shouldBe hello
+            parsed.hashCode() shouldBe hello.hashCode()
+            parsed.claimedPeerId shouldBe alice
+            parsed.statements.size shouldBe statements.size
+            parsed.statements.zip(statements).forEach { (got, sent) ->
+                got.name shouldBe sent.name
+                got.keyId shouldBe sent.keyId
+                got.issuance shouldBe sent.issuance
+                got.signature.contentEquals(sent.signature) shouldBe true
+            }
+            encodeHello3(parsed) shouldBe line
+        }
+        HELLO3_PREFIX shouldBe "HELLO3 "
+        HELLO3_FIXED_TOKEN_COUNT shouldBe 4
+        MAX_HELLO_STATEMENTS shouldBe 8
+
+        // A different signature is a different hello.
+        val tampered = statementAlice.copy(signature = statementAlice.signature.copyOf().also { it[0] = (it[0] + 1).toByte() })
+        (hello3FromAlice(listOf(tampered)) == hello3FromAlice()) shouldBe false
+
+        // toString names ids and counts, never bytes.
+        val text = hello3FromAlice(three).toString()
+        text shouldContain "claimedPeerId=alice"
+        text shouldContain "statements=3"
+        text shouldNotContain encodeIdentityStatementToken(statementAlice)
+    }
+
+    @Test
+    fun `a HELLO3 with zero or more than eight statements is WRONG_TOKEN_COUNT, and a doubled space is the empty token's own kind`() {
+        val token = encodeIdentityStatementToken(statementAlice)
+
+        // Four fields and no statement: not a downgrade to HELLO2, a malformation.
+        parseHello3(hello3Line(statements = emptyList())).malformation() shouldBe HelloMalformation.WRONG_TOKEN_COUNT
+        // Eight parses; nine is refused.
+        parseHello3(hello3Line(statements = List(8) { token })).ok().statements.size shouldBe 8
+        parseHello3(hello3Line(statements = List(9) { token })).malformation() shouldBe HelloMalformation.WRONG_TOKEN_COUNT
+
+        // A doubled space inserts an empty token, refused by the kind of the
+        // position it lands in — never trimmed away, never absorbed.
+        val line = hello3Line()
+        parseHello3(line.replaceFirst(HELLO3_PREFIX, "$HELLO3_PREFIX ")).malformation() shouldBe
+            HelloMalformation.UNDECODABLE_MIRROR_REF
+        parseHello3(hello3Line(mirror = "$mirrorA ")).malformation() shouldBe HelloMalformation.CLAIMED_ID_MALFORMED
+        parseHello3("$line ").malformation() shouldBe HelloMalformation.UNDECODABLE_STATEMENT
+
+        // The encoder refuses to emit what the parser would refuse.
+        shouldThrow<IllegalArgumentException> { encodeHello3(hello3FromAlice(emptyList())) }
+        shouldThrow<IllegalArgumentException> { encodeHello3(hello3FromAlice(List(9) { statementAlice })) }
+    }
+
+    @Test
+    fun `a HELLO3 claimed id is opaque - any non-empty well-formed name parses, empty or ill-formed UTF-16 is CLAIMED_ID_MALFORMED`() {
+        // The discriminator against isKeyDerivedPeerIdForm: these names are
+        // refused by HELLO2 as CLAIMED_ID_NOT_KEY_DERIVED and accepted here.
+        listOf("alice", "jvm-a", identityA.peerId.name, "😀").forEach { name ->
+            isKeyDerivedPeerIdForm(name) shouldBe (name == identityA.peerId.name)
+            parseHello3(hello3Line(claimed = name)).ok().claimedPeerId shouldBe PeerId(name)
+        }
+
+        parseHello3(hello3Line(claimed = "")).malformation() shouldBe HelloMalformation.CLAIMED_ID_MALFORMED
+        listOf("\uD800", "al\uDC00ice").forEach { name ->
+            val result = parseHello3(hello3Line(claimed = name))
+            result.malformation() shouldBe HelloMalformation.CLAIMED_ID_MALFORMED
+            (result as HelloParse.Malformed).detail shouldNotContain name
+        }
+
+        // The encoder refuses the same names, and a space, rather than emitting them.
+        listOf("", "\uD800", "ali ce").forEach { name ->
+            shouldThrow<IllegalArgumentException> { encodeHello3(hello3FromAlice(name = PeerId(name))) }
+        }
+
+        // The fixed fields after the claimed id keep HELLO2's kinds.
+        parseHello3(hello3Line(mirror = "not-a-uuid")).malformation() shouldBe HelloMalformation.UNDECODABLE_MIRROR_REF
+        parseHello3(hello3Line(key = "n0t-base64!!")).malformation() shouldBe HelloMalformation.UNDECODABLE_PUBLIC_KEY
+        parseHello3(hello3Line(nonce = "!!!!")).malformation() shouldBe HelloMalformation.UNDECODABLE_NONCE
+        parseHello3(hello3Line(nonce = b64.encodeToString(ByteArray(8)))).malformation() shouldBe
+            HelloMalformation.NONCE_TOO_SHORT
+    }
+
+    @Test
+    fun `an undecodable HELLO3 statement token is UNDECODABLE_STATEMENT, its detail naming the index and not the content`() {
+        val good = encodeIdentityStatementToken(statementAlice)
+
+        // A /v2-tagged statement: same bytes with the tag's version swapped.
+        // The tag lengths match, so only the tag check can refuse it.
+        val v1Bytes = statementSigningBytes(statementAlice) + statementAlice.signature
+        val v2Tag = IDENTITY_BINDING_DOMAIN_TAG.replace("/v1", "/v2")
+        v2Tag.length shouldBe IDENTITY_BINDING_DOMAIN_TAG.length
+        val v2Token = b64.encodeToString(
+            String(v1Bytes, Charsets.ISO_8859_1).replace(IDENTITY_BINDING_DOMAIN_TAG, v2Tag).toByteArray(Charsets.ISO_8859_1),
+        )
+        (v2Token == good) shouldBe false
+        decodeIdentityStatementToken(v2Token) shouldBe null
+
+        // A padded token: needs signing bytes whose length is not a multiple of
+        // three (alice's are), so a one-character-longer name; its unpadded
+        // spelling decodes, so the '=' is the only defect.
+        val padSource = anchor.bind(PeerId("alicex"), identityA.keyId, issuance = 1L, notBefore = 0L, notAfter = 1L)
+        val padBytes = statementSigningBytes(padSource) + padSource.signature
+        val paddedToken = java.util.Base64.getUrlEncoder().encodeToString(padBytes)
+        paddedToken shouldContain "="
+        (decodeIdentityStatementToken(paddedToken.trimEnd('=')) != null) shouldBe true
+
+        listOf("not!base64url", paddedToken, v2Token).forEach { bad ->
+            val result = parseHello3(hello3Line(statements = listOf(good, bad)))
+            result.malformation() shouldBe HelloMalformation.UNDECODABLE_STATEMENT
+            val detail = (result as HelloParse.Malformed).detail
+            detail shouldContain "token 1"
+            detail shouldNotContain bad
+            result.reason shouldBe DenialReason.MALFORMED_HELLO
+        }
+        // Index 0 is named as such.
+        (parseHello3(hello3Line(statements = listOf(v2Token))) as HelloParse.Malformed).detail shouldContain "token 0"
+    }
+
+    @Test
+    fun `the HELLO3 malformation kinds are appended after the landed ones`() {
+        HelloMalformation.entries.takeLast(3) shouldBe listOf(
+            HelloMalformation.NOT_HELLO3,
+            HelloMalformation.CLAIMED_ID_MALFORMED,
+            HelloMalformation.UNDECODABLE_STATEMENT,
+        )
+        HelloMalformation.entries.indexOf(HelloMalformation.UNDECODABLE_SIGNATURE) shouldBe 8
+    }
+
+    @Test
     fun `the hazard this grammar avoids is real - the legacy parse shape absorbs extra tokens into the name`() {
         // Non-vacuity for the test above: it is only worth pinning because
         // appending to the legacy line really does corrupt identity. This
@@ -220,11 +431,29 @@ class HelloProtocolTest {
     // (4) challenge bytes: deterministic and role-asymmetric
     // ------------------------------------------------------------------
 
+    /**
+     * A challenge between two HELLO3 stable names. The challenge layout is
+     * unchanged by HELLO3 (feature decision 5y8t.F3-D5): it commits to whatever
+     * ids the two sides admitted each other under, now opaque names.
+     */
+    private fun challengeBetweenStableNames() = HelloChallenge(
+        signerPeerId = PeerId("alice"),
+        verifierPeerId = PeerId("bob"),
+        verifierNonce = nonceB,
+        signerNonce = nonceA,
+        signerMirrorRef = mirrorA,
+        verifierMirrorRef = mirrorB,
+    )
+
     @Test
     fun `challenge bytes are deterministic for equal inputs`() {
         val first = helloChallengeBytes(challengeSignedByA())
         val second = helloChallengeBytes(challengeSignedByA())
         first.contentEquals(second) shouldBe true
+
+        // Over stable names too.
+        helloChallengeBytes(challengeBetweenStableNames())
+            .contentEquals(helloChallengeBytes(challengeBetweenStableNames())) shouldBe true
 
         // And sensitive to every field: changing any one of the six changes them.
         val base = challengeSignedByA()
@@ -256,6 +485,12 @@ class HelloProtocolTest {
         val aProof = identityA.sign(aBytes)
         Ed25519.verify(identityA.publicKey, aBytes, aProof) shouldBe true
         Ed25519.verify(identityA.publicKey, bBytes, aProof) shouldBe false
+
+        // The same asymmetry between stable names.
+        val aliceSigns = helloChallengeBytes(challengeBetweenStableNames())
+        val bobSigns = helloChallengeBytes(challengeBetweenStableNames().mirrored())
+        aliceSigns.contentEquals(bobSigns) shouldBe false
+        helloChallengeBytes(challengeBetweenStableNames().mirrored().mirrored()).contentEquals(aliceSigns) shouldBe true
     }
 
     @Test
@@ -282,6 +517,11 @@ class HelloProtocolTest {
         // Every challenge carries it, whichever role signs.
         helloChallengeBytes(challengeSignedByA().mirrored())
             .copyOfRange(0, expectedPrefix.size).contentEquals(expectedPrefix) shouldBe true
+
+        // Still /v1 between HELLO3 stable names: the layout did not change.
+        listOf(challengeBetweenStableNames(), challengeBetweenStableNames().mirrored()).forEach {
+            helloChallengeBytes(it).copyOfRange(0, expectedPrefix.size).contentEquals(expectedPrefix) shouldBe true
+        }
     }
 
     @Test
@@ -489,6 +729,24 @@ class HelloProtocolTest {
         identityA.verify(message, credentials.sign(message)) shouldBe true
 
         credentials.toString() shouldBe "PeerIdentityCredentials(peerId=${identityA.peerId.name})"
+    }
+
+    @Test
+    fun `PeerIdentityCredentials forwards a named identity's statements and is empty for an unnamed one`() {
+        val namedA = PeerIdentity(
+            DeterministicKeySource.keyPairFromSeed("hello-protocol-A".toByteArray()),
+            alice,
+            listOf(statementAlice),
+        )
+        val credentials = namedA.asPeerCredentials()
+
+        credentials.peerId shouldBe alice
+        // Forwarded, not copied: the very list the identity holds.
+        credentials.statements shouldBeSameInstanceAs namedA.statements
+        credentials.statements shouldBe listOf(statementAlice)
+
+        identityA.asPeerCredentials().statements.shouldBeEmpty()
+        credentials.toString() shouldBe "PeerIdentityCredentials(peerId=alice)"
     }
 
     @Test

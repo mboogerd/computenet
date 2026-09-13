@@ -59,15 +59,16 @@ String)` dispatches to `Session.onText` (handshake lines only) and
 (`wire/src/main/kotlin/civictech/wire/HelloProtocol.kt:255-267`); the
 receiving side reads the whole WebSocket TEXT message as the line.
 
-There are two handshake grammars, chosen by whether the sending side has
-`PeerCredentials` (`Session.hello()`,
+There are three handshake grammars, chosen by whether the sending side has
+`PeerCredentials` and whether they hold statements (`Session.hello()`,
 `wire/src/main/kotlin/civictech/wire/WsTransport.kt:960-974`):
 
 | line | grammar | when |
 |---|---|---|
 | legacy `HELLO` | `HELLO <mirrorRef>[ <peerName>]` | `side.credentials == null` |
-| `HELLO2` | `HELLO2 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)>` | `side.credentials != null` |
-| `PROOF` | `PROOF <base64url(signature)>` | answers a `HELLO2` the peer is authenticating against |
+| `HELLO2` | `HELLO2 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)>` | `side.credentials != null && credentials.statements` empty |
+| `HELLO3` | `HELLO3 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)> <statement>+` | `side.credentials != null && credentials.statements` non-empty |
+| `PROOF` | `PROOF <base64url(signature)>` | answers a `HELLO2` or `HELLO3` the peer is authenticating against |
 
 Prefixes and token counts (`HelloProtocol.kt`): `HELLO2_PREFIX = "HELLO2 "`
 (line 68), `PROOF_PREFIX = "PROOF "` (line 71), `LEGACY_HELLO_PREFIX =
@@ -82,7 +83,18 @@ base64url-no-pad(signature)`. A nonce of at least `MIN_HELLO_NONCE_BYTES =
 16` bytes is accepted on receipt; a fresh hello generates
 `HELLO_NONCE_BYTES = 32`.
 
-**What this section pins and what it does not.** The three line grammars
+`HELLO3` is DSC4's versioned break (feature computenet-5y8t.3): the stable-name
+hello, with `HELLO2` and legacy bytes frozen. `HELLO3_PREFIX = "HELLO3 "`; after
+it come `HELLO3_FIXED_TOKEN_COUNT = 4` fields as in `HELLO2` except that
+`claimedPeerId` is opaque (any non-empty, well-formed UTF-16 name, no
+key-derived-form check), then 1 to `MAX_HELLO_STATEMENTS = 8` statement tokens,
+each the encoding of
+`civictech.identity.anchor.encodeIdentityStatementToken` (unpadded base64url of
+the statement's signing bytes followed by its signature). The `when` column is
+the rule the transport follows for choosing between `HELLO2` and `HELLO3`; a
+`HELLO3` exchange uses the same `PROOF` line and challenge bytes as `HELLO2`.
+
+**What this section pins and what it does not.** The four line grammars
 above are pinned — a conforming peer must produce and parse exactly these
 token shapes. Whether a given signature or proof **verifies** is DSC1's
 concern, not this corpus's: see `HelloProtocolTest` and
