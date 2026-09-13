@@ -62,7 +62,8 @@ data class ApplyReport(
  * A non-zero exit is [WriteBackFailure.ImportExited], recorded in the failed
  * set, and **the loop continues to the next issue** — clause 6's seam. A zero
  * exit is not yet a success: the row is re-read from [export] and compared
- * field by field against what was imposed, `updated_at` excluded, using the
+ * field by field against what was imposed, [ImposedFields.NON_COMPARABLE]
+ * fields excluded (`created_at`, `updated_at`), using the
  * planner's own [WriteBackPlanner.preflight] comparison so that the
  * instant-equality rule is not re-implemented here. Absent row ->
  * [WriteBackFailure.ReadBackMissing]; disagreement ->
@@ -168,28 +169,22 @@ class WriteBackApplier(
      * RE-READ, never from the import report.
      *
      * Returns `null` when [observed] — the re-read row — agrees with
-     * [imposition] on every imposed field except `updated_at`, and the failure
-     * otherwise.
+     * [imposition] on every [ImposedFields.COMPARABLE] field (which excludes
+     * `created_at` and `updated_at` — see [ImposedFields.NON_COMPARABLE]), and
+     * the failure otherwise. Reuses [WriteBackPlanner.preflight] rather than
+     * re-implementing the exclusion here, so the planner's Impose/NoOp
+     * decision and this post-import re-read draw the excluded-field set from
+     * the same place (computenet-6wc.1.6 clause 3).
      */
     private fun readBackFailure(imposition: Imposition, observed: ExportRow?): WriteBackFailure? {
         if (observed == null) return WriteBackFailure.ReadBackMissing
         val mismatches = WriteBackPlanner.preflight(imposition.row, observed)
-            .filterNot { it.field == UPDATED_AT }
         return if (mismatches.isEmpty()) null else WriteBackFailure.ReadBackMismatch(mismatches)
     }
 
     private fun reRead(issueId: String): ExportRow? = export().firstOrNull { it.id == issueId }
 
     companion object {
-
-        /**
-         * The field excluded from the post-import comparison, on purpose: an
-         * incoming sub-second `updated_at` of `>= .500` is rounded UP by bd on
-         * the way in (E4), so the stored value is bd's business rather than a
-         * failure of the imposition. It is reported inside
-         * [WriteBackEvent.Imposed.observed], not adjudicated.
-         */
-        const val UPDATED_AT: String = "updated_at"
 
         /**
          * Production wiring for one bd workspace at [workspaceRoot]: real
