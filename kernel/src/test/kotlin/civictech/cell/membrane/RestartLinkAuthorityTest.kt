@@ -16,7 +16,6 @@ import civictech.cell.link.LinkPolicy
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
-import civictech.cell.link.KeyId
 import civictech.cell.link.allowPeers
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -171,7 +170,7 @@ class RestartLinkAuthorityTest {
         val host = world.host
 
         val alice = PeerId("alice")
-        val countingPolicy = CountingLinkPolicy(allowPeers(KeyId(alice.name)))
+        val countingPolicy = CountingLinkPolicy(allowPeers(PeerId(alice.name)))
         val membrane = SubscribeAuthorityMembrane(countingPolicy = countingPolicy)
         val membraneRef = host.managementInlet.call.spawn(membrane)
         host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
@@ -228,7 +227,7 @@ class RestartLinkAuthorityTest {
         val hostB = ManagedHost(scheduler = controller.scheduler(), registry = world.registry)
 
         val alice = PeerId("alice")
-        val countingPolicy = CountingLinkPolicy(allowPeers(KeyId(alice.name)))
+        val countingPolicy = CountingLinkPolicy(allowPeers(PeerId(alice.name)))
         val membrane = SubscribeAuthorityMembrane(countingPolicy = countingPolicy)
         val membraneRef = hostA.managementInlet.call.spawn(membrane)
 
@@ -283,7 +282,7 @@ class RestartLinkAuthorityTest {
         val host = world.host
 
         val alice = PeerId("alice")
-        val countingPolicy = CountingLinkPolicy(allowPeers(KeyId(alice.name)))
+        val countingPolicy = CountingLinkPolicy(allowPeers(PeerId(alice.name)))
         val membrane = SubscribeAuthorityInletMembrane(countingPolicy = countingPolicy)
         val membraneRef = host.managementInlet.call.spawn(membrane)
         host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)

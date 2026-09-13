@@ -98,7 +98,7 @@ class WsAuthenticatedHelloTest {
      */
     private inner class Stack(
         name: String,
-        allow: Set<KeyId>? = null,
+        allow: Set<PeerId>? = null,
         binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
     ) {
         val identity: PeerIdentity = FilePeerKeyStore(keyDirs.resolve(name)).loadOrGenerate()
@@ -293,7 +293,7 @@ class WsAuthenticatedHelloTest {
         val remote = Stack("taxonomy-remote")
         val stranger = Stack("taxonomy-stranger")
         // an allowlist naming somebody else, evaluated on the DERIVED id
-        val allowlisted = Stack("taxonomy-allowlisted", allow = setOf(stranger.identity.keyId))
+        val allowlisted = Stack("taxonomy-allowlisted", allow = setOf(stranger.identity.peerId))
 
         // One sink for the whole test, exactly as a listener shares one across
         // every connection it accepts — otherwise a per-Session sink would reset

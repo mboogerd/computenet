@@ -1049,7 +1049,7 @@ object WsTransport {
                 refuseUnbound(null, checkNotNull(key), resolution)
                 return
             }
-            if (!admitted(peer, key)) return
+            if (!admitted(peer)) return
             bindAndAnnounce(peer, key, UUID.fromString(parts[0]), AuthLevel.TransportVouched)
         }
 
@@ -1178,7 +1178,7 @@ object WsTransport {
                 // defect of this path: an unkeyed side cannot prove anything,
                 // which is exactly what its configuration says. The
                 // mixed-version proofs are a sibling item's.
-                if (!admitted(derived, derivedKey)) return
+                if (!admitted(derived)) return
                 pending = PendingHello(hello, derivedKey, key, bound.issuer)
                 bindAndAnnounce(derived, derivedKey, hello.mirrorRef, AuthLevel.TransportVouched)
                 return
@@ -1212,9 +1212,10 @@ object WsTransport {
          *    Reflecting our own `PROOF` back therefore cannot verify
          *    (`[DSC1-HELLO-07]`, `HelloProtocol.helloChallengeBytes`).
          * 5. **Admit** (`NOT_ADMITTED`) — `Side.admits` evaluated on the
-         *    **derived** id, never the claimed string (`[DSC1-HELLO-12]`). The
-         *    allowlist check is unchanged code doing a strictly stronger check:
-         *    the id it tests is now one the peer had to prove.
+         *    **resolved** identity — the one this side's binding resolved the
+         *    proven key to — never the claimed string (`[DSC1-HELLO-12]`).
+         *    Allowlists name identities (epic `computenet-5y8t`); the key is
+         *    what this hello was proven on.
          * 6. **Record, bind, install, announce** — in that order, see
          *    [bindAndAnnounce].
          */
@@ -1267,7 +1268,7 @@ object WsTransport {
                 )
                 return
             }
-            if (!admitted(peer, awaiting.derivedKey)) return
+            if (!admitted(peer)) return
             replayGuard.recordAccepted(peer, awaiting.hello.nonce, proof.signature)
             bindAndAnnounce(
                 peer,
@@ -1307,22 +1308,25 @@ object WsTransport {
          * `Peering.Side.admits`, with the refusal accounted — unchanged
          * behaviour on the legacy path (the stderr line and the denial detail
          * are the ones this transport has always written) and unchanged *code*
-         * on the authenticated ones, where the only difference is that [key]
-         * is a derived fingerprint rather than a claimed name
-         * (`[DSC1-HELLO-12]`).
+         * on the authenticated ones, where the identity judged is one the peer
+         * had to prove a key for (`[DSC1-HELLO-12]`).
          *
-         * **Two arguments, and the split is the point** (feature
-         * `computenet-376c`): [key] is what the allowlist judges, [peer] is the
-         * identity that key resolved to and therefore what the denial record
-         * attributes the refusal to. Under the interim binding they hold the
-         * same string, which is why every landed `denial.principal` assertion
-         * is unaffected.
+         * **The allowlist judges the RESOLVED identity** (epic
+         * `computenet-5y8t`): [peer] is what this side's binding resolved the
+         * hello's key to, and it is both what the allowlist judges and what the
+         * denial record attributes the refusal to. Allowlists name identities;
+         * the key is what a hello is proven on and plays no part here. Every
+         * caller has already refused an `IdentityResolution.Unbound` key
+         * ([refuseUnbound]) before reaching this. Under the interim binding a
+         * key identifier and its identity hold the same string, which is why
+         * every landed allowlist and `denial.principal` assertion is
+         * unaffected.
          *
          * @return true when the peer is admitted; false after refusing it, in
          *   which case the caller must return without binding anything.
          */
-        private fun admitted(peer: PeerId?, key: KeyId?): Boolean {
-            if (side.admits(key)) return true
+        private fun admitted(peer: PeerId?): Boolean {
+            if (side.admits(peer)) return true
             System.err.println("[WsTransport] refusing peer $peer: not on the allowlist (spec 43)")
             // Seam 1 (spec 40/43, [SEC1-07]): accounted before the
             // connection is refused. A hello is a text frame with no
