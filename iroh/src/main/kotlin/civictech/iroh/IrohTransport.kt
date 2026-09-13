@@ -10,15 +10,20 @@ import civictech.cell.Propagate
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IdentityStatement
 import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.UnboundReason
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryMirrorCell
+import civictech.cell.wire.denialReasonFor
 import civictech.identity.Ed25519
+import civictech.identity.anchor.decodeIdentityStatementToken
+import civictech.identity.anchor.encodeIdentityStatementToken
 import civictech.identity.fingerprint
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -52,37 +57,61 @@ import kotlin.time.Duration.Companion.seconds
  * `WireCodec` frame. `PROTOCOL.md` §3 guarantees per-link delivery order, which
  * is exactly the premise `WsTransport` takes from WebSocket message order, so
  * hello-before-announcements holds here for the same reason it holds there
- * (egl.2-D1). The bytes are new — `IROH-HELLO1 <mirrorRef>` in UTF-8, see
- * [IrohTransport.HELLO_PREFIX] — and are deliberately *not* `WsTransport`'s:
+ * (egl.2-D1). The bytes are new and are deliberately *not* `WsTransport`'s:
  * `[DSC1-HELLO-10]` freezes that line's bytes for that transport, and nothing
  * here may claim to speak it.
  *
- * ## Admission is a public-key allowlist over the connection's NodeId
+ * Two line forms, told apart by their prefix (feature `computenet-5y8t.3`,
+ * decision 5y8t.F3-D4), both UTF-8:
+ *
+ * - `IROH-HELLO1 <mirrorRef>[ <name>]` ([IrohTransport.HELLO_PREFIX]) — the
+ *   form a side holding no identity statements sends, byte-for-byte what it
+ *   sent before DSC4.
+ * - `IROH-HELLO2 <mirrorRef> <claimedName> <statement>{1,8}`
+ *   ([IrohTransport.HELLO2_PREFIX]) — the form a side whose
+ *   `Peering.Side.credentials` hold statements sends: the name it claims and
+ *   the anchor-signed statements vouching for it, each one
+ *   `civictech.identity.anchor.encodeIdentityStatementToken`. No key token
+ *   (the NodeId IS the key) and no nonce (the QUIC handshake is the proof of
+ *   possession, below).
+ *
+ * The sender picks the form by what it holds, so every side configured before
+ * DSC4 emits exactly the bytes it always did. **The break is loud and one-way,
+ * as on `:wire`**: a pre-DSC4 side reading `IROH-HELLO2 ...` fails its
+ * `IROH-HELLO1 ` prefix check and refuses `DenialReason.MALFORMED_HELLO`,
+ * accounted and closed — never misread as the older line with extra tokens.
+ *
+ * ## Admission: the link is proven on the NodeId key, the binding names the identity
  *
  * Feature `computenet-egl.3` replaced egl.2-D4's interim, in which the hello
  * asserted a name and that name was the admission token. **The [KeyId] a
- * connection is admitted on is now
+ * connection is proven on is
  * `fingerprint(Ed25519.publicKeyFromRaw(remoteNodeId))`** — the ed25519 public
  * key the sidecar reports as the remote endpoint of *this* QUIC connection
  * ([Session.remoteNodeId]: `SidecarLink.remoteNodeId` on an accepted link, the
  * dialled `peerNodeId` on a dialled one). Nothing a peer writes can move it.
  *
- * The identity stamped on every delivery is
- * `Peering.Side.identityBinding.resolve(key, presented)`'s `IdentityResolution.Bound` peer
- * and nothing else (feature `computenet-376c`): this module derives a *key
- * identifier* from key material and never an identity, so when DSC4's
- * anchor-vouched names replace the interim binding, no site here changes. A
- * key that binding resolves to `IdentityResolution.Unbound` is refused at the
- * hello (task `computenet-hbqvz`).
+ * The identity is what this side's binding resolves that key to, **given what
+ * the hello presented**: `Peering.Side.identityBinding.resolve(key, presented)`,
+ * once per hello, with `presented` the decoded statements of an `IROH-HELLO2`
+ * line and empty for `IROH-HELLO1`. Its `IdentityResolution.Bound` peer is the
+ * identity stamped on every delivery and nothing else (feature
+ * `computenet-376c`): this module derives a *key identifier* from key material
+ * and never an identity. A key the binding resolves to
+ * `IdentityResolution.Unbound` is refused at the hello with
+ * `civictech.cell.wire.denialReasonFor(reason)` — `UNVOUCHED` or
+ * `STATEMENT_EXPIRED`, the same table `:wire` reads — before the allowlist is
+ * consulted; the allowlist then judges the resolved identity, never the key.
  *
- * **[Side.peer] is therefore no longer written to the wire over this
- * transport.** Over iroh a peer's name is not a claim anyone needs — the
- * connection already carries the key — so the hello this side sends is exactly
- * `IROH-HELLO1 <mirrorRef>`. A hello that *does* carry a trailing token (a
- * foreign or older client) is checked, never trusted: a token equal to the
- * resolved identity is redundant and admitted, one that differs is refused
+ * **[Side.peer] is not written to the wire over this transport.** A name
+ * token, on either form, is checked and never trusted: a claimed name equal to
+ * the resolved identity is admitted, one that differs is refused
  * `DenialReason.ID_MISMATCH` — the `:wire` `[DSC1-HELLO-06]` shape. A token can
- * only ever CONFIRM the derived identity; it can never supply one.
+ * only ever CONFIRM the resolved identity; it can never supply one. So an
+ * `IROH-HELLO2` line read by a side on the interim binding (which ignores
+ * statements and resolves the key-derived name) is refused `ID_MISMATCH`, and
+ * an `IROH-HELLO1` line read by an anchor-bound side is refused `UNVOUCHED`
+ * (`UnboundReason.NO_STATEMENT`).
  *
  * ## Why [AuthLevel.Authenticated], and what it does not claim
  *
@@ -130,20 +159,51 @@ import kotlin.time.Duration.Companion.seconds
 object IrohTransport {
 
     /**
-     * The hello line's prefix, trailing space included. A hello this side sends
-     * is exactly `IROH-HELLO1 <mirrorRef>`; the ref is a [UUID] in its canonical
-     * form, which contains no space.
+     * The statement-free hello line's prefix, trailing space included. A side
+     * whose credentials hold no statements sends exactly
+     * `IROH-HELLO1 <mirrorRef>`; the ref is a [UUID] in its canonical form,
+     * which contains no space.
      *
      * A hello this side *reads* may carry one trailing token — a foreign or
      * older client asserting a name — which the split still isolates
      * unambiguously. That token is only ever compared against the identity the
-     * connection's own key resolved to; see [Session.onHello].
+     * connection's own key resolved to; see [Session.onHello]. The line
+     * presents no statements, so a binding that requires them resolves it
+     * `Unbound`.
      *
      * The version digit is part of the token rather than a separate field
-     * because the whole grammar is one line: a future `IROH-HELLO2` is a
-     * different prefix and cannot be misread as this one with an extra token.
+     * because the whole grammar is one line: [HELLO2_PREFIX] is a different
+     * prefix and cannot be misread as this one with extra tokens.
      */
     const val HELLO_PREFIX: String = "IROH-HELLO1 "
+
+    /**
+     * The statement-carrying hello line's prefix, trailing space included
+     * (feature `computenet-5y8t.3`, decision 5y8t.F3-D4). The grammar is
+     *
+     * ```
+     * IROH-HELLO2 <mirrorRef> <claimedName> <statement>{1,8}
+     * ```
+     *
+     * split strictly on single spaces (no trim, no limit): a canonical [UUID]
+     * mirror ref, a non-empty claimed name, and between one and
+     * [MAX_HELLO_STATEMENTS] tokens each of which
+     * `civictech.identity.anchor.decodeIdentityStatementToken` accepts. Every
+     * deviation is refused `DenialReason.MALFORMED_HELLO` with a detail that
+     * names the shape and a token index, never the bytes.
+     *
+     * A side sends this form exactly when `Peering.Side.credentials` holds at
+     * least one statement; otherwise it sends [HELLO_PREFIX]'s.
+     */
+    const val HELLO2_PREFIX: String = "IROH-HELLO2 "
+
+    /**
+     * The most statements one [HELLO2_PREFIX] line may carry (feature
+     * `computenet-5y8t.3`'s breakdown: 1..8 per line on both transports). A
+     * bound on attacker-chosen verification work per hello, not a semantic
+     * limit: a peer holds statements from a handful of issuers at most.
+     */
+    const val MAX_HELLO_STATEMENTS: Int = 8
 
     /**
      * The production re-dial backoff: fixed doubling from 1s, capped at 30s,
@@ -540,12 +600,45 @@ object IrohTransport {
             send(hello())
         }
 
+        /**
+         * The line form is picked by what this side HOLDS, never configured
+         * separately: credentials carrying statements send [HELLO2_PREFIX]'s
+         * form with the credentials' name and every statement as a token;
+         * anything else sends `IROH-HELLO1 <mirrorRef>` exactly as before DSC4.
+         * `side.peer` is never written — over iroh the connection's NodeId
+         * already carries the key, so a bare name would be an assertion nobody
+         * may act on (see the class KDoc).
+         *
+         * Credentials that could only produce a line the receiving side must
+         * refuse — more than [MAX_HELLO_STATEMENTS] statements, or a name that
+         * is empty or holds a space — fail here, loudly, rather than being
+         * truncated into a different claim.
+         */
         private fun hello(): ByteArray {
+            val credentials = side.credentials
+            val statements = credentials?.statements.orEmpty()
+            if (credentials != null && statements.isNotEmpty()) {
+                val name = credentials.peerId.name
+                check(statements.size <= MAX_HELLO_STATEMENTS) {
+                    "credentials for $name hold ${statements.size} statements; an IROH-HELLO2 line carries at most " +
+                        "$MAX_HELLO_STATEMENTS"
+                }
+                check(name.isNotEmpty() && ' ' !in name) {
+                    "credentials name '$name' cannot be an IROH-HELLO2 name token (empty or contains a space)"
+                }
+                // Tokens are computed before the mirror is minted, so a statement
+                // the codec refuses leaves no mirror behind.
+                val tokens = statements.map { encodeIdentityStatementToken(it) }
+                val fresh = Peering.spawnMirror(side, toPeer = egress)
+                mirror = fresh
+                val line = buildString {
+                    append(HELLO2_PREFIX).append(fresh.ref.id).append(' ').append(name)
+                    tokens.forEach { append(' ').append(it) }
+                }
+                return line.toByteArray(StandardCharsets.UTF_8)
+            }
             val fresh = Peering.spawnMirror(side, toPeer = egress)
             mirror = fresh
-            // No name token: over iroh the connection's NodeId already carries
-            // the key, so `side.peer` would be an assertion nobody may act on.
-            // See the class KDoc.
             return (HELLO_PREFIX + fresh.ref.id).toByteArray(StandardCharsets.UTF_8)
         }
 
@@ -588,55 +681,31 @@ object IrohTransport {
          *
          * A **refused** hello sends nothing at all: this side never mints a
          * mirror for a peer it will not talk to, and the link is closed.
+         *
+         * Both line forms reach the same admission order: the key from the
+         * connection, ONE resolution of it given what the line presented, the
+         * claimed-name comparison, and only then the allowlist ([admitted]).
          */
         private fun onHello(payload: ByteArray) {
             val text = String(payload, StandardCharsets.UTF_8)
-            if (!text.startsWith(HELLO_PREFIX)) {
-                refuseHello(
+            when {
+                text.startsWith(HELLO2_PREFIX) -> onHello2(text)
+                text.startsWith(HELLO_PREFIX) -> onHello1(text)
+                else -> refuseHello(
                     DenialReason.MALFORMED_HELLO,
                     null,
-                    "first frame on this link refused: ${payload.size} bytes that do not open with the hello prefix",
+                    "first frame on this link refused: ${payload.size} bytes that do not open with a hello prefix",
                 )
-                return
             }
+        }
+
+        /** `IROH-HELLO1 <mirrorRef>[ <name>]` — presents no statements. @see HELLO_PREFIX */
+        private fun onHello1(text: String) {
             val parts = text.removePrefix(HELLO_PREFIX).trim().split(" ", limit = 2)
-            // The admission key comes from the connection, not from the line —
-            // and it is settled BEFORE the allowlist is consulted, so a NodeId
-            // this side cannot make a key of never reaches an allowlist decision
-            // at all. The detail names the shape only, never the bytes.
-            val key = admissionKey.getOrElse {
-                refuseHello(
-                    DenialReason.MALFORMED_HELLO,
-                    null,
-                    "hello refused: this link's remote NodeId is not a valid Ed25519 public key",
-                )
-                return
-            }
-            // The ONE resolution on this path (feature `computenet-376c`): the
-            // identity is whatever this side's binding maps the key to, never
-            // the fingerprint read as a name and never a `PeerId` built here.
-            //
-            // A key the binding holds no identity for is refused right here
-            // (task `computenet-hbqvz`): nothing below may run without an
-            // identity to attribute it to, and none is invented. Accounted
-            // NOT_ADMITTED with the machine-readable `UnboundReason` in the
-            // detail — the same shape `WsTransport.Session.refuseUnbound`
-            // writes; a dedicated `DenialReason` is a kernel taxonomy change
-            // this task does not make. No principal: the hello asserts no name
-            // this side could attribute the refusal to.
-            // Presents nothing; feature computenet-5y8t.3's hello carries the statements.
-            val bound = when (val resolution = side.identityBinding.resolve(key, emptyList())) {
-                is IdentityResolution.Bound -> resolution
-                is IdentityResolution.Unbound -> {
-                    refuseHello(
-                        DenialReason.NOT_ADMITTED,
-                        null,
-                        "hello presenting key ${key.name} refused: this side's identity binding holds no " +
-                            "identity for it (UnboundReason.${resolution.reason.name})",
-                    )
-                    return
-                }
-            }
+            val key = linkKeyOrRefuse() ?: return
+            // Presents nothing: this line form carries no statements, so a
+            // binding that needs them resolves it Unbound (NO_STATEMENT).
+            val bound = resolveOrRefuse(key, emptyList()) ?: return
             val peer = bound.peer
             val peerMirrorRef = runCatching { UUID.fromString(parts[0]) }.getOrNull()
             if (peerMirrorRef == null) {
@@ -647,24 +716,150 @@ object IrohTransport {
                 )
                 return
             }
-            // A trailing token can only CONFIRM the derived identity, never
+            // A trailing token can only CONFIRM the resolved identity, never
             // supply one: equal is redundant and admitted, different is refused
             // (`[DSC1-HELLO-06]`'s shape, recording both values by name).
             val asserted = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
             if (asserted != null && asserted != peer.name) {
+                refuseClaimMismatch(asserted, peer)
+                return
+            }
+            admitAndBind(bound, key, peerMirrorRef)
+        }
+
+        /**
+         * `IROH-HELLO2 <mirrorRef> <claimedName> <statement>{1,8}`. @see HELLO2_PREFIX
+         *
+         * The whole line is parsed before anything else is decided, so a
+         * malformed line is refused on its shape alone and never reaches the
+         * binding. The claimed name is compared as a string with the resolved
+         * identity's name — no `PeerId` is built from attacker-chosen bytes.
+         */
+        private fun onHello2(text: String) {
+            val tokens = text.removePrefix(HELLO2_PREFIX).split(" ")
+            if (tokens.size !in 3..(2 + MAX_HELLO_STATEMENTS)) {
                 refuseHello(
-                    DenialReason.ID_MISMATCH,
-                    peer,
-                    "hello claims $asserted but this link's NodeId resolves ${peer.name}",
+                    DenialReason.MALFORMED_HELLO,
+                    null,
+                    "IROH-HELLO2 refused: ${tokens.size} tokens where a mirror ref, a claimed name and " +
+                        "1..$MAX_HELLO_STATEMENTS statements are required",
                 )
                 return
             }
-            if (!admitted(peer)) return
-            // Our own hello first (see this method's KDoc), then bind + announce.
+            val peerMirrorRef = runCatching { UUID.fromString(tokens[0]) }.getOrNull()
+            if (peerMirrorRef == null || peerMirrorRef.toString() != tokens[0]) {
+                refuseHello(
+                    DenialReason.MALFORMED_HELLO,
+                    null,
+                    "IROH-HELLO2 refused: token 0 is not a canonical mirror ref UUID",
+                )
+                return
+            }
+            val claimedName = tokens[1]
+            if (claimedName.isEmpty() || !claimedName.isWellFormedUtf16()) {
+                refuseHello(
+                    DenialReason.MALFORMED_HELLO,
+                    null,
+                    "IROH-HELLO2 refused: token 1 is not a claimed name (empty or ill-formed UTF-16)",
+                )
+                return
+            }
+            val presented = ArrayList<IdentityStatement>(tokens.size - 2)
+            for (index in 2 until tokens.size) {
+                val statement = decodeIdentityStatementToken(tokens[index])
+                if (statement == null) {
+                    refuseHello(
+                        DenialReason.MALFORMED_HELLO,
+                        null,
+                        "IROH-HELLO2 refused: token $index is not a decodable identity statement",
+                    )
+                    return
+                }
+                presented += statement
+            }
+            val key = linkKeyOrRefuse() ?: return
+            val bound = resolveOrRefuse(key, presented) ?: return
+            if (claimedName != bound.peer.name) {
+                refuseClaimMismatch(claimedName, bound.peer)
+                return
+            }
+            admitAndBind(bound, key, peerMirrorRef)
+        }
+
+        /**
+         * The admission key comes from the connection, not from the line — and
+         * it is settled BEFORE the allowlist is consulted, so a NodeId this side
+         * cannot make a key of never reaches an allowlist decision at all. The
+         * detail names the shape only, never the bytes.
+         *
+         * @return the key, or null after refusing the hello.
+         */
+        private fun linkKeyOrRefuse(): KeyId? = admissionKey.getOrElse {
+            refuseHello(
+                DenialReason.MALFORMED_HELLO,
+                null,
+                "hello refused: this link's remote NodeId is not a valid Ed25519 public key",
+            )
+            null
+        }
+
+        /**
+         * The ONE resolution on a hello path (feature `computenet-376c`): the
+         * identity is whatever this side's binding maps the link's key to,
+         * given the statements the line [presented] — never the fingerprint
+         * read as a name and never a `PeerId` built here.
+         *
+         * A key the binding holds no identity for is refused right here (task
+         * `computenet-hbqvz`), before the claimed name is compared and before
+         * the allowlist is consulted: nothing below may run without an identity
+         * to attribute it to, and none is invented. Accounted under
+         * `denialReasonFor(reason)` — `UNVOUCHED` or `STATEMENT_EXPIRED`, the
+         * one table both transports read (feature `computenet-5y8t.3`) — with
+         * the machine-readable `UnboundReason` in the detail. No principal: an
+         * unresolved key has no identity to attribute the refusal to, and a
+         * claimed name is exactly what may not stand in for one.
+         *
+         * @return the binding's verdict, or null after refusing the hello.
+         */
+        private fun resolveOrRefuse(
+            key: KeyId,
+            presented: List<IdentityStatement>,
+        ): IdentityResolution.Bound? =
+            when (val resolution = side.identityBinding.resolve(key, presented)) {
+                is IdentityResolution.Bound -> resolution
+                is IdentityResolution.Unbound -> {
+                    val reason = resolution.reason
+                    val window = when (reason) {
+                        UnboundReason.EXPIRED, UnboundReason.NOT_YET_VALID -> " under this side's clock"
+                        else -> ""
+                    }
+                    refuseHello(
+                        denialReasonFor(reason),
+                        null,
+                        "hello presenting key ${key.name} refused: this side's identity binding holds no " +
+                            "identity for it (UnboundReason.${reason.name}$window)",
+                    )
+                    null
+                }
+            }
+
+        /** A claimed name that differs from the resolved identity — `[DSC1-HELLO-06]`'s shape, both named. */
+        private fun refuseClaimMismatch(claimed: String, resolved: PeerId) {
+            refuseHello(
+                DenialReason.ID_MISMATCH,
+                resolved,
+                "hello claims $claimed but this link's NodeId resolves ${resolved.name}",
+            )
+        }
+
+        /** The allowlist on the resolved identity, then our hello, then bind + announce. */
+        private fun admitAndBind(bound: IdentityResolution.Bound, key: KeyId, peerMirrorRef: UUID) {
+            if (!admitted(bound.peer)) return
+            // Our own hello first (see onHello's KDoc), then bind + announce.
             openLocalHello()
             // Every iroh admission is Authenticated (the NodeId IS the proven
             // key), so the resolution's issuer rides onto the stamp unconditionally.
-            bindAndAnnounce(peer, key, peerMirrorRef, bound.issuer)
+            bindAndAnnounce(bound.peer, key, peerMirrorRef, bound.issuer)
         }
 
         /**
@@ -1291,4 +1486,25 @@ object IrohTransport {
             sidecar.close()
         }
     }
+}
+
+/**
+ * True when every surrogate in this string is part of a high-low pair. A
+ * string decoded from UTF-8 with replacement cannot hold a lone surrogate, so
+ * this guards the claimed-name token's contract rather than a reachable decode
+ * path; it is cheap and keeps the check next to the grammar that states it.
+ */
+private fun String.isWellFormedUtf16(): Boolean {
+    var i = 0
+    while (i < length) {
+        val c = this[i]
+        if (Character.isHighSurrogate(c)) {
+            if (i + 1 >= length || !Character.isLowSurrogate(this[i + 1])) return false
+            i += 2
+            continue
+        }
+        if (Character.isLowSurrogate(c)) return false
+        i++
+    }
+    return true
 }

@@ -148,6 +148,7 @@ line by its leading keyword and its space-separated tokens, in order:
 |---|---|
 | `HELLO <mirrorRef>[ <peerName>]` | `{"type": "HELLO", "fields": {"mirrorRef": "<uuid>", "peerName": "<name>"}}` — `peerName` omitted when the line has none |
 | `HELLO2 <mirrorRef> <claimedPeerId> <spki> <nonce>` | `{"type": "HELLO2", "fields": {"mirrorRef": "<uuid>", "claimedPeerId": "<id>", "publicKeySpki": "<base64url>", "nonce": "<base64url>"}}` |
+| `HELLO3 <mirrorRef> <claimedPeerId> <spki> <nonce> <statement>{1,8}` | `{"type": "HELLO3", "fields": {"mirrorRef": "<uuid>", "claimedPeerId": "<name>", "publicKeySpki": "<base64url>", "nonce": "<base64url>", "statements": ["<token>", ...]}}` — `statements` is the array of the exact statement-token texts, in line order; `HELLO3` is DSC4's versioned break (feature computenet-5y8t.3), with `HELLO2` and legacy bytes frozen |
 | `PROOF <signature>` | `{"type": "PROOF", "fields": {"signature": "<base64url>"}}` |
 
 Token values are written as the exact text of the token (base64url stays
@@ -497,7 +498,7 @@ wire discriminator and never appears in any bytes.
 | `frames/additive` | `ADDITIVE` | present/absent pairs for additive envelope fields |
 | `payloads` | `PAYLOAD` | one vector per registered polymorphic discriminator |
 | `payloads` | `INTEREST` | one vector per `Interest` arm |
-| `handshake` | `HELLO` | `HELLO`, `HELLO2` and `PROOF` lines |
+| `handshake` | `HELLO` | `HELLO`, `HELLO2`, `HELLO3` and `PROOF` lines |
 | `negative` | `NEG` | vectors that must be refused |
 
 The tokens are the ones sibling features ncz.2–ncz.6 already cite

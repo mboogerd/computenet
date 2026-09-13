@@ -143,7 +143,7 @@ class WsUnboundPrecedesAllowlistTest {
         peer.send(encodeHello2(peer.hello()))
 
         val denial = requireNotNull(session.lastAdmissionDenial) { "the unbound key was not refused" }
-        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.reason shouldBe DenialReason.UNVOUCHED
         // attributed to the id the hello CLAIMED — never a key-derived fallback
         denial.principal shouldBe remote.peerId
         val detail = requireNotNull(denial.detail)
@@ -205,7 +205,7 @@ class WsUnboundPrecedesAllowlistTest {
             openSide(bindingWithoutIdentityFor(KeyId("mallory")), allow = setOf(PeerId("mallory"))),
         )
         val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound token was not refused" }
-        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.reason shouldBe DenialReason.UNVOUCHED
         denial.principal.shouldBeNull()
         val detail = requireNotNull(denial.detail)
         detail shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"

@@ -23,11 +23,19 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.cell.link.IdentityStatement
+import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireCodec
 import civictech.cell.wire.WireEdgeLink
+import civictech.identity.DeterministicKeySource
 import civictech.identity.Ed25519
+import civictech.identity.PeerIdentity
+import civictech.identity.anchor.AnchorIssuer
+import civictech.identity.anchor.AnchorVouchedBinding
+import civictech.identity.anchor.decodeIdentityStatementToken
+import civictech.identity.anchor.encodeIdentityStatementToken
 import civictech.identity.fingerprint
 import org.junit.jupiter.api.Test
 import java.nio.charset.StandardCharsets
@@ -297,7 +305,8 @@ class IrohSessionHelloTest {
     /**
      * Task `computenet-hbqvz`, this transport's admission path: a link whose
      * NodeId-derived key the side's binding resolves to **no identity** is
-     * refused with a typed reason and the machine-readable `UnboundReason`,
+     * refused with a typed reason (`DenialReason.UNVOUCHED` since feature
+     * `computenet-5y8t.3`) and the machine-readable `UnboundReason`,
      * attributed to no principal, costs no mirror and is never written to —
      * even on an open side, and even when the hello asserts the very name a
      * `PeerId(key.name)` fallback would have produced.
@@ -337,7 +346,7 @@ class IrohSessionHelloTest {
         assertEquals(1, refusals, "the link is closed")
         assertEquals(1L, session.admissionDenialCount)
         val denial = assertNotNull(session.lastAdmissionDenial)
-        assertEquals(DenialReason.NOT_ADMITTED, denial.reason)
+        assertEquals(DenialReason.UNVOUCHED, denial.reason)
         assertEquals(null, denial.principal, "no identity means none to attribute the refusal to")
         assertTrue(
             assertNotNull(denial.detail).contains("UnboundReason.${UnboundReason.NO_BINDING.name}"),
@@ -472,6 +481,279 @@ class IrohSessionHelloTest {
         assertEquals(DenialReason.MALFORMED_HELLO, assertNotNull(session.lastAdmissionDenial).reason)
         assertFalse(session.peered)
     }
+
+    // ------------------------------------------------------------------------
+    // IROH-HELLO2 (feature computenet-5y8t.3, task computenet-5y8t.3.5): the
+    // statement-carrying line, resolved by a real AnchorVouchedBinding under a
+    // fixed clock. Every case below is about whether a key an accepted issuer
+    // vouched for resolves to the vouched name; none speaks to a stolen key or
+    // to revocation ([DSC1-NV-01] stays EXPLICITLY UNVERIFIED).
+    // ------------------------------------------------------------------------
+
+    private val fixedNow = 1_700_000_000_000L
+    private val day = 86_400_000L
+
+    private val anchorA = AnchorIssuer(PeerIdentity(DeterministicKeySource.keyPairFromSeed("iroh-anchor-A".toByteArray())))
+    private val anchorC = AnchorIssuer(PeerIdentity(DeterministicKeySource.keyPairFromSeed("iroh-anchor-C".toByteArray())))
+
+    /** alice's keypair; her raw public half is the NodeId her links come up on. */
+    private val aliceKeys = DeterministicKeySource.keyPairFromSeed("iroh-alice".toByteArray())
+    private val aliceNodeId = Ed25519.rawPublicKey(aliceKeys.public)
+
+    private fun statementFor(
+        name: String,
+        issuer: AnchorIssuer = anchorA,
+        notBefore: Long = fixedNow - day,
+        notAfter: Long = fixedNow + day,
+    ) = issuer.bind(PeerId(name), fingerprint(aliceKeys.public), notBefore = notBefore, notAfter = notAfter)
+
+    private val alice = PeerIdentity(aliceKeys, PeerId("alice"), listOf(statementFor("alice")))
+
+    /** A side whose binding accepts exactly anchor A, judged at [fixedNow]. */
+    private fun anchorBound(allow: Set<PeerId>? = null, credentials: PeerCredentials? = null): Peering.Side {
+        val registry = LocationRegistry()
+        return Peering.Side(
+            registry,
+            ManagedHost(registry = registry),
+            allow = allow,
+            identityBinding = AnchorVouchedBinding(mapOf(anchorA.issuerId to anchorA.publicKey), clock = { fixedNow }),
+            credentials = credentials,
+        )
+    }
+
+    /** `PeerCredentials` over a [PeerIdentity] — `:wire`'s adapter is not on this classpath. */
+    private class TestCredentials(private val identity: PeerIdentity) : PeerCredentials {
+        override val keyId: KeyId get() = identity.keyId
+        override val peerId: PeerId get() = identity.peerId
+        override val publicKey: ByteArray get() = identity.publicKey.encoded
+        override fun sign(message: ByteArray): ByteArray = identity.sign(message)
+        override val statements: List<IdentityStatement> get() = identity.statements
+    }
+
+    private fun hello2(mirrorRef: UUID, name: String, tokens: List<String>): ByteArray =
+        (IrohTransport.HELLO2_PREFIX + mirrorRef + " " + name + tokens.joinToString("") { " $it" })
+            .toByteArray(StandardCharsets.UTF_8)
+
+    private fun hello2(name: String, statements: List<IdentityStatement>): ByteArray =
+        hello2(UUID.randomUUID(), name, statements.map { encodeIdentityStatementToken(it) })
+
+    /** One Session plus what it wrote and how often it refused. */
+    private class Probe(side: Peering.Side, nodeId: ByteArray) {
+        val sent = mutableListOf<ByteArray>()
+        var refusals = 0
+        val session = IrohTransport.Session(side, nodeId, send = { sent += it }, refuse = { refusals++ })
+    }
+
+    /** Asserts [probe] refused its one hello as [reason] and left no trace, returning the denial. */
+    private fun assertRefusedOnce(probe: Probe, reason: DenialReason): civictech.cell.BoundaryDenial {
+        assertEquals(1, probe.refusals, "the link is closed exactly once")
+        assertEquals(1L, probe.session.admissionDenialCount)
+        val denial = assertNotNull(probe.session.lastAdmissionDenial)
+        assertEquals(reason, denial.reason, "denial detail: ${denial.detail}")
+        assertFalse(probe.session.peered, "no ingress on a refused hello")
+        assertEquals(null, probe.session.mirrorRef, "a refused peer costs this side no mirror")
+        assertTrue(probe.sent.isEmpty(), "nothing is written to a refused link")
+        return denial
+    }
+
+    @Test
+    fun `IROH-HELLO2 from the vouched key is admitted, and a delivery carries the anchor-issued identity`() {
+        // The fixture's premise: the key a statement binds is the key a link
+        // on alice's NodeId is proven on.
+        assertEquals(fingerprint(aliceKeys.public), keyOf(aliceNodeId))
+        assertTrue("alice" != keyOf(aliceNodeId).name, "the admitted name is not the key-derived one")
+
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry)
+        val local = Peering.Side(
+            registry,
+            host,
+            // The allowlist names the RESOLVED identity, never the key.
+            allow = setOf(PeerId("alice")),
+            identityBinding = AnchorVouchedBinding(mapOf(anchorA.issuerId to anchorA.publicKey), clock = { fixedNow }),
+        )
+        val probe = PrincipalProbeCell()
+        host.managementInlet.call.spawn(probe)
+        val sent = mutableListOf<ByteArray>()
+        val session = IrohTransport.Session(
+            local,
+            aliceNodeId,
+            send = { sent += it },
+            refuse = { throw AssertionError("a vouched key presenting its statement must be admitted") },
+        )
+
+        val mirrorRef = UUID.randomUUID()
+        session.onData(hello2(mirrorRef, "alice", alice.statements.map { encodeIdentityStatementToken(it) }))
+
+        assertTrue(session.peered)
+        assertEquals(0L, session.admissionDenialCount)
+        assertEquals(PeerId("alice"), assertNotNull(session.mirrorCell).peer)
+        assertNotNull(session.mirrorRef, "our own mirror was minted")
+        assertEquals(
+            IrohTransport.HELLO_PREFIX + assertNotNull(session.mirrorRef).id,
+            String(sent.first(), StandardCharsets.UTF_8),
+            "our own hello is the first frame written; this side holds no statements, so it is IROH-HELLO1",
+        )
+
+        session.onData(WireCodec.encode(attentionFrame(probe.ref)))
+        val deadline = System.currentTimeMillis() + 30_000
+        while (probe.principals.isEmpty()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionError("timed out awaiting the delivery")
+            Thread.sleep(50)
+        }
+        assertEquals(
+            Principal.Peer(PeerId("alice"), AuthLevel.Authenticated, anchorA.issuerId),
+            probe.principals.last(),
+        )
+    }
+
+    @Test
+    fun `a side whose credentials hold statements sends IROH-HELLO2, and every other side sends IROH-HELLO1 exactly`() {
+        // Credentialed and named: IROH-HELLO2 with the name and one decodable token.
+        val named = Probe(anchorBound(credentials = TestCredentials(alice)), nodeId())
+        named.session.openLocalHello()
+        val line = String(named.sent.single(), StandardCharsets.UTF_8)
+        assertTrue(line.startsWith(IrohTransport.HELLO2_PREFIX), line)
+        val tokens = line.removePrefix(IrohTransport.HELLO2_PREFIX).split(" ")
+        assertEquals(3, tokens.size, line)
+        assertEquals(assertNotNull(named.session.mirrorRef).id.toString(), tokens[0])
+        assertEquals("alice", tokens[1])
+        // IdentityStatement's signature is a ByteArray, so compare canonical tokens, not data-class equality.
+        assertEquals(encodeIdentityStatementToken(alice.statements.single()), tokens[2])
+        assertEquals(PeerId("alice"), assertNotNull(decodeIdentityStatementToken(tokens[2])).name)
+
+        // Credentialed but unnamed (no statements): IROH-HELLO1, byte for byte.
+        val unnamed = Probe(anchorBound(credentials = TestCredentials(PeerIdentity(Ed25519.generateKeyPair()))), nodeId())
+        unnamed.session.openLocalHello()
+        assertEquals(
+            IrohTransport.HELLO_PREFIX + assertNotNull(unnamed.session.mirrorRef).id,
+            String(unnamed.sent.single(), StandardCharsets.UTF_8),
+        )
+
+        // No credentials at all: IROH-HELLO1, byte for byte.
+        val bare = Probe(side(name = "bare"), nodeId())
+        bare.session.openLocalHello()
+        assertEquals(
+            IrohTransport.HELLO_PREFIX + assertNotNull(bare.session.mirrorRef).id,
+            String(bare.sent.single(), StandardCharsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun `a key the presented statements do not vouch for is refused UNVOUCHED or STATEMENT_EXPIRED, before the allowlist`() {
+        // The allowlist names alice, so a refusal below that were the
+        // allowlist's would read NOT_ADMITTED. None may.
+        val allow = setOf(PeerId("alice"))
+
+        // mallory's key, presenting alice's statement under alice's name.
+        val malloryNodeId = nodeId()
+        val claimsAlice = Probe(anchorBound(allow), malloryNodeId)
+        claimsAlice.session.onData(hello2("alice", alice.statements))
+        val keyMismatch = assertRefusedOnce(claimsAlice, DenialReason.UNVOUCHED)
+        assertEquals(null, keyMismatch.principal)
+        assertTrue(assertNotNull(keyMismatch.detail).contains("UnboundReason.${UnboundReason.KEY_MISMATCH.name}"), keyMismatch.detail)
+
+        // mallory's key, alice's statement, mallory's own name — a name the
+        // allowlist does NOT hold, so consulting it first would say NOT_ADMITTED.
+        val ownName = Probe(anchorBound(allow), malloryNodeId)
+        ownName.session.onData(hello2("mallory", alice.statements))
+        val ownNameDenial = assertRefusedOnce(ownName, DenialReason.UNVOUCHED)
+        assertTrue(assertNotNull(ownNameDenial.detail).contains("UnboundReason.${UnboundReason.KEY_MISMATCH.name}"), ownNameDenial.detail)
+
+        // alice's key, a statement from an issuer this side does not accept.
+        val unaccepted = Probe(anchorBound(allow), aliceNodeId)
+        unaccepted.session.onData(hello2("alice", listOf(statementFor("alice", issuer = anchorC))))
+        val issuerDenial = assertRefusedOnce(unaccepted, DenialReason.UNVOUCHED)
+        assertEquals(null, issuerDenial.principal)
+        assertTrue(
+            assertNotNull(issuerDenial.detail).contains("UnboundReason.${UnboundReason.ISSUER_NOT_ACCEPTED.name}"),
+            issuerDenial.detail,
+        )
+
+        // alice's key, an accepted statement whose window closed a day ago.
+        val expired = Probe(anchorBound(allow), aliceNodeId)
+        expired.session.onData(hello2("alice", listOf(statementFor("alice", notBefore = fixedNow - 3 * day, notAfter = fixedNow - day))))
+        val expiredDenial = assertRefusedOnce(expired, DenialReason.STATEMENT_EXPIRED)
+        assertEquals(null, expiredDenial.principal)
+        val expiredDetail = assertNotNull(expiredDenial.detail)
+        assertTrue(expiredDetail.contains("UnboundReason.${UnboundReason.EXPIRED.name}"), expiredDetail)
+        assertTrue(expiredDetail.contains("clock"), "the detail names whose clock judged the window: $expiredDetail")
+    }
+
+    @Test
+    fun `IROH-HELLO1 to an anchor-bound side presents no statement and is refused UNVOUCHED, not ID_MISMATCH`() {
+        for (name in listOf(null, "alice")) {
+            val probe = Probe(anchorBound(), aliceNodeId)
+            probe.session.onData(hello(name = name))
+            val denial = assertRefusedOnce(probe, DenialReason.UNVOUCHED)
+            assertEquals(null, denial.principal)
+            assertTrue(
+                assertNotNull(denial.detail).contains("UnboundReason.${UnboundReason.NO_STATEMENT.name}"),
+                "trailing name $name: ${denial.detail}",
+            )
+        }
+    }
+
+    @Test
+    fun `IROH-HELLO2 to an interim side resolves the key-derived name and is refused ID_MISMATCH naming both`() {
+        val local = side(name = "local")
+        val probe = Probe(local, aliceNodeId)
+        probe.session.onData(hello2("alice", alice.statements))
+
+        val denial = assertRefusedOnce(probe, DenialReason.ID_MISMATCH)
+        val derived = local.identityBinding.boundPeer(keyOf(aliceNodeId))
+        assertEquals(derived, denial.principal, "attributed to who the interim binding says is on the link")
+        val detail = assertNotNull(denial.detail)
+        assertTrue(detail.contains("alice") && detail.contains(derived.name), detail)
+    }
+
+    @Test
+    fun `malformed IROH-HELLO2 lines are refused MALFORMED_HELLO on their shape alone`() {
+        val token = encodeIdentityStatementToken(alice.statements.single())
+        val ref = UUID.randomUUID()
+        val malformed = mapOf(
+            "two tokens" to hello2(ref, "alice", emptyList()),
+            "nine statements" to hello2(ref, "alice", List(9) { token }),
+            "empty name via a doubled space" to hello2(ref, "", listOf(token)),
+            "a =-padded token" to hello2(ref, "alice", listOf("$token=")),
+            "a mirror ref that is not a UUID" to
+                (IrohTransport.HELLO2_PREFIX + "not-a-uuid alice " + token).toByteArray(StandardCharsets.UTF_8),
+        )
+        for ((shape, line) in malformed) {
+            // An anchor-bound side that WOULD admit alice's well-formed line:
+            // the refusal is the shape's, not the binding's.
+            val probe = Probe(anchorBound(), aliceNodeId)
+            probe.session.onData(line)
+            val denial = assertRefusedOnce(probe, DenialReason.MALFORMED_HELLO)
+            assertEquals(null, denial.principal, shape)
+            assertTrue(!assertNotNull(denial.detail).contains(token), "$shape: the detail never echoes the bytes")
+        }
+
+        // Control: the same fixture, well formed, is admitted.
+        val control = Probe(anchorBound(), aliceNodeId)
+        control.session.onData(hello2(ref, "alice", listOf(token)))
+        assertTrue(control.session.peered)
+
+        // A pre-DSC4 side's only check is `startsWith(IROH-HELLO1 )`, which
+        // an IROH-HELLO2 line fails: it is refused malformed, never misread.
+        assertFalse(String(hello2(ref, "alice", listOf(token)), StandardCharsets.UTF_8).startsWith(IrohTransport.HELLO_PREFIX))
+    }
+
+    private fun attentionFrame(target: CellRef) = HostedPortInvocation(
+        cellRef = target,
+        portName = "outlet",
+        type = HostedPortInvocation.Type.PORT_PROTOCOL,
+        invocation = Invocation("", emptyList(), emptyList()),
+        protocolId = Protocols.Attention,
+        protocolLink = WireEdgeLink(
+            id = UUID.randomUUID(),
+            from = PortRef.generate(),
+            to = PortRef.generate(target),
+            fromAddr = PortAddress(CellRef(UUID.randomUUID()), "inlet"),
+            toAddr = PortAddress(target, "outlet"),
+        ),
+        protocolMessage = Attention(1f),
+    )
 }
 
 /**

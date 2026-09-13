@@ -461,7 +461,7 @@ class WsAuthenticatedHelloTest {
         val (unbound, unboundTexts, unboundRefusals) =
             drive(Stack("unbound-local", binding = bindingWithoutIdentityFor(remote.identity.keyId)))
         val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound key was not refused" }
-        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.reason shouldBe DenialReason.UNVOUCHED
         // attributed to the id the hello CLAIMED — the only name this side has
         denial.principal shouldBe remote.identity.peerId
         requireNotNull(denial.detail) shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"
@@ -498,7 +498,7 @@ class WsAuthenticatedHelloTest {
 
         val unbound = drive(openSide(bindingWithoutIdentityFor(KeyId("mallory"))))
         val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound token was not refused" }
-        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.reason shouldBe DenialReason.UNVOUCHED
         denial.principal.shouldBeNull()
         requireNotNull(denial.detail) shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"
         unbound.peered shouldBe false

@@ -250,6 +250,44 @@ enum class DenialReason {
      * terminal about.
      */
     MALFORMED_ANNOUNCEMENT,
+
+    /**
+     * Seam 1 hello: the side's `identityBinding` resolved the proven key to NO
+     * identity — no statement presented, an issuer this side does not accept, a
+     * statement whose signature does not verify, a statement binding another
+     * key, or a binding that simply holds nothing
+     * (`civictech.cell.link.UnboundReason` `NO_BINDING` / `NO_STATEMENT` /
+     * `ISSUER_NOT_ACCEPTED` / `BAD_SIGNATURE` / `KEY_MISMATCH`; DSC4, epic
+     * `computenet-5y8t` decision D8, feature `computenet-5y8t.3`).
+     *
+     * **Machine-distinguishable from [NOT_ADMITTED]** (the peer HAS an identity
+     * and it is not welcome) **and from [ID_MISMATCH]** (the key resolved to an
+     * identity, just not the claimed one). The `UnboundReason` that produced it
+     * is named in [BoundaryDenial.detail]; the one table from `UnboundReason`
+     * to this taxonomy is `civictech.cell.wire.denialReasonFor`.
+     *
+     * `[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED: this constant says nothing
+     * about revocation or about a key held by someone other than its owner
+     * (epic residual R4).
+     */
+    UNVOUCHED,
+
+    /**
+     * Seam 1 hello: a presented statement from an accepted issuer verifies and
+     * binds the proven key, but is outside its validity window at the
+     * RECEIVER's clock (`civictech.cell.link.UnboundReason` `EXPIRED` /
+     * `NOT_YET_VALID`; DSC4, epic `computenet-5y8t` decision D8). The
+     * [BoundaryDenial.detail] names which of the two, and names the clock that
+     * refused — the [EXPIRED] announcement precedent (epic §9.6): a verdict
+     * that depends on state the peer cannot see is unactionable without
+     * whose-now. Rests on `[DSC1-NV-03]` (clock-skew adequacy), EXPLICITLY
+     * UNVERIFIED.
+     *
+     * `[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED: this constant says nothing
+     * about revocation or about a key held by someone other than its owner
+     * (epic residual R4).
+     */
+    STATEMENT_EXPIRED,
 }
 
 /**

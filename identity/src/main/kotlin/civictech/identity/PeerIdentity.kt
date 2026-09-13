@@ -1,6 +1,7 @@
 package civictech.identity
 
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IdentityStatement
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerIdentityBinding
@@ -68,7 +69,18 @@ fun fingerprint(publicKey: PublicKey): KeyId {
 
 /**
  * A loaded Ed25519 keypair, the [KeyId] its public half fingerprints to, and
- * the [PeerId] that key identifier resolves to.
+ * the [PeerId] this process presents as its own.
+ *
+ * Two construction shapes, and they differ only in where [peerId] comes from:
+ *
+ * - **Unnamed** — `PeerIdentity(publicKey, privateKey)` / `PeerIdentity(keyPair)`:
+ *   [peerId] is resolved from [keyId] through the kernel's interim binding and
+ *   [statements] is empty. Every construction path that existed before feature
+ *   `computenet-5y8t.3` is this one, unchanged.
+ * - **Named** — `PeerIdentity(publicKey, privateKey, name, statements)` /
+ *   `PeerIdentity(keyPair, name, statements)` (epic `computenet-5y8t` decision
+ *   D9): [peerId] IS the explicit `name`, and [statements] are the
+ *   anchor-signed [IdentityStatement]s this process holds as evidence for it.
  *
  * The private key is **not** a property: it is reachable only through [sign],
  * so no accessor, destructuring, copy or serializer can carry it out of here.
@@ -76,17 +88,97 @@ fun fingerprint(publicKey: PublicKey): KeyId {
  * absence of `equals`/`hashCode`, which would otherwise invite comparing
  * private material.
  */
-class PeerIdentity(
+class PeerIdentity private constructor(
+    explicitName: PeerId?,
+    statements: List<IdentityStatement>,
     val publicKey: PublicKey,
     private val privateKey: PrivateKey,
 ) {
+    /** The unnamed identity: [peerId] resolved from [keyId], no [statements]. */
+    constructor(publicKey: PublicKey, privateKey: PrivateKey) : this(null, emptyList(), publicKey, privateKey)
+
+    /** The unnamed identity over [keyPair]; see the two-key constructor. */
     constructor(keyPair: KeyPair) : this(keyPair.public, keyPair.private)
+
+    /**
+     * The **named** identity: [peerId] is [name], and [statements] are the
+     * anchor-signed statements this process presents for it (epic
+     * `computenet-5y8t` decision D9, feature decision 5y8t.F3-D6).
+     *
+     * Fails closed at construction, with messages that name ids only (never
+     * key bytes):
+     * - [statements] must be non-empty — a name with no evidence is not a
+     *   named identity;
+     * - every statement's `keyId` must be this identity's [keyId] — a statement
+     *   for another key beside this keypair is a misconfiguration (the
+     *   `KEYPAIR_MISMATCH` precedent);
+     * - every statement's `name` must be [name].
+     *
+     * **Signatures are NOT verified here.** This process need not hold any
+     * issuer's public key; judging a statement is the relying side's job
+     * (`civictech.identity.anchor.AnchorVouchedBinding`). Nor is `issuance`
+     * compared with anything: it is carried, not interpreted — nothing here
+     * supersedes, revokes or rotates, and `[DSC1-NV-01]` (stolen-key
+     * resistance) remains EXPLICITLY UNVERIFIED.
+     *
+     * @throws IllegalArgumentException on any of the three conditions above.
+     */
+    constructor(
+        publicKey: PublicKey,
+        privateKey: PrivateKey,
+        name: PeerId,
+        statements: List<IdentityStatement>,
+    ) : this(name, statements, publicKey, privateKey)
+
+    /** The named identity over [keyPair]; see the four-argument constructor. */
+    constructor(keyPair: KeyPair, name: PeerId, statements: List<IdentityStatement>) :
+        this(keyPair.public, keyPair.private, name, statements)
 
     /** This peer's key identifier — the fingerprint of [publicKey], see [fingerprint]. */
     val keyId: KeyId = fingerprint(publicKey)
 
     /**
-     * This peer's durable identity, **resolved through the kernel's single
+     * The anchor-signed statements this identity holds for [peerId] — empty on
+     * every unnamed construction path, non-empty (and all naming [peerId] and
+     * binding [keyId]) on the named one.
+     *
+     * **Reading a name out of a presented statement is not a derivation from
+     * key material.** The name in a statement was chosen by its issuer and
+     * signed over; nothing here computes it from [publicKey] or [keyId]. That
+     * is the distinction `IdentityDerivationRatchetTest`'s rule (a) draws — it
+     * baselines every production file that *constructs* a [PeerId], and this
+     * file constructs none: the named path takes a [PeerId] as a parameter.
+     *
+     * Held, not judged: no signature, validity window or `issuance` is checked
+     * here (see the named constructor).
+     */
+    val statements: List<IdentityStatement> = statements.toList()
+
+    init {
+        if (explicitName != null) {
+            require(this.statements.isNotEmpty()) {
+                "a named PeerIdentity (${explicitName.name}) needs at least one IdentityStatement"
+            }
+            for (statement in this.statements) {
+                require(statement.keyId == keyId) {
+                    "IdentityStatement for ${statement.name.name} binds key ${statement.keyId.name}, " +
+                        "but this identity's key is ${keyId.name}"
+                }
+                require(statement.name == explicitName) {
+                    "IdentityStatement binding key ${statement.keyId.name} names ${statement.name.name}, " +
+                        "but this identity is named ${explicitName.name}"
+                }
+            }
+        }
+    }
+
+    /**
+     * This peer's durable identity.
+     *
+     * **On the named path it is the explicit name, verbatim** — not resolved
+     * through any binding and not derived from anything.
+     *
+     * **On the unnamed path it is resolved through the kernel's single
      * [PeerIdentityBinding] seam — not a derivation** (feature
      * `computenet-376c`).
      *
@@ -105,13 +197,25 @@ class PeerIdentity(
      * second derivation site the seam exists to prevent. This is not an
      * admission path; it is a process loading its own key.
      */
-    val peerId: PeerId = when (val resolution = PeerIdentityBinding.Interim.resolve(keyId, emptyList())) {
-        is IdentityResolution.Bound -> resolution.peer
-        is IdentityResolution.Unbound -> error(
-            "PeerIdentityBinding.Interim resolved this key to no identity (${resolution.reason}); " +
-                "the interim binding is total, so this is a broken invariant, not a refusal",
-        )
-    }
+    val peerId: PeerId = explicitName
+        ?: when (val resolution = PeerIdentityBinding.Interim.resolve(keyId, emptyList())) {
+            is IdentityResolution.Bound -> resolution.peer
+            is IdentityResolution.Unbound -> error(
+                "PeerIdentityBinding.Interim resolved this key to no identity (${resolution.reason}); " +
+                    "the interim binding is total, so this is a broken invariant, not a refusal",
+            )
+        }
+
+    /**
+     * This same keypair under the named constructor — the private half never
+     * leaves the class. For [FilePeerKeyStore.loadNamed] and
+     * [FilePeerKeyStore.storeStatements], which obtain the keypair as
+     * [FilePeerKeyStore.loadOrGenerate] does and then attach statements.
+     *
+     * @throws IllegalArgumentException as the named constructor does.
+     */
+    internal fun named(name: PeerId, statements: List<IdentityStatement>): PeerIdentity =
+        PeerIdentity(publicKey, privateKey, name, statements)
 
     /** Ed25519 signature over [message] with the private half. */
     fun sign(message: ByteArray): ByteArray = Ed25519.sign(privateKey, message)

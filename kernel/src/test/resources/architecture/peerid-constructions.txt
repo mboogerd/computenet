@@ -29,6 +29,9 @@ kernel/src/main/kotlin/civictech/cell/wire/AnnouncementAdmission.kt
 # computenet-376c non-goals): announcement verification stays identity-keyed
 # in this feature, not a leak of the interim binding.
 
+identity/src/main/kotlin/civictech/identity/anchor/IdentityStatementToken.kt
+# hello token parse — the name a PRESENTED statement carries, read off a hello token; verified, never derived, by AnchorVouchedBinding.
+
 wire/src/main/kotlin/civictech/wire/HelloProtocol.kt
 # frame/hello token parse — the identity a HELLO2 frame CLAIMS, read off the
 # wire as a plain string token, not derived from key material.

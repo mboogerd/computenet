@@ -1,6 +1,7 @@
 package civictech.wire
 
 import civictech.cell.DenialReason
+import civictech.cell.link.IdentityStatement
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.wire.DEFAULT_NONCE_RETENTION_MILLIS
@@ -8,6 +9,8 @@ import civictech.cell.wire.PeerCredentials
 import civictech.identity.PEER_ID_LENGTH
 import civictech.identity.PEER_ID_PREFIX
 import civictech.identity.PeerIdentity
+import civictech.identity.anchor.decodeIdentityStatementToken
+import civictech.identity.anchor.encodeIdentityStatementToken
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -38,23 +41,27 @@ import java.util.UUID
  * `PeerId` nobody minted. Corrupted identity, no error. Extending that line is
  * therefore forbidden, not merely inadvisable — its bytes never change.
  *
- * Instead there are two new forms, both with versioned prefixes:
+ * Instead there are three new forms, all with versioned prefixes:
  *
  * ```text
  * HELLO2 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)>
+ * HELLO3 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)> <statement>{1,8}
  * PROOF <base64url(signature)>
  * ```
  *
- * **A legacy peer receiving `HELLO2 ...` fails loudly rather than misparsing
- * it.** The legacy prefix constant is `"HELLO "` *with a trailing space*, and
- * the sixth character of `"HELLO2 ..."` is `2`, not a space — so
- * `startsWith("HELLO ")` is false and the legacy `require` throws. The old side
- * sees a visible connection error; it can never reach `split` and so can never
- * mint a wrong `PeerId` from these bytes. [helloBytesCannotBeMisparsedByLegacy]
- * states that argument as executable code, and `HelloProtocolTest` pins it.
+ * **A legacy peer receiving `HELLO2 ...` or `HELLO3 ...` fails loudly rather
+ * than misparsing it.** The legacy prefix constant is `"HELLO "` *with a
+ * trailing space*, and the sixth character of `"HELLO2 ..."` is `2` (of
+ * `"HELLO3 ..."`, `3`), not a space — so `startsWith("HELLO ")` is false and
+ * the legacy `require` throws. The old side sees a visible connection error; it
+ * can never reach `split` and so can never mint a wrong `PeerId` from these
+ * bytes. [helloBytesCannotBeMisparsedByLegacy] states that argument as
+ * executable code, and `HelloProtocolTest` pins it for all three lines.
  *
  * In the other direction a new side reading a legacy line gets
- * [HelloMalformation.NOT_HELLO2] — a refusal, never a silent downgrade.
+ * [HelloMalformation.NOT_HELLO2] (or [HelloMalformation.NOT_HELLO3]) — a
+ * refusal, never a silent downgrade. The two new hello forms refuse each other
+ * the same way, by prefix.
  *
  * **Strict parsing with an exact token count is unambiguous here** because
  * every `HELLO2` field is space-free by construction: a `UUID`'s canonical
@@ -62,10 +69,45 @@ import java.util.UUID
  * base64url. So a wrong token count, an undecodable field, or a claimed id
  * outside the derived form is a *malformed hello*
  * ([HelloParse.Malformed], `DenialReason.MALFORMED_HELLO`) — never a name.
+ *
+ * ## HELLO3: DSC4's versioned break for a stable name (feature `computenet-5y8t.3`)
+ *
+ * `HELLO3` exists because **`HELLO2` cannot carry a stable name**:
+ * [parseHello2] requires the claimed id to be in the key-derived form
+ * ([isKeyDerivedPeerIdForm]) and refuses anything else as
+ * [HelloMalformation.CLAIMED_ID_NOT_KEY_DERIVED]. A name an anchor vouches for
+ * (epic `computenet-5y8t`, decision D5) is an arbitrary string, so it needs a
+ * new line form rather than a relaxed old one — and HELLO2's exact token count
+ * would refuse appended statements anyway.
+ *
+ * `HELLO3` carries the same four fields as `HELLO2` except that the claimed id
+ * is **opaque** (any non-empty, well-formed UTF-16 string —
+ * [HelloMalformation.CLAIMED_ID_MALFORMED] otherwise; no key-derived-form
+ * check), followed by one to [MAX_HELLO_STATEMENTS] anchor-signed
+ * `IdentityStatement`s, each one space-free token in the encoding of
+ * `civictech.identity.anchor.encodeIdentityStatementToken`. Zero statements or
+ * more than eight is [HelloMalformation.WRONG_TOKEN_COUNT], not a downgrade.
+ * The statements vouch for the name; they are **not** inside the signed
+ * challenge — [helloChallengeBytes] and `PROOF` are unchanged and shared by both
+ * exchanges, and the statements are bound to the key that signs the `PROOF`
+ * by their own anchor signature.
+ *
+ * **The break, stated.** A stable-name peering needs **both** sides on
+ * `HELLO3`. A pre-DSC4 side receiving `HELLO3 ...` fails its legacy
+ * `require(startsWith("HELLO "))` loudly (the §9.1 argument above, extended);
+ * a DSC4 side whose identity binding is the key-derived interim binding
+ * resolves the presented key to its key-derived name, which is not the
+ * claimed stable name, and refuses `DenialReason.ID_MISMATCH` (the admission
+ * point's rule — `WsTransport`, not this file). No legacy, `HELLO2` or `PROOF`
+ * byte changes: a sender whose credentials hold no statements keeps emitting
+ * today's lines.
  */
 
 /** The versioned prefix of an authenticated hello line, trailing space included. */
 const val HELLO2_PREFIX: String = "HELLO2 "
+
+/** The versioned prefix of the stable-name hello line (DSC4), trailing space included. */
+const val HELLO3_PREFIX: String = "HELLO3 "
 
 /** The versioned prefix of the challenge-response line, trailing space included. */
 const val PROOF_PREFIX: String = "PROOF "
@@ -164,6 +206,70 @@ class Hello2(
 }
 
 /**
+ * The stable-name hello (DSC4): [Hello2]'s four fields with an **opaque**
+ * [claimedPeerId], plus the anchor-signed [statements] vouching for it — see
+ * the file KDoc's HELLO3 section.
+ *
+ * A separate class rather than a field on [Hello2], so `HELLO2` stays
+ * byte-frozen and its parser untouched.
+ *
+ * `equals`/`hashCode` are written out, and compare [statements] **by content**
+ * — every statement field, the signature with `contentEquals` — because
+ * `IdentityStatement`'s own data-class `equals` compares its `signature`
+ * array by reference, which would make a parsed hello unequal to the one that
+ * was encoded. [statements] is copied at construction.
+ */
+class Hello3(
+    val mirrorRef: UUID,
+    val claimedPeerId: PeerId,
+    val publicKeySpki: ByteArray,
+    val nonce: ByteArray,
+    statements: List<IdentityStatement>,
+) {
+    val statements: List<IdentityStatement> = statements.toList()
+
+    override fun equals(other: Any?): Boolean =
+        other is Hello3 &&
+            mirrorRef == other.mirrorRef &&
+            claimedPeerId == other.claimedPeerId &&
+            publicKeySpki.contentEquals(other.publicKeySpki) &&
+            nonce.contentEquals(other.nonce) &&
+            statements.size == other.statements.size &&
+            statements.indices.all { sameStatement(statements[it], other.statements[it]) }
+
+    override fun hashCode(): Int {
+        var result = mirrorRef.hashCode()
+        result = 31 * result + claimedPeerId.hashCode()
+        result = 31 * result + publicKeySpki.contentHashCode()
+        result = 31 * result + nonce.contentHashCode()
+        for (statement in statements) {
+            result = 31 * result + statement.name.hashCode()
+            result = 31 * result + statement.keyId.hashCode()
+            result = 31 * result + statement.issuer.hashCode()
+            result = 31 * result + statement.issuance.hashCode()
+            result = 31 * result + statement.notBefore.hashCode()
+            result = 31 * result + statement.notAfter.hashCode()
+            result = 31 * result + statement.signature.contentHashCode()
+        }
+        return result
+    }
+
+    /** Ids and counts only — no key, nonce or signature bytes (`[DSC1-OBS-05]`). */
+    override fun toString(): String =
+        "Hello3(mirrorRef=$mirrorRef, claimedPeerId=${claimedPeerId.name}, " +
+            "publicKeySpki=${publicKeySpki.size}B, nonce=${nonce.size}B, statements=${statements.size})"
+
+    private fun sameStatement(a: IdentityStatement, b: IdentityStatement): Boolean =
+        a.name == b.name &&
+            a.keyId == b.keyId &&
+            a.issuer == b.issuer &&
+            a.issuance == b.issuance &&
+            a.notBefore == b.notBefore &&
+            a.notAfter == b.notAfter &&
+            a.signature.contentEquals(b.signature)
+}
+
+/**
  * The response to the peer's challenge: an Ed25519 signature over
  * [helloChallengeBytes].
  *
@@ -233,6 +339,23 @@ enum class HelloMalformation {
 
     /** The signature token is not decodable unpadded base64url, or decodes to nothing. */
     UNDECODABLE_SIGNATURE,
+
+    /** The line does not begin with [HELLO3_PREFIX] — a legacy or `HELLO2` hello, or something else entirely. */
+    NOT_HELLO3,
+
+    /**
+     * A `HELLO3` claimed id that is empty or contains an unpaired UTF-16
+     * surrogate. The claimed id is otherwise opaque — no key-derived-form
+     * check — and this is what keeps [helloChallengeBytes]'s fail-closed throw
+     * unreachable from a `HELLO3` wire line.
+     */
+    CLAIMED_ID_MALFORMED,
+
+    /**
+     * A `HELLO3` statement token that `decodeIdentityStatementToken` refuses.
+     * The detail names the token's index, never its content.
+     */
+    UNDECODABLE_STATEMENT,
 }
 
 /** The outcome of parsing one hello-protocol line: a message, or a classified malformation. */
@@ -349,8 +472,134 @@ fun parseProof(line: String): HelloParse<Proof> {
     return HelloParse.Ok(Proof(signature))
 }
 
+/**
+ * `HELLO3 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)> <statement>{1,8}`.
+ *
+ * The canonical inverse of [parseHello3]: `encodeHello3(parsed) == line` for
+ * every CANONICAL line — every line this function emits. It is not the inverse
+ * of every line [parseHello3] accepts: the fixed fields are parsed exactly as
+ * [parseHello2] parses them, which (via `UUID.fromString` and the JDK base64url
+ * decoder) also accepts a non-canonical mirror-ref spelling such as `1-2-3-4-5`
+ * and a `=`-padded key or nonce, and those re-encode canonically. Statement
+ * tokens are canonical-only (`decodeIdentityStatementToken` refuses any other
+ * spelling). This function refuses, rather than emits, a hello that
+ * [parseHello3] would refuse on the other side.
+ *
+ * @throws IllegalArgumentException if [Hello3.statements] holds fewer than one
+ *   or more than [MAX_HELLO_STATEMENTS] statements; if [Hello3.claimedPeerId]
+ *   is empty, contains a space, or contains an unpaired UTF-16 surrogate; or as
+ *   `encodeIdentityStatementToken` throws (an unsigned or ill-formed statement).
+ */
+fun encodeHello3(hello: Hello3): String {
+    val count = hello.statements.size
+    require(count in 1..MAX_HELLO_STATEMENTS) {
+        "a HELLO3 carries 1..$MAX_HELLO_STATEMENTS statements, got $count"
+    }
+    val name = hello.claimedPeerId.name
+    require(name.isNotEmpty()) { "a HELLO3 claimed id must not be empty" }
+    require(' ' !in name) { "a HELLO3 claimed id must not contain a space" }
+    unpairedSurrogateAt(name)?.let { throw IllegalArgumentException("a HELLO3 claimed id contains an $it") }
+    return buildString {
+        append(HELLO3_PREFIX)
+        append(hello.mirrorRef)
+        append(' ')
+        append(name)
+        append(' ')
+        append(BASE64URL_ENCODER.encodeToString(hello.publicKeySpki))
+        append(' ')
+        append(BASE64URL_ENCODER.encodeToString(hello.nonce))
+        for (statement in hello.statements) {
+            append(' ')
+            append(encodeIdentityStatementToken(statement))
+        }
+    }
+}
+
+/**
+ * Parse one [HELLO3_PREFIX] line. Total: every rejection is a
+ * [HelloParse.Malformed], never a throw and never a [PeerId] — the same
+ * discipline as [parseHello2].
+ *
+ * `split(" ")` with **no** `limit` and **no** `trim()`, then, in this order:
+ * the prefix ([HelloMalformation.NOT_HELLO3]); between
+ * `1 + `[HELLO3_FIXED_TOKEN_COUNT] and [HELLO3_FIXED_TOKEN_COUNT]` + `
+ * [MAX_HELLO_STATEMENTS] tokens ([HelloMalformation.WRONG_TOKEN_COUNT]); the
+ * mirror ref; the claimed id, non-empty and well-formed UTF-16 but otherwise
+ * opaque ([HelloMalformation.CLAIMED_ID_MALFORMED]); the public key and nonce
+ * exactly as `HELLO2`; then each statement token through
+ * `decodeIdentityStatementToken` ([HelloMalformation.UNDECODABLE_STATEMENT]).
+ *
+ * A decoded statement is only well-formed, not verified: whether it vouches
+ * for the claimed id is the identity binding's decision at admission.
+ */
+fun parseHello3(line: String): HelloParse<Hello3> {
+    if (!line.startsWith(HELLO3_PREFIX)) {
+        return HelloParse.Malformed(
+            HelloMalformation.NOT_HELLO3,
+            "line does not start with the \"$HELLO3_PREFIX\" prefix",
+        )
+    }
+    val tokens = line.substring(HELLO3_PREFIX.length).split(" ")
+    val minTokens = HELLO3_FIXED_TOKEN_COUNT + 1
+    val maxTokens = HELLO3_FIXED_TOKEN_COUNT + MAX_HELLO_STATEMENTS
+    if (tokens.size < minTokens || tokens.size > maxTokens) {
+        return HelloParse.Malformed(
+            HelloMalformation.WRONG_TOKEN_COUNT,
+            "expected $minTokens..$maxTokens space-separated tokens after the prefix, got ${tokens.size}",
+        )
+    }
+    val (mirrorRefToken, claimedIdToken, keyToken, nonceToken) = tokens
+    val mirrorRef = try {
+        UUID.fromString(mirrorRefToken)
+    } catch (_: IllegalArgumentException) {
+        return HelloParse.Malformed(HelloMalformation.UNDECODABLE_MIRROR_REF, "mirror ref is not a canonical UUID")
+    }
+    if (claimedIdToken.isEmpty()) {
+        return HelloParse.Malformed(HelloMalformation.CLAIMED_ID_MALFORMED, "claimed id is empty")
+    }
+    unpairedSurrogateAt(claimedIdToken)?.let {
+        return HelloParse.Malformed(HelloMalformation.CLAIMED_ID_MALFORMED, "claimed id contains an $it")
+    }
+    val publicKeySpki = decodeBase64Url(keyToken)
+        ?: return HelloParse.Malformed(HelloMalformation.UNDECODABLE_PUBLIC_KEY, "public key is not base64url")
+    if (publicKeySpki.isEmpty()) {
+        return HelloParse.Malformed(HelloMalformation.UNDECODABLE_PUBLIC_KEY, "public key decoded to zero bytes")
+    }
+    val nonce = decodeBase64Url(nonceToken)
+        ?: return HelloParse.Malformed(HelloMalformation.UNDECODABLE_NONCE, "nonce is not base64url")
+    if (nonce.size < MIN_HELLO_NONCE_BYTES) {
+        return HelloParse.Malformed(
+            HelloMalformation.NONCE_TOO_SHORT,
+            "nonce is ${nonce.size} bytes, below the $MIN_HELLO_NONCE_BYTES-byte floor",
+        )
+    }
+    val statementTokens = tokens.subList(HELLO3_FIXED_TOKEN_COUNT, tokens.size)
+    val statements = ArrayList<IdentityStatement>(statementTokens.size)
+    for ((index, token) in statementTokens.withIndex()) {
+        statements += decodeIdentityStatementToken(token)
+            ?: return HelloParse.Malformed(
+                HelloMalformation.UNDECODABLE_STATEMENT,
+                "statement token $index is not a decodable identity statement",
+            )
+    }
+    return HelloParse.Ok(Hello3(mirrorRef, PeerId(claimedIdToken), publicKeySpki, nonce, statements))
+}
+
 /** Token count after [HELLO2_PREFIX]: mirror ref, claimed id, public key, nonce. */
 const val HELLO2_TOKEN_COUNT: Int = 4
+
+/** Fixed token count after [HELLO3_PREFIX], before the statements: mirror ref, claimed id, public key, nonce. */
+const val HELLO3_FIXED_TOKEN_COUNT: Int = 4
+
+/**
+ * Most statements one `HELLO3` may carry; at least one is required.
+ *
+ * A bound on the decode work an unauthenticated peer can make this side do per
+ * hello — the `[DSC1-ANN-13]` bounded-work spirit. Eight leaves room for a
+ * peer vouched for by several issuers without making a hello a free
+ * amplification vector.
+ */
+const val MAX_HELLO_STATEMENTS: Int = 8
 
 /** Token count after [PROOF_PREFIX]: the signature alone. */
 const val PROOF_TOKEN_COUNT: Int = 1
@@ -359,7 +608,7 @@ const val PROOF_TOKEN_COUNT: Int = 1
  * The §9.1 legacy-collision argument, as code rather than prose: no line this
  * file encodes can be read by the legacy parser as a hello at all.
  *
- * True by construction — `"HELLO2 "` and `"PROOF "` both fail
+ * True by construction — `"HELLO2 "`, `"HELLO3 "` and `"PROOF "` all fail
  * `startsWith("HELLO ")` — and pinned by `HelloProtocolTest` so a later
  * prefix change that reintroduced the collision would redden a build instead
  * of silently corrupting identity on a mixed-version peering.
@@ -519,24 +768,36 @@ fun helloChallengeBytes(challenge: HelloChallenge): ByteArray {
 
 private fun ByteArrayOutputStream.writeName(peer: PeerId, field: String) {
     val name = peer.name
+    unpairedSurrogateAt(name)?.let { throw IllegalArgumentException("$field contains an $it") }
+    writeLengthPrefixed(name.toByteArray(Charsets.UTF_8))
+}
+
+/**
+ * The one well-formed-UTF-16 walk, shared by [helloChallengeBytes] (which
+ * throws on it) and [parseHello3] (which refuses the line on it) — so a
+ * `HELLO3` claimed id that parses can never make the challenge encoding throw.
+ *
+ * Null when [name] is well-formed UTF-16; otherwise a description of the first
+ * unpaired surrogate by kind and index, never by content.
+ */
+private fun unpairedSurrogateAt(name: String): String? {
     var index = 0
     while (index < name.length) {
         val c = name[index]
         when {
             c.isHighSurrogate() -> {
                 if (index + 1 >= name.length || !name[index + 1].isLowSurrogate()) {
-                    throw IllegalArgumentException("$field contains an unpaired high surrogate at index $index")
+                    return "unpaired high surrogate at index $index"
                 }
                 index += 2
             }
 
-            c.isLowSurrogate() ->
-                throw IllegalArgumentException("$field contains an unpaired low surrogate at index $index")
+            c.isLowSurrogate() -> return "unpaired low surrogate at index $index"
 
             else -> index++
         }
     }
-    writeLengthPrefixed(name.toByteArray(Charsets.UTF_8))
+    return null
 }
 
 private fun ByteArrayOutputStream.writeLengthPrefixed(bytes: ByteArray) {
@@ -712,6 +973,13 @@ class PeerIdentityCredentials(private val identity: PeerIdentity) : PeerCredenti
     override val publicKey: ByteArray get() = spki.copyOf()
 
     override fun sign(message: ByteArray): ByteArray = identity.sign(message)
+
+    /**
+     * The anchor-signed statements the wrapped identity holds — forwarded, never
+     * copied or re-derived: non-empty for a named `PeerIdentity`, empty for an
+     * unnamed one. Whether a side sends `HELLO3` or `HELLO2` follows from this.
+     */
+    override val statements: List<IdentityStatement> get() = identity.statements
 
     /** The [peerId] is public by construction; no key material appears. */
     override fun toString(): String = "PeerIdentityCredentials(peerId=${peerId.name})"
