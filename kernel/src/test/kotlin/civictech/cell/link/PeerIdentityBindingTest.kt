@@ -99,6 +99,14 @@ class PeerIdentityBindingTest {
      * resolves to. A key with no identity backs no name, so the sender stays
      * `TransportVouched` — even though its configured name is exactly what a
      * `PeerId(key.name)` fallback would have produced.
+     *
+     * **The partial binding sits on the RECEIVER.** Task `computenet-hbqvz`
+     * landed this case with the binding on the sender, because the loopback
+     * then resolved a sender's key through the sender's own binding. Task
+     * `computenet-5y8t.1.3` deliberately changed that (feature
+     * `computenet-5y8t.1`, decision D9): the relying side resolves the
+     * sender's presented key, as the socket's admitting side does, so the
+     * binding that can refuse is the receiver's. The sender here is `Interim`.
      */
     @Test
     fun `a loopback sender whose key resolves to no identity is not promoted`() {
@@ -121,17 +129,18 @@ class PeerIdentityBindingTest {
                 identityBinding = binding,
             )
         }
-        val receiver = side(KeyId("receiver-key"), PeerIdentityBinding.Interim)
+        val sender = side(senderKey, PeerIdentityBinding.Interim)
 
-        // Control: under the interim binding the same configuration IS promoted,
-        // so the verdict below is the binding's refusal arm and nothing else.
+        // Control: a receiver under the interim binding promotes the same
+        // sender, so the verdict below is the receiver binding's refusal arm
+        // and nothing else.
         assertEquals(
             AuthLevel.Authenticated,
-            Peering.loopbackAuthLevel(side(senderKey, PeerIdentityBinding.Interim), receiver),
+            Peering.loopbackAuthLevel(sender, side(KeyId("receiver-key"), PeerIdentityBinding.Interim)),
         )
         assertEquals(
             AuthLevel.TransportVouched,
-            Peering.loopbackAuthLevel(side(senderKey, unboundForSender), receiver),
+            Peering.loopbackAuthLevel(sender, side(KeyId("receiver-key"), unboundForSender)),
         )
     }
 
