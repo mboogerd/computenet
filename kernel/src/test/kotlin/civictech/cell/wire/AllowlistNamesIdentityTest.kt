@@ -186,10 +186,14 @@ class AllowlistNamesIdentityTest {
 
         (K1 == K2) shouldBe false // the rotation is real: two distinct keys are in play
 
+        r.probe.principals.size shouldBe 1 // K1 admitted
         val s2 = r.sender(ALICE, Credentials(K2, ALICE, listOf(stmt(ALICE, K2, issuance = 2))))
         r.peerAndDeliver(s2)
 
-        r.probe.principals.lastOrNull() shouldBe Principal.Peer(ALICE, AuthLevel.Authenticated, ANCHOR_A)
+        // The K2 frame itself must land: `lastOrNull` alone would still read
+        // K1's principal if K2 were refused.
+        r.probe.principals.size shouldBe 2
+        r.probe.principals.last() shouldBe Principal.Peer(ALICE, AuthLevel.Authenticated, ANCHOR_A)
         // documents the "no reconfiguration" claim; allow is a val and was never touched
         r.side.allow shouldBe setOf(ALICE)
     }
