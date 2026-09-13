@@ -860,8 +860,10 @@ class SignedAnnouncementTest {
      * `KeyId(signerKeyId) != boundKey` branch in [AnnouncementAdmission]
      * compiles, and the frame is then refused BAD_SIGNATURE instead — the
      * signed bytes are rebuilt over A, the bound identity, and B's signature
-     * does not verify over them. The mutation's full red set is in the
-     * `computenet-5y8t.7.1` report.
+     * does not verify over them. Three tests in this file go red and no others:
+     * this one (at the `reason` line), the named-peer key-mismatch case, and the
+     * secrecy test below, whose BAD_SIGNATURE detail no longer names B. `:wire`'s
+     * `WsAnnouncementIdentityTest` ordering case goes red the same way.
      */
     @Test
     fun `BS-08 a validly signed announcement minted by B on A's connection is ID_MISMATCH`() {
@@ -1149,9 +1151,9 @@ class SignedAnnouncementTest {
         val replayed = sameIncarnation.publish(rig.mirror.ref)
         counterOf(replayed) shouldBe 1_048_577L
         rig.feed(replayed)
+        rig.rejected shouldBe 1L // first, so an admitted replay fails here and not in lastDenial()
         rig.lastDenial().reason shouldBe DenialReason.REPLAY
         rig.lastDenial().detail!! shouldContain alice.name
-        rig.rejected shouldBe 1L
         rig.registrySnapshot() shouldBe before
         rig.side.announcementAdmission!!.highWaterFor(alice) shouldBe 1_048_577L
 
