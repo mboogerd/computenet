@@ -1,5 +1,8 @@
 package civictech.identity
 
+import civictech.cell.link.PeerId
+import civictech.identity.anchor.AnchorIssuer
+import civictech.identity.anchor.encodeIdentityStatementToken
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
@@ -94,7 +97,73 @@ class FilePeerKeyStoreTest {
         assertEquals(identity.peerId, FilePeerKeyStore(nested).loadOrGenerate().peerId)
     }
 
+    // ---- named load (computenet-5y8t.3.2): peer.statements beside the keypair ----
+    //
+    // The statements are held, not judged: nothing here verifies a signature or
+    // compares issuance, and no case is revocation, rotation or stolen-key
+    // resistance ([DSC1-NV-01] stays EXPLICITLY UNVERIFIED).
+
+    @Test
+    fun `stored statements load back as the named identity on a fresh store over the same directory`(@TempDir dir: Path) {
+        val keyed = FilePeerKeyStore(dir).loadOrGenerate()
+        val alice = PeerId("alice")
+        val statements = listOf(
+            anchor.bind(alice, keyed.keyId, 1, 1_000L, 2_000L),
+            anchor.bind(alice, keyed.keyId, 2, 1_500L, 3_000L),
+        )
+        FilePeerKeyStore(dir).storeStatements(statements)
+
+        val named = FilePeerKeyStore(dir).loadNamed()
+
+        assertEquals(alice, named.peerId)
+        assertEquals(keyed.keyId, named.keyId)
+        assertContentEquals(keyed.publicKey.encoded, named.publicKey.encoded)
+        assertEquals(statements.size, named.statements.size)
+        // One shared empty array: the data-class equality compares ByteArray by identity.
+        val unsigned = ByteArray(0)
+        statements.zip(named.statements).forEach { (stored, loaded) ->
+            assertEquals(stored.copy(signature = unsigned), loaded.copy(signature = unsigned))
+            assertContentEquals(stored.signature, loaded.signature)
+        }
+        val message = "named after reload".toByteArray()
+        assertTrue(keyed.verify(message, named.sign(message)), "the named load signs with the persisted key")
+        assertEquals(
+            statements.joinToString("") { encodeIdentityStatementToken(it) + "\n" },
+            Files.readString(dir.resolve(FilePeerKeyStore.STATEMENTS_FILE)),
+            "one token per line, LF-terminated",
+        )
+    }
+
+    @Test
+    fun `loadOrGenerate ignores peer statements and still yields the key-derived identity`(@TempDir dir: Path) {
+        val keyed = FilePeerKeyStore(dir).loadOrGenerate()
+        FilePeerKeyStore(dir).storeStatements(listOf(anchor.bind(PeerId("alice"), keyed.keyId, 1, 1_000L, 2_000L)))
+        val before = snapshot(dir)
+
+        val reloaded = FilePeerKeyStore(dir).loadOrGenerate()
+
+        assertEquals(keyed.peerId, reloaded.peerId)
+        assertEquals(keyed.keyId.name, reloaded.peerId.name)
+        assertTrue(reloaded.statements.isEmpty())
+        assertEquals(before, snapshot(dir), "loadOrGenerate must not touch any file, peer.statements included")
+    }
+
+    @Test
+    fun `loadNamed on an empty directory generates the keypair then refuses STATEMENTS_MISSING`(@TempDir dir: Path) {
+        val store = FilePeerKeyStore(dir)
+
+        val refusal = assertFailsWith<KeyStoreRefusedException> { store.loadNamed() }
+
+        assertEquals(KeyStoreRefusal.STATEMENTS_MISSING, refusal.reason)
+        assertEquals(store.statementsFile, refusal.path)
+        assertTrue(Files.exists(store.privateKeyFile), "the keypair is generated before the statements are required")
+        assertTrue(Files.exists(store.publicKeyFile))
+        assertFalse(Files.exists(store.statementsFile), "a refusal writes no statements")
+    }
+
     private companion object {
+        val anchor = AnchorIssuer(PeerIdentity(DeterministicKeySource.keyPairFromSeed("store-anchor".toByteArray())))
+
         /** File name -> (content, last-modified) for every file under [dir]. */
         fun snapshot(dir: Path): Map<String, Pair<String, Long>> =
             Files.list(dir).use { stream ->
