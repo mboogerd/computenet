@@ -3125,10 +3125,15 @@ So on 22 value-divergent runs every one the edge-only predicate attributed is st
 attributed: the source clause cost nothing on these seeds. The PR #788 signature
 (`shared-45`, `2aa3a97d#55`, seed 145 control run 470) and the PR #847 signature
 (`shared-46`, `2aa3a97d#40`, seed 132 SHARED runs 194/297/312/434) both recurred
-and both stayed attributed. (Side reading, unchanged by this item: outside the
-sweep's `MeshConvergences.observing` accounting the instrument's SHARED arm ends
-1183 of 1200 runs on `DISAGREEMENT_FAILURE`, branch F-A, which the check reaches
-only after both value classes have passed; the control ends 1 and 3 of 600 there.)
+and both stayed attributed. (Side reading, unchanged by this item: the
+instrument's SHARED arm ends 1183 of 1200 runs on `DISAGREEMENT_FAILURE`, branch
+F-A, which the check reaches only after both value classes have passed; the
+control ends 1 and 3 of 600 there. Not new: the 200-seed SHARED sweep lists both
+132 and 145 among its F-A seeds (review re-run, 129 of 200 F-A), and the instrument
+runs under the same `MeshConvergences.observing` wrapper the sweep does — a
+per-seed rate on two F-A-prone seeds, not an instrument defect. Review
+re-measurement, load1 10.7: SHARED 1187 of 1200 F-A, 9 attributed, 0 unattributed;
+SHARED_NONE 5 F-A, 9 attributed, 0 unattributed; all 18 `edge=true source=true`.)
 
 **Mutation evidence** (`--rerun --no-build-cache`, each mutated and reverted with
 an exact-string edit, `git diff HEAD` empty after):
