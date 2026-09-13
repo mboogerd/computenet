@@ -7,6 +7,7 @@ import civictech.cell.BoundarySeam
 import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.AuthLevel
@@ -1020,13 +1021,21 @@ object WsTransport {
             // and the identity is what this side's binding resolves it to — the
             // one resolution on this path (feature `computenet-376c`).
             val key = parts.getOrNull(1)?.let { KeyId(it) }
-            val peer = key?.let { side.identityBinding.identityOf(it) }
+            val resolution = key?.let { side.identityBinding.resolve(it) }
+            val peer = (resolution as? IdentityResolution.Bound)?.peer
+            // AUTH_REQUIRED keeps precedence: under RequireAuthenticated the
+            // substance of this refusal is the downgrade, whatever the asserted
+            // token resolves to.
             if (side.auth !is PeerAuthPolicy.Open) {
                 refuseHello(
                     DenialReason.AUTH_REQUIRED,
                     peer,
                     "legacy name-only hello from $peer refused: this side requires an authenticated hello",
                 )
+                return
+            }
+            if (resolution is IdentityResolution.Unbound) {
+                refuseUnbound(null, checkNotNull(key), resolution)
                 return
             }
             if (!admitted(peer, key)) return
@@ -1097,7 +1106,17 @@ object WsTransport {
             // whatever this side's binding resolves that key to. Everything
             // below therefore reads `hello.claimedPeerId` for the identity
             // rather than resolving a second time (feature `computenet-376c`).
-            val derived = side.identityBinding.identityOf(derivedKey)
+            //
+            // A key the binding holds no identity for is refused here, before
+            // the compare: there is no derived identity for the claim to match,
+            // and nothing may stand in for one (task `computenet-hbqvz`).
+            val derived = when (val resolution = side.identityBinding.resolve(derivedKey)) {
+                is IdentityResolution.Bound -> resolution.peer
+                is IdentityResolution.Unbound -> {
+                    refuseUnbound(hello.claimedPeerId, derivedKey, resolution)
+                    return
+                }
+            }
             if (derived != hello.claimedPeerId) {
                 refuseHello(
                     DenialReason.ID_MISMATCH,
@@ -1302,6 +1321,31 @@ object WsTransport {
             )
             refuse()
             return false
+        }
+
+        /**
+         * Refuse a connection whose admission key this side's
+         * `Peering.Side.identityBinding` resolves to **no identity** (task
+         * `computenet-hbqvz`) — the typed refusal arm of that seam on this
+         * transport. No binding in the tree produces it today; the default
+         * `PeerIdentityBinding.Interim` is total.
+         *
+         * Accounted as [DenialReason.NOT_ADMITTED] — this side will not let the
+         * connection in — with the machine-readable
+         * [civictech.cell.link.UnboundReason] carried in the detail, so it stays
+         * distinguishable from an allowlist refusal by its detail. A dedicated
+         * `DenialReason` constant is a kernel taxonomy change this task does not
+         * make. [principal] is the identity the hello *claimed* where it claimed
+         * one (the only name this side has for the peer), never one built from
+         * [key].
+         */
+        private fun refuseUnbound(principal: PeerId?, key: KeyId, resolution: IdentityResolution.Unbound) {
+            refuseHello(
+                DenialReason.NOT_ADMITTED,
+                principal,
+                "hello presenting key ${key.name} refused: this side's identity binding holds no identity " +
+                    "for it (UnboundReason.${resolution.reason.name})",
+            )
         }
 
         /**

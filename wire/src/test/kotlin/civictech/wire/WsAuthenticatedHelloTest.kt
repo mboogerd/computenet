@@ -8,8 +8,11 @@ import civictech.cell.Consumer
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerIdentityBinding
+import civictech.cell.link.UnboundReason
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
@@ -96,6 +99,7 @@ class WsAuthenticatedHelloTest {
     private inner class Stack(
         name: String,
         allow: Set<KeyId>? = null,
+        binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
     ) {
         val identity: PeerIdentity = FilePeerKeyStore(keyDirs.resolve(name)).loadOrGenerate()
         val registry = LocationRegistry()
@@ -109,6 +113,7 @@ class WsAuthenticatedHelloTest {
             credentials = identity.asPeerCredentials(),
             announcementSigning = socketAnnouncementSigning(),
             announcementVerification = socketAnnouncementVerification(),
+            identityBinding = binding,
         )
     }
 
@@ -172,10 +177,10 @@ class WsAuthenticatedHelloTest {
             // fingerprint of the presented key to — `.peer` is a PeerId and
             // `fingerprint` now returns a KeyId, so the two are compared where
             // the transport actually joins them ...
-            client.registry.remote(collector.ref).peer shouldBe
-                client.side.identityBinding.identityOf(fingerprint(server.identity.publicKey))
-            server.registry.remote(writer.ref).peer shouldBe
-                server.side.identityBinding.identityOf(fingerprint(client.identity.publicKey))
+            client.side.identityBinding.resolve(fingerprint(server.identity.publicKey)) shouldBe
+                IdentityResolution.Bound(requireNotNull(client.registry.remote(collector.ref).peer))
+            server.side.identityBinding.resolve(fingerprint(client.identity.publicKey)) shouldBe
+                IdentityResolution.Bound(requireNotNull(server.registry.remote(writer.ref).peer))
             // ... reached independently as the id each key store minted ...
             client.registry.remote(collector.ref).peer shouldBe server.identity.peerId
             server.registry.remote(writer.ref).peer shouldBe client.identity.peerId
@@ -404,6 +409,99 @@ class WsAuthenticatedHelloTest {
         // an audit trail rather than silence
         captured shouldContain remote.identity.peerId.name
         captured shouldContain stranger.identity.peerId.name
+    }
+
+    /**
+     * A binding holding no identity for [unbound], and the interim answer for
+     * every other key — the smallest partial binding. No binding in production
+     * behaves like this today; it exists to reach the refusal arm.
+     */
+    private fun bindingWithoutIdentityFor(unbound: KeyId) = PeerIdentityBinding { key ->
+        if (key == unbound) IdentityResolution.Unbound(UnboundReason.NO_BINDING) else PeerIdentityBinding.Interim.resolve(key)
+    }
+
+    /**
+     * Task `computenet-hbqvz`, the `HELLO2` admission path: a presented key the
+     * admitting side's binding resolves to **no identity** is refused at the
+     * derive step, accounted with a typed reason and the machine-readable
+     * `UnboundReason`, and nothing is answered — no `PROOF`, no admission.
+     *
+     * New coverage of a verdict the interim binding never produces, not a
+     * changed one: the control half runs the identical exchange under
+     * `PeerIdentityBinding.Interim` and is answered normally. What is refused
+     * is *a key the binding does not bind* — this says nothing about a stolen
+     * key (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
+     */
+    @Test
+    fun `a HELLO2 presenting a key the binding holds no identity for is refused, and no PROOF answers it`() {
+        val remote = Stack("unbound-remote")
+
+        fun drive(local: Stack): Triple<WsTransport.Session, List<String>, Int> {
+            val texts = mutableListOf<String>()
+            var refusals = 0
+            val session = WsTransport.Session(
+                local.side,
+                send = {},
+                refuse = { refusals++ },
+                sendText = { texts += it },
+            )
+            val peer = Peer(session, remote.identity)
+            peer.open()
+            peer.send(encodeHello2(peer.hello()))
+            return Triple(session, texts, refusals)
+        }
+
+        // Control: the interim binding answers the challenge.
+        val (bound, boundTexts, boundRefusals) = drive(Stack("unbound-control"))
+        bound.lastAdmissionDenial.shouldBeNull()
+        boundRefusals shouldBe 0
+        boundTexts.size shouldBe 1
+
+        // The same exchange at a side whose binding has no identity for that key.
+        val (unbound, unboundTexts, unboundRefusals) =
+            drive(Stack("unbound-local", binding = bindingWithoutIdentityFor(remote.identity.keyId)))
+        val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound key was not refused" }
+        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        // attributed to the id the hello CLAIMED — the only name this side has
+        denial.principal shouldBe remote.identity.peerId
+        requireNotNull(denial.detail) shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"
+        unboundRefusals shouldBe 1
+        unboundTexts shouldBe emptyList()
+        unbound.achievedAuthLevel.shouldBeNull()
+        unbound.peered shouldBe false
+    }
+
+    /**
+     * Task `computenet-hbqvz`, the legacy name-only hello path at an `Open`
+     * side: an asserted token the binding resolves to no identity is refused
+     * with the typed reason, and attributed to **no** principal — the token is
+     * a key identifier, and building a `PeerId` from it would be exactly the
+     * fallback the seam forbids. Control under the interim binding admits.
+     */
+    @Test
+    fun `a legacy hello asserting a token the binding holds no identity for is refused unattributed`() {
+        fun openSide(binding: PeerIdentityBinding): Peering.Side {
+            val registry = LocationRegistry()
+            return Peering.Side(registry, ManagedHost(registry = registry), identityBinding = binding)
+        }
+
+        fun drive(side: Peering.Side): WsTransport.Session {
+            val session = WsTransport.Session(side, send = {}, refuse = {})
+            session.hello()
+            session.onText("HELLO ${UUID.randomUUID()} mallory")
+            return session
+        }
+
+        val bound = drive(openSide(PeerIdentityBinding.Interim))
+        bound.lastAdmissionDenial.shouldBeNull()
+        bound.peered shouldBe true
+
+        val unbound = drive(openSide(bindingWithoutIdentityFor(KeyId("mallory"))))
+        val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound token was not refused" }
+        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.principal.shouldBeNull()
+        requireNotNull(denial.detail) shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"
+        unbound.peered shouldBe false
     }
 
     /**
