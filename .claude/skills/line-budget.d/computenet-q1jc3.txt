@@ -1,0 +1,4 @@
+# computenet-q1jc3 + computenet-ci7k: 5b's empty-model rule logs friction only
+# for breakdown-filed beads; session-filed ones are fixed in place via the new
+# create-ticket.sh --model flag (mechanical half costs no budget).
+work +1

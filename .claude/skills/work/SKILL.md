@@ -1621,8 +1621,9 @@ AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
 indistinguishable from the result being measured and can invert a verdict.
 
-An entry with empty `model` → dispatch at `sonnet`, comment on the task, log
-friction. **Empty batch** → read `verdict`, don't infer:
+An entry with empty `model` → dispatch at `sonnet`, comment on the task; log
+friction only if a breakdown filed it — a bead this session filed (a residual)
+or filed directly is an omission to fix in place (`create-ticket.sh --model`). **Empty batch** → read `verdict`, don't infer:
 
 | `verdict` | Meaning | Do |
 |---|---|---|
