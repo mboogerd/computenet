@@ -3064,6 +3064,93 @@ correlation plus endpoint pairing, not frame identity. That no other schedule
 produces an attributed-looking divergence from a real defect: the ABSENT and
 endpoint clauses narrow it, and the ceiling bounds it.
 
+### The attribution narrowed to the other endpoint's own dots (computenet-cfajw)
+
+Recorded by: `computenet-cfajw` (task, review residual of `computenet-yjji2`).
+Base commit `ec80f8917` (`origin/main`, yjji2's #852 on it), branch
+`feature/computenet-cfajw`. Host darwin/arm64, 16 cores, `MacBoo`, shared with two
+other work sessions. Measured 2026-09-13.
+
+**What the review found wider than the mechanism.** The yjji2 attribution admitted
+a lacking dot without asking who MINTED it. A frame buffered on `peer0<->peer2`
+can withhold peer2's direct delivery of peer2's own dot to peer0; it cannot
+explain a dot peer1 minted never reaching peer0 over peer1's own, unbuffered edge.
+It also left sender-side reclamation (a compacting sender omitting a dot from a
+reply) unnarrowed.
+
+**The change** (`OrMapGcSafetySweepTest.kt`, `OrMapGcSafetySweep.check`). One
+clause added: every lacking dot must be minted by the OTHER reorder-edge endpoint.
+The minter is read from the run itself, not by restating `OrMapCell`'s private
+ref-derived dot source: every contended put's value is `"$putter#$step"`, so
+`sourceId -> putter` is read off every live replica's put map over the contended
+keys, and the clause requires that map to name exactly `{other endpoint}` for the
+dot's `sourceId`. The detail line now prints `:by=[minter]` per lacking dot and
+`attribution={edge=… source=…}` per key, so a run the old predicate attributed and
+the new one does not is visible as `edge=true source=false`.
+
+**Zero-compute first pass, against the signatures already recorded above.** Every
+recorded hit is the other endpoint's own dot: peer0 lacks `2aa3a97d#55` (PR #788,
+seed 145) and `2aa3a97d#40` (PR #847, seed 132), and seed 132's control hit on
+`shared-42`/`#35` is the same shape; in each, peer0's own dot is `6ad7101a#…` and
+peer2's value (`peer2#4850`, `peer2#4950`) is the add-wins pick of the
+`2aa3a97d` dot, so `2aa3a97d` is peer2's source. The source clause admits all of
+them.
+
+**The review's second suggestion was NOT adopted, and why.** "Every live
+non-endpoint replica must hold the dot" is already implied: a live peer1 lacking
+the dot is a lacking replica that is not a reorder-edge endpoint, which the
+existing endpoint clause refuses. What the review actually flagged — that the edge
+clause is satisfied by construction when peer1 is not live — could only be closed
+by requiring peer1 to BE live, and both CI hits above and all 22 hits measured
+below list only peer0 and peer2 in `liveDots`, so that clause would un-attribute
+every one of them.
+It is left open; the ceiling bounds it.
+
+**Repeat instrument under the new predicate** (seeds 132 and 145, 600 runs each,
+one arm per invocation, `--rerun`, JUnit `<system-out>`):
+
+```
+                           SHARED_NONE (reclaimer off)     SHARED (reclaimer on)
+  load1 at start/end       14.96 / 13.28                   12.86 / 15.78
+  wall (1200 runs)         25.5 s                          59.3 s
+  seed 132 attributed      5 of 600                        10 of 600
+  seed 145 attributed      3 of 600                        4 of 600
+  unattributed value-div   0                               0
+  edge=true source=false   0                               0
+  lacking dots             22 of 22 ABSENT, :by=[peer2], lacking replica peer0
+  stranded on value runs   {1=6, 2=2}                      {1=2, 2=12}
+```
+
+So on 22 value-divergent runs every one the edge-only predicate attributed is still
+attributed: the source clause cost nothing on these seeds. The PR #788 signature
+(`shared-45`, `2aa3a97d#55`, seed 145 control run 470) and the PR #847 signature
+(`shared-46`, `2aa3a97d#40`, seed 132 SHARED runs 194/297/312/434) both recurred
+and both stayed attributed. (Side reading, unchanged by this item: outside the
+sweep's `MeshConvergences.observing` accounting the instrument's SHARED arm ends
+1183 of 1200 runs on `DISAGREEMENT_FAILURE`, branch F-A, which the check reaches
+only after both value classes have passed; the control ends 1 and 3 of 600 there.)
+
+**Mutation evidence** (`--rerun --no-build-cache`, each mutated and reverted with
+an exact-string edit, `git diff HEAD` empty after):
+
+- M1 (`cell.value(key)` -> `cell.values(key).firstOrNull()` at the cross-replica
+  read), SHARED arm alone, load1 14.4: FAILED on the zero-tolerance assertion,
+  `crossReplica=` 154 of 200 seeds (yjji2 and rjue recorded 153; the sweep is not
+  run-to-run deterministic), `vsOwnFold=[]`, `stranded-frame value-diverging
+  seeds=[]`. The narrowed attribution still swallows none of the mis-resolution
+  class.
+- M3, the source clause pointed at the LACKING replica (`setOf(other)` ->
+  `setOf(name)`), instrument on seeds 132,145 control x600, load1 15.1: 5 value
+  divergences, all `edge=true source=false`, all in the UNATTRIBUTED class, none
+  attributed. The clause is what admits the observed runs, so it is not vacuous.
+- M2 (ABSENT -> FENCED) was not re-run: this item did not touch that clause.
+
+**What is NOT claimed.** That a THIRD-peer dot can never be withheld by this
+adversary — none was observed in 22 hits plus the recorded history, which is what
+licenses the clause, not a proof. That the clause excludes sender-side
+reclamation: it narrows it to peer2's own compaction omitting peer2's own dot from
+a reply to peer0, which still reads ABSENT and still sits inside the ceiling.
+
 ## KE3-42-ORMAP — feature close-out: what the OR-map seam + reclaimer delivered, the three corrected premises, and the u7fi trigger check restated in code
 
 Recorded by: `computenet-9sm.8.8` (task, parent `computenet-9sm.8`, close-out
