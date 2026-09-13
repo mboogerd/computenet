@@ -23,8 +23,12 @@
 #   create-ticket.sh --type <bug|feature|task|chore> --title "<one line>" \
 #     (--parent <id> | --top-level) [--desc D | --desc-file F] \
 #     [--accept A | --accept-file F] [--priority N] \
-#     [--label L]... [--metadata '<json>'] [--claim]
+#     [--label L]... [--metadata '<json>'] [--model M] [--claim]
 #
+# --model: sets metadata.model (merged into --metadata), so a ticket the
+#   orchestrator files reaches next-batch.py with a dispatch model rather than
+#   tripping 5b's empty-model rule against a breakdown that never ran
+#   (computenet-q1jc3, computenet-ci7k).
 # --top-level: the one sanctioned unparented create (red-check-attribution.md
 #   artifact 3's first-sighting bug). This was refused with "use bd create
 #   directly", which meant re-typing a composed heredoc body under a different
@@ -46,7 +50,7 @@
 #   bd update <id> --parent=<parent>
 set -uo pipefail
 
-TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= CLAIM=0 TOP=0
+TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= MODEL= CLAIM=0 TOP=0
 LABELS=()
 # --help prints the comment header's own Usage block rather than a second copy
 # that can drift from it. A reviewer guessed `--description-file` for
@@ -69,6 +73,7 @@ while [ $# -gt 0 ]; do
     --priority) PRIO=$2; shift 2 ;;
     --label)    LABELS+=("$2"); shift 2 ;;
     --metadata) META=$2; shift 2 ;;
+    --model)    MODEL=$2; shift 2 ;;
     --claim)    CLAIM=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -80,6 +85,11 @@ if [ -z "$PARENT" ] && [ "$TOP" != 1 ]; then
   echo "--parent is required, or --top-level for a deliberately unparented bead (a first-sighting red-check bug, red-check-attribution.md artifact 3)" >&2; exit 2
 fi
 if [ -n "$PARENT" ] && [ "$TOP" = 1 ]; then echo "--parent and --top-level are exclusive" >&2; exit 2; fi
+
+if [ -n "$MODEL" ]; then
+  META=$(jq -cn --argjson m "${META:-null}" --arg v "$MODEL" '($m // {}) + {model: $v}') \
+    || { echo "--metadata is not a JSON object" >&2; exit 2; }
+fi
 
 args=(create "$TITLE" --type="$TYPE" --priority="$PRIO" --json)
 for l in ${LABELS+"${LABELS[@]}"}; do args+=(--label="$l"); done
