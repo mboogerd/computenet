@@ -827,6 +827,31 @@ class BeadsMirrorAppTest {
     }
 
     /**
+     * Task computenet-6wc.1.5 clause 2: `--write-back` is opt-in, so a
+     * [BeadsMirrorConfig] built with no `writeBack` argument at all — every
+     * caller before this parameter existed, and every real `--workspace`
+     * invocation with no `--write-back` on the command line — must default
+     * to it being off. A pure data-class check, no `bd`/`dolt` needed: this
+     * is the cheap, always-on half of "off by default", complementing
+     * [WriteBackTwoNodeTest]'s real end-to-end demonstration that an
+     * explicitly-off dialer never touches its own `bd` data after a peer
+     * edit.
+     */
+    @Nested
+    inner class WriteBackConfigDefault {
+
+        @Test
+        fun `a config built with no write-back argument defaults it to false`() {
+            BeadsMirrorConfig(workspace = Path.of("/tmp/beadsmirror-config-default-probe")).writeBack shouldBe false
+        }
+
+        @Test
+        fun `the multi-workspace constructor form also defaults write-back to false`() {
+            BeadsMirrorConfig(workspaces = listOf(Path.of("/tmp/a"), Path.of("/tmp/b"))).writeBack shouldBe false
+        }
+    }
+
+    /**
      * Feature rule a, against real workspaces: one process, N >= 2 configured
      * workspaces, **one of each per workspace** — feed, checkpoint, baseline,
      * projector, dot identity and poll loop — behind one
