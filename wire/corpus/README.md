@@ -152,7 +152,9 @@ key/value pairs.
 
 A map whose key is **structured** (polymorphic, or a class) instead encodes
 as a **flat alternating array** `[k1, v1, k2, v2, …]` — kotlinx's documented
-`allowStructuredMapKeys` behaviour for a non-primitive key.
+`allowStructuredMapKeys` behaviour for a non-primitive key — e.g. a
+`MapDelta` over polymorphic `String` keys encodes as
+`["MapDelta",{"puts":[["kotlin.String","a"],["kotlin.Long",1]],"removals":[]}]`.
 `unverified:` no bytes anywhere in the repo pin a structured map key today
 (`git grep` over `kernel`/`wire` tests for a `MapDelta`/`TaggedMapDelta`
 literal with a non-primitive key finds none); this is a prediction from
@@ -185,12 +187,12 @@ prints `False False`. `WV-PORT-API-STALL-RESUME-01`'s `args` field —
 every field defaulted**: `Resume` is a `data object` (no fields at all), and
 still carries an empty `fields`/`{}` rather than being omitted, because the
 omission rule applies to a *field of an envelope or payload*, never to an
-`args` list element itself (`SCHEMA.md`'s "Absent optionals" section draws
-this line precisely).
+`args` list element itself (`SCHEMA.md`'s "Polymorphic positions" section
+draws this line precisely).
 
 ## 4. The envelope: `WireFrame`
 
-`WireFrame` (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:94-207`)
+`WireFrame` (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:50-142`)
 is the top-level JSON object every binary `WireFrame` message carries. All 17
 fields, in declaration order:
 
@@ -214,7 +216,7 @@ fields, in declaration order:
 | `sigCounter` | integer (64-bit) or absent | optional | `null` | same condition as `signature` |
 | `notAfter` | integer (64-bit, epoch millis) or absent | optional | `null` | same condition as `signature` |
 
-`WireEdge` (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:210-220`),
+`WireEdge` (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:145-155`),
 all 7 fields, all required whenever `edge` itself is present:
 
 | field | JSON type | meaning |
@@ -312,7 +314,7 @@ deliver any part of it" — which is what this section states.
 ## 7. `PORT_PROTOCOL` frames
 
 A `PORT_PROTOCOL` frame is built by `WireCodec.encode`'s `PORT_PROTOCOL`
-branch (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:522-543`):
+branch (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:518-539`):
 
 - **`contractId` and `methodId` are `0`/`0`, and emitted** (they are not the
   Kotlin default for a `Long`-typed *optional* field — there is none here;
@@ -395,7 +397,8 @@ both from the bare simple name and from the `Any`-polymorphic namespace
 above (verify: `git grep -n 'SerialName("Interest\.' kernel/src/main/kotlin/civictech/cell/link/Interest.kt`).
 
 Every one of the 33+7 registrations except the 5 primitives and `Uuid`
-carries an explicit `@SerialName` equal to its simple name (verified by the
+carries an explicit `@SerialName` — equal to its simple name for the 27
+`Any`-polymorphic classes, `Interest.<Name>` for the 7 arms above (verified by the
 sibling task ncz.1.3's breakdown comment: `git grep -n 'SerialName("'` over
 `kernel/src/main/kotlin` matches all 33 `Any` registrations and 7 `Interest`
 arms) — no fully-qualified Kotlin class name appears among these

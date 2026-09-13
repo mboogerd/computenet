@@ -302,8 +302,8 @@ with every field defaulted still carries `fields`, empty, and encodes to
 > descriptor name, not a JVM class name (the JVM class would be
 > `java.lang.String`). `UUID` is registered through `UuidSerializer`, whose
 > descriptor name is `Uuid`. Every registered **class** carries an explicit
-> `@SerialName` equal to its simple name, so no fully-qualified name appears
-> among them.
+> `@SerialName` — its simple name, or `Interest.<Name>` for the seven `Interest`
+> arms — so no fully-qualified name appears among them.
 >
 > `unverified:` on the wire — no test in the repo pins a primitive arg's bytes
 > (`WireCodecTest."wire bytes carry no reflection artifacts"` asserts only the
