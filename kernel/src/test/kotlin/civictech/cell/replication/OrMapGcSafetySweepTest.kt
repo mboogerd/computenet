@@ -544,7 +544,8 @@ object OrMapGcSafetySweep {
     /**
      * [VALUE_DIVERGENCE_FAILURE]'s shape, ATTRIBUTED to a frame the reorder fault stranded
      * (computenet-yjji2): every dot a replica lacks is ABSENT there, the two replicas are the
-     * reorder edge's endpoints, and the buffer stranded at least one frame on the run. Split out so
+     * reorder edge's endpoints, the lacking dot was minted by the OTHER endpoint (computenet-cfajw),
+     * and the buffer stranded at least one frame on the run. Split out so
      * the arms can tolerate the adversary's measured rate here while keeping zero tolerance on the
      * unattributed class. See the attribution clause in [check] and `doc/kernel-lane-findings.md`
      * `## KE3-42-ORMAP-SHARED`.
@@ -704,8 +705,9 @@ object OrMapGcSafetySweep {
                 // and covered by a del-dot) or FENCED (in the replica's own `ReclaimedDots`, so the
                 // reclaimer's fence refused it — the only one of the three the LACKING replica's own
                 // reclaimer can cause). ABSENT does not exonerate reclamation ELSEWHERE: a sender whose
-                // compaction made it omit the dot from a reply would leave it ABSENT here too, and
-                // the clauses below do not check the dot's source — only the arm's ceiling bounds that.
+                // compaction made it omit the dot from a reply would leave it ABSENT here too. The
+                // source clause below (computenet-cfajw) narrows that to the one sender the reorder
+                // edge sits in front of; only the arm's ceiling bounds what remains.
                 val liveByPeer = cellsByPeer.associate { (name, cell) -> name to liveDotsOf(cell, key) }
                 val unionLive = liveByPeer.values.flatten().toSet()
                 // (lacking replica, dot, state) for every live dot some replica lacks.
@@ -723,7 +725,22 @@ object OrMapGcSafetySweep {
                         Triple(name, dot, how)
                     }
                 }
-                val lackingByPeer = lacking.groupBy({ it.first }, { "${it.second.sourceId.toString().take(8)}#${it.second.counter}:${it.third}" })
+                // WHO MINTED each dot, by its SOURCE (computenet-cfajw): every contended put's value
+                // is `"$putter#$step"` ([issueContendedPuts]), so reading `sourceId -> putter` off
+                // every live replica's put map names a dot's minting peer from the run itself —
+                // without restating `OrMapCell`'s private ref-derived dot-source derivation here.
+                val mintersBySource: Map<java.util.UUID, Set<String>> = buildMap<java.util.UUID, MutableSet<String>> {
+                    for ((_, cell) in cellsByPeer) {
+                        val puts = cell.state().puts
+                        for (k in contendedKeys) puts[k]?.forEach { (dot, value) ->
+                            getOrPut(dot.sourceId) { mutableSetOf() } += value.substringBefore('#')
+                        }
+                    }
+                }
+                val lackingByPeer = lacking.groupBy({ it.first }, {
+                    "${it.second.sourceId.toString().take(8)}#${it.second.counter}:${it.third}" +
+                        ":by=${mintersBySource[it.second.sourceId]?.sorted()}"
+                })
                     .mapValues { it.value.sorted() }
                 // THE STRANDED-FRAME ATTRIBUTION (computenet-yjji2). A divergence is attributed to
                 // the adversary's reorder buffer only when EVERY clause below holds, each of which
@@ -736,13 +753,28 @@ object OrMapGcSafetySweep {
                 //  - every lacking replica is an endpoint of the reorder fault's edge, and the dot
                 //    it lacks is live at the OTHER endpoint — the one pair a buffered frame on that
                 //    edge can keep apart;
+                //  - the dot was MINTED by that other endpoint (computenet-cfajw): its source is the
+                //    other endpoint's own. A frame buffered on the edge can withhold the other
+                //    endpoint's direct delivery of its own dot; it cannot explain a THIRD peer's dot
+                //    never arriving over that third peer's own, unbuffered edge;
                 //  - the buffer really did strand at least one frame on this run.
+                // NOT added (measured against the recorded signatures, `## KE3-42-ORMAP-SHARED`): a
+                // clause that every live non-endpoint replica HOLDS the dot is already implied — a
+                // live peer1 lacking it is a non-endpoint lacking replica, refused above — and
+                // requiring peer1 to BE live would refuse every recorded hit, all of which had only
+                // the two endpoints live.
                 val strandedFrames = reorderBySeed[world.seed]?.strandedFrames ?: 0
-                val attributable = lacking.isNotEmpty() && strandedFrames > 0 && lacking.all { (name, dot, how) ->
+                fun otherEndpoint(name: String) = REORDER_ENDPOINTS.singleOrNull { it != name }
+                val edgeAttributable = lacking.isNotEmpty() && strandedFrames > 0 && lacking.all { (name, dot, how) ->
                     how == "ABSENT" && name in REORDER_ENDPOINTS &&
-                        REORDER_ENDPOINTS.any { other -> other != name && dot in liveByPeer[other].orEmpty() }
+                        otherEndpoint(name)?.let { other -> dot in liveByPeer[other].orEmpty() } == true
                 }
-                ("$key=$byPeer liveDots=$dotsByPeer lacking=$lackingByPeer") to attributable
+                val sourceHeld = lacking.all { (name, dot, _) ->
+                    otherEndpoint(name)?.let { other -> mintersBySource[dot.sourceId] == setOf(other) } == true
+                }
+                val attributable = edgeAttributable && sourceHeld
+                ("$key=$byPeer liveDots=$dotsByPeer lacking=$lackingByPeer " +
+                    "attribution={edge=$edgeAttributable source=$sourceHeld}") to attributable
             } else {
                 null
             }
@@ -1205,7 +1237,8 @@ class OrMapGcSafetySweepTest {
         //
         // What stays at ZERO: a value divergence the attribution does not cover (identical dot sets
         // resolving differently — a mis-resolution; a FENCED or TOMBSTONED lacking dot; a pair that
-        // is not the reorder edge's; a run that stranded nothing), and all value-fold drift. Those
+        // is not the reorder edge's; a lacking dot the other endpoint did not mint; a run that
+        // stranded nothing), and all value-fold drift. Those
         // are what a reclamation or resolution defect produces, and the control has never shown one.
         assertTrue(
             valueDiverging.isEmpty() && valueDrift.isEmpty(),
