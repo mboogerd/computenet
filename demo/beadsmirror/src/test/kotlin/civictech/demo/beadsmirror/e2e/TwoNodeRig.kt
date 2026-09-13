@@ -19,6 +19,7 @@ import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorKey
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import civictech.demo.beadsmirror.sanitizedDoltDatabaseName
+import civictech.demo.beadsmirror.writeback.WriteBackEvent
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import kotlinx.serialization.json.jsonPrimitive
@@ -99,6 +100,9 @@ class TwoNodeRig private constructor(
     private var listenerNode: Node? = null
     private var dialerNode: Node? = null
 
+    /** This rig's poll cadence, in milliseconds — for a caller that needs to size a bounded sleep against it. */
+    fun pollIntervalMs(): Long = pollInterval.toMillis()
+
     /** The listening node. Available after [startListener]. */
     val listener: Node get() = checkNotNull(listenerNode) { "startListener() has not run yet" }
 
@@ -111,25 +115,29 @@ class TwoNodeRig private constructor(
      * Starts node L: `--listen 0`, so it binds a port of its own choosing and
      * [BeadsMirrorApp.boundWsPort] is the only place that knows which
      * (computenet-dqy.25 — a pre-picked number would be a port nobody bound).
+     *
+     * @param writeBack task computenet-6wc.1.5: starts this node's mirror with
+     *   `--write-back` on. `false` (the default) is every caller before this
+     *   parameter existed — nothing about the fixture changes for them.
      */
-    fun startListener(): Node {
+    fun startListener(writeBack: Boolean = false): Node {
         check(listenerNode == null) { "the listener is already started" }
-        val node = start(MirrorCellRefs.LISTENER, listenerWorkspace, MirrorWire.Listen(0))
+        val node = start(MirrorCellRefs.LISTENER, listenerWorkspace, MirrorWire.Listen(0), writeBack)
         checkNotNull(node.app.boundWsPort) { "a listening node must have bound a ws port" }
         listenerNode = node
         return node
     }
 
-    /** Starts node D against the listener's **bound** ws port. */
-    fun startDialer(): Node {
+    /** Starts node D against the listener's **bound** ws port. See [startListener] for [writeBack]. */
+    fun startDialer(writeBack: Boolean = false): Node {
         check(dialerNode == null) { "the dialer is already started" }
         val wsPort = checkNotNull(listener.app.boundWsPort) { "the listener has no bound ws port" }
-        val node = start(MirrorCellRefs.DIALER, dialerWorkspace, MirrorWire.Dial("ws://localhost:$wsPort"))
+        val node = start(MirrorCellRefs.DIALER, dialerWorkspace, MirrorWire.Dial("ws://localhost:$wsPort"), writeBack)
         dialerNode = node
         return node
     }
 
-    private fun start(role: String, workspace: BdScratchWorkspace, wire: MirrorWire): Node {
+    private fun start(role: String, workspace: BdScratchWorkspace, wire: MirrorWire, writeBack: Boolean = false): Node {
         val runDir = tempDir("beadsmirror-tworig-$role-run-")
         // Captured per node, and created BEFORE the app starts: a start always
         // re-baselines, so the FirstStart event is emitted inside
@@ -137,6 +145,7 @@ class TwoNodeRig private constructor(
         // Synchronized because the poller thread appends while the test thread
         // reads (task computenet-7em.4.3).
         val events = Collections.synchronizedList(mutableListOf<MirrorEvent>())
+        val writeBackEvents = Collections.synchronizedList(mutableListOf<WriteBackEvent>())
         val app = BeadsMirrorApp.start(
             BeadsMirrorConfig(
                 workspace = workspace.root,
@@ -146,9 +155,11 @@ class TwoNodeRig private constructor(
                 onEvent = { events += it },
                 peering = MirrorPeeringSettings(rigName, wire),
                 peeringTransport = transport,
+                writeBack = writeBack,
+                onWriteBackEvent = { _, event -> writeBackEvents += event },
             ),
         )
-        return Node(role, workspace, app, runDir, events)
+        return Node(role, workspace, app, runDir, events, writeBackEvents)
     }
 
     /**
@@ -221,6 +232,7 @@ class TwoNodeRig private constructor(
         val app: BeadsMirrorApp,
         private val runDir: Path,
         private val capturedEvents: MutableList<MirrorEvent>,
+        private val capturedWriteBackEvents: MutableList<WriteBackEvent> = Collections.synchronizedList(mutableListOf()),
     ) : AutoCloseable {
 
         private val probe = HttpProbe("http://localhost:${app.boundPort}")
@@ -253,6 +265,15 @@ class TwoNodeRig private constructor(
          * emptiness.
          */
         fun events(): List<MirrorEvent> = synchronized(capturedEvents) { capturedEvents.toList() }
+
+        /**
+         * Every [WriteBackEvent] this node's applier has emitted so far
+         * (task computenet-6wc.1.5), oldest first, as an immutable snapshot —
+         * empty for a node started with `writeBack = false`, since no applier
+         * ever runs to emit one.
+         */
+        fun writeBackEvents(): List<WriteBackEvent> =
+            synchronized(capturedWriteBackEvents) { capturedWriteBackEvents.toList() }
 
         fun view(): Map<String, Map<String, String>> = projector.view()
 
