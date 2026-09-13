@@ -10,6 +10,7 @@ import civictech.cell.Propagate
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -624,8 +625,8 @@ object IrohTransport {
             // this task does not make. No principal: the hello asserts no name
             // this side could attribute the refusal to.
             // Presents nothing; feature computenet-5y8t.3's hello carries the statements.
-            val peer = when (val resolution = side.identityBinding.resolve(key, emptyList())) {
-                is IdentityResolution.Bound -> resolution.peer
+            val bound = when (val resolution = side.identityBinding.resolve(key, emptyList())) {
+                is IdentityResolution.Bound -> resolution
                 is IdentityResolution.Unbound -> {
                     refuseHello(
                         DenialReason.NOT_ADMITTED,
@@ -636,6 +637,7 @@ object IrohTransport {
                     return
                 }
             }
+            val peer = bound.peer
             val peerMirrorRef = runCatching { UUID.fromString(parts[0]) }.getOrNull()
             if (peerMirrorRef == null) {
                 refuseHello(
@@ -660,7 +662,9 @@ object IrohTransport {
             if (!admitted(peer, key)) return
             // Our own hello first (see this method's KDoc), then bind + announce.
             openLocalHello()
-            bindAndAnnounce(peer, key, peerMirrorRef)
+            // Every iroh admission is Authenticated (the NodeId IS the proven
+            // key), so the resolution's issuer rides onto the stamp unconditionally.
+            bindAndAnnounce(peer, key, peerMirrorRef, bound.issuer)
         }
 
         /**
@@ -718,8 +722,12 @@ object IrohTransport {
          * and only ever from a path that has already admitted [peer]. See the
          * class KDoc's four-step happens-before argument for why the late bind is
          * safe on this transport.
+         *
+         * [issuer] is the `IdentityResolution.Bound.issuer` the hello admission
+         * resolved, fixed here beside the level for the same reason: a delivery's
+         * `PeerStamp.issuer` is a parameter of the admission, never read later.
          */
-        private fun bindAndAnnounce(peer: PeerId, key: KeyId, peerMirrorRef: UUID) {
+        private fun bindAndAnnounce(peer: PeerId, key: KeyId, peerMirrorRef: UUID, issuer: IssuerId?) {
             val instance = checkNotNull(mirror) { "onHello admitted a peer without opening a link instance" }
             // Bind BEFORE announcing, so every Remote location this link installs
             // — including the peer's own catch-up burst, which cannot start
@@ -732,6 +740,7 @@ object IrohTransport {
                 side,
                 fromPeer = peer,
                 fromPeerAuth = AuthLevel.Authenticated,
+                fromPeerIssuer = issuer,
                 fromKey = key,
             )
             announcement?.close()

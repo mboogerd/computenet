@@ -8,6 +8,7 @@ import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.AuthLevel
@@ -690,8 +691,17 @@ object WsTransport {
          * `onAuthenticatedHello` has already checked equals what the side's
          * `PeerIdentityBinding` resolves [derivedKey] to — so reading it costs
          * no second resolution.
+         *
+         * [issuer] is the `IdentityResolution.Bound.issuer` of that same derive
+         * step, carried here so the `PROOF` row stamps the resolution that was
+         * actually checked rather than re-resolving (feature `computenet-5y8t.1`).
          */
-        private class PendingHello(val hello: Hello2, val derivedKey: KeyId, val publicKey: PublicKey)
+        private class PendingHello(
+            val hello: Hello2,
+            val derivedKey: KeyId,
+            val publicKey: PublicKey,
+            val issuer: IssuerId?,
+        )
 
         /**
          * The peer's accepted `HELLO2` for the current open, or null before one
@@ -1112,13 +1122,14 @@ object WsTransport {
             // the compare: there is no derived identity for the claim to match,
             // and nothing may stand in for one (task `computenet-hbqvz`).
             // Presents nothing; feature computenet-5y8t.3's hello carries the statements.
-            val derived = when (val resolution = side.identityBinding.resolve(derivedKey, emptyList())) {
-                is IdentityResolution.Bound -> resolution.peer
+            val bound = when (val resolution = side.identityBinding.resolve(derivedKey, emptyList())) {
+                is IdentityResolution.Bound -> resolution
                 is IdentityResolution.Unbound -> {
                     refuseUnbound(hello.claimedPeerId, derivedKey, resolution)
                     return
                 }
             }
+            val derived = bound.peer
             if (derived != hello.claimedPeerId) {
                 refuseHello(
                     DenialReason.ID_MISMATCH,
@@ -1168,7 +1179,7 @@ object WsTransport {
                 // which is exactly what its configuration says. The
                 // mixed-version proofs are a sibling item's.
                 if (!admitted(derived, derivedKey)) return
-                pending = PendingHello(hello, derivedKey, key)
+                pending = PendingHello(hello, derivedKey, key, bound.issuer)
                 bindAndAnnounce(derived, derivedKey, hello.mirrorRef, AuthLevel.TransportVouched)
                 return
             }
@@ -1176,7 +1187,7 @@ object WsTransport {
             // same socket and is dispatched to this Session after this call
             // returns, so `pending` is always visible to the [onProof] that
             // answers this exchange.
-            pending = PendingHello(hello, derivedKey, key)
+            pending = PendingHello(hello, derivedKey, key, bound.issuer)
             sendText(encodeProof(Proof(credentials.sign(helloChallengeBytes(ourProofChallenge(credentials))))))
         }
 
@@ -1258,7 +1269,13 @@ object WsTransport {
             }
             if (!admitted(peer, awaiting.derivedKey)) return
             replayGuard.recordAccepted(peer, awaiting.hello.nonce, proof.signature)
-            bindAndAnnounce(peer, awaiting.derivedKey, awaiting.hello.mirrorRef, AuthLevel.Authenticated)
+            bindAndAnnounce(
+                peer,
+                awaiting.derivedKey,
+                awaiting.hello.mirrorRef,
+                AuthLevel.Authenticated,
+                issuer = awaiting.issuer,
+            )
         }
 
         /**
@@ -1432,12 +1449,22 @@ object WsTransport {
          * the peer's `HELLO2` is written from *its* `onOpen`, exactly where a
          * legacy hello would have been.
          */
-        private fun bindAndAnnounce(peer: PeerId?, key: KeyId?, peerMirrorRef: UUID, achieved: AuthLevel) {
+        private fun bindAndAnnounce(
+            peer: PeerId?,
+            key: KeyId?,
+            peerMirrorRef: UUID,
+            achieved: AuthLevel,
+            issuer: IssuerId? = null,
+        ) {
             // The level is a PARAMETER, fixed by the admission row that called
             // us, and it is applied before the ingress exists — so it is bound
             // by the same happens-before that binds the mirror's peer
             // (`[DSC1-HELLO-13]`, and `RegistryMirrorCell.peer`'s own
-            // argument). Publishing it on the observable field first keeps the
+            // argument). The issuer is a parameter by the same argument: only
+            // the PROOF row passes one, because the two TransportVouched rows
+            // (legacy hello, uncredentialed HELLO2) never proved possession of
+            // the key, so its binding statement vouches for nothing on this
+            // connection and they leave it null. Publishing it on the observable field first keeps the
             // two readings — what a delivery is stamped with, and what
             // `achievedAuthLevel` reports — the same value by construction
             // rather than by two assignments agreeing.
@@ -1475,6 +1502,7 @@ object WsTransport {
                 side,
                 fromPeer = peer,
                 fromPeerAuth = achieved,
+                fromPeerIssuer = issuer,
                 fromKey = key,
                 announcementAdmission = admission,
             )
