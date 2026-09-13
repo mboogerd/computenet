@@ -125,7 +125,9 @@ class IdentityDerivationRatchetTest {
     // supertype ("(Int) -> Unit", which contributes a lone '>' via `->` and
     // no '<' at all) from ever registering as unbalanced. The two counts are
     // unordered totals over the folded text, not a left-to-right nesting
-    // walk, which is where the residual below comes from.
+    // walk, which is where the arrow shapes closed by
+    // [bindingHeaderArrowContinuation] and [genericCloseNotArrow] came from
+    // (computenet-s8ige), and where the residual noted at the fold comes from.
     private val bindingHeaderInfixContinuation = Regex("""\bby$""")
 
     // A line ending in the function-type arrow ("(Int) ->") is a
@@ -244,6 +246,14 @@ class IdentityDerivationRatchetTest {
                         // against this base — neither occurs in production
                         // today (scanned: 29 wrapped headers, none with an
                         // arrow on a continuation line).
+                        // KNOWN RESIDUAL (computenet-omm5p): a '<' that is a
+                        // less-than OPERATOR in a body-less header's supertype
+                        // constructor call ("Base(a < b)") still counts as an
+                        // open generic, so the fold runs forward and a later
+                        // unrelated PeerIdentityBinding usage is flagged — a
+                        // false positive, pre-existing; excluding the arrow's
+                        // '>' also unmasks it in "Base(a < b, null as
+                        // (() -> Unit)?)". No production file has either shape.
                         val listContinues = trimmed.endsWith(",") ||
                             folded.count { it == '(' } > folded.count { it == ')' } ||
                             folded.count { it == '<' } > genericCloseNotArrow.findAll(folded).count() ||
