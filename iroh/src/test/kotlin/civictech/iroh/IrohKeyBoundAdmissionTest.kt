@@ -8,8 +8,10 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.membrane.Principal
 import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanOutlet
@@ -51,7 +53,7 @@ import kotlin.test.fail
  *    binding.** L allowlists the [KeyId] fingerprinted from B's NodeId; B's
  *    invocation is delivered and a cell on L reading
  *    [civictech.cell.membrane.currentPrincipal] inside that delivery observes
- *    `Principal.Peer(L.side.identityBinding.identityOf(key), Authenticated)`.
+ *    `Principal.Peer(<the peer L.side.identityBinding.resolve(key) is Bound to>, Authenticated)`.
  *    The expected identity is spelled *through the binding* — writing it as
  *    `PeerId(fingerprint(...).name)` would make the assertion a restatement of
  *    the implementation rather than a check on it (feature `computenet-376c`).
@@ -196,7 +198,7 @@ class IrohKeyBoundAdmissionTest {
         // The expected identity, spelled through the binding this side actually
         // consults — NOT as `PeerId(keyB.name)`, which would assert the interim
         // binding's shape rather than that the site resolves through it.
-        val expectedIdentity = l.side.identityBinding.identityOf(keyB)
+        val expectedIdentity = l.side.identityBinding.boundPeer(keyB)
 
         // B carries a name of its own, and that name is NOT what gets stamped:
         // over this transport `Side.peer` is not written to the wire at all.
@@ -354,7 +356,7 @@ class IrohKeyBoundAdmissionTest {
         val goodNodeId = SidecarProcess.spawn(binary, args = goodArgs).use { it.nodeId }
         val goodKey = fingerprint(Ed25519.publicKeyFromRaw(goodNodeId))
         val l = Stack(name = "listener", allow = setOf(goodKey))
-        val admittedName = l.side.identityBinding.identityOf(goodKey).name
+        val admittedName = l.side.identityBinding.boundPeer(goodKey).name
 
         IrohTransport.listen(l.side, binary, stderrSink = stderrSink("listener")).use { listener ->
             val published = SetCell<String>()
@@ -412,3 +414,14 @@ class IrohKeyBoundAdmissionTest {
         }
     }
 }
+
+/**
+ * The identity [key] resolves to through this binding, for spelling an
+ * expected value. Fails loudly on `Unbound` — every side here uses the total
+ * interim binding — rather than substituting anything.
+ */
+private fun PeerIdentityBinding.boundPeer(key: KeyId): PeerId =
+    when (val resolution = resolve(key)) {
+        is IdentityResolution.Bound -> resolution.peer
+        is IdentityResolution.Unbound -> throw AssertionError("expected $key to be bound, got $resolution")
+    }

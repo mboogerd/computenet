@@ -7,6 +7,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
@@ -552,12 +553,13 @@ object Peering {
          * DSC4's anchor-vouched names arrive by substituting a different
          * binding here, not by editing the sites that stamp.
          *
-         * **No consumer in this task.** The loopback path, `hostIngress` and
-         * the `:wire`/`:iroh` transports start reading it in the sibling item
-         * that migrates admission onto the key identifier; today it is
-         * declared, defaulted and inert. It is last in the constructor so
-         * every existing positional and named `Side(...)` construction
-         * compiles unchanged.
+         * The resolution is partial (task `computenet-hbqvz`): every consumer
+         * handles `IdentityResolution.Unbound` explicitly — the transports'
+         * hello admission refuses the connection, [loopbackAuthLevel] does
+         * not promote — and none substitutes a name built from the key.
+         *
+         * It is last in the constructor so every existing positional and
+         * named `Side(...)` construction compiles unchanged.
          */
         val identityBinding: PeerIdentityBinding = PeerIdentityBinding.Interim,
     ) {
@@ -810,8 +812,11 @@ object Peering {
      *   answer with a `PROOF`; without a keypair there is no `PROOF` row to
      *   reach;
      * - the sender's [Side.peer] **is** the identity its own key resolves to
-     *   (`sender.identityBinding.identityOf(credentials.keyId)`) — the
-     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A side
+     *   (`sender.identityBinding.resolve(credentials.keyId)` is
+     *   `IdentityResolution.Bound` to it) — the
+     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A key the
+     *   binding resolves to `IdentityResolution.Unbound` backs no name at all
+     *   and is never promoted (task `computenet-hbqvz`). A side
      *   announcing itself under a name its key does
      *   not derive is exactly the `ID_MISMATCH` the socket refuses, and the
      *   name is what gets stamped on every delivery, so promoting it would
@@ -833,9 +838,15 @@ object Peering {
     internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel {
         val senderKeys = sender.credentials ?: return AuthLevel.TransportVouched
         if (receiver.credentials == null) return AuthLevel.TransportVouched
-        return if (sender.peer != null && sender.peer == sender.identityBinding.identityOf(senderKeys.keyId))
-            AuthLevel.Authenticated
-        else AuthLevel.TransportVouched
+        if (sender.peer == null) return AuthLevel.TransportVouched
+        // A sender whose own key resolves to no identity has no name its key
+        // backs, so there is nothing to promote — the same verdict as a name its
+        // key does not derive (task `computenet-hbqvz`). Never a fallback name.
+        return when (val resolution = sender.identityBinding.resolve(senderKeys.keyId)) {
+            is IdentityResolution.Bound ->
+                if (sender.peer == resolution.peer) AuthLevel.Authenticated else AuthLevel.TransportVouched
+            is IdentityResolution.Unbound -> AuthLevel.TransportVouched
+        }
     }
 
     /**

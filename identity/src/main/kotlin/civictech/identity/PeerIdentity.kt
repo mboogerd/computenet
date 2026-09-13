@@ -1,5 +1,6 @@
 package civictech.identity
 
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerIdentityBinding
@@ -96,8 +97,21 @@ class PeerIdentity(
      * editing here. Under
      * [PeerIdentityBinding.Interim][civictech.cell.link.PeerIdentityBinding.Companion.Interim]
      * the value is unchanged: the identity's name is the key identifier's own.
+     *
+     * The `Unbound` arm is handled, not assumed away (task
+     * `computenet-hbqvz`): `Interim` is total by construction, so reaching it
+     * is a broken invariant of the kernel's binding and fails loudly at
+     * construction — never a name built from [keyId] here, which would be the
+     * second derivation site the seam exists to prevent. This is not an
+     * admission path; it is a process loading its own key.
      */
-    val peerId: PeerId = PeerIdentityBinding.Interim.identityOf(keyId)
+    val peerId: PeerId = when (val resolution = PeerIdentityBinding.Interim.resolve(keyId)) {
+        is IdentityResolution.Bound -> resolution.peer
+        is IdentityResolution.Unbound -> error(
+            "PeerIdentityBinding.Interim resolved this key to no identity (${resolution.reason}); " +
+                "the interim binding is total, so this is a broken invariant, not a refusal",
+        )
+    }
 
     /** Ed25519 signature over [message] with the private half. */
     fun sign(message: ByteArray): ByteArray = Ed25519.sign(privateKey, message)
