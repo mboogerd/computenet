@@ -38,6 +38,18 @@ data class HostedPortInvocation(
      */
     val peerAuth: civictech.cell.link.AuthLevel = civictech.cell.link.AuthLevel.TransportVouched,
     /**
+     * Who vouched for [peer] on this connection (feature `computenet-5y8t.1`,
+     * decision D5/D12): bound once, by the caller, at the admission decision,
+     * the same way [peerAuth] is — see its KDoc paragraph above, which applies
+     * here verbatim. Never serialized into a frame; meaningless when [peer]
+     * is null.
+     *
+     * Null exactly when the identity is key-derived
+     * ([civictech.cell.link.PeerIdentityBinding.Interim]) or [peerAuth] is not
+     * [civictech.cell.link.AuthLevel.Authenticated].
+     */
+    val peerIssuer: civictech.cell.link.IssuerId? = null,
+    /**
      * T04 finding 7 (extended, T06 §C1a): [civictech.cell.ReplayScope]
      * captured at STAGE time by [civictech.cell.host.HostDurability.recoverFrom]
      * for a replayed frame that carries no [Invocation.context] (a root
