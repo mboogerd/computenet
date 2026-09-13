@@ -230,7 +230,7 @@ class IrohSessionHelloTest {
 
     @Test
     fun `the stamped and denied identity comes from the side's binding, never from the key itself`() {
-        val aliasing = PeerIdentityBinding { key -> IdentityResolution.Bound(PeerId("alias-of-" + key.name)) }
+        val aliasing = PeerIdentityBinding { key, _ -> IdentityResolution.Bound(PeerId("alias-of-" + key.name), null, null) }
         val remote = nodeId()
         val expected = PeerId("alias-of-" + keyOf(remote).name)
 
@@ -291,11 +291,11 @@ class IrohSessionHelloTest {
     @Test
     fun `a link whose key the binding holds no identity for is refused, and nothing stands in for the identity`() {
         val remote = nodeId()
-        val unbound = PeerIdentityBinding { key ->
+        val unbound = PeerIdentityBinding { key, presented ->
             if (key == keyOf(remote)) {
                 IdentityResolution.Unbound(UnboundReason.NO_BINDING)
             } else {
-                PeerIdentityBinding.Interim.resolve(key)
+                PeerIdentityBinding.Interim.resolve(key, presented)
             }
         }
 
@@ -387,7 +387,7 @@ class IrohSessionHelloTest {
  * expected value. Fails loudly on `Unbound` rather than substituting anything.
  */
 private fun PeerIdentityBinding.boundPeer(key: KeyId): PeerId =
-    when (val resolution = resolve(key)) {
+    when (val resolution = resolve(key, emptyList())) {
         is IdentityResolution.Bound -> resolution.peer
         is IdentityResolution.Unbound -> throw AssertionError("expected $key to be bound, got $resolution")
     }

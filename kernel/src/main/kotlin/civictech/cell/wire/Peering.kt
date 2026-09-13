@@ -8,6 +8,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IdentityStatement
 import civictech.cell.link.KeyId
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
@@ -394,6 +395,18 @@ interface PeerCredentials {
 
     /** A signature over exactly [message]; no framing, prefixing or hashing is added here. */
     fun sign(message: ByteArray): ByteArray
+
+    /**
+     * This side's **own evidence** for its name: the
+     * [civictech.cell.link.IdentityStatement]s it presents to a peer's
+     * [civictech.cell.link.PeerIdentityBinding] (feature `computenet-5y8t.1`).
+     * A list, because a peer may hold statements from several issuers.
+     *
+     * Defaults to empty, so every implementation that predates statements is
+     * unchanged; under [civictech.cell.link.PeerIdentityBinding.Interim] the
+     * list is ignored either way.
+     */
+    val statements: List<IdentityStatement> get() = emptyList()
 }
 
 /**
@@ -812,7 +825,7 @@ object Peering {
      *   answer with a `PROOF`; without a keypair there is no `PROOF` row to
      *   reach;
      * - the sender's [Side.peer] **is** the identity its own key resolves to
-     *   (`sender.identityBinding.resolve(credentials.keyId)` is
+     *   (`sender.identityBinding.resolve(credentials.keyId, credentials.statements)` is
      *   `IdentityResolution.Bound` to it) — the
      *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A key the
      *   binding resolves to `IdentityResolution.Unbound` backs no name at all
@@ -842,7 +855,7 @@ object Peering {
         // A sender whose own key resolves to no identity has no name its key
         // backs, so there is nothing to promote — the same verdict as a name its
         // key does not derive (task `computenet-hbqvz`). Never a fallback name.
-        return when (val resolution = sender.identityBinding.resolve(senderKeys.keyId)) {
+        return when (val resolution = sender.identityBinding.resolve(senderKeys.keyId, senderKeys.statements)) {
             is IdentityResolution.Bound ->
                 if (sender.peer == resolution.peer) AuthLevel.Authenticated else AuthLevel.TransportVouched
             is IdentityResolution.Unbound -> AuthLevel.TransportVouched
