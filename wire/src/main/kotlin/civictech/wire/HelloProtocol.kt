@@ -476,8 +476,14 @@ fun parseProof(line: String): HelloParse<Proof> {
  * `HELLO3 <mirrorRef> <claimedPeerId> <base64url(SPKI)> <base64url(nonce)> <statement>{1,8}`.
  *
  * The canonical inverse of [parseHello3]: `encodeHello3(parsed) == line` for
- * every line [parseHello3] accepts. So it refuses, rather than emits, a hello
- * that [parseHello3] would refuse on the other side.
+ * every CANONICAL line — every line this function emits. It is not the inverse
+ * of every line [parseHello3] accepts: the fixed fields are parsed exactly as
+ * [parseHello2] parses them, which (via `UUID.fromString` and the JDK base64url
+ * decoder) also accepts a non-canonical mirror-ref spelling such as `1-2-3-4-5`
+ * and a `=`-padded key or nonce, and those re-encode canonically. Statement
+ * tokens are canonical-only (`decodeIdentityStatementToken` refuses any other
+ * spelling). This function refuses, rather than emits, a hello that
+ * [parseHello3] would refuse on the other side.
  *
  * @throws IllegalArgumentException if [Hello3.statements] holds fewer than one
  *   or more than [MAX_HELLO_STATEMENTS] statements; if [Hello3.claimedPeerId]
