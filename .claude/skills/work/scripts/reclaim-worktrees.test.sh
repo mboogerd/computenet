@@ -2,7 +2,7 @@
 # Tests for reclaim-worktrees.sh. Stubs `bd` and builds real git worktrees
 # against a real (local, bare) origin, because the load-bearing guard is
 # "HEAD is on origin" and it cannot be exercised without one.
-# Expect "28 passed, 0 failed".
+# Expect "34 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reclaim-worktrees.sh"}
@@ -15,10 +15,17 @@ mkdir -p "$ROOT/bin" "$ROOT/computenet-worktrees"
 cat > "$ROOT/bin/bd" <<'EOF'
 #!/usr/bin/env bash
 echo "Warning: beads.role not set"      # bd prints warnings BEFORE the JSON
-printf '[{"id":"%s","status":"%s"}]\n' "$2" "$(cat "$CTRL/status.$2" 2>/dev/null || echo open)"
+printf '[{"id":"%s","status":"%s","parent":"%s","metadata":{"holder":"%s"}}]\n' "$2" \
+  "$(cat "$CTRL/status.$2" 2>/dev/null || echo open)" "$(cat "$CTRL/parent.$2" 2>/dev/null)" "$(cat "$CTRL/holder.$2" 2>/dev/null)"
 EOF
 chmod +x "$ROOT/bin/bd"
-export PATH="$ROOT/bin:$PATH" CTRL="$ROOT"
+# Liveness stub: a token answers with its own prefix (LIVE-x -> LIVE).
+cat > "$ROOT/bin/holder" <<'EOF'
+#!/usr/bin/env bash
+echo "${2%%-*}"
+EOF
+chmod +x "$ROOT/bin/holder"
+export PATH="$ROOT/bin:$PATH" CTRL="$ROOT" RECLAIM_HOLDER_CHECK="$ROOT/bin/holder"
 
 REPO="$ROOT/repo"
 git init -q --bare "$ROOT/origin.git"
@@ -140,6 +147,23 @@ age "$ROOT/computenet-worktrees/computenet-rebasing"
 out=$(run); rc=$?
 check "paused rebase -> SKIP" "IN PROGRESS (rebase-merge)" "$out"
 alive computenet-rebasing "a paused rebase must never be removed"
+
+# computenet-zgdt9: a closed task of a LIVE sibling session passes every other
+# guard. Its own holder, or its parent feature's, must stop it — run for real.
+mk computenet-sib closed; echo LIVE-47538 > "$ROOT/holder.computenet-sib"
+out=$(run)
+check "own holder LIVE -> SKIP naming the token" "LIVE-47538" "$out"
+alive computenet-sib "a live sibling's task worktree must never be removed"
+mk computenet-sibkid closed; echo computenet-feat > "$ROOT/parent.computenet-sibkid"
+echo FOREIGN-other > "$ROOT/holder.computenet-feat"
+out=$(run)
+check "parent holder FOREIGN -> SKIP" "FOREIGN-other" "$out"
+alive computenet-sibkid "a task under a foreign-held feature must never be removed"
+mk computenet-deadkid closed; echo DEAD-1 > "$ROOT/holder.computenet-deadkid"
+out=$(run)
+check "DEAD holder falls through to the other guards" "removed $ROOT/computenet-worktrees/computenet-deadkid" "$out"
+gone computenet-deadkid "a DEAD holder must not block reclaim"
+rm -f "$ROOT/holder.computenet-sib" "$ROOT/holder.computenet-feat"
 
 # ...and the happy path really does remove, so the guards above are not just
 # refusing everything.

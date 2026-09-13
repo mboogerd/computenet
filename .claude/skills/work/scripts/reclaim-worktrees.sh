@@ -50,6 +50,16 @@
 #    against the narrow race where a bead is closed and its worktree written
 #    seconds apart, nothing more — the load-bearing guards are the four above.
 #
+# A HOLDER GUARD runs first (computenet-zgdt9), because every guard above is
+# satisfied by a LIVE sibling session's normal mid-feature state: 5c closes
+# each task as it merges, the implementer committed and left, 5c pushed the
+# feature branch, and the session has moved on for 15m+. Measured: a dry run
+# proposed three task worktrees of two live sessions on the same box. So the
+# bead's `metadata.holder`, and its PARENT's, go through `session-holder.sh
+# --check`: LIVE or FOREIGN on either -> SKIP naming the token (not an error;
+# that session reclaims its own). MINE, DEAD, STALE, UNKNOWN or no holder ->
+# the guards below still decide.
+#
 # Directory name -> bead id, so a path that is not <id>-shaped is skipped
 # rather than guessed at.
 #
@@ -76,6 +86,9 @@ done
 
 command -v jq >/dev/null || { echo "reclaim-worktrees: jq unusable; NOTHING was checked" >&2; exit 3; }
 command -v bd >/dev/null || { echo "reclaim-worktrees: bd unusable; NOTHING was checked" >&2; exit 3; }
+# ponytail: the env override exists only so the test can stub liveness.
+HOLDER_CHECK=${RECLAIM_HOLDER_CHECK:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-holder.sh"}
+bead_json() { bd show "$1" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p'; }
 
 # One fetch, before the loop: `branch -r --contains` reads REMOTE-TRACKING refs,
 # which are a CACHE, not origin. Two ways that cache lies, and they fail in
@@ -103,9 +116,24 @@ while IFS= read -r line; do
   # Bead ids look like computenet-<slug> or computenet-<slug>.<n>...
   case "$id" in computenet-*) ;; *) continue ;; esac
 
-  status=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status // ""' 2>/dev/null)
+  json=$(bead_json "$id")
+  status=$(jq -r '.[0].status // ""' <<<"$json" 2>/dev/null)
   [ "$status" = "closed" ] || continue
   found=1
+
+  live=""
+  parent=$(jq -r '.[0].parent // ""' <<<"$json" 2>/dev/null)
+  for h in "$(jq -r '.[0].metadata.holder // ""' <<<"$json" 2>/dev/null)" \
+           "$([ -n "$parent" ] && bead_json "$parent" | jq -r '.[0].metadata.holder // ""' 2>/dev/null)"; do
+    [ -n "$h" ] || continue
+    case "$("$HOLDER_CHECK" --check "$h" 2>/dev/null)" in
+      LIVE|FOREIGN) live=$h; break ;;
+    esac
+  done
+  if [ -n "$live" ]; then
+    echo "SKIP $id: held by a LIVE or FOREIGN session ($live) — its own session reclaims it" >&2
+    continue
+  fi
 
   dirty=$(git -C "$path" status --short 2>/dev/null)
   if [ -n "$dirty" ]; then

@@ -743,6 +743,10 @@ unpushed commits is deleted silently. Detached HEAD and commits on no origin
 branch are each a SKIP; an unreachable origin aborts everything at `rc=3`.
 The 15-minute quiet hold is a cheap filter on the close/write race, **not**
 a liveness test — an agent sitting on an idle worktree reads as quiet.
+Liveness is the **holder** guard: a bead or parent whose `metadata.holder` is
+LIVE or FOREIGN is a `SKIP … held by a LIVE or FOREIGN session` line — a
+sibling mid-feature, not a failure; leave it to that session and never
+remove it by hand (computenet-zgdt9).
 `rc=1` means a candidate was dirty, mid-operation, not provably pushed, or a
 removal failed: look, do not re-run.
 
