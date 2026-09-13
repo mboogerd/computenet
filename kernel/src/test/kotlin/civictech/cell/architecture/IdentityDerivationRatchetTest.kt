@@ -158,6 +158,15 @@ class IdentityDerivationRatchetTest {
     // [genericCloseNotArrow]'s count (0 real '>' in the folded text), and
     // the fold runs forward into a later unrelated PeerIdentityBinding type
     // usage (computenet-omm5p PROBEs o5/o4).
+    // The spacing rule is convention, not enforced (no ktlint/editorconfig
+    // here), so it has a measured cost in both directions (computenet-omm5p
+    // review, 2026-09-13, by probe; the real-corpus assertion is unaffected):
+    // a SPACED generic open ("Handler <" / "String" / ">," then a later
+    // PeerIdentityBinding entry) is now missed where the all-'<' count caught
+    // it — a silent false negative this rule introduced; an UNSPACED operator
+    // ("Base(a<b)", "Base(a< b)") still opens a runaway fold as before; and a
+    // greater-than operator ("Base(a > b),") still feeds the close count and
+    // ends a following multi-line generic's fold early, as before.
     private val genericOpenNotOperator = Regex("""\w<""")
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
