@@ -2,8 +2,8 @@
 # Self-checks for the three feedback mechanisms. Each asserts the tool
 # DISCRIMINATES — fires when it should and stays quiet when it should not —
 # because a check that can only pass is the failure mode this whole lane exists
-# to catch (work/references/gradle-evidence.md, "Measurements whose failure
-# mode is a PASS").
+# to catch (work/references/evidence.md: evidence counts only if it could have come out
+# the other way).
 #
 # Runs from a worktree or the main checkout — recurrence-audit.py locates the
 # export via git-common-dir when the local tree has none.
@@ -28,13 +28,13 @@ echo "reachability.py"
 if $S/reachability.py --for orchestrator .claude/skills/work/SKILL.md >/dev/null 2>&1
   then ok "orchestrator is served by its own entry document"
   else bad "orchestrator not served by SKILL.md — the graph is broken"; fi
-# A /work file the named role does NOT reach: task.md is the implementer's own
+# A /work file the named role does NOT reach: implement.md is the implementer's own
 # entry document and sits 2 hops from the orchestrator. This is the l5rc
 # discrimination and it must stay exit 1. (It used to be this lane's own
 # SKILL.md, which now declines instead — computenet-z9tu.)
-$S/reachability.py --for orchestrator .claude/skills/work/references/task.md >/dev/null 2>&1 && rc=0 || rc=$?
+$S/reachability.py --for orchestrator .claude/skills/work/references/implement.md >/dev/null 2>&1 && rc=0 || rc=$?
 [ "${rc:-0}" = 1 ] && ok "exit 1 for a work file the named role does not read" \
-                   || bad "the orchestrator appears to read the implementer's task.md"
+                   || bad "the orchestrator appears to read the implementer's implement.md"
 # Outside /work the graph has no model, and a confident NOT-READ there is a
 # false negative — the script committing the defect it exists to catch.
 $S/reachability.py --for implementer .claude/skills/remediate-friction/SKILL.md 2>/dev/null \

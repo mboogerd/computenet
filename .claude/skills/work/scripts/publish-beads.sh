@@ -54,7 +54,7 @@ echo "-- push rejected; recovering: pull, then push --"
 pout=$(bd dolt pull 2>&1)
 printf '%s\n' "$pout"
 if grep -qi "conflict" <<<"$pout"; then
-  echo "ESCALATE: merge conflict — see .claude/skills/work/references/dolt-conflict.md (issues-only modify/modify is resolvable here; anything else needs an operator); state is LOCAL-ONLY" >&2
+  echo "ESCALATE: merge conflict — see .claude/skills/work/references/recovery.md § Dolt pull conflicts (issues-only modify/modify is resolvable here; anything else needs an operator); state is LOCAL-ONLY" >&2
   exit 2
 fi
 out=$(push_with_backoff); rc=$?

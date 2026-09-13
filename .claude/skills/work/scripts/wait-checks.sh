@@ -411,7 +411,7 @@ for i in $(seq 1 "$rounds"); do
     red=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '{print $1}' | tr '\n' ' ')
     if [ -n "$red" ]; then
       echo "wait-checks: RED — required check(s) FAILED: ${red% }"
-      echo "wait-checks: SETTLED is not a verdict. Do NOT gh pr ready; go to red-check-attribution.md."
+      echo "wait-checks: SETTLED is not a verdict. Do NOT gh pr ready; go to recovery.md § A red required check."
     fi
     echo SETTLED
     exit 0

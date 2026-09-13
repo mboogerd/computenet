@@ -29,7 +29,7 @@
 #   orchestrator files reaches next-batch.py with a dispatch model rather than
 #   tripping 5b's empty-model rule against a breakdown that never ran
 #   (computenet-q1jc3, computenet-ci7k).
-# --top-level: the one sanctioned unparented create (red-check-attribution.md
+# --top-level: the one sanctioned unparented create (recovery.md, red check;
 #   artifact 3's first-sighting bug). This was refused with "use bd create
 #   directly", which meant re-typing a composed heredoc body under a different
 #   tool mid-attribution, twice in one session (computenet-7xeh).
@@ -82,7 +82,7 @@ done
 case "$TYPE" in bug|feature|task|chore) ;; *) echo "--type must be bug, feature, task or chore" >&2; exit 2 ;; esac
 [ -n "$TITLE" ]  || { echo "--title is required" >&2; exit 2; }
 if [ -z "$PARENT" ] && [ "$TOP" != 1 ]; then
-  echo "--parent is required, or --top-level for a deliberately unparented bead (a first-sighting red-check bug, red-check-attribution.md artifact 3)" >&2; exit 2
+  echo "--parent is required, or --top-level for a deliberately unparented bead (a first-sighting red-check bug, recovery.md § A red required check)" >&2; exit 2
 fi
 if [ -n "$PARENT" ] && [ "$TOP" = 1 ]; then echo "--parent and --top-level are exclusive" >&2; exit 2; fi
 

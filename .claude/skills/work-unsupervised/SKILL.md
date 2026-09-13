@@ -34,7 +34,7 @@ keeps two machines off each other's work — a dead run is far cheaper than that
 
 ## Where the parking bar sits when nobody is listening
 
-`work`'s [ask-human.md](../work/references/ask-human.md) defines the bar and the exact
+`work`'s [recovery.md](../work/references/recovery.md) ("Parks") defines the bar and the exact
 sequence. Follow it as written — parking is a specific sequence, not just a comment, and
 its five-minute/five-hour test is already calibrated for nobody being there.
 

@@ -149,7 +149,7 @@ out=$(run "$TASK" "$FBR"); rc=$?
 [ "$rc" -eq 1 ] && ok "exits 1" || bad "exits $rc, wanted 1"
 has "$out" "GATE origin-state: FAIL" "names the gate"
 has "$out" "AHEAD" "names the finding"
-has "$out" "ask-human.md" "routes to the park, not to a winner"
+has "$out" "recovery.md" "routes to the park, not to a winner"
 merged_local && bad "merged anyway" || ok "nothing merged"
 
 # 5. GATE origin-state: branch absent from origin is a CHECK-shaped refusal

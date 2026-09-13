@@ -194,7 +194,7 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   file the task had to edit, and separately let the false premise ":oracle is
   a leaf that nothing depends on" survive two reports and a review
   (computenet-l5rc, recurred as computenet-u0b0 and computenet-rf0a). It is
-  recorded HERE, not only in `.claude/skills/work/references/agent-execution.md`,
+  recorded HERE, not only in `.claude/skills/work/references/agent.md`,
   because that file is handed to dispatched agents and the orchestrator never
   reads it — which is why the first fix did not stop the recurrence.
 - Third member of the same family, in git itself: a pathspec ending at a
@@ -232,7 +232,7 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   (computenet-adgy, same family as computenet-wahz's `bd -C` case). Write the
   command out per invocation, or define a function. The same shape in a
   scripted mutation is why
-  `.claude/skills/work/references/mutation-check.md` step 3 requires proving
+  `.claude/skills/work/references/evidence.md` "Mutation checks" requires proving
   the mutation LANDED — a non-empty `git diff HEAD -- <file>` — before the
   test result is read at all. Note which half each check covers: here the
   variable held the test INVOCATION, so the mutation may well have landed and
@@ -386,7 +386,7 @@ Confidence means all three of:
   edit — not a migration, a wire-format change, or deleted data.
 
 If any of the three is in doubt, leave the PR in draft and park the doubt for a
-human (`.claude/skills/work/references/ask-human.md`), naming which criterion
+human (`.claude/skills/work/references/recovery.md`, "Parks"), naming which criterion
 is unsettled. Asking in your output instead is a dropped question. Draft stays
 the default until all three hold; a green, finished PR left in draft for
 someone to click is equally a dropped task.
@@ -431,7 +431,7 @@ machine, not on a timer:
 **Keep the bracket: `pull` → verify → write → `push`.** Never push without
 pulling first. The pull is what stops a clobber and what makes a claim a lock
 rather than a private note; skipping it is how two machines mint the same id or
-both claim one epic. See `.claude/skills/work/references/claim-sync.md`.
+both claim one epic. See `.claude/skills/work/SKILL.md`, "Hard constraints".
 
 Dispatched implementers and reviewers still **don't** push — not because they
 need permission, but because the orchestrator serializes pushes and a subagent
