@@ -307,7 +307,9 @@ const val DEFAULT_NONCE_RETENTION_MILLIS: Long = 600_000
  * exchanged is already known to be genuine and the only question left is
  * whether it is *present*. A direction whose sender and receiver both hold
  * [Peering.Side.credentials], and whose sender's [Peering.Side.peer] is the
- * fingerprint its own key derives, therefore stamps
+ * identity the *receiver's* binding resolves the sender's key to (under
+ * `PeerIdentityBinding.Interim`, the fingerprint that key derives; feature
+ * `computenet-5y8t.1`, decision D9), therefore stamps
  * `civictech.cell.link.AuthLevel.Authenticated` — the same principal a socket
  * peering with the same configuration yields. Every other loopback direction
  * stamps `TransportVouched`, exactly as before this feature.
