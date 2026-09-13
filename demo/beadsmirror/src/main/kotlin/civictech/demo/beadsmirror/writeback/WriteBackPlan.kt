@@ -57,6 +57,36 @@ object ImposedFields {
         "created_by",
         "updated_at",
     )
+
+    /**
+     * The subset of [FIELDS] `bd` treats as immutable or system-rounded once
+     * an issue row exists, so a difference in one of them, ALONE, is never a
+     * reason to import and never a reason to fail a post-import read-back.
+     * They are still written into an [Imposition.row] when the winner
+     * carries them — `bd import` silently keeps its own stored value rather
+     * than rejecting the row — but [WriteBackPlanner.preflight] excludes them
+     * from every comparison it makes, which is the ONE place both the
+     * planner's Impose/NoOp decision ([WriteBackPlanner.plan]) and the
+     * applier's post-import re-read ([WriteBackApplier]'s `readBackFailure`)
+     * draw the set from (computenet-6wc.1.6 clause 3: defined once, used by
+     * both).
+     *
+     * - `created_at`: `bd import` cannot overwrite it on a row that already
+     *   exists — measured for computenet-6wc.1.6: a post-import re-read still
+     *   shows the destination's own original value. Two independently
+     *   `bd create`d rows for the same id (the two-node write-back setup)
+     *   therefore always disagree on this field even once every other field
+     *   converges, so comparing it made `Imposed` and `NoOp` alike
+     *   unreachable for such a row.
+     * - `updated_at`: an incoming sub-second value `>= .500` is rounded UP by
+     *   bd on the way in (E4), so the stored value is bd's business rather
+     *   than a failure of the imposition — computenet-6wc.1.3/.1.4. Reported
+     *   inside [WriteBackEvent.Imposed.observed], not adjudicated.
+     */
+    val NON_COMPARABLE: Set<String> = setOf("created_at", "updated_at")
+
+    /** [FIELDS] minus [NON_COMPARABLE] — what [WriteBackPlanner.preflight] actually compares. */
+    val COMPARABLE: Set<String> = FIELDS - NON_COMPARABLE
 }
 
 /**
@@ -224,6 +254,10 @@ object WriteBackPlanner {
      * pre-flight instrument the feature's clause 2 requires the loss record
      * to precede.
      *
+     * Compares [ImposedFields.COMPARABLE] only — [ImposedFields.NON_COMPARABLE]
+     * fields (`created_at`, `updated_at`) are excluded from every comparison
+     * this method makes, on both call sites (computenet-6wc.1.6 clause 3).
+     *
      * [row]'s value for a field (or its absence) is compared against
      * [exportRow]'s (a JSON `null` on the export side counts as absent, the
      * same convention [civictech.demo.beadsmirror.equality.MirrorExportEquality]
@@ -242,7 +276,7 @@ object WriteBackPlanner {
      */
     fun preflight(row: JsonObject, exportRow: ExportRow?): List<FieldLoss> {
         val losses = mutableListOf<FieldLoss>()
-        for (field in ImposedFields.FIELDS) {
+        for (field in ImposedFields.COMPARABLE) {
             val newValue = row[field]
             val oldValue = exportRow?.json?.get(field)?.takeUnless { it is JsonNull }
             if (!valuesAgree(newValue, oldValue)) {

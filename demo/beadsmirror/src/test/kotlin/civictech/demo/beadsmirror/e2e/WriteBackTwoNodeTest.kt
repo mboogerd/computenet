@@ -2,6 +2,7 @@ package civictech.demo.beadsmirror.e2e
 
 import civictech.demo.beadsmirror.writeback.WriteBackEvent
 import civictech.demo.beadsmirror.writeback.WriteBackFailure
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -26,32 +27,14 @@ import org.junit.jupiter.api.Test
  * (`--id <id> --force`, the `ScheduleStep.Create` idiom — see
  * [CrossWorkspaceResolutionTest]'s KDoc for why an explicit foreign-style id
  * is needed at all: every [civictech.demo.beadsmirror.BdScratchWorkspace]
- * copy mints its own auto-ids under the SAME template prefix).
- *
- * **A discovered defect this class works around rather than fixes** (outside
- * this task's file claim — `WriteBackPlanner`/`WriteBackApplier` belong to
- * tasks computenet-6wc.1.1/.1.3): two independently `bd create`d rows for the
- * SAME id disagree on `created_at` (real wall-clock timestamps, milliseconds
- * apart) even at equal priority, and `created_at` IS one of
- * [civictech.demo.beadsmirror.writeback.ImposedFields.FIELDS]. Measured live
- * while building this test: `bd import` against a row that already exists
- * does NOT overwrite `created_at` (exits 0, but a post-import re-read still
- * shows the destination's own original value) — so a `created_at` mismatch
- * settles into a permanent `WriteBackEvent.Failed(ReadBackMismatch(created_at))`
- * for that issue's row, and NEVER an `Imposed`, no matter how many times the
- * SAME row content is re-planned (the applier's own `previouslyFailed` cache
- * then skips it, per clause 6, until the winner's OTHER fields change and
- * produce a materially different row). Every OTHER field the row also
- * carries (priority included) still lands correctly despite that overall
- * "Failed" verdict, because `bd import` writes what it CAN write in the same
- * invocation. Reported on this task's bead as a finding for tasks
- * computenet-6wc.1.1/.1.3 (`created_at`, like `updated_at`, likely needs
- * excluding from the post-import comparison — and arguably from
- * `ImposedFields` altogether, since it is bd-immutable once a row exists).
- * The tests below therefore assert the functionally load-bearing half of
- * each clause (what `bd show` reports, and that write-back specifically
- * caused it) rather than an exact `Imposed`/commit count that this defect
- * makes unreachable whenever the destination's own `created_at` differs.
+ * copy mints its own auto-ids under the SAME template prefix) — real
+ * wall-clock `created_at` values, milliseconds apart, on each workspace's own
+ * copy of X. This used to make a clean `Imposed` for that row permanently
+ * unreachable, because `created_at` was compared like any other field; fixed
+ * by excluding it from comparison
+ * ([civictech.demo.beadsmirror.writeback.ImposedFields.NON_COMPARABLE],
+ * computenet-6wc.1.6). The tests below assert the exact
+ * `Imposed`/import-invocation counts clause 1 and clause 4 ask for.
  *
  * Guarded exactly like [TwoNodeRigTest]: green-but-skipped where `bd`/`dolt`
  * are not on PATH.
@@ -109,20 +92,19 @@ class WriteBackTwoNodeTest {
 
     private fun importedCountFor(node: TwoNodeRig.Node, issueId: String): Int =
         // Every actual `bd import` invocation is preceded by exactly one
-        // PreFlight (WriteBackApplier.applyOnce's KDoc) — unlike Imposed,
-        // which the created_at defect (class KDoc) can make permanently
-        // unreachable, PreFlight fires on every real attempt regardless of
-        // its eventual outcome, so it is the right proxy for "an import ran".
+        // PreFlight (WriteBackApplier.applyOnce's KDoc), regardless of the
+        // eventual outcome, so it is the right proxy for "an import ran".
         node.writeBackEvents().count { it is WriteBackEvent.PreFlight && it.issueId == issueId }
 
     /**
      * Clause 1's R1, end to end: the dialer (write-back ON) imposes the
-     * listener's priority edit onto its OWN `bd` data, and `bd show` on the
-     * dialer reports it. See the class KDoc for why this does not additionally
-     * assert an exact `Imposed`/commit count.
+     * listener's priority edit onto its OWN `bd` data — exactly ONE
+     * `Imposed(X)` and exactly ONE importer invocation (computenet-6wc.1.6
+     * clause 4) — and `bd show` on the dialer reports it. No further
+     * `Imposed(X)` fires once the two nodes have converged.
      */
     @Test
-    fun `R1 - the dialer imposes the listener's edit and bd show reports it`() {
+    fun `R1 - the dialer imposes the listener's edit exactly once and bd show reports it`() {
         seedOnBoth(priority = "3")
         val listener = rigOrFail.startListener(writeBack = false)
         listener.quiesce()
@@ -132,10 +114,12 @@ class WriteBackTwoNodeTest {
         rigOrFail.await("both nodes agree on X before the edit") {
             listener.view()[x] == dialer.view()[x]
         }
-        // Let write-back's own first pass(es) — including the created_at-driven
-        // one described in the class KDoc — settle BEFORE taking the "before"
-        // baseline, so the growth measured below is attributable to the
-        // deliberate edit rather than to that unrelated startup noise.
+        // X was seeded independently on both workspaces at equal priority, so
+        // write-back's own first pass(es) settle as a NoOp (created_at is the
+        // only field that could differ, and it is excluded from comparison —
+        // computenet-6wc.1.6). Give that a few ticks before taking the
+        // "before" baseline, so the growth measured below is attributable to
+        // the deliberate edit rather than to startup noise.
         rigOrFail.await("write-back has processed X at least once") {
             dialer.writeBackEvents().any { it.issueId == x }
         }
@@ -145,30 +129,30 @@ class WriteBackTwoNodeTest {
         rigOrFail.listenerWorkspace.run("update", x, "--priority", "1")
         listener.quiesce()
 
-        rigOrFail.await("the dialer's fold picks up the listener's edit") {
-            dialer.view()[x]?.get("priority")?.contains("1") == true
+        rigOrFail.await("the dialer imposes X") {
+            dialer.writeBackEvents().any { it is WriteBackEvent.Imposed && it.issueId == x }
         }
-        // The functionally load-bearing half of clause 1: `bd show` on the
-        // dialer genuinely reports the imposed value. This holds regardless
-        // of the `created_at` defect described in the class KDoc — `bd
-        // import` writes the fields it CAN write (priority included) even on
-        // a row it also reports as an overall mismatch because of an
-        // unrelated, immutable field.
-        rigOrFail.await("bd show on the dialer reports priority 1") {
-            bdShowPriority(dialer, x) == 1
-        }
-        // write-back, not some other path, is what caused it.
-        rigOrFail.await("a write-back event for X named the priority field") {
-            anyEventNamesField(dialer, x, "priority")
-        }
+        // Let the outcome settle for a few more ticks before counting, so a
+        // repeated-imposition regression has a chance to show up here rather
+        // than only in the separate clause-5 test below.
+        Thread.sleep(rigOrFail.pollIntervalMs() * 3)
+
+        val imposedForX = dialer.writeBackEvents().filterIsInstance<WriteBackEvent.Imposed>().filter { it.issueId == x }
+        imposedForX shouldHaveSize 1
+        importedCountFor(dialer, x) shouldBe 1
+
+        // `bd show` on the dialer genuinely reports the imposed value.
+        bdShowPriority(dialer, x) shouldBe 1
+        imposedForX.single().observed["priority"]?.jsonPrimitive?.int shouldBe 1
 
         val dialerLogAfterConvergence = dialer.logHead()
         val doltLogGrowth = dialerLogAfterConvergence.size - dialerLogBeforeEdit.size
-        // Reported, not asserted to equal exactly 1 — see the class KDoc's
-        // discovered-defect note for why an unrelated import attempt's own
-        // commit accounting is not this task's to pin down.
         println("WriteBackTwoNodeTest: dolt_log growth on the dialer attributable to the edit window = $doltLogGrowth")
         (doltLogGrowth >= 1) shouldBe true
+
+        // No further Imposed(X) after convergence, over several more ticks.
+        Thread.sleep(rigOrFail.pollIntervalMs() * 8)
+        dialer.writeBackEvents().filterIsInstance<WriteBackEvent.Imposed>().filter { it.issueId == x } shouldHaveSize 1
     }
 
     /**
@@ -177,8 +161,9 @@ class WriteBackTwoNodeTest {
      * suppression clause, which owns whether a self-imposed dolt commit
      * re-triggers anything. This asserts the narrower, decided property:
      * once the applier's own bookkeeping (agreement, OR the `previouslyFailed`
-     * cache for a row it cannot fully reconcile — see the class KDoc) has
-     * settled for a given winner, further poll ticks touch NEITHER the
+     * cache for a row it cannot fully reconcile — see
+     * [civictech.demo.beadsmirror.writeback.WriteBackApplier]'s class KDoc)
+     * has settled for a given winner, further poll ticks touch NEITHER the
      * dialer's write-back event count NOR its `dolt_log` for X. If
      * `dolt_log` is NOT stable across those same ticks, that is exactly the
      * echo the sibling feature exists to close — reported here with counts,
@@ -211,8 +196,8 @@ class WriteBackTwoNodeTest {
         Thread.sleep(rigOrFail.pollIntervalMs() * 3)
 
         // NOT the raw event count: every tick emits SOMETHING for X even once
-        // stable (Skipped(Equal) on agreement, or Skipped(PreviouslyFailed) —
-        // see the class KDoc), so a raw count grows forever by design and is
+        // stable (Skipped(Equal) on agreement, or Skipped(PreviouslyFailed)),
+        // so a raw count grows forever by design and is
         // not evidence of repeated IMPOSITION. importedCountFor (one per
         // actual `bd import` attempt, via its PreFlight) is the property
         // clause 5 actually constrains: it must stop growing once the winner

@@ -283,6 +283,12 @@ class WriteBackApplierTest {
      * R6 real / criterion 5: a genuine `bd import` refusal — an `updated_at`
      * that is not a timestamp at all — is captured as `ImportExited` with bd's
      * own error text, and the destination row is untouched.
+     *
+     * `priority` is also changed here (computenet-6wc.1.6): `updated_at` is
+     * now [ImposedFields.NON_COMPARABLE], so a row differing from the
+     * destination ONLY in `updated_at` is a planner `NoOp` and never reaches
+     * an import at all — a comparable field has to differ too for `plan` to
+     * produce an `Impose` this test can then watch `bd import` refuse.
      */
     @Test
     fun `R6 real - a genuine bd import refusal is captured and leaves the row unchanged`() {
@@ -290,7 +296,10 @@ class WriteBackApplierTest {
             val id = createIssue(ws, "R6 real subject")
             val before = row(ws, id).json
             val winner = mapOf(
-                id to winnerFieldsFrom(row(ws, id)).apply { put("updated_at", "\"not-a-time\"") },
+                id to winnerFieldsFrom(row(ws, id)).apply {
+                    put("priority", "1")
+                    put("updated_at", "\"not-a-time\"")
+                },
             )
 
             val report = WriteBackApplier.forWorkspace(ws.root, { winner }).applyOnce()
@@ -362,6 +371,38 @@ class WriteBackApplierTest {
             // read-back comparison rather than adjudicated.
             Instant.parse((observed.getValue("updated_at") as JsonPrimitive).content) shouldBe
                 exportInstant.plusSeconds(1)
+        }
+    }
+
+    /**
+     * computenet-6wc.1.6: a row that lands with every OTHER imposed field
+     * matching, but whose stored `created_at` differs from what was imposed
+     * (bd cannot overwrite `created_at` on a row that already exists — the
+     * exact two-node R1 shape, where the destination created its own copy of
+     * the issue independently), must be `Imposed`, not
+     * `ReadBackMismatch(created_at)`. Unfixed, this reddens: the applier's
+     * `readBackFailure` compares `created_at` and reports a permanent
+     * mismatch even though `priority` — the field actually under test —
+     * landed correctly in the same invocation.
+     */
+    @Test
+    fun `a differing stored created_at is not adjudicated as a mismatch, since bd cannot overwrite it`() {
+        BdScratchWorkspace.create().use { ws ->
+            val id = createIssue(ws, "created-at subject")
+            val fields = winnerFieldsFrom(row(ws, id)).apply {
+                put("priority", "1")
+                put("created_at", "\"2020-01-01T00:00:00Z\"")
+            }
+
+            val report = WriteBackApplier.forWorkspace(ws.root, { mapOf(id to fields) }).applyOnce()
+
+            report.imposed shouldBe 1
+            report.failed shouldBe 0
+            val observed = report.events.filterIsInstance<WriteBackEvent.Imposed>().single().observed
+            observed["priority"] shouldBe JsonPrimitive(1)
+            // The destination's own created_at survives untouched — bd's
+            // business, not adjudicated here.
+            (observed["created_at"] as JsonPrimitive).content shouldNotContain "2020-01-01"
         }
     }
 }

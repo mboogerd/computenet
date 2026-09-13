@@ -172,6 +172,20 @@ class WriteBackPlannerTest {
     }
 
     @Test
+    fun `8 - local and winner differing only in created_at is a no-op, since bd treats it as immutable`() {
+        // computenet-6wc.1.6: bd cannot overwrite created_at on an existing
+        // row, so a difference in ONLY that field must never be a reason to
+        // import — unfixed, this reddens because preflight still compares
+        // created_at and reports a phantom Impose.
+        val view = mapOf("X" to mapOf("priority" to "3", "created_at" to "\"2026-09-13T09:30:00Z\""))
+        val export = listOf(exportRow("""{"id":"X","priority":3,"created_at":"2026-09-13T09:30:05Z"}"""))
+
+        val outcomes = WriteBackPlanner.plan(view, export)
+
+        outcomes shouldBe listOf(PlanOutcome.NoOp("X"))
+    }
+
+    @Test
     fun `preflight is callable standalone against a built row and a fresh export`() {
         val row = JsonObject(mapOf("id" to JsonPrimitive("X"), "priority" to JsonPrimitive(1)))
         val freshExport = exportRow("""{"id":"X","priority":3}""")

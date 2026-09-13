@@ -50,10 +50,11 @@ sealed interface WriteBackFailure {
      * the imposed row as the proposed value, the re-read row as the
      * destination — so each [FieldLoss] here reads `old` = what the re-read
      * actually holds, `new` = the value that was imposed and did not land.
-     * `updated_at` is never among them: E4's
-     * round-half-up makes its stored value bd's business, so it is excluded
-     * from the comparison and reported inside [WriteBackEvent.Imposed.observed]
-     * instead of adjudicated.
+     * [ImposedFields.NON_COMPARABLE] fields are never among them: `updated_at`'s
+     * E4 round-half-up and `created_at`'s bd-immutability both make their
+     * stored value bd's business rather than a failure of the imposition, so
+     * both are excluded from the comparison and reported inside
+     * [WriteBackEvent.Imposed.observed] instead of adjudicated.
      */
     data class ReadBackMismatch(val fields: List<FieldLoss>) : WriteBackFailure
 
@@ -103,11 +104,13 @@ sealed interface WriteBackEvent {
 
     /**
      * The row landed: the import exited zero and the post-import re-read
-     * agrees with it on every imposed field except `updated_at`.
+     * agrees with it on every imposed field except
+     * [ImposedFields.NON_COMPARABLE] (`created_at`, `updated_at`).
      *
      * [observed] is that re-read export row itself — not the imposed row and
-     * not bd's report — so `updated_at`'s stored value (E4 rounding included)
-     * is reported rather than adjudicated.
+     * not bd's report — so a non-comparable field's stored value (E4
+     * rounding, or bd's own immutable `created_at`) is reported rather than
+     * adjudicated.
      */
     data class Imposed(override val issueId: String, val observed: JsonObject) : WriteBackEvent
 
