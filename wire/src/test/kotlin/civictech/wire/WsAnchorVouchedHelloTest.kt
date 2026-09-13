@@ -342,9 +342,11 @@ class WsAnchorVouchedHelloTest {
      * announcement from a named peer is refused `ID_MISMATCH` and no `Remote`
      * location ever appears (observed while writing this test). Re-keying that
      * gate is a DSC4 residual in `:kernel`, outside task
-     * `computenet-5y8t.3.4`'s files; the hello and its `PROOF` are exercised
-     * here in full — credentials are held, so both sides challenge — and only
-     * the announcement signature is absent.
+     * `computenet-5y8t.3.4`'s files, owned by feature `computenet-5y8t.7`; the
+     * `RequireAuthenticated`, signed-announcement variant of this case belongs
+     * there. The hello and its `PROOF` are exercised here in full — credentials
+     * are held, so both sides challenge — and only the announcement signature
+     * is absent.
      */
     @Test
     fun `two named identities peer over a socket at Authenticated, each attributed to its stable name`() {
