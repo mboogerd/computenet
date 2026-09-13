@@ -476,6 +476,25 @@ export const DENIAL_REASONS = [
    *  record names the field, the offending index and the length, never the
    *  string itself. */
   'MALFORMED_ANNOUNCEMENT',
+  /** Seam 1 hello: the side's `identityBinding` resolved the proven key to NO
+   *  identity — no statement presented, an issuer this side does not accept,
+   *  a statement whose signature does not verify, a statement binding another
+   *  key, or a binding that simply holds nothing (`UnboundReason` NO_BINDING /
+   *  NO_STATEMENT / ISSUER_NOT_ACCEPTED / BAD_SIGNATURE / KEY_MISMATCH).
+   *  Machine-distinguishable from `NOT_ADMITTED` (the peer HAS an identity and
+   *  it is not welcome) and from `ID_MISMATCH` (the key resolved to an
+   *  identity, just not the claimed one). `[DSC1-NV-01]` stays EXPLICITLY
+   *  UNVERIFIED: this says nothing about revocation or about a key held by
+   *  someone other than its owner. */
+  'UNVOUCHED',
+  /** Seam 1 hello: a presented statement from an accepted issuer verifies and
+   *  binds the proven key, but is outside its validity window at the
+   *  RECEIVER's clock (`UnboundReason` EXPIRED / NOT_YET_VALID; the detail
+   *  names which, and names the clock that refused — the `EXPIRED`
+   *  announcement precedent). Rests on `[DSC1-NV-03]`, EXPLICITLY UNVERIFIED.
+   *  `[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED: this says nothing about
+   *  revocation or about a key held by someone other than its owner. */
+  'STATEMENT_EXPIRED',
 ] as const;
 
 export type DenialReason = (typeof DENIAL_REASONS)[number];
