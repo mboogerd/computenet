@@ -8,6 +8,7 @@ import civictech.testkit.dst.CheckRegistry
 import civictech.testkit.dst.DepartEvent
 import civictech.testkit.dst.DepartureMode
 import civictech.testkit.dst.DstCheck
+import civictech.testkit.dst.DstRun
 import civictech.testkit.dst.DstWorld
 import civictech.testkit.dst.DuplicateFault
 import civictech.testkit.dst.FaultPlan
@@ -26,6 +27,7 @@ import civictech.testkit.dst.churn.MeshPeers
 import civictech.testkit.dst.churn.ReferenceFold
 import civictech.testkit.dst.dstSweep
 import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order
@@ -495,7 +497,13 @@ object OrMapGcSafetySweep {
      */
     internal val reorderBySeed: MutableMap<Long, ReorderFault> = java.util.concurrent.ConcurrentHashMap()
 
-    fun plan(seed: Long): FaultPlan = planWith(seed, ReorderFault("ormap-gc-reorder", "peer0<->peer2", window = 3))
+    /** The one edge `ormap-gc-reorder` buffers. Named once so the check's attribution reads the same edge. */
+    private const val REORDER_EDGE: String = "peer0<->peer2"
+
+    /** [REORDER_EDGE]'s two endpoints. */
+    private val REORDER_ENDPOINTS: Set<String> = REORDER_EDGE.split("<->").toSet()
+
+    fun plan(seed: Long): FaultPlan = planWith(seed, ReorderFault("ormap-gc-reorder", REORDER_EDGE, window = 3))
 
     private fun planWith(seed: Long, reorder: ReorderFault): FaultPlan = run {
         reorderBySeed[seed] = reorder
@@ -532,6 +540,17 @@ object OrMapGcSafetySweep {
      * counts stay seed-for-seed comparable with the OR-set sweep's.
      */
     const val VALUE_DIVERGENCE_FAILURE: String = "live replicas' per-key values diverge after compaction"
+
+    /**
+     * [VALUE_DIVERGENCE_FAILURE]'s shape, ATTRIBUTED to a frame the reorder fault stranded
+     * (computenet-yjji2): every dot a replica lacks is ABSENT there, the two replicas are the
+     * reorder edge's endpoints, and the buffer stranded at least one frame on the run. Split out so
+     * the arms can tolerate the adversary's measured rate here while keeping zero tolerance on the
+     * unattributed class. See the attribution clause in [check] and `doc/kernel-lane-findings.md`
+     * `## KE3-42-ORMAP-SHARED`.
+     */
+    const val STRANDED_VALUE_DIVERGENCE_FAILURE: String =
+        "live replicas' per-key values diverge on a frame the reorder fault stranded"
 
     /** A cell's `value(key)` disagrees with its OWN emitted fold's — the resurrection class's twin. */
     const val VALUE_FOLD_DRIFT_FAILURE: String = "a replica's value drifted from its own emitted fold"
@@ -679,17 +698,61 @@ object OrMapGcSafetySweep {
                 val dotsByPeer = cellsByPeer.associate { (name, cell) ->
                     name to liveDotsOf(cell, key).map { "${it.sourceId.toString().take(8)}#${it.counter}" }.sorted()
                 }
-                "$key=$byPeer liveDots=$dotsByPeer"
+                // WHY each replica lacks what another holds (computenet-yjji2). A live dot missing
+                // at one replica is in exactly one of three states there, and they are three
+                // different findings: ABSENT (never applied — a withheld frame), TOMBSTONED (applied
+                // and covered by a del-dot) or FENCED (in the replica's own `ReclaimedDots`, so the
+                // reclaimer's fence refused it — the only one of the three reclamation can cause).
+                val liveByPeer = cellsByPeer.associate { (name, cell) -> name to liveDotsOf(cell, key) }
+                val unionLive = liveByPeer.values.flatten().toSet()
+                // (lacking replica, dot, state) for every live dot some replica lacks.
+                val lacking = cellsByPeer.flatMap { (name, cell) ->
+                    val missing = unionLive - liveByPeer.getValue(name)
+                    if (missing.isEmpty()) return@flatMap emptyList()
+                    val state = cell.state()
+                    val fenced = cell.fencedAmong(key, missing)
+                    missing.map { dot ->
+                        val how = when {
+                            dot in fenced -> "FENCED"
+                            state.puts[key]?.containsKey(dot) == true -> "TOMBSTONED"
+                            else -> "ABSENT"
+                        }
+                        Triple(name, dot, how)
+                    }
+                }
+                val lackingByPeer = lacking.groupBy({ it.first }, { "${it.second.sourceId.toString().take(8)}#${it.second.counter}:${it.third}" })
+                    .mapValues { it.value.sorted() }
+                // THE STRANDED-FRAME ATTRIBUTION (computenet-yjji2). A divergence is attributed to
+                // the adversary's reorder buffer only when EVERY clause below holds, each of which
+                // a reclamation or resolution defect would have to fake:
+                //  - some dot is lacking at all (identical live dot sets resolving to different
+                //    values are a mis-RESOLUTION, never attributed — that is computenet-rjue's
+                //    mutation class);
+                //  - every lacking dot is ABSENT at the lacking replica: never applied, not
+                //    tombstoned and not in its `ReclaimedDots`;
+                //  - every lacking replica is an endpoint of the reorder fault's edge, and the dot
+                //    it lacks is live at the OTHER endpoint — the one pair a buffered frame on that
+                //    edge can keep apart;
+                //  - the buffer really did strand at least one frame on this run.
+                val strandedFrames = reorderBySeed[world.seed]?.strandedFrames ?: 0
+                val attributable = lacking.isNotEmpty() && strandedFrames > 0 && lacking.all { (name, dot, how) ->
+                    how == "ABSENT" && name in REORDER_ENDPOINTS &&
+                        REORDER_ENDPOINTS.any { other -> other != name && dot in liveByPeer[other].orEmpty() }
+                }
+                ("$key=$byPeer liveDots=$dotsByPeer lacking=$lackingByPeer") to attributable
             } else {
                 null
             }
         }
         if (valueDisagreements.isNotEmpty()) {
             totals.getValue(trigger).absorb(observations)
+            val allStranded = valueDisagreements.all { it.second }
             throw ChurnCheckFailure(
-                VALUE_DIVERGENCE_FAILURE,
+                if (allStranded) STRANDED_VALUE_DIVERGENCE_FAILURE else VALUE_DIVERGENCE_FAILURE,
                 detail = "live replicas agree on membership but not on value: " +
-                    valueDisagreements.joinToString("; ") + "; discarded=${observations.discarded}",
+                    valueDisagreements.joinToString("; ") { it.first } +
+                    "; strandedFrames=${reorderBySeed[world.seed]?.strandedFrames}" +
+                    "; discarded=${observations.discarded}",
             )
         }
 
@@ -797,7 +860,11 @@ class OrMapGcSafetySweepTest {
         stableDisagreeing = seedsOf(sweep, OrMapGcSafetySweep.DISAGREEMENT_FAILURE)
         stableDiverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE)
         stableFenceAttributed = seedsOf(sweep, OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE)
-        val stableValueDiverging = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE)
+        // Both value classes, attributed or not: the ordinal workload holds one live dot per key, so
+        // a lacking dot is a MEMBERSHIP difference there and the stranded-frame class is unreachable
+        // by construction — no tolerance for it is extended to this arm.
+        val stableValueDiverging = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE) +
+            seedsOf(sweep, OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE)
         val stableValueDrift = seedsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE)
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
 
@@ -956,6 +1023,7 @@ class OrMapGcSafetySweepTest {
         val fenceAttributed = seedsOf(sweep, OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE)
         val diverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE) + fenceAttributed
         val valueHarm = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE) +
+            seedsOf(sweep, OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE) +
             seedsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE)
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
         println(
@@ -1047,6 +1115,7 @@ class OrMapGcSafetySweepTest {
         val diverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE)
         val fenceAttributed = seedsOf(sweep, OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE)
         val valueDiverging = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE)
+        val strandedValue = seedsOf(sweep, OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE)
         val valueDrift = seedsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE)
         val disagreeing = seedsOf(sweep, OrMapGcSafetySweep.DISAGREEMENT_FAILURE)
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
@@ -1060,6 +1129,9 @@ class OrMapGcSafetySweepTest {
                 "of which fence-attributed=$fenceAttributed\n" +
                 "[ORMAP-SHARED] value-diverging seeds=$valueDiverging\n" +
                 detailsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE, "ORMAP-SHARED VALUE") +
+                "[ORMAP-SHARED] stranded-frame value-diverging seeds=$strandedValue " +
+                "(ceiling $MAX_STRANDED_VALUE_DIVERGING)\n" +
+                detailsOf(sweep, OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE, "ORMAP-SHARED STRANDED") +
                 "[ORMAP-SHARED] value-fold-drift seeds=$valueDrift\n" +
                 detailsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE, "ORMAP-SHARED DRIFT") +
                 "[ORMAP-SHARED] F-A fold-disagreeing seeds=$disagreeing\n" +
@@ -1115,26 +1187,43 @@ class OrMapGcSafetySweepTest {
 
         // THE PROPERTY. Now over a real add-wins pick, which is what computenet-rjue was filed for.
         //
-        // ZERO tolerance, and computenet-pa5l is why it stays zero rather than becoming a measured
-        // ceiling: the CONTENDED no-reclaimer control (`@Order(5)`) runs this same workload with
-        // the reclaimer off and measured BOTH value classes empty on 200 seeds in each of three
-        // runs, so the rig's own floor under this assertion is 0 and there is no rig behaviour for
-        // a ceiling to cover. A ceiling would be a tolerance for nothing measured.
+        // ZERO tolerance on the UNATTRIBUTED classes; a measured CEILING on the stranded-frame one.
         //
-        // If this ever reddens, run the control arm on the same seed BEFORE reading it as a
-        // reclamation defect. A permanently STRANDED reorder frame — one the adversary's buffer
-        // swallowed when traffic on its edge stopped — reproduces this exact shape (memberships
-        // agree, each replica holds only its own final-round dot, `vsOwnFold` empty) with the
-        // reclaimer OFF and `discarded == 0`; that demonstration, and the earlier 56-round seed-132
-        // occurrence it explains, are in `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`.
+        // computenet-pa5l kept this at zero on a floor of "0 of 200 on three class runs". That floor
+        // was real but too coarse: the class is concentrated on a few seeds at ~1% per run, and one
+        // seed's schedule is NOT reproducible — every repeat run of one seed draws a distinct trace
+        // digest — so a handful of class runs could not see it. computenet-yjji2 measured it by
+        // repeating single seeds: the CONTENDED CONTROL (reclaimer OFF, `discarded == 0`) reddened
+        // on seed 145 in 8 of 900 runs with the byte-identical signature ubuntu CI failed on
+        // (`shared-45`, peer0 lacking peer2's dot `#55`), and on seed 132 in 2 of 300. Every such run
+        // stranded a reorder frame; every lacking dot was ABSENT, never FENCED. So the shape is the
+        // adversary's, and the check now classifies it as [STRANDED_VALUE_DIVERGENCE_FAILURE] only
+        // when the attribution in `OrMapGcSafetySweep.check` holds on every clause.
+        //
+        // What stays at ZERO: a value divergence the attribution does not cover (identical dot sets
+        // resolving differently — a mis-resolution; a FENCED or TOMBSTONED lacking dot; a pair that
+        // is not the reorder edge's; a run that stranded nothing), and all value-fold drift. Those
+        // are what a reclamation or resolution defect produces, and the control has never shown one.
         assertTrue(
             valueDiverging.isEmpty() && valueDrift.isEmpty(),
             "[KE3-23] OR-map reclamation must be invisible to `value(key)` even where the key's " +
                 "value is an add-wins pick over CONCURRENT dots: crossReplica=$valueDiverging " +
-                "vsOwnFold=$valueDrift. Before reading this as a reclamation defect, run the " +
-                "contended no-reclaimer control on the same seed: its measured floor on both " +
-                "classes is 0 of 200, and a stranded reorder frame reproduces this shape with " +
-                "the reclaimer off — see the stranded-frame counts printed above",
+                "vsOwnFold=$valueDrift. These did NOT match the stranded-frame attribution (see the " +
+                "`lacking=` states in the detail printed above: FENCED is the reclaimer's fence, " +
+                "an empty `lacking` is a mis-resolution). To test a seed against the reclaimer-off " +
+                "control, run `repeat one seed on the contended arms` with ORMAP_SHARED_REPEAT_SEEDS",
+        )
+        // The ceiling on the attributed class. MEASURED (computenet-yjji2, `## KE3-42-ORMAP-SHARED`):
+        // 0 in 1000 SHARED seed-runs over seeds 1..200 x 5, and at most 1 per class run in every run
+        // recorded on the bead. The ceiling is not a pin: it is there so that a defect which makes
+        // replicas miss dots BROADLY — and could hide behind the ~55% of seeds that strand some frame
+        // — reddens rather than being attributed wholesale to the adversary.
+        assertTrue(
+            strandedValue.size <= MAX_STRANDED_VALUE_DIVERGING,
+            "[KE3-23]: ${strandedValue.size} seeds carried a value divergence attributed to a " +
+                "stranded reorder frame, above the recorded ceiling of $MAX_STRANDED_VALUE_DIVERGING. " +
+                "The adversary's measured rate is ~0-1 per 200-seed sweep, so this many is a defect " +
+                "masquerading as the adversary until shown otherwise. seeds=$strandedValue",
         )
         assertTrue(
             resurrecting.isEmpty(),
@@ -1195,6 +1284,7 @@ class OrMapGcSafetySweepTest {
         val resurrecting = seedsOf(sweep, OrMapGcSafetySweep.RESURRECTION_FAILURE)
         val diverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE)
         val valueDiverging = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE)
+        val strandedValue = seedsOf(sweep, OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE)
         val valueDrift = seedsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE)
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
 
@@ -1206,6 +1296,8 @@ class OrMapGcSafetySweepTest {
                 "(${diverging.size} of ${sweep.total}) — the CONTENDED rig's own floor, recorded not pinned\n" +
                 "[ORMAP-SHARED-CONTROL] value-diverging seeds=$valueDiverging\n" +
                 detailsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE, "ORMAP-SHARED-CONTROL VALUE") +
+                "[ORMAP-SHARED-CONTROL] stranded-frame value-diverging seeds=$strandedValue\n" +
+                detailsOf(sweep, OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE, "ORMAP-SHARED-CONTROL STRANDED") +
                 "[ORMAP-SHARED-CONTROL] value-fold-drift seeds=$valueDrift\n" +
                 detailsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE, "ORMAP-SHARED-CONTROL DRIFT") +
                 "[ORMAP-SHARED-CONTROL] reorder stranded frames on VALUE-diverging seeds=" +
@@ -1252,6 +1344,84 @@ class OrMapGcSafetySweepTest {
                 "$MIN_CONTENDABLE_SEEDS — the control is no longer controlling for the contended " +
                 "workload. $contended",
         )
+    }
+
+    /**
+     * **The instrument the SHARED arm's failure message names** (computenet-yjji2): repeat ONE seed
+     * (or a few) many times on the contended arms and count each outcome class, with the reorder
+     * buffer's stranded-frame count per run. SKIPPED unless `ORMAP_SHARED_REPEAT_SEEDS` is set, so it
+     * costs nothing in the gate.
+     *
+     * Why repetition rather than one re-run: on this rig a seed does NOT fix the schedule. Every
+     * repeat of one seed draws a distinct trace digest (measured: 300 of 300 on seed 145, 299 of 300
+     * on seed 132 — a plan with no `PARTITION_SUSPEND`, so the entropy is wider than
+     * `doc/dst-rig.md` section 4 scopes it), so "re-run seed N" answers nothing and a rate is the
+     * only reproducible quantity. Running the SHARED arm and its reclaimer-off control
+     * (`SHARED_NONE`) on the same seed is what separates the adversary from reclamation.
+     *
+     * ```
+     * ORMAP_SHARED_REPEAT_SEEDS=145 ORMAP_SHARED_REPEAT_RUNS=900 ORMAP_SHARED_REPEAT_ARMS=SHARED_NONE \
+     *   ./gradlew :kernel:test --tests 'civictech.cell.replication.OrMapGcSafetySweepTest.repeat*' --rerun
+     * ```
+     *
+     * Seeds are a comma list with `a-b` ranges. Keep one invocation to roughly 1200 runs: 4000 in
+     * one test JVM died with `Java heap space` (2026-09-13). Output is in the JUnit XML's
+     * `<system-out>`, tagged `[ORMAP-REPEAT]`.
+     */
+    @Test
+    @Order(6)
+    fun `repeat one seed on the contended arms to separate a stranded frame from reclamation`() {
+        val seedSpec = System.getenv("ORMAP_SHARED_REPEAT_SEEDS")
+        Assumptions.assumeTrue(seedSpec != null, "set ORMAP_SHARED_REPEAT_SEEDS to run the repeat instrument")
+        val runs = (System.getenv("ORMAP_SHARED_REPEAT_RUNS") ?: "300").toInt()
+        val seeds = seedSpec!!.split(",").flatMap { s ->
+            if ("-" in s) s.split("-").let { (a, b) -> (a.trim().toLong()..b.trim().toLong()).toList() } else listOf(s.trim().toLong())
+        }
+        val arms = (System.getenv("ORMAP_SHARED_REPEAT_ARMS") ?: "SHARED,SHARED_NONE")
+            .split(",").map { OrMapGcSafetySweep.Trigger.valueOf(it.trim()) }
+        val valueClasses = setOf(
+            OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE,
+            OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE,
+            OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE,
+        )
+        val out = StringBuilder()
+        for (arm in arms) {
+            val outcomes = sortedMapOf<String, Int>()
+            val strandedAll = sortedMapOf<Int, Int>()
+            val strandedOnValue = sortedMapOf<Int, Int>()
+            val startedAt = System.nanoTime()
+            for (seed in seeds) {
+                val digests = mutableSetOf<String>()
+                val seedOutcomes = sortedMapOf<String, Int>()
+                val details = mutableListOf<String>()
+                repeat(runs) { i ->
+                    val plan = OrMapGcSafetySweep.plan(seed)
+                    val reorder = plan.faults.filterIsInstance<ReorderFault>().single()
+                    val report = MeshConvergences.observing {
+                        DstRun(OrMapGcSafetySweep.graph(arm), plan, BUDGET, checks.getValue(arm)).execute()
+                    }
+                    val outcome = report.failingCheck?.message ?: report.outcome.name
+                    seedOutcomes.merge(outcome, 1, Int::plus)
+                    outcomes.merge(outcome, 1, Int::plus)
+                    digests += report.traceDigest.hex
+                    strandedAll.merge(reorder.strandedFrames, 1, Int::plus)
+                    if (outcome in valueClasses) {
+                        strandedOnValue.merge(reorder.strandedFrames, 1, Int::plus)
+                        details += "run=$i class=\"$outcome\" " + (report.failingCheck?.error as? ChurnCheckFailure)?.detail
+                    }
+                }
+                if (seeds.size <= 5 || details.isNotEmpty()) {
+                    out.append("[ORMAP-REPEAT] arm=$arm seed=$seed runs=$runs distinctDigests=${digests.size} outcomes=$seedOutcomes\n")
+                }
+                details.forEach { out.append("[ORMAP-REPEAT VALUE] arm=$arm seed=$seed $it\n") }
+            }
+            out.append(
+                "[ORMAP-REPEAT] arm=$arm seeds=$seedSpec runsPerSeed=$runs total=${outcomes.values.sum()} " +
+                    "elapsedMs=${(System.nanoTime() - startedAt) / 1_000_000} outcomes=$outcomes " +
+                    "strandedFrames(all runs)=$strandedAll strandedFrames(value-class runs)=$strandedOnValue\n",
+            )
+        }
+        println(out)
     }
 
     // ------------------------------------------------------------------------------- shared bits
@@ -1386,6 +1556,17 @@ class OrMapGcSafetySweepTest {
         private const val MAX_SHARED_DIVERGING: Int = 12
 
         /**
+         * The SHARED arm's ceiling on value divergences ATTRIBUTED to a stranded reorder frame
+         * (computenet-yjji2). MEASURED, not chosen for comfort: 0 in 1000 SHARED seed-runs over
+         * seeds 1..200 x 5 repeats; per-run rates on the two worst seeds of ~0.7-1% with the
+         * reclaimer on AND off (seed 145: SHARED 3/300, control 8/900; seed 132: SHARED 2/300,
+         * control 2/300); and never more than 1 per class run in any run recorded on the bead. 3
+         * leaves room for an unlucky sweep while still reddening on a defect that makes replicas
+         * miss dots broadly. Its limits are in `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`.
+         */
+        private const val MAX_STRANDED_VALUE_DIVERGING: Int = 3
+
+        /**
          * The floor on how many of [SEEDS] must give the contended-put hook two putters in one
          * round. MEASURED at 197 of 200 (2026-09-08, `## KE3-42-ORMAP-SHARED`): seeds 22, 37 and
          * 191 leave a single member for the whole contention window, so their plan cannot produce a
@@ -1399,6 +1580,7 @@ class OrMapGcSafetySweepTest {
             OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE,
             OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE,
             OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE,
+            OrMapGcSafetySweep.STRANDED_VALUE_DIVERGENCE_FAILURE,
             OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE,
             OrMapGcSafetySweep.DISAGREEMENT_FAILURE,
         )
