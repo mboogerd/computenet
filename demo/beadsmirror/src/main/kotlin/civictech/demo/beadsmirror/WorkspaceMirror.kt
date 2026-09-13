@@ -171,7 +171,8 @@ class WorkspaceMirror private constructor(
      * **What survives from the original decision.** [applier] still has
      * exactly one caller at a time — this scheduler's own thread never runs
      * two ticks concurrently with itself, and nothing else calls `applyOnce`
-     * — so clause 5's "one writer of `bd import`" property holds; only the
+     * — so the one-caller rule for `applyOnce` (one writer of `bd import` per
+     * mirror) holds; only the
      * THREAD it runs on changed, from the shared poll thread to a dedicated
      * one. [MirrorState.current] is read the same way an HTTP handler thread
      * already does (`@Volatile`, see that class's KDoc), so a concurrent read
@@ -243,7 +244,8 @@ class WorkspaceMirror private constructor(
             /**
              * Opt-in (task computenet-6wc.1.5): when true, this workspace runs
              * a [WriteBackApplier] over its own `bd export`/`bd import`, one
-             * `applyOnce` pass per poll batch. `false` — the default — is
+             * `applyOnce` pass per poll interval on its own scheduler thread
+             * ([WriteBackScheduler]), not per poll batch. `false` — the default — is
              * exactly the mirror that existed before this parameter did: no
              * applier is constructed, no `bd import` is ever invoked, and
              * [writeBackApplier] reads `null`.

@@ -191,7 +191,8 @@ class WriteBackApplier(
          * `bd export` reads, real single-row `bd import --allow-stale` writes.
          *
          * The app/CLI wiring that calls this — the `--write-back` opt-in and
-         * the poll-thread scheduling — is the sibling app-wiring task's
+         * its dedicated scheduler thread (`WorkspaceMirror.WriteBackScheduler`,
+         * not the poll thread) — is the sibling app-wiring task's
          * (computenet-6wc.1.5); this factory only spares it from re-deriving
          * which three seams go together.
          */

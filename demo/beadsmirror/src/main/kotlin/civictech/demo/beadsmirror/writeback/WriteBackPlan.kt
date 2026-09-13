@@ -249,10 +249,18 @@ object WriteBackPlanner {
      * The losses a proposed [row] would cause against [exportRow], one per
      * allowlisted field where the two disagree. Exposed separately from
      * [plan] (rather than folded into its loop) so the applier
-     * (computenet-6wc.1.3) can re-run this exact comparison against a
-     * freshly re-read export immediately before importing — the
-     * pre-flight instrument the feature's clause 2 requires the loss record
-     * to precede.
+     * (computenet-6wc.1.3) can re-run this exact comparison against its
+     * post-import re-read. Note what the applier does NOT do: it does not
+     * re-read the export immediately before each import. The pre-flight loss
+     * record for every row in a pass is computed against the ONE export taken
+     * at the start of that pass, so a local `bd` edit landing between that
+     * export and a row's import is overwritten without appearing in the loss
+     * record.
+     *
+     * Because [ImposedFields.NON_COMPARABLE] is excluded here, and this is
+     * also what fills [Imposition.losses], a loss record never names the
+     * local `updated_at` an imposition overwrites, even though the imposed
+     * row carries the winner's `updated_at` and `bd import` writes it.
      *
      * Compares [ImposedFields.COMPARABLE] only — [ImposedFields.NON_COMPARABLE]
      * fields (`created_at`, `updated_at`) are excluded from every comparison
