@@ -1021,7 +1021,8 @@ object WsTransport {
             // and the identity is what this side's binding resolves it to — the
             // one resolution on this path (feature `computenet-376c`).
             val key = parts.getOrNull(1)?.let { KeyId(it) }
-            val resolution = key?.let { side.identityBinding.resolve(it) }
+            // Presents nothing; feature computenet-5y8t.3's hello carries the statements.
+            val resolution = key?.let { side.identityBinding.resolve(it, emptyList()) }
             val peer = (resolution as? IdentityResolution.Bound)?.peer
             // AUTH_REQUIRED keeps precedence: under RequireAuthenticated the
             // substance of this refusal is the downgrade, whatever the asserted
@@ -1110,7 +1111,8 @@ object WsTransport {
             // A key the binding holds no identity for is refused here, before
             // the compare: there is no derived identity for the claim to match,
             // and nothing may stand in for one (task `computenet-hbqvz`).
-            val derived = when (val resolution = side.identityBinding.resolve(derivedKey)) {
+            // Presents nothing; feature computenet-5y8t.3's hello carries the statements.
+            val derived = when (val resolution = side.identityBinding.resolve(derivedKey, emptyList())) {
                 is IdentityResolution.Bound -> resolution.peer
                 is IdentityResolution.Unbound -> {
                     refuseUnbound(hello.claimedPeerId, derivedKey, resolution)

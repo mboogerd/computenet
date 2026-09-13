@@ -67,7 +67,7 @@ import kotlin.time.Duration.Companion.seconds
  * dialled `peerNodeId` on a dialled one). Nothing a peer writes can move it.
  *
  * The identity stamped on every delivery is
- * `Peering.Side.identityBinding.resolve(key)`'s `IdentityResolution.Bound` peer
+ * `Peering.Side.identityBinding.resolve(key, presented)`'s `IdentityResolution.Bound` peer
  * and nothing else (feature `computenet-376c`): this module derives a *key
  * identifier* from key material and never an identity, so when DSC4's
  * anchor-vouched names replace the interim binding, no site here changes. A
@@ -623,7 +623,8 @@ object IrohTransport {
             // writes; a dedicated `DenialReason` is a kernel taxonomy change
             // this task does not make. No principal: the hello asserts no name
             // this side could attribute the refusal to.
-            val peer = when (val resolution = side.identityBinding.resolve(key)) {
+            // Presents nothing; feature computenet-5y8t.3's hello carries the statements.
+            val peer = when (val resolution = side.identityBinding.resolve(key, emptyList())) {
                 is IdentityResolution.Bound -> resolution.peer
                 is IdentityResolution.Unbound -> {
                     refuseHello(

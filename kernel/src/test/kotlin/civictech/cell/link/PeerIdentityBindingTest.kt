@@ -34,8 +34,8 @@ class PeerIdentityBindingTest {
     @Test
     fun `the interim binding resolves every key identifier to the identity of its own name`() {
         assertEquals(
-            IdentityResolution.Bound(PeerId("k")),
-            PeerIdentityBinding.Interim.resolve(KeyId("k")),
+            IdentityResolution.Bound(PeerId("k"), null, null),
+            PeerIdentityBinding.Interim.resolve(KeyId("k"), emptyList()),
         )
     }
 
@@ -57,7 +57,7 @@ class PeerIdentityBindingTest {
 
     @Test
     fun `substituting the binding flips the verdict with no change to the request`() {
-        val prefixing = PeerIdentityBinding { IdentityResolution.Bound(PeerId("name-of-" + it.name)) }
+        val prefixing = PeerIdentityBinding { key, _ -> IdentityResolution.Bound(PeerId("name-of-" + key.name), null, null) }
         val request = request(PeerId("good"))
 
         // Same key on the allowlist, same request: only the binding differs.
@@ -74,11 +74,11 @@ class PeerIdentityBindingTest {
         // A binding with no identity for `unbound`, and the interim answer for
         // every other key. Nothing may stand in for the missing identity — in
         // particular not the identity of the key's own name, `PeerId("unbound")`.
-        val partial = PeerIdentityBinding { key ->
+        val partial = PeerIdentityBinding { key, presented ->
             if (key == KeyId("unbound")) {
                 IdentityResolution.Unbound(UnboundReason.NO_BINDING)
             } else {
-                PeerIdentityBinding.Interim.resolve(key)
+                PeerIdentityBinding.Interim.resolve(key, presented)
             }
         }
 
@@ -103,11 +103,11 @@ class PeerIdentityBindingTest {
     @Test
     fun `a loopback sender whose key resolves to no identity is not promoted`() {
         val senderKey = KeyId("sender-key")
-        val unboundForSender = PeerIdentityBinding { key ->
+        val unboundForSender = PeerIdentityBinding { key, presented ->
             if (key == senderKey) {
                 IdentityResolution.Unbound(UnboundReason.NO_BINDING)
             } else {
-                PeerIdentityBinding.Interim.resolve(key)
+                PeerIdentityBinding.Interim.resolve(key, presented)
             }
         }
 
