@@ -245,11 +245,13 @@ If the feature's own rules and examples don't meet
 [issue-quality.md](issue-quality.md), fix them first
 (`bd update <feature-id> --acceptance=… --design=…`).
 **`--design` REPLACES the field; there is no append form.** To add a
-decision, write the current field to a file first
-(`bd show <feature-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].design' > "$SCRATCH/design.md"`),
-append to that file, and pass it back with `--design-file` — never recompose
-the field from what you remember, which silently drops a decision the tasks are
-scored against (computenet-l586).
+decision, write the current field to a file first:
+`bd show <feature-id> --json | sed -n '/^[[{]/,$p' | jq -er '.[0].design // ""' > "$SCRATCH/design.md" || echo 'READ FAILED - do not write'`.
+Append to that file, then pass it back with `--design-file`. **Stop if the
+read failed**: raw control characters (computenet-9n60) leave the file EMPTY,
+and a bare `.design` writes `null` for an empty field. Either way the write
+would erase the field. Never recompose the field from memory; that silently
+drops a decision the tasks are scored against (computenet-l586).
 
 **If that `bd update` is DENIED, it does not become optional.** The permission
 classifier refused `bd update <feature-id> --set-metadata files=…` to a
