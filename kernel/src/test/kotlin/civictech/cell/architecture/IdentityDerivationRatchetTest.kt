@@ -599,7 +599,7 @@ class IdentityDerivationRatchetTest {
             private interface ProbeMarker
 
             private class Escape: PeerIdentityBinding, ProbeMarker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -614,16 +614,16 @@ class IdentityDerivationRatchetTest {
             package fixture.c
 
             private class CtorEscape(private val n: Int) : PeerIdentityBinding, ProbeMarker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
 
             @Suppress("unused") class AnnotatedEscape : PeerIdentityBinding, ProbeMarker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
 
             private class Holder {
                 companion object : PeerIdentityBinding, ProbeMarker {
-                    override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                    override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
                 }
             }
             """.trimIndent(),
@@ -698,7 +698,7 @@ class IdentityDerivationRatchetTest {
             class Escape :
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -800,7 +800,7 @@ class IdentityDerivationRatchetTest {
                     1,
                 ),
                 PeerIdentityBinding {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -847,7 +847,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
                 override fun compareTo(other: String): Int = 0
             }
             """.trimIndent(),
@@ -891,7 +891,7 @@ class IdentityDerivationRatchetTest {
                     delegate,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -982,7 +982,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1029,7 +1029,7 @@ class IdentityDerivationRatchetTest {
                     Unit,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1171,7 +1171,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1223,7 +1223,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1330,7 +1330,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1383,7 +1383,7 @@ class IdentityDerivationRatchetTest {
                 PeerIdentityBinding,
                 Marker {
                 fun x() = 1
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1478,7 +1478,7 @@ class IdentityDerivationRatchetTest {
                 Base("(")
 
             class Impl : PeerIdentityBinding {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
