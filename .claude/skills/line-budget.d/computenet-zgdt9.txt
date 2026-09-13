@@ -1,0 +1,3 @@
+# computenet-zgdt9: step 3 says reclaim-worktrees.sh's holder SKIP is a live
+# sibling, not a failure to override (the guard itself is mechanical).
+work +4
