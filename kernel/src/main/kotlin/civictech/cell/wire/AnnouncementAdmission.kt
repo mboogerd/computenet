@@ -1,6 +1,7 @@
 package civictech.cell.wire
 
 import civictech.cell.DenialReason
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -172,37 +173,55 @@ data class AnnouncementRejection(val reason: DenialReason, val detail: String)
  *
  * [DenialReason.MALFORMED_ANNOUNCEMENT] is decided **first**, above both of the
  * orderings argued below (`computenet-l8y5`). An announcement whose `portName`
- * or minting-peer name is not well-formed UTF-16 has no canonical encoding at
- * all, so every check under it would be answering a question about bytes that
- * do not exist: the binding check reports `ID_MISMATCH` (a name that cannot be
- * an identity is certainly not the bound one) and the verifier reports
- * `BAD_SIGNATURE` (nothing could ever verify). Both refuse, and both name a
- * cause that is not the cause — which is the whole content of that item.
+ * is not well-formed UTF-16 has no canonical encoding at all, and one whose
+ * `signerKeyId` is not cannot name any key, so every check under it would be
+ * answering a question about something that does not exist: the key check
+ * reports `ID_MISMATCH` (a string that cannot be a key id is certainly not the
+ * bound key) and the verifier reports `BAD_SIGNATURE` (nothing could ever
+ * verify). Both refuse, and both name a cause that is not the cause — which is
+ * the whole content of that item.
  *
- * [DenialReason.ID_MISMATCH] is decided **before** the signature is verified,
- * so that which reason a frame gets does not depend on where the verifier
- * happens to look up keys. [AnnouncementVerifier.verify] is handed the frame's
- * *minting* peer, never [boundPeer] — the binding is this class's job, not the
- * verifier's — and that is what makes the ordering matter differently for the
- * two verifier shapes DSC1 admits:
+ * ## Whose announcement it is (feature `computenet-5y8t.7`)
+ *
+ * The **minting identity is the connection's bound identity** — [check]'s
+ * `boundPeer`, never read out of the frame (decision 5y8t.7-D1). The frame
+ * names only the key that signed it (`signerKeyId`, the key's fingerprint), and
+ * the binding check holds that key to the key the connection was **proven on**
+ * (`boundKey`). The signed bytes are reconstructed over `boundPeer`, the
+ * verifier is asked about `boundPeer` (5y8t.7-D2), and the replay ledger is
+ * keyed by `boundPeer` (5y8t.7-D3) — so a named peer that rotates its key keeps
+ * one high-water mark under its name. Under `PeerIdentityBinding.Interim` the
+ * bound key and the bound identity carry the same string, so every key-derived
+ * peer is judged exactly as it was when this gate keyed off the key name.
+ *
+ * [DenialReason.ID_MISMATCH] — "the signing key is not the key this connection
+ * was proven on" — is decided **before** the signature is verified, so that
+ * which reason a frame gets does not depend on where the verifier happens to
+ * look up keys. [AnnouncementVerifier.verify] is handed the bound identity and
+ * is not told which key the frame claims — holding the signer key to the
+ * connection is this class's job, not the verifier's — and that is what makes
+ * the ordering matter differently for the two verifier shapes DSC1 admits:
  *
  * - A verifier that resolves only **the connection's** key (task 4's
  *   hello-bound shape) answers `false` for a validly signed announcement
- *   minted by B and injected on a connection bound to A. Verified first, that
- *   frame reports [DenialReason.BAD_SIGNATURE] — collapsing impersonation into
- *   "bad crypto" and losing precisely the fact that this gate binds an
- *   announcement to *its connection*.
+ *   signed by B's key and injected on a connection proven on A's. Verified
+ *   first, that frame reports [DenialReason.BAD_SIGNATURE] — collapsing
+ *   impersonation into "bad crypto" and losing precisely the fact that this
+ *   gate binds an announcement to *its connection*.
  * - A verifier over a **directory** of known peers (what `SignedAnnouncementTest`
- *   injects, and what a multi-peer receiver naturally holds) answers `true` for
- *   that same frame, and the binding check reports [DenialReason.ID_MISMATCH]
- *   on either side of the verify call.
+ *   injects, and what a multi-peer receiver naturally holds) is asked about the
+ *   bound identity A, so B's signature verifies `false` under A's key there
+ *   too; the key check reports [DenialReason.ID_MISMATCH] only because it runs
+ *   first.
  *
- * **Caveat, measured at review and stated here rather than only in the review:**
- * because this file's suite injects the directory-shaped verifier, no test here
- * pins the order. Moving both ID_MISMATCH blocks below the verify call compiles
- * and leaves all ten cases green. The order is kept for the first bullet's sake
- * — it is a deliberate choice, not a test-constrained invariant, and a change to
- * it will not redden this suite.
+ * **Caveat, stated here rather than only in the review:** the ordering pin
+ * that was measured is `WsAnnouncementIdentityTest`'s connection-bound case
+ * (`computenet-ssa.4.4`). `SignedAnnouncementTest`'s BS-08 was measured, before
+ * this feature, to stay green with the blocks moved below the verify call,
+ * because its directory verifier was then asked about the frame's claimed
+ * minting peer; now that the verifier is asked about the bound identity, that
+ * measurement is stale and has not been re-run. The order is a deliberate
+ * choice for the first bullet's sake.
  */
 class AnnouncementAdmission private constructor(
     private val config: AnnouncementVerification,
@@ -267,14 +286,24 @@ class AnnouncementAdmission private constructor(
      * caller before the ingress existed ([BridgeIngressCell.peer]): a hello's
      * admission row on a socket, the opposite `Side`'s configuration on a
      * loopback. It is never read out of the frame — that is the whole binding.
+     * It is the announcement's minting identity: the signed bytes are rebuilt
+     * over it and its replay high-water mark is kept under it.
+     *
+     * [boundKey] is the key the connection was **proven** on
+     * ([BridgeIngressCell]'s `peerKey`), fixed by the same caller at the same
+     * moment. A signed frame's `signerKeyId` must name exactly it, or the frame
+     * is [DenialReason.ID_MISMATCH]; a connection bound to a peer but to no key
+     * refuses every signed announcement the same way (feature
+     * `computenet-5y8t.7`, decision D4). Required, with no default, so no
+     * caller can forget to say which key a connection proved.
      */
-    fun check(boundPeer: PeerId?, frame: WireFrame): AnnouncementRejection? {
-        val rejection = classify(boundPeer, frame)
+    fun check(boundPeer: PeerId?, boundKey: KeyId?, frame: WireFrame): AnnouncementRejection? {
+        val rejection = classify(boundPeer, boundKey, frame)
         if (rejection != null) rejected.incrementAndGet()
         return rejection
     }
 
-    private fun classify(boundPeer: PeerId?, frame: WireFrame): AnnouncementRejection? {
+    private fun classify(boundPeer: PeerId?, boundKey: KeyId?, frame: WireFrame): AnnouncementRejection? {
         // [DSC1-ANN-05] UNSIGNED: the four fields travel together or not at all,
         // so a partially populated frame is as unsigned as an empty one.
         val encodedSignature = frame.signature
@@ -292,42 +321,55 @@ class AnnouncementAdmission private constructor(
 
         // computenet-l8y5: MALFORMED_ANNOUNCEMENT, above every reason this gate
         // decides EXCEPT [DenialReason.UNSIGNED] above, which is structurally
-        // prior and cannot be reordered under this: the minting-peer half reads
+        // prior and cannot be reordered under this: the signer-key half reads
         // `signerKeyId`, and on an unsigned frame that field is null — there is
-        // no minting-peer name to be ill-formed yet.
-        // An announcement whose portName or minting-peer name is
-        // ill-formed UTF-16 is *unencodable*, so there are no canonical bytes
-        // for any of the checks below to be about: no signature over it could
-        // verify (a total verifier answers false, which used to read as
-        // BAD_SIGNATURE), and its name cannot be an identity, so the binding
-        // check would report ID_MISMATCH. Both are true and neither is the
-        // fact. Deciding it first is what makes the reason mean something.
+        // no signer key id to be ill-formed yet.
+        // An announcement whose portName is ill-formed UTF-16 is *unencodable*,
+        // so there are no canonical bytes for any of the checks below to be
+        // about: no signature over it could verify (a total verifier answers
+        // false, which used to read as BAD_SIGNATURE). An ill-formed signer key
+        // id cannot name any key, so the key check would report ID_MISMATCH.
+        // Both are true and neither is the fact. Deciding it first is what makes
+        // the reason mean something.
         malformed("portName", frame.portName)?.let { return it }
-        malformed("mintingPeerId.name", signerKeyId)?.let { return it }
+        malformed("signerKeyId", signerKeyId)?.let { return it }
 
         // [DSC1-ANN-08] ID_MISMATCH, before any crypto — see the class KDoc.
-        // `signerKeyId` IS the minting identity's name: on every :identity-backed
-        // signer it defaults to `credentials.keyId.name`, which is the key's own
-        // fingerprint ([DSC1-WIRE-01], AnnouncementSigningConfig.signerKeyId).
-        // Keying `mintingPeer` off that key name rather than a key-independent
-        // identity is a decided DSC4 residual (computenet-t446/computenet-376c),
-        // not an oversight: DSC4's remaining work re-keys this line.
-        val mintingPeer = PeerId(signerKeyId)
+        // The minting identity IS the connection's bound identity and is never
+        // read out of the frame (feature computenet-5y8t.7, decision D1): the
+        // frame names only the SIGNING KEY (`signerKeyId`, the key's
+        // fingerprint), and that key is held to the key the connection was
+        // proven on. This closes the DSC4 residual that used to key the minting
+        // identity off the key name (computenet-t446/computenet-376c); under
+        // `PeerIdentityBinding.Interim` the bound key and the bound identity
+        // carry the same string, so a key-derived peer is judged as before.
         if (boundPeer == null) {
             return AnnouncementRejection(
                 DenialReason.ID_MISMATCH,
-                "announcement minted by '${mintingPeer.name}' arrived on a connection bound to no " +
+                "announcement signed by key '$signerKeyId' arrived on a connection bound to no " +
                     "peer identity, so nothing can be held to it",
             )
         }
-        if (mintingPeer != boundPeer) {
+        if (boundKey == null) {
+            // 5y8t.7-D4: the sibling of the branch above.
             return AnnouncementRejection(
                 DenialReason.ID_MISMATCH,
-                "announcement minted by '${mintingPeer.name}' arrived on the connection bound to " +
-                    "'${boundPeer.name}' — the signature may verify perfectly; what fails is the " +
-                    "binding between the minting identity and this connection",
+                "announcement signed by key '$signerKeyId' arrived on a connection bound to " +
+                    "'${boundPeer.name}' but proven on no key, so nothing can hold the signer key to it",
             )
         }
+        if (KeyId(signerKeyId) != boundKey) {
+            return AnnouncementRejection(
+                DenialReason.ID_MISMATCH,
+                "announcement signed by key '$signerKeyId' arrived on the connection bound to " +
+                    "'${boundPeer.name}' and proven on key '${boundKey.name}' — the signature may verify " +
+                    "perfectly; what fails is the binding between the signing key and this connection",
+            )
+        }
+        // The canonical bytes are built over the bound name, so a bound name the
+        // encoder refuses is MALFORMED_ANNOUNCEMENT, not BAD_SIGNATURE.
+        malformed("mintingPeerId.name", boundPeer.name)?.let { return it }
+        val mintingPeer = boundPeer
 
         // [DSC1-ANN-06] BAD_SIGNATURE. The transport representation is base64url
         // (WireFrame.signature); anything that is not is refused here rather than
