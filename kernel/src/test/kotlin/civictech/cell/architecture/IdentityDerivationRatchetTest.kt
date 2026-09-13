@@ -105,7 +105,39 @@ class IdentityDerivationRatchetTest {
     // bound in [scanPeerIdentityBindingImplementations], which is what keeps a
     // body-less header from sweeping later code in — then the fold is checked
     // as a whole for the interface name. Measured 2026-09-02 (computenet-6jkz).
-    private val bindingHeaderWrapStart = Regex("""^\s*(?:\w+\s+)*(?:class|object)\s+\S.*:\s*$""")
+    // The modifier-prefix group admits an annotation ("@Suppress(\"x\")",
+    // "@JvmStatic") as well as a bare word-modifier, so an annotation
+    // immediately before the `class`/`object` keyword on the wrap-start line
+    // itself does not stop wrap-start detection from firing. Before this, the
+    // group was `(?:\w+\s+)*` alone: `@` is not a `\w` character, so the
+    // whole line failed to match — and with it, none of the fold logic below
+    // ever ran — whenever the header opened with a same-line annotation.
+    // Measured 2026-09-13 (computenet-qqkg6) at this bead's own base commit
+    // 65b415b81, unchanged from 3df3f1fad/212c34320 where the bead
+    // originally measured it: "@Suppress(\"x\") class W :\n    Base(),\n
+    // PeerIdentityBinding,\n    Marker {\n}" NOT flagged (should be flagged).
+    // #866 (computenet-ru92m) touched only [headerBracketDepths]'s
+    // bodyBraceFrom bound, never this regex, so the escape survived that
+    // change untouched. The annotation-argument's own parens/quotes
+    // (`("x")`) are matched by the permissive `\([^)]*\)` group here only to
+    // decide whether the fold OPENS; [headerBracketDepths]'s string-literal
+    // tracking (over the whole folded header, starting at this same line)
+    // is what actually keeps a quote inside the annotation argument from
+    // corrupting later paren/generic-depth accounting, and it already
+    // balances within the annotation itself before the `class` keyword is
+    // reached, so no state carries over.
+    // Known residual, out of scope: the annotation alternative admits only a
+    // simple name with at most one non-nested argument list followed by
+    // whitespace. A qualified name ("@kotlin.Suppress(\"x\")"), a use-site
+    // target ("@param:Foo"), a nested paren or a `)` inside the argument
+    // ("@Suppress(names = arrayOf(\"a\"))"), or no space before the keyword
+    // ("@Suppress(\"x\")class W :") still fails the match, so the fold never
+    // opens and a wrapped PeerIdentityBinding entry goes unflagged — the same
+    // false negative this fix closes for the simple shape. Measured against
+    // the regex 2026-09-14 (computenet-qqkg6 review); unattested in production.
+    private val bindingHeaderWrapStart = Regex(
+        """^\s*(?:@\w+(?:\([^)]*\))?\s+|\w+\s+)*(?:class|object)\s+\S.*:\s*$""",
+    )
 
     // The LAST `class`/`object` keyword occurring on a wrap-start line — used
     // to bound [sawBodyBrace] at the call site in
@@ -1833,6 +1865,58 @@ class IdentityDerivationRatchetTest {
         assertEquals(setOf("fixture-n3/src/main/kotlin/fixture/n3/Wrapped.kt"), actual) {
             "an unclosed generic inside a nested member's wrapped initializer must not hide a later real " +
                 "implementation to end of file; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE reproduction (computenet-qqkg6): an annotation immediately before
+     * the `class`/`object` keyword on the wrap-start line itself
+     * ("@Suppress(\"x\") class W :") must open the fold. Before the fix,
+     * [bindingHeaderWrapStart]'s modifier-prefix group was `(?:\w+\s+)*`,
+     * which only admits bare word-modifiers (`private`, `open`, ...); `@` is
+     * not a `\w` character, so the regex failed to match and the
+     * wrap-start-detection branch never fired for an annotation-prefixed
+     * header — the supertype list wrapped onto the next line was never
+     * folded, and a `PeerIdentityBinding` entry inside it went unflagged. Measured 2026-09-13 (bead filing) at 3df3f1fad/212c34320:
+     * NOT flagged (should be flagged). Re-verified at this bead's own base
+     * commit 65b415b81 before this fix: still NOT flagged, since #866
+     * (computenet-ru92m) changed only [headerBracketDepths]'s body-brace
+     * bound, not this regex.
+     */
+    @Test
+    fun `fixture self-check - an annotation prefix on the wrap-start line opens the fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-w")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-w/src/main/kotlin/fixture/w").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.w
+
+            private open class Base
+            private interface Marker
+
+            @Suppress("x") class W :
+                Base(),
+                PeerIdentityBinding,
+                Marker {
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-w/src/main/kotlin/fixture/w/Wrapped.kt"), actual) {
+            "an annotation immediately before the class keyword on the wrap-start line must not stop the " +
+                "wrap-start detection from opening the fold; found: $actual"
         }
     }
 }
