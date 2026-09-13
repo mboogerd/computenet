@@ -183,6 +183,12 @@ bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the fil
 # both yield null, which reads as an empty thread rather than as a bad jq
 ```
 
+**The bead may have been amended after you were dispatched.** If its title,
+description or acceptance differs from what your dispatch prompt quoted, or
+changes between your reads, do not reconcile it silently: say so in your
+report's first lines, quoting both versions, and state which one you scored
+against (computenet-7gxi).
+
 **Read the comments — that third command is not optional.** `bd show --json`
 carries only `comment_count`, never the bodies, so a review that skips this
 has not seen the thread. On a long-lived item the thread is where the
