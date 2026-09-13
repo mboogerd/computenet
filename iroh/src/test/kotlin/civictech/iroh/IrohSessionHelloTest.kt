@@ -65,7 +65,7 @@ class IrohSessionHelloTest {
 
     private fun side(
         name: String? = null,
-        allow: Set<KeyId>? = null,
+        allow: Set<PeerId>? = null,
         binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
     ): Peering.Side {
         val registry = LocationRegistry()
@@ -151,7 +151,7 @@ class IrohSessionHelloTest {
     fun `admission is decided on the link's NodeId, and an allowlisted name cannot be asserted onto it`() {
         val goodNodeId = nodeId()
         val goodKey = keyOf(goodNodeId)
-        val allow = setOf(goodKey)
+        val allow = setOf(PeerId(goodKey.name))
 
         // ---- the holder of the allowlisted key is admitted -----------------
         val admitted = IrohTransport.Session(
@@ -269,7 +269,7 @@ class IrohSessionHelloTest {
         // Refused path: the same alias is what the denial is attributed to.
         var refusals = 0
         val closed = IrohTransport.Session(
-            side(name = "local", allow = setOf(KeyId("nobody")), binding = aliasing),
+            side(name = "local", allow = setOf(PeerId("nobody")), binding = aliasing),
             remote,
             send = { },
             refuse = { refusals++ },
@@ -442,7 +442,7 @@ class IrohSessionHelloTest {
         // is never reached, so the denial names the shape and no principal.
         val notAPoint = ByteArray(32) { 0xFF.toByte() }
         val session = IrohTransport.Session(
-            side(name = "server", allow = setOf(KeyId("good"))),
+            side(name = "server", allow = setOf(PeerId("good"))),
             notAPoint,
             send = { },
             refuse = { refusals++ },

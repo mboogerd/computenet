@@ -19,7 +19,6 @@ import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.protocol.Protocols
 import civictech.cell.port.Use
-import civictech.cell.link.KeyId
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
@@ -486,7 +485,7 @@ class GlitchFreeBridgedDiamondTest {
         val gf = GlitchFreeCell(propagateString)
         net.hostFar.managementInlet.call.spawn(gf)
         net.controller.runToIdle()
-        gf.inlet.linking.policies += allowPeers(KeyId("good"))
+        gf.inlet.linking.policies += allowPeers(PeerId("good"))
 
         // a bridged link request from an unlisted peer is refused at the handshake
         val refused = CurrentPeer.with(PeerId("evil")) {

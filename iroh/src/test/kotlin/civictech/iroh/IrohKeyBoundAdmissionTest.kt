@@ -147,7 +147,7 @@ class IrohKeyBoundAdmissionTest {
 
     // ---------------------------------------------------------------- fixture
 
-    private class Stack(name: String? = null, allow: Set<KeyId>? = null) {
+    private class Stack(name: String? = null, allow: Set<PeerId>? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -194,7 +194,7 @@ class IrohKeyBoundAdmissionTest {
         val nodeIdB = SidecarProcess.spawn(binary, args = bArgs).use { it.nodeId }
         val keyB = fingerprint(Ed25519.publicKeyFromRaw(nodeIdB))
 
-        val l = Stack(name = "listener", allow = setOf(keyB))
+        val l = Stack(name = "listener", allow = setOf(PeerId(keyB.name)))
         // The expected identity, spelled through the binding this side actually
         // consults — NOT as `PeerId(keyB.name)`, which would assert the interim
         // binding's shape rather than that the site resolves through it.
@@ -253,7 +253,7 @@ class IrohKeyBoundAdmissionTest {
         // about mallory's key, not a side that refuses everyone.
         val goodArgs = pinnedSecretKeyArgs()
         val goodNodeId = SidecarProcess.spawn(binary, args = goodArgs).use { it.nodeId }
-        val l = Stack(name = "listener", allow = setOf(fingerprint(Ed25519.publicKeyFromRaw(goodNodeId))))
+        val l = Stack(name = "listener", allow = setOf(PeerId(fingerprint(Ed25519.publicKeyFromRaw(goodNodeId)).name)))
 
         IrohTransport.listen(l.side, binary, stderrSink = stderrSink("listener")).use { listener ->
             val published = SetCell<String>()
@@ -355,7 +355,7 @@ class IrohKeyBoundAdmissionTest {
         val goodArgs = pinnedSecretKeyArgs()
         val goodNodeId = SidecarProcess.spawn(binary, args = goodArgs).use { it.nodeId }
         val goodKey = fingerprint(Ed25519.publicKeyFromRaw(goodNodeId))
-        val l = Stack(name = "listener", allow = setOf(goodKey))
+        val l = Stack(name = "listener", allow = setOf(PeerId(goodKey.name)))
         val admittedName = l.side.identityBinding.boundPeer(goodKey).name
 
         IrohTransport.listen(l.side, binary, stderrSink = stderrSink("listener")).use { listener ->

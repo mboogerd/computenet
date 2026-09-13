@@ -13,7 +13,6 @@ import civictech.cell.host.SupervisionPolicy
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
-import civictech.cell.link.KeyId
 import civictech.cell.link.allowPeers
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -55,7 +54,7 @@ private class PldaSubscribeAuthorityMembrane(
         "outlet",
         organelle.outlet,
         policy = BoundaryPolicy(
-            linkAuthority = listOf(allowPeers(KeyId(allowed.name))),
+            linkAuthority = listOf(allowPeers(PeerId(allowed.name))),
             protocolAuthority = mapOf(Protocols.Attention to ProtocolAuthority(ceiling = AttentionBand.LOW)),
         ),
     )
