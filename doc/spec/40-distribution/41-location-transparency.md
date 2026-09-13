@@ -152,14 +152,19 @@ local and remote links negotiate differently — a location-transparency bug
    `BoundaryPolicy`): `Peer(id, auth)` for a bridged edge, `id` the `PeerId`
    the hello already carries and `auth` an `AuthLevel` — `TransportVouched`
    by default, promoted to `Authenticated` once a verified hello lands
-   (DSC1). A `WireFrame` carrying `PORT_API` deltas MAY additively carry a
-   signature/counter envelope field, checked at ingress under
-   `IntegrityPolicy.RequireSigned` before `deltaInlet` delivery; absent a
-   declared `BoundaryPolicy` this is a no-op (today's byte-for-byte
+   (DSC1). Under `IntegrityPolicy.RequireSigned` a `PORT_API` delta carries a
+   signature/counter envelope, verified before `deltaInlet` delivery and
+   dead-lettered on failure — landed at a membrane's Mediate proxy (the
+   envelope is a `SignedDelta` argument), not at bridge ingress, which does
+   not yet consult a `BoundaryPolicy` (40/43, SEC1). A `WireFrame` carrying
+   `PORT_API` deltas MAY additively carry that envelope as a frame field,
+   but the encoding is unspecified (93 I-28 §8 "Delta signature scheme");
+   `WireFrame`'s existing `signature`/`sigCounter` fields sign
+   `RegistryAnnounce` frames only (`computenet-ssa.4`). Absent a declared
+   `BoundaryPolicy` the integrity check is a no-op (today's byte-for-byte
    behavior). Identity strength is phased behind this vocabulary, not
    baked into the wire format — see 40/43 for the full predicate set and
    the `PeerAuthPolicy.Open`/`RequireAuthenticated` phasing.
-
    **On-demand pull** *(implemented, W2.2 — closes the G-18 residual)*:
    `StateRequest(replyTo, since)` on the metadata plane (`civictech.cell.port`)
    answered by an ordinary state-as-delta single wave, issued by the
