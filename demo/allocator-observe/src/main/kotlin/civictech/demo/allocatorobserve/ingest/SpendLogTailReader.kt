@@ -77,20 +77,48 @@ sealed interface TailReason {
 }
 
 /**
- * One poll's result: the complete lines read, why they were read, and the
- * byte offset they leave the reader at.
+ * ONE HAND-OFF of a poll: a bounded run of complete lines, why they were read,
+ * and the byte offset they leave the reader at.
  *
- * @param lines the COMPLETE lines read this poll, in file order, newline
- *   stripped. A trailing byte run with no terminating `'\n'` is not included —
- *   see [SpendLogTailReader].
+ * A poll hands the consumer one *or more* of these — see
+ * [SpendLogTailReader.poll]. A batch is therefore a slice of the poll, not the
+ * poll: only the batch with [last] set closes it.
+ *
+ * @param lines COMPLETE lines, in file order, newline stripped, at most
+ *   [SpendLogTailReader.maxLinesPerBatch] of them. A trailing byte run with no
+ *   terminating `'\n'` is not included — see [SpendLogTailReader].
  * @param offset the byte offset immediately after the last complete line in
- *   [lines] (or the unchanged prior offset when [lines] is empty). This is
- *   what the next poll resumes from.
+ *   [lines] (or the offset this hand-off started at, when [lines] is empty).
+ *   On the [last] batch this is what the next poll resumes from; on an earlier
+ *   one it is how far the poll had got, and is NOT yet persisted.
+ * @param last whether this is the final hand-off of the poll. Exactly one batch
+ *   per poll carries `true`, it is always the last one delivered, and a consumer
+ *   that must see the whole poll before acting (a re-baseline reconcile, say)
+ *   acts on it. A poll that reads nothing at all still delivers one empty batch
+ *   with `last = true`.
  */
 data class TailBatch(
     val reason: TailReason,
     val lines: List<String>,
     val offset: Long,
+    val last: Boolean,
+)
+
+/**
+ * What a whole [SpendLogTailReader.poll] did, in aggregate — returned rather
+ * than handed over, because the lines themselves are deliberately not retained
+ * to be returned.
+ *
+ * @param lineCount the total complete lines delivered across every hand-off.
+ * @param offset the offset the poll leaves the reader at: the one persisted.
+ * @param handOffs how many times [SpendLogTailReader.poll] invoked its consumer.
+ *   Always at least 1.
+ */
+data class TailSummary(
+    val reason: TailReason,
+    val lineCount: Long,
+    val offset: Long,
+    val handOffs: Int,
 )
 
 /**
@@ -115,8 +143,10 @@ data class TailBatch(
  *    [ReBaselineCause.Replaced]; otherwise resume at the checkpoint offset.
  * 4. Read `[start, length)`, keep only the bytes up to and including the last
  *    `'\n'`, and split those into lines.
- * 5. Hand the batch to the consumer.
- * 6. **Then** persist the new offset and fingerprint.
+ * 5. Hand those lines to the consumer, in bounded batches of at most
+ *    [maxLinesPerBatch], as they are scanned.
+ * 6. **Then**, after the LAST hand-off has returned, persist the new offset and
+ *    fingerprint.
  *
  * **5 before 6 is the crash-ordering rule** and is why the consumer is a
  * parameter of [poll] rather than the caller's business after it returns. A
@@ -163,28 +193,39 @@ data class TailBatch(
  * against `length - start` and terminates only when the range is consumed or
  * the channel reports EOF.
  *
- * **Two bounds survive, and neither is silent.**
+ * ## Bounded by the BATCH, not by the range and not by the log
  *
- * - **One line must fit in memory.** The partial-line carry grows to the length
- *   of the longest line in the range, because a line is only emitted once its
- *   newline is seen. A line longer than [chunkSize] is therefore delivered
- *   correctly — it is assembled across as many chunks as it needs — but it is
- *   held whole while that happens. The *read buffer* stays at `chunkSize`; the
- *   carry does not. At the socaity v1 record width (~130 bytes) this is
- *   nothing; a log with no newlines at all would be the pathological case.
- * - **The delivered batch is the range's line content.** [TailBatch.lines] is a
- *   `List<String>` of every complete line read, so a whole-file read of an
- *   enormous log still materializes that log's lines on the heap even though it
- *   never buffers more than one chunk of raw bytes. Chunking bounds the *read*,
- *   not the batch; bounding the batch would mean streaming lines to the
- *   consumer instead of handing it a list, which is a change to [poll]'s
- *   contract and is deliberately not made here.
+ * [poll] no longer hands the consumer one list of the range's whole line
+ * content. It invokes the consumer repeatedly with at most [maxLinesPerBatch]
+ * lines at a time as they are scanned, dropping its reference to each batch's
+ * lines before assembling the next, so a whole-file read of an arbitrarily
+ * large log holds a bounded number of lines at once in the reader
+ * (`computenet-xs5u`). The checkpoint is still written strictly after the LAST
+ * hand-off returns, so the crash-ordering rule is unchanged and a consumer that
+ * throws on ANY hand-off — the first, the last, or one in between — leaves the
+ * checkpoint exactly as it was and the whole range is retried.
  *
- * Both bounds fail as `OutOfMemoryError`, which precedes the hand-off to the
- * consumer and therefore precedes the checkpoint write — so the batch is
- * retried on the next poll rather than skipped. That is the whole difference
- * from what this section used to describe: the failure is loud and the
- * checkpoint does not advance past bytes nobody saw.
+ * **What that does and does not bound, stated where the bound lives:**
+ *
+ * - **Bounded**: the lines *this reader* holds — at most [maxLinesPerBatch]
+ *   plus the carry, however large the range is.
+ * - **NOT bounded by this class**: what the CONSUMER retains. A consumer that
+ *   accumulates every batch into one collection has simply moved the
+ *   materialization, not removed it; the bound is a contract the consumer has
+ *   to honour too (`SpendLogIngester` does — it folds each batch into its
+ *   `SetCell` and retains no line).
+ * - **Still unbounded, at a much smaller scale**: the partial-line carry grows
+ *   to the length of the longest line in the range, because a line is only
+ *   emitted once its newline is seen. A line longer than [chunkSize] is
+ *   delivered correctly — assembled across as many chunks as it needs — but is
+ *   held whole while that happens. At the socaity v1 record width (~130 bytes)
+ *   this is nothing; a log with no newlines at all is the pathological case.
+ *   This bound is NOT closed by the batching above and survives deliberately.
+ *
+ * The surviving carry bound fails as `OutOfMemoryError`, which (like every
+ * other failure in the read) precedes the hand-off it would have been part of
+ * and therefore precedes the checkpoint write — so the range is retried on the
+ * next poll rather than skipped.
  *
  * @param logPath the spend log. A parameter, never a hardcoded path
  *   (fpml.1-D1): no real socaity log exists yet and its eventual location is
@@ -196,31 +237,41 @@ data class TailBatch(
  *   boundary landing exactly on a newline, a line longer than one chunk — are
  *   testable at a size a unit test can actually build a fixture for; a 4 GiB
  *   fixture is not a unit test. Production has no reason to change it.
+ * @param maxLinesPerBatch the most lines handed to the consumer in one
+ *   [TailBatch]. A parameter for the same reason [chunkSize] is: it makes the
+ *   multi-hand-off path reachable from a unit test over a fixture a temp dir
+ *   can hold. It bounds line COUNT rather than bytes because a line's length is
+ *   not known until its newline is scanned; at the socaity v1 record width
+ *   (~130 bytes) the default is a few hundred KiB of line content resident.
  */
 class SpendLogTailReader(
     private val logPath: Path,
     private val checkpoint: SpendOffsetStore,
     private val chunkSize: Int = DEFAULT_CHUNK_SIZE,
+    private val maxLinesPerBatch: Int = DEFAULT_MAX_LINES_PER_BATCH,
 ) {
 
     init {
         require(chunkSize > 0) { "chunkSize must be positive, was $chunkSize" }
+        require(maxLinesPerBatch > 0) { "maxLinesPerBatch must be positive, was $maxLinesPerBatch" }
     }
 
     /**
-     * Reads whatever complete lines are new, hands them to [consume], and only
-     * then persists the resulting position.
+     * Reads whatever complete lines are new, hands them to [consume] in bounded
+     * batches, and only then persists the resulting position.
      *
-     * Returns the same [TailBatch] that was handed to [consume], so a caller
-     * that needs the outcome for its own bookkeeping does not have to capture
-     * it out of the lambda.
+     * [consume] is invoked **one or more times** — once per at most
+     * [maxLinesPerBatch] lines, and always at least once, with the final
+     * invocation carrying [TailBatch.last]`= true`. Returns a [TailSummary] of
+     * the whole poll; the lines themselves are not returned, because retaining
+     * them to return would reinstate exactly the whole-range materialization
+     * the batching exists to remove (`computenet-xs5u`).
      */
-    fun poll(consume: (TailBatch) -> Unit): TailBatch {
+    fun poll(consume: (TailBatch) -> Unit): TailSummary {
         val persisted = checkpoint.read()
 
         if (!Files.isRegularFile(logPath)) {
-            return TailBatch(TailReason.LogAbsent, emptyList(), persisted?.offset ?: 0L)
-                .also(consume)
+            return absent(persisted, consume)
         }
 
         val length =
@@ -229,8 +280,7 @@ class SpendLogTailReader(
             } catch (_: NoSuchFileException) {
                 // The log vanished between the existence check and the size
                 // read. Same situation as step 2, same handling.
-                return TailBatch(TailReason.LogAbsent, emptyList(), persisted?.offset ?: 0L)
-                    .also(consume)
+                return absent(persisted, consume)
             }
 
         val reason: TailReason
@@ -261,22 +311,36 @@ class SpendLogTailReader(
             }
         }
 
-        val (lines, offset) = readCompleteLines(start, length)
-        val batch = TailBatch(reason, lines, offset)
+        var lineCount = 0L
+        var handOffs = 0
+        var offset = start
+        streamCompleteLines(start, length) { lines, at, last ->
+            lineCount += lines.size
+            handOffs++
+            offset = at
+            consume(TailBatch(reason, lines, at, last))
+        }
 
-        consume(batch)
-
-        // Only now, and only if the position actually moved: an unchanged
-        // state would rewrite the same two values on every idle poll.
+        // Only now — after the LAST hand-off has RETURNED — and only if the
+        // position actually moved: an unchanged state would rewrite the same two
+        // values on every idle poll. A consumer that throws on any hand-off,
+        // first or last, never reaches this line, so the range is retried.
         val next = CheckpointState(offset, fingerprintHead(logPath, offset))
         if (next != persisted) checkpoint.write(next)
 
-        return batch
+        return TailSummary(reason, lineCount, offset, handOffs)
+    }
+
+    /** The one empty hand-off an absent log gets, plus its summary. */
+    private fun absent(persisted: CheckpointState?, consume: (TailBatch) -> Unit): TailSummary {
+        val offset = persisted?.offset ?: 0L
+        consume(TailBatch(TailReason.LogAbsent, emptyList(), offset, last = true))
+        return TailSummary(TailReason.LogAbsent, 0L, offset, handOffs = 1)
     }
 
     /**
-     * Reads `[start, length)` in [chunkSize]-byte chunks and splits off the
-     * complete lines.
+     * Reads `[start, length)` in [chunkSize]-byte chunks, splits off the
+     * complete lines, and emits them in runs of at most [maxLinesPerBatch].
      *
      * The range is `Long` throughout — nothing narrows it — so the size of the
      * range places no bound on correctness; see the class KDoc's "Bounded by
@@ -287,13 +351,27 @@ class SpendLogTailReader(
      * cannot split a character, and decoding per line is equivalent to decoding
      * the whole complete-line region at once.
      *
-     * @return the lines (newline stripped) and the offset just past the last
-     *   `'\n'` — equal to [start] when the range holds no newline at all.
+     * The pending list is REPLACED rather than cleared at each emission, so this
+     * method holds no reference to a batch it has already emitted: what a
+     * consumer keeps is the consumer's business, but nothing here keeps it. That
+     * is the whole residency property (`computenet-xs5u`).
+     *
+     * [emit] is called at least once. Its arguments are the lines (newline
+     * stripped), the offset just past the last `'\n'` emitted so far — equal to
+     * [start] while no newline has been seen — and whether this is the final
+     * emission of the range.
      */
-    private fun readCompleteLines(start: Long, length: Long): Pair<List<String>, Long> {
-        if (length <= start) return emptyList<String>() to start
+    private fun streamCompleteLines(
+        start: Long,
+        length: Long,
+        emit: (lines: List<String>, offset: Long, last: Boolean) -> Unit,
+    ) {
+        if (length <= start) {
+            emit(emptyList(), start, true)
+            return
+        }
 
-        val lines = mutableListOf<String>()
+        var pending = mutableListOf<String>()
         val carry = ByteArrayOutputStream()
         val span = length - start
         var scanned = 0L
@@ -323,18 +401,27 @@ class SpendLogTailReader(
                     val newline = indexOfNewline(bytes, from)
                     if (newline < 0) break
                     carry.write(bytes, from, newline - from)
-                    lines += carry.toString(Charsets.UTF_8)
+                    pending += carry.toString(Charsets.UTF_8)
                     carry.reset()
                     consumed = scanned + newline + 1
                     from = newline + 1
+                    if (pending.size == maxLinesPerBatch) {
+                        // Not `last`: the range is not finished until the read
+                        // loop is, and the checkpoint must not be written on a
+                        // hand-off that still has bytes behind it.
+                        emit(pending, start + consumed, false)
+                        pending = mutableListOf()
+                    }
                 }
                 carry.write(bytes, from, bytes.size - from)
                 scanned += bytes.size
             }
         }
 
-        if (lines.isEmpty()) return emptyList<String>() to start
-        return lines to (start + consumed)
+        // Always exactly one final emission, even when it is empty: it is what
+        // closes the poll for a consumer that reconciles on `last`, and its
+        // offset is the one that gets persisted.
+        emit(pending, start + consumed, true)
     }
 
     private fun indexOfNewline(bytes: ByteArray, from: Int): Int {
@@ -353,6 +440,14 @@ class SpendLogTailReader(
          * consideration however big the log gets.
          */
         const val DEFAULT_CHUNK_SIZE: Int = 1 shl 20
+
+        /**
+         * 4096 lines: at the socaity v1 record width (~130 bytes) a few hundred
+         * KiB of line content resident per hand-off, and large enough that a
+         * steady-state poll — a handful of appended records — is still exactly
+         * one hand-off, so the common case is unchanged by the batching.
+         */
+        const val DEFAULT_MAX_LINES_PER_BATCH: Int = 4096
 
         private const val NEWLINE: Byte = '\n'.code.toByte()
     }

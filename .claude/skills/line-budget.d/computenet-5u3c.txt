@@ -1,0 +1,32 @@
+work +32
+
+# computenet-5u3c asked for a statement that the documented cache tells do NOT
+# fire when --rerun is bound to a lifecycle task, and named
+# `:module:test --rerun :module:check` as the unsafe form.
+#
+# BOTH HALVES ARE FALSE, and the reviewer of PR #823 proved it by running the
+# four shapes on :nature and :testkit. --rerun binds to the task it FOLLOWS,
+# so a trailing lifecycle task is harmless: that command executes the test task
+# unmarked with a fresh JUnit XML, --no-build-cache interleaved or not. The
+# genuinely unsafe shapes are the flag ON the lifecycle task and the flag on
+# ANOTHER module's test task — and on both, the test task prints UP-TO-DATE and
+# the count line shows ZERO executed. The tells fire loudly.
+#
+# Shipping the acceptance as written would have told a reader to abandon a
+# command that works and to distrust three signals that do work — de-training a
+# correct habit. This is the rule computenet-k1vd landed two hours earlier: a
+# criterion whose premise the work disproves is met by DISPROVING it with
+# evidence, not by contorting the change to satisfy it.
+#
+# So these 32 lines are the measured four-row table, the correction of which
+# shapes are unsafe, the real mechanism (the lifecycle task's plausible
+# presence invites you not to read the line below it), and a note that the
+# 2026-09-07 concord incident's stated cause is refuted and needs re-diagnosing
+# against the build-cache-restore bullet below it before it is written up.
+#
+# +4 from the re-review (PR #823): the measurement date was a day off (a
+# provenance error in the file whose subject is provenance), the host is now
+# named, computenet-1mjv is stated as having been BOTH unsafe shapes at once
+# rather than one of them, and the table says which cell is load-bearing —
+# `executed`, not the trailing up-to-date count, which varies with
+# configuration-cache state.

@@ -126,15 +126,21 @@ data class SpendPollOutcome(
  *   at THIS seam: a test double can record its [SpendOffsetStore.write] and
  *   check what the fold already holds at that moment, rather than trusting
  *   that [poll]'s KDoc still matches its body (`computenet-xol9`).
+ * @param maxLinesPerBatch how many lines the reader hands over at a time —
+ *   passed through to [SpendLogTailReader] for the same reason its `chunkSize`
+ *   is a parameter: it makes the multi-hand-off fold, in particular a
+ *   re-baseline reconciled across several hand-offs, reachable from a unit test
+ *   over a fixture a temp dir can hold (`computenet-xs5u`).
  */
 class SpendLogIngester(
     logPath: Path,
     runDir: Path,
     val records: SetCell<SpendRecord> = SetCell(),
     checkpoint: SpendOffsetStore = OffsetCheckpoint(runDir),
+    maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
 ) {
 
-    private val reader = SpendLogTailReader(logPath, checkpoint)
+    private val reader = SpendLogTailReader(logPath, checkpoint, maxLinesPerBatch = maxLinesPerBatch)
 
     /**
      * Running per-reason failure counts since this ingester was constructed.
@@ -150,63 +156,105 @@ class SpendLogIngester(
     /**
      * Reads whatever the log has for us and folds it in.
      *
-     * The fold happens inside the reader's consumer callback, i.e. *before* the
-     * reader persists its new offset — the crash-ordering rule the reader
-     * documents. A crash between the two re-delivers the batch, which the fold
-     * absorbs idempotently because it is keyed by record identity.
+     * The fold happens inside the reader's consumer callback — which the reader
+     * invokes once per bounded batch, one or more times per poll — i.e. *before*
+     * the reader persists its new offset, the crash-ordering rule the reader
+     * documents. A crash anywhere in that sequence, including between two
+     * hand-offs, re-delivers the whole range, which the fold absorbs
+     * idempotently because it is keyed by record identity.
      */
     fun poll(): SpendPollOutcome {
-        var outcome: SpendPollOutcome? = null
-        reader.poll { batch -> outcome = fold(batch) }
-        // The reader always invokes the consumer exactly once per poll, on every
-        // branch including LogAbsent, so this is never null.
-        return checkNotNull(outcome) { "tail reader did not hand the batch to its consumer" }
+        val fold = PollFold()
+        reader.poll(fold::absorb)
+        // The reader always delivers at least one batch per poll, on every
+        // branch including LogAbsent, and exactly one of them carries `last`.
+        return checkNotNull(fold.outcome) { "tail reader did not close the poll with a final batch" }
     }
 
-    private fun fold(batch: TailBatch): SpendPollOutcome {
-        val valid = mutableListOf<SpendRecord>()
-        var malformed = 0L
-        var unknownVersion = 0L
+    /**
+     * The per-poll fold state, spanning the reader's one-or-more hand-offs
+     * (`computenet-xs5u`).
+     *
+     * It exists because a re-baseline is inherently a whole-file operation — the
+     * removals are `what the fold holds` minus `what the WHOLE re-read
+     * produced`, so they cannot be computed from one hand-off — while an append
+     * is not. So the two branches accumulate differently, and only the
+     * re-baseline branch waits for [TailBatch.last]:
+     *
+     * - **Append**: each batch is folded in as it arrives and its lines are
+     *   dropped. Nothing accumulates but counts.
+     * - **Re-baseline**: the *records* accumulate (they are what the `SetCell`
+     *   is about to hold anyway, so this adds no asymptotic residency the fold
+     *   did not already have) while the *lines* are dropped batch by batch. Raw
+     *   line content is what the bead was about, and none of it is retained.
+     *
+     * Either way the fold is complete before the final hand-off RETURNS, so the
+     * reader's checkpoint write still happens strictly after it.
+     */
+    private inner class PollFold {
 
-        for (line in batch.lines) {
-            when (val classification = classifySpendLine(line)) {
-                is LineClassification.Valid -> valid += classification.record
-                LineClassification.Malformed -> malformed++
-                is LineClassification.UnknownVersion -> unknownVersion++
+        /** Non-null once the final batch has been folded; the poll's answer. */
+        var outcome: SpendPollOutcome? = null
+            private set
+
+        private var malformed = 0L
+        private var unknownVersion = 0L
+        private var added = 0
+        private var removed = 0
+
+        /** Re-baseline only: every valid record the whole re-read has produced. */
+        private val desired = mutableSetOf<SpendRecord>()
+
+        fun absorb(batch: TailBatch) {
+            val valid = mutableListOf<SpendRecord>()
+            for (line in batch.lines) {
+                when (val classification = classifySpendLine(line)) {
+                    is LineClassification.Valid -> valid += classification.record
+                    LineClassification.Malformed -> malformed++
+                    is LineClassification.UnknownVersion -> unknownVersion++
+                }
+            }
+
+            if (batch.reason is TailReason.ReBaselined) {
+                // Converge on the file's current content: the POLL (not this
+                // batch) is the whole file, so anything the fold holds that the
+                // re-read did not produce is stale and must go — which is only
+                // knowable once every batch is in.
+                desired += valid
+                if (batch.last) {
+                    val live = records.membership()
+                    val toAdd = desired - live
+                    val toRemove = live - desired
+                    toAdd.forEach { records.inlet.call.add(it) }
+                    toRemove.forEach { records.inlet.call.remove(it) }
+                    added = toAdd.size
+                    removed = toRemove.size
+                }
+            } else {
+                // Append (or first start, or an absent log's empty batch):
+                // add-only, so each batch can be applied on arrival. Re-adding an
+                // element already present is a no-op for membership, which is
+                // what makes re-delivery safe. `live` is re-read per batch, so a
+                // record repeated across batches is counted added once.
+                val live = records.membership()
+                added += (valid.toSet() - live).size
+                valid.forEach { records.inlet.call.add(it) }
+            }
+
+            if (batch.last) {
+                failures =
+                    SpendIngestFailures(
+                        malformed = failures.malformed + malformed,
+                        unknownVersion = failures.unknownVersion + unknownVersion,
+                    )
+                outcome =
+                    SpendPollOutcome(
+                        batch.reason,
+                        added,
+                        removed,
+                        SpendIngestFailures(malformed, unknownVersion),
+                    )
             }
         }
-
-        val pollFailures = SpendIngestFailures(malformed, unknownVersion)
-        failures =
-            SpendIngestFailures(
-                malformed = failures.malformed + malformed,
-                unknownVersion = failures.unknownVersion + unknownVersion,
-            )
-
-        val live = records.membership()
-        val added: Int
-        var removed = 0
-
-        if (batch.reason is TailReason.ReBaselined) {
-            // Converge on the file's current content: the batch IS the whole
-            // file, so anything the fold holds that the re-read did not produce
-            // is stale and must go.
-            val desired = valid.toSet()
-            val toAdd = desired - live
-            val toRemove = live - desired
-            toAdd.forEach { records.inlet.call.add(it) }
-            toRemove.forEach { records.inlet.call.remove(it) }
-            added = toAdd.size
-            removed = toRemove.size
-        } else {
-            // Append (or first start, or an absent log's empty batch): add-only.
-            // Re-adding an element already present is a no-op for membership,
-            // which is what makes re-delivery safe.
-            val toAdd = valid.toSet() - live
-            valid.forEach { records.inlet.call.add(it) }
-            added = toAdd.size
-        }
-
-        return SpendPollOutcome(batch.reason, added, removed, pollFailures)
     }
 }

@@ -61,7 +61,8 @@ class SpendLogIngesterTest {
         logPath: Path = log,
         run: Path = runDir,
         fold: SetCell<SpendRecord> = SetCell(),
-    ) = SpendLogIngester(logPath, run, fold)
+        maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
+    ) = SpendLogIngester(logPath, run, fold, OffsetCheckpoint(run), maxLinesPerBatch)
 
     /**
      * Feature example 1: "Given an empty log file, When three valid v1 lines
@@ -289,6 +290,81 @@ class SpendLogIngesterTest {
         // The whole point: at the moment the checkpoint was persisted, the
         // fold this poll just produced was already visible.
         membershipAtPersistTime shouldBe setOf(record(workItem = "a"))
+    }
+
+    // ---- computenet-xs5u: the fold spans the reader's several hand-offs ----
+
+    /**
+     * The reader now delivers a poll in bounded batches, so the ingester's fold
+     * has to be correct ACROSS them — and a re-baseline is the case that cannot
+     * simply be applied batch by batch, because its removals are `what the fold
+     * holds` minus `what the WHOLE re-read produced`.
+     *
+     * A batch-local reconcile would remove, on each batch, everything the fold
+     * holds that this batch did not carry — i.e. almost everything — so the
+     * surviving set would be roughly the final batch. This asserts the whole
+     * replacement survives and none of the superseded log does.
+     */
+    @Test
+    fun `a re-baseline delivered over several hand-offs converges on the whole new content`() {
+        val original = (0 until 40).map { line(workItem = "old-$it") }
+        append(*original.toTypedArray())
+        val fold = SetCell<SpendRecord>()
+        val ingester = ingester(fold = fold, maxLinesPerBatch = 7)
+        ingester.poll()
+        ingester.view().size shouldBe 40
+
+        // Replace the log wholesale with different, longer content: a
+        // re-baseline read across 5+ hand-offs at this bound.
+        val replacement = (0 until 33).map { line(workItem = "new-$it") }
+        Files.writeString(log, replacement.joinToString("") { "$it\n" })
+
+        val outcome = ingester.poll()
+
+        outcome.reason.shouldBeInstanceOf<TailReason.ReBaselined>()
+        outcome.added shouldBe 33
+        outcome.removed shouldBe 40
+        ingester.view() shouldBe (0 until 33).map { record(workItem = "new-$it") }.toSet()
+        // Explicitly: nothing of the superseded log survived a multi-hand-off
+        // reconcile, and nothing of the replacement was reconciled away.
+        ingester.view().none { it.workItem.startsWith("old-") } shouldBe true
+    }
+
+    /**
+     * An append spanning several hand-offs is add-only and counts each new
+     * record once — the branch that does NOT wait for the final hand-off, since
+     * it can be applied as it arrives.
+     */
+    @Test
+    fun `an append delivered over several hand-offs adds every record exactly once`() {
+        append(*(0 until 25).map { line(workItem = "w-$it") }.toTypedArray())
+        // A duplicate line straddling the bound: it is one element, and it is
+        // counted added once even though two different hand-offs may carry it.
+        append(line(workItem = "w-0"))
+
+        val ingester = ingester(maxLinesPerBatch = 4)
+        val outcome = ingester.poll()
+
+        outcome.added shouldBe 25
+        outcome.failures.total shouldBe 0L
+        ingester.view() shouldBe (0 until 25).map { record(workItem = "w-$it") }.toSet()
+    }
+
+    /**
+     * Failure accounting must not be lost or double-counted by the batching:
+     * the per-poll counts are the sum over the poll's hand-offs, once.
+     */
+    @Test
+    fun `failure counts span the hand-offs of one poll without loss or duplication`() {
+        val lines = (0 until 30).map { if (it % 3 == 0) "not json at all" else line(workItem = "w-$it") }
+        append(*lines.toTypedArray())
+
+        val ingester = ingester(maxLinesPerBatch = 4)
+        val outcome = ingester.poll()
+
+        outcome.failures.malformed shouldBe 10L
+        outcome.added shouldBe 20
+        ingester.failures.malformed shouldBe 10L
     }
 
     /**

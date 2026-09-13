@@ -935,9 +935,29 @@ bd list --parent=<epic> --all --json     # statuses of ALL children, closed incl
   finished** (`every child closed` is vacuously true there), so that case goes
   to step 4, never to `bd close`.
 
+  Two Bash calls, never `&&`-chained — the permission classifier has denied a
+  compound `bd`-write call, and the same commands split one per call went
+  through unchanged (computenet-br1y; not universal, per
+  [bd-traps.md](references/bd-traps.md)).
+
   ```bash
-  bd close <epic> && bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  bd close <epic>
   ```
+
+  **Only if that close reported success:**
+
+  ```bash
+  bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  ```
+
+  The `&&` guaranteed that ordering and splitting the calls does not, so state
+  it: a failed close followed by a blind label removal leaves the epic OPEN,
+  still held by this session, and no longer labelled — and `owner:` is the
+  durable half of step 3's candidate-skip rule, the half that survives the
+  stale window `in_progress` does not. `check-dotted-ids.sh` reads the same
+  label to answer "parents this machine owns", so every breakdown child under
+  that epic then flags spuriously. On a failed close, leave the label alone
+  (computenet-94tg4).
 
   `bd defer` here would park a completed epic and hide it from both machines
   until a human noticed. **Closing a drained epic does not consume the
@@ -1704,6 +1724,31 @@ verdict. (`parked` is only meaningful on an empty batch.)
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+
+  **Then read the ACCEPTANCE for a clause the widening contradicts, and amend
+  it before anyone is dispatched** — the same reconciliation the human-park
+  route already requires, for the same reason: a reviewer scores against
+  `bd show`, not a comment thread. Widening computenet-j2x.4.3 to include
+  `Values.kt` left its criteria reading "no Kotlin file SHALL change in this
+  task", so the bead claimed a Kotlin file and forbade changing one. Its
+  reviewer happened to read the comments first and flagged it; one that read
+  criteria first would have failed correct, CI-green work — and the
+  implementer, reading the same criteria, could equally have refused the one
+  change that stopped its own scenarios passing vacuously (computenet-ussk).
+  Amend in place, keeping the superseded wording verbatim under a
+  `Superseded <date>:` label — the form the park route uses, whose
+  verbatim-preservation half is DISPUTED above and will be settled by
+  computenet-febs9; when it lands, this site changes with the other two.
+  This applies to the review-filed residual below too, where you author the
+  claim outright.
+
+  **When the widening is for a task ALREADY DISPATCHED** — the
+  report-and-widen case in the sentence above — "before anyone is dispatched"
+  has already been missed, and amending the acceptance under a live review
+  silently moves the standard the verdict is measured against
+  (computenet-7gxi, open). Do not amend it silently: comment the
+  reconciliation on the bead and `SendMessage` the implementer, so the text
+  the reviewer scores and the text the agent worked from stay the same one.
 - **Disjoint paths are not enough — read each candidate's acceptance for a
   cross-reference into another candidate's claim.** `next-batch.py` proves the
   batch will not merge into a conflict; it cannot see that task A's acceptance

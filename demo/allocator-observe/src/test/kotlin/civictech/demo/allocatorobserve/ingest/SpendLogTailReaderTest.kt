@@ -31,17 +31,52 @@ class SpendLogTailReaderTest {
         Files.writeString(log, text, StandardOpenOption.CREATE, StandardOpenOption.APPEND)
     }
 
-    /** Polls a fresh reader over the same run dir, collecting what the consumer saw. */
+    /**
+     * Polls a fresh reader over the same run dir and returns the poll's hand-offs
+     * CONCATENATED into one batch, so a test about file mechanics can assert on
+     * the poll's line content without caring how many hand-offs carried it.
+     *
+     * The hand-off protocol itself is checked here, on every poll every test
+     * makes, rather than in one place: at least one hand-off, `last` set on the
+     * final one and on no other, and a [TailSummary] that agrees with what the
+     * consumer actually saw. How much is resident per hand-off is what
+     * [handOffSizes] is for; this helper deliberately accumulates and so proves
+     * nothing about residency.
+     */
     private fun poll(
         store: SpendOffsetStore = OffsetCheckpoint(runDir),
         chunkSize: Int = SpendLogTailReader.DEFAULT_CHUNK_SIZE,
+        maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
     ): TailBatch {
-        var seen: TailBatch? = null
-        val returned = SpendLogTailReader(log, store, chunkSize).poll { seen = it }
-        // The value handed to the consumer and the value returned are the same
-        // batch — a caller must not have to choose between them.
-        seen shouldBe returned
-        return returned
+        val handOffs = mutableListOf<TailBatch>()
+        val summary =
+            SpendLogTailReader(log, store, chunkSize, maxLinesPerBatch).poll { handOffs += it }
+
+        handOffs.isEmpty() shouldBe false
+        handOffs.dropLast(1).forEach { it.last shouldBe false }
+        handOffs.last().last shouldBe true
+        handOffs.forEach { it.reason shouldBe summary.reason }
+
+        val lines = handOffs.flatMap { it.lines }
+        summary.handOffs shouldBe handOffs.size
+        summary.lineCount shouldBe lines.size.toLong()
+        summary.offset shouldBe handOffs.last().offset
+        return TailBatch(summary.reason, lines, summary.offset, last = true)
+    }
+
+    /**
+     * One poll's hand-offs, in order, UNCONCATENATED — the instrument for what
+     * is resident at once, where [poll]'s aggregation would destroy the evidence.
+     * One poll per call, like [poll]: it advances the checkpoint exactly once.
+     */
+    private fun handOffs(
+        chunkSize: Int = SpendLogTailReader.DEFAULT_CHUNK_SIZE,
+        maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
+    ): List<TailBatch> {
+        val batches = mutableListOf<TailBatch>()
+        SpendLogTailReader(log, OffsetCheckpoint(runDir), chunkSize, maxLinesPerBatch)
+            .poll { batches += it }
+        return batches
     }
 
     @Test
@@ -319,6 +354,131 @@ class SpendLogTailReaderTest {
         // never occurs inside a multi-byte sequence — this pins that too.
         append("a€b\nc€d\n")
         poll(chunkSize = 2).lines shouldContainExactly listOf("a€b", "c€d")
+    }
+
+    // ---- computenet-xs5u: the HAND-OFF is bounded, not just the read ----
+    //
+    // v5c7 bounded the read buffer at chunkSize but still handed the consumer a
+    // List of every complete line in the range, so a whole-file read of a 4 GiB
+    // log materialized several GiB of Strings. These cover the bound that
+    // replaces it, and the crash-ordering rule it must not cost.
+
+    @Test
+    fun `a multi-chunk read hands over bounded batches instead of the range's whole line content`() {
+        val all = manyLines(300)
+
+        // 3000 bytes read through a 64-byte buffer: ~47 chunks, one poll.
+        val batches = handOffs(chunkSize = 64, maxLinesPerBatch = 32)
+        val sizes = batches.map { it.lines.size }
+
+        // THE residency pin: no hand-off carries more than the bound, however
+        // many lines the range holds. Against the pre-fix reader this is a
+        // single hand-off of 300.
+        sizes.forEach { (it <= 32) shouldBe true }
+        // And the read really did span several hand-offs — without this the
+        // bound above would hold vacuously for a reader that delivered nothing.
+        sizes.size shouldBe 10
+        sizes.sum() shouldBe 300
+
+        // Bounding the hand-off costs no line, no order, and no byte.
+        batches.flatMap { it.lines } shouldContainExactly all
+        batches.last().offset shouldBe 3000L
+        batches.last().last shouldBe true
+    }
+
+    /**
+     * What this pins, and what it does not — the honest statement, kept next to
+     * the number rather than only in the bead.
+     *
+     * It pins what the reader HANDS OVER at once (`<= maxLinesPerBatch`) and
+     * that a large range is split across many such hand-offs. It does not
+     * measure heap, and no test here does: a heap measurement is flaky and
+     * would be worthless evidence (AGENTS.md — assert semantic outcomes, not
+     * timing or machine state). Two things are therefore argued rather than
+     * measured, and are stated as such:
+     *
+     * - The reader dropping its reference to each emitted batch is structural
+     *   (`streamCompleteLines` replaces the pending list rather than clearing
+     *   it), not observed here.
+     * - A CONSUMER that accumulates every hand-off has moved the
+     *   materialization rather than removed it. This test's own `poll` helper
+     *   is such a consumer, deliberately. `SpendLogIngesterTest` covers the
+     *   real consumer's side.
+     */
+    @Test
+    fun `the bound holds for the whole-file reasons, which are the ones that read a large range`() {
+        // FirstStart: a whole-file read with no checkpoint.
+        manyLines(300)
+        val first = handOffs(chunkSize = 64, maxLinesPerBatch = 32)
+        first.first().reason shouldBe TailReason.FirstStart
+        first.map { it.lines.size }.forEach { (it <= 32) shouldBe true }
+
+        // ReBaselined: re-reads the WHOLE current file — the case that OOMed —
+        // so it is the one that most needs the bound.
+        val replacement = (0 until 250).map { "fresh-%04d".format(it) }
+        Files.writeString(log, replacement.joinToString("") { it + "\n" })
+        val rebaselined = handOffs(chunkSize = 37, maxLinesPerBatch = 16)
+
+        rebaselined.first().reason.shouldBeInstanceOf<TailReason.ReBaselined>()
+        rebaselined.map { it.lines.size }.forEach { (it <= 16) shouldBe true }
+        // Bounded AND complete: all 250 lines of the new content, in order.
+        rebaselined.flatMap { it.lines } shouldContainExactly replacement
+    }
+
+    @Test
+    fun `the checkpoint is written only after the LAST hand-off returns`() {
+        manyLines(100)
+
+        val events = mutableListOf<String>()
+        val store = RecordingStore(OffsetCheckpoint(runDir), events)
+        SpendLogTailReader(log, store, 64, 32).poll { batch ->
+            events += "consumed(${batch.lines.size}, last=${batch.last})"
+        }
+
+        // Four hand-offs, the write strictly after the last of them. A reader
+        // that persisted per hand-off would advance the checkpoint past lines a
+        // later hand-off might still fail on.
+        events shouldContainExactly
+            listOf(
+                "read",
+                "consumed(32, last=false)",
+                "consumed(32, last=false)",
+                "consumed(32, last=false)",
+                "consumed(4, last=true)",
+                "write(1000)",
+            )
+    }
+
+    @Test
+    fun `a consumer that throws on a LATER hand-off still leaves the checkpoint untouched`() {
+        manyLines(100)
+
+        val checkpoint = OffsetCheckpoint(runDir)
+        var seen = 0
+        assertThrows<IllegalStateException> {
+            SpendLogTailReader(log, checkpoint, 64, 32).poll {
+                seen++
+                if (seen == 3) error("consumer failed on the third hand-off")
+            }
+        }
+        // Not merely "nothing was written": nothing was written even though two
+        // whole hand-offs had already been accepted. Multi-hand-off delivery
+        // must not become partial-commit delivery.
+        checkpoint.read() shouldBe null
+
+        val retried = poll(checkpoint, chunkSize = 64, maxLinesPerBatch = 32)
+        retried.reason shouldBe TailReason.FirstStart
+        retried.lines.size shouldBe 100
+    }
+
+    @Test
+    fun `a non-positive max lines per batch is refused at construction`() {
+        assertThrows<IllegalArgumentException> {
+            SpendLogTailReader(log, OffsetCheckpoint(runDir), 64, 0)
+        }
+        assertThrows<IllegalArgumentException> {
+            SpendLogTailReader(log, OffsetCheckpoint(runDir), 64, -1)
+        }
     }
 
     @Test

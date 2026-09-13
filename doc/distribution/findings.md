@@ -270,3 +270,330 @@ ends at `EXPIRED`, and the bead is `closed`.
 Nothing else in the entry above is affected: `computenet-tdcx` is still open,
 `[DSC1-NV-01..03]` are still explicitly unverified, and the key-rotation
 position and its follow-up (`computenet-aimh`) are unchanged.
+
+---
+
+## 2026-09-12 — Key rotation decided (option 4) and the revocation path designed over anchor rebinding (`computenet-aimh`)
+
+**Names the entry "Key rotation: a documented position, not a mechanism" in the
+DSC1 entry above, and supersedes its position.** That section states *"The
+position: identity IS the key"* and lays out a three-option space as unchosen.
+Both statements were true of that entry's commit and are recorded, not edited,
+per this file's append-only rule. They are now wrong: the premise was rejected
+and a fourth option was adopted. Per the file's own warning at the top, a reader
+who cites that section without reading forward will cite a superseded position.
+
+This entry records a **decision and a design**, not a mechanism. Nothing in it is
+built by `computenet-aimh`; the rotation half is being built under epic
+`computenet-5y8t` (DSC4) and the revocation half is built by nobody yet.
+
+### The decision: option 4, anchor-vouched stable name
+
+Taken by the maintainer on 2026-08-29 (recorded on `computenet-aimh`), amended
+the same day. The acceptance criteria permitted *"one of the three ... or a
+fourth explicitly argued"*; this is the fourth, and it rejects the premise the
+other three share — that identity is key material and the consequences are to be
+negotiated around.
+
+1. A peer's identity is a **stable name**. It is not derived from, and does not
+   change with, any key the peer holds.
+2. The binding from that name to the peer's **current public key** is a signed
+   statement. Its trustworthiness comes from a signature by a **centrally
+   managed anchor key**, not from where the mapping is stored or how it arrives.
+3. **Delivery is decentralized.** Signed statements may be gossiped, replicated
+   as mesh state, cached, or piggybacked on the hello. A signed statement is
+   self-validating: a peer holding the anchor's public key verifies it offline,
+   with no lookup and no reachability requirement. There is **no central lookup
+   service**, and none may be introduced on the strength of this decision.
+4. **Rotation is a new signed binding for the same name.** The name survives, so
+   allowlists, mirrored `Remote` locations and durable AGO2 attribution all keep
+   pointing at a live, resolvable identity.
+
+Why the premise was rejected: binding identity to key material means rotation
+renames the peer *at whatever tier the binding sits*. Option 1 relocates that
+problem rather than solving it — the identity key becomes the thing that can
+never rotate, so identity-key compromise, or an algorithm migration
+(post-quantum being the obvious one), returns the original problem with a
+delegation tier added for nothing. This is R7 direction (2) in
+`doc/spec/90-roadmap/95-research-plan.md`, recorded there as *not pursued*
+because direction (1) was smaller and sufficient at the time. It is now pursued;
+R7 itself judged this shape as matching the niche, so the reversal is on **size,
+not merit**.
+
+A self-certifying alternative (name derived from a long-lived genesis key,
+current key reachable by a signed delegation chain, no anchor) was argued and
+**rejected**: it cannot recover from identity-key compromise. Under pure
+self-certification a stolen root key makes the thief the peer permanently. An
+anchor-vouched mapping can rebind a compromised name to a new key after
+out-of-band authentication — the capability the self-certifying design
+structurally lacks, and the capability the revocation design below is built on.
+
+Three objections to a central anchor were **withdrawn** once vouching was
+distinguished from delivery, recorded so they are not raised again: availability
+is not a correctness dependency (a statement verifies offline); it is not a
+category change (a signing key is not a service, and can be held offline); and
+the P7/P10 contradiction is weakened but not eliminated — see R3 as amended.
+
+### Residual risks — accepted, not solved
+
+Carried from the 2026-08-29 decision. **Do not read the decision, or this entry,
+as closing any of them.**
+
+- **R1. Anchor-key compromise is total.** Whoever holds the anchor key can mint a
+  binding from *any* name to a key they control, impersonating every peer
+  without stealing anything, and a malicious rebinding is indistinguishable from
+  a legitimate rotation. This is strictly more powerful than the single-key
+  theft the decision defends against. Known mitigations exist and are **not
+  chosen**: an append-only transparency log gossiped over the mesh
+  (Certificate-Transparency shaped), threshold signing or multiple independent
+  anchors, and first-seen pinning with an alert on change.
+- **R2. Anchor-key rotation is unsolved.** The anchor's own key cannot rotate
+  without the same rename problem one level up. Standard answers (overlapping
+  validity, cross-signing, multiple configured anchors) are not chosen here.
+- **R3 (as amended 2026-08-29 — the amendment replaces this residual's framing,
+  it is not a second item alongside it). An anchor is the architecture, not a
+  compromise.** R3 was first written as *"tension accepted for the deployments
+  we have now"*. That undersells the position. No single system fits all needs
+  and real security is layered: purely technical decentralization has a poor
+  empirical record, under cryptocurrency-scale financial incentive to make it
+  work. A trust anchor is valuable precisely because breaching it requires
+  defeating more than a technical system — it sits inside norms, law, and the
+  enforcement of both. The intended long-run anchors are **institutional**
+  (governments issuing identities for people being the clearest case); the
+  anchor ComputeNet operates for itself is explicitly a **dummy implementation**
+  standing in for that. What remains genuinely open is the open-mesh case:
+  `doc/spec/40-distribution/43-security.md` §Posture's *"mutually untrusting
+  contributors"*, P10 in `doc/spec/00-foundations/02-design-principles.md`, and
+  SOC3 (`computenet-6a2`, the declared north star, whose §1 is an OPEN mesh).
+  The tension is **resited, not dissolved**: the claim is no longer "we accept a
+  central point reluctantly" but "trust roots are institutional by design, and
+  the technical layer's job is to make *which* institution is trusted an
+  explicit, per-relying-peer policy choice". **SOC3 must not be planned as
+  though this is settled**; it still has to say what it does when participants
+  share no issuer.
+- **R4. Revocation is deferred, and `[DSC1-NV-01]` remains EXPLICITLY
+  UNVERIFIED.** The anchor makes revocation *possible* — rebinding is the
+  mechanism — but no revocation path is designed, published or verified by the
+  decision. This entry designs it; **designing it does not build it**, and
+  `[DSC1-NV-01]` stays unverified until a peer can act on "this key is no longer
+  me". See the entry below.
+
+The amendment also *raises* the value of the resolution seam rather than
+lowering it: the seam is the socket institutional issuers plug into later, so it
+must be designed as an issuer boundary — more than one anchor expressible, the
+anchor nameable and attributable in the verification result so a relying peer
+applies its own policy (the shape `BoundaryPolicy`'s identity-keyed predicates
+already have), and our own anchor not privileged in the code.
+
+### The revocation design — over anchor rebinding, not a second mechanism
+
+This is the half `computenet-aimh` was reopened for on 2026-09-11. It is a
+design position; no code implements it.
+
+**The mechanism is the one DSC4 already has.** The only authoritative statement
+about a name is the anchor-signed binding of that name to a public key.
+Revocation is therefore not a new object type and not a new protocol: it is the
+anchor issuing a **superseding binding** for the same name — to a replacement
+key after out-of-band authentication, or to a designated *no valid key*
+tombstone when the name is to be admitted by nobody. Anything that introduces a
+separate revocation channel — a CRL, an OCSP-shaped responder, a "revoked" list
+a peer must fetch — contradicts the decision's property 3 and must not be built.
+
+DSC4's stated design properties bind here, and each one constrains the design:
+
+- **Offline verification against a held anchor public key, no reachability
+  requirement.** This is the property that fixes revocation's character: a
+  relying peer can verify that a binding it *holds* is genuine, but it can never
+  establish offline that the binding it holds is the *newest* one. **Revocation
+  is therefore eventual and best-effort by construction**, and there is no point
+  at which a peer knows it is current. Any design that makes revocation prompt
+  by requiring a peer to check something reachable is a different decision, not
+  an implementation of this one.
+- **Decentralized delivery.** A superseding binding travels the same way the
+  original did — gossip, mesh state, cache, hello piggyback. Delivery is the
+  whole of revocation latency.
+- Two consequences follow that the design must carry, or revocation does not
+  work at all:
+  1. **A monotone issuance counter per name, signed inside the statement,
+     strictly-greater-wins.** Without an ordering discipline, a peer receiving
+     an old and a new binding for one name by different gossip paths has no
+     ground to prefer either, and a thief holding the superseded key can
+     **re-inject the superseded binding** and undo its own revocation. The
+     counter is what makes the superseded statement permanently non-authoritative
+     to any peer that has seen the newer one — and only to those peers.
+  2. **A validity window in the statement**, because it is the only bound on
+     staleness a peer can evaluate offline — and note what that buys it on:
+     a clock. `[DSC1-NV-03]` (clock-skew adequacy) is recorded EXPLICITLY
+     UNVERIFIED in this same file and stays that way, so the one offline
+     bound this design has rests on a property the project has not checked.
+     It caps how long a superseded
+     binding remains acceptable to a peer that never hears the rebinding. The
+     tension is real and is named rather than hidden: short windows buy
+     revocation latency by making liveness depend on re-issuance *reaching*
+     peers, which is a reachability requirement arriving by the back door. The
+     position: the window is a **per-deployment policy knob, not a protocol
+     constant**, and a deployment choosing a short window is choosing
+     availability risk over revocation latency, knowingly.
+- **Verification behind the `SignatureVerifier`-shaped seam.** In landed code
+  that seam is `PeerIdentityBinding` in
+  `kernel/src/main/kotlin/civictech/cell/link/Identity.kt` — the kernel declares
+  it, `:identity` supplies the implementation, and its `Interim` binding maps a
+  `KeyId` to the `PeerId` of the same name. Revocation is expressible entirely
+  as the behaviour of a non-interim binding: it resolves a `KeyId` to a `PeerId`
+  only while an unsuperseded, in-window statement vouches for that pairing.
+  **A blocking finding for DSC4, stated here because it is cheaper to know now:
+  `PeerIdentityBinding.identityOf(key: KeyId): PeerId` is total and cannot
+  express "no identity".** A revoked key has no identity to resolve to, so
+  either that signature admits refusal (a nullable or sealed result) or
+  revocation cannot live behind the one seam the decision requires it to live
+  behind, and a second seam appears — exactly the scattering `computenet-376c`
+  built the seam to prevent. Filed as `computenet-hbqvz` under DSC4.
+- **More than one anchor expressible; the anchor nameable in the verification
+  result.** Revocation is therefore **issuer-scoped**: issuer A superseding a
+  binding says nothing about a name issuer B vouches for. Under multiple accepted
+  issuers "revoked" is not a global fact, and a relying peer accepting two
+  issuers for one name must decide whether one issuer's supersession overrides
+  another's live binding. Per the 2026-08-29 amendment that choice is **the
+  relying peer's own policy**, not the protocol's — which is precisely why the
+  verification result must *name* the issuer: a peer that cannot tell which
+  anchor vouched cannot express the policy at all. The consequence to state
+  plainly: a peer whose policy admits a name on *any* accepted issuer's live
+  binding has revocation only as strong as its most permissive issuer.
+
+### What revocation costs the three consumers
+
+Each of these is a cost of the mechanism as designed, not a defect to be fixed
+later by tuning.
+
+- **Allowlists (`Peering.Side.allow`, `allowPeers(...)`).** The central
+  distinction, and it is easy to misread: **anchor revocation answers "this key
+  is no longer this name", never "this name is no longer welcome".** Rebinding
+  is authentication, not authorization; ejecting a peer remains allowlist
+  removal and is a separate act.
+
+  **But that only pays off once an allowlist entry names the name, and in
+  landed code neither of these does.** Both are configured in `KeyId`s since
+  `computenet-376c`: `Peering.Side.allow` is a `Set<KeyId>?` compared against
+  the key on the wire at hello time, and `allowPeers(vararg keys: KeyId,
+  binding)` resolves each *configured key* through the binding per evaluation
+  and compares the result against the stamped `PeerId`. So today a rotation —
+  and a revocation, which is the same statement — leaves both entries naming a
+  key that no longer resolves to the peer, and an operator must re-point them
+  by hand; the "re-admitted by the same entry the moment the new binding
+  arrives, with no operator action" property option 4 is supposed to buy is a
+  property DSC4 still has to deliver by moving allowlist *configuration* to
+  names. Until it does, the two seams behave oppositely: `allowPeers` fails
+  closed (the configured key stops resolving), while `Peering.Side.allow`
+  never consults the binding at all, so anchor revocation is invisible to
+  ingress admission. Both are DSC4's to change, not this entry's.
+
+  Second cost, and it survives whichever way that is settled: until the
+  superseding binding reaches a given peer, that
+  peer's allowlist keeps admitting the stolen key. The window is bounded only by
+  gossip and the validity window, and no peer can observe its own exposure.
+- **Mirrored `Remote` location attribution
+  (`civictech.cell.location.LocationRegistry.Remote.peer`).** Keyed on the
+  stable identity, so rotation and revocation both leave mirrors intact — the
+  location stays attributed to the same name, now reachable through a different
+  key. The cost is retroactive: a location mirrored while a stolen key was live
+  is attributed to the legitimate name and is **indistinguishable after the fact
+  from a genuine one**. Revocation is prospective only; nothing re-attributes or
+  invalidates what is already mirrored, and nothing marks a mirror as having
+  been recorded inside a compromise window.
+- **AGO2 durable per-`Principal` attribution.** The same shape with the worst
+  consequence, because the statements are durable, replicated and user-visible.
+  Rebinding keeps a rotated speaker's history linked to one name — the gain
+  option 3 could never deliver. Revocation, though, renders the stolen key inert
+  **going forward only** and changes nothing about statements already recorded
+  and replicated under that name. A reader cannot tell which statements the
+  thief made. Retroactive repudiation — a signed "statements attributed to me
+  between t1 and t2 were not mine" — is **not** provided by rebinding: it needs
+  its own statement type, a rule for how a reader renders repudiated history,
+  and a decision about whether replicated durable state may be re-rendered at
+  all. That is out of scope here and is named as the residual this design does
+  not close.
+
+### Scope, and what this entry deliberately does not touch
+
+`computenet-aimh` is documentation only. It implements nothing, and it does not
+change `PeerId` derivation, the hello, `allowPeers`/`Peering.Side.allow`,
+mirrored `Remote` attribution or `Principal` — all DSC4's territory (epic
+`computenet-5y8t`). The `KeyId`/`PeerId` split the design needs has already
+landed (`computenet-376c`, `computenet-egl.3`).
+
+The rotation **documentation reconciliation** listed on `computenet-aimh`'s
+2026-08-29 "REMAINING SCOPE" comment — `doc/spec/40-distribution/43-security.md`
+(*"a PeerId derived as the key's fingerprint"*, and §G-29's open list, where key
+rotation/revocation is now *decided-but-unbuilt* rather than undefined),
+`doc/spec/90-roadmap/95-research-plan.md` R7 (direction (2) is now the adopted
+shape, and R7's *"no decided position yet"* closing line is superseded),
+`doc/ARCHITECTURE.md`'s `:identity` row, and `doc/spec/90-roadmap/91-gap-analysis.md`'s
+G-29 row — is **not done here**: the maintainer disposition of 2026-09-11
+narrowed this bead to revocation, and doing it would be the rotation half.
+
+State it exactly, because the 2026-08-29 inventory has drifted and because
+ownership is currently unclaimed:
+
+- **Still asserting identity-is-key at this entry's commit**:
+  `43-security.md:56` (*"a `PeerId` derived as the key's fingerprint"*, plus
+  §G-29's open list, where key rotation/revocation is now
+  *decided-but-unbuilt* rather than undefined) and `95-research-plan.md` R7
+  (direction (2) recorded as *not pursued* though it is now the adopted
+  shape, and the *"no decided position yet"* closing line superseded).
+- **Already reconciled, and the 2026-08-29 inventory is stale on both**:
+  `doc/ARCHITECTURE.md`'s `:identity` row was rewritten by `computenet-376c`
+  (`82158fb49`, PR #616) and `computenet-egl.3` (`0ecfc869d`, PR #620) and now
+  describes key-derived **`KeyId`** fingerprints with `PeerId` resolving
+  through the `PeerIdentityBinding` seam; `91-gap-analysis.md`'s G-29 row
+  never asserted the derivation, and reads as accurate as written.
+- **Ownership is unassigned, not delegated.** The disposition moved the
+  *rotation* half to DSC4 but said nothing about these files, and epic
+  `computenet-5y8t`'s own description lists "the documentation
+  reconciliation, which is `computenet-aimh`'s remaining scope" under
+  EXPLICITLY OUT OF SCOPE. Both items therefore currently sit outside both
+  beads. Filed as a residual rather than silently left to whoever lands DSC4.
+`doc/spec/CONCORDANCE.md` is generated and must never be hand-edited.
+
+---
+
+## 2026-09-12 — `[DSC1-NV-01]` revisited: stolen-key resistance REMAINS EXPLICITLY UNVERIFIED (`computenet-aimh`)
+
+**Names the DSC1 entry's "Explicitly unverified — stated, not softened" section
+above, and does not weaken it.** This entry exists so that the decision and the
+design recorded immediately above cannot be read as having closed
+`[DSC1-NV-01]`. They have not.
+
+The state is unchanged in substance and changed only in prospect:
+
+- **Unchanged.** A thief holding a peer's private key *is* that peer. Every
+  signature verifies, every derived key identifier matches, and no seam in the
+  system can tell the two apart. `PeerIdentityBinding.Interim` — the binding
+  landed on `main` 2026-09-02 by `computenet-376c` (`82158fb49`, PR #616) —
+  maps a key identifier to an identity of the same name and
+  claims nothing about theft; naming the derivation does not strengthen it.
+- **Changed only in prospect.** Option 4 makes recovery *possible*: an
+  anchor-vouched name can be rebound to a fresh key after out-of-band
+  authentication, which is the capability DSC1's identity-is-key model and the
+  rejected self-certifying alternative both structurally lack. Possible is not
+  built. No anchor, no signed binding statement, no issuance counter and no
+  validity window exists in code at this entry's commit; the only binding in the
+  repository is the interim one.
+- Even fully built, the design above would **not** make `[DSC1-NV-01]` a checked
+  property on its own. Revocation is eventual by construction: detection of
+  compromise is out-of-band, and the window between theft and the superseding
+  binding reaching a given peer is unbounded and unobservable by that peer. What
+  a working path would let the suite check is narrower and honest — that a peer
+  which *has received* a superseding binding no longer admits the superseded
+  key. That is the requirement worth writing when the mechanism exists; it is
+  not stolen-key resistance.
+
+**No test is written here, and none may be written that appears to demonstrate
+stolen-key resistance without a working revocation path.** Per AGENTS.md a
+requirement that cannot be checked honestly is filed in
+`concord/corpus/DISPUTES.md`, never weakened into a passing scenario;
+`[DSC1-NV-01]` is filed there as of this entry. It has no corpus scenario and
+must not acquire one until there is a mechanism for a scenario to exercise.
+
+`[DSC1-NV-02]` (Sybil resistance) and `[DSC1-NV-03]` (clock-skew adequacy) are
+untouched by this work and remain explicitly unverified exactly as the DSC1
+entry states them.

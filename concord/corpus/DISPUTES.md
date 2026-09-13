@@ -3517,3 +3517,40 @@ property is statable at the driver and not in the corpus.
   than releasing them optimistically changes what the release rule has to
   establish, and is the one design move that would make this entry's residual
   answerable rather than accepted.
+
+## `[DSC1-NV-01]` — stolen-key resistance (no scenario, and none may be authored)
+
+Filed 2026-09-12 by `computenet-aimh`. Unlike every other entry in this file,
+this one names **no scenario id**, because the point of the entry is that no
+scenario may exist. It is filed here so that the prohibition is discoverable
+from the corpus side, where someone deciding to cover the requirement would
+otherwise find nothing.
+
+- **Requirement**: `[DSC1-NV-01]`, stolen-key resistance. Recorded EXPLICITLY
+  UNVERIFIED in `doc/distribution/findings.md` since the DSC1 entry
+  (2026-08-21), and re-affirmed unverified by that file's 2026-09-12 entry.
+- **Missing capability**: revocation — any mechanism by which a peer can act on
+  "this key is no longer me". Without it the requirement is not merely
+  unchecked, it is **uncheckable by construction**: a thief holding the private
+  key *is* the peer, every signature verifies, every derived key identifier
+  matches, and no seam in the system can separate them. No arrangement of
+  scenario, driver or kernel binding can witness a difference that does not
+  exist.
+- **What was NOT done instead**: no scenario asserts `[DSC1-NV-01]` in any form,
+  and no weakened stand-in was authored — no "signature from an unknown key is
+  refused" check dressed as theft resistance, and no test whose passing could be
+  read as demonstrating the property. `computenet-aimh`'s acceptance criteria
+  and epic `computenet-5y8t`'s forbid exactly that.
+- **Check to restore, and it is narrower than the requirement**: when a
+  revocation path exists, the honest check is that **a peer which has received a
+  superseding anchor-signed binding no longer admits the superseded key**. That
+  is not stolen-key resistance: detection of compromise is out-of-band, and the
+  window between theft and the superseding binding reaching a given peer is
+  unbounded and unobservable by that peer (revocation is eventual by
+  construction — see the revocation design in `doc/distribution/findings.md`,
+  2026-09-12). Whoever authors that scenario must cover the narrower property
+  under its own requirement id and leave `[DSC1-NV-01]` filed here.
+- **Revisit trigger**: a revocation path landing over epic `computenet-5y8t`'s
+  anchor rebinding. DSC4 excludes revocation by its own residual R4, so the
+  trigger is not DSC4 completing — it is whatever item finally builds the
+  superseding-binding path DSC4 makes possible.
