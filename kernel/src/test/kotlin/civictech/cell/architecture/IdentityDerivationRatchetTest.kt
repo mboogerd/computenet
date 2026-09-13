@@ -126,6 +126,15 @@ class IdentityDerivationRatchetTest {
     // corrupting later paren/generic-depth accounting, and it already
     // balances within the annotation itself before the `class` keyword is
     // reached, so no state carries over.
+    // Known residual, out of scope: the annotation alternative admits only a
+    // simple name with at most one non-nested argument list followed by
+    // whitespace. A qualified name ("@kotlin.Suppress(\"x\")"), a use-site
+    // target ("@param:Foo"), a nested paren or a `)` inside the argument
+    // ("@Suppress(names = arrayOf(\"a\"))"), or no space before the keyword
+    // ("@Suppress(\"x\")class W :") still fails the match, so the fold never
+    // opens and a wrapped PeerIdentityBinding entry goes unflagged — the same
+    // false negative this fix closes for the simple shape. Measured against
+    // the regex 2026-09-14 (computenet-qqkg6 review); unattested in production.
     private val bindingHeaderWrapStart = Regex(
         """^\s*(?:@\w+(?:\([^)]*\))?\s+|\w+\s+)*(?:class|object)\s+\S.*:\s*$""",
     )
@@ -1860,16 +1869,15 @@ class IdentityDerivationRatchetTest {
     }
 
     /**
-     * PROBE reproduction (computenet-qqkg6, unfixed-baseline check): an
-     * annotation immediately before the `class`/`object` keyword on the
-     * wrap-start line itself ("@Suppress(\"x\") class W :") never opens the
-     * fold. [bindingHeaderWrapStart]'s modifier-prefix group `(?:\w+\s+)*`
-     * only admits bare word-modifiers (`private`, `open`, ...); `@` is not a
-     * `\w` character, so the regex fails to match starting at position 0 and
-     * the whole wrap-start-detection branch never fires for an
-     * annotation-prefixed header — the supertype list wrapped onto the next
-     * line is never folded, and a `PeerIdentityBinding` entry inside it goes
-     * unflagged. Measured 2026-09-13 (bead filing) at 3df3f1fad/212c34320:
+     * PROBE reproduction (computenet-qqkg6): an annotation immediately before
+     * the `class`/`object` keyword on the wrap-start line itself
+     * ("@Suppress(\"x\") class W :") must open the fold. Before the fix,
+     * [bindingHeaderWrapStart]'s modifier-prefix group was `(?:\w+\s+)*`,
+     * which only admits bare word-modifiers (`private`, `open`, ...); `@` is
+     * not a `\w` character, so the regex failed to match and the
+     * wrap-start-detection branch never fired for an annotation-prefixed
+     * header — the supertype list wrapped onto the next line was never
+     * folded, and a `PeerIdentityBinding` entry inside it went unflagged. Measured 2026-09-13 (bead filing) at 3df3f1fad/212c34320:
      * NOT flagged (should be flagged). Re-verified at this bead's own base
      * commit 65b415b81 before this fix: still NOT flagged, since #866
      * (computenet-ru92m) changed only [headerBracketDepths]'s body-brace
