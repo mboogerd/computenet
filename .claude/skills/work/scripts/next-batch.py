@@ -651,13 +651,27 @@ def plan_batch(candidates, feature=None, elsewhere=()):
             skipped.append({"id": tid, "reason": "human-gated"})
             continue
         files = claim_of(task)
-        if not files:
+        # compute=dedicated is a measurement valid only on a quiesced host:
+        # disjoint claims say nothing about CPU contention, and a co-scheduled
+        # sibling inflates the dispersion it measures into a result that reads
+        # as a finding (computenet-42zc). So it runs alone, like a claimless task.
+        dedicated = (task.get("metadata") or {}).get("compute") == "dedicated"
+        if dedicated and elsewhere:
+            # Any live unit contends, disjoint files or not — and the alone
+            # route below would skip the overlap check against it entirely.
+            # ponytail: sees only this actor's claimed units, not sibling sessions
+            skipped.append({"id": tid, "reason": "compute=dedicated; running outside this feature: "
+                            + ",".join(sorted(u["id"] for u in elsewhere))})
+            continue
+        if not files or dedicated:
+            why = "compute=dedicated" if dedicated else "no files claim"
             if batch:
-                skipped.append({"id": tid, "reason": "no files claim; must run alone"})
+                skipped.append({"id": tid, "reason": why + "; must run alone"})
                 continue
             batch.append(_entry(task, resumed, sorted(files), feature))
+            behind = "compute=dedicated" if dedicated else "unclaimed-files"
             already = {s["id"] for s in skipped}
-            skipped.extend({"id": t["id"], "reason": "deferred behind unclaimed-files task"}
+            skipped.extend({"id": t["id"], "reason": f"deferred behind {behind} task"}
                            for t, _ in candidates if t["id"] != tid and t["id"] not in already)
             break
         collisions = overlaps(files, taken)
