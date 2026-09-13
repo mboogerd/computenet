@@ -86,6 +86,21 @@ class WsPrincipalPromotionTest {
         name: String,
         val keyed: Boolean,
         binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
+        // Overrides the keyed-implies-RequireAuthenticated default below, for
+        // the uncredentialed-HELLO2 case: a keyed side that still admits
+        // unauthenticated peers (`Peering.Side.credentials`' own KDoc says
+        // this combination is valid), so it sends HELLO2 to a peer whose
+        // Open policy never challenges it back.
+        auth: PeerAuthPolicy? = null,
+        // Overrides the keyed-implies-verifies default below, for the same
+        // uncredentialed-HELLO2 case from the OTHER side: a keyed peer talking
+        // to an unkeyed side must not demand signed announcements, because the
+        // unkeyed side (`announcementSigning == null`) cannot produce one —
+        // `Peering.Side.announcementSigning`'s KDoc: signing is active exactly
+        // when a side holds both credentials and a signing config, and this
+        // peer's counterpart holds neither. Verification is the mirror of that
+        // on the receive side.
+        verifiesAnnouncements: Boolean? = null,
     ) {
         val identity: PeerIdentity? =
             if (keyed) FilePeerKeyStore(keyDirs.resolve(name)).loadOrGenerate() else null
@@ -97,7 +112,7 @@ class WsPrincipalPromotionTest {
             registry,
             bridgeHost,
             peer = peerId,
-            auth = if (keyed) PeerAuthPolicy.RequireAuthenticated() else PeerAuthPolicy.Open,
+            auth = auth ?: if (keyed) PeerAuthPolicy.RequireAuthenticated() else PeerAuthPolicy.Open,
             credentials = identity?.asPeerCredentials(),
             announcementSigning = if (keyed) socketAnnouncementSigning() else null,
             // The loopback parity case has no hello to bind a key, so this side
@@ -105,7 +120,11 @@ class WsPrincipalPromotionTest {
             // side's key (see `principalOverLoopback`). On the socket path the
             // ingress rebinds this with the hello-bound key regardless.
             announcementVerification =
-                if (keyed) socketAnnouncementVerification(publicKeys = { knownKeys[it] }) else null,
+                if (verifiesAnnouncements ?: keyed) {
+                    socketAnnouncementVerification(publicKeys = { knownKeys[it] })
+                } else {
+                    null
+                },
             identityBinding = binding,
         )
     }
@@ -230,6 +249,32 @@ class WsPrincipalPromotionTest {
 
         principalOverSocket(server, client) shouldBe
             Principal.Peer(PeerId("issuer-vouched-client"), AuthLevel.TransportVouched)
+    }
+
+    @Test
+    fun `an uncredentialed-HELLO2 socket crossing carries no issuer, even under an issuer-naming binding`() {
+        // The keyed client sends HELLO2; the unkeyed Open server has no
+        // credentials to challenge back with, so it takes the uncredentialed
+        // row (`WsTransport`'s `onAuthenticatedHello`, `credentials == null`
+        // branch) and admits at TransportVouched without ever proving
+        // possession — even though its issuer-naming binding resolved a
+        // `Bound.issuer` for the derived id. That resolved issuer must not
+        // reach the stamp: this is the row `bindAndAnnounce` deliberately
+        // calls with no `issuer` argument.
+        val server = Stack("hello2-vouched-server", keyed = false, binding = issuerNaming)
+        // Open despite holding a keypair, so the server's legacy (unkeyed)
+        // hello back is admitted rather than refused AUTH_REQUIRED — the
+        // asymmetric-but-peered outcome the production KDoc documents at
+        // WsTransport's `onAuthenticatedHello` uncredentialed-row comment.
+        val client = Stack(
+            "hello2-vouched-client",
+            keyed = true,
+            auth = PeerAuthPolicy.Open,
+            verifiesAnnouncements = false,
+        )
+
+        principalOverSocket(server, client) shouldBe
+            Principal.Peer(client.identity!!.peerId, AuthLevel.TransportVouched)
     }
 
     @Test
