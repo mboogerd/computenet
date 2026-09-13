@@ -1326,12 +1326,14 @@ as the second guard; never read it as "nobody is working here".
 
 **The same lock covers the bead's scoring fields.** While a dispatched agent
 is live, its bead's **comments** are always yours to add — append-only and
-timestamped — but its **title, description and acceptance wait for the
-verdict**: those are what the agent scores against, and it cannot tell your
-edit from a concurrent session's. An amendment that cannot wait goes in a
-comment plus a `SendMessage` to the agent saying what moved and why — never a
-silent edit (computenet-7gxi: a reviewer met its own finding in a title it had
-not written).
+timestamped — but its **title, description and acceptance wait for its
+completion notification**: those are what the agent scores against, and it
+cannot tell your edit from a concurrent session's. An amendment that cannot
+wait goes in a comment plus a `SendMessage` to the agent saying what moved and
+why, and the field follows once the notification arrives — never a silent
+edit. No `SendMessage` here (step 2) and the agent must work to the new text →
+`TaskStop` it and re-dispatch against the amended bead (computenet-7gxi: a
+reviewer met its own finding in a title it had not written).
 
 A worktree already on disk that this session did not create may also belong
 to a *concurrent session* on this machine, not just a dead one — step 3's
@@ -1753,7 +1755,7 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
   **When the widening is for a task ALREADY DISPATCHED** — the
   report-and-widen case in the sentence above — "before anyone is dispatched"
-  has already been missed — follow "the same lock covers the bead's scoring
+  has already been missed; follow "the same lock covers the bead's scoring
   fields" under step 5: comment the reconciliation and `SendMessage` the
   implementer, never amend silently (computenet-7gxi).
 - **Disjoint paths are not enough — read each candidate's acceptance for a
