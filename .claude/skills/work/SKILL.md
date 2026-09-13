@@ -130,7 +130,7 @@ header.
 | `claim-epic.sh` | `<epic-id>` — Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | `<feature-id>` — Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | `(no arguments)` — Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
-| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--claim]` — THE create path for a ticket under a shared epic — unparented, then re-parented |
+| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--claim]` — THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | `(no arguments)` — Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `claim-item.sh` | `<id>` — `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
@@ -1621,9 +1621,10 @@ AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
 indistinguishable from the result being measured and can invert a verdict.
 
-An entry with empty `model` → dispatch at `sonnet`, comment on the task; log
-friction only if a breakdown filed it — a bead this session filed (a residual)
-or filed directly is an omission to fix in place (`create-ticket.sh --model`). **Empty batch** → read `verdict`, don't infer:
+An entry with empty `model` → dispatch at `sonnet`, stamp it (`bd update <id>
+--set-metadata model=sonnet`), comment on the task. Log friction only if a
+breakdown filed it: residuals and directly-filed beads arrive unstamped (file
+with `create-ticket.sh --model`). **Empty batch** → read `verdict`, don't infer:
 
 | `verdict` | Meaning | Do |
 |---|---|---|

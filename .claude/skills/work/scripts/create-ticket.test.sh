@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "18 passed, 0 failed".
+# Expect "19 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -77,6 +77,12 @@ fixture
 out=$(run --model opus); st=$?
 [ "$st" = 0 ] && grep "^create" "$BD_LOG" | grep -q '{"model":"opus"}' \
   && ok "--model alone sets metadata" || bad "model-alone: exit=$st log=$(cat "$BD_LOG")"
+
+# 4d. --model with a non-object --metadata refuses before creating anything
+fixture
+out=$(run --model sonnet --metadata '["a.kt"]'); st=$?
+[ "$st" = 2 ] && ! grep -q "^create" "$BD_LOG" \
+  && ok "--model refuses a non-object --metadata" || bad "model-badmeta: exit=$st log=$(cat "$BD_LOG")"
 
 # 5. create returns non-JSON: exit 1, nothing parented
 fixture; touch "$CTRL/create-garbage"
