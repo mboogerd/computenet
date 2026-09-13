@@ -70,7 +70,7 @@ A worked, complete `frame` vector — the bytes are `StallNoticeWireCompatTest`'
   "title": "Stall(SUSPENDED) crosses as a PORT_API arg",
   "category": "frames/port-api",
   "kind": "frame",
-  "covers": ["WIR1-C04", "WIR1-C05", "WIR1-I01", "WIR1-I02", "WIR1-I19", "41 point 1"],
+  "covers": ["WIR1-C02", "WIR1-C09", "WIR1-C10", "WIR1-I01", "WIR1-I02", "WIR1-I03", "41 point 1"],
   "codecVersion": 2,
   "messageKind": "binary",
   "decoded": {
@@ -88,7 +88,7 @@ A worked, complete `frame` vector — the bytes are `StallNoticeWireCompatTest`'
     "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
     "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU3RhbGwiLHsicmVhc29uIjoiU1VTUEVOREVEIn1dXX0="
   },
-  "notes": "Transcribed from StallNoticeWireCompatTest.goldenSuspended. No version key and no natures key: both equal their defaults and are omitted (README, default omission)."
+  "notes": "Transcribed, not generated (WIR1-F1-D1), from StallNoticeWireCompatTest.goldenSuspended, captured at ea84150f5 per that test's KDoc. Encodes a HostedPortInvocation of the Propagate::propagate contract (contractId/methodId are that contract's FNV-1a hashes) carrying a Stall(SUSPENDED) notice on cellRef 00000000-0000-0000-0000-000000000042's inlet port. No version key: the frame version stays unemitted while it matches the implementation's own, which is a decision the codec KEEPS operational rather than a spec requirement — pinned-because-current ([WIR1-C16])."
 }
 ```
 
