@@ -207,6 +207,20 @@ class RejectionTest {
     }
 
     @Test
+    fun `QRY1 §REJECT-10 a dependent of a rejected rule whose head is a catalog relation still reports its own rejection`() {
+        // `r(X) :- s(X).` is EDB_REDEFINED; `q`'s reference to `r` resolves to the catalog
+        // relation, not to that rule, so `q` is independent of the rejection and its own
+        // ill-typed comparison must still surface as NO_LOWERING (QueryCompiler's KDoc:
+        // a head that is also a catalog relation is not tainted by exclusion).
+        val rejections = QueryCompiler.compile(
+            "r(X) :- s(X).\nq(X) :- r(X), t(X, Y), Y = \"three\".",
+            catalog("r" to 1, "s" to 1, "t" to 2),
+        ).shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        rejections.map { it.code } shouldBe listOf(RejectionCode.EDB_REDEFINED, RejectionCode.NO_LOWERING)
+    }
+
+    @Test
     fun `a query with no rejection in any phase compiles`() {
         QueryCompiler.compile("q(X) :- r(X, Y), Y > 3.", catalog("r" to 2))
             .shouldBeInstanceOf<CompileResult.Compiled>()

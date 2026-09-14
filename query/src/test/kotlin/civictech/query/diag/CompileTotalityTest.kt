@@ -64,7 +64,13 @@ class CompileTotalityTest {
         TextCase("EDB_REDEFINED", "r(X) :- s(X).", r1s1),
         TextCase("RECURSION_UNSUPPORTED self", "p(X) :- p(X), r(X).", r1s1),
         TextCase("RECURSION_UNSUPPORTED mutual, with a dependent", "p(X) :- q(X), r(X).\nq(X) :- p(X).\nd(X) :- q(X).", r1s1),
-        TextCase("defined by both a rule and a define statement", "q(X) :- r(X).\ndefine q(X) := s(X).\nd(X) :- q(X).", r1s1),
+        // The cycle's first statement heads a catalog relation, which exclusion does not taint:
+        // only excluding every head on the cycle keeps p -> q -> p away from the planner.
+        TextCase("RECURSION_UNSUPPORTED cycle whose located statement heads a catalog relation", "r(X) :- p(X).\np(X) :- q(X).\nq(X) :- p(X), r(X).", r1s1),
+        // Mirrors Planner's private outer-join renaming apart: the right side's non-key `X`
+        // collides with a left column, so the expression has arity 3, not 2.
+        TextCase("outer join whose renamed-apart right column makes the expression wider than the head", "define o(X, Y) := t(X, Y) left outer join t(Y, X) on X = Y.", catalog("t" to 2)),
+        TextCase("defined by both a rule and a define statement","q(X) :- r(X).\ndefine q(X) := s(X).\nd(X) :- q(X).", r1s1),
         TextCase("defined by more than one define statement", "define q(X) := r(X).\ndefine q(X) := s(X).", r1s1),
         TextCase("a constant in a head", "q(X, 1) :- r(X).", r1s1),
         TextCase("a repeated variable in a head", "q(X, X) :- r(X).", r1s1),
