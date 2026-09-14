@@ -158,6 +158,23 @@ class ChecksTest {
         pass(Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx))
     }
 
+    /**
+     * computenet-2ee6c: `view: '*'` resolves to `oracle.allViewValues().keys`
+     * — `graph.cells.filter { type in VIEW_TYPES }`. A graph with no view cell
+     * at all makes that set empty, so the loop body never runs and the check
+     * returned `Passed` having compared nothing. Only `24-GEN-01` uses `'*'`
+     * today and it is `kind: generative` (the generator always synthesizes a
+     * view), so this shape is unreachable from the live corpus — the same
+     * "latent, not regressed" status as the replicas-converge sibling above.
+     * Must fail rather than pass vacuously.
+     */
+    @Test
+    fun `incremental-equals-batch view star fails when the graph has no view cell`() {
+        val sc = scenario(listOf(cell("a", "set-source")), emptyList())
+        val ctx = FakeContext(FakeDriver(), sc)
+        fail(Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx))
+    }
+
     @Test
     fun `late-join-equals-early infers an early-late pair of journaled views`() {
         val sc = scenario(listOf(cell("early", "journal-set-view"), cell("late", "journal-set-view")), emptyList())
@@ -370,6 +387,49 @@ class ChecksTest {
         val r = Checks.replicasConverge(ReplicasConverge("shared"), ctx)
         fail(r)
         (r as CheckResult.Failed).message shouldContain "shared"
+    }
+
+    /**
+     * computenet-2ee6c: `declared` non-empty but every declared replica has
+     * departed leaves `live` empty — "nothing was compared", the same vacuous
+     * shape computenet-23z3 closed one scope level out (an empty *declared*
+     * set). Before this fix `live.size < 2` returned `Passed` unconditionally
+     * for `live.size == 0` too, so an all-departed replica set went green
+     * having compared nothing. Must fail, naming the logical id.
+     */
+    @Test
+    fun `replicas-converge fails when every declared replica has departed`() {
+        val sc = scenario(
+            listOf(
+                cell("r1", "set-source").copy(replicaOf = "shared"),
+                cell("r2", "set-source").copy(replicaOf = "shared"),
+            ),
+            emptyList(),
+        )
+        val ctx = FakeContext(FakeDriver(departed = setOf("r1", "r2")), sc)
+        val r = Checks.replicasConverge(ReplicasConverge("shared"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "shared"
+    }
+
+    /**
+     * computenet-2ee6c acceptance criterion 2: pins the legitimate G-45
+     * single-live-replica PASS (one declared replica departed, one live) so
+     * that mutating `if (live.size < 2) return CheckResult.Passed` to return
+     * `Failed` reddens this test — the demonstrated mutation quoted in the
+     * bead.
+     */
+    @Test
+    fun `replicas-converge holds when one declared replica has departed and one is live`() {
+        val sc = scenario(
+            listOf(
+                cell("r1", "set-source").copy(replicaOf = "shared"),
+                cell("r2", "set-source").copy(replicaOf = "shared"),
+            ),
+            emptyList(),
+        )
+        val ctx = FakeContext(FakeDriver(views = mapOf("r2" to list(s("a"))), departed = setOf("r1")), sc)
+        pass(Checks.replicasConverge(ReplicasConverge("shared"), ctx))
     }
 
     // --- no-dead-letters ----------------------------------------------------

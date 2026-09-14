@@ -93,7 +93,16 @@ object Checks {
         return CheckResult.Passed
     }
 
-    /** View equals the harness-side batch oracle over the accepted-op multiset. */
+    /**
+     * View equals the harness-side batch oracle over the accepted-op multiset.
+     *
+     * **`view: '*'` must resolve to at least one target** (computenet-2ee6c). It
+     * expands to [BatchOracle.allViewValues]'s keys — the graph's view cells —
+     * and a graph with none makes that set empty, so the comparison loop never
+     * ran and the check returned `Passed` having compared nothing: the same
+     * vacuous-coverage shape `replicas-converge` was closed for. Fails instead,
+     * naming that nothing was resolved to compare.
+     */
     fun incrementalEqualsBatch(check: IncrementalEqualsBatch, ctx: CheckContext): CheckResult {
         val oracle = try {
             BatchOracle(ctx.scenario)
@@ -101,6 +110,11 @@ object Checks {
             return CheckResult.Failed("incremental-equals-batch: oracle cannot model this scenario — ${e.message}")
         }
         val targets = if (check.view == "*") oracle.allViewValues().keys.toList() else listOf(check.view)
+        if (targets.isEmpty()) {
+            return CheckResult.Failed(
+                "incremental-equals-batch(*): no view cell in the graph to compare — nothing observed",
+            )
+        }
         for (viewId in targets) {
             val expected = try {
                 oracle.view(viewId)
@@ -270,8 +284,15 @@ object Checks {
      * all-but-one-departed case) let a scenario naming a nonexistent `logical:`
      * id go green having compared nothing — the vacuous-coverage failure mode
      * concord exists to rule out. So the two are distinguished: an empty
-     * *declared* set fails, naming the unmatched id; an empty or singleton
-     * *live* set (declared is non-empty) still passes, exactly as before.
+     * *declared* set fails, naming the unmatched id.
+     *
+     * **The same vacuous shape recurs one scope level in** (computenet-2ee6c):
+     * `declared` non-empty but every declared replica has since departed
+     * leaves `live` empty too — again "nothing was compared", not "nothing to
+     * compare". That also fails, naming the logical id and the departed
+     * count. Only a *singleton* live set (declared is non-empty, exactly one
+     * replica still live) passes — the legitimate G-45 all-but-one-departed
+     * case, where there is genuinely nothing left to compare it *against*.
      */
     fun replicasConverge(check: ReplicasConverge, ctx: CheckContext): CheckResult {
         val declared = ctx.scenario.graph?.cells.orEmpty().filter { it.replicaOf == check.logical }.map { it.id }
@@ -288,6 +309,12 @@ object Checks {
             } catch (e: NoSuchElementException) {
                 null // departed (despawned/evicted) — excluded, not compared (G-45)
             }
+        }
+        if (live.isEmpty()) {
+            return CheckResult.Failed(
+                "replicas-converge(${check.logical}): all ${declared.size} declared replica(s) of " +
+                    "'${check.logical}' have departed — nothing to compare",
+            )
         }
         if (live.size < 2) return CheckResult.Passed
         val (refId, refVal) = live.first()
