@@ -37,13 +37,27 @@ import org.junit.jupiter.api.Test
  * on every seed of `0L until 50L`: the hand-written script is fixed and the runner's own seed
  * varies only the injection interleaving and partial drains (`DifferentialRunner.kt:127-136`).
  *
- * **Non-vacuity (AMENDS computenet-cab.6.2, orchestrator task review):**
- * [QueryCase.buildGraph] links exactly one [TerminalFold] per entry of
- * `CompiledQuery.outputShapes`, so asserting a scenario's `outputShapes.keys` is exactly its
- * expected root name(s) is a direct proof that the runner compared a real terminal, not a
- * silently-unlinked root. Every scenario below carries that assertion, plus an explicit
- * assertion on the batch answer's content (`[QRY1-ORA-04]`) so a scenario cannot pass by
- * comparing two vacuous empty folds.
+ * **Non-vacuity (AMENDS computenet-cab.6.2, orchestrator task review):** every scenario asserts
+ * `outputShapes.keys` equals its expected root name(s) — this proves the root is present in
+ * [QueryCase.buildGraph]'s terminal map at all, guarding the AMENDS comment's original concern
+ * (a root absent from `CompiledQuery.outputShapes` entirely). **It does NOT by itself prove the
+ * terminal is actually linked to the live compiled output** — a task review (2026-09-14)
+ * confirmed that mutating [QueryCase.buildGraph] to spawn a fold without ever calling
+ * `connect` still passes this assertion, since `outputShapes` is a property of the compiled
+ * plan alone. For a scenario whose script has a non-empty expected answer (BS-3, BS-4's
+ * `survives`, BS-8, BS-9's `group2Dies`, BS-10, BS-18's early/late folds), [QueryCase
+ * .assertSuccess]'s own content comparison catches an unlinked terminal as a collateral
+ * effect — an unlinked [SetTerminalFold]/[civictech.oracle.run.MapTerminalFold] reads its
+ * un-fed default (empty), which disagrees with a non-empty expectation. **A deliberately wrong
+ * reference does NOT close this gap for an empty-answer script**: an unlinked terminal reads
+ * empty regardless of what it is compared against, so it would `Mismatch` against any wrong
+ * (non-empty) reference exactly as readily as a genuinely-linked, correctly-empty terminal
+ * would — the comparison can't tell them apart. For a scenario whose deterministic script
+ * always ends at the empty/absent state (BS-4's `collapses`, BS-9's `bothDie`), the fix instead
+ * calls [QueryCase.buildGraph] directly — the SAME production linking code `assertSuccess`
+ * uses, not a mock — drives the script by hand, and witnesses the terminal genuinely non-empty
+ * mid-script before the final remove empties it, the way BS-18 proves `earlyFold` non-empty
+ * before the late link.
  */
 class QueryScenarioTest {
 
@@ -127,6 +141,32 @@ class QueryScenarioTest {
         withClue("[24-OP-JOINSET-02]: c=7's last contributing pair died") {
             case.reference().evaluate(collapses).getValue("q") shouldBe ModelState.EMPTY_SET
         }
+
+        // NON-VACUITY WITNESS: collapses' expected answer is always EMPTY_SET, so an unlinked
+        // terminal's un-fed default would coincidentally match `assertSuccess` above — a wrong
+        // reference control cannot catch this either, since an unlinked terminal reads empty
+        // regardless of what it is compared against. Drive [QueryCase.buildGraph] directly (the
+        // SAME production linking code assertSuccess uses, not a mock) and observe the terminal
+        // is genuinely non-empty mid-script, before the final remove collapses it to empty.
+        val witnessWorld = SimWorld(seed = 0)
+        val witnessGraph = case.buildGraph(witnessWorld)
+        val qFold = witnessGraph.terminals.getValue("q")
+        val rSource = witnessGraph.sources.getValue(SourceId("r"))
+        val sSource = witnessGraph.sources.getValue(SourceId("s"))
+        rSource.add(row(1, 7))
+        rSource.add(row(2, 7))
+        sSource.add(row(1))
+        sSource.add(row(2))
+        rSource.remove(row(1, 7))
+        witnessWorld.runToIdle()
+        withClue("[24-OP-JOINSET-02] non-vacuity: q must be genuinely non-empty before the final remove") {
+            (qFold.current() as ModelState.SetState).elements.isEmpty() shouldBe false
+        }
+        rSource.remove(row(2, 7))
+        witnessWorld.runToIdle()
+        withClue("[24-OP-JOINSET-02]: c=7's last contributing pair died, on the SAME linked terminal just witnessed non-empty") {
+            qFold.current() shouldBe ModelState.SetState(emptySet())
+        }
     }
 
     @Test
@@ -206,6 +246,31 @@ class QueryScenarioTest {
         val afterBoth = (case.reference().evaluate(bothDie).getValue("byKey") as ModelState.MapState).entries
         withClue("[24-OP-GROUPBY-02]: an emptied group is absent, never present with an identity value") {
             afterBoth.keys shouldBe emptySet()
+        }
+
+        // NON-VACUITY WITNESS: bothDie's expected answer is always the empty map, so an unlinked
+        // terminal's un-fed default would coincidentally match `assertSuccess` above — a wrong
+        // reference control cannot catch this either, since an unlinked terminal reads empty
+        // regardless of what it is compared against. Drive [QueryCase.buildGraph] directly (the
+        // SAME production linking code assertSuccess uses, not a mock) and observe the terminal
+        // genuinely holds group 1 mid-script, before its own final removal empties it too.
+        val witnessWorld = SimWorld(seed = 0)
+        val witnessGraph = case.buildGraph(witnessWorld)
+        val byKeyFold = witnessGraph.terminals.getValue("byKey")
+        val rSource = witnessGraph.sources.getValue(SourceId("r"))
+        rSource.add(row(1, 10))
+        rSource.add(row(1, 11))
+        rSource.add(row(2, 20))
+        rSource.remove(row(2, 20))
+        witnessWorld.runToIdle()
+        withClue("[24-OP-GROUPBY-02] non-vacuity: byKey must genuinely hold group 1 before it too is removed") {
+            (byKeyFold.current() as ModelState.MapState).entries.keys shouldBe setOf(row(1))
+        }
+        rSource.remove(row(1, 10))
+        rSource.remove(row(1, 11))
+        witnessWorld.runToIdle()
+        withClue("[24-OP-GROUPBY-02]: an emptied group is absent, on the SAME linked terminal just witnessed holding it") {
+            (byKeyFold.current() as ModelState.MapState).entries.keys shouldBe emptySet()
         }
     }
 
