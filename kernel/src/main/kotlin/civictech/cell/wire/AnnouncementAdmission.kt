@@ -190,7 +190,16 @@ data class AnnouncementRejection(val reason: DenialReason, val detail: String)
  * (`boundKey`). The signed bytes are reconstructed over `boundPeer`, the
  * verifier is asked about `boundPeer` (5y8t.7-D2), and the replay ledger is
  * keyed by `boundPeer` (5y8t.7-D3) — so a named peer that rotates its key keeps
- * one high-water mark under its name. Under `PeerIdentityBinding.Interim` the
+ * one high-water mark under its name. The consequence is fail-closed and
+ * deliberate: a signer on the new key whose counter floor
+ * ([announcementCounterFloor] of its incarnation) does not exceed the mark the
+ * name already holds is refused [DenialReason.REPLAY] — so is any signer under
+ * that name, on any key, that the mark has overtaken, including a still-live
+ * one on the old key. The cure is a later (or durable) incarnation; the
+ * default wall-clock incarnation is read once, when the signer (one per
+ * `Peering.Side`) is built, so a rotated identity's side must be built at a
+ * later incarnation than the signer whose counters set the mark.
+ * `SignedAnnouncementTest` pins the rotated-signer case. Under `PeerIdentityBinding.Interim` the
  * bound key and the bound identity carry the same string, so every key-derived
  * peer is judged exactly as it was when this gate keyed off the key name.
  *
