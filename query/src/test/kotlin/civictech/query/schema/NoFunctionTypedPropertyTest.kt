@@ -13,6 +13,7 @@ import civictech.query.ast.RelationalExpr
 import civictech.query.ast.Rule
 import civictech.query.ast.SetOpKind
 import civictech.query.ast.Term
+import civictech.query.architecture.HierarchyCompleteness
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -73,6 +74,19 @@ class NoFunctionTypedPropertyTest {
         }
         withClue("Function-typed fields found on AST/schema types (violates [QRY1-LANG-06]): $offenders") {
             offenders.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `schemaAndAstTypes names every permitted subclass of Term, Literal and RelationalExpr`() {
+        // The sealed roots in this list's ast half (computenet-njvps); Attribute/RelationSchema/
+        // Catalog and the other ast types here are plain (non-sealed), with no permitted-subclass
+        // set to check.
+        val missing = HierarchyCompleteness.missingFrom(Term::class.java, schemaAndAstTypes) +
+            HierarchyCompleteness.missingFrom(Literal::class.java, schemaAndAstTypes) +
+            HierarchyCompleteness.missingFrom(RelationalExpr::class.java, schemaAndAstTypes)
+        withClue("schemaAndAstTypes is missing sealed-hierarchy members: $missing") {
+            missing.shouldBeEmpty()
         }
     }
 

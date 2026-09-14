@@ -1,10 +1,13 @@
 package civictech.query.plan
 
+import civictech.query.architecture.HierarchyCompleteness
 import civictech.query.ast.Aggregate
 import civictech.query.ast.AggregateKind
 import civictech.query.ast.ComparisonOp
 import civictech.query.ast.Literal
 import civictech.query.ast.Term
+import io.kotest.assertions.withClue
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
@@ -190,6 +193,22 @@ class LogicalPlanSerializationTest {
     fun `a representative plan covering every node kind round-trips equal to the original`() {
         val plan = representativePlan()
         roundTrip(plan) shouldBe plan
+    }
+
+    @Test
+    fun `representativePlan actually reaches every permitted PlanNode kind`() {
+        // The completeness backstop this class's own KDoc claim ("covering every closed
+        // node kind") had none of before computenet-njvps: a node kind dropped from
+        // representativePlan() would leave the round-trip test above green while quietly
+        // proving less than it claims.
+        val reachedKinds = representativePlan().roots.values
+            .flatMap { PlanOrder.allNodes(it) }
+            .map { it::class.java }
+            .distinct()
+        val missing = HierarchyCompleteness.missingFrom(PlanNode::class.java, reachedKinds)
+        withClue("representativePlan() never constructs: $missing") {
+            missing.shouldBeEmpty()
+        }
     }
 
     @Test
