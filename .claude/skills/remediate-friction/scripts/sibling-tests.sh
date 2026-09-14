@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the sibling test of every script this branch changes under
-# .claude/skills/*/scripts/. Step 4 of remediate-friction gates the PROSE
+# .claude/skills/*/scripts/. remediate-friction §5 gates the PROSE
 # (validate-skills.rb, reachability.py) and gated no
 # script at all, so a script edit shipped with its suite unrun — twice in the
 # 2026-08-29 drain, both caught by a dispatched reviewer rather than by the
@@ -39,7 +39,7 @@ git rev-parse --verify -q "$base" >/dev/null || {
 # bash 3.2 (the macOS system bash this repo runs under) has no `mapfile`, and
 # `${#arr[@]}` on an empty array is an unbound-variable error under `set -u`.
 # So: newline-delimited strings, not arrays.
-# Diff the MERGE BASE against the WORKING TREE, not `$base...HEAD`: step 4 runs
+# Diff the MERGE BASE against the WORKING TREE, not `$base...HEAD`: §5 runs
 # this BEFORE the commit, and a three-dot diff ignores uncommitted and staged
 # edits entirely — the gate would pass on exactly the change it is meant to
 # test. Untracked files need `--others` and are picked up separately below.

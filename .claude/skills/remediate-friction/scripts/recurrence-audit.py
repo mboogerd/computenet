@@ -82,7 +82,8 @@ def load(path):
 
 
 def landed(r):
-    """Closed as DONE — not superseded, rejected or deduplicated.
+    """Closed as DONE — not superseded, rejected, deduplicated, covered by an
+    existing principle, re-filed elsewhere, or closed as unfixable by text.
 
     NOT `"fixed in" in close_reason`, which this used until 2026-08-20 and
     which is a friction-lane CONVENTION: work epics close their children with
@@ -93,7 +94,8 @@ def landed(r):
     """
     cr = (r.get("close_reason") or "").strip().lower()
     return (r.get("status") == "closed"
-            and not cr.startswith(("superseded", "rejected", "duplicate")))
+            and not cr.startswith(("superseded", "rejected", "duplicate",
+                                  "covered", "refiled", "time")))
 
 
 def children_of(records, epic):
@@ -132,7 +134,7 @@ def main(argv):
         # Worktrees have no .beads/ — the export lives in the main checkout.
         # git-common-dir points at the shared .git from any worktree, so its
         # parent is the main checkout. This lane runs in a worktree by design
-        # (step 4), so without this the audit is unrunnable exactly where it
+        # (step 3), so without this the audit is unrunnable exactly where it
         # is needed.
         jsonl = main_checkout_export(a.jsonl)
     if not jsonl:

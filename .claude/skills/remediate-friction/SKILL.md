@@ -21,10 +21,10 @@ The lane works in two modes, and the nightly scheduled run does both:
   concurrent-run check never sees this lane.
 - **Touch only `.claude/skills/` and `AGENTS.md`.** Product code belongs to
   /work.
-- Sync follows /work's hard constraints: claim with `claim-item.sh`, bracket
-  every write under the epic as pull → verify → write → push, and push with
-  `publish-beads.sh`. File new items with `create-ticket.sh`. Scripts live in
-  `.claude/skills/work/scripts/`.
+- **Sync.** Triage writes (closes, labels, metadata, comments) stay local
+  until §6. Acquisitions (claiming an item, filing with `create-ticket.sh`)
+  are bracketed pull → verify → write → push. Claim with `claim-item.sh`,
+  push with `publish-beads.sh`. Scripts live in `.claude/skills/work/scripts/`.
 
 ## 1. Start
 
@@ -35,9 +35,11 @@ bd list --parent=computenet-wpvy --all --json | sed -n '/^[[{]/,/^[]}]/p' \
   | jq '[(if type=="array" then . else (.issues // []) end)[] | select(.status != "closed")]'
 ```
 
-Skip items labelled `human` or `needs-evidence`. Skip items claimed by a live
-holder (`session-holder.sh --check <metadata.holder>`). An item claimed but untouched for more
-than 12h may be taken: pull, claim, push, and leave a comment saying so.
+Skip items labelled `human`, `needs-evidence` or `revise` (already queued).
+Skip a claimed item whose `session-holder.sh --check <metadata.holder>` says
+LIVE or FOREIGN. Any other claimed item that has been untouched for more than
+12h may be taken: pull, claim it, push, and leave a comment saying so.
+Triage itself claims nothing; claim an item only before fixing it (§3).
 
 ## 2. Triage
 
@@ -47,27 +49,27 @@ names the revision it was filed under. Choose one row:
 
 | The friction is… | Do |
 |---|---|
-| Already fixed by the current text | Close: `superseded: <current hash>` |
+| Already fixed by the current text | Close: `superseded: <git rev-parse --short origin/main>` |
 | A command, flag, path or fact the skill states wrongly | **Fix now** (§3). Reproduce it first |
 | A bug in a skill script | **Fix now**, with a test that fails without the fix |
 | A data-loss, collision or shipping-safety hazard | **Fix now** |
 | An existing rule that misfired, or two rules that conflict | **Queue** for revision |
 | A new tool or environment hazard that can recur | **Queue** as a `traps.md` row |
 | Covered by a principle, or something a capable agent reasons through | Close: `covered: principle <N>` or `covered: judgment`, naming which |
-| Elapsed time, stalls or ending a turn | Close unless a script could detect it; never add prose |
-| A product, tracker or CI bug | Re-file outside the SDLC epic, then close with a pointer |
+| Elapsed time, stalls or ending a turn | Close: `time:` unless a script could detect it; never add prose |
+| A product, tracker or CI bug | Re-file outside the SDLC epic, then close: `refiled: <new id>` |
 | A misreading of the skill | Close: `rejected:` and quote the text it misreads |
 | One instance you can't verify | Park (below) |
 
 Before closing or queueing, record the class from
 [error-classes.md](references/error-classes.md):
-`bd update <id> --set-metadata friction_class=<E-n>`. Make one `bd` write per
+`bd update <id> --set-metadata friction_class=E<n>`. Make one `bd` write per
 call.
 
-- **Queue:** `bd update <id> --add-label revise --set-metadata section=<file>#<heading> --assignee="" --status=open`.
+- **Queue:** `bd update <id> --add-label revise --set-metadata 'section=<file>#<heading>'`.
 - **Park:** comment exactly what a future instance must capture (the command,
   its verbatim output, what it cost), then
-  `bd update <id> --add-label needs-evidence --assignee="" --status=open`.
+  `bd update <id> --add-label needs-evidence`.
   /work step 7 removes the label when a second instance arrives.
 - Unsure whether a change would be an improvement? Label the item `human` and
   park the question per /work's `references/recovery.md` "Parks".
@@ -80,7 +82,8 @@ grow it.
 
 ## 3. Fix now
 
-Make one small PR per item, in a worktree cut from `origin/main`:
+Claim the item (`claim-item.sh`, then push). Make one small PR per item, in
+a worktree cut from `origin/main`:
 
 ```bash
 .claude/skills/work/scripts/ensure-worktree.sh "$PWD/../computenet-worktrees/<id>" friction/<id> origin/main
@@ -95,8 +98,8 @@ A claim you still hold at session end: land the PR or release the claim
 
 ## 4. Revision
 
-Run a revision when one section has **5 queued items or 2 recurrences**,
-counted over its `revise` items. Run at most one per night, and keep at most
+Run a revision when one section has **5 queued items**, or **2 queued items
+that each have a second instance** (`comment_count` ≥ 1). Run at most one per night, and keep at most
 one revision PR open at a time.
 
 1. **Pin** `origin/main`'s sha. Read the whole section and every queued item
@@ -113,7 +116,8 @@ one revision PR open at a time.
 
    Fix what they find.
 4. **One draft PR.** Its description lists each queued item and its outcome.
-   It stays a draft for a human to approve. Close the items when it merges.
+   It stays a draft for a human to approve: park that question per
+   `recovery.md` "Parks" so a person sees it. Close the items when it merges.
 
 ## 5. Gates
 
