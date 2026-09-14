@@ -3,27 +3,23 @@ package civictech.query.diag
 /**
  * A closed enum naming the reason a query was rejected during compilation.
  *
- * Landed EMPTY by cab.1 (feature decision cab.1-D1, computenet-cab.1): each variant is
- * added by the feature that realizes the refusal it names, together with that refusal's own
- * named behaviour test ([QRY1-REJECT-05]). Pre-seeding a variant here — before any feature
- * exercises the rejection it stands for — would violate that discipline from day one: a
- * variant with no behaviour test is exactly the gap [QRY1-REJECT-05] exists to forbid.
+ * Closed under [QRY1-REJECT-05]: every variant is added by the feature that realizes the
+ * refusal it names, together with a producing test, and a variant with no registered
+ * producer fails `civictech.query.diag.RejectionExhaustivenessTest` (BS-13, cab.5-D11) —
+ * the enum is never pre-seeded ahead of its refusal (cab.1-D1). Provenance, one line each:
  *
- * [SYNTAX_ERROR] is the first variant to be added under that discipline, by the text-parser
- * feature (computenet-cab.2.2) together with the named tests that produce it in
- * `civictech.query.parse.QueryParserTest`.
+ * - [SYNTAX_ERROR] — the text parser (computenet-cab.2.2).
+ * - [UNSAFE_RULE], [EDB_REDEFINED], [RECURSION_UNSUPPORTED] — the safety/EDB/recursion
+ *   analysis (computenet-cab.2.3), `civictech.query.parse.SafetyAnalysis`.
+ * - [NO_LOWERING] — `civictech.query.QueryCompiler`'s mapping of every
+ *   `civictech.query.lower.LoweringRefusal` (computenet-cab.5.1, cab.5-D10).
+ * - [UNKNOWN_PREDICATE], [ARITY_MISMATCH], [PREDICATE_REDEFINED], [UNPLANNABLE_STATEMENT] —
+ *   `civictech.query.parse.WellFormednessAnalysis`, the fence in front of
+ *   `civictech.query.plan.Planner`'s preconditions (computenet-cab.5.1, cab.5-D6).
  *
- * [UNSAFE_RULE], [EDB_REDEFINED] and [RECURSION_UNSUPPORTED] are added by the safety/EDB/
- * recursion analysis feature (computenet-cab.2.3) together with the named tests that produce
- * them in `civictech.query.parse.SafetyAnalysisTest` and
- * `civictech.query.parse.RecursionRefusalTest`.
- *
- * [Rejection] pairs a [RejectionCode] with a [Locus] (offending source span or plan node)
- * and a `specId` naming the spec text, gap marker, or roadmap item that forbids the
- * construct — the data shape [QRY1-REJECT-02] requires. `RejectionCode` being empty does not
- * block that shape from existing; it blocks a [Rejection] from being *instantiated* until a
- * rejection-realizing feature adds a variant, which is intentional (see
- * `civictech.query.diag.DiagSerializationTest`'s KDoc for what is proven in the meantime).
+ * [Rejection] pairs a [RejectionCode] with a [Locus] (offending source span, statement, or
+ * plan node) and a `specId` naming the spec text, gap marker, or roadmap item that forbids
+ * the construct — the data shape [QRY1-REJECT-02] requires.
  *
  * [QRY1-REJECT-02], [QRY1-REJECT-05]
  *
@@ -82,4 +78,53 @@ enum class RejectionCode {
      * [QRY1-LANG-09]
      */
     RECURSION_UNSUPPORTED,
+
+    /**
+     * A plan node has no lowering rule for the shape it was given — a non-root aggregate, an
+     * ill-typed comparison, an aggregate over a column the kernel cannot sum. One rejection per
+     * `civictech.query.lower.LoweringRefusal`, located at that plan node (`<root>/<n>:<kind>`),
+     * its `specId` naming the node kind and the refusal reason; never collapsed, never a
+     * nearest-match operator.
+     *
+     * [QRY1-REJECT-06], [QRY1-REJECT-01]
+     */
+    NO_LOWERING,
+
+    /**
+     * A body atom, negated atom, or definition leaf names a predicate that is neither a
+     * relation declared in the [Catalog][civictech.query.schema.Catalog] nor the head of a
+     * rule or `define` statement.
+     *
+     * [QRY1-LANG-05]
+     */
+    UNKNOWN_PREDICATE,
+
+    /**
+     * A predicate is used at an arity other than the one it has: an atom whose term count
+     * differs from its catalog schema's attribute count or from its defining head's arity,
+     * two rules for one head at different arities, a `define` head whose arity differs from
+     * its expression's, or set-operation operands of different arity.
+     *
+     * [QRY1-LANG-05]
+     */
+    ARITY_MISMATCH,
+
+    /**
+     * A head predicate is defined by both a rule and a `define` statement, or by more than one
+     * `define` statement — a head has exactly one kind of definition. (A head that redefines a
+     * catalog relation is [EDB_REDEFINED], not this.)
+     *
+     * [QRY1-LANG-04], [QRY1-REJECT-03]
+     */
+    PREDICATE_REDEFINED,
+
+    /**
+     * A statement parses and is safe but has a shape the planner has no translation for: a
+     * constant or repeated variable in a head, a rule with no positive body atom (a fact such
+     * as `q(1).` included), an aggregate-annotated nullary head, or an outer-join key that is
+     * not a column of its side or is used twice.
+     *
+     * [QRY1-REJECT-03]
+     */
+    UNPLANNABLE_STATEMENT,
 }
