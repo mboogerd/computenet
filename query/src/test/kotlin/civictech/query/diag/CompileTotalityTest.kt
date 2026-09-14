@@ -122,6 +122,12 @@ class CompileTotalityTest {
                     Query(listOf(Rule(Atom("q", listOf(v("X"))), listOf(Literal.Positive(Atom("r", listOf(v("X")))), Literal.Negated(Atom("nope", listOf(v("X"))))))), r1),
                 )
             },
+            "a span table with duplicate spans across a safe then an unsafe rule (computenet-o63x3)" to {
+                val safe = Rule(Atom("p", listOf(v("X"))), listOf(Literal.Positive(Atom("r", listOf(v("X"))))))
+                val unsafe = Rule(Atom("q", listOf(v("X"))), listOf(Literal.Positive(Atom("r", listOf(v("Y"))))))
+                val span = Locus.SourceSpan(1, 1, 1, 5)
+                QueryCompiler.compile(Query(listOf(safe, unsafe), r1), SpanTable(listOf(span, span), emptyList()))
+            },
         )
     }
 
@@ -158,6 +164,22 @@ class CompileTotalityTest {
             .map { it.name }
         withClue("corpus inputs that compiled: $compiled") {
             compiled.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `computenet-o63x3 - duplicate spans across a safe then an unsafe rule reject UNSAFE_RULE instead of throwing`() {
+        fun v(name: String) = Term.Var(name)
+        val r1 = catalog("r" to 1)
+        val safe = Rule(Atom("p", listOf(v("X"))), listOf(Literal.Positive(Atom("r", listOf(v("X"))))))
+        val unsafe = Rule(Atom("q", listOf(v("X"))), listOf(Literal.Positive(Atom("r", listOf(v("Y"))))))
+        val span = Locus.SourceSpan(1, 1, 1, 5)
+
+        val result = QueryCompiler.compile(Query(listOf(safe, unsafe), r1), SpanTable(listOf(span, span), emptyList()))
+
+        val rejected = result.shouldBeInstanceOf<CompileResult.Rejected>()
+        withClue("rejections: ${rejected.rejections}") {
+            rejected.rejections.map { it.code } shouldBe listOf(RejectionCode.UNSAFE_RULE)
         }
     }
 

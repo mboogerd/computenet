@@ -66,12 +66,22 @@ object QueryCompiler {
      * Compiles [query] against the catalog it carries. [spans], when supplied (a text parse's
      * [ParseResult.Parsed.spans]), locates statement-level rejections at source spans; a
      * [SpanTable] whose sizes do not match [query]'s statement lists is ignored rather than
-     * trusted, so loci fall back to [Locus.RuleStatement]. Total.
+     * trusted, so loci fall back to [Locus.RuleStatement]. [Remainder.statementOf] maps a
+     * [Locus.SourceSpan] rejection back to the statement that produced it by value equality
+     * against [SpanTable.rules]/[SpanTable.definitions] — the span itself carries no index —
+     * so a span table whose spans are not pairwise distinct would map every rejection at a
+     * duplicated span to the *first* statement holding that span, silently mis-excluding the
+     * wrong one. A caller-supplied [SpanTable] with duplicate spans is therefore just as
+     * untrusted as one of the wrong size: it is ignored, and loci fall back to
+     * [Locus.RuleStatement], which locates by index and is never ambiguous. A text parse never
+     * produces duplicate spans, so this only guards the AST overload's hand-built tables. Total.
      */
     fun compile(query: Query, spans: SpanTable? = null): CompileResult {
         val rejections = mutableListOf<Rejection>()
         val usableSpans = spans?.takeIf {
-            it.rules.size == query.rules.size && it.definitions.size == query.definitions.size
+            it.rules.size == query.rules.size &&
+                it.definitions.size == query.definitions.size &&
+                (it.rules + it.definitions).let { all -> all.size == all.toSet().size }
         }
         var remaining = Remainder.of(query, usableSpans)
 
