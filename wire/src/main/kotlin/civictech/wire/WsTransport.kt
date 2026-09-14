@@ -162,6 +162,54 @@ object WsTransport {
     const val REFUSED_DIAL_LIMIT: Int = 5
 
     /**
+     * A [Peering.Side] whose credentials no `HELLO3` line can carry: more than
+     * [MAX_HELLO_STATEMENTS] statements, a name that is empty or holds a
+     * space, or anything else [encodeHello3] refuses for them (an unsigned
+     * statement, a name with an unpaired surrogate). Thrown by [listen] and
+     * [connect] **before any socket is bound, accepted or dialled**
+     * (computenet-5y8t.6).
+     *
+     * `Session.hello` refuses the same credentials and still does, as defence
+     * in depth; but it runs per open — on a listener's socket thread for
+     * every accepted peer, and inside a client's reconnect loop — so a
+     * configuration fault would surface there once per connection, far from
+     * the call that configured it. Credentials with **no** statements are
+     * never refused here: they send `HELLO2`, which carries no statements.
+     *
+     * `IrohTransport.UnsendableHelloCredentialsException` is the same refusal
+     * on `:iroh`; the two modules do not depend on each other, so the name is
+     * declared once per transport.
+     */
+    class UnsendableHelloCredentialsException internal constructor(message: String, cause: Throwable? = null) :
+        IllegalArgumentException(message, cause)
+
+    /** Refuses [side] with [UnsendableHelloCredentialsException] when `Session.hello` could not send its credentials. */
+    private fun requireSendableHelloCredentials(side: Peering.Side) {
+        val credentials = side.credentials ?: return
+        val statements = credentials.statements
+        if (statements.isEmpty()) return
+        val name = credentials.peerId.name
+        if (statements.size > MAX_HELLO_STATEMENTS) {
+            throw UnsendableHelloCredentialsException(
+                "credentials for $name hold ${statements.size} statements; a HELLO3 line carries at most " +
+                    "$MAX_HELLO_STATEMENTS",
+            )
+        }
+        if (name.isEmpty() || ' ' in name) {
+            throw UnsendableHelloCredentialsException(
+                "credentials name '$name' cannot be a HELLO3 claimed id (empty or contains a space)",
+            )
+        }
+        // The rest of what the encoder refuses, by asking the encoder: a
+        // placeholder mirror ref and nonce, since neither can make it refuse.
+        try {
+            encodeHello3(Hello3(UUID(0L, 0L), credentials.peerId, credentials.publicKey, ByteArray(HELLO_NONCE_BYTES), statements))
+        } catch (e: IllegalArgumentException) {
+            throw UnsendableHelloCredentialsException("credentials for $name cannot be sent in a HELLO3: ${e.message}", e)
+        }
+    }
+
+    /**
      * How long an opened connection must last to clear the refused-dial run
      * (computenet-4gzr) — see [REFUSED_DIAL_LIMIT] for why a duration is the
      * discriminator here and not on `:iroh`.
@@ -202,9 +250,14 @@ object WsTransport {
      * (java-websocket calls `setReuseAddress` on the already-bound socket, where
      * it has no effect on the existing binding). Ownership transfers with the
      * call: `listener.stop()` closes the channel.
+     *
+     * @throws UnsendableHelloCredentialsException before the channel is
+     *   served, when [side]'s credentials cannot be sent in a hello; the
+     *   channel then stays the caller's, open and unaccepted.
      */
     fun listen(channel: ServerSocketChannel, side: Peering.Side): WsListener {
         require(channel.localAddress != null) { "listen(channel) needs an already-bound channel" }
+        requireSendableHelloCredentials(side)
         val listener = WsListener(channel, side)
         listener.start()
         check(listener.awaitStart(10, TimeUnit.SECONDS)) {
@@ -281,8 +334,12 @@ object WsTransport {
      * port whose old connections are still in TIME_WAIT, while an ephemeral bind
      * has no port to re-bind and asking for reuse there only widens what may
      * overlap it (computenet-8ru).
+     *
+     * @throws UnsendableHelloCredentialsException before anything is bound,
+     *   when [side]'s credentials cannot be sent in a hello.
      */
     fun listen(port: Int, side: Peering.Side): WsListener {
+        requireSendableHelloCredentials(side)
         val listener = WsListener(if (port == 0) loopback(0) else InetSocketAddress(port), side)
         listener.isReuseAddr = port != 0
         listener.start()
@@ -314,6 +371,9 @@ object WsTransport {
      * mid-handshake. Diagnostics only: the retry, the timeout and the give-up
      * condition are unchanged, and the diagnosis is built inside `check`'s lazy
      * message, so a successful connect never pays for it.
+     *
+     * @throws UnsendableHelloCredentialsException before anything is dialled,
+     *   when [side]'s credentials cannot be sent in a hello.
      */
     fun connect(
         uri: URI,
@@ -339,6 +399,7 @@ object WsTransport {
         backoff: (attempt: Int) -> Long,
         refusedDialLimit: Int,
     ): WsConnection {
+        requireSendableHelloCredentials(side)
         awaitReachable(uri, backoff)
         val connection = WsConnection(uri, side, backoff, refusedDialLimit)
         // `connectBlocking` is `connectLatch.await(timeout) && isOpen()`, and BOTH
@@ -967,7 +1028,9 @@ object WsTransport {
          *   [MAX_HELLO_STATEMENTS] statements, or a name that is empty or
          *   holds a space) fail here with an `IllegalStateException`, before
          *   this open mutates anything — never truncated into a different
-         *   claim.
+         *   claim. [listen] and [connect] refuse them earlier still, before
+         *   any socket exists ([UnsendableHelloCredentialsException]); this
+         *   check stays as defence in depth for a Session built directly.
          *
          * So a side holding no statements emits exactly the bytes it did
          * before `HELLO3` existed.
