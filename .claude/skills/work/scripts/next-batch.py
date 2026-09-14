@@ -691,6 +691,37 @@ def plan_batch(candidates, feature=None, elsewhere=()):
     return batch, skipped
 
 
+def drop_unmerged_blocked(candidates):
+    """Split off new candidates verify-ready.sh reports BLOCKED.
+
+    `bd ready` counts a closed blocker as done, but a task closes when it merges
+    into ITS feature branch: a blocker under another, unmerged feature is not on
+    this feature's branch yet (computenet-frxh6). verify-ready.sh owns that test;
+    this only routes on it. Resumed tasks are already under way and pass through.
+    If the check itself fails, nothing is dropped: it is advisory, not a gate.
+    """
+    fresh = [t["id"] for t, resumed in candidates if not resumed]
+    if not fresh:
+        return candidates, []
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify-ready.sh")
+    out = subprocess.run(["sh", script, *fresh], capture_output=True, text=True)
+    if out.returncode not in (0, 1):
+        return candidates, []
+    blocked, current = {}, None
+    for line in out.stdout.splitlines():
+        if line.startswith("BLOCKED "):
+            current = line.split()[1]
+            blocked[current] = []
+        elif line.startswith("READY "):
+            current = None
+        elif current:
+            blocked[current].append(line.strip())
+    kept = [(t, r) for t, r in candidates if t["id"] not in blocked]
+    skipped = [{"id": tid, "reason": "blocked (verify-ready): " + "; ".join(why)}
+               for tid, why in blocked.items()]
+    return kept, skipped
+
+
 def running_elsewhere(actor, feature, candidate_ids):
     """Units this actor has in flight OUTSIDE this feature, with their claims.
 
@@ -790,6 +821,8 @@ def main():
         seen.add(tid)
         candidates.append((task, resumed))
 
+    candidates, unmerged = drop_unmerged_blocked(candidates)
+
     elsewhere = running_elsewhere(actor, feature, {t["id"] for t, _ in candidates})
     try:
         batch, skipped = plan_batch(candidates, feature, elsewhere)
@@ -801,6 +834,8 @@ def main():
                  "Fix that bead's metadata.files -- a comma-separated string "
                  "(\"a/b.kt,c/d.kt\") or a JSON list of strings -- then re-run:\n"
                  "  bd update <id> --set-metadata files=a/b.kt,c/d.kt" % exc)
+
+    skipped = unmerged + skipped
 
     cores = os.cpu_count() or 1
     # Siblings are discovered by the orchestrator (step 3's liveness check) and
