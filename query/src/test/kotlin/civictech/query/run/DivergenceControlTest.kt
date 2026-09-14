@@ -11,7 +11,9 @@ import civictech.oracle.run.StateDifference
 import civictech.query.lower.Lowering
 import civictech.query.lower.LoweringResult
 import civictech.query.lower.PlanFixtures
+import civictech.query.run.controls.StatelessLastWinsProjectCell
 import civictech.query.run.controls.lastWinsProjection
+import civictech.query.run.controls.statelessLastWinsProjection
 import civictech.query.run.controls.stickyGroupBy
 import civictech.query.schema.AttrType
 import civictech.query.schema.Attribute
@@ -101,6 +103,76 @@ class DivergenceControlTest {
     }
 
     @Test
+    fun `computenet-cab 6 6 - the stateless per-delta last-wins remap is caught downstream of a join, and only there`() {
+        // Premise check first: over the plain projection (a SetCell source, one row per delta)
+        // the stateless remap sees no in-delta collision and no seed catches it.
+        val plain = QueryCase.compile(PROJECTION_SOURCE, PROJECTION_CATALOG)
+        val plainMutated = plain.copy(compiled = plain.compiled.statelessLastWinsProjection("q"))
+        StatelessLastWinsProjectCell.collidingDeltas.set(0)
+        var plainMismatches = 0
+        forEachSeed(SEEDS) { seed ->
+            val generated = QueryScripts(seed, PROJECTION_CATALOG, PROJECTION_DOMAIN, steps = 40, deletionRatio = 0.5)
+            if (plainMutated.check(seed, generated.script) != RunOutcome.Success) plainMismatches++
+        }
+        val plainCollisions = StatelessLastWinsProjectCell.collidingDeltas.get()
+
+        val case = QueryCase.compile(JOIN_PROJECTION_SOURCE, JOIN_CATALOG)
+        val mutated = case.copy(compiled = case.compiled.statelessLastWinsProjection("q"))
+        assertEveryRootCompared(case)
+        mutated.compiled.spec shouldNotBe case.compiled.spec
+
+        // r(1, 1) meets s(1, 1) and s(1, 2): whichever side arrives last, if it is r(1, 1) the
+        // join emits (1, 1, 1) and (1, 1, 2) in ONE delta, both projecting onto q(1); the remap
+        // keeps one tag. Removing the kept pair's s row then kills q(1) while (1, 1, other) is
+        // live. Which pair is kept is the join's map order, so both removals are scripted.
+        fun hand(removed: Int) = Script(
+            listOf(
+                SourceScript(SourceId("r"), listOf(add("r", row(1, 1)))),
+                SourceScript(SourceId("s"), listOf(add("s", row(1, 1)), add("s", row(1, 2)), remove("s", row(1, removed)))),
+            ),
+        )
+
+        StatelessLastWinsProjectCell.collidingDeltas.set(0)
+        val mismatchSeeds = sortedSetOf<String>()
+        var totals = QueryScripts.ScriptStats.ZERO
+        forEachSeed(SEEDS) { seed ->
+            val generated = QueryScripts(seed, JOIN_CATALOG, JOIN_DOMAIN, steps = 40, deletionRatio = 0.5)
+            totals += generated.stats
+            listOf("hand1" to hand(1), "hand2" to hand(2), "generated" to generated.script).forEach { (label, script) ->
+                case.assertSuccess(seed, script)
+                when (val outcome = mutated.check(seed, script)) {
+                    RunOutcome.Success -> Unit
+                    else -> {
+                        withClue("seed=$seed $label: the control may only fail as a mismatch on q\n${outcome.describe(mutated, script)}") {
+                            val mismatch = outcome.shouldBeInstanceOf<RunOutcome.Mismatch>()
+                            mismatch.terminal shouldBe "q"
+                        }
+                        mismatchSeeds += "$label:$seed"
+                    }
+                }
+            }
+        }
+        val joinCollisions = StatelessLastWinsProjectCell.collidingDeltas.get()
+        val generatedFailures = mismatchSeeds.count { it.startsWith("generated:") }
+        println(
+            "[cab.6.6] stateless last-wins: plain projection $plainMismatches of ${SEEDS.count()} seeds caught, " +
+                "$plainCollisions colliding deltas; downstream of join ${mismatchSeeds.size} failing (script, seed) pairs of " +
+                "${3 * SEEDS.count()}, generated sweep failed on $generatedFailures of ${SEEDS.count()} seeds, " +
+                "$joinCollisions colliding deltas; achieved $totals",
+        )
+        withClue("premise: a SetCell-fed projection never sees two colliding preimages in one delta") {
+            plainCollisions shouldBe 0L
+            plainMismatches shouldBe 0
+        }
+        withClue("premise: the join emitted at least one delta with two rows colliding under the projection") {
+            (joinCollisions > 0L) shouldBe true
+        }
+        withClue("the stateless remap downstream of a join was caught on no seed of $SEEDS — a finding, not a range to widen") {
+            mismatchSeeds.shouldNotBeEmpty()
+        }
+    }
+
+    @Test
     fun `QRY1 §ORA-08 BS-16 a sticky group-by is caught and attributed to the aggregate root`() {
         val catalog = PlanFixtures.catalog("r" to 2)
         val case = QueryCase.compile("a(X) :- r(X, Y).\n@count z(X, Y) :- r(X, Y).", catalog)
@@ -174,6 +246,14 @@ class DivergenceControlTest {
         val PROJECTION_CATALOG = Catalog(
             mapOf("r" to RelationSchema(listOf(Attribute("a0", AttrType.INT), Attribute("a1", AttrType.LONG)))),
         )
+
+        /** A projection over a join's output: one r row meeting two s rows yields two q(X) preimages in one delta. */
+        const val JOIN_PROJECTION_SOURCE = "q(X) :- r(X, Y), s(Y, Z)."
+
+        val JOIN_CATALOG: Catalog = PlanFixtures.catalog("r" to 2, "s" to 2)
+
+        /** Three INT values: joins match often and projections onto X collide often. */
+        val JOIN_DOMAIN: Map<AttrType, List<Any>> = QueryScripts.DEFAULT_DOMAIN + mapOf(AttrType.INT to listOf(1, 2, 3))
 
         val PROJECTION_DOMAIN: Map<AttrType, List<Any>> =
             QueryScripts.DEFAULT_DOMAIN + mapOf(AttrType.INT to listOf(1, 2), AttrType.LONG to (1L..6L).toList())

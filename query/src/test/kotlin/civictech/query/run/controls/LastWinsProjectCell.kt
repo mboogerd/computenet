@@ -115,3 +115,49 @@ class LastWinsProjectCell(
 data class LastWinsProjectFactory(val transform: RowProjection) : TypedCellFactory<LastWinsProjectCell> {
     override fun create(ref: CellRef): LastWinsProjectCell = LastWinsProjectCell(transform, ref)
 }
+
+/**
+ * The kernel control's LITERAL last-wins shape (computenet-cab.6.6): a stateless per-delta
+ * remap, `SetDelta(adds = adds.mapKeys { project }, dels = dels.mapKeys { project })`. When two
+ * input rows of ONE delta project onto the same output row, `mapKeys` keeps the last one's tags
+ * and silently drops the other's — the `[24-OP-FLATMAP-01]` "union of preimage tags" violation
+ * confined to a single delta. Across deltas it is indistinguishable from `FlatMapSetCell`.
+ *
+ * It therefore diverges only where its input carries multi-row deltas with colliding preimages.
+ * A root `SetCell` source never does (one row per delta, see [LastWinsProjectCell]); a
+ * `JoinSetCell` does: one left row meeting two live right rows under one key reconciles both
+ * pairs into the same outgoing `SetDelta`. [collidingDeltas] counts the deltas in which a
+ * collision actually happened, so a control that passes can prove its premise was exercised.
+ */
+class StatelessLastWinsProjectCell(
+    private val transform: RowProjection,
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell {
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Row>>>())
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Row>>>())
+
+    private fun project(row: Row): Row = transform(row).single()
+
+    init {
+        inlet.serve(object : Propagate<SetDelta<Row>> {
+            override fun propagate(value: SetDelta<Row>) {
+                val collides = value.adds.keys.map(::project).let { it.size != it.toSet().size } ||
+                    value.dels.keys.map(::project).let { it.size != it.toSet().size }
+                if (collides) collidingDeltas.incrementAndGet()
+                outlet.call.propagate(
+                    SetDelta(adds = value.adds.mapKeys { project(it.key) }, dels = value.dels.mapKeys { project(it.key) }),
+                )
+            }
+        })
+    }
+
+    companion object {
+        /** Deltas, over every instance since the last reset, in which two preimages collided. */
+        val collidingDeltas = java.util.concurrent.atomic.AtomicLong()
+    }
+}
+
+/** The data-class factory `SpecMutations.statelessLastWinsProjection` substitutes for a root's `FlatMapFactory`. */
+data class StatelessLastWinsProjectFactory(val transform: RowProjection) : TypedCellFactory<StatelessLastWinsProjectCell> {
+    override fun create(ref: CellRef): StatelessLastWinsProjectCell = StatelessLastWinsProjectCell(transform, ref)
+}
