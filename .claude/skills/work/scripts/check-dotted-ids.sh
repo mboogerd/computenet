@@ -47,10 +47,16 @@ SINCE=$(date -u -v-"${DAYS}"d +%Y-%m-%d 2>/dev/null) \
 # returns {"issues":[...]}. Accept either rather than depending on that.
 ROWS='(if type=="array" then . else (.issues // []) end)[]'
 
-dotted=$(bd list --all --created-after "$SINCE" --limit 0 --skip-labels --json 2>/dev/null \
+# "<id> <created_at>" per line. The id alone is not enough: this machine can run
+# several sessions, and the one that pushes next reads a warning about beads
+# another session minted. The timestamp is what lets a reader say "not mine"
+# without opening the tracker (computenet-rbltj).
+minted=$(bd list --all --created-after "$SINCE" --limit 0 --skip-labels --json 2>/dev/null \
          | jq -r "$ROWS | select(.created_by == \"$BEADS_ACTOR\")
-                       | select(.id | test(\"\\\\.[0-9]+$\")) | .id" 2>/dev/null) || exit 0
-[ -n "$dotted" ] || exit 0
+                       | select(.id | test(\"\\\\.[0-9]+$\"))
+                       | \"\\(.id) \\(.created_at // \"unknown\")\"" 2>/dev/null) || exit 0
+dotted=$(printf '%s\n' "$minted" | cut -d' ' -f1)
+[ -n "$minted" ] || exit 0
 
 # Parents this machine owns. `assignee` is the live claim and is absent once a
 # session releases it, so the durable marker matters too: claim-epic.sh stamps
@@ -96,7 +102,9 @@ for parent in $(for id in $dotted; do echo "${id%.*}"; done | sort -u); do
           | jq -r '.[0].assignee // ""' 2>/dev/null)
   for id in $dotted; do
     [ "${id%.*}" = "$parent" ] || continue
-    flagged="$flagged  $id  (parent $parent held by ${owner:-nobody})
+    when=$(printf '%s\n' "$minted" | awk -v i="$id" '$1 == i { print $2 }')
+    when=${when:-unknown}
+    flagged="$flagged  $id  minted $when by $BEADS_ACTOR  (parent $parent held by ${owner:-nobody})
 "
   done
 done
@@ -116,7 +124,9 @@ $flagged
   id and leaves the counter untouched:
     .claude/skills/work/scripts/create-ticket.sh --type <t> --title "<t>" --parent <id>
 
-  Nothing is blocked: the id is already minted and cannot be changed. Treat
+  Any session on this machine may have minted these, not necessarily the one
+  pushing now. Not your parent and not minted during your session: not yours,
+  no action. Otherwise nothing is blocked: the id cannot be changed. Treat
   this as "do not do that again", and check the other machine for a twin.
 
 EOF
