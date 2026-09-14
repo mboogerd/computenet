@@ -24,14 +24,30 @@ plugins {
 // `PublicKey` conversion (`Ed25519.publicKeyFromRaw`) and the one `fingerprint`
 // function in the repo. Deriving either here would be a second scheme.
 //
-// Still no `:wire`: this module has no business on another transport's
-// classpath. `:identity` itself depends only on `:kernel`, so the direction
-// stays `:iroh -> {:identity, :kernel} `, never the reverse.
+// Still no `:wire` in PRODUCTION: this module's main code has no business on
+// another transport's classpath. `:identity` itself depends only on `:kernel`,
+// so the production direction stays `:iroh -> {:identity, :kernel}`, never the
+// reverse.
+//
+// `:wire` is on the TEST classpath only, for exactly one reason (feature
+// computenet-5y8t.5, decision 5y8t.F5-D7): `IrohWireStableNameTest` proves one
+// stable name across both transports at one listener, and a test that proves
+// that must dial both. `runtimeClasspath` and `compileClasspath` carry no
+// `:wire`; nothing under `src/main` may import `civictech.wire`.
+//
+// `:wire` declares java-websocket as `implementation` (deliberately — it is not
+// part of `:wire`'s API surface), but `WsTransport.WsListener`/`WsConnection`
+// extend its `WebSocketServer`/`WebSocketClient`, so a consumer compiling
+// against them needs it on the compile classpath — the same explicit edge
+// `:demo:shopping`, `:demo:exchange`, `:demo:tiering` and `:demo:beadsmirror`
+// declare. Test scope here, like `:wire` itself.
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":identity"))
 
     testImplementation(project(":testkit"))
+    testImplementation(project(":wire"))
+    testImplementation(libs.java.websocket)
 }
 
 if (project.hasProperty("iroh.enabled")) {

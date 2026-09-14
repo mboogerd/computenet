@@ -93,12 +93,22 @@ decided otherwise on 2026-08-29 (recorded in
 **stable name**, independent of any key it holds, bound to its current public
 key by an anchor-signed statement that a relying peer verifies offline
 (option 4, over the identity-is-key premise this section described above).
-That decision is design-decided, not implemented: the landed phase-2
-mechanism above — key-fingerprint-derived identity via the interim binding —
-is exactly the identity-is-key shape the decision supersedes, kept as today's
-behaviour until DSC4 (epic `computenet-5y8t`) builds the anchor-vouched
-binding. Nothing at this commit implements the anchor, the signed binding
-statement, or rebinding.
+The decision is now built, not only decided: epic `computenet-5y8t` (DSC4)
+lands the anchor-vouched binding described above — a dummy `AnchorIssuer` in
+`:identity` signs `IdentityStatement`s over a canonical, versioned byte
+encoding; `AnchorVouchedBinding` verifies them offline against the relying
+peer's own configured issuers; `:wire`'s `HELLO3` and `:iroh`'s
+`IROH-HELLO2` carry a claimed stable name and its statement(s); and
+rebinding — a fresh statement for the same name after a key rotation — is
+demonstrated end to end over a real socket, with the receiving side's
+allowlist and its mirrored `Remote`/`Principal.Peer` attribution both
+following the name across the rotation with no reconfiguration
+(`doc/distribution/findings.md`'s `2026-09-14 — DSC4 landed` entry;
+`civictech.wire.WsStableNameRotationOfflineAnchorTest`). The landed phase-2
+mechanism above — key-fingerprint-derived identity via the interim binding
+— remains exactly as described: it is unchanged behaviour on any side that
+does not configure the anchor-vouched binding, per the compatibility rule
+below.
 
 ⚠ Still undefined: signed, replay-defended `RegistryAnnounce` frames that let
 an ingress reject a forged management frame using this identity (`computenet-ssa.4`,
@@ -109,9 +119,13 @@ both are **decided, unbuilt**: rotation is a new anchor-signed binding for the
 same stable name (option 4, above), and revocation is designed as a
 *superseding* binding over the same mechanism (a monotone per-name issuance
 counter, a validity window, issuer-scoped) rather than a second channel —
-see `doc/distribution/findings.md`'s 2026-09-12 entries. Neither is built;
-DSC4 owns rotation, and revocation is owned by nobody yet. The rest of the
-former open list is design-decided below
+see `doc/distribution/findings.md`'s 2026-09-12 entries. **Rotation is now
+built** by DSC4 (above); **revocation — a superseding binding actually
+retiring an earlier one — is still owned by nobody**: `AnchorVouchedBinding`
+carries `issuance` but compares it with nothing, so any verifying in-window
+statement resolves regardless of a later statement seen elsewhere
+(`doc/distribution/findings.md`'s `2026-09-14 — DSC4 landed` entry, which
+pins the absence by test). The rest of the former open list is design-decided below
 (93 I-28): integrity of replicated deltas is `RequireSigned` verification at
 ingress, and Sybil resistance for interest signals is structural (attention
 clamping + per-`Principal` quotas). Encryption in transit is transport
@@ -138,9 +152,12 @@ read `Principal`; only the strength that `AuthLevel` certifies changes
 across the upgrade. Identity-is-key is not the forward position (G-29,
 above): the 2026-08-29 option-4 decision binds a peer's stable name to its
 current key via a centrally managed anchor signing key that relying peers
-verify offline — a CA in shape, design-decided but unbuilt (DSC4,
-`computenet-5y8t`). What the decision rules out, and what remains true here,
-is a central lookup service and a global identity registry (P4, P10).
+verify offline — a CA in shape, **now built** by DSC4 (epic
+`computenet-5y8t`; `doc/distribution/findings.md`'s `2026-09-14 — DSC4
+landed` entry). What the decision rules out, and what remains true here, is
+a central lookup service and a global identity registry (P4, P10) — the
+binding is relying-peer configuration (which issuers it accepts), never a
+directory anyone queries.
 
 **Vocabulary.** A `BoundaryPolicy` attaches to a membrane `Exposure` (93
 I-10) and holds four predicates, each defaulting to today's open behavior

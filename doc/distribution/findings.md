@@ -597,3 +597,227 @@ must not acquire one until there is a mechanism for a scenario to exercise.
 `[DSC1-NV-02]` (Sybil resistance) and `[DSC1-NV-03]` (clock-skew adequacy) are
 untouched by this work and remain explicitly unverified exactly as the DSC1
 entry states them.
+
+---
+
+## 2026-09-14 — DSC4 landed: anchor-vouched stable peer identity (epic `computenet-5y8t`)
+
+**Names, does not edit, the three entries above**: `2026-08-21 — DSC1 ...`,
+`2026-09-12 — Key rotation decided (option 4) ...`, and `2026-09-12 —
+[DSC1-NV-01] revisited`. Where those said *decided, not built* or *design-
+decided, not implemented*, this entry records what building it actually
+produced — measured against tests, not restated from the decision.
+
+### What landed
+
+Six features and two out-of-band fixes, all merged to `main`:
+
+- `computenet-5y8t.1` (issuer-boundary seam: `IdentityStatement`,
+  `IdentityResolution.Bound`/`Unbound`, `PeerIdentityBinding.resolve`,
+  `PeerStamp.issuer`) — PR #854, `bc58cf43b`.
+- `computenet-5y8t.2` (offline verification in `:identity`: canonical
+  statement bytes, `AnchorIssuer`, `AnchorVouchedBinding`) — PR #861,
+  `f4b72fcff`.
+- `computenet-5y8t.3` (the versioned wire break: `HELLO3` on `:wire`,
+  `IROH-HELLO2` on `:iroh`; admission resolves through the binding) — PR
+  #865, `a2cbab699`.
+- `computenet-5y8t.4` (allowlists name identities: `Peering.Side.allow:
+  Set<PeerId>?`, `allowPeers(vararg peers: PeerId)`) — PR #862, `3df3f1fad`.
+- `computenet-5y8t.7` (signed announcements from a named peer are admitted:
+  the minting check and the replay high-water mark re-keyed onto the bound
+  name, not the signer key fingerprint) — PR #872, `621ac28e2`.
+- `computenet-5y8t.6` (hello-sendable credentials validated at transport
+  start, not on the sidecar reader thread) — PR #876, `c0abd6d96`.
+- `computenet-tlb83` (an anchor-bound side refuses a nameless legacy hello
+  `UNVOUCHED`) — PR #871, `9ee7ea5ec`.
+- `computenet-28pnr` (43-security's Interim-bound-vs-anchor-bound admission
+  wording corrected) — PR #873, `2b96b0853`.
+
+Feature `computenet-5y8t.5` itself (this feature: the end-to-end rotation
+test, the cross-transport test, and this entry) is **PR #877, still open as
+a draft at the time this entry is written** — no `main` sha exists for it
+yet; the two test classes it added are named below by class, not by sha.
+
+### The wire break, and why it was required
+
+`:wire`'s `HELLO2` line (`HelloProtocol.kt`) requires the claimed id to be
+key-derived (`isKeyDerivedPeerIdForm`) before any binding is consulted — a
+stable name literally cannot be written into that line's claimed-id field
+without failing its own grammar check, let alone being admitted. `:iroh`'s
+pre-DSC4 hello (`IROH-HELLO1`) carries at most a trailing name that may only
+*confirm* the NodeId-derived identity, never assert an independent one. A
+stable name therefore needed a new line form on each transport, not a
+relaxation of the old one: `HELLO3` on `:wire` and `IROH-HELLO2` on `:iroh`,
+each carrying one or more encoded `IdentityStatement`s alongside the existing
+fields. Both new forms have their own prefix so a legacy or `HELLO2`/
+`IROH-HELLO1` reader refuses them loudly (`NOT_HELLO2`/`NOT_HELLO3` on
+`:wire`; the `IROH-HELLO1 ` prefix check on `:iroh`) rather than misparsing
+them.
+
+`HELLO2` and the legacy line, and `IROH-HELLO1`, are **retained** on an
+Interim-bound side — `PeerAuthPolicy.Open` keeps today's behaviour
+byte-for-byte there — so nothing pre-DSC4 broke. The consequence stated
+plainly, and it is the shape of the break: **a stable-name peering needs
+both sides on the new grammar.** An anchor-bound side receiving a
+statement-less `HELLO2`/legacy/`IROH-HELLO1` hello gets
+`Unbound(NO_STATEMENT)` from the binding and refuses, typed and accounted,
+never silently downgrading to a key-derived identity (43-security.md's
+Interim-bound/anchor-bound distinction, corrected by `computenet-28pnr`
+before this feature started).
+
+### Delivery and anchor-key distribution — the two design properties this feature exercises, not invents
+
+**Delivery is hello piggyback**, exactly as epic property 3 names it: the
+statement rides the same `HELLO3`/`IROH-HELLO2` line as the rest of the
+hello. Gossip, replication-as-mesh-state, and caching remain admissible
+later — nothing built here forecloses them, and nothing built here
+implements them either.
+
+**Anchor public-key distribution is relying-peer configuration** (epic
+property 4): a relying process constructs its `AnchorVouchedBinding` from
+the `acceptedIssuers: Map<IssuerId, PublicKey>` it chooses to hand in —
+`AcceptedIssuerStore` loads public halves from files and refuses a private
+key found in that directory — with no discovery, no fetch, and no default
+issuer compiled in. Both test classes below build the binding this way: the
+listener's map names exactly the anchor(s) it accepts, and nothing else is
+reachable.
+
+### The statement format
+
+One `IdentityStatement` shape, declared in `:kernel`
+(`civictech.cell.link.Identity.kt`) as data the kernel carries but never
+verifies: `name: PeerId`, `keyId: KeyId`, `issuer: IssuerId`,
+`issuance: Long`, `notBefore: Long`, `notAfter: Long`, `signature: ByteArray`.
+The bytes an issuer signs are the canonical encoding in
+`civictech.identity.anchor.IdentityStatementBytes.kt`, domain-tagged
+`computenet/DSC4/identity-binding/v1` (`IDENTITY_BINDING_DOMAIN_TAG`) first,
+then the fields in fixed order with length prefixes on the variable ones —
+the same discipline as `AnnouncementSigningInput.canonicalBytes`, pinned by
+a golden vector.
+
+`issuance` is **carried** into every `Bound` resolution
+(`IdentityResolution.Bound.statement.issuance`) and **compared with
+nothing** by `AnchorVouchedBinding.resolve` — any verifying in-window
+statement resolves, even one presented after a higher-issuance statement for
+the same name was seen elsewhere. The validity window (`notBefore`/
+`notAfter`) **is enforced**, against the receiver's own clock with a
+lag-only skew allowance shaped like
+`AnnouncementAdmission.DEFAULT_ANNOUNCEMENT_SKEW_MILLIS`
+(`AnchorVouchedBinding.check`). Supersession — a later `issuance`
+retiring an earlier one — is **not built**; `AnchorVouchedBinding`'s own
+KDoc states the absence on purpose ("No supersession, no revocation (epic
+residual R4)"), and `WsStableNameRotationOfflineAnchorTest`'s second test
+method pins it by construction (below).
+
+### The allowlist-by-name resolution of the 2026-09-12 cost paragraph
+
+The "What revocation costs the three consumers" paragraph above (this file's
+2026-09-12 entry) stated the gap plainly: *"today a rotation ... leaves both
+entries naming a key that no longer resolves to the peer, and an operator
+must re-point them by hand; the 're-admitted by the same entry the moment
+the new binding arrives, with no operator action' property option 4 is
+supposed to buy is a property DSC4 still has to deliver by moving allowlist
+configuration to names."* `computenet-5y8t.4` is that delivery:
+`Peering.Side.allow` is now `Set<PeerId>?`, judged against the *resolved*
+identity (key proven → `identityBinding.resolve` → name on the allowlist),
+and `allowPeers(vararg peers: PeerId)` drops its `binding` parameter
+entirely — there is no longer a second way to configure the same allowlist
+in keys. `WsStableNameRotationOfflineAnchorTest`'s
+`rotate()` fixture is the property, run over real sockets and real crypto:
+alice's rotation from K1 to K2 is admitted with `allow` unchanged and
+`l.side.allow shouldBeSameInstanceAs allowAtStart` — the allowlist object
+itself is never touched.
+
+### Feature-5 evidence: the two test classes
+
+- **`civictech.wire.WsStableNameRotationOfflineAnchorTest`**
+  (`wire/src/test/kotlin/civictech/wire/`, task `computenet-5y8t.5.1`). One
+  class, parameterised over `Binding.INTERIM` and `Binding.ANCHOR_VOUCHED`,
+  run against a real socket with real Ed25519 keys and an offline
+  `AnchorIssuer` object that is never listened on. It **shows**: a peer
+  (alice) rotates from key K1 to key K2 under a fresh anchor statement for
+  the same name and is admitted both times by one unchanged allowlist entry,
+  with the mirrored `Remote` location and the `Principal.Peer` stamp both
+  naming `PeerId("alice")` both times (the epic's first acceptance
+  criterion, on the real bindings, not asserted structurally); the contrast
+  under `Binding.INTERIM`, where the same steps rename and the allowlist
+  refuses the rotated key (the pre-DSC4 behaviour, unchanged); and, in its
+  second test method, that a dialer still holding K1 and its *original*
+  issuance-1 statement is **still admitted as alice after the rotation** —
+  the class's own KDoc states this is the absence of revocation, deliberate
+  and required, so a reader of a green rotation test does not infer
+  stolen-key resistance. It **does not show**: revocation, supersession, or
+  anything about network reachability beyond "nothing the verification
+  needed had an address to reach" (the anchor object holds no listener and
+  no socket in the test JVM).
+- **`civictech.iroh.IrohWireStableNameTest`**
+  (`iroh/src/test/kotlin/civictech/iroh/`, task `computenet-5y8t.5.2`; needs
+  `-Piroh.enabled=true` and a built sidecar, else it reports `SKIPPED`). It
+  **shows**: one `Peering.Side` served by both an `IrohTransport` listener
+  and a `WsTransport` listener at the same time, with alice dialing in on a
+  *different* key over each transport (`fingerprint(Ki) != fingerprint(Kw)`
+  asserted) and both dials resolving to one `PeerId("alice")` — read from
+  the listener's own registry and its probe's stamped `Principal`, never
+  from the dialer's state — which is `computenet-egl.3`'s own stated goal
+  ("the same `PeerId` across transports") realized by a stable name rather
+  than by key-derivation. It **does not show**: revocation, supersession,
+  or stolen-key resistance — both keys are admitted because the anchor
+  vouched for each, and a thief holding either key with its statement is
+  alice exactly as anyone else would be.
+- The second class requires `iroh/build.gradle.kts` to add
+  `testImplementation(project(":wire"))` — needed because the cross-
+  transport test dials the same listener over `WsTransport`, defined in
+  `:wire` — and `testImplementation(libs.java.websocket)`, needed to compile
+  against `WsTransport.WsListener`/`WsConnection` as every other `:wire`
+  consumer already declares. **Production stays free of `:wire`**: the
+  added edges are `testImplementation` only, and `:iroh`'s production code
+  imports nothing from `:wire`.
+
+### Residuals carried forward, unchanged in substance
+
+- **R1. Anchor-key compromise is total.** Unaddressed; no mitigation
+  (transparency log, threshold signing, multiple anchors, first-seen
+  pinning) is chosen or built by this feature.
+- **R2. Anchor-key rotation is unsolved.** Unaddressed.
+- **R3, as amended.** Unaddressed by this feature; the open-mesh /
+  no-shared-issuer question (SOC3) is untouched.
+- **R4. Revocation is deferred.** Unaddressed by design *and* pinned by
+  test: `AnchorVouchedBindingTest` and
+  `WsStableNameRotationOfflineAnchorTest`'s old-key case both assert the
+  absence of supersession, on purpose, so a green suite is never read as
+  having built it.
+- **Per-issuer allowlist predicates** ("admit alice only if issuer A
+  vouches") remain unwired. `PeerStamp.issuer`/`Principal.Peer.issuer`
+  (feature 1) make the predicate expressible in `BoundaryPolicy`'s
+  identity-keyed vocabulary; nothing here constructs one. Left to a later
+  item.
+- **`[DSC1-NV-03]` (clock-skew adequacy)** stays explicitly unverified
+  under the window: `AnchorVouchedBinding`'s own KDoc says the window rests
+  on it, and nothing built by DSC4 measures adequacy between real peers'
+  clocks.
+
+**`[DSC1-NV-01]` (stolen-key resistance) REMAINS EXPLICITLY UNVERIFIED.**
+This is not a residual alongside the others above; it is restated in its
+own paragraph because it is the property this epic's design work was most
+at risk of appearing to close. Nothing built by DSC4 changes the analysis in
+this file's `2026-09-12 — [DSC1-NV-01] revisited` entry: a thief holding a
+peer's private key is that peer, every signature verifies, and no seam
+introduced here — the issuer boundary, the anchor-vouched binding, the
+`HELLO3`/`IROH-HELLO2` grammar, the name-keyed allowlists and replay ledger
+— can tell the two apart. Both new test classes say so explicitly in their
+own KDoc, and neither asserts anything that would read as revocation or
+theft resistance. `[DSC1-NV-01]` remains filed in
+`concord/corpus/DISPUTES.md`, unedited by this feature, and must not
+acquire a corpus scenario until a revocation mechanism exists for one to
+exercise.
+
+### `doc/spec/90-roadmap/91-gap-analysis.md`'s G-29 row
+
+Read, not edited (lane-forbidden here per the epic's "out of scope" list).
+Its current text — "crypto authentication and encryption-at-rest remain" —
+predates DSC4 and reads as though no anchor-vouched authentication exists;
+it likely needs a line naming DSC4 as landed (with revocation still open,
+R4), the same correction this entry makes to 43-security.md and
+95-research-plan.md. Left to whoever next has that row in their claim.
+
+`concord/corpus/DISPUTES.md` is unchanged by this feature.
