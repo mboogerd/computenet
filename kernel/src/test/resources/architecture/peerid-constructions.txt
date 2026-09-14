@@ -23,12 +23,6 @@ kernel/src/main/kotlin/civictech/cell/link/Identity.kt
 # the interim binding itself — PeerIdentityBinding.Companion.Interim's lambda
 # body, the one named derivation site the seam exists to concentrate.
 
-kernel/src/main/kotlin/civictech/cell/wire/AnnouncementAdmission.kt
-# frame field parse — `PeerId(signerKeyId)` reads the minting peer id out of
-# a signed announcement frame field. Decided residual (feature
-# computenet-376c non-goals): announcement verification stays identity-keyed
-# in this feature, not a leak of the interim binding.
-
 identity/src/main/kotlin/civictech/identity/anchor/IdentityStatementToken.kt
 # hello token parse — the name a PRESENTED statement carries, read off a hello token; verified, never derived, by AnchorVouchedBinding.
 

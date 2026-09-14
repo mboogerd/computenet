@@ -135,6 +135,12 @@ fun durableIncarnation(store: IncarnationStore): () -> Long = store::nextIncarna
  * `ID_MISMATCH` before it verifies, so B-on-A's-connection reports
  * impersonation rather than collapsing into `BAD_SIGNATURE`.
  * `WsAnnouncementIdentityTest` pins that, and fails if the order is swapped.
+ *
+ * The gate hands this verifier the connection's **bound identity** as the
+ * minting peer, never an identity read out of the frame (feature
+ * `computenet-5y8t.7`), so `minting == peer` holds for every announcement that
+ * got past the key check and [key] is found by construction — for a named peer
+ * as much as for a key-derived one.
  */
 fun connectionBoundVerifier(peer: PeerId, key: PublicKey): AnnouncementVerifier =
     announcementVerifier { minting -> key.takeIf { minting == peer } }

@@ -633,8 +633,10 @@ object Peering {
         /**
          * The key token this side would present to a peer — a keyed side
          * presents its key's fingerprint, an unkeyed one the name it asserts.
-         * Informational at the receiving ingress (`hostIngress`'s `fromKey`):
-         * allowlists name identities (epic `computenet-5y8t`).
+         * Not judged by the receiving ingress's allowlist (`hostIngress`'s
+         * `fromKey`): allowlists name identities (epic `computenet-5y8t`). Its
+         * announcement gate does hold a signed announcement's `signerKeyId` to
+         * it (feature `computenet-5y8t.7`).
          *
          * Used by [loopback] as the in-process stand-in for what a hello would
          * carry on a socket. The `KeyId(peer.name)` arm is the **transport-
@@ -1068,14 +1070,18 @@ object Peering {
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
         fromPeerIssuer: IssuerId? = null,
         /**
-         * The key identifier this connection was **proven** on — an
-         * informational record only, carried into the ingress's refusal
-         * detail and **judged by nothing** (epic `computenet-5y8t`).
-         * Allowlists name identities: [side]'s allowlist judges [fromPeer],
-         * the identity this ingress stamps, and the caller decides both —
+         * The key identifier this connection was **proven** on. Allowlists
+         * name identities: [side]'s allowlist judges [fromPeer], the identity
+         * this ingress stamps, and never this key (epic `computenet-5y8t`).
+         * The announcement gate does judge it: a signed announcement's
+         * `signerKeyId` must name exactly this key or it is refused
+         * `ID_MISMATCH` (feature `computenet-5y8t.7`, see
+         * [AnnouncementAdmission.check]). The caller decides both —
          * this function resolves nothing.
          *
-         * Null on a caller that names no key; that changes no verdict.
+         * Null on a caller that names no key; that changes no allowlist
+         * verdict, but a side that verifies announcements then refuses every
+         * signed one from this connection (decision 5y8t.7-D4).
          */
         fromKey: KeyId? = null,
         /**
