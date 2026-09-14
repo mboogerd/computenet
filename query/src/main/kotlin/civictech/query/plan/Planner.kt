@@ -716,7 +716,8 @@ private fun normalizeExpr(expr: RelationalExpr, scopeTag: String): RelationalExp
             "${expr.kind} operands have different arity: left $leftColumns (arity " +
                 "${leftColumns.size}) vs right $rightColumns (arity ${rightColumns.size})"
         }
-        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(leftColumns).toMap()))
+        val targetColumns = setOpColumns(leftColumns, rightColumns)
+        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(targetColumns).toMap()))
     }
     is RelationalExpr.OuterJoin -> {
         val left = normalizeExpr(expr.left, "${scopeTag}L/")
