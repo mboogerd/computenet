@@ -21,14 +21,20 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.cell.link.IdentityStatement
+import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireEdgeLink
 import civictech.identity.Ed25519
+import civictech.identity.PeerIdentity
+import civictech.identity.anchor.AnchorIssuer
+import civictech.identity.anchor.AnchorVouchedBinding
 import civictech.identity.fingerprint
 import org.junit.jupiter.api.Test
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.security.interfaces.EdECPrivateKey
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
@@ -49,11 +55,14 @@ import kotlin.test.fail
  *
  * The three cases are the feature's three examples:
  *
- * 1. **Admission is a public-key allowlist, and the stamp comes from the
- *    binding.** L allowlists the [KeyId] fingerprinted from B's NodeId; B's
+ * 1. **Admission judges the identity a key resolves to, and the stamp comes
+ *    from the same binding.** The key is what the connection is proven on —
+ *    the [KeyId] fingerprinted from B's NodeId — and L's allowlist admits the
+ *    identity that key resolves to through `identityBinding` (epic
+ *    `computenet-5y8t`), never the key itself; B's
  *    invocation is delivered and a cell on L reading
  *    [civictech.cell.membrane.currentPrincipal] inside that delivery observes
- *    `Principal.Peer(<the peer L.side.identityBinding.resolve(key) is Bound to>, Authenticated)`.
+ *    `Principal.Peer(<the peer L.side.identityBinding.resolve(key, emptyList()) is Bound to>, Authenticated)`.
  *    The expected identity is spelled *through the binding* — writing it as
  *    `PeerId(fingerprint(...).name)` would make the assertion a restatement of
  *    the implementation rather than a check on it (feature `computenet-376c`).
@@ -147,7 +156,7 @@ class IrohKeyBoundAdmissionTest {
 
     // ---------------------------------------------------------------- fixture
 
-    private class Stack(name: String? = null, allow: Set<KeyId>? = null) {
+    private class Stack(name: String? = null, allow: Set<PeerId>? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -186,15 +195,17 @@ class IrohKeyBoundAdmissionTest {
     fun `an allowlisted NodeId is admitted and its deliveries are stamped with the binding-resolved identity`() {
         val binary = SidecarBinary.orSkip()
 
-        // B's NodeId has to be known before the listener exists, because the
-        // allowlist judges the KEY the QUIC connection authenticates. Pin B's
-        // sidecar secret key, spawn once to read the NodeId it yields, and dial
-        // later with the same args so the endpoint is the same endpoint.
+        // B's NodeId has to be known before the listener exists: the key is
+        // what the QUIC connection is proven on, and the allowlist judges the
+        // identity that key resolves to through this side's `identityBinding`
+        // (epic `computenet-5y8t`), never the key itself. Pin B's sidecar
+        // secret key, spawn once to read the NodeId it yields, and dial later
+        // with the same args so the endpoint is the same endpoint.
         val bArgs = pinnedSecretKeyArgs()
         val nodeIdB = SidecarProcess.spawn(binary, args = bArgs).use { it.nodeId }
         val keyB = fingerprint(Ed25519.publicKeyFromRaw(nodeIdB))
 
-        val l = Stack(name = "listener", allow = setOf(keyB))
+        val l = Stack(name = "listener", allow = setOf(PeerId(keyB.name)))
         // The expected identity, spelled through the binding this side actually
         // consults — NOT as `PeerId(keyB.name)`, which would assert the interim
         // binding's shape rather than that the site resolves through it.
@@ -243,6 +254,91 @@ class IrohKeyBoundAdmissionTest {
         }
     }
 
+    // ------------------------------------------- example 1b: IROH-HELLO2 over a real link
+
+    /** `PeerCredentials` over a [PeerIdentity] — `:wire`'s adapter is not on this classpath. */
+    private class TestCredentials(private val identity: PeerIdentity) : PeerCredentials {
+        override val keyId: KeyId get() = identity.keyId
+        override val peerId: PeerId get() = identity.peerId
+        override val publicKey: ByteArray get() = identity.publicKey.encoded
+        override fun sign(message: ByteArray): ByteArray = identity.sign(message)
+        override val statements: List<IdentityStatement> get() = identity.statements
+    }
+
+    /**
+     * Feature `computenet-5y8t.3` over a real QUIC link (task
+     * `computenet-5y8t.3.5`): a dialler whose credentials hold an anchor-signed
+     * statement for its NodeId key sends `IROH-HELLO2`, and a listener that
+     * accepts exactly that anchor admits it under the vouched name, stamping
+     * the anchor as issuer. [IrohSessionHelloTest] pins the refusal reasons at
+     * Session level; this pins that the line and the resolution survive a real
+     * sidecar pair.
+     *
+     * The JVM keypair and the sidecar hold the SAME key: an RFC 8032 Ed25519
+     * private key IS its 32-byte seed, which the JDK exposes as
+     * `EdECPrivateKey.getBytes()` and the sidecar takes as `--secret-key`. The
+     * first assertion checks that premise rather than assuming it. What is
+     * admitted is a key an accepted issuer vouched for; nothing here speaks to
+     * a stolen key or revocation (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
+     */
+    @Test
+    fun `a dialler presenting an anchor statement for its NodeId key is admitted under the vouched name`() {
+        val binary = SidecarBinary.orSkip()
+
+        val anchor = AnchorIssuer(PeerIdentity(Ed25519.generateKeyPair()))
+        val keys = Ed25519.generateKeyPair()
+        val seedHex = (keys.private as EdECPrivateKey).bytes.orElseThrow()
+            .joinToString("") { "%02x".format(it) }
+        val bArgs = listOf("--secret-key", seedHex)
+        val nodeIdB = SidecarProcess.spawn(binary, args = bArgs).use { it.nodeId }
+        assertTrue(
+            nodeIdB.contentEquals(Ed25519.rawPublicKey(keys.public)),
+            "the sidecar spawned with the JVM key's seed reports that key's public half as its NodeId",
+        )
+        val alice = PeerIdentity(keys, PeerId("alice"), listOf(anchor.bind(PeerId("alice"), fingerprint(keys.public))))
+
+        val lRegistry = LocationRegistry()
+        val lHost = ManagedHost(registry = lRegistry)
+        val lSide = Peering.Side(
+            lRegistry,
+            ManagedHost(registry = lRegistry),
+            allow = setOf(PeerId("alice")),
+            identityBinding = AnchorVouchedBinding(mapOf(anchor.issuerId to anchor.publicKey)),
+        )
+        val bRegistry = LocationRegistry()
+        val bSide = Peering.Side(bRegistry, ManagedHost(registry = bRegistry), credentials = TestCredentials(alice))
+
+        IrohTransport.listen(lSide, binary, stderrSink = stderrSink("listener")).use { listener ->
+            val probe = PrincipalProbeCell()
+            lHost.managementInlet.call.spawn(probe)
+
+            IrohTransport.connect(
+                bSide,
+                listener.nodeId,
+                listener.addresses,
+                binary,
+                stderrSink = stderrSink("alice"),
+                sidecarArgs = bArgs,
+            ).use { connection ->
+                await("the admitted dialler learns the listening side's probe") {
+                    bRegistry.location(probe.ref) is LocationRegistry.Remote
+                }
+                assertTrue(connection.peered, "a vouched NodeId key presenting its statement must be admitted")
+
+                bRegistry.deliver(protocolFrame(probe.ref))
+                await("the assertion crossed the QUIC link and was dispatched on L") {
+                    probe.principals.isNotEmpty()
+                }
+                assertEquals(
+                    Principal.Peer(PeerId("alice"), AuthLevel.Authenticated, anchor.issuerId),
+                    probe.principals.last(),
+                )
+                assertEquals(0L, listener.admissionDenialCount, "a vouched peer costs no denial")
+                assertTrue(listener.linkErrors.isEmpty(), "sidecar reported link errors: ${listener.linkErrors}")
+            }
+        }
+    }
+
     // ------------------------------------------------------------- example 2
 
     @Test
@@ -253,7 +349,7 @@ class IrohKeyBoundAdmissionTest {
         // about mallory's key, not a side that refuses everyone.
         val goodArgs = pinnedSecretKeyArgs()
         val goodNodeId = SidecarProcess.spawn(binary, args = goodArgs).use { it.nodeId }
-        val l = Stack(name = "listener", allow = setOf(fingerprint(Ed25519.publicKeyFromRaw(goodNodeId))))
+        val l = Stack(name = "listener", allow = setOf(PeerId(fingerprint(Ed25519.publicKeyFromRaw(goodNodeId)).name)))
 
         IrohTransport.listen(l.side, binary, stderrSink = stderrSink("listener")).use { listener ->
             val published = SetCell<String>()
@@ -355,7 +451,7 @@ class IrohKeyBoundAdmissionTest {
         val goodArgs = pinnedSecretKeyArgs()
         val goodNodeId = SidecarProcess.spawn(binary, args = goodArgs).use { it.nodeId }
         val goodKey = fingerprint(Ed25519.publicKeyFromRaw(goodNodeId))
-        val l = Stack(name = "listener", allow = setOf(goodKey))
+        val l = Stack(name = "listener", allow = setOf(PeerId(goodKey.name)))
         val admittedName = l.side.identityBinding.boundPeer(goodKey).name
 
         IrohTransport.listen(l.side, binary, stderrSink = stderrSink("listener")).use { listener ->
@@ -421,7 +517,7 @@ class IrohKeyBoundAdmissionTest {
  * interim binding — rather than substituting anything.
  */
 private fun PeerIdentityBinding.boundPeer(key: KeyId): PeerId =
-    when (val resolution = resolve(key)) {
+    when (val resolution = resolve(key, emptyList())) {
         is IdentityResolution.Bound -> resolution.peer
         is IdentityResolution.Unbound -> throw AssertionError("expected $key to be bound, got $resolution")
     }

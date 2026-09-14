@@ -73,6 +73,16 @@ plan_cases = [
     ([t("z"), t("y")], ["z"], ["y"], "two claimless tasks never share a batch"),
     ([t("h", labels=["human"]), t("z")], ["z"], ["h"],
      "a human-gated skip does not count as a batch that blocks the alone-task"),
+    # compute=dedicated serialises the box, not just its files (computenet-42zc)
+    ([dict(t("m", "doc/bench/"), metadata={"files": "doc/bench/", "compute": "dedicated"}),
+      t("a", "src/A.kt")], ["m"], ["a"],
+     "a dedicated-compute task first defers every disjoint sibling behind it"),
+    ([t("a", "src/A.kt"),
+      dict(t("m"), metadata={"files": "bench/series/", "compute": "dedicated"})], ["a"], ["m"],
+     "a dedicated-compute task arriving after a batch is held, never co-scheduled"),
+    ([dict(t("m"), metadata={"files": "doc/bench/", "compute": "dedicated"}),
+      dict(t("n"), metadata={"files": "bench/series/", "compute": "dedicated"})], ["m"], ["n"],
+     "two dedicated-compute tasks with disjoint claims never share a batch"),
     # The observed defect this convention exists to prevent: a descriptive
     # string is NOT claimless, so it batches like a path and the alone-rule
     # never protects it. Pinned so the divergence stays visible.
@@ -854,6 +864,17 @@ _ecase([], "running outside this feature: computenet-4gzr",
        [(t("o0m3.3", "iroh/src/main/kotlin/X.kt"), False)],
        "containment counts: a file inside the running unit's directory claim")
 
+# a dedicated measurement contends with ANY live unit, overlapping or not (computenet-42zc)
+_ecase([], "compute=dedicated; running outside this feature: computenet-4gzr",
+       [{"id": "computenet-4gzr", "files": ["doc/bench"]}],
+       [(dict(t("m"), metadata={"files": "doc/bench/x.md", "compute": "dedicated"}), False)],
+       "a dedicated task overlapping a route-0 unit is held, not dispatched onto its files")
+_ecase(["a"], "compute=dedicated; running outside this feature: computenet-4gzr",
+       [{"id": "computenet-4gzr", "files": ["src/Other.kt"]}],
+       [(dict(t("m"), metadata={"files": "doc/bench/", "compute": "dedicated"}), False),
+        (t("a", "src/A.kt"), False)],
+       "a dedicated task is held behind a disjoint live unit; ordinary siblings still batch")
+
 _ecase(["free"], None,
        [{"id": "computenet-4gzr", "files": ["iroh/src/main/kotlin/X.kt"]}],
        [(t("free", "wire/src/main/kotlin/Y.kt"), False)],
@@ -879,6 +900,66 @@ if [u["id"] for u in _got] != ["route0"]:
     failed += 1
     print("FAIL: running_elsewhere must exclude the feature, the epic, this "
           f"feature's own candidates and claimless units — got {_got}")
+
+# The batch path WRITES the lag memory but never READS it (computenet-bydx4):
+# 5b's batch call dispatches agents that the 5e reviewer's --capacity read
+# cannot see in load1, so that read must warn — while the batch call's own
+# advice must not warn about the agents it is itself dispatching.
+import io as _io, contextlib as _ctx
+_saved_bd, _saved_argv, _saved_scratch = nb.bd, sys.argv, _os.environ.get("SCRATCH")
+_saved_assess, _saved_warn = nb._assess, nb.dir_claim_warnings
+with _tf.TemporaryDirectory() as _d:
+    _os.environ["SCRATCH"] = _d
+    _mem = nb._recent_read_path()
+    nb.bd = lambda *a: ([{"id": "t1", "issue_type": "task",
+                          "metadata": {"files": "a.kt"}}] if a[0] == "ready" else [])
+    nb._assess = lambda f, b: ("ok", [])
+    nb.dir_claim_warnings = lambda *a: []
+    nb.os.getloadavg = lambda: (1.0, 0, 0)
+    _saved_cpu, _saved_sib = nb.os.cpu_count, _os.environ.pop("WORK_SIBLINGS", None)
+    nb.os.cpu_count = lambda: 16                    # load 1.0 on 16 cores: a quiet box anywhere
+    try:
+        nb.record_capacity_read(path=_mem)          # a read seconds ago...
+        sys.argv = ["next-batch.py", "feat", "--actor", "MacBoo"]
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):
+            nb.main()
+        _out = _json.loads(_buf.getvalue())
+        lag_cases += 1
+        if [b["id"] for b in _out["batch"]] != ["t1"] or _out["capacity"]["advice"] is not None:
+            failed += 1
+            print(f"FAIL: the batch call must not read the lag memory, got {_out!r}")
+        _os.remove(_mem)                            # now with no prior read
+        with _ctx.redirect_stdout(_io.StringIO()):
+            nb.main()
+        lag_cases += 1
+        _gap = nb.recent_capacity_read(path=_mem)   # ...the reviewer's --capacity
+        if _gap is None or _gap > 1:
+            failed += 1
+            print(f"FAIL: a batch call must seed the lag memory, got gap {_gap!r}")
+        lag_cases += 1
+        _, _adv = nb.load_advice(16, 3, _gap)
+        if not _adv or "lags dispatch" not in _adv:
+            failed += 1
+            print(f"FAIL: --capacity after a batch call must warn, got {_adv!r}")
+        # an empty batch dispatches nothing, so it must not seed the memory
+        _os.remove(_mem)
+        nb.bd = lambda *a: []
+        with _ctx.redirect_stdout(_io.StringIO()):
+            nb.main()
+        lag_cases += 1
+        if _os.path.exists(_mem):
+            failed += 1
+            print("FAIL: an empty batch must not seed the lag memory")
+    finally:
+        nb.bd, sys.argv, nb._assess, nb.dir_claim_warnings = _saved_bd, _saved_argv, _saved_assess, _saved_warn
+        nb.os.getloadavg, nb.os.cpu_count = _real_getloadavg, _saved_cpu
+        if _saved_sib is not None:
+            _os.environ["WORK_SIBLINGS"] = _saved_sib
+        if _saved_scratch is None:
+            _os.environ.pop("SCRATCH", None)
+        else:
+            _os.environ["SCRATCH"] = _saved_scratch
 
 dir_claim_cases_n = len(dir_claim_cases) + 7
 

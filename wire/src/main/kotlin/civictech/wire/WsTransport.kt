@@ -8,8 +8,11 @@ import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IdentityStatement
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.UnboundReason
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -19,6 +22,7 @@ import civictech.cell.wire.PeerAuthPolicy
 import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryMirrorCell
+import civictech.cell.wire.denialReasonFor
 import civictech.identity.Ed25519
 import civictech.identity.fingerprint
 import org.java_websocket.WebSocket
@@ -158,6 +162,54 @@ object WsTransport {
     const val REFUSED_DIAL_LIMIT: Int = 5
 
     /**
+     * A [Peering.Side] whose credentials no `HELLO3` line can carry: more than
+     * [MAX_HELLO_STATEMENTS] statements, a name that is empty or holds a
+     * space, or anything else [encodeHello3] refuses for them (an unsigned
+     * statement, a name with an unpaired surrogate). Thrown by [listen] and
+     * [connect] **before any socket is bound, accepted or dialled**
+     * (computenet-5y8t.6).
+     *
+     * `Session.hello` refuses the same credentials and still does, as defence
+     * in depth; but it runs per open — on a listener's socket thread for
+     * every accepted peer, and inside a client's reconnect loop — so a
+     * configuration fault would surface there once per connection, far from
+     * the call that configured it. Credentials with **no** statements are
+     * never refused here: they send `HELLO2`, which carries no statements.
+     *
+     * `IrohTransport.UnsendableHelloCredentialsException` is the same refusal
+     * on `:iroh`; the two modules do not depend on each other, so the name is
+     * declared once per transport.
+     */
+    class UnsendableHelloCredentialsException internal constructor(message: String, cause: Throwable? = null) :
+        IllegalArgumentException(message, cause)
+
+    /** Refuses [side] with [UnsendableHelloCredentialsException] when `Session.hello` could not send its credentials. */
+    private fun requireSendableHelloCredentials(side: Peering.Side) {
+        val credentials = side.credentials ?: return
+        val statements = credentials.statements
+        if (statements.isEmpty()) return
+        val name = credentials.peerId.name
+        if (statements.size > MAX_HELLO_STATEMENTS) {
+            throw UnsendableHelloCredentialsException(
+                "credentials for $name hold ${statements.size} statements; a HELLO3 line carries at most " +
+                    "$MAX_HELLO_STATEMENTS",
+            )
+        }
+        if (name.isEmpty() || ' ' in name) {
+            throw UnsendableHelloCredentialsException(
+                "credentials name '$name' cannot be a HELLO3 claimed id (empty or contains a space)",
+            )
+        }
+        // The rest of what the encoder refuses, by asking the encoder: a
+        // placeholder mirror ref and nonce, since neither can make it refuse.
+        try {
+            encodeHello3(Hello3(UUID(0L, 0L), credentials.peerId, credentials.publicKey, ByteArray(HELLO_NONCE_BYTES), statements))
+        } catch (e: IllegalArgumentException) {
+            throw UnsendableHelloCredentialsException("credentials for $name cannot be sent in a HELLO3: ${e.message}", e)
+        }
+    }
+
+    /**
      * How long an opened connection must last to clear the refused-dial run
      * (computenet-4gzr) — see [REFUSED_DIAL_LIMIT] for why a duration is the
      * discriminator here and not on `:iroh`.
@@ -198,9 +250,14 @@ object WsTransport {
      * (java-websocket calls `setReuseAddress` on the already-bound socket, where
      * it has no effect on the existing binding). Ownership transfers with the
      * call: `listener.stop()` closes the channel.
+     *
+     * @throws UnsendableHelloCredentialsException before the channel is
+     *   served, when [side]'s credentials cannot be sent in a hello; the
+     *   channel then stays the caller's, open and unaccepted.
      */
     fun listen(channel: ServerSocketChannel, side: Peering.Side): WsListener {
         require(channel.localAddress != null) { "listen(channel) needs an already-bound channel" }
+        requireSendableHelloCredentials(side)
         val listener = WsListener(channel, side)
         listener.start()
         check(listener.awaitStart(10, TimeUnit.SECONDS)) {
@@ -277,8 +334,12 @@ object WsTransport {
      * port whose old connections are still in TIME_WAIT, while an ephemeral bind
      * has no port to re-bind and asking for reuse there only widens what may
      * overlap it (computenet-8ru).
+     *
+     * @throws UnsendableHelloCredentialsException before anything is bound,
+     *   when [side]'s credentials cannot be sent in a hello.
      */
     fun listen(port: Int, side: Peering.Side): WsListener {
+        requireSendableHelloCredentials(side)
         val listener = WsListener(if (port == 0) loopback(0) else InetSocketAddress(port), side)
         listener.isReuseAddr = port != 0
         listener.start()
@@ -310,6 +371,9 @@ object WsTransport {
      * mid-handshake. Diagnostics only: the retry, the timeout and the give-up
      * condition are unchanged, and the diagnosis is built inside `check`'s lazy
      * message, so a successful connect never pays for it.
+     *
+     * @throws UnsendableHelloCredentialsException before anything is dialled,
+     *   when [side]'s credentials cannot be sent in a hello.
      */
     fun connect(
         uri: URI,
@@ -335,6 +399,7 @@ object WsTransport {
         backoff: (attempt: Int) -> Long,
         refusedDialLimit: Int,
     ): WsConnection {
+        requireSendableHelloCredentials(side)
         awaitReachable(uri, backoff)
         val connection = WsConnection(uri, side, backoff, refusedDialLimit)
         // `connectBlocking` is `connectLatch.await(timeout) && isOpen()`, and BOTH
@@ -441,6 +506,14 @@ object WsTransport {
      * to the transport that owns the legacy grammar.
      */
     private const val HELLO = "HELLO "
+
+    /**
+     * What a nameless legacy hello (`HELLO <mirrorRef>`, no token) asserted —
+     * nothing — as the key identifier the binding is asked about (bug
+     * `computenet-tlb83`). Read for the binding's verdict only; never
+     * attribution. See `Session.onLegacyHello`.
+     */
+    private val NAMELESS_ASSERTION = KeyId("")
 
     /**
      * The replay memory a peering side gets: the window its own
@@ -673,11 +746,13 @@ object WsTransport {
         private var localNonce: ByteArray? = null
 
         /**
-         * A peer's `HELLO2` that parsed and whose claimed id matched the key it
-         * presented, held between `HELLO2` receipt and `PROOF` receipt.
+         * A peer's `HELLO2` or `HELLO3` that parsed and whose claimed id matched
+         * what its presented key resolved to, held between hello receipt and
+         * `PROOF` receipt. It carries the hello's fields rather than the parsed
+         * line, so the two forms share one `PROOF` path.
          *
          * Everything here is **derived, not claimed**: [derivedKey] is
-         * `fingerprint(publicKey)` and [publicKey] is the key the `HELLO2`
+         * `fingerprint(publicKey)` and [publicKey] is the key the hello
          * actually carried, so the `PROOF` is verified under the key whose
          * fingerprint the peer is being held to — never under a key chosen
          * later, and never against the id the hello merely asserted
@@ -685,13 +760,24 @@ object WsTransport {
          *
          * [derivedKey] is a `civictech.cell.link.KeyId` since feature
          * `computenet-376c`: it names *which key* answered, which is what
-         * admission judges and what the announcement gate binds to. The peer's
-         * **identity** on this connection is [hello]`.claimedPeerId`, which
-         * `onAuthenticatedHello` has already checked equals what the side's
-         * `PeerIdentityBinding` resolves [derivedKey] to — so reading it costs
-         * no second resolution.
+         * the hello was proven on and what the announcement gate binds to. The
+         * peer's **identity** on this connection is [claimedPeerId], which
+         * `admitKeyedHello` has already checked equals what the side's
+         * `PeerIdentityBinding` resolved [derivedKey] to (with the statements
+         * the hello presented) — so reading it costs no second resolution.
+         *
+         * [issuer] is the `IdentityResolution.Bound.issuer` of that same derive
+         * step, carried here so the `PROOF` row stamps the resolution that was
+         * actually checked rather than re-resolving (feature `computenet-5y8t.1`).
          */
-        private class PendingHello(val hello: Hello2, val derivedKey: KeyId, val publicKey: PublicKey)
+        private class PendingHello(
+            val mirrorRef: UUID,
+            val claimedPeerId: PeerId,
+            val nonce: ByteArray,
+            val derivedKey: KeyId,
+            val publicKey: PublicKey,
+            val issuer: IssuerId?,
+        )
 
         /**
          * The peer's accepted `HELLO2` for the current open, or null before one
@@ -925,13 +1011,29 @@ object WsTransport {
          *   byte for byte as before (`[DSC1-HELLO-10]`). A side that never
          *   mentions authentication cannot get any, and cannot emit a byte of a
          *   new grammar.
-         * - Credentials: `HELLO2 <mirrorRef> <claimedId> <key> <nonce>` — the
-         *   id it claims is `credentials.peerId`, the **identity** its own key
-         *   identifier resolves to, because that is the only claim a peer can
-         *   hold it to (`[DSC1-HELLO-03]`, `[DSC1-HELLO-06]`). `Side.peer` is
-         *   deliberately *not* used here: a name nothing binds to a key cannot
-         *   be proven, so an authenticated peering names peers by the identity
-         *   of the key they present and by nothing else.
+         * - Credentials holding no statements: `HELLO2 <mirrorRef> <claimedId>
+         *   <key> <nonce>` — the id it claims is `credentials.peerId`, the
+         *   **identity** its own key identifier resolves to, because that is
+         *   the only claim a peer can hold it to (`[DSC1-HELLO-03]`,
+         *   `[DSC1-HELLO-06]`). `Side.peer` is deliberately *not* used here: a
+         *   name nothing binds to a key cannot be proven, so an authenticated
+         *   peering names peers by the identity of the key they present and by
+         *   nothing else.
+         * - Credentials holding anchor-signed statements (a named identity,
+         *   feature `computenet-5y8t.3`): `HELLO3` — the same four fields with
+         *   `credentials.peerId` as an opaque stable name, followed by the
+         *   statements vouching for it. The receiver judges them through its
+         *   own `identityBinding`; nothing is added to the signed challenge.
+         *   Credentials this line cannot carry (more than
+         *   [MAX_HELLO_STATEMENTS] statements, or a name that is empty or
+         *   holds a space) fail here with an `IllegalStateException`, before
+         *   this open mutates anything — never truncated into a different
+         *   claim. [listen] and [connect] refuse them earlier still, before
+         *   any socket exists ([UnsendableHelloCredentialsException]); this
+         *   check stays as defence in depth for a Session built directly.
+         *
+         * So a side holding no statements emits exactly the bytes it did
+         * before `HELLO3` existed.
          *
          * The policy — `PeerAuthPolicy.Open` vs `RequireAuthenticated` — does
          * not enter here. It governs what this side *accepts*, not what it
@@ -958,19 +1060,38 @@ object WsTransport {
          * later.
          */
         fun hello(): String {
+            val credentials = side.credentials
+            val statements = credentials?.statements.orEmpty()
+            if (credentials != null && statements.isNotEmpty()) {
+                // Checked before anything this open mutates, so a hello this
+                // side cannot send leaves no mirror and no reset state behind.
+                // Loud, never truncated: dropping statements or rewriting the
+                // name would send a different claim than the one configured
+                // (consistent with `IrohTransport`'s hello, computenet-5y8t.3.5).
+                val name = credentials.peerId.name
+                check(statements.size <= MAX_HELLO_STATEMENTS) {
+                    "credentials for $name hold ${statements.size} statements; a HELLO3 line carries at most " +
+                        "$MAX_HELLO_STATEMENTS"
+                }
+                check(name.isNotEmpty() && ' ' !in name) {
+                    "credentials name '$name' cannot be a HELLO3 claimed id (empty or contains a space)"
+                }
+            }
             mirror?.detach() // this open supersedes whatever instance came before it
             val fresh = Peering.spawnMirror(side, toPeer = egress)
             mirror = fresh
             pending = null
             achieved = null
             admitted = false
-            val credentials = side.credentials
             if (credentials == null) {
                 localNonce = null
                 return HELLO + fresh.ref.id + (side.peer?.let { " ${it.name}" } ?: "")
             }
             val nonce = generateHelloNonce()
             localNonce = nonce
+            if (statements.isNotEmpty()) {
+                return encodeHello3(Hello3(fresh.ref.id, credentials.peerId, credentials.publicKey, nonce, statements))
+            }
             return encodeHello2(Hello2(fresh.ref.id, credentials.peerId, credentials.publicKey, nonce))
         }
 
@@ -979,14 +1100,14 @@ object WsTransport {
          * makes about a peer is taken here, between parsing a text message and
          * `Peering.Side.admits` — and no ingress, no bound mirror and no
          * announcer exists on any path that does not reach the end of one of the
-         * three handlers below (`[DSC1-HELLO-13]`).
+         * four handlers below (`[DSC1-HELLO-13]`).
          *
          * The dispatch is by prefix, and the prefixes cannot collide: the legacy
          * one is `"HELLO "` *with* a trailing space, so `"HELLO2 …"` is never a
          * legacy hello and can never have a token absorbed into a peer *name*
          * (epic §9.1 — see `HelloProtocol`'s file KDoc for the whole argument).
          *
-         * A text message that is none of the three keeps its previous
+         * A text message that is none of the four keeps its previous
          * behaviour exactly — the `require` in [onLegacyHello] throws
          * "unexpected text message", reported by the listener's `onError` with
          * the socket left open (`WsAnnouncementSilenceInventoryTest` pins it).
@@ -998,6 +1119,7 @@ object WsTransport {
          */
         fun onText(message: String) = when {
             message.startsWith(HELLO2_PREFIX) -> onAuthenticatedHello(message)
+            message.startsWith(HELLO3_PREFIX) -> onNamedHello(message)
             message.startsWith(PROOF_PREFIX) -> onProof(message)
             else -> onLegacyHello(message)
         }
@@ -1012,17 +1134,37 @@ object WsTransport {
          * on the allowlist. No peer is admitted at `TransportVouched` on this
          * path while the policy stands, which is that requirement's WHILE
          * clause — there is no branch below the check that could.
+         *
+         * Under `Open`, a side whose identity binding holds no identity for
+         * what the line asserted — including the nameless line, which asserts
+         * nothing — refuses `UNVOUCHED`/`STATEMENT_EXPIRED` (bug
+         * `computenet-tlb83`); an Interim-bound side admits both as before.
          */
         private fun onLegacyHello(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
             val parts = message.removePrefix(HELLO).trim().split(" ", limit = 2)
-            // The legacy line carries an ASSERTED name and nothing else, so the
-            // token is the admission token (`KeyId`'s "TransportVouched" arm)
-            // and the identity is what this side's binding resolves it to — the
-            // one resolution on this path (feature `computenet-376c`).
+            // The legacy line carries an ASSERTED name and nothing else. The key
+            // is what the line asserts (`KeyId`'s "TransportVouched" arm); the
+            // allowlist below (`admitted(peer)`) judges the identity that key
+            // resolves to through this side's `identityBinding`, never the key
+            // itself (epic `computenet-5y8t`) — the one resolution on this path
+            // (feature `computenet-376c`).
             val key = parts.getOrNull(1)?.let { KeyId(it) }
-            val resolution = key?.let { side.identityBinding.resolve(it) }
-            val peer = (resolution as? IdentityResolution.Bound)?.peer
+            // A legacy line presents no statements; only a HELLO3 carries them.
+            //
+            // A NAMELESS line (no token) is resolved too, as the empty
+            // assertion — `KeyId`'s TransportVouched arm holds what the peer
+            // asserted, and it asserted nothing (bug `computenet-tlb83`). Only
+            // the VERDICT is read: a binding that vouches no identity without
+            // evidence (an anchor-vouched one answers `NO_STATEMENT`) refuses
+            // it `UNVOUCHED` below, as it refuses the tokened line and as
+            // `:iroh` refuses a nameless `IROH-HELLO1`, so omitting the token
+            // is no way past that refusal. A `Bound` answer for the empty
+            // assertion names nobody and is never used as attribution: the
+            // peer stays anonymous (`peer == null`), which keeps an
+            // Interim-bound side's admission of the nameless line unchanged.
+            val resolution = side.identityBinding.resolve(key ?: NAMELESS_ASSERTION, emptyList())
+            val peer = if (key == null) null else (resolution as? IdentityResolution.Bound)?.peer
             // AUTH_REQUIRED keeps precedence: under RequireAuthenticated the
             // substance of this refusal is the downgrade, whatever the asserted
             // token resolves to.
@@ -1035,10 +1177,19 @@ object WsTransport {
                 return
             }
             if (resolution is IdentityResolution.Unbound) {
-                refuseUnbound(null, checkNotNull(key), resolution)
+                if (key != null) {
+                    refuseUnbound(null, key, resolution)
+                } else {
+                    refuseHello(
+                        denialReasonFor(resolution.reason),
+                        null,
+                        "nameless legacy hello refused: this side's identity binding vouches no identity for a " +
+                            "peer that asserted none (UnboundReason.${resolution.reason.name})",
+                    )
+                }
                 return
             }
-            if (!admitted(peer, key)) return
+            if (!admitted(peer)) return
             bindAndAnnounce(peer, key, UUID.fromString(parts[0]), AuthLevel.TransportVouched)
         }
 
@@ -1055,14 +1206,16 @@ object WsTransport {
          * 1. **Parse** (`MALFORMED_HELLO`) — a malformed line never yields a
          *    `PeerId`, so nothing downstream can be reached with a half-read
          *    hello.
-         * 2. **Derive and compare** (`ID_MISMATCH`, recording *both* ids) —
+         * 2. **Resolve and compare** (`UNVOUCHED`/`STATEMENT_EXPIRED` for an
+         *    `Unbound` key, then `ID_MISMATCH` recording *both* ids) —
          *    `[DSC1-HELLO-06]`. The presented key is fingerprinted to a
-         *    `civictech.cell.link.KeyId` and that key identifier is resolved
+         *    `civictech.cell.link.KeyId` and that key identifier is resolved,
+         *    with the statements the hello presented (none for `HELLO2`),
          *    through `Peering.Side.identityBinding`; the result must equal the
-         *    id the hello claimed. From here on the connection is judged on the
-         *    derived KEY and attributed to that checked identity — the claimed
-         *    string is no longer merely claimed, it is the value the derivation
-         *    agreed with.
+         *    id the hello claimed. The key is what the hello is proven on; from
+         *    here on the connection is attributed to — and the allowlist judges
+         *    — the identity that key resolved to. The claimed string is no
+         *    longer merely claimed, it is the value the resolution agreed with.
          * 3. **Replay** (`REPLAY`) — `[DSC1-HELLO-11]`, and it is checked
          *    **before any signature work**, ours or the peer's. A replayed
          *    `HELLO2` carries the nonce this side already accepted, and the
@@ -1082,54 +1235,116 @@ object WsTransport {
                     return
                 }
             }
+            admitKeyedHello("HELLO2", hello.mirrorRef, hello.claimedPeerId, hello.publicKeySpki, hello.nonce, emptyList())
+        }
+
+        /**
+         * A `HELLO3` (feature `computenet-5y8t.3`): parse strictly, then run
+         * **the same admission body as a `HELLO2`** ([admitKeyedHello]) with the
+         * statements the line presented. The statements are judged by this
+         * side's `identityBinding` — an `AnchorVouchedBinding` resolves the
+         * stable name they vouch for, the `Interim` binding ignores them and
+         * resolves the key-derived name, which the claimed stable name then
+         * fails to match (`ID_MISMATCH`, the stated break). They are not part
+         * of the signed challenge: each is anchor-signed on its own and binds
+         * the key that signs the `PROOF`.
+         *
+         * A presented statement that binds another key (a peer presenting
+         * someone else's statement beside its own keypair) is
+         * `UnboundReason.KEY_MISMATCH` on that statement — a refusal of a
+         * statement that does not vouch for this key, not a claim about stolen
+         * keys (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
+         */
+        private fun onNamedHello(message: String) {
+            val hello = when (val parse = parseHello3(message)) {
+                is HelloParse.Ok -> parse.message
+                is HelloParse.Malformed -> {
+                    refuseHello(parse.reason, null, "malformed HELLO3 refused (${parse.kind}): ${parse.detail}")
+                    return
+                }
+            }
+            admitKeyedHello(
+                "HELLO3",
+                hello.mirrorRef,
+                hello.claimedPeerId,
+                hello.publicKeySpki,
+                hello.nonce,
+                hello.statements,
+            )
+        }
+
+        /**
+         * The post-parse admission body shared by `HELLO2` and `HELLO3` — one
+         * body, so the two forms cannot drift in step order or refusal reasons
+         * (feature `computenet-5y8t.3` decision F3-D4). [form] names the line in
+         * refusal details only; a `HELLO2`'s details are byte-for-byte those it
+         * has always written.
+         *
+         * Order: out-of-order -> decode key (`MALFORMED_HELLO`) -> fingerprint
+         * -> resolve with [presented] -> `Unbound` refused ([refuseUnbound]) ->
+         * resolved name != [claimedPeerId] (`ID_MISMATCH`) -> replay keyed on
+         * the resolved name -> uncredentialed row / `PROOF`. Resolution precedes
+         * replay because the replay guard is keyed by the resolved name.
+         */
+        private fun admitKeyedHello(
+            form: String,
+            mirrorRef: UUID,
+            claimedPeerId: PeerId,
+            publicKeySpki: ByteArray,
+            nonce: ByteArray,
+            presented: List<IdentityStatement>,
+        ) {
             if (pending != null || achieved != null) {
                 refuseHello(
                     DenialReason.MALFORMED_HELLO,
-                    hello.claimedPeerId,
-                    "a second HELLO2 on one connection instance refused as out of order",
+                    claimedPeerId,
+                    "a second $form on one connection instance refused as out of order",
                 )
                 return
             }
-            val key = decodeEd25519PublicKey(hello.publicKeySpki)
+            val key = decodeEd25519PublicKey(publicKeySpki)
             if (key == null) {
                 refuseHello(
                     DenialReason.MALFORMED_HELLO,
-                    hello.claimedPeerId,
-                    "HELLO2 claiming ${hello.claimedPeerId.name} refused: the presented bytes are not an " +
+                    claimedPeerId,
+                    "$form claiming ${claimedPeerId.name} refused: the presented bytes are not an " +
                         "Ed25519 X.509 public key",
                 )
                 return
             }
             val derivedKey = fingerprint(key)
-            // The ONE resolution this path performs: admission decides on
-            // `derivedKey`, and the identity the hello must have claimed is
-            // whatever this side's binding resolves that key to. Everything
-            // below therefore reads `hello.claimedPeerId` for the identity
-            // rather than resolving a second time (feature `computenet-376c`).
+            // The ONE resolution this path performs: the key is what the hello
+            // is proven on, and the identity the hello must have claimed is
+            // whatever this side's binding resolves that key to, given the
+            // statements the hello presented. The allowlist judges that
+            // identity. Everything below therefore reads `claimedPeerId` for
+            // the identity rather than resolving a second time (feature
+            // `computenet-376c`).
             //
             // A key the binding holds no identity for is refused here, before
-            // the compare: there is no derived identity for the claim to match,
+            // the compare: there is no resolved identity for the claim to match,
             // and nothing may stand in for one (task `computenet-hbqvz`).
-            val derived = when (val resolution = side.identityBinding.resolve(derivedKey)) {
-                is IdentityResolution.Bound -> resolution.peer
+            val bound = when (val resolution = side.identityBinding.resolve(derivedKey, presented)) {
+                is IdentityResolution.Bound -> resolution
                 is IdentityResolution.Unbound -> {
-                    refuseUnbound(hello.claimedPeerId, derivedKey, resolution)
+                    refuseUnbound(claimedPeerId, derivedKey, resolution)
                     return
                 }
             }
-            if (derived != hello.claimedPeerId) {
+            val derived = bound.peer
+            if (derived != claimedPeerId) {
                 refuseHello(
                     DenialReason.ID_MISMATCH,
-                    hello.claimedPeerId,
-                    "HELLO2 claims ${hello.claimedPeerId.name} but the presented key derives ${derived.name}",
+                    claimedPeerId,
+                    "$form claims ${claimedPeerId.name} but the presented key derives ${derived.name}",
                 )
                 return
             }
-            if (replayGuard.hasSeenNonce(derived, hello.nonce)) {
+            if (replayGuard.hasSeenNonce(derived, nonce)) {
                 refuseHello(
                     DenialReason.REPLAY,
                     derived,
-                    "HELLO2 from ${derived.name} refused: it replays a hello this side already accepted " +
+                    "$form from ${derived.name} refused: it replays a hello this side already accepted " +
                         "inside the retention window",
                 )
                 return
@@ -1165,16 +1380,16 @@ object WsTransport {
                 // defect of this path: an unkeyed side cannot prove anything,
                 // which is exactly what its configuration says. The
                 // mixed-version proofs are a sibling item's.
-                if (!admitted(derived, derivedKey)) return
-                pending = PendingHello(hello, derivedKey, key)
-                bindAndAnnounce(derived, derivedKey, hello.mirrorRef, AuthLevel.TransportVouched)
+                if (!admitted(derived)) return
+                pending = PendingHello(mirrorRef, claimedPeerId, nonce, derivedKey, key, bound.issuer)
+                bindAndAnnounce(derived, derivedKey, mirrorRef, AuthLevel.TransportVouched)
                 return
             }
             // Held BEFORE the PROOF is written: the peer's answer arrives on the
             // same socket and is dispatched to this Session after this call
             // returns, so `pending` is always visible to the [onProof] that
             // answers this exchange.
-            pending = PendingHello(hello, derivedKey, key)
+            pending = PendingHello(mirrorRef, claimedPeerId, nonce, derivedKey, key, bound.issuer)
             sendText(encodeProof(Proof(credentials.sign(helloChallengeBytes(ourProofChallenge(credentials))))))
         }
 
@@ -1199,9 +1414,10 @@ object WsTransport {
          *    Reflecting our own `PROOF` back therefore cannot verify
          *    (`[DSC1-HELLO-07]`, `HelloProtocol.helloChallengeBytes`).
          * 5. **Admit** (`NOT_ADMITTED`) — `Side.admits` evaluated on the
-         *    **derived** id, never the claimed string (`[DSC1-HELLO-12]`). The
-         *    allowlist check is unchanged code doing a strictly stronger check:
-         *    the id it tests is now one the peer had to prove.
+         *    **resolved** identity — the one this side's binding resolved the
+         *    proven key to — never the claimed string (`[DSC1-HELLO-12]`).
+         *    Allowlists name identities (epic `computenet-5y8t`); the key is
+         *    what this hello was proven on.
          * 6. **Record, bind, install, announce** — in that order, see
          *    [bindAndAnnounce].
          */
@@ -1211,7 +1427,7 @@ object WsTransport {
             if (credentials == null || awaiting == null || achieved != null) {
                 refuseHello(
                     DenialReason.MALFORMED_HELLO,
-                    awaiting?.hello?.claimedPeerId,
+                    awaiting?.claimedPeerId,
                     "PROOF refused as out of order: " + when {
                         credentials == null -> "this side issued no challenge (it holds no credentials)"
                         awaiting == null -> "no HELLO2 preceded it on this connection instance"
@@ -1223,7 +1439,7 @@ object WsTransport {
             // The identity this connection is attributed to: checked against the
             // presented key in [onAuthenticatedHello] step 2, so no second
             // resolution happens here (feature `computenet-376c`).
-            val peer = awaiting.hello.claimedPeerId
+            val peer = awaiting.claimedPeerId
             val proof = when (val parse = parseProof(message)) {
                 is HelloParse.Ok -> parse.message
                 is HelloParse.Malformed -> {
@@ -1254,9 +1470,15 @@ object WsTransport {
                 )
                 return
             }
-            if (!admitted(peer, awaiting.derivedKey)) return
-            replayGuard.recordAccepted(peer, awaiting.hello.nonce, proof.signature)
-            bindAndAnnounce(peer, awaiting.derivedKey, awaiting.hello.mirrorRef, AuthLevel.Authenticated)
+            if (!admitted(peer)) return
+            replayGuard.recordAccepted(peer, awaiting.nonce, proof.signature)
+            bindAndAnnounce(
+                peer,
+                awaiting.derivedKey,
+                awaiting.mirrorRef,
+                AuthLevel.Authenticated,
+                issuer = awaiting.issuer,
+            )
         }
 
         /**
@@ -1276,11 +1498,11 @@ object WsTransport {
             val awaiting = checkNotNull(pending) { "no HELLO2 to build a challenge from" }
             return HelloChallenge(
                 signerPeerId = credentials.peerId,
-                verifierPeerId = awaiting.hello.claimedPeerId,
-                verifierNonce = awaiting.hello.nonce,
+                verifierPeerId = awaiting.claimedPeerId,
+                verifierNonce = awaiting.nonce,
                 signerNonce = checkNotNull(localNonce) { "a credentialed side always sends a nonce in hello()" },
                 signerMirrorRef = checkNotNull(mirror) { "onText before hello opened a connection instance" }.ref.id,
-                verifierMirrorRef = awaiting.hello.mirrorRef,
+                verifierMirrorRef = awaiting.mirrorRef,
             )
         }
 
@@ -1288,22 +1510,25 @@ object WsTransport {
          * `Peering.Side.admits`, with the refusal accounted — unchanged
          * behaviour on the legacy path (the stderr line and the denial detail
          * are the ones this transport has always written) and unchanged *code*
-         * on the authenticated ones, where the only difference is that [key]
-         * is a derived fingerprint rather than a claimed name
-         * (`[DSC1-HELLO-12]`).
+         * on the authenticated ones, where the identity judged is one the peer
+         * had to prove a key for (`[DSC1-HELLO-12]`).
          *
-         * **Two arguments, and the split is the point** (feature
-         * `computenet-376c`): [key] is what the allowlist judges, [peer] is the
-         * identity that key resolved to and therefore what the denial record
-         * attributes the refusal to. Under the interim binding they hold the
-         * same string, which is why every landed `denial.principal` assertion
-         * is unaffected.
+         * **The allowlist judges the RESOLVED identity** (epic
+         * `computenet-5y8t`): [peer] is what this side's binding resolved the
+         * hello's key to, and it is both what the allowlist judges and what the
+         * denial record attributes the refusal to. Allowlists name identities;
+         * the key is what a hello is proven on and plays no part here. Every
+         * caller has already refused an `IdentityResolution.Unbound` key
+         * ([refuseUnbound]) before reaching this. Under the interim binding a
+         * key identifier and its identity hold the same string, which is why
+         * every landed allowlist and `denial.principal` assertion is
+         * unaffected.
          *
          * @return true when the peer is admitted; false after refusing it, in
          *   which case the caller must return without binding anything.
          */
-        private fun admitted(peer: PeerId?, key: KeyId?): Boolean {
-            if (side.admits(key)) return true
+        private fun admitted(peer: PeerId?): Boolean {
+            if (side.admits(peer)) return true
             System.err.println("[WsTransport] refusing peer $peer: not on the allowlist (spec 43)")
             // Seam 1 (spec 40/43, [SEC1-07]): accounted before the
             // connection is refused. A hello is a text frame with no
@@ -1327,24 +1552,33 @@ object WsTransport {
          * Refuse a connection whose admission key this side's
          * `Peering.Side.identityBinding` resolves to **no identity** (task
          * `computenet-hbqvz`) — the typed refusal arm of that seam on this
-         * transport. No binding in the tree produces it today; the default
-         * `PeerIdentityBinding.Interim` is total.
+         * transport, reached on the legacy, `HELLO2` and `HELLO3` paths alike.
+         * The default `PeerIdentityBinding.Interim` is total and never produces
+         * it; `civictech.identity.anchor.AnchorVouchedBinding` does, for any
+         * hello that presents no statement vouching for its key.
          *
-         * Accounted as [DenialReason.NOT_ADMITTED] — this side will not let the
-         * connection in — with the machine-readable
-         * [civictech.cell.link.UnboundReason] carried in the detail, so it stays
-         * distinguishable from an allowlist refusal by its detail. A dedicated
-         * `DenialReason` constant is a kernel taxonomy change this task does not
-         * make. [principal] is the identity the hello *claimed* where it claimed
-         * one (the only name this side has for the peer), never one built from
-         * [key].
+         * Accounted under `civictech.cell.wire.denialReasonFor` — the one table
+         * from an [civictech.cell.link.UnboundReason] to its seam-1 class
+         * (`UNVOUCHED` or `STATEMENT_EXPIRED`, task `computenet-5y8t.3.1`), which
+         * `:iroh` reads too — never `NOT_ADMITTED`, so an unvouched key is
+         * machine-distinguishable from an allowlist refusal by its reason. The
+         * finer `UnboundReason` is carried in the detail; an expiry verdict also
+         * names the clock that refused, because the validity window is judged
+         * against THIS side's clock (epic §9.6, `[DSC1-NV-03]` stays EXPLICITLY
+         * UNVERIFIED). [principal] is the identity the hello *claimed* where it
+         * claimed one (the only name this side has for the peer), never one
+         * built from [key].
          */
         private fun refuseUnbound(principal: PeerId?, key: KeyId, resolution: IdentityResolution.Unbound) {
+            val clock = when (resolution.reason) {
+                UnboundReason.EXPIRED, UnboundReason.NOT_YET_VALID -> ", judged under this side's clock"
+                else -> ""
+            }
             refuseHello(
-                DenialReason.NOT_ADMITTED,
+                denialReasonFor(resolution.reason),
                 principal,
                 "hello presenting key ${key.name} refused: this side's identity binding holds no identity " +
-                    "for it (UnboundReason.${resolution.reason.name})",
+                    "for it (UnboundReason.${resolution.reason.name}$clock)",
             )
         }
 
@@ -1430,12 +1664,22 @@ object WsTransport {
          * the peer's `HELLO2` is written from *its* `onOpen`, exactly where a
          * legacy hello would have been.
          */
-        private fun bindAndAnnounce(peer: PeerId?, key: KeyId?, peerMirrorRef: UUID, achieved: AuthLevel) {
+        private fun bindAndAnnounce(
+            peer: PeerId?,
+            key: KeyId?,
+            peerMirrorRef: UUID,
+            achieved: AuthLevel,
+            issuer: IssuerId? = null,
+        ) {
             // The level is a PARAMETER, fixed by the admission row that called
             // us, and it is applied before the ingress exists — so it is bound
             // by the same happens-before that binds the mirror's peer
             // (`[DSC1-HELLO-13]`, and `RegistryMirrorCell.peer`'s own
-            // argument). Publishing it on the observable field first keeps the
+            // argument). The issuer is a parameter by the same argument: only
+            // the PROOF row passes one, because the two TransportVouched rows
+            // (legacy hello, uncredentialed HELLO2) never proved possession of
+            // the key, so its binding statement vouches for nothing on this
+            // connection and they leave it null. Publishing the level on the observable field first keeps the
             // two readings — what a delivery is stamped with, and what
             // `achievedAuthLevel` reports — the same value by construction
             // rather than by two assignments agreeing.
@@ -1473,6 +1717,7 @@ object WsTransport {
                 side,
                 fromPeer = peer,
                 fromPeerAuth = achieved,
+                fromPeerIssuer = issuer,
                 fromKey = key,
                 announcementAdmission = admission,
             )

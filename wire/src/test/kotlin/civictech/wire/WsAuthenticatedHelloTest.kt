@@ -98,7 +98,7 @@ class WsAuthenticatedHelloTest {
      */
     private inner class Stack(
         name: String,
-        allow: Set<KeyId>? = null,
+        allow: Set<PeerId>? = null,
         binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
     ) {
         val identity: PeerIdentity = FilePeerKeyStore(keyDirs.resolve(name)).loadOrGenerate()
@@ -177,10 +177,10 @@ class WsAuthenticatedHelloTest {
             // fingerprint of the presented key to — `.peer` is a PeerId and
             // `fingerprint` now returns a KeyId, so the two are compared where
             // the transport actually joins them ...
-            client.side.identityBinding.resolve(fingerprint(server.identity.publicKey)) shouldBe
-                IdentityResolution.Bound(requireNotNull(client.registry.remote(collector.ref).peer))
-            server.side.identityBinding.resolve(fingerprint(client.identity.publicKey)) shouldBe
-                IdentityResolution.Bound(requireNotNull(server.registry.remote(writer.ref).peer))
+            client.side.identityBinding.resolve(fingerprint(server.identity.publicKey), emptyList()) shouldBe
+                IdentityResolution.Bound(requireNotNull(client.registry.remote(collector.ref).peer), null, null)
+            server.side.identityBinding.resolve(fingerprint(client.identity.publicKey), emptyList()) shouldBe
+                IdentityResolution.Bound(requireNotNull(server.registry.remote(writer.ref).peer), null, null)
             // ... reached independently as the id each key store minted ...
             client.registry.remote(collector.ref).peer shouldBe server.identity.peerId
             server.registry.remote(writer.ref).peer shouldBe client.identity.peerId
@@ -293,7 +293,7 @@ class WsAuthenticatedHelloTest {
         val remote = Stack("taxonomy-remote")
         val stranger = Stack("taxonomy-stranger")
         // an allowlist naming somebody else, evaluated on the DERIVED id
-        val allowlisted = Stack("taxonomy-allowlisted", allow = setOf(stranger.identity.keyId))
+        val allowlisted = Stack("taxonomy-allowlisted", allow = setOf(stranger.identity.peerId))
 
         // One sink for the whole test, exactly as a listener shares one across
         // every connection it accepts — otherwise a per-Session sink would reset
@@ -416,8 +416,8 @@ class WsAuthenticatedHelloTest {
      * every other key — the smallest partial binding. No binding in production
      * behaves like this today; it exists to reach the refusal arm.
      */
-    private fun bindingWithoutIdentityFor(unbound: KeyId) = PeerIdentityBinding { key ->
-        if (key == unbound) IdentityResolution.Unbound(UnboundReason.NO_BINDING) else PeerIdentityBinding.Interim.resolve(key)
+    private fun bindingWithoutIdentityFor(unbound: KeyId) = PeerIdentityBinding { key, presented ->
+        if (key == unbound) IdentityResolution.Unbound(UnboundReason.NO_BINDING) else PeerIdentityBinding.Interim.resolve(key, presented)
     }
 
     /**
@@ -461,7 +461,7 @@ class WsAuthenticatedHelloTest {
         val (unbound, unboundTexts, unboundRefusals) =
             drive(Stack("unbound-local", binding = bindingWithoutIdentityFor(remote.identity.keyId)))
         val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound key was not refused" }
-        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.reason shouldBe DenialReason.UNVOUCHED
         // attributed to the id the hello CLAIMED — the only name this side has
         denial.principal shouldBe remote.identity.peerId
         requireNotNull(denial.detail) shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"
@@ -498,7 +498,7 @@ class WsAuthenticatedHelloTest {
 
         val unbound = drive(openSide(bindingWithoutIdentityFor(KeyId("mallory"))))
         val denial = requireNotNull(unbound.lastAdmissionDenial) { "the unbound token was not refused" }
-        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.reason shouldBe DenialReason.UNVOUCHED
         denial.principal.shouldBeNull()
         requireNotNull(denial.detail) shouldContain "UnboundReason.${UnboundReason.NO_BINDING.name}"
         unbound.peered shouldBe false

@@ -11,19 +11,17 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
- * The vocabulary split of feature `computenet-376c`: a [KeyId] is what
- * boundary admission is configured in, a [PeerId] is what attribution is
- * stamped with, and [PeerIdentityBinding] is the single named seam between
- * them.
+ * The vocabulary split of feature `computenet-376c`: a [KeyId] is what a
+ * hello is **proven** on, a [PeerId] is what attribution is stamped with, and
+ * [PeerIdentityBinding] is the single named seam between them.
  *
- * The point of the substitution case is the one that is easy to lose:
- * [allowPeers] must go *through* the binding on every evaluation, not assume
- * the interim identity-is-the-key-name rule. Substituting a binding has to
- * change the verdict on an unchanged request.
+ * Allowlists name **identities** (epic `computenet-5y8t`): [allowPeers] is
+ * configured in [PeerId]s and compares the stamped identity by name, consulting
+ * no binding — the identity was already resolved when the ingress stamped it.
  *
  * Task `computenet-hbqvz` made the seam partial ([IdentityResolution]); the
- * last case pins that a key resolving to [IdentityResolution.Unbound] vouches
- * for nobody. That is the *shape* of the refusal arm only — nothing here
+ * loopback case pins that a key resolving to [IdentityResolution.Unbound]
+ * backs no name. That is the *shape* of the refusal arm only — nothing here
  * models revocation, and nothing here says anything about a stolen key
  * (`[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED).
  */
@@ -34,14 +32,14 @@ class PeerIdentityBindingTest {
     @Test
     fun `the interim binding resolves every key identifier to the identity of its own name`() {
         assertEquals(
-            IdentityResolution.Bound(PeerId("k")),
-            PeerIdentityBinding.Interim.resolve(KeyId("k")),
+            IdentityResolution.Bound(PeerId("k"), null, null),
+            PeerIdentityBinding.Interim.resolve(KeyId("k"), emptyList()),
         )
     }
 
     @Test
-    fun `allowPeers keyed on a KeyId admits, rejects and passes exactly as it did on a PeerId`() {
-        val policy = allowPeers(KeyId("good"))
+    fun `allowPeers keyed on a PeerId admits, rejects and passes on the stamped identity`() {
+        val policy = allowPeers(PeerId("good"))
 
         assertNull(policy.evaluate(request(PeerId("good"))), "the allowlisted peer is admitted")
 
@@ -55,42 +53,21 @@ class PeerIdentityBindingTest {
         assertNull(policy.evaluate(request(null)), "a local request (null identity) passes")
     }
 
+    /**
+     * With no binding in play there is nothing to substitute: the verdict is a
+     * comparison of names. `name-of-good` is exactly what a prefixing binding
+     * would have resolved the key `good` to under the retired key-configured
+     * allowlist; it is refused here because it is not the configured name.
+     */
     @Test
-    fun `substituting the binding flips the verdict with no change to the request`() {
-        val prefixing = PeerIdentityBinding { IdentityResolution.Bound(PeerId("name-of-" + it.name)) }
-        val request = request(PeerId("good"))
+    fun `allowPeers compares the stamped identity by name and consults no binding`() {
+        val policy = allowPeers(PeerId("good"))
 
-        // Same key on the allowlist, same request: only the binding differs.
-        assertNull(allowPeers(KeyId("good")).evaluate(request))
-        assertNotNull(allowPeers(KeyId("good"), binding = prefixing).evaluate(request))
-
-        // ...and the key whose identity the substituted binding DOES resolve to
-        // `good` is a different key entirely.
-        assertNull(allowPeers(KeyId("good"), binding = prefixing).evaluate(request(PeerId("name-of-good"))))
-    }
-
-    @Test
-    fun `an allowlisted key the binding holds no identity for admits nobody, and the other keys still count`() {
-        // A binding with no identity for `unbound`, and the interim answer for
-        // every other key. Nothing may stand in for the missing identity — in
-        // particular not the identity of the key's own name, `PeerId("unbound")`.
-        val partial = PeerIdentityBinding { key ->
-            if (key == KeyId("unbound")) {
-                IdentityResolution.Unbound(UnboundReason.NO_BINDING)
-            } else {
-                PeerIdentityBinding.Interim.resolve(key)
-            }
-        }
-
-        // The very request a PeerId(key.name) fallback would admit is refused.
-        val onlyUnbound = allowPeers(KeyId("unbound"), binding = partial)
-        assertNotNull(onlyUnbound.evaluate(request(PeerId("unbound"))), "an unbound key vouches for nobody")
-        assertNull(onlyUnbound.evaluate(request(null)), "a local request still passes")
-
-        // An unbound entry does not poison the list: the bound key still admits.
-        val mixed = allowPeers(KeyId("unbound"), KeyId("good"), binding = partial)
-        assertNull(mixed.evaluate(request(PeerId("good"))))
-        assertNotNull(mixed.evaluate(request(PeerId("unbound"))))
+        assertNull(policy.evaluate(request(PeerId("good"))), "the configured identity is admitted")
+        assertNotNull(
+            policy.evaluate(request(PeerId("name-of-good"))),
+            "an identity that is not the configured name is rejected, whatever key it was proven on",
+        )
     }
 
     /**
@@ -99,15 +76,23 @@ class PeerIdentityBindingTest {
      * resolves to. A key with no identity backs no name, so the sender stays
      * `TransportVouched` — even though its configured name is exactly what a
      * `PeerId(key.name)` fallback would have produced.
+     *
+     * **The partial binding sits on the RECEIVER.** Task `computenet-hbqvz`
+     * landed this case with the binding on the sender, because the loopback
+     * then resolved a sender's key through the sender's own binding. Task
+     * `computenet-5y8t.1.3` deliberately changed that (feature
+     * `computenet-5y8t.1`, decision D9): the relying side resolves the
+     * sender's presented key, as the socket's admitting side does, so the
+     * binding that can refuse is the receiver's. The sender here is `Interim`.
      */
     @Test
     fun `a loopback sender whose key resolves to no identity is not promoted`() {
         val senderKey = KeyId("sender-key")
-        val unboundForSender = PeerIdentityBinding { key ->
+        val unboundForSender = PeerIdentityBinding { key, presented ->
             if (key == senderKey) {
                 IdentityResolution.Unbound(UnboundReason.NO_BINDING)
             } else {
-                PeerIdentityBinding.Interim.resolve(key)
+                PeerIdentityBinding.Interim.resolve(key, presented)
             }
         }
 
@@ -121,17 +106,18 @@ class PeerIdentityBindingTest {
                 identityBinding = binding,
             )
         }
-        val receiver = side(KeyId("receiver-key"), PeerIdentityBinding.Interim)
+        val sender = side(senderKey, PeerIdentityBinding.Interim)
 
-        // Control: under the interim binding the same configuration IS promoted,
-        // so the verdict below is the binding's refusal arm and nothing else.
+        // Control: a receiver under the interim binding promotes the same
+        // sender, so the verdict below is the receiver binding's refusal arm
+        // and nothing else.
         assertEquals(
             AuthLevel.Authenticated,
-            Peering.loopbackAuthLevel(side(senderKey, PeerIdentityBinding.Interim), receiver),
+            Peering.loopbackAuthLevel(sender, side(KeyId("receiver-key"), PeerIdentityBinding.Interim)),
         )
         assertEquals(
             AuthLevel.TransportVouched,
-            Peering.loopbackAuthLevel(side(senderKey, unboundForSender), receiver),
+            Peering.loopbackAuthLevel(sender, side(KeyId("receiver-key"), unboundForSender)),
         )
     }
 

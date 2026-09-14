@@ -1,48 +1,31 @@
 package civictech.cell.link
 
 /**
- * Deny-by-default building block (M8.3): remote peers whose identity is not
- * the identity of one of [keys] are rejected; local requests (null identity)
- * pass — boundary control, not ambient suspicion (spec 43 posture).
+ * Deny-by-default building block (M8.3): remote peers whose stamped identity
+ * is not one of [peers] are rejected; local requests (null identity) pass —
+ * boundary control, not ambient suspicion (spec 43 posture).
  *
- * **Configured in key identifiers, judged against the stamped identity**
- * (feature `computenet-376c`). Seam-2 link authority is boundary admission,
- * so its allowlist is expressed in [KeyId]s — "which keys may link here" —
- * which is what "boundary admission is expressed in terms of the key
- * identifier" means for this function. But a [LinkRequest] carries no key:
- * it carries the [PeerId] the admitting side already stamped
- * ([LinkRequest.identity], built from [CurrentPeer.get]). Widening the stamp
- * to carry a key alongside was considered and rejected as a carrier change
- * this feature does not need. So each configured key is resolved to its
- * identity through [binding] and compared against the stamped one.
+ * **Allowlists name identities** (epic `computenet-5y8t`). The key is what a
+ * hello is **proven** on; the admitting side resolves it to an identity
+ * through its `civictech.cell.link.PeerIdentityBinding` and stamps that
+ * identity on every delivery. A [LinkRequest] carries exactly that stamp
+ * ([LinkRequest.identity], built from [CurrentPeer.get]), so this policy
+ * compares the stamp with the configured names directly and **resolves
+ * nothing at link time**. The inversion feature `computenet-376c` needed —
+ * an allowlist configured in key identifiers, each resolved per evaluation
+ * to compare against the stamp — is gone with the key-configured allowlist,
+ * and so is the resolver parameter it needed: there is one way to say who may
+ * link here, not two.
  *
- * The resolution happens **per evaluation**, not once at construction: a
- * binding is a live mapping (DSC4's anchor-vouched names can change what a
- * key resolves to over time), and a policy that froze it at construction
- * would keep admitting a peer under a name it no longer holds.
- *
- * Under the default [PeerIdentityBinding.Interim] a key identifier and the
- * identity it resolves to hold the same string, so every pre-`376c` allowlist
- * admits and refuses exactly what it did before.
- *
- * A configured key the binding resolves to [IdentityResolution.Unbound]
- * vouches for **nobody** (task `computenet-hbqvz`): it matches no stamped
- * identity, so it can never be the entry that admits a request. The remaining
- * keys are still consulted.
+ * Under the default `Interim` resolution a key identifier and the identity it
+ * resolves to hold the same string, so every allowlist configured before
+ * epic `computenet-5y8t` admits and refuses exactly what it did.
  */
-fun allowPeers(
-    vararg keys: KeyId,
-    binding: PeerIdentityBinding = PeerIdentityBinding.Interim,
-): LinkPolicy = LinkPolicy { request ->
+fun allowPeers(vararg peers: PeerId): LinkPolicy = LinkPolicy { request ->
     val identity = request.identity
     when {
         identity == null -> null
-        keys.any { key ->
-            when (val resolution = binding.resolve(key)) {
-                is IdentityResolution.Bound -> resolution.peer == identity
-                is IdentityResolution.Unbound -> false
-            }
-        } -> null
+        identity in peers -> null
         else -> LinkResult.Rejected("peer $identity is not on the allowlist (spec 43)")
     }
 }

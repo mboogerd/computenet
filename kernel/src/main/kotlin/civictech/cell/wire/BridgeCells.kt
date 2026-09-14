@@ -11,6 +11,7 @@ import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanOutlet
@@ -118,20 +119,36 @@ class BridgeIngressCell(
      */
     private val peerAuth: AuthLevel = AuthLevel.TransportVouched,
     /**
-     * The **key identifier** this connection was admitted on, judged by
-     * [admit] (feature `computenet-376c`). Null when the connection presented
-     * no key — an open side admits it, an allowlisted side refuses it.
+     * Who vouched for [peer] on this connection (feature `computenet-5y8t.1`,
+     * decision D5/D12) — **bound once, by the caller, at the admission
+     * decision**, the same discipline [peerAuth]'s KDoc paragraph states above
+     * and which applies here verbatim. Null exactly when the identity is
+     * key-derived or [peerAuth] is not [AuthLevel.Authenticated].
+     */
+    private val peerIssuer: IssuerId? = null,
+    /**
+     * The **key identifier** this connection was **proven** on. The
+     * allowlist ([admit]) does not judge it — allowlists name identities
+     * (epic `computenet-5y8t`) — but the announcement gate does: a signed
+     * announcement's `signerKeyId` must name exactly this key, or it is
+     * refused `ID_MISMATCH` (feature `computenet-5y8t.7`, see
+     * [AnnouncementAdmission.check]). Null when the connection presented no
+     * key; that changes no allowlist verdict, and on a side that verifies
+     * announcements it refuses every signed one (decision 5y8t.7-D4).
      *
-     * Distinct from [peer] on purpose: this is what admission *decides on*,
-     * [peer] is what every delivery is *stamped with*. Under the interim
-     * [civictech.cell.link.PeerIdentityBinding] the two carry the same string.
+     * Distinct from [peer] on purpose: the key is what a hello is proven on,
+     * [peer] is the identity it resolved to — what every delivery is
+     * *stamped with* and what [admit] judges, because allowlists name
+     * identities. Under the interim [civictech.cell.link.PeerIdentityBinding]
+     * the two carry the same string.
      */
     private val peerKey: KeyId? = null,
     /**
      * Boundary admission (M8.3, spec 43 mechanism 2): allowlists are bridge
-     * configuration, not a protocol fork. Judges [peerKey] — the key on the
-     * connection — and not [peer], which is the identity it resolved to
-     * (feature `computenet-376c`).
+     * configuration, not a protocol fork. Judges [peer] — the identity the
+     * connection's key resolved to — and not [peerKey], the key it was proven
+     * on: allowlists name identities (epic `computenet-5y8t`, superseding
+     * feature `computenet-376c`'s key-judged gate).
      *
      * A refused frame is refused before [WireCodec.decode] runs and before any
      * delivery reaches the local registry ([SEC1-06]): a typed
@@ -141,13 +158,13 @@ class BridgeIngressCell(
      * cell fault that triggers supervision RESTART or escalation — a denial is
      * not a fault (BS-14).
      *
-     * **Residual (feature `computenet-376c`):** the emitted
-     * `civictech.cell.BoundaryDenial.principal` stays a [PeerId] and grows no
-     * `KeyId` field, so a refusal records the identity that was refused and
-     * names the refused key only in its `detail`. Re-keying the denial record
-     * is DSC4's remaining work.
+     * The emitted `civictech.cell.BoundaryDenial.principal` is a [PeerId] and
+     * grows no `KeyId` field (feature `computenet-376c`, kept by epic
+     * `computenet-5y8t`): a refusal records the identity that was refused —
+     * the same identity this gate judged — and names the key the connection
+     * was proven on only in its `detail`.
      */
-    private val admit: (KeyId?) -> Boolean = { true },
+    private val admit: (PeerId?) -> Boolean = { true },
     /**
      * Reverse-direction sink for upstream protocol replies over a
      * wire-reconstructed [WireEdgeLink] (spec 41 point 4, G-35 phase B) —
@@ -299,7 +316,7 @@ class BridgeIngressCell(
     init {
         inlet.serve(object : Propagate<ByteArray> {
             override fun propagate(value: ByteArray) {
-                if (!admit(peerKey)) {
+                if (!admit(peer)) {
                     // Seam 1 (spec 40/43, [SEC1-07]): refused before decode and
                     // before any delivery reaches the local registry
                     // ([SEC1-06]). Nothing throws — a denial is not a cell
@@ -356,7 +373,7 @@ class BridgeIngressCell(
                     // is nothing to discharge, and handing the raw frame bytes over
                     // as the allowlist path does would put the base64 signature into
                     // a dead letter ([DSC1-OBS-05]).
-                    val rejection = gate.check(peer, decodedFrame.frame)
+                    val rejection = gate.check(peer, peerKey, decodedFrame.frame)
                     if (rejection != null) {
                         announcementSink.deny(
                             seam = BoundarySeam.ADMISSION,
@@ -408,9 +425,9 @@ class BridgeIngressCell(
                 }
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
-                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth)
+                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth, peerIssuer = peerIssuer)
                 } else {
-                    decoded.copy(peer = peer, peerAuth = peerAuth)
+                    decoded.copy(peer = peer, peerAuth = peerAuth, peerIssuer = peerIssuer)
                 }
                 deliverTo.deliver(withPeer)
             }

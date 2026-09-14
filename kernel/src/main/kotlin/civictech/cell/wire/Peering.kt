@@ -8,6 +8,8 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.IdentityResolution
+import civictech.cell.link.IdentityStatement
+import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
@@ -305,7 +307,9 @@ const val DEFAULT_NONCE_RETENTION_MILLIS: Long = 600_000
  * exchanged is already known to be genuine and the only question left is
  * whether it is *present*. A direction whose sender and receiver both hold
  * [Peering.Side.credentials], and whose sender's [Peering.Side.peer] is the
- * fingerprint its own key derives, therefore stamps
+ * identity the *receiver's* binding resolves the sender's key to (under
+ * `PeerIdentityBinding.Interim`, the fingerprint that key derives; feature
+ * `computenet-5y8t.1`, decision D9), therefore stamps
  * `civictech.cell.link.AuthLevel.Authenticated` — the same principal a socket
  * peering with the same configuration yields. Every other loopback direction
  * stamps `TransportVouched`, exactly as before this feature.
@@ -372,9 +376,11 @@ interface PeerCredentials {
      * This side's **key identifier** — `civictech.identity.fingerprint(publicKey)`,
      * the fingerprint of [publicKey] (feature `computenet-376c`).
      *
-     * This is the token boundary admission judges: an allowlist
-     * ([Peering.Side.allow]) names keys, and a hello is admitted on the key it
-     * presented.
+     * This is what a hello is **proven** on: the peer's signature verifies
+     * against this key. It is not what an allowlist names — since epic
+     * `computenet-5y8t` [Peering.Side.allow] names identities, judged after
+     * this key has been resolved to one through the receiving side's
+     * [civictech.cell.link.PeerIdentityBinding].
      */
     val keyId: KeyId
 
@@ -394,6 +400,18 @@ interface PeerCredentials {
 
     /** A signature over exactly [message]; no framing, prefixing or hashing is added here. */
     fun sign(message: ByteArray): ByteArray
+
+    /**
+     * This side's **own evidence** for its name: the
+     * [civictech.cell.link.IdentityStatement]s it presents to a peer's
+     * [civictech.cell.link.PeerIdentityBinding] (feature `computenet-5y8t.1`).
+     * A list, because a peer may hold statements from several issuers.
+     *
+     * Defaults to empty, so every implementation that predates statements is
+     * unchanged; under [civictech.cell.link.PeerIdentityBinding.Interim] the
+     * list is ignored either way.
+     */
+    val statements: List<IdentityStatement> get() = emptyList()
 }
 
 /**
@@ -411,22 +429,30 @@ object Peering {
         /** This side's transport identity (M8.2); null = anonymous. */
         val peer: PeerId? = null,
         /**
-         * Deny-by-default admission (M8.3): the **keys** accepted at this
-         * boundary; null = open.
+         * Deny-by-default admission (M8.3): the **identities** accepted at
+         * this boundary; null = open.
          *
-         * Keyed on [KeyId] rather than [PeerId] since feature
-         * `computenet-376c`: admission asks "may this connection in front of
-         * me be let in", which is a property of the key on the wire right now,
-         * while the [PeerId] this side then stamps is attribution resolved
-         * through [identityBinding]. Under the interim binding the two hold the
-         * same string, so an allowlist configured before the split admits and
-         * refuses exactly the same connections after it.
+         * Allowlists name identities, not keys (epic `computenet-5y8t`). The
+         * key is what a hello is **proven** on; the order at every ingress is
+         * key proven → identity resolved through [identityBinding] → that
+         * resolved name judged against this set. On the transports' hello
+         * paths a binding that resolves no identity refuses the connection
+         * before the allowlist is reached; [loopback], which has no hello,
+         * judges the name its ingress stamps ([Side.peer]). A peer
+         * whose key changes but whose binding still resolves the same identity
+         * stays admitted with no edit to this set.
+         *
+         * Under the interim binding a key identifier and its identity hold the
+         * same string, so every allowlist configured before epic
+         * `computenet-5y8t` (when this set was keyed on
+         * `civictech.cell.link.KeyId`, feature `computenet-376c`) admits and
+         * refuses exactly the connections it did.
          *
          * Under `civictech.cell.link.AuthLevel.TransportVouched` no key exists:
-         * the entry then names the identifier a peer *asserted* and the
-         * transport vouched for — see [KeyId]'s own KDoc.
+         * the entry then names the identity a peer *asserted* and the
+         * transport vouched for.
          */
-        val allow: Set<KeyId>? = null,
+        val allow: Set<PeerId>? = null,
         /**
          * **Test-only seam** (computenet-dqy.45), null on every production path
          * and never set by kernel, `:wire` or any demo. [announceTo] invokes it
@@ -541,12 +567,13 @@ object Peering {
         val announcementVerification: AnnouncementVerification? = null,
         /**
          * The seam this side resolves an admitted connection's **identity**
-         * through, given the key identifier it admitted on (feature
+         * through, given the key identifier its hello was proven on (feature
          * `computenet-376c`).
          *
-         * Admission judges a `civictech.cell.link.KeyId`; attribution records
-         * a [PeerId]; this is the one named place that gets from the first to
-         * the second. The default,
+         * A hello is proven on a `civictech.cell.link.KeyId`; attribution and
+         * the allowlist ([allow], epic `computenet-5y8t`) use a [PeerId]; this
+         * is the one named place that gets from the first to the second. The
+         * default,
          * [PeerIdentityBinding.Interim][civictech.cell.link.PeerIdentityBinding.Companion.Interim],
          * maps a key identifier to the identity of the same name, which is
          * exactly the behaviour every side had before the two types existed.
@@ -556,7 +583,9 @@ object Peering {
          * The resolution is partial (task `computenet-hbqvz`): every consumer
          * handles `IdentityResolution.Unbound` explicitly — the transports'
          * hello admission refuses the connection, [loopbackAuthLevel] does
-         * not promote — and none substitutes a name built from the key.
+         * not promote — and none substitutes a name built from the key. On
+         * both paths it is the **receiving** side's binding that resolves the
+         * peer's presented key (feature `computenet-5y8t.1`, decision D9).
          *
          * It is last in the constructor so every existing positional and
          * named `Side(...)` construction compiles unchanged.
@@ -602,8 +631,12 @@ object Peering {
         }
 
         /**
-         * The admission token this side would present to a peer — a keyed side
+         * The key token this side would present to a peer — a keyed side
          * presents its key's fingerprint, an unkeyed one the name it asserts.
+         * Not judged by the receiving ingress's allowlist (`hostIngress`'s
+         * `fromKey`): allowlists name identities (epic `computenet-5y8t`). Its
+         * announcement gate does hold a signed announcement's `signerKeyId` to
+         * it (feature `computenet-5y8t.7`).
          *
          * Used by [loopback] as the in-process stand-in for what a hello would
          * carry on a socket. The `KeyId(peer.name)` arm is the **transport-
@@ -614,15 +647,20 @@ object Peering {
         val presentedKeyId: KeyId? get() = credentials?.keyId ?: peer?.let { KeyId(it.name) }
 
         /**
-         * Is the connection presenting key identifier [key] admitted here?
+         * Is the connection whose identity resolved to [peer] admitted here?
          *
-         * Judges the **key**, never the identity (feature `computenet-376c`).
-         * There is deliberately no [PeerId] overload: a `null` argument would
+         * Judges the **identity**, never the key (epic `computenet-5y8t`):
+         * the caller has already proven the hello on its key and resolved
+         * that key through [identityBinding], and passes the resolved name.
+         * Null — a caller with no identity — is admitted by an open side and
+         * refused by one with an allowlist.
+         *
+         * There is deliberately no [KeyId] overload: a `null` argument would
          * be ambiguous between the two, and `side::admits` — how
-         * [hostIngress] passes this gate to a `BridgeIngressCell` — would not
-         * resolve.
+         * [hostIngress] passes this gate to a `BridgeIngressCell` — must
+         * resolve to exactly one function.
          */
-        fun admits(key: KeyId?): Boolean = allow == null || key in allow
+        fun admits(peer: PeerId?): Boolean = allow == null || peer in allow
     }
 
     interface FrameInletProxy {
@@ -811,12 +849,17 @@ object Peering {
      * - the sender holds [Side.credentials] — on a socket this is what lets it
      *   answer with a `PROOF`; without a keypair there is no `PROOF` row to
      *   reach;
-     * - the sender's [Side.peer] **is** the identity its own key resolves to
-     *   (`sender.identityBinding.resolve(credentials.keyId)` is
-     *   `IdentityResolution.Bound` to it) — the
-     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A key the
-     *   binding resolves to `IdentityResolution.Unbound` backs no name at all
-     *   and is never promoted (task `computenet-hbqvz`). A side
+     * - the sender's [Side.peer] **is** the identity its key resolves to on
+     *   the **relying** side — the sender presents, the receiver resolves:
+     *   `receiver.identityBinding.resolve(sender.credentials.keyId,
+     *   sender.credentials.statements)` is `IdentityResolution.Bound` to it
+     *   (feature `computenet-5y8t.1`, decision D9; task `computenet-5y8t.1.3`).
+     *   That is the socket's `[DSC1-HELLO-06]` derive-and-compare, as data,
+     *   and it is the socket's *admitting* side's binding that does it, so a
+     *   relying peer applies its own policy about which issuers it accepts.
+     *   The sender's own [Side.identityBinding] is not read here. A key the
+     *   receiver's binding resolves to `IdentityResolution.Unbound` backs no
+     *   name at all and is never promoted (task `computenet-hbqvz`). A side
      *   announcing itself under a name its key does
      *   not derive is exactly the `ID_MISMATCH` the socket refuses, and the
      *   name is what gets stamped on every delivery, so promoting it would
@@ -834,18 +877,47 @@ object Peering {
      * [PeerAuthPolicy]'s KDoc). A `RequireAuthenticated` loopback side is
      * neither promoted nor refused by this function; what decides is whether
      * the material a hello would have used is present on both sides.
+     *
+     * The issuer half of the verdict lives in [loopbackAdmission]; this is its
+     * level alone.
      */
-    internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel {
-        val senderKeys = sender.credentials ?: return AuthLevel.TransportVouched
-        if (receiver.credentials == null) return AuthLevel.TransportVouched
-        if (sender.peer == null) return AuthLevel.TransportVouched
-        // A sender whose own key resolves to no identity has no name its key
-        // backs, so there is nothing to promote — the same verdict as a name its
-        // key does not derive (task `computenet-hbqvz`). Never a fallback name.
-        return when (val resolution = sender.identityBinding.resolve(senderKeys.keyId)) {
+    internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel =
+        loopbackAdmission(sender, receiver).auth
+
+    /**
+     * A loopback direction's admission verdict: the [auth] level
+     * [loopbackAuthLevel] documents, and the [issuer] that vouched for the
+     * stamped name.
+     *
+     * [issuer] is the receiver's resolution's `IdentityResolution.Bound.issuer`
+     * **exactly when** [auth] is [AuthLevel.Authenticated], and null on every
+     * [AuthLevel.TransportVouched] verdict — a name no key backs has no
+     * vouching issuer (feature `computenet-5y8t.1`, decision D9). Under
+     * [PeerIdentityBinding.Interim] a promoted verdict still carries null,
+     * because a key-derived identity has no issuer.
+     */
+    internal data class LoopbackAdmission(val auth: AuthLevel, val issuer: IssuerId?)
+
+    private val NOT_PROMOTED = LoopbackAdmission(AuthLevel.TransportVouched, issuer = null)
+
+    /** See [loopbackAuthLevel] for the rule and [LoopbackAdmission] for the issuer half. */
+    internal fun loopbackAdmission(sender: Side, receiver: Side): LoopbackAdmission {
+        val senderKeys = sender.credentials ?: return NOT_PROMOTED
+        if (receiver.credentials == null) return NOT_PROMOTED
+        if (sender.peer == null) return NOT_PROMOTED
+        // The RELYING side resolves the sender's presented evidence (5y8t.1-D9),
+        // as the socket's admitting side does. A key that resolves to no
+        // identity has no name it backs, so there is nothing to promote — the
+        // same verdict as a name its key does not derive (task
+        // `computenet-hbqvz`). Never a fallback name.
+        return when (val resolution = receiver.identityBinding.resolve(senderKeys.keyId, senderKeys.statements)) {
             is IdentityResolution.Bound ->
-                if (sender.peer == resolution.peer) AuthLevel.Authenticated else AuthLevel.TransportVouched
-            is IdentityResolution.Unbound -> AuthLevel.TransportVouched
+                if (sender.peer == resolution.peer) {
+                    LoopbackAdmission(AuthLevel.Authenticated, resolution.issuer)
+                } else {
+                    NOT_PROMOTED
+                }
+            is IdentityResolution.Unbound -> NOT_PROMOTED
         }
     }
 
@@ -923,8 +995,8 @@ object Peering {
         // the socket path gets from binding the level at its admission row
         // ([DSC1-HELLO-13]): no delivery can observe a level that later
         // changes, because a `Side`'s configuration is read once, now.
-        val aToBLevel = loopbackAuthLevel(sender = a, receiver = b)
-        val bToALevel = loopbackAuthLevel(sender = b, receiver = a)
+        val aToBAdmission = loopbackAdmission(sender = a, receiver = b)
+        val bToAAdmission = loopbackAdmission(sender = b, receiver = a)
         // Each direction's egress borrows its *sending* side's signer, so a
         // loopback with keypairs signs its announcements with no socket
         // involved ([DSC1-WIRE-05]); a side without one is unchanged.
@@ -936,7 +1008,8 @@ object Peering {
                         hostIngress(
                             b,
                             fromPeer = a.peer,
-                            fromPeerAuth = aToBLevel,
+                            fromPeerAuth = aToBAdmission.auth,
+                            fromPeerIssuer = aToBAdmission.issuer,
                             fromKey = a.presentedKeyId,
                             onSpawn = { ingressOnB = it },
                         ),
@@ -953,7 +1026,8 @@ object Peering {
                         hostIngress(
                             a,
                             fromPeer = b.peer,
-                            fromPeerAuth = bToALevel,
+                            fromPeerAuth = bToAAdmission.auth,
+                            fromPeerIssuer = bToAAdmission.issuer,
                             fromKey = b.presentedKeyId,
                             onSpawn = { ingressOnA = it },
                         ),
@@ -980,20 +1054,34 @@ object Peering {
      * [BridgeIngressCell.peerAuth]. It defaults to
      * [AuthLevel.TransportVouched], so a caller that never mentions
      * authentication gets exactly today's principals (`[DSC1-WIRE-06]`).
+     *
+     * [fromPeerIssuer] is who vouched for [fromPeer] on this connection
+     * (feature `computenet-5y8t.1`, decision D5/D12) — bound once, by the
+     * caller, the same way [fromPeerAuth] is; see [BridgeIngressCell.peerIssuer].
+     * Defaults to null, so a caller that never mentions an issuer gets
+     * exactly today's principals. [loopback] passes its admission verdict's
+     * issuer (task `computenet-5y8t.1.3`); the socket and iroh transports pass
+     * their hello admission's `IdentityResolution.Bound.issuer` on an
+     * `Authenticated` admission only (task `computenet-5y8t.1.4`).
      */
     fun hostIngress(
         side: Side,
         fromPeer: PeerId? = null,
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
+        fromPeerIssuer: IssuerId? = null,
         /**
-         * The key identifier [side]'s allowlist judges this connection on
-         * (feature `computenet-376c`). [fromPeer] is what gets *stamped*;
-         * this is what gets *admitted*, and the caller decides both — this
-         * function resolves nothing.
+         * The key identifier this connection was **proven** on. Allowlists
+         * name identities: [side]'s allowlist judges [fromPeer], the identity
+         * this ingress stamps, and never this key (epic `computenet-5y8t`).
+         * The announcement gate does judge it: a signed announcement's
+         * `signerKeyId` must name exactly this key or it is refused
+         * `ID_MISMATCH` (feature `computenet-5y8t.7`, see
+         * [AnnouncementAdmission.check]). The caller decides both —
+         * this function resolves nothing.
          *
-         * Null on a caller that names no key, which an open side admits and a
-         * side with an allowlist refuses, exactly as a null [fromPeer] did
-         * before the split.
+         * Null on a caller that names no key; that changes no allowlist
+         * verdict, but a side that verifies announcements then refuses every
+         * signed one from this connection (decision 5y8t.7-D4).
          */
         fromKey: KeyId? = null,
         /**
@@ -1010,6 +1098,7 @@ object Peering {
             InvocationSink(side.registry::deliver),
             peer = fromPeer,
             peerAuth = fromPeerAuth,
+            peerIssuer = fromPeerIssuer,
             peerKey = fromKey,
             admit = side::admits,
             // Borrowed from the Side, so every ingress this side ever hosts —

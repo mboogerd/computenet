@@ -34,15 +34,16 @@ import java.io.File
  *     name, is not a derivation from key material and is fine to baseline;
  *     constructing one from a `KeyId`, a fingerprint, or key bytes is exactly
  *     the second site this feature forbids.
- * (b) exactly one production file implements `PeerIdentityBinding` (a line
+ * (b) exactly two production files implement `PeerIdentityBinding` (a line
  *     matching `PeerIdentityBinding\s*\{` as a SAM conversion, or a
  *     `class`/`object` declaration line whose supertype list names
  *     `PeerIdentityBinding` after a colon, or a supertype colon written
  *     `\s:\s*PeerIdentityBinding` — the two supertype forms are
  *     complementary, see [bindingSupertypeSpacedColon] — excluding the
  *     interface's own `fun interface PeerIdentityBinding {` declaration
- *     line) — and it is
- *     `civictech.cell.link.Identity.kt`.
+ *     line) — and they are `civictech.cell.link.Identity.kt` (the Interim
+ *     derivation) and `civictech.identity.anchor.AnchorVouchedBinding.kt`
+ *     (DSC4's anchor-vouched binding, feature `computenet-5y8t.2`).
  * (c) exactly one production `fun fingerprint(` declaration exists, and its
  *     return type on that line is `KeyId`.
  */
@@ -104,7 +105,46 @@ class IdentityDerivationRatchetTest {
     // bound in [scanPeerIdentityBindingImplementations], which is what keeps a
     // body-less header from sweeping later code in — then the fold is checked
     // as a whole for the interface name. Measured 2026-09-02 (computenet-6jkz).
-    private val bindingHeaderWrapStart = Regex("""^\s*(?:\w+\s+)*(?:class|object)\s+\S.*:\s*$""")
+    // The modifier-prefix group admits an annotation ("@Suppress(\"x\")",
+    // "@JvmStatic") as well as a bare word-modifier, so an annotation
+    // immediately before the `class`/`object` keyword on the wrap-start line
+    // itself does not stop wrap-start detection from firing. Before this, the
+    // group was `(?:\w+\s+)*` alone: `@` is not a `\w` character, so the
+    // whole line failed to match — and with it, none of the fold logic below
+    // ever ran — whenever the header opened with a same-line annotation.
+    // Measured 2026-09-13 (computenet-qqkg6) at this bead's own base commit
+    // 65b415b81, unchanged from 3df3f1fad/212c34320 where the bead
+    // originally measured it: "@Suppress(\"x\") class W :\n    Base(),\n
+    // PeerIdentityBinding,\n    Marker {\n}" NOT flagged (should be flagged).
+    // #866 (computenet-ru92m) touched only [headerBracketDepths]'s
+    // bodyBraceFrom bound, never this regex, so the escape survived that
+    // change untouched. The annotation-argument's own parens/quotes
+    // (`("x")`) are matched by the permissive `\([^)]*\)` group here only to
+    // decide whether the fold OPENS; [headerBracketDepths]'s string-literal
+    // tracking (over the whole folded header, starting at this same line)
+    // is what actually keeps a quote inside the annotation argument from
+    // corrupting later paren/generic-depth accounting, and it already
+    // balances within the annotation itself before the `class` keyword is
+    // reached, so no state carries over.
+    // Known residual, out of scope: the annotation alternative admits only a
+    // simple name with at most one non-nested argument list followed by
+    // whitespace. A qualified name ("@kotlin.Suppress(\"x\")"), a use-site
+    // target ("@param:Foo"), a nested paren or a `)` inside the argument
+    // ("@Suppress(names = arrayOf(\"a\"))"), or no space before the keyword
+    // ("@Suppress(\"x\")class W :") still fails the match, so the fold never
+    // opens and a wrapped PeerIdentityBinding entry goes unflagged — the same
+    // false negative this fix closes for the simple shape. Measured against
+    // the regex 2026-09-14 (computenet-qqkg6 review); unattested in production.
+    private val bindingHeaderWrapStart = Regex(
+        """^\s*(?:@\w+(?:\([^)]*\))?\s+|\w+\s+)*(?:class|object)\s+\S.*:\s*$""",
+    )
+
+    // The LAST `class`/`object` keyword occurring on a wrap-start line — used
+    // to bound [sawBodyBrace] at the call site in
+    // [scanPeerIdentityBindingImplementations]. See that call site's comment
+    // for why the wrap-start line's own text can still carry this header's
+    // real body brace (PROBEs N1-N3, computenet-7s1p2).
+    private val classOrObjectKeyword = Regex("""\b(?:class|object)\b""")
 
     // The interface name, matched against a FOLDED header region rather than a
     // single line. Hoisted out of the scan loop; see
@@ -185,19 +225,124 @@ class IdentityDerivationRatchetTest {
      * nothing rather than going negative) — not attested in any fixture or
      * production file, but a walk should not let one adversarial line poison
      * the running depth for the rest of the header.
+     *
+     * Two additions close the two LATENT shapes filed as computenet-etm0u
+     * (measured pre-existing at both 65756a102 and this walk's own
+     * introduction at 8c9beaeba/4e483e1e5 — neither introduced nor fixed by
+     * computenet-zfdsw):
+     *
+     * - **PROBE T1**: the caller used to end the fold on any line where
+     *   `trimmed.contains("{")`, with no regard for paren nesting — so a
+     *   brace belonging to a LAMBDA ARGUMENT inside a still-open supertype
+     *   constructor call ("Base({ a -> ... }),") ended the header before its
+     *   real body brace, losing a later `PeerIdentityBinding` entry in the
+     *   same list. [sawBodyBrace] answers "was an actual top-level `{` seen"
+     *   (paren depth zero at the point of the brace) instead of "did this
+     *   line contain any `{` at all", so a lambda's brace — always seen at
+     *   paren depth > 0 — no longer ends the header.
+     * - **PROBE T2**: every `(`/`)`/`<`/`>` character was counted regardless
+     *   of context, so one appearing inside a STRING LITERAL in a
+     *   body-less header's supertype call ("Base(\"(\")") threw off the
+     *   paren balance and left the header reading as still-open, opening a
+     *   runaway fold into later unrelated code. The walk now tracks whether
+     *   it is inside a double-quoted string (honoring a `\`-escape) and
+     *   ignores bracket characters while inside one. Deliberately narrow:
+     *   this is not a Kotlin lexer — no char literals, no triple-quoted raw
+     *   strings, no unicode escapes — because the file's own history is a
+     *   sequence of heuristic patches each reopening a neighbouring escape;
+     *   the two shapes actually filed are what this closes.
+     *
+     * Consequence of ending the fold only on a paren-depth-zero brace: an
+     * imbalance this walk does NOT model (a char literal `'('`, a string
+     * template nesting quotes) no longer ends at the next `{` — the fold
+     * runs to end of file and HIDES any later implementation in that file
+     * (false negative). Measured 2026-09-13 (computenet-etm0u review):
+     * "class W :\n    Base('(')" followed by
+     * "class Impl : PeerIdentityBinding {" is flagged at 6855cdc53 and not
+     * after this change. Unattested in production. **PROBE U1
+     * (computenet-ru92m): recorded here as out of scope, not fixed** —
+     * adding char-literal and string-template awareness is exactly the
+     * lexer growth this function's own history (S1-S3, o4/o5, P2/P3, T1/T2)
+     * keeps warning against, for a shape no production file exhibits.
+     *
+     * A second, unrelated false negative from the same PROBE-T1/T2 change
+     * was found and FIXED (PROBE U2, computenet-ru92m; see the depth-walk
+     * call site in [scanPeerIdentityBindingImplementations]): a top-level
+     * `{` sitting on the wrap-start line itself, before the class keyword
+     * ("class Outer { class W :"), used to seed [sawBodyBrace] from the
+     * unrelated enclosing scope's own brace and close the header before the
+     * supertype list naming `PeerIdentityBinding` was ever read — closing
+     * too early rather than swallowing to end of file. Closed by
+     * [bodyBraceFrom]: the walk still runs over the WHOLE folded text, so
+     * paren/generic/string state opened on the wrap-start line carries into
+     * the continuation lines, but a `{` at an offset before [bodyBraceFrom]
+     * never sets [sawBodyBrace]. The first form of this fix dropped the
+     * wrap-start line from the walk altogether, which reopened PROBE T1 for a
+     * primary constructor whose `(` opens on the wrap-start line ("class
+     * W(val x:\n    Int = run { 1 },\n) : Base(),\n    PeerIdentityBinding,\n
+     * Marker {"): the lambda's brace was then seen at paren depth zero and
+     * ended the header early (computenet-ru92m review, PROBE V1).
+     *
+     * **Corrected premise (computenet-7s1p2):** it is NOT true that "no brace
+     * on the wrap-start line can be this header's body" — a class body CAN
+     * open on that very line ("class W : Base() { fun f(a:", where a nested
+     * member's own declaration wraps after its own colon on the same line).
+     * The U2 fix as first stated it (bodyBraceFrom = the wrap-start line's
+     * full length) treated the ENTIRE wrap-start line as incapable of
+     * carrying a body brace, which is only true of the portion before the
+     * header's own `class`/`object` keyword — text after that keyword is
+     * this header's own supertype/body region and CAN carry the real body
+     * brace. [bodyBraceFrom] is therefore the offset just past the LAST
+     * `class`/`object` keyword occurring on the wrap-start line (see
+     * [classOrObjectKeyword] at the call site), not the line's length: a
+     * brace before that keyword is taken to be an enclosing scope's (PROBE
+     * U2); a brace at or after it can be this header's own (PROBEs N1/N2 —
+     * a false positive under the line-length bound, since a nested member's
+     * parameter type mentioning `PeerIdentityBinding` was folded into this
+     * class's own supertype list after the true body brace had been
+     * excluded; PROBE N3 — a false negative under the line-length bound,
+     * since the fold ran past the true body brace on the wrap-start line,
+     * through a generic left open by `a < b` with no closing `>`, and
+     * swallowed a later real implementation to end of file).
+     *
+     * The keyword is found textually, so it is only a heuristic anchor:
+     * `class`/`object` text after the body brace that is not this header's
+     * keyword — inside a string or block comment, `W::class`, or a
+     * body-less object expression `object : Foo()` — moves the bound past
+     * the real body brace and reopens the N1-N3 shapes, and a `{` inside a
+     * block comment after the real keyword ("class Outer { class W /* { */
+     * :") ends the header early as U2 did. Measured 2026-09-13
+     * (computenet-7s1p2 review); unattested in production (29 wrap-start
+     * lines under src/main, none carrying a `{`).
      */
-    private fun headerBracketDepths(text: String): Pair<Int, Int> {
+    private fun headerBracketDepths(text: String, bodyBraceFrom: Int = 0): Triple<Int, Int, Boolean> {
         var parenDepth = 0
         var genericDepth = 0
-        for (index in text.indices) {
-            when (text[index]) {
+        var sawBodyBrace = false
+        var inString = false
+        var index = 0
+        while (index < text.length) {
+            val c = text[index]
+            if (inString) {
+                if (c == '\\') {
+                    index += 2 // skip the escaped character, including an escaped '"'
+                    continue
+                }
+                if (c == '"') inString = false
+                index++
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
                 '(' -> parenDepth++
                 ')' -> if (parenDepth > 0) parenDepth--
                 '<' -> if (parenDepth == 0) genericDepth++
                 '>' -> if (parenDepth == 0 && genericDepth > 0 && (index == 0 || text[index - 1] != '-')) genericDepth--
+                '{' -> if (parenDepth == 0 && index >= bodyBraceFrom) sawBodyBrace = true
             }
+            index++
         }
-        return parenDepth to genericDepth
+        return Triple(parenDepth, genericDepth, sawBodyBrace)
     }
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
@@ -286,13 +431,57 @@ class IdentityDerivationRatchetTest {
                         // replaces three successive patches with. `by` and
                         // `->` remain plain trailing-token checks: neither is
                         // a bracket, so neither needs the depth walk.
-                        val (parenDepth, genericDepth) = headerBracketDepths(folded)
+                        //
+                        // The header now ends on [sawBodyBrace] — an actual
+                        // top-level `{` (paren depth zero) — rather than on
+                        // any `{` the line happens to contain: a brace inside
+                        // a still-open supertype constructor call's lambda
+                        // argument is not the class body and must not end the
+                        // fold early (PROBE T1, computenet-etm0u). The walk
+                        // also now skips string-literal content, so a `(`
+                        // written inside a string in a body-less header's
+                        // supertype call no longer throws off the paren
+                        // balance and opens a runaway fold (PROBE T2,
+                        // computenet-etm0u).
+                        //
+                        // A `{` on the wrap-start line BEFORE its last
+                        // `class`/`object` keyword never counts as the body
+                        // brace: that prefix belongs to an ENCLOSING scope
+                        // sharing the line ("class Outer { class W :", PROBE
+                        // U2, computenet-ru92m) — it is not true, and was
+                        // never true, that no brace on the wrap-start line
+                        // can be this header's own body brace: a class body
+                        // CAN open on the wrap-start line itself
+                        // ("class W : Base() { fun f(a:", PROBEs N1-N3,
+                        // computenet-7s1p2, where a nested member declared on
+                        // that same line wraps after its own colon and would
+                        // otherwise be folded into this class's supertype
+                        // list). [bodyBraceFrom] is therefore the offset
+                        // just past the wrap-start line's OWN LAST
+                        // `class`/`object` keyword, not the whole line's
+                        // length — a brace before that keyword is taken to be
+                        // an enclosing scope's; a brace at or after it can be
+                        // this header's real body brace (a textual anchor, so
+                        // a keyword in a string/comment/`::class`/object
+                        // expression misplaces it — see [headerBracketDepths]'s
+                        // KDoc). The depth walk still
+                        // spans the WHOLE folded text — only the body-brace
+                        // test is bounded by this offset — so a primary
+                        // constructor's `(` opened on the wrap-start line
+                        // still puts a later lambda brace at paren depth > 0
+                        // (PROBE V1, computenet-ru92m review), independently
+                        // of where [bodyBraceFrom] falls.
+                        val wrapStartLine = header.first()
+                        val bodyBraceFrom = classOrObjectKeyword.findAll(wrapStartLine).lastOrNull()
+                            ?.range?.last?.plus(1) ?: wrapStartLine.length
+                        val (parenDepth, genericDepth, sawBodyBrace) =
+                            headerBracketDepths(folded, bodyBraceFrom = bodyBraceFrom)
                         val listContinues = trimmed.endsWith(",") ||
                             parenDepth > 0 ||
                             genericDepth > 0 ||
                             bindingHeaderInfixContinuation.containsMatchIn(trimmed) ||
                             bindingHeaderArrowContinuation.containsMatchIn(trimmed)
-                        if (trimmed.contains("{") || !listContinues) {
+                        if (sawBodyBrace || !listContinues) {
                             if (bindingHeaderName.containsMatchIn(folded)) {
                                 paths += relativePath
                             }
@@ -397,10 +586,18 @@ class IdentityDerivationRatchetTest {
             }
         }
 
-        // (b) exactly one production PeerIdentityBinding implementation, and it is Identity.kt.
+        // (b) exactly two production PeerIdentityBinding implementations: Identity.kt's Interim and
+        // DSC4's AnchorVouchedBinding (feature computenet-5y8t.2).
         val implementations = scanPeerIdentityBindingImplementations(root, moduleRoots)
-        assertEquals(setOf("kernel/src/main/kotlin/civictech/cell/link/Identity.kt"), implementations) {
-            "expected exactly one PeerIdentityBinding implementation (Identity.kt's Interim); found: $implementations"
+        assertEquals(
+            setOf(
+                "kernel/src/main/kotlin/civictech/cell/link/Identity.kt",
+                "identity/src/main/kotlin/civictech/identity/anchor/AnchorVouchedBinding.kt",
+            ),
+            implementations,
+        ) {
+            "expected exactly two PeerIdentityBinding implementations (Identity.kt's Interim and " +
+                "DSC4's AnchorVouchedBinding); found: $implementations"
         }
 
         // (c) exactly one fingerprint() declaration, returning KeyId.
@@ -526,7 +723,7 @@ class IdentityDerivationRatchetTest {
             private interface ProbeMarker
 
             private class Escape: PeerIdentityBinding, ProbeMarker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -541,16 +738,16 @@ class IdentityDerivationRatchetTest {
             package fixture.c
 
             private class CtorEscape(private val n: Int) : PeerIdentityBinding, ProbeMarker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
 
             @Suppress("unused") class AnnotatedEscape : PeerIdentityBinding, ProbeMarker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
 
             private class Holder {
                 companion object : PeerIdentityBinding, ProbeMarker {
-                    override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                    override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
                 }
             }
             """.trimIndent(),
@@ -625,7 +822,7 @@ class IdentityDerivationRatchetTest {
             class Escape :
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -727,7 +924,7 @@ class IdentityDerivationRatchetTest {
                     1,
                 ),
                 PeerIdentityBinding {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -774,7 +971,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
                 override fun compareTo(other: String): Int = 0
             }
             """.trimIndent(),
@@ -818,7 +1015,7 @@ class IdentityDerivationRatchetTest {
                     delegate,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -909,7 +1106,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -956,7 +1153,7 @@ class IdentityDerivationRatchetTest {
                     Unit,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1098,7 +1295,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1150,7 +1347,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1257,7 +1454,7 @@ class IdentityDerivationRatchetTest {
                 >,
                 PeerIdentityBinding,
                 Marker {
-                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
             }
             """.trimIndent(),
         )
@@ -1268,6 +1465,458 @@ class IdentityDerivationRatchetTest {
         assertEquals(setOf("fixture-q/src/main/kotlin/fixture/q/Nested.kt"), actual) {
             "a '>' inside a function-type parameter list must not close the enclosing top-level generic " +
                 "supertype; the fold must still see the interface name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE T1 (computenet-etm0u): a brace inside a supertype constructor
+     * call's LAMBDA ARGUMENT ("Base({ a -> ... }),") ends the header early,
+     * because the old continuation test ended the fold on any line where
+     * `trimmed.contains("{")`, with no regard for whether that brace sat
+     * inside an unbalanced constructor call. [headerBracketDepths] now also
+     * tracks whether a `{` was seen while paren depth was zero — the actual
+     * class-body brace, not a lambda's — so the fold survives the lambda and
+     * still reaches the later `PeerIdentityBinding` entry in the same
+     * supertype list. Measured 2026-09-13 against 6855cdc53 (this bead's
+     * base commit, unchanged from 8c9beaeba where the shape was filed): NOT
+     * flagged.
+     */
+    @Test
+    fun `fixture self-check - a lambda brace inside a supertype constructor call does not end the header early`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-r")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-r/src/main/kotlin/fixture/r").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.r
+
+            private interface Marker
+            private open class Base(private val predicate: (Int) -> Boolean)
+
+            class W :
+                Base({ a ->
+                    a > 0
+                }),
+                PeerIdentityBinding,
+                Marker {
+                fun x() = 1
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-r/src/main/kotlin/fixture/r/Wrapped.kt"), actual) {
+            "a lambda brace inside a supertype constructor call must not end the header early; the fold " +
+                "must still see the interface name later in the same header; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE T2 (computenet-etm0u): a `(` inside a STRING LITERAL, in a
+     * body-less header's supertype constructor call ("Base(\"(\")"), opens a
+     * runaway fold — because the old continuation test counted every `(`
+     * character naively, including one that is only literal text inside a
+     * string, so the call's own balanced parens read as unbalanced and the
+     * fold never closes, sweeping the unrelated `PeerIdentityBinding` type
+     * usage below into the match. [headerBracketDepths] now tracks whether
+     * it is inside a double-quoted string literal (honoring `\`-escapes) and
+     * ignores bracket characters while inside one. Measured 2026-09-13
+     * against 6855cdc53 (this bead's base commit, unchanged from 8c9beaeba
+     * where the shape was filed): FLAGGED (should be empty).
+     */
+    @Test
+    fun `fixture self-check - a paren inside a string literal in a body-less header's supertype call does not open a runaway fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-s")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-s/src/main/kotlin/fixture/s").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.s
+
+            private open class Base(private val marker: String)
+
+            class W :
+                Base("(")
+
+            fun consume(b: PeerIdentityBinding) {
+                println(b)
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a '(' inside a string literal in a body-less header's supertype constructor call must not " +
+                "open a runaway fold into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * Pins [headerBracketDepths]'s string-literal skip (computenet-etm0u
+     * review). Fixture s does not: with the string skip removed, its
+     * runaway fold still never reaches a paren-depth-zero brace, so it runs
+     * to end of file and flags nothing — the expected empty set by accident
+     * — and every fixture stayed green with the skip disabled. The skip is
+     * load-bearing when a REAL implementation follows the body-less header:
+     * without it the fold swallows that implementation and the file goes
+     * unflagged. Expected value is the literal fixture path.
+     */
+    @Test
+    fun `fixture self-check - a paren inside a string literal does not swallow a later implementation`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-t")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-t/src/main/kotlin/fixture/t").apply { mkdirs() }
+
+        File(moduleDir, "Swallowed.kt").writeText(
+            """
+            package fixture.t
+
+            private open class Base(private val marker: String)
+
+            class W :
+                Base("(")
+
+            class Impl : PeerIdentityBinding {
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-t/src/main/kotlin/fixture/t/Swallowed.kt"), actual) {
+            "a '(' inside a string literal in a body-less header must not leave the fold open and swallow a " +
+                "later implementation in the same file; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE U2 (computenet-ru92m, follow-on from computenet-etm0u's own
+     * PROBE T1/T2 fix): a top-level `{` sitting on the wrap-start line
+     * itself, BEFORE the class keyword that opens the header
+     * ("class Outer { class W :"), used to end the fold one line early. The
+     * fold's first continuation line folds the wrap-start line's own text in
+     * too (`header.joinToString(" ")` included index 0), so
+     * [headerBracketDepths] saw `Outer`'s own brace at paren depth zero and
+     * set `sawBodyBrace` before the supertype list — where the actual
+     * `PeerIdentityBinding` entry lives — was ever read. That is a
+     * false-negative in the opposite direction from U1: the header closes
+     * too EARLY, not too late, so nothing runs to end-of-file; the file
+     * simply goes unflagged. Measured 2026-09-13 against 3df3f1fad (this
+     * bead's base commit, unchanged from 4b547f488 where the shape was
+     * filed): NOT flagged (should be flagged).
+     *
+     * Fixed by [headerBracketDepths]'s `bodyBraceFrom`: a `{` on the
+     * wrap-start line before its last `class`/`object` keyword never sets
+     * `sawBodyBrace` (a brace after that keyword still can — PROBEs N1-N3,
+     * computenet-7s1p2, where the class body opens on this line), while the
+     * depth walk still spans the whole folded header — see PROBE V1's
+     * fixture below for why the walk must not simply drop that line.
+     */
+    @Test
+    fun `fixture self-check - a top-level brace preceding the class keyword on the wrap-start line does not end the header early`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-u")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-u/src/main/kotlin/fixture/u").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.u
+
+            private open class Base
+
+            class Outer { class W :
+                Base(),
+                PeerIdentityBinding,
+                Marker {
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
+            }
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-u/src/main/kotlin/fixture/u/Wrapped.kt"), actual) {
+            "a top-level '{' belonging to an enclosing scope on the wrap-start line itself must not end the " +
+                "header before the supertype list naming PeerIdentityBinding is read; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE V1 (computenet-ru92m review): PROBE T1's lambda brace, with the
+     * enclosing `(` opened on the WRAP-START line — a primary constructor
+     * whose parameter type wraps after its colon, so the line still matches
+     * [bindingHeaderWrapStart]. The first form of the U2 fix walked the
+     * continuation lines only, which started the walk at paren depth zero,
+     * read `run { 1 }`'s brace as the body brace and ended the header before
+     * the later `PeerIdentityBinding` entry. Measured 2026-09-13: flagged at
+     * 3df3f1fad (whole-header walk), NOT flagged at 7fd23f849
+     * (`header.drop(1)`). Unattested in production, like U2 itself; pinned
+     * because it is exactly the neighbouring escape a narrower U2 fix reopens.
+     */
+    @Test
+    fun `fixture self-check - a lambda brace inside a primary constructor opened on the wrap-start line does not end the header early`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-v")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-v/src/main/kotlin/fixture/v").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.v
+
+            private interface Marker
+            private open class Base
+
+            class W(val x:
+                Int = run { 1 },
+            ) : Base(),
+                PeerIdentityBinding,
+                Marker {
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-v/src/main/kotlin/fixture/v/Wrapped.kt"), actual) {
+            "a lambda brace inside a primary constructor call opened on the wrap-start line must not end the " +
+                "header early; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE N1 (computenet-7s1p2, second-reader review of computenet-ru92m's
+     * U2 fix): a class BODY opens on the wrap-start line itself, and a
+     * MEMBER declaration on that same line wraps after its own colon
+     * ("class W : Base() { fun f(a:"). The U2 fix's first form excluded the
+     * whole wrap-start line's text from [sawBodyBrace], so this class's own
+     * real body brace (right after `Base()`) was never seen and the fold ran
+     * on into the member's parameter list, reading `PeerIdentityBinding` as
+     * a supertype instead of a parameter type. Measured 2026-09-13 against
+     * 212c34320 (this bead's base commit): FLAGGED (should be empty — `W`
+     * does not implement `PeerIdentityBinding`, it merely has a member whose
+     * parameter is typed with it).
+     */
+    @Test
+    fun `fixture self-check - a class body opening on the wrap-start line is not folded into a nested member's wrapped parameter list`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n1")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n1/src/main/kotlin/fixture/n1").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.n1
+
+            private open class Base
+
+            class W : Base() { fun f(a:
+                Int,
+                b: PeerIdentityBinding) {
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a nested member's wrapped parameter list must not be folded into the enclosing class's own " +
+                "supertype list just because the class body opened on the wrap-start line; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE N2 (computenet-7s1p2), the same shape as N1 but the member that
+     * wraps is a `val` property whose initializer contains an unclosed `<`
+     * comparison ("val ok:\n    Boolean = a < b"). This additionally probes
+     * that ending the fold on the class's own body brace happens BEFORE the
+     * `a < b` is ever read as an open generic — at 212c34320 the whole
+     * wrap-start line was excluded from [sawBodyBrace], so the fold ran past
+     * the real body brace, the `<` opened a runaway generic depth with no
+     * closing `>` anywhere in the file, and a later unrelated
+     * `fun consume(b: PeerIdentityBinding)` was folded into the header as a
+     * false positive. Measured 2026-09-13 against 212c34320: FLAGGED (should
+     * be empty).
+     */
+    @Test
+    fun `fixture self-check - a class body opening on the wrap-start line does not let an unclosed generic in a nested member swallow a later unrelated usage`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n2")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n2/src/main/kotlin/fixture/n2").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.n2
+
+            private open class Base
+
+            class W : Base() { val ok:
+                Boolean = a < b
+            }
+
+            fun consume(b: PeerIdentityBinding) {
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "an unclosed generic inside a nested member's wrapped initializer must not open a runaway fold " +
+                "that sweeps a later unrelated function parameter into the match; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE N3 (computenet-7s1p2), the mirror of N2: the same class-body-
+     * on-wrap-start-line shape precedes a REAL implementation further down
+     * the file ("val impl = object : PeerIdentityBinding by delegate"). At
+     * 212c34320 the runaway fold from N2's `a < b` swallowed this real
+     * implementation to end of file instead of ever reaching it as a
+     * standalone declaration — a false NEGATIVE, the opposite direction from
+     * N1/N2. Measured 2026-09-13 against 212c34320: NOT flagged (should be
+     * flagged).
+     */
+    @Test
+    fun `fixture self-check - a class body opening on the wrap-start line does not let an unclosed generic in a nested member hide a later real implementation`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-n3")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-n3/src/main/kotlin/fixture/n3").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.n3
+
+            private open class Base
+
+            class W : Base() { val ok:
+                Boolean = a < b
+            }
+
+            val impl = object : PeerIdentityBinding by delegate
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-n3/src/main/kotlin/fixture/n3/Wrapped.kt"), actual) {
+            "an unclosed generic inside a nested member's wrapped initializer must not hide a later real " +
+                "implementation to end of file; found: $actual"
+        }
+    }
+
+    /**
+     * PROBE reproduction (computenet-qqkg6): an annotation immediately before
+     * the `class`/`object` keyword on the wrap-start line itself
+     * ("@Suppress(\"x\") class W :") must open the fold. Before the fix,
+     * [bindingHeaderWrapStart]'s modifier-prefix group was `(?:\w+\s+)*`,
+     * which only admits bare word-modifiers (`private`, `open`, ...); `@` is
+     * not a `\w` character, so the regex failed to match and the
+     * wrap-start-detection branch never fired for an annotation-prefixed
+     * header — the supertype list wrapped onto the next line was never
+     * folded, and a `PeerIdentityBinding` entry inside it went unflagged. Measured 2026-09-13 (bead filing) at 3df3f1fad/212c34320:
+     * NOT flagged (should be flagged). Re-verified at this bead's own base
+     * commit 65b415b81 before this fix: still NOT flagged, since #866
+     * (computenet-ru92m) changed only [headerBracketDepths]'s body-brace
+     * bound, not this regex.
+     */
+    @Test
+    fun `fixture self-check - an annotation prefix on the wrap-start line opens the fold`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-w")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-w/src/main/kotlin/fixture/w").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.w
+
+            private open class Base
+            private interface Marker
+
+            @Suppress("x") class W :
+                Base(),
+                PeerIdentityBinding,
+                Marker {
+                override fun resolve(key: KeyId, presented: List<IdentityStatement>): IdentityResolution = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-w/src/main/kotlin/fixture/w/Wrapped.kt"), actual) {
+            "an annotation immediately before the class keyword on the wrap-start line must not stop the " +
+                "wrap-start detection from opening the fold; found: $actual"
         }
     }
 }
