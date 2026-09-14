@@ -196,7 +196,14 @@ class WsStableNameRotationOfflineAnchorTest {
         val stampsBefore = probe.principals.size
         val connection = WsTransport.connect(uri, dialer.side) { 0L }
         try {
-            await("L mirrored the dialer's cell and both ends reached Authenticated") {
+            await(
+                "L mirrored the dialer's cell and both ends reached Authenticated",
+                detail = {
+                    "L.admissionDenialCount=${listener.admissionDenialCount} (was $deniedBefore), " +
+                        "L.rejectedAnnouncements=${admission.rejectedAnnouncements}, " +
+                        "dialer achievedAuthLevel=${connection.achievedAuthLevel}"
+                },
+            ) {
                 l.registry.location(cell.ref) is LocationRegistry.Remote &&
                     dialer.registry.location(probe.ref) is LocationRegistry.Remote &&
                     connection.achievedAuthLevel == AuthLevel.Authenticated
@@ -314,10 +321,10 @@ class WsStableNameRotationOfflineAnchorTest {
         }
     }
 
-    private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
+    private fun await(what: String, timeoutMs: Long = 30_000, detail: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
-            if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
+            if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what ${detail()}")
             Thread.sleep(50)
         }
     }
