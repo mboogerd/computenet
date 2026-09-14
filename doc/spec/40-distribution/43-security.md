@@ -61,8 +61,18 @@ sides holding credentials — promotes the crossing from `AuthLevel.TransportVou
 to `AuthLevel.Authenticated`; `currentPrincipal()` reflects the achieved level.
 Every refusal (name/key mismatch, forged signature, downgrade under a
 `RequireAuthenticated` policy, replayed hello) is observable, never a silent
-drop. `PeerAuthPolicy.Open` keeps today's behaviour byte-for-byte; only
-`PeerAuthPolicy.RequireAuthenticated` demands a verified hello.
+drop. `PeerAuthPolicy.Open` keeps today's behaviour byte-for-byte **on an
+Interim-bound side** (`PeerIdentityBinding.Interim`); only
+`PeerAuthPolicy.RequireAuthenticated` demands a verified hello there. On an
+anchor-bound side (`AnchorVouchedBinding`) neither policy admits a hello that
+presents no vouching statement: it is refused `DenialReason.UNVOUCHED` (or,
+for an expired or not-yet-valid statement, `STATEMENT_EXPIRED`) regardless of
+`PeerAuthPolicy` — this covers the tokened and nameless legacy hello, HELLO2,
+and IROH-HELLO1 (`WsAnchorVouchedHelloTest`'s "a plain HELLO2 and a legacy
+hello at an anchor-bound side are refused UNVOUCHED as NO_STATEMENT" and "a
+nameless legacy hello at an anchor-bound Open side is refused UNVOUCHED as
+NO_STATEMENT"; `IrohSessionHelloTest`'s "IROH-HELLO1 to an anchor-bound side
+presents no statement and is refused UNVOUCHED, not ID_MISMATCH").
 
 **Identity-is-key is no longer the project's position.** The maintainer
 decided otherwise on 2026-08-29 (recorded in
@@ -199,15 +209,21 @@ exists only where a boundary declares it, and only on the bridge crossing
 `PeerAuthPolicy` governs what a side *tolerates*, not what a verified hello
 *earns*: as G-29 phase 2 (DSC1) landed it, a hello whose signature verifies
 promotes the crossing to `AuthLevel.Authenticated` under either policy
-(`WsTransport.Session.onProof`, unconditional on `Side.auth`). By default
-(`PeerAuthPolicy.Open`) an unauthenticated (legacy or uncredentialed) hello
-is still admitted at `TransportVouched` and default `minAuth` admits it,
-byte-for-byte unchanged; under `PeerAuthPolicy.RequireAuthenticated` (phase 2,
-landed — DSC1) that same unauthenticated hello is refused `AUTH_REQUIRED`
-instead (`WsTransport.Session.onLegacyHello`), so every peer admitted under
-that policy is `Authenticated`, unlocking the predicates (`integrity`,
+(`WsTransport.Session.onProof`, unconditional on `Side.auth`). This holds **on
+an Interim-bound side**: by default (`PeerAuthPolicy.Open`) an unauthenticated
+(legacy or uncredentialed) hello is still admitted at `TransportVouched` and
+default `minAuth` admits it, byte-for-byte unchanged; under
+`PeerAuthPolicy.RequireAuthenticated` (phase 2, landed — DSC1) that same
+unauthenticated hello is refused `AUTH_REQUIRED` instead
+(`WsTransport.Session.onLegacyHello`), so every peer admitted under that
+policy is `Authenticated`, unlocking the predicates (`integrity`,
 high-`minAuth` protocol authority) that transport-vouched identity cannot
-safely satisfy. Encryption in transit stays transport configuration (wss://);
+safely satisfy. An anchor-bound side (`AnchorVouchedBinding`) is not
+byte-for-byte under either policy: a hello presenting no vouching statement —
+tokened or nameless legacy, HELLO2, or IROH-HELLO1 — is refused
+`DenialReason.UNVOUCHED` (or `STATEMENT_EXPIRED`) regardless of
+`PeerAuthPolicy`, per `WsAnchorVouchedHelloTest` and `IrohSessionHelloTest`
+above. Encryption in transit stays transport configuration (wss://);
 encryption at rest remains open.
 
 G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (linkAuthority,
