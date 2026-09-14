@@ -447,6 +447,14 @@ object WsTransport {
     private const val HELLO = "HELLO "
 
     /**
+     * What a nameless legacy hello (`HELLO <mirrorRef>`, no token) asserted —
+     * nothing — as the key identifier the binding is asked about (bug
+     * `computenet-tlb83`). Read for the binding's verdict only; never
+     * attribution. See `Session.onLegacyHello`.
+     */
+    private val NAMELESS_ASSERTION = KeyId("")
+
+    /**
      * The replay memory a peering side gets: the window its own
      * [PeerAuthPolicy.RequireAuthenticated] configured, or the default window
      * for an [PeerAuthPolicy.Open] side that will never consult it
@@ -1063,6 +1071,11 @@ object WsTransport {
          * on the allowlist. No peer is admitted at `TransportVouched` on this
          * path while the policy stands, which is that requirement's WHILE
          * clause — there is no branch below the check that could.
+         *
+         * Under `Open`, a side whose identity binding holds no identity for
+         * what the line asserted — including the nameless line, which asserts
+         * nothing — refuses `UNVOUCHED`/`STATEMENT_EXPIRED` (bug
+         * `computenet-tlb83`); an Interim-bound side admits both as before.
          */
         private fun onLegacyHello(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
@@ -1073,8 +1086,20 @@ object WsTransport {
             // one resolution on this path (feature `computenet-376c`).
             val key = parts.getOrNull(1)?.let { KeyId(it) }
             // A legacy line presents no statements; only a HELLO3 carries them.
-            val resolution = key?.let { side.identityBinding.resolve(it, emptyList()) }
-            val peer = (resolution as? IdentityResolution.Bound)?.peer
+            //
+            // A NAMELESS line (no token) is resolved too, as the empty
+            // assertion — `KeyId`'s TransportVouched arm holds what the peer
+            // asserted, and it asserted nothing (bug `computenet-tlb83`). Only
+            // the VERDICT is read: a binding that vouches no identity without
+            // evidence (an anchor-vouched one answers `NO_STATEMENT`) refuses
+            // it `UNVOUCHED` below, as it refuses the tokened line and as
+            // `:iroh` refuses a nameless `IROH-HELLO1`, so omitting the token
+            // is no way past that refusal. A `Bound` answer for the empty
+            // assertion names nobody and is never used as attribution: the
+            // peer stays anonymous (`peer == null`), which keeps an
+            // Interim-bound side's admission of the nameless line unchanged.
+            val resolution = side.identityBinding.resolve(key ?: NAMELESS_ASSERTION, emptyList())
+            val peer = if (key == null) null else (resolution as? IdentityResolution.Bound)?.peer
             // AUTH_REQUIRED keeps precedence: under RequireAuthenticated the
             // substance of this refusal is the downgrade, whatever the asserted
             // token resolves to.
@@ -1087,7 +1112,16 @@ object WsTransport {
                 return
             }
             if (resolution is IdentityResolution.Unbound) {
-                refuseUnbound(null, checkNotNull(key), resolution)
+                if (key != null) {
+                    refuseUnbound(null, key, resolution)
+                } else {
+                    refuseHello(
+                        denialReasonFor(resolution.reason),
+                        null,
+                        "nameless legacy hello refused: this side's identity binding vouches no identity for a " +
+                            "peer that asserted none (UnboundReason.${resolution.reason.name})",
+                    )
+                }
                 return
             }
             if (!admitted(peer)) return
