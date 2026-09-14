@@ -64,15 +64,28 @@ Every refusal (name/key mismatch, forged signature, downgrade under a
 drop. `PeerAuthPolicy.Open` keeps today's behaviour byte-for-byte **on an
 Interim-bound side** (`PeerIdentityBinding.Interim`); only
 `PeerAuthPolicy.RequireAuthenticated` demands a verified hello there. On an
-anchor-bound side (`AnchorVouchedBinding`) neither policy admits a hello that
-presents no vouching statement: it is refused `DenialReason.UNVOUCHED` (or,
-for an expired or not-yet-valid statement, `STATEMENT_EXPIRED`) regardless of
-`PeerAuthPolicy` — this covers the tokened and nameless legacy hello, HELLO2,
-and IROH-HELLO1 (`WsAnchorVouchedHelloTest`'s "a plain HELLO2 and a legacy
-hello at an anchor-bound side are refused UNVOUCHED as NO_STATEMENT" and "a
-nameless legacy hello at an anchor-bound Open side is refused UNVOUCHED as
+anchor-bound side (`AnchorVouchedBinding`), a statement-less HELLO2 or
+IROH-HELLO1 is refused `DenialReason.UNVOUCHED` (`UnboundReason.NO_STATEMENT`)
+**independent of `PeerAuthPolicy`**: their shared admission body resolves
+identity through the binding before any policy check runs
+(`WsTransport.Session.admitKeyedHello`; `IrohTransport` never reads
+`PeerAuthPolicy` at all). The tokened or nameless **legacy** hello differs
+under `RequireAuthenticated`: `WsTransport.Session.onLegacyHello` checks
+`side.auth` before it reads the binding's resolution, so a legacy hello at an
+anchor-bound `RequireAuthenticated` side is refused `AUTH_REQUIRED` — the same
+downgrade refusal an Interim-bound side gives — and never reaches the
+UNVOUCHED check; only under `Open` does an anchor-bound side reach the
+resolution and refuse the legacy hello `UNVOUCHED`
+(`WsAnchorVouchedHelloTest`'s "a plain HELLO2 and a legacy hello at an
+anchor-bound side are refused UNVOUCHED as NO_STATEMENT" and "a nameless
+legacy hello at an anchor-bound Open side is refused UNVOUCHED as
 NO_STATEMENT"; `IrohSessionHelloTest`'s "IROH-HELLO1 to an anchor-bound side
-presents no statement and is refused UNVOUCHED, not ID_MISMATCH").
+presents no statement and is refused UNVOUCHED, not ID_MISMATCH"). None of
+these forms carries a statement, so none can be `STATEMENT_EXPIRED`; that
+reason is reserved for a presented statement outside its validity window
+(`WsAnchorVouchedHelloTest`'s "an unaccepted issuer is UNVOUCHED, and an
+expired or not-yet-valid statement is STATEMENT_EXPIRED under this side's
+clock").
 
 **Identity-is-key is no longer the project's position.** The maintainer
 decided otherwise on 2026-08-29 (recorded in
@@ -219,11 +232,18 @@ unauthenticated hello is refused `AUTH_REQUIRED` instead
 policy is `Authenticated`, unlocking the predicates (`integrity`,
 high-`minAuth` protocol authority) that transport-vouched identity cannot
 safely satisfy. An anchor-bound side (`AnchorVouchedBinding`) is not
-byte-for-byte under either policy: a hello presenting no vouching statement —
-tokened or nameless legacy, HELLO2, or IROH-HELLO1 — is refused
-`DenialReason.UNVOUCHED` (or `STATEMENT_EXPIRED`) regardless of
-`PeerAuthPolicy`, per `WsAnchorVouchedHelloTest` and `IrohSessionHelloTest`
-above. Encryption in transit stays transport configuration (wss://);
+byte-for-byte under either policy. A statement-less HELLO2 or IROH-HELLO1 is
+refused `DenialReason.UNVOUCHED` (`NO_STATEMENT`) independent of
+`PeerAuthPolicy` — their admission body resolves identity before any policy
+check runs. The legacy hello differs: under `RequireAuthenticated` it is
+refused `AUTH_REQUIRED` (`WsTransport.Session.onLegacyHello` checks
+`side.auth` before it reads the binding's resolution), the same downgrade
+refusal an Interim-bound side gives under that policy; only under `Open` does
+an anchor-bound side reach the resolution and refuse the legacy hello
+`UNVOUCHED`. A presented statement outside its validity window is refused
+`STATEMENT_EXPIRED` instead — none of these statement-less forms can trigger
+it — per `WsAnchorVouchedHelloTest` and `IrohSessionHelloTest` above.
+Encryption in transit stays transport configuration (wss://);
 encryption at rest remains open.
 
 G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (linkAuthority,
