@@ -23,11 +23,11 @@ import java.io.File
  * - a read of a host's `deadLetterOutlet`, anywhere, not only a `.subscribe` call, outside
  *   [DEAD_LETTER_ALLOWLIST] (the runner owns that assertion; the allowlist is empty today — no
  *   `:query` file has a reason to read the outlet at all);
- * - an identifier containing `Shrink`, or a call to a `shrink…(` function. A *use* of ORA1's own
- *   `civictech.oracle.shrink.Shrinker` — consumption, not re-implementation — also matches this
- *   name rule and would be flagged; no `:query` source calls it today (cab.6-D12 is future work),
- *   so the false positive is latent, not live. A task that adds such a call must widen this rule
- *   (e.g. exempt the qualified name `civictech.oracle.shrink.Shrinker`) in the same change.
+ * - an identifier containing `Shrink`, or a call to a `shrink…(` function — exempting the bare
+ *   name `Shrinker` wherever it names ORA1's own `civictech.oracle.shrink.Shrinker` (a qualified
+ *   reference to it, or any bare use once the file imports it), so *consuming* that shrinker is
+ *   not mistaken for re-implementing one. A locally declared type or function whose name merely
+ *   contains `Shrink` (`QueryShrinker`, `shrinkScript(`) is unaffected and still flagged.
  *
  * And a positive control: at least one test file calls `DifferentialRunner.check(`, so the
  * suite really does go through the runner rather than trivially avoiding the forbidden names.
@@ -36,10 +36,10 @@ import java.io.File
  * out the forbidden constructs on purpose. The synthetic-source controls prove each rule armed.
  *
  * **Chosen arm (computenet-ls5z2): strengthen the scan**, not review-only enforcement. Rule (a)
- * stays as a cheap, permanently-vacuous documentation check; the parallel-taxonomy and
- * dead-letter-read rules below close the two gaps computenet-cab.6.2's review found exploitable
- * without extending a sealed type from another module. Rule (c)'s name-vs-qualified-name gap
- * (`Shrinker` consumption) is accepted rather than closed, since :query does not consume it yet.
+ * stays as a cheap, permanently-vacuous documentation check; the parallel-taxonomy, dead-letter-
+ * read and Shrinker-exemption rules below close the gaps computenet-cab.6.2's review found
+ * exploitable without extending a sealed type from another module or being blocked from
+ * consuming ORA1's own shrinker.
  *
  * **What this scan still does not catch — it is a name/pattern tripwire, not a proof of
  * `[QRY1-ORA-01]`.**
@@ -49,9 +49,11 @@ import java.io.File
  *   nested types instead of one all pass.
  * - Rule (b) matches only `deadLetterOutlet` followed directly by `.subscribe`; reading the
  *   outlet through a local alias, or any other dead-letter inspection, passes.
- * - Rule (c) matches names, so a minimiser not spelled `Shrink…`/`shrink…(` passes, and using
- *   ORA1's own `civictech.oracle.shrink.Shrinker` (consumption, not re-implementation) FAILS —
- *   see above.
+ * - Rule (c) matches names, so a minimiser not spelled `Shrink…`/`shrink…(` passes. The
+ *   `Shrinker` exemption is name-based too: a locally declared `typealias Shrinker = …` or an
+ *   import alias (`import civictech.oracle.shrink.Shrinker as X`) is not recognised as the real
+ *   one and is either wrongly exempted (the typealias case, unlikely to arise) or wrongly flagged
+ *   (the alias case, the safe direction).
  * - The supertype-list reader skips no constructor modifier or annotation
  *   (`class X private constructor(…) : …`) and stops at a line break not preceded by a comma.
  *   The sealed-body reader has the same primary-constructor-only limit.
@@ -82,6 +84,8 @@ class NoOwnDifferentialMachineryTest {
         private val shrinkIdentifier = Regex("""\b[A-Za-z0-9_]*Shrink[A-Za-z0-9_]*\b""")
         private val shrinkCall = Regex("""\bshrink[A-Za-z0-9_]*\s*\(""")
         private val runnerCall = Regex("""\bDifferentialRunner\s*\.\s*check\s*\(""")
+        private val qualifiedShrinker = Regex("""\bcivictech\.oracle\.shrink\.Shrinker\b""")
+        private val importsShrinker = Regex("""^\s*import\s+civictech\.oracle\.shrink\.Shrinker\s*$""", RegexOption.MULTILINE)
 
         /**
          * Every violation in [source], one human-readable line each. [path] identifies the file
@@ -107,7 +111,13 @@ class NoOwnDifferentialMachineryTest {
             if (path !in deadLetterAllowlist) {
                 deadLetterOutletRead.findAll(source).forEach { _ -> found += "deadLetterOutlet read" }
             }
-            shrinkIdentifier.findAll(source).forEach { found += "shrink identifier ${it.value}" }
+            val exemptShrinkerRanges = qualifiedShrinker.findAll(source).map { it.range }.toList()
+            val fileImportsShrinker = importsShrinker.containsMatchIn(source)
+            shrinkIdentifier.findAll(source).forEach { m ->
+                val isRealShrinker = m.value == "Shrinker" &&
+                    (fileImportsShrinker || exemptShrinkerRanges.any { it.last == m.range.last })
+                if (!isRealShrinker) found += "shrink identifier ${m.value}"
+            }
             shrinkCall.findAll(source).forEach { found += "shrink call ${it.value.trimEnd('(', ' ')}" }
             return found
         }
@@ -348,6 +358,30 @@ class NoOwnDifferentialMachineryTest {
             fun go() = shrinkScript (script)
         """.trimIndent()
         classify(src) shouldContainExactly listOf("shrink identifier QueryShrinker", "shrink call shrinkScript")
+    }
+
+    @Test
+    fun `QRY1 §ORA-01 ORA1's own Shrinker import and use are exempt but a local Shrinker-named class is not`() {
+        val src = """
+            package civictech.query.run
+
+            import civictech.oracle.shrink.Shrinker
+
+            class QueryShrinker
+
+            fun go(case: GeneratedCase) = Shrinker.run(case, reference, budget)
+        """.trimIndent()
+        classify(src) shouldContainExactly listOf("shrink identifier QueryShrinker")
+    }
+
+    @Test
+    fun `QRY1 §ORA-01 a fully-qualified Shrinker use is exempt even without a bare import`() {
+        val src = """
+            package civictech.query.run
+
+            fun go(case: GeneratedCase) = civictech.oracle.shrink.Shrinker.run(case, reference, budget)
+        """.trimIndent()
+        classify(src).shouldBeEmpty()
     }
 
     @Test
