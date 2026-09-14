@@ -43,9 +43,11 @@ import civictech.query.schema.Catalog
  * rejection is located at. Loci always refer to the caller's query: a [Locus.RuleStatement]
  * produced over the reduced query is translated back to the original index.
  *
- * **Parse.** Today's parser is all-or-nothing — it reports one syntax rejection and no partial
- * query — so a syntax rejection returns immediately with that single rejection
- * (statement-level recovery is cab.5-D7's sibling task).
+ * **Parse.** [QueryParser] recovers per statement (cab.5-D7): a [ParseResult.Rejected] carries
+ * both its rejections and the *partial* query built from the statements that did parse. The
+ * `source`-taking overload adds those parse rejections to the accumulator up front and then
+ * runs every later phase over the partial query and its spans, so a syntax error in one
+ * statement and an unsafe rule in another both surface from one call ([QRY1-REJECT-10]).
  *
  * **No side effect ([QRY1-REJECT-04]).** Neither overload takes a host, and
  * [CompileResult.Rejected] carries no `GraphSpec`: a rejection cannot have spawned a cell.
@@ -55,10 +57,19 @@ import civictech.query.schema.Catalog
  */
 object QueryCompiler {
 
-    /** Parses [source] against [catalog] and compiles the result. Total. */
+    /**
+     * Parses [source] against [catalog] and compiles the result. Total. A parse
+     * [ParseResult.Rejected] does not stop here: its rejections join the accumulator and
+     * later phases still run over its partial query, so a good statement's own rejections are
+     * not hidden behind a bad statement's syntax error.
+     */
     fun compile(source: String, catalog: Catalog): CompileResult =
         when (val parsed = QueryParser.parse(source, catalog)) {
-            is ParseResult.Rejected -> CompileResult.Rejected(parsed.rejections)
+            is ParseResult.Rejected -> {
+                val laterPhases = compile(parsed.partial, parsed.spans)
+                val laterRejections = (laterPhases as? CompileResult.Rejected)?.rejections.orEmpty()
+                CompileResult.Rejected(parsed.rejections + laterRejections)
+            }
             is ParseResult.Parsed -> compile(parsed.query, parsed.spans)
         }
 

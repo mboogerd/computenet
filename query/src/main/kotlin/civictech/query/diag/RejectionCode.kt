@@ -16,6 +16,8 @@ package civictech.query.diag
  * - [UNKNOWN_PREDICATE], [ARITY_MISMATCH], [PREDICATE_REDEFINED], [UNPLANNABLE_STATEMENT] —
  *   `civictech.query.parse.WellFormednessAnalysis`, the fence in front of
  *   `civictech.query.plan.Planner`'s preconditions (computenet-cab.5.1, cab.5-D6).
+ * - [ORDER_DEPENDENT_AGGREGATE] — the text parser, re-attributed from [SYNTAX_ERROR]
+ *   (computenet-cab.5.3, [QRY1-SEM-05]).
  *
  * [Rejection] pairs a [RejectionCode] with a [Locus] (offending source span, statement, or
  * plan node) and a `specId` naming the spec text, gap marker, or roadmap item that forbids
@@ -127,4 +129,16 @@ enum class RejectionCode {
      * [QRY1-REJECT-03]
      */
     UNPLANNABLE_STATEMENT,
+
+    /**
+     * A rule's aggregate annotation names something outside `[QRY1-LANG-03]`'s closed seven:
+     * `@first`, `@last`, `@scan` — the arrival-order aggregates the set-semantic operator
+     * algebra excludes by rule ([24-AGG-01]) — or any other name `[QRY1-LANG-03]` never
+     * admitted. Located at the aggregate name's span. Strictly a re-attribution of what the
+     * text parser used to report as [SYNTAX_ERROR]: the name is syntactically well-formed, so
+     * [SYNTAX_ERROR] stays syntactic and this variant carries the semantic exclusion instead.
+     *
+     * [QRY1-SEM-05]
+     */
+    ORDER_DEPENDENT_AGGREGATE,
 }
