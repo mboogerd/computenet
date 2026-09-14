@@ -1080,10 +1080,12 @@ object WsTransport {
         private fun onLegacyHello(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
             val parts = message.removePrefix(HELLO).trim().split(" ", limit = 2)
-            // The legacy line carries an ASSERTED name and nothing else, so the
-            // token is the admission token (`KeyId`'s "TransportVouched" arm)
-            // and the identity is what this side's binding resolves it to — the
-            // one resolution on this path (feature `computenet-376c`).
+            // The legacy line carries an ASSERTED name and nothing else. The key
+            // is what the line asserts (`KeyId`'s "TransportVouched" arm); the
+            // allowlist below (`admitted(peer)`) judges the identity that key
+            // resolves to through this side's `identityBinding`, never the key
+            // itself (epic `computenet-5y8t`) — the one resolution on this path
+            // (feature `computenet-376c`).
             val key = parts.getOrNull(1)?.let { KeyId(it) }
             // A legacy line presents no statements; only a HELLO3 carries them.
             //

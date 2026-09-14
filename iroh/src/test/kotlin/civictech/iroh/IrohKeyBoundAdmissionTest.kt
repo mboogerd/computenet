@@ -55,8 +55,11 @@ import kotlin.test.fail
  *
  * The three cases are the feature's three examples:
  *
- * 1. **Admission is a public-key allowlist, and the stamp comes from the
- *    binding.** L allowlists the [KeyId] fingerprinted from B's NodeId; B's
+ * 1. **Admission judges the identity a key resolves to, and the stamp comes
+ *    from the same binding.** The key is what the connection is proven on —
+ *    the [KeyId] fingerprinted from B's NodeId — and L's allowlist admits the
+ *    identity that key resolves to through `identityBinding` (epic
+ *    `computenet-5y8t`), never the key itself; B's
  *    invocation is delivered and a cell on L reading
  *    [civictech.cell.membrane.currentPrincipal] inside that delivery observes
  *    `Principal.Peer(<the peer L.side.identityBinding.resolve(key, emptyList()) is Bound to>, Authenticated)`.
@@ -192,10 +195,12 @@ class IrohKeyBoundAdmissionTest {
     fun `an allowlisted NodeId is admitted and its deliveries are stamped with the binding-resolved identity`() {
         val binary = SidecarBinary.orSkip()
 
-        // B's NodeId has to be known before the listener exists, because the
-        // allowlist judges the KEY the QUIC connection authenticates. Pin B's
-        // sidecar secret key, spawn once to read the NodeId it yields, and dial
-        // later with the same args so the endpoint is the same endpoint.
+        // B's NodeId has to be known before the listener exists: the key is
+        // what the QUIC connection is proven on, and the allowlist judges the
+        // identity that key resolves to through this side's `identityBinding`
+        // (epic `computenet-5y8t`), never the key itself. Pin B's sidecar
+        // secret key, spawn once to read the NodeId it yields, and dial later
+        // with the same args so the endpoint is the same endpoint.
         val bArgs = pinnedSecretKeyArgs()
         val nodeIdB = SidecarProcess.spawn(binary, args = bArgs).use { it.nodeId }
         val keyB = fingerprint(Ed25519.publicKeyFromRaw(nodeIdB))
