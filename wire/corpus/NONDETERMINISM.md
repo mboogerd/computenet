@@ -72,9 +72,15 @@ nothing to tolerate yet), and the bead or disposition that owns resolving it.
   discriminator encodes exactly as `"kotlin.Double"` and the three values
   render as `1.0`, `0.1`, `1.0E21` — JDK `Double.toString`'s shortest-round-trip
   form, pinned-because-current (`[WIR1-C16]`). This resolves the `unverified:`
-  call-out above for `Double` specifically; `String`, `Long`, `Int` and
-  `Boolean` remain `unverified:` and are `computenet-ncz.3`'s to pin — this
-  task does not remove those four labels.
+  call-out above for `Double` specifically. `String` and `Long` are observed
+  too, but only NESTED: `WV-PAYLOAD-MAPDELTA-01` and
+  `WV-PAYLOAD-TAGGEDMAPDELTA-01` carry `["kotlin.String","b"]` keys and
+  `["kotlin.Long",1]` values in `encoded.utf8`, which is why
+  `RegistrationCoverageTest` (it reads type nodes at any depth) counts both as
+  vectored and `manifest.json`'s `pending` no longer lists them. A dedicated
+  top-level vector for each, and `Int` and `Boolean` (still `unverified:`),
+  remain `computenet-ncz.3`'s to pin — this task does not remove the labels
+  above. (Clarified by the computenet-ncz.2 feature review.)
 
   **Decision ncz.2-D7 (recorded here per the task breakdown; full text on
   feature `computenet-ncz.2`'s bead).** The five `kotlin.<Type>` builtin
