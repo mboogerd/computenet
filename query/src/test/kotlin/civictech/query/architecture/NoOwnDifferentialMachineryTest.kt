@@ -24,6 +24,21 @@ import java.io.File
  * This file is excluded from the live scan by name: its synthetic sources and patterns spell
  * out the forbidden constructs on purpose. The synthetic-source controls prove each rule armed.
  *
+ * **What this scan does not catch — it is a name tripwire, not a proof of `[QRY1-ORA-01]`.**
+ * - Rule (a) can never fire on code that compiles: `RunOutcome` and `StateDifference` are
+ *   `sealed` in `:oracle`, and Kotlin already refuses a subtype from another module (observed
+ *   in review of computenet-cab.6.2: "Extending sealed classes or interfaces from a different
+ *   module is prohibited"). A *parallel* taxonomy — a `:query`-owned sealed verdict type with
+ *   its own names — and a hand-written `expected != actual` comparison of folds are not
+ *   flagged at all; "no diffing" is held by review, not by this test.
+ * - Rule (b) matches only `deadLetterOutlet` followed directly by `.subscribe`; reading the
+ *   outlet through a local alias, or any other dead-letter inspection, passes.
+ * - Rule (c) matches names, so a minimiser not spelled `Shrink…`/`shrink…(` passes, and using
+ *   ORA1's own `civictech.oracle.shrink.Shrinker` (consumption, not re-implementation) FAILS.
+ * - The supertype-list reader skips no constructor modifier or annotation
+ *   (`class X private constructor(…) : …`) and stops at a line break not preceded by a comma.
+ * - The wave-prefix check is not scanned (cab.6-D4/D12: the BYO path has none to copy).
+ *
  * Plain-JUnit source-text scan (cab.1-D2), the style of [RefImportBoundaryTest] and
  * [NoCellClassArchitectureTest].
  */

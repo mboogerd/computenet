@@ -26,8 +26,12 @@ import kotlin.random.Random
  * Deterministic from [seed]: one `kotlin.random.Random(seed)`, relations taken in name order,
  * held rows kept in insertion order — no hash-order iteration touches the random stream.
  *
- * The achieved split is [stats]; the configured [deletionRatio] is an upper bound on it, since
- * a step on an empty relation always adds.
+ * The achieved split is [stats], and it is NOT bounded by the configured [deletionRatio] in
+ * either direction: a step on an empty relation always adds (pulling it down), and the
+ * saturated-domain fallback above turns adds into removes (pushing it up). On the default
+ * domain over two binary relations, 40 steps, seeds 0 until 50, a configured 0.1 achieved
+ * 350 removes of 2000 ops (17.5%; observed in review of computenet-cab.6.2). Assert on [stats],
+ * never on the configured ratio.
  */
 class QueryScripts(
     val seed: Long,
