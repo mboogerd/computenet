@@ -57,16 +57,19 @@ from collections import deque
 SKILLDIR = ".claude/skills/work"
 ROLES = {
     "orchestrator":     [f"{SKILLDIR}/SKILL.md", "AGENTS.md"],
-    "implementer":      [f"{SKILLDIR}/references/task.md"],
-    "task-reviewer":    [f"{SKILLDIR}/references/review-task.md"],
-    "feature-reviewer": [f"{SKILLDIR}/references/review-feature.md"],
-    "breakdown":        [f"{SKILLDIR}/references/epic.md",
-                         f"{SKILLDIR}/references/feature.md"],
+    "implementer":      [f"{SKILLDIR}/references/agent.md",
+                         f"{SKILLDIR}/references/implement.md"],
+    "task-reviewer":    [f"{SKILLDIR}/references/agent.md",
+                         f"{SKILLDIR}/references/review.md"],
+    "feature-reviewer": [f"{SKILLDIR}/references/agent.md",
+                         f"{SKILLDIR}/references/review.md"],
+    "breakdown":        [f"{SKILLDIR}/references/agent.md",
+                         f"{SKILLDIR}/references/breakdown.md"],
 }
 
 MD = re.compile(r"[\w./-]+\.md")
 # A row of SKILL.md's reference index: `| `references/foo.md` | when to read |`.
-INDEX_ROW = re.compile(r"^\|\s*`references/[\w-]+\.md`\s*\|")
+INDEX_ROW = re.compile(r"^\|\s*(`references/[\w-]+\.md`|\[[\w.-]+\]\(references/[\w-]+\.md\))\s*\|")
 
 SKILL_OF = re.compile(r"^\.claude/skills/([\w-]+)/")
 

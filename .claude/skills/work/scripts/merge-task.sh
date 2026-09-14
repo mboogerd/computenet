@@ -83,7 +83,7 @@ if git -C "$FWT" fetch origin "$fbr" 2>/dev/null; then
   if git -C "$FWT" merge-base --is-ancestor FETCH_HEAD HEAD; then
     pass_gate origin-state "local contains origin/$fbr"
   else
-    fail_gate origin-state "origin/$fbr is AHEAD — somebody pushed under you; both sides may hold pushed unreviewed work, so park via ask-human.md rather than picking a winner"
+    fail_gate origin-state "origin/$fbr is AHEAD — somebody pushed under you; both sides may hold pushed unreviewed work, so park via recovery.md § Parks rather than picking a winner"
   fi
 elif git -C "$FWT" ls-remote origin >/dev/null 2>&1; then
   # §3 calls this a CHECK, not a STOP — a missing branch endangers nobody's
@@ -112,7 +112,7 @@ else
   foreign=$(jq -r --arg me "$me" \
     '.[] | select(.author.login != $me) | "#\(.number) by \(.author.login)"' <<<"$prs")
   [ -z "$foreign" ] \
-    || fail_gate competing-pr "open PR on $fbr not yours: $foreign — park via ask-human.md"
+    || fail_gate competing-pr "open PR on $fbr not yours: $foreign — park via recovery.md § Parks"
   pass_gate competing-pr "every open PR on $fbr is yours"
 fi
 

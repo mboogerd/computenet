@@ -63,7 +63,7 @@ git fetch origin main
 bd dolt pull
 ```
 
-Same sync principle as /work (`references/claim-sync.md` there): this pull
+Same sync principle as /work (its SKILL.md "Hard constraints"): this pull
 plus a publication push at the end, with an extra push whenever step 2
 acquires an item this machine doesn't already hold. If the pull fails, stop
 and report.
@@ -213,7 +213,7 @@ verdict:
 
   (Two calls, not one chained block — `bd` writes chained in a single Bash
   invocation die mid-sequence and leave half-recorded state, per
-  `work/references/bd-traps.md`.) The field is what makes the scoreboard in
+  `work/references/traps.md`.) The field is what makes the scoreboard in
   step 1b able to compare the two classes; until enough fixes carry it the
   audit prints them as `?` and says so.
 - **Needs evidence** — a single instance you cannot cheaply verify, or a
@@ -245,7 +245,7 @@ verdict:
 **When the verdict itself is a judgment call** — the evidence bar is met
 but whether the change is an improvement is a matter of process taste —
 make the call if confident. If not, `bd update <id> --add-label human`,
-park the question per `work`'s `references/ask-human.md`, and name which
+park the question per `work`'s `references/recovery.md` "Parks", and name which
 part you are unsure about. Confidence, not category, decides who calls it.
 
 ## 4. Fix, review, ship
@@ -353,10 +353,9 @@ the fix is attributable to the revision it amends.
 Commit, push, open a **draft** PR. Then dispatch a fresh reviewer agent
 (never yourself in the same breath) to check the fix against the item's
 acceptance and the surrounding skill text. The reviewer runs under
-`work`'s `references/agent-execution.md` — put that path in the dispatch
-prompt, along with the explicit foreground-timeout line every `work`
-dispatch carries (a bare Gradle or long command otherwise backgrounds at
-120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
+`work`'s `references/agent.md` — put that path in the dispatch prompt; it
+carries the explicit-timeout rule (a bare Gradle or long command otherwise
+backgrounds at 120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
 reviewer certifies, you run:
 
 ```bash
@@ -371,7 +370,7 @@ idempotent, so arming an already-armed PR costs nothing. Do **not** substitute
 a `gh pr view --json autoMergeRequest` check: the workflow has not run yet
 seconds after `gh pr ready`, so it reads `NOT-ARMED` on a PR that arms fine
 (#707: null at t=0, `enabledAt` 45s later). If a merge is still missing later,
-`work`'s `references/ship-feature.md` diagnoses it — a `skipped` auto-merge run
+`work`'s SKILL.md step 5e diagnoses it — a `skipped` auto-merge run
 needs a fresh event, never a re-run.
 
 On merge — which normally arrives while the NEXT item is already in flight,
@@ -385,7 +384,7 @@ git worktree remove "$PWD/../computenet-worktrees/<id>"
 Take the next item without waiting — repeat from step 2 while budget remains;
 this lane is cheap per item, so several items per session is normal — **but
 keep at most ~2 PRs open against any one file.** The bound and its reason live
-in `work/references/direct-child.md` (computenet-nxac); restated here because
+in `work`'s SKILL.md step 5e (computenet-nxac); restated here because
 an agent in this lane has no reason to open that file. Budget growth is no
 longer part of that bound: each PR writes its own `line-budget.d/<id>.txt`, so
 budgets no longer serialise the lane (computenet-x69c cost four hand-resolved
@@ -415,7 +414,7 @@ alone should do.
 ```
 
 Never a bare `bd dolt push`: it has been observed exiting 0 while printing a
-rejection, so the exit code alone is not a signal (`work`'s claim-sync.md;
+rejection, so the exit code alone is not a signal (`work`'s SKILL.md "Hard constraints";
 computenet-kbk0). The script fails on either signal and recovers a
 non-fast-forward inline.
 
