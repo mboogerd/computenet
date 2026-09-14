@@ -54,6 +54,16 @@ fun CompiledQuery.lastWinsProjection(root: String): CompiledQuery {
 }
 
 /**
+ * computenet-cab.6.6: [root]'s `Project` spawn replaced by a [StatelessLastWinsProjectCell], the
+ * kernel control's literal per-delta `mapKeys` shape. Only caught where the projection reads
+ * multi-row deltas, e.g. downstream of a join.
+ */
+fun CompiledQuery.statelessLastWinsProjection(root: String): CompiledQuery {
+    val (handle, factory) = singleSpawnOf<FlatMapFactory>(root)
+    return withFactory(handle, StatelessLastWinsProjectFactory(factory.transform))
+}
+
+/**
  * `[QRY1-ORA-08]`'s mutation (BS-16): [root]'s [GroupByFactory] spawn replaced by a
  * [StickyGroupByCell] that never removes a dead group. COUNT only.
  */
