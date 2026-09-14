@@ -396,7 +396,7 @@ Agent({
   prompt: `You are the task reviewer for beads task <task-id>.
 Worktree <task-worktree>, branch task/<task-id>, feature branch <feature-branch> (on origin).
 Read <task-worktree>/.claude/skills/work/references/agent.md, then <task-worktree>/.claude/skills/work/references/review.md.
-Tracker writes authorized for this task: <cross_bead or "none">.
+Your verdict comment and review metadata on this task are yours to write. Cross-bead writes authorized: <cross_bead or "none">.
 You may commit repairs on the task branch and temporarily mutate files its tests constrain (evidence.md).
 Do not push, merge, rebase or switch branches.`
 })
@@ -458,7 +458,7 @@ Agent({
 Read <feature-worktree>/.claude/skills/work/references/agent.md, then <feature-worktree>/.claude/skills/work/references/review.md.
 origin/main at dispatch: <sha>. Landed on main since this branch forked: <log output, or "none">.
 Open PRs that may merge meanwhile: <list>. Children left open as human parks (confirm each is one): <list or "none">.
-Tracker writes authorized on this feature and its tasks: <cross_bead or "none">. <Merge shas you resolved; gate scope if an implementer is live.>
+Your verdict comment and review/residual metadata on this feature are yours to write. Cross-bead writes authorized: <cross_bead or "none">. <Merge shas you resolved; gate scope if an implementer is live.>
 You may commit and push repairs to the feature branch. Never run gh pr ready.`
 })
 ```
