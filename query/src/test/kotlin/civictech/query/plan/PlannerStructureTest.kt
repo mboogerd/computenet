@@ -340,6 +340,44 @@ class PlannerStructureTest {
         root.input.shouldBeInstanceOf<Scan>().relation shouldBe "r"
     }
 
+    @Test
+    fun `QRY1 §SEM-01§SEM-02 a COUNT aggregate's input is the full body plan, not a projection narrowed to grouping+aggregated columns`() {
+        // c(count X) :- e(X, Y).   e = {(1,a), (1,b)} — Planner.kt's aggregate-construction
+        // KDoc: the population COUNT aggregates over is the distinct body rows the rule
+        // binds ([QRY1-SEM-01]), so this pins 2 distinct (X, Y) rows, not 1 distinct X value.
+        // A narrowing Project to {X} before the GroupAggregate would be exactly the
+        // distinct-semantics approximation [QRY1-SEM-02] forbids; this test pins that no
+        // such Project is inserted — the aggregate sits directly on the two-column body scan.
+        val plan = Planner.plan(
+            Query(
+                rules = listOf(
+                    Rule(
+                        head = atom("c", "x"),
+                        body = listOf(positive(atom("e", "x", "y"))),
+                        aggregate = Aggregate(AggregateKind.COUNT),
+                    ),
+                ),
+                catalog = catalogOf("e" to listOf("x", "y")),
+            ),
+        )
+
+        val root = plan.roots.getValue("c").shouldBeInstanceOf<GroupAggregate>()
+        withClue("no group-by variable: the aggregated column is the sole head variable") {
+            root.groupByColumns.shouldBeEmpty()
+            root.aggregatedColumn shouldBe "x"
+        }
+        root.aggregate shouldBe Aggregate(AggregateKind.COUNT)
+
+        val input = root.input.shouldBeInstanceOf<Scan>()
+        withClue(
+            "the GroupAggregate sits directly on the body scan — no narrowing Project to " +
+                "{x} was inserted, so the counted population is the full (x, y) body rows",
+        ) {
+            input.relation shouldBe "e"
+            input.outputColumns shouldContainExactly listOf("x", "y")
+        }
+    }
+
     // ---------------------------------------------------------------- construction hygiene
 
     @Test

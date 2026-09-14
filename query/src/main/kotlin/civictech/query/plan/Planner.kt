@@ -381,6 +381,26 @@ private class PlanningContext(
 
         // 6. Aggregate-annotated head: group by every head variable but the last, aggregate
         //    over the last. See this file's KDoc for why the column comes from the head shape.
+        //
+        // Aggregate input population: [GroupAggregate] is built over the FULL body plan
+        // `plan`, not over a [Project] narrowed to `groupByColumns` + the aggregated column.
+        // The body plan is already a set of distinct rows ([QRY1-SEM-01]: "every compiled
+        // operator's result is a set of rows, and duplicate elimination is a consequence of
+        // the algebra rather than an added step"), so the population COUNT/SUM/AVG aggregate
+        // over is the distinct body rows the rule binds, not the distinct values of the
+        // grouped/aggregated columns alone. Concretely, `c(count X) :- e(X, Y).` over
+        // `e = {(1,a), (1,b)}` counts the 2 distinct `(X, Y)` body rows, answering 2 — not 1,
+        // the count of distinct `X` values.
+        //
+        // A narrowing [Project] to grouping keys + aggregated column before the aggregate
+        // would be exactly the distinct-semantics approximation [QRY1-SEM-02] forbids: that
+        // projection is not key-preserving, and SEM-02 requires the compiler to reject a
+        // non-key-preserving projection feeding a multiplicity-sensitive consumer
+        // (`count`/`sum`/`avg`) with `RejectionCode.BAG_SEMANTICS_REQUIRED` rather than
+        // silently compile an approximation. This planner does not yet implement that
+        // rejection (computenet-cab.5); until it does, a rule whose aggregated head variable
+        // set is a strict subset of its body variables silently aggregates over full body
+        // rows rather than being refused.
         require(headVars.isNotEmpty()) {
             "Rule ${rule.head.predicate} is aggregate-annotated but has a nullary head; " +
                 "the aggregated column is the last head variable, so there must be one."
