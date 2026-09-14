@@ -290,6 +290,19 @@ class PlannerDefinitionsTest {
     }
 
     @Test
+    fun `recursion through definitions alone fails fast in the planner`() {
+        // No rule on the cycle, so only the definition branch of planPredicate can push the
+        // head onto the recursion stack; without it this loops until StackOverflowError.
+        val q = query(catalog) {
+            val x = v("X"); val y = v("Y")
+            define(derived("h")(x, y)) { rel(relation("a")(x, y)) union rel(derived("g")(x, y)) }
+            define(derived("g")(x, y)) { rel(derived("h")(x, y)) intersect rel(relation("b")(x, y)) }
+        }
+
+        shouldThrow<IllegalArgumentException> { Planner.plan(q) }.message shouldContain "recursion"
+    }
+
+    @Test
     fun `a head defined twice, or by both a rule and a definition, fails fast`() {
         val twice = query(catalog) {
             val x = v("X"); val y = v("Y")
