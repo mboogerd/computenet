@@ -13,14 +13,18 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.query.ast.Term
 import civictech.query.parse.ParseResult
 import civictech.query.parse.QueryParser
+import civictech.query.plan.AntiJoin
 import civictech.query.plan.Difference
 import civictech.query.plan.JoinKey
 import civictech.query.plan.LogicalPlan
 import civictech.query.plan.OuterJoin
 import civictech.query.plan.OuterJoinSide
 import civictech.query.plan.Planner
+import civictech.query.plan.Scan
+import civictech.query.plan.Select
 import civictech.query.run.AppliedQuery
 import civictech.query.run.CompiledQuery
 import civictech.query.schema.Catalog
@@ -197,9 +201,9 @@ class GatingEvidenceTest {
      * join's right inlet directly, and the join either emits or absorb-acks onto the antijoin's
      * left inlet — the join is the absorber and it links straight into the gated edge, which is
      * F-15's safe case. A two-operator-deep arm is therefore NOT sufficient for withholding; the
-     * silent arm must have no other path from the root. `F-15 reproduces on a compiled shape`
-     * below shows such a shape does withhold, so this negative does not license widening the
-     * depth rule (no production rule change here, per the task).
+     * silent arm must have no other path from the root. `F-15 reproduces on an equal-provenance
+     * compiled shape` below shows such a shape does withhold, so this negative does not license
+     * widening the depth rule (no production rule change here, per the task).
      */
     @Test
     fun `F-15 negative - forcing the gate on the self-join depth shape does not withhold, because src e reaches the join directly on its other inlet`() {
@@ -230,61 +234,133 @@ class GatingEvidenceTest {
     }
 
     /**
-     * The F-15 pin, reproducing shape: `q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` The
-     * arms share `e`; the left arm is `src:e → Filter → Join(·, src:f) → antijoin`, and this time
-     * the join's other inlet is fed by `f`, so a wave on `e` that the filter drops has NO other
-     * path to the antijoin's left inlet. The lowering leaves it ungated
-     * ([LoweringDiagnostic.GateNotProvable]) — on two grounds since computenet-cab.4.8: the arms
-     * are `{e,f}` and `{e}` (the provenance-equality check reports it first), and the left arm
-     * is two operators deep. CAVEAT (computenet-cab.4.8 task review, residual computenet-cab.4.9):
-     * this script's prefix `e.add(5,1)`, `f.add(1,-1)` is the phantom-edge pin's, and with the gate
-     * forced on that `f` wave is already buffered and `(5,-1)` already missing before any
-     * `e`-removal (seeds 0..4), so the forced-arm assertions below are satisfied by the phantom
-     * edge alone and do NOT isolate F-15's absorb-ack withholding. As written, the claim that
-     * follows is not established by this test. Forcing the gate on in test scope and ending on an
-     * `e`-removal the filter drops but the witness carries — the removal that should RE-ADMIT a
-     * blocked answer — leaves that wave buffered at rest and the answer MISSING from `q`: the
-     * withheld-at-rest signature of `FrontierGatedEmissionTest`'s two-hop case, through a
-     * `FilterCell`→`JoinSetCell` arm. This is the reason cab.4-D6's depth rule exists.
+     * The F-15 pin, reproducing shape, with EQUAL arm provenance (computenet-cab.4.9):
+     * [F15_QUERY] = `q(X, Y) :- e(X, Y), X > 1, Y > 0, not e(Y, X).` Both arms are `{e}`, so no
+     * source is one-arm-only and there is no phantom expected edge (`WaveGate` G-13) to confound
+     * the measurement. The planner stacks the comparisons in source order — the left arm is
+     * `src:e → Filter(X > 1) → Filter(Y > 0) → antijoin` (asserted on the plan below) — and the
+     * right arm is `src:e` straight into the witness inlet. The lowering refuses the gate on the
+     * depth rule (cab.4-D6) alone.
+     *
+     * With the gate FORCED on in test scope: the prefix `e.add(2,1)` passes both filters and
+     * settles with nothing buffered and `(2,1)` answered — the phantom-free prefix, asserted.
+     * Then `e.add(1,2)` blocks `(2,1)` on the witness inlet, and on the left arm the INNER
+     * filter drops it (`X = 1`) and absorb-acks onto its own outlet, where the outer
+     * `Filter(Y > 0)` hop swallows the ack (F-15: no plain operator relays it). The gate holds
+     * that wave at rest and the stale `(2,1)` stays in `q` while the batch fold is empty. The
+     * shipped ungated lowering is the control and retracts it.
+     *
+     * Limit: this measures one equal-provenance shape (a filter-over-filter arm) on seeds
+     * [SEEDS]; it shows the depth rule refuses at least one gate that would withhold, not that
+     * every wave on a two-deep arm withholds — [F15_HOP_CONTROL_QUERY]'s test is a two-deep arm
+     * whose outer-dropped wave does not (and whose inner-dropped wave does). The earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was
+     * replaced because its forced-gate withholding was already produced by `f`'s phantom
+     * expected edge before any F-15 wave (computenet-cab.4.8 task review).
      */
     @Test
-    fun `F-15 reproduces on a compiled shape - forcing the gate on a filter-then-join arm withholds a re-admitted answer at rest`() {
-        val catalog = PlanFixtures.catalog("e" to 2, "f" to 2)
-        val compiled = compile("q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).", catalog)
+    fun `F-15 reproduces on an equal-provenance compiled shape - forcing the gate on a filter-over-filter arm withholds a retraction at rest`() {
+        val catalog = PlanFixtures.catalog("e" to 2)
+        assertTwoFilterArm(F15_QUERY, innerColumn = "X", catalog)
+        val compiled = compile(F15_QUERY, catalog)
         val (antijoinHandle, factory) = antijoinOf(compiled)
         factory.emitOnFrontier shouldBe false
         compiled.diagnostics.single { it.handle == antijoinHandle }
-            .shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>()
+            .shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().reason shouldContain "F-15"
 
-        // Batch fold over e = {(5,1)}, f = {(1,-1)}: (5,-1) is a live, unblocked answer.
-        val batch = setOf(row(5, -1))
         forEachSeed(SEEDS) { seed ->
             for (forceGate in listOf(false, true)) {
                 val world = SimWorld(seed = seed)
                 val (applied, cell) = withCapturedAntijoin(compiled, antijoinHandle, world, forceGate = forceGate)
                 val e = writerOf(world, applied, "e")
-                val f = writerOf(world, applied, "f")
                 val q = viewOf(world, applied, "q")
 
-                e.add(row(5, 1)); world.runToIdle() // Y = 1 passes the filter
-                f.add(row(1, -1)); world.runToIdle() // joins: candidate answer (5, -1)
-                e.add(row(5, -1)); world.runToIdle() // witness blocks (5, -1); the filter drops it
-                e.remove(row(5, -1)); world.runToIdle() // LAST wave: re-admits (5, -1); the filter drops it
+                e.add(row(2, 1)); world.runToIdle() // passes both filters: answer (2,1)
+                withClue("seed=$seed forceGate=$forceGate phantom-free prefix: nothing buffered, (2,1) answered") {
+                    cell.bufferedWaves shouldBe 0
+                    q.current() shouldBe setOf(row(2, 1))
+                }
 
+                e.add(row(1, 2)); world.runToIdle() // blocks (2,1); the INNER filter (X > 1) drops it
+                val batch = emptySet<Row>() // e = {(2,1),(1,2)}: (2,1)'s witness (1,2) is present
                 if (!forceGate) {
-                    withClue("seed=$seed control: the shipped ungated lowering re-admits (5,-1)") {
+                    withClue("seed=$seed control: the shipped ungated lowering retracts (2,1)") {
                         cell.bufferedWaves shouldBe 0
                         q.current() shouldBe batch
                     }
                 } else {
-                    withClue("seed=$seed forced gate: the batch fold holds (5,-1), the gate withholds it at rest") {
+                    withClue("seed=$seed forced gate: the witness wave is withheld at rest, (2,1) is stale") {
                         cell.bufferedWaves shouldBeGreaterThanOrEqual 1
-                        q.current() shouldNotBe batch
-                        batch.filterNot { it in q.current() } shouldHaveSize 1
+                        q.current() shouldBe setOf(row(2, 1))
                     }
                 }
             }
         }
+    }
+
+    /**
+     * The hop-order control for the pin above: [F15_HOP_CONTROL_QUERY] is the same query with the
+     * comparisons swapped, so the arm is still two `FilterCell`s deep with equal provenance and
+     * the lowering refuses it identically — but now the filter that drops `(1,2)` (`X > 1`) is
+     * the OUTER one, which links straight into the gated inlet, so its absorb-ack lands on the
+     * expected edge (F-15's safe case). With the gate forced on, the same script settles with
+     * nothing buffered and agrees with the batch fold. What discriminates is how deep the
+     * absorber of THAT WAVE sits, not how deep the arm is.
+     *
+     * Limit (computenet-cab.4.9 task review): this is a per-wave control, not evidence that the
+     * swapped shape is safe to gate. Its inner filter (`Y > 0`) drops waves too, and a final
+     * `e.add(5,-1)` it drops is held at rest here exactly as in the pin — asserted below. On the
+     * scripts measured the held wave changes no answer (a row with `Y <= 0` can only block a
+     * left row with `X <= 0`, which the arm never carries), so `q` still equals the batch fold,
+     * but by this suite's own `bufferedWaves == 0` settling bar the depth rule's refusal of this
+     * shape is not a measured over-refusal.
+     */
+    @Test
+    fun `F-15 hop-order control - the outer filter's dropped wave settles under a forced gate, the inner filter's is still held at rest`() {
+        val catalog = PlanFixtures.catalog("e" to 2)
+        assertTwoFilterArm(F15_HOP_CONTROL_QUERY, innerColumn = "Y", catalog)
+        val compiled = compile(F15_HOP_CONTROL_QUERY, catalog)
+        val (antijoinHandle, factory) = antijoinOf(compiled)
+        factory.emitOnFrontier shouldBe false
+        compiled.diagnostics.single { it.handle == antijoinHandle }
+            .shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().reason shouldContain "F-15"
+
+        forEachSeed(SEEDS) { seed ->
+            val world = SimWorld(seed = seed)
+            val (applied, cell) = withCapturedAntijoin(compiled, antijoinHandle, world, forceGate = true)
+            val e = writerOf(world, applied, "e")
+            val q = viewOf(world, applied, "q")
+
+            e.add(row(2, 1)); world.runToIdle()
+            e.add(row(1, 2)); world.runToIdle() // the OUTER filter (X > 1) drops it and acks onto the gate
+            withClue("seed=$seed forced gate, dropping filter outermost: nothing held, (2,1) retracted") {
+                cell.bufferedWaves shouldBe 0
+                q.current() shouldBe emptySet()
+            }
+
+            e.add(row(5, -1)); world.runToIdle() // the INNER filter (Y > 0) drops it: F-15 on this arm too
+            // Batch fold over e = {(2,1),(1,2),(5,-1)}: (5,-1) fails Y > 0 and (2,1) stays blocked.
+            withClue("seed=$seed forced gate, final wave dropped by the inner filter: held at rest, q unchanged") {
+                cell.bufferedWaves shouldBeGreaterThanOrEqual 1
+                q.current() shouldBe emptySet()
+            }
+        }
+    }
+
+    /**
+     * Pins the plan shape the two F-15 tests rely on: root `AntiJoin` over
+     * `Select(Select(Scan e))` whose INNER comparison is on [innerColumn], witness `Scan e`, and
+     * equal provenance `{e}` on both arms.
+     */
+    private fun assertTwoFilterArm(source: String, innerColumn: String, catalog: Catalog) {
+        val query = (QueryParser.parse(source, catalog) as ParseResult.Parsed).query
+        val root = Planner.plan(query).roots.getValue("q").shouldBeInstanceOf<AntiJoin>()
+        val outer = root.input.shouldBeInstanceOf<Select>()
+        val inner = outer.input.shouldBeInstanceOf<Select>()
+        inner.input.shouldBeInstanceOf<Scan>()
+        (inner.condition.left as Term.Var).name shouldBe innerColumn
+        root.witness.shouldBeInstanceOf<Scan>()
+        root.input.provenance shouldBe setOf("e")
+        root.witness.provenance shouldBe setOf("e")
     }
 
     // ------------------------------------------------------------- phantom expected edge
@@ -578,6 +654,12 @@ class GatingEvidenceTest {
 
         /** The depth case: `Y > 0` is pushed onto `e(X, Y)`'s scan, under the join. */
         const val DEEP_ARM_QUERY = "q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z)."
+
+        /** The F-15 pin: equal provenance, left arm `Filter(X > 1)` under `Filter(Y > 0)`. */
+        const val F15_QUERY = "q(X, Y) :- e(X, Y), X > 1, Y > 0, not e(Y, X)."
+
+        /** [F15_QUERY] with the comparisons swapped: the dropping filter sits next to the gate. */
+        const val F15_HOP_CONTROL_QUERY = "q(X, Y) :- e(X, Y), Y > 0, X > 1, not e(Y, X)."
 
         /** The phantom-edge case: `f` feeds only the antijoin's left arm. */
         const val PHANTOM_QUERY = "q(X, Z) :- e(X, Y), f(Y, Z), not e(X, Z)."

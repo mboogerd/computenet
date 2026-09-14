@@ -612,18 +612,28 @@ and `OuterJoin`, which reuse the rule; all three now run ungated with a
 `GateNotProvable` naming the phantom edge, pinned with the gate forced on in
 `GatingEvidenceTest`. `GatingEvidenceTest` (`:query`) makes that rule checkable
 on a live `SimWorld` host. With the gate forced on in test scope,
-`q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` (left arm
-`src:e → FilterCell → JoinSetCell`, the join's other inlet fed by `f`)
-reproduces this finding through a `FilterCell`→`JoinSetCell` arm. A last
-`e`-removal that the filter drops stays buffered at rest, and the answer it
-re-admits is missing from `q`. The shipped ungated lowering answers correctly
-on the same script. The depth-two self-join
-`q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z).` does **not** reproduce it
-when forced. There `src:e` also feeds the join's other inlet, so the join
-absorb-acks straight onto the gated edge, which is this entry's safe case.
-Depth two is therefore the conservative proxy the rule claims to be, not the
-exact condition: the precise one is whether the silent arm has any other path
-from the root. The rule was not widened. Only these two shapes were measured.
+`q(X, Y) :- e(X, Y), X > 1, Y > 0, not e(Y, X).` (arms `{e}` and `{e}`, so
+no phantom edge; left arm `src:e → FilterCell(X > 1) → FilterCell(Y > 0)`)
+reproduces this finding (computenet-cab.4.9). After `e.add(2,1)` nothing is
+buffered; `e.add(1,2)` then blocks `(2,1)`, the inner filter drops it on the
+left arm and its absorb-ack dies at the outer filter, so the wave stays
+buffered at rest and the stale `(2,1)` stays in `q`. The shipped ungated
+lowering retracts it. Swapping the two comparisons, so the filter that drops
+`(1,2)` links straight into the gate, settles that wave with nothing buffered;
+the swapped shape is not safe to gate either, because a final `e.add(5,-1)`
+that its now-inner `Y > 0` filter drops is still held at rest (its answer set
+stays equal to the batch fold, since such a row blocks nothing the arm
+carries). The depth-two
+self-join `q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z).` does **not**
+reproduce it when forced either: `src:e` also feeds the join's other inlet, so
+the join absorb-acks straight onto the gated edge, which is this entry's safe
+case. Depth two is therefore the conservative proxy the rule claims to be, not
+the exact condition: the precise one is how deep the absorber sits on the
+silent arm. The rule was not widened. Only these three shapes were measured.
+An earlier version of this paragraph (computenet-cab.4.5) cited
+`q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` as the reproduction; that
+shape does not isolate this finding, because its forced gate already withholds
+from `f`'s phantom expected edge before any wave the filter drops.
 
 ## F-16 — BS-10 measured: the AGO1 pipeline's incremental credences equal the batch fold exactly on DAG transcripts, and sit 112x inside the cyclic bound
 

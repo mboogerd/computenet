@@ -43,14 +43,21 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  *    reported [LoweringDiagnostic.GateNotProvable].
  *
  * Limit of the claim: (2) and (3) together are a sufficient condition read from the kernel's
- * documented mechanism, measured only for the shapes computenet-23bf, computenet-cab.4.5 and
- * computenet-cab.4.8 ran (`GatingEvidenceTest`) — it is not a proof over every plan shape. An
+ * documented mechanism, measured only for the shapes computenet-23bf, computenet-cab.4.5,
+ * computenet-cab.4.8 and computenet-cab.4.9 ran (`GatingEvidenceTest`) — it is not a proof over every plan shape. An
  * earlier version of this paragraph claimed the intersect-plus-depth rule "can withhold a gate
  * that would have been safe, never grant one that is not"; the unequal-provenance case above
  * falsified that, so treat a newly found withholding shape as a gap in this rule, not in the
- * kernel. Both checks are conservative in the direction they are known to err — depth is the
- * maximum over every child, not only the children carrying the shared relation, and equality
- * refuses arms that differ in a source even where that source's waves happen to be acked.
+ * kernel. The depth check is conservative: what withholds is an absorbing operator with a
+ * further hop below it, not the arm's depth as such, and depth is the maximum over every
+ * child, not only the children carrying the shared relation. `GatingEvidenceTest` measures
+ * both sides on one equal-provenance two-`Filter` arm (computenet-cab.4.9): with the gate
+ * forced on, a wave the inner filter drops is held at rest and a wave the outer filter drops
+ * settles. No over-refusal by the depth check is measured: every two-`Filter` arm has an inner
+ * filter, and the swapped shape still holds an inner-dropped final wave at rest (its answers
+ * happen to stay equal to the batch fold on the scripts run). The equality check claims no
+ * such over-refusal: per `WaveGate` G-13 a one-arm-only source's waves never reach the other
+ * inlet, so neither an ack nor a later wave of that source can release them there.
  */
 object Gating {
 
