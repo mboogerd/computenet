@@ -963,11 +963,38 @@ with _tf.TemporaryDirectory() as _d:
 
 dir_claim_cases_n = len(dir_claim_cases) + 7
 
+# --- drop_unmerged_blocked(): routes on verify-ready.sh (computenet-frxh6) ----
+class _Out:
+    def __init__(self, rc, out): self.returncode, self.stdout = rc, out
+_saved_run = nb.subprocess.run
+_vr_cands = [(t("a", "x/A.kt"), False), (t("b", "x/B.kt"), False), (t("r", "x/R.kt"), True)]
+_seen_args = []
+def _vr(args, **k):
+    _seen_args.append(args)
+    return _Out(0, "READY a\nBLOCKED b by:\n    c.1 (closed) [unmerged on c]\n")
+nb.subprocess.run = _vr
+try:
+    _kept, _skip = nb.drop_unmerged_blocked(_vr_cands)
+    nb.subprocess.run = lambda *a, **k: _Out(3, "")
+    _kept3, _skip3 = nb.drop_unmerged_blocked(_vr_cands)
+finally:
+    nb.subprocess.run = _saved_run
+unmerged_cases = [
+    ([x["id"] for x, _ in _kept] == ["a", "r"], "BLOCKED candidate is dropped, READY and resumed kept"),
+    (_skip == [{"id": "b", "reason": "blocked (verify-ready): c.1 (closed) [unmerged on c]"}], "skip names the unmerged feature"),
+    ("r" not in _seen_args[0], "resumed tasks are not re-checked"),
+    (len(_kept3) == 3 and _skip3 == [], "a failed check drops nothing"),
+]
+for ok_, what in unmerged_cases:
+    if not ok_:
+        failed += 1
+        print(f"FAIL: {what}")
+
 total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n
          + lag_cases
-         + elsewhere_cases)
+         + elsewhere_cases + len(unmerged_cases))
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

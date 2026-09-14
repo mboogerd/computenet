@@ -24,6 +24,12 @@
 # type is blocks/conditional-blocks AND its target is neither closed nor
 # pinned. No denormalized column is consulted.
 #
+# A CLOSED blocker still blocks when it is a task under a DIFFERENT feature that
+# is not itself closed: a task closes when it merges into ITS feature branch, so
+# its code is on that branch, not on main and not on this task's feature branch
+# (computenet-frxh6: cab.6.5 read READY while QueryCompiler existed only on
+# feature/computenet-cab.5). Such lines are suffixed `[unmerged on <feature>]`.
+#
 # Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`.
 # Exit: 0 = at least one READY; 1 = none ready; 2 = bad usage;
 #       3 = a `bd dep list` call failed — NOTHING was checked, do not route
@@ -40,6 +46,19 @@ for id in "$@"; do
   live=$(printf '%s\n' "$deps" \
          | grep -E 'via (blocks|conditional-blocks)$' \
          | grep -vE '\((closed|pinned)\) via ' || true)
+  own_parent=
+  for dep in $(printf '%s\n' "$deps" | grep -E 'via (blocks|conditional-blocks)$' \
+               | grep -E '\(closed\) via ' | sed -E 's/^ *([^: ]+):.*/\1/'); do
+    [ -n "$own_parent" ] || own_parent=$(bd show "$id" --json 2>/dev/null \
+      | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // "-"')
+    dep_parent=$(bd show "$dep" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // empty')
+    [ -n "$dep_parent" ] && [ "$dep_parent" != "$own_parent" ] || continue
+    fp=$(bd show "$dep_parent" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+         | jq -r '.[0] | select(.issue_type == "feature" and .status != "closed") | .id')
+    [ -n "$fp" ] || continue
+    live="${live:+$live
+}  $dep (closed) [unmerged on $fp]"
+  done
   if [ -n "$live" ]; then
     echo "BLOCKED $id by:"
     printf '%s\n' "$live" | sed 's/^ */    /'
