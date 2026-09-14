@@ -34,12 +34,20 @@ plugins {
 // stable name across both transports at one listener, and a test that proves
 // that must dial both. `runtimeClasspath` and `compileClasspath` carry no
 // `:wire`; nothing under `src/main` may import `civictech.wire`.
+//
+// `:wire` declares java-websocket as `implementation` (deliberately — it is not
+// part of `:wire`'s API surface), but `WsTransport.WsListener`/`WsConnection`
+// extend its `WebSocketServer`/`WebSocketClient`, so a consumer compiling
+// against them needs it on the compile classpath — the same explicit edge
+// `:demo:shopping`, `:demo:exchange`, `:demo:tiering` and `:demo:beadsmirror`
+// declare. Test scope here, like `:wire` itself.
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":identity"))
 
     testImplementation(project(":testkit"))
     testImplementation(project(":wire"))
+    testImplementation(libs.java.websocket)
 }
 
 if (project.hasProperty("iroh.enabled")) {
