@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-dotted-ids.sh. Stubs `bd` on PATH. Expect "13 passed, 0 failed".
+# Tests for check-dotted-ids.sh. Stubs `bd` on PATH. Expect "14 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-dotted-ids.sh"}
@@ -128,6 +128,13 @@ echo '[{"id":"computenet-f7h.8","created_by":"MacBoo","created_at":"2026-09-14T0
 out=$("$SCRIPT" 2>&1); st=$?
 [ "$st" = 0 ] && grep -q "computenet-f7h.8  minted 2026-09-14T09:12:00Z by MacBoo" <<<"$out" \
   && ok "flagged id carries its mint time and actor" || bad "attribution: exit=$st out=$out"
+
+# 12. an empty created_at still renders a readable token, not a blank gap
+fixture
+echo '[{"id":"computenet-f7h.8","created_by":"MacBoo","created_at":""}]' > "$CTRL/list.json"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 0 ] && grep -q "computenet-f7h.8  minted unknown by MacBoo" <<<"$out" \
+  && ok "empty created_at renders as unknown" || bad "empty-created_at: exit=$st out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

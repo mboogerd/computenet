@@ -103,6 +103,7 @@ for parent in $(for id in $dotted; do echo "${id%.*}"; done | sort -u); do
   for id in $dotted; do
     [ "${id%.*}" = "$parent" ] || continue
     when=$(printf '%s\n' "$minted" | awk -v i="$id" '$1 == i { print $2 }')
+    when=${when:-unknown}
     flagged="$flagged  $id  minted $when by $BEADS_ACTOR  (parent $parent held by ${owner:-nobody})
 "
   done
