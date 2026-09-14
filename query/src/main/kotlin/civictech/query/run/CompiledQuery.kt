@@ -57,7 +57,7 @@ data class CompiledQuery(
         /**
          * Builds a [CompiledQuery] from a successful [Lowering.lower][civictech.query.lower.Lowering.lower]
          * result and the [plan] it lowered. [LoweringResult.Refused] has no `CompiledQuery` to
-         * build — mapping it to a rejection is computenet-cab.5's, not this function's.
+         * build — `civictech.query.QueryCompiler` maps it to `NO_LOWERING` rejections instead.
          */
         fun from(lowered: LoweringResult.Lowered, plan: LogicalPlan): CompiledQuery {
             val outputShapes = lowered.outputHandles.keys.associateWith { root ->
