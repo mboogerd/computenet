@@ -10976,12 +10976,21 @@ delivery. **Phase-1 (landed)**: the transport connection *vouches* for the name
 (`TransportVouched`). **Phase-2 (landed — DSC1, `computenet-ssa`)**: `PeerId` today
 resolves 1:1 from an Ed25519 **public key**'s fingerprint, via the interim
 `PeerIdentityBinding` (`computenet-376c`); the hello adds a signed-nonce
-challenge; a verified peer is `Authenticated`. The *policy vocabulary is
+challenge; a hello whose signature verifies promotes to `Authenticated`
+**under either `PeerAuthPolicy`** (`WsTransport.Session.onProof`, unconditional
+on `Side.auth`) — the policy governs only what an *unverified* hello is
+allowed, not what a verified one earns. The *policy vocabulary is
 stable across the upgrade* — predicates read `Principal`; only the strength that
-`AuthLevel` certifies changes. This is the P7-compatible phasing: open-by-default and
-transport-vouched under `PeerAuthPolicy.Open` (still the default), key-authenticated under
-`PeerAuthPolicy.RequireAuthenticated` — **no central lookup service, no global identity
-registry** (P4, P10). Sybil resistance = the *cost* of minting an `Authenticated` identity
+`AuthLevel` certifies changes. This is the P7-compatible phasing: on an
+Interim-bound side, `PeerAuthPolicy.Open` (still the default) still admits an
+unauthenticated (legacy or uncredentialed) hello at `TransportVouched`, while
+`PeerAuthPolicy.RequireAuthenticated` refuses that same hello `AUTH_REQUIRED`
+(`WsTransport.Session.onLegacyHello`) so every peer admitted under it is
+`Authenticated` — **no central lookup service, no global identity
+registry** (P4, P10). An anchor-bound side (`AnchorVouchedBinding`) is not
+byte-for-byte under either policy: a statement-less hello is refused
+`UNVOUCHED` independent of `PeerAuthPolicy` (43-security.md §G-29, §Phasing).
+Sybil resistance = the *cost* of minting an `Authenticated` identity
 plus per-`Principal` quotas (§4.4).
 
 **Identity-is-key is no longer the forward position.** The maintainer decided otherwise
@@ -11115,12 +11124,19 @@ class*:
    stays "reuses dataflow + gossip; no second sync protocol."
 
 7. **Authentication strength is phased behind a stable vocabulary.** Predicates read
-   `Principal`/`AuthLevel`; by default (`PeerAuthPolicy.Open`) bridge peers stay
-   `TransportVouched` and `minAuth` defaults let them through; under
-   `PeerAuthPolicy.RequireAuthenticated` (phase 2, landed — DSC1) a verified hello
-   promotes peers to `Authenticated`, unlocking the predicates (`integrity`,
-   high-`minAuth` protocol authority) that
-   transport-vouched identity cannot safely satisfy. Encryption-in-transit stays transport
+   `Principal`/`AuthLevel`; a verified hello promotes a crossing to `Authenticated`
+   **under either `PeerAuthPolicy`** (phase 2, landed — DSC1; `WsTransport.Session.onProof`,
+   unconditional on `Side.auth`) — the policy governs only whether an *unverified* hello is
+   tolerated, not what a verified one earns. On an Interim-bound side, by default
+   (`PeerAuthPolicy.Open`) an unauthenticated (legacy or uncredentialed) hello is still
+   admitted at `TransportVouched` and `minAuth` defaults let it through, byte-for-byte
+   unchanged; under `PeerAuthPolicy.RequireAuthenticated` that same hello is refused
+   `AUTH_REQUIRED` instead, so every peer admitted under that policy is `Authenticated`,
+   unlocking the predicates (`integrity`, high-`minAuth` protocol authority) that
+   transport-vouched identity cannot safely satisfy. An anchor-bound side
+   (`AnchorVouchedBinding`) is not byte-for-byte under either policy: a statement-less
+   hello is refused `UNVOUCHED` independent of `PeerAuthPolicy` (43-security.md §G-29,
+   §Phasing). Encryption-in-transit stays transport
    config (`wss://`, `40/43`); encryption-at-rest remains a follow-on (§8).
 
 ##### 4.5 The load-bearing summary
