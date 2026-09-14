@@ -658,6 +658,31 @@ private fun exprColumns(expr: RelationalExpr): List<String> = when (expr) {
 }
 
 /**
+ * The rename an outer join's right operand undergoes when merged against [leftColumns] (this
+ * file's "Definition column naming" KDoc): a right key variable — paired with its left key
+ * variable positionally via [leftKeys]/[rightKeys] — is substituted to that left key variable,
+ * so the merged join key is one column under the left's name; any other right column
+ * ([rightColumns]) that merely collides with a left column's name is renamed apart
+ * (`name!scopeTag`, which no surface identifier can be), because only the `on` clause is meant
+ * to merge columns. Shared with [civictech.query.parse.WellFormednessAnalysis], whose
+ * definition-arity check must compute the same exposed columns as [normalizeExpr]/[exprColumns]
+ * do here, or a change to this rename could pass planning while the analysis still accepts (or
+ * rejects) a definition by the old rule.
+ */
+internal fun outerJoinRightRename(
+    leftColumns: List<String>,
+    rightColumns: List<String>,
+    leftKeys: List<String>,
+    rightKeys: List<String>,
+    scopeTag: String,
+): Map<String, String> {
+    val keyTarget = rightKeys.zip(leftKeys).toMap()
+    return rightColumns.associateWith { column ->
+        keyTarget[column] ?: if (column in leftColumns) "$column!$scopeTag" else column
+    }
+}
+
+/**
  * Rewrites [expr] so every operator's operands agree on column names without a rename node:
  * a set operation's right operand is substituted positionally to its left operand's columns,
  * and an outer join's right operand has each key variable substituted by its left key
@@ -695,10 +720,7 @@ private fun normalizeExpr(expr: RelationalExpr, scopeTag: String): RelationalExp
             "Planner does not support an outer join key column used twice: " +
                 expr.on.map { "${it.left.name} = ${it.right.name}" }
         }
-        val keyTarget = rightKeys.zip(leftKeys).toMap()
-        val substitution = rightColumns.associateWith { column ->
-            keyTarget[column] ?: if (column in leftColumns) "$column!$scopeTag" else column
-        }
+        val substitution = outerJoinRightRename(leftColumns, rightColumns, leftKeys, rightKeys, scopeTag)
         val merged = leftKeys.map { Term.Var(it) }
         expr.copy(
             left = left,

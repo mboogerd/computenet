@@ -240,4 +240,38 @@ class WellFormednessAnalysisTest {
         val parse = parsed(source, catalog("r" to 2, "s" to 1))
         WellFormednessAnalysis.analyze(parse.query, parse.spans).shouldBeEmpty()
     }
+
+    // ------------------------------------------------------ shared with Planner.normalizeExpr
+
+    /**
+     * `define o(X, Y, Z) := t(X, Y) left outer join t(Y, X) on X = Y.`: the outer join's key
+     * merges the right's `Y` onto the left's `X`; the right's other column, `X`, is not a key
+     * but collides with the left's own `X` and must be renamed apart (`civictech.query.plan`'s
+     * `outerJoinRightRename`), so the expression exposes 3 columns — `X, Y` from the left plus
+     * the renamed-apart right `X` — matching the head's declared arity. This is the query the
+     * discovering review (computenet-cab.5.1) used to show the analysis's copy of this rule
+     * could drift from the planner's; it is now a call to the same function, so mutating that
+     * rename (e.g. dropping the "renamed apart" branch, merging the colliding column away
+     * instead) fails this test rather than only the totality corpus.
+     */
+    @Test
+    fun `outer join right column colliding with a left column is renamed apart, not merged away`() {
+        val source = "define o(X, Y, Z) := t(X, Y) left outer join t(Y, X) on X = Y."
+        val parse = parsed(source, catalog("t" to 2))
+        WellFormednessAnalysis.analyze(parse.query, parse.spans).shouldBeEmpty()
+    }
+
+    /**
+     * `define h(X) := r(X, X).`: the leaf atom's two terms are the same variable, so it exposes
+     * one distinct column, matching the head's declared arity of 1. If the Relation branch of
+     * `columnsOf` counted terms instead of distinct variables (e.g. `.distinct()` dropped), it
+     * would expose 2 columns and this well-formed definition would be falsely rejected as
+     * ARITY_MISMATCH.
+     */
+    @Test
+    fun `a relation's repeated variable is counted once, not per occurrence`() {
+        val source = "define h(X) := r(X, X)."
+        val parse = parsed(source, catalog("r" to 2))
+        WellFormednessAnalysis.analyze(parse.query, parse.spans).shouldBeEmpty()
+    }
 }
