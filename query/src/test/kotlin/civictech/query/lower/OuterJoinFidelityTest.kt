@@ -173,6 +173,40 @@ class OuterJoinFidelityTest {
     }
 
     @Test
+    fun `each keyed cell reads its own inlet's key position - RIGHT and FULL swap keys exactly as RelationalGraphs does`() {
+        // The key column sits at a DIFFERENT index on each side, so a RowKey handed to the wrong
+        // inlet is a different data value (the fidelity test above cannot see this: its fixture
+        // keys both sides at index 0, and the kernel's key lambdas cannot be compared).
+        val l = listOf("a", "k")
+        val r = listOf("k", "b")
+        val lKey = RowKey(l, listOf("k"))
+        val rKey = RowKey(r, listOf("k"))
+        fun keyed(side: OuterJoinSide): Map<String, Any> {
+            val node = OuterJoin(
+                f.scan("l", "a", "k"), f.scan("r", "k", "b"), listOf(JoinKey("k", "k")), side,
+                outColumns, setOf("l", "r"), false,
+            )
+            return f.spawns(f.lowered(LogicalPlan(mapOf("q" to node)), f.catalog("l" to 2, "r" to 2)).spec.steps)
+                .filter { it.factory is JoinFactory || it.factory is SemiJoinFactory }
+                .associate { it.handle.removePrefix(nodeHandle) to it.factory }
+        }
+        // Disjoint sources: every antijoin is ungated (emitOnFrontier = false).
+        keyed(OuterJoinSide.LEFT) shouldBe mapOf(
+            "-matched" to JoinFactory(lKey, rKey, civictech.query.expr.RowCombine(l, r, outColumns)),
+            "-unmatched" to SemiJoinFactory(lKey, rKey, true, false),
+        )
+        keyed(OuterJoinSide.RIGHT) shouldBe mapOf(
+            "-matched" to JoinFactory(rKey, lKey, civictech.query.expr.RowCombine(r, l, outColumns)),
+            "-unmatched" to SemiJoinFactory(rKey, lKey, true, false),
+        )
+        keyed(OuterJoinSide.FULL) shouldBe mapOf(
+            "-matched" to JoinFactory(lKey, rKey, civictech.query.expr.RowCombine(l, r, outColumns)),
+            "-left-only" to SemiJoinFactory(lKey, rKey, true, false),
+            "-right-only" to SemiJoinFactory(rKey, lKey, true, false),
+        )
+    }
+
+    @Test
     fun `an outer join whose key names no input column is refused, not thrown`() {
         val bad = OuterJoin(
             f.scan("l", "k", "a"), f.scan("r", "k", "b"), listOf(JoinKey("z", "z")), OuterJoinSide.LEFT,
