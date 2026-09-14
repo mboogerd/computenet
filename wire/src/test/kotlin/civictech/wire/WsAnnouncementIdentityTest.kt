@@ -116,7 +116,7 @@ class WsAnnouncementIdentityTest {
             .withVerifier(connectionBoundVerifier(identityB.peerId, identityB.publicKey))
 
         val frame = signedFrame(identityB)
-        gate.check(boundPeer = identityB.peerId, frame = frame).shouldBeNull()
+        gate.check(boundPeer = identityB.peerId, boundKey = identityB.keyId, frame = frame).shouldBeNull()
         gate.rejectedAnnouncements shouldBe 0L
         gate.highWaterFor(identityB.peerId) shouldBe frame.sigCounter
     }
@@ -137,7 +137,7 @@ class WsAnnouncementIdentityTest {
         val gate = receivingSide().announcementAdmission!!
             .withVerifier(connectionBoundVerifier(identityA.peerId, identityA.publicKey))
 
-        val rejection = gate.check(boundPeer = identityA.peerId, frame = signedFrame(identityB))!!
+        val rejection = gate.check(boundPeer = identityA.peerId, boundKey = identityA.keyId, frame = signedFrame(identityB))!!
 
         rejection.reason shouldBe DenialReason.ID_MISMATCH
         rejection.detail shouldContain identityB.peerId.name
@@ -154,7 +154,7 @@ class WsAnnouncementIdentityTest {
             .withVerifier(connectionBoundVerifier(identityA.peerId, identityA.publicKey))
 
         val forged = signedFrame(identityB).copy(signerKeyId = identityA.peerId.name)
-        val rejection = gate.check(boundPeer = identityA.peerId, frame = forged)!!
+        val rejection = gate.check(boundPeer = identityA.peerId, boundKey = identityA.keyId, frame = forged)!!
 
         rejection.reason shouldBe DenialReason.BAD_SIGNATURE
         gate.highWaterFor(identityA.peerId).shouldBeNull()

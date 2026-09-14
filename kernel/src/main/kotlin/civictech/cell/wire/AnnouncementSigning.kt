@@ -132,7 +132,12 @@ fun announcementCounterFloor(incarnation: Long): Long {
  *   from [PeerCredentials.peerId]; under the interim
  *   `civictech.cell.link.PeerIdentityBinding` the two carry the same string,
  *   so the emitted field is byte-identical to what the old
- *   `credentials.peerId.name` default produced.
+ *   `credentials.peerId.name` default produced. The receiver reads no identity
+ *   out of it (feature `computenet-5y8t.7`): [AnnouncementAdmission.check]
+ *   holds it to the key the connection was proven on, refusing any other key
+ *   `ID_MISMATCH`, and rebuilds the signed bytes over the connection's bound
+ *   identity — which is why [AnnouncementSigner.sign] signs over
+ *   [PeerCredentials.peerId] and not over this key name.
  * @property incarnation which *run* of this signing identity's process this
  *   signer belongs to, read **once**, at construction. See
  *   [AnnouncementSigner.counterFloor] for what it buys and what it assumes.

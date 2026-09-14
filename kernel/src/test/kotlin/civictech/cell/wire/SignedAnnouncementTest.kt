@@ -129,6 +129,20 @@ class SignedAnnouncementTest {
         override fun sign(message: ByteArray): ByteArray = identity.sign(message)
     }
 
+    /**
+     * A **named** peer's credentials (feature `computenet-5y8t.7`): a stable
+     * [peerId] that is *not* derived from the key, beside the key's real
+     * fingerprint as [keyId] — exactly the split a named `PeerIdentity` carries
+     * (epic `computenet-5y8t`), built here without that constructor. What the
+     * signer puts on the wire is therefore `signerKeyId = fingerprint(key)`
+     * while the bytes it signs commit to `mintingPeerId = peerId`.
+     */
+    private class Named(override val peerId: PeerId, private val identity: PeerIdentity) : PeerCredentials {
+        override val keyId: KeyId = identity.keyId
+        override val publicKey: ByteArray = identity.publicKey.encoded
+        override fun sign(message: ByteArray): ByteArray = identity.sign(message)
+    }
+
     /** A clock a test moves by hand — nothing in this file sleeps ([DSC1-ANN-07]). */
     private class TestClock(var now: Long = 1_700_000_000_000L) : () -> Long {
         override fun invoke(): Long = now
@@ -204,6 +218,18 @@ class SignedAnnouncementTest {
     private inner class Rig(
         boundPeer: PeerId?,
         verification: AnnouncementVerification? = verification(),
+        /**
+         * The key the connection was proven on. Defaults to `KeyId(boundPeer.name)`
+         * — the same interim double [Keys] uses — so every key-derived case keeps
+         * its verdict under the key-held binding check (feature `computenet-5y8t.7`).
+         */
+        boundKey: KeyId? = boundPeer?.let { KeyId(it.name) },
+        /**
+         * Which admission this connection judges with; defaults to the side's own.
+         * A named case rebinds it with `withVerifier`, the way `WsTransport` binds
+         * a connection to the key its hello proved — the same ledger either way.
+         */
+        admission: (Peering.Side) -> AnnouncementAdmission? = { it.announcementAdmission },
     ) {
         val controller = SimulationController(0)
         val registry = LocationRegistry()
@@ -225,7 +251,12 @@ class SignedAnnouncementTest {
          * `Peering.hostIngress` a loopback and `WsTransport` both use, so a
          * frame pushed here travels the production path.
          */
-        var ingress: Propagate<ByteArray> = Peering.hostIngress(side, fromPeer = boundPeer)
+        var ingress: Propagate<ByteArray> = Peering.hostIngress(
+            side,
+            fromPeer = boundPeer,
+            fromKey = boundKey,
+            announcementAdmission = admission(side),
+        )
             private set
 
         val ingressCells = CopyOnWriteArrayList<BridgeIngressCell>()
@@ -244,8 +275,18 @@ class SignedAnnouncementTest {
         }
 
         /** What a reconnect does: a brand-new ingress cell on the same [Peering.Side]. */
-        fun replaceIngress(boundPeer: PeerId?) {
-            ingress = Peering.hostIngress(side, fromPeer = boundPeer, onSpawn = { ingressCells += it })
+        fun replaceIngress(
+            boundPeer: PeerId?,
+            boundKey: KeyId? = boundPeer?.let { KeyId(it.name) },
+            admission: (Peering.Side) -> AnnouncementAdmission? = { it.announcementAdmission },
+        ) {
+            ingress = Peering.hostIngress(
+                side,
+                fromPeer = boundPeer,
+                fromKey = boundKey,
+                announcementAdmission = admission(side),
+                onSpawn = { ingressCells += it },
+            )
         }
 
         fun feed(bytes: ByteArray) {
@@ -801,26 +842,29 @@ class SignedAnnouncementTest {
      * admit it. It arrives on the connection bound to A, and is refused
      * [DenialReason.ID_MISMATCH].
      *
-     * **This case does not pin the check ORDER, and does not claim to.** The
-     * verifier injected here resolves keys from a directory holding both A and
-     * B, so B's signature verifies `true` and the binding check reports
-     * ID_MISMATCH whether it runs before or after the verify — measured at
-     * review by moving the ID_MISMATCH blocks below the verify call, which
-     * compiles and leaves all ten cases in this file green. What this case does
-     * pin is that the binding is checked *at all* (see the mutation note
-     * below). The ordering argument in [AnnouncementAdmission]'s KDoc is about a
-     * connection-keyed verifier, which is task 4's shape and not this file's.
+     * **This case was not written to pin the check ORDER.** Before feature
+     * `computenet-5y8t.7` the directory verifier here was asked about the
+     * frame's claimed minting peer B, so B's signature verified `true` and the
+     * binding check reported ID_MISMATCH on either side of the verify call
+     * (measured then). Since that feature the verifier is asked about the bound
+     * identity A, so B's signature verifies `false` and a verify-first order
+     * reports BAD_SIGNATURE here too — measured at the `computenet-5y8t.7.1`
+     * review by moving the `KeyId(signerKeyId) != boundKey` block below the
+     * verify call: this case goes red at its `reason` line, so it now pins the
+     * order as well as `:wire`'s `WsAnnouncementIdentityTest` does.
      *
      * The discriminating half is the second feed: **the very same bytes** are
      * accepted on a connection bound to B. So the refusal is about the
      * connection, not about the frame.
      *
-     * Mutation-checked, measured: deleting the `mintingPeer != boundPeer`
-     * branch in [AnnouncementAdmission] compiles, and the frame is then
-     * *accepted* here — B's signature verifies under B's key, which the
-     * receiver knows — so no denial is recorded at all. Two tests go red and no
-     * others: this one, and the secrecy test below, which uses an ID_MISMATCH
-     * refusal as the dead letter it inspects.
+     * Mutation-checked, measured under `computenet-5y8t.7`: deleting the
+     * `KeyId(signerKeyId) != boundKey` branch in [AnnouncementAdmission]
+     * compiles, and the frame is then refused BAD_SIGNATURE instead — the
+     * signed bytes are rebuilt over A, the bound identity, and B's signature
+     * does not verify over them. Three tests in this file go red and no others:
+     * this one (at the `reason` line), the named-peer key-mismatch case, and the
+     * secrecy test below, whose BAD_SIGNATURE detail no longer names B. `:wire`'s
+     * `WsAnnouncementIdentityTest` ordering case goes red the same way.
      */
     @Test
     fun `BS-08 a validly signed announcement minted by B on A's connection is ID_MISMATCH`() {
@@ -943,8 +987,9 @@ class SignedAnnouncementTest {
      * The other half of the criterion, and the half the ordering decision is
      * about: an ill-formed **minting peer name**.
      *
-     * `signerKeyId` is the minting identity's name, and an ill-formed one can
-     * never equal the connection's bound peer — so with the well-formedness
+     * `signerKeyId` names the signing key (feature `computenet-5y8t.7`; it is no
+     * longer read as the minting identity's name), and an ill-formed one can
+     * never equal the key the connection was proven on — so with the well-formedness
      * check placed after the binding check this frame would report
      * [DenialReason.ID_MISMATCH], which is true and useless: it invites an
      * operator to hunt an impersonation attempt when what arrived is a name no
@@ -967,7 +1012,7 @@ class SignedAnnouncementTest {
         rig.lastDenial().reason shouldBe DenialReason.MALFORMED_ANNOUNCEMENT
         rig.registrySnapshot() shouldBe before
         rig.rejected shouldBe 1L
-        rig.lastDenial().detail shouldContain "mintingPeerId.name"
+        rig.lastDenial().detail shouldContain "signerKeyId"
         rig.lastDenial().detail shouldContain "index 8"
     }
 
@@ -996,6 +1041,153 @@ class SignedAnnouncementTest {
         // and not the well-formed remainder either: the field/index/length the
         // encoder's own message names is what an operator acts on
         rendered shouldNotContain "orders/"
+    }
+
+    // ============================== named peers, computenet-5y8t.7
+
+    private val alice = PeerId("alice")
+    private val aliceKey1 = identity("5y8t-7-alice-k1")
+    private val aliceKey2 = identity("5y8t-7-alice-k2")
+
+    /**
+     * An admission for a connection bound to [peer] and proven on [key]: the
+     * side's own ledger rebound to a verifier that resolves [peer] to exactly
+     * that key — `WsTransport`'s `withVerifier` shape, built from this file's
+     * real Ed25519 seam.
+     */
+    private fun boundTo(peer: PeerId, key: PeerIdentity): (Peering.Side) -> AnnouncementAdmission? = { side ->
+        side.announcementAdmission!!.withVerifier(verification(keys = mapOf(peer to key.publicKey)).verifier)
+    }
+
+    private fun aliceRig(key: PeerIdentity = aliceKey1) =
+        Rig(boundPeer = alice, boundKey = key.keyId, admission = boundTo(alice, key))
+
+    private fun counterOf(frame: ByteArray): Long = WireCodec.decodeFrame(frame).frame.sigCounter!!
+
+    /**
+     * Feature `computenet-5y8t.7`, decision D1: a **named** peer's signed
+     * announcement is admitted. The frame carries `signerKeyId =
+     * fingerprint(K1)` and signs over `mintingPeerId = alice`; the gate reads no
+     * identity out of the frame, holds K1 to the key the connection was proven
+     * on, rebuilds the bytes over the bound name, and keeps the replay mark
+     * under the name — not under the key's fingerprint.
+     */
+    @Test
+    fun `a named peer's signed announcement is admitted under its bound name, not its key`() {
+        val rig = aliceRig()
+        val sender = Sender(Named(alice, aliceKey1), signingConfig(incarnation = { 1L }))
+        val ref = CellRef(UUID.randomUUID())
+        val frame = sender.publish(rig.mirror.ref, ref)
+        WireCodec.decodeFrame(frame).frame.signerKeyId shouldBe aliceKey1.keyId.name
+
+        rig.feed(frame)
+
+        rig.deadLetters.shouldBeEmpty()
+        rig.rejected shouldBe 0L
+        rig.registry.remoteRefs() shouldContain ref
+        (rig.registry.location(ref) as LocationRegistry.Remote).peer shouldBe alice
+        val admission = rig.side.announcementAdmission!!
+        admission.highWaterFor(alice) shouldBe counterOf(frame)
+        admission.highWaterFor(PeerId(aliceKey1.keyId.name)) shouldBe null
+    }
+
+    /**
+     * The binding check is re-keyed, not removed (feature `computenet-5y8t.7`,
+     * criterion 2): on alice's connection proven on K1, a frame signed by K2 —
+     * over alice's name, so only the key differs — is ID_MISMATCH, and the
+     * detail names both key ids and the bound identity.
+     */
+    @Test
+    fun `a named peer's announcement signed by a key the connection was not proven on is ID_MISMATCH`() {
+        val rig = aliceRig()
+        rig.feed(Sender(Named(alice, aliceKey1), signingConfig(incarnation = { 1L })).publish(rig.mirror.ref))
+        rig.rejected shouldBe 0L
+        val highWater = rig.side.announcementAdmission!!.highWaterFor(alice).shouldNotBeNull()
+        val before = rig.registrySnapshot()
+
+        rig.feed(Sender(Named(alice, aliceKey2), signingConfig(incarnation = { 2L })).publish(rig.mirror.ref))
+
+        val denial = rig.lastDenial()
+        denial.reason shouldBe DenialReason.ID_MISMATCH
+        denial.detail!! shouldContain aliceKey1.keyId.name
+        denial.detail!! shouldContain aliceKey2.keyId.name
+        denial.detail!! shouldContain alice.name
+        rig.registrySnapshot() shouldBe before
+        rig.rejected shouldBe 1L
+        rig.side.announcementAdmission!!.highWaterFor(alice) shouldBe highWater
+    }
+
+    /**
+     * Decision 5y8t.7-D3: the replay ledger is keyed by **name**, so a name has
+     * one high-water mark across its keys.
+     *
+     * alice announces on K1 at incarnation 1 (first counter
+     * `announcementCounterFloor(1) + 1 = 1048577`). The connection is replaced
+     * by one proven on K2. A K2 signer that restarts its counter at the same
+     * incarnation (first counter 1048577 again) does not exceed the mark alice
+     * already holds and is refused REPLAY; a K2 signer at incarnation 2 (first
+     * counter 2097153) is admitted, and the ledger still tracks one identity.
+     *
+     * **This is the decided fail-closed reading, not a new rule.** It is the same
+     * clause as [AnnouncementSigner.counterFloor]'s backwards-clock restart —
+     * a signer whose floor does not exceed the identity's mark is refused, and
+     * is cured the same way, by a later (or durable) incarnation. It says
+     * nothing about the old key: K1 is not revoked by anything here, and no
+     * claim about revocation ([DSC1-NV-01]) is made or tested.
+     */
+    @Test
+    fun `a named peer's replay mark is kept under its name across a change of key`() {
+        val rig = aliceRig(aliceKey1)
+        val k1Frame = Sender(Named(alice, aliceKey1), signingConfig(incarnation = { 1L })).publish(rig.mirror.ref)
+        counterOf(k1Frame) shouldBe 1_048_577L
+        rig.feed(k1Frame)
+        rig.rejected shouldBe 0L
+
+        rig.replaceIngress(alice, boundKey = aliceKey2.keyId, admission = boundTo(alice, aliceKey2))
+        rig.ingressCells shouldHaveSize 1
+
+        // a K2 signer whose counter floor is the one alice already used: REPLAY
+        val sameIncarnation = Sender(Named(alice, aliceKey2), signingConfig(incarnation = { 1L }))
+        val before = rig.registrySnapshot()
+        val replayed = sameIncarnation.publish(rig.mirror.ref)
+        counterOf(replayed) shouldBe 1_048_577L
+        rig.feed(replayed)
+        rig.rejected shouldBe 1L // first, so an admitted replay fails here and not in lastDenial()
+        rig.lastDenial().reason shouldBe DenialReason.REPLAY
+        rig.lastDenial().detail!! shouldContain alice.name
+        rig.registrySnapshot() shouldBe before
+        rig.side.announcementAdmission!!.highWaterFor(alice) shouldBe 1_048_577L
+
+        // a K2 signer at a later incarnation: admitted, one identity tracked
+        val later = Sender(Named(alice, aliceKey2), signingConfig(incarnation = { 2L }))
+        val laterFrame = later.publish(rig.mirror.ref)
+        counterOf(laterFrame) shouldBe 2_097_153L
+        rig.feed(laterFrame)
+        rig.rejected shouldBe 1L
+        val admission = rig.side.announcementAdmission!!
+        admission.trackedPeers shouldBe 1
+        admission.highWaterFor(alice) shouldBe 2_097_153L
+    }
+
+    /**
+     * Decision 5y8t.7-D4: a connection bound to a peer but proven on no key has
+     * nothing to hold a signer key to, so a signed announcement is ID_MISMATCH
+     * — the sibling of the bound-to-no-peer refusal.
+     */
+    @Test
+    fun `a signed announcement on a connection bound to a peer but to no key is ID_MISMATCH`() {
+        val rig = Rig(boundPeer = peerB, boundKey = null)
+        val before = rig.registrySnapshot()
+
+        rig.feed(Sender(Keys(identityB)).publish(rig.mirror.ref))
+
+        val denial = rig.lastDenial()
+        denial.reason shouldBe DenialReason.ID_MISMATCH
+        denial.detail!! shouldContain "proven on no key"
+        denial.detail!! shouldContain peerB.name
+        rig.registrySnapshot() shouldBe before
+        rig.rejected shouldBe 1L
+        rig.side.announcementAdmission!!.highWaterFor(peerB) shouldBe null
     }
 
     // ================================================================ secrecy

@@ -127,10 +127,14 @@ class BridgeIngressCell(
      */
     private val peerIssuer: IssuerId? = null,
     /**
-     * The **key identifier** this connection was **proven** on — the
-     * informational record of that key, named in the refusal detail and
-     * **judged by nothing** (epic `computenet-5y8t`). Null when the connection
-     * presented no key; that changes no verdict.
+     * The **key identifier** this connection was **proven** on. The
+     * allowlist ([admit]) does not judge it — allowlists name identities
+     * (epic `computenet-5y8t`) — but the announcement gate does: a signed
+     * announcement's `signerKeyId` must name exactly this key, or it is
+     * refused `ID_MISMATCH` (feature `computenet-5y8t.7`, see
+     * [AnnouncementAdmission.check]). Null when the connection presented no
+     * key; that changes no allowlist verdict, and on a side that verifies
+     * announcements it refuses every signed one (decision 5y8t.7-D4).
      *
      * Distinct from [peer] on purpose: the key is what a hello is proven on,
      * [peer] is the identity it resolved to — what every delivery is
@@ -369,7 +373,7 @@ class BridgeIngressCell(
                     // is nothing to discharge, and handing the raw frame bytes over
                     // as the allowlist path does would put the base64 signature into
                     // a dead letter ([DSC1-OBS-05]).
-                    val rejection = gate.check(peer, decodedFrame.frame)
+                    val rejection = gate.check(peer, peerKey, decodedFrame.frame)
                     if (rejection != null) {
                         announcementSink.deny(
                             seam = BoundarySeam.ADMISSION,
