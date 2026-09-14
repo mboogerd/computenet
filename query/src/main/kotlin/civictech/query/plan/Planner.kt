@@ -650,12 +650,25 @@ private fun requireDistinctSetOp(expr: RelationalExpr.SetOp) {
  */
 private fun exprColumns(expr: RelationalExpr): List<String> = when (expr) {
     is RelationalExpr.Relation -> variablesOf(expr.atom)
-    is RelationalExpr.SetOp -> exprColumns(expr.left)
+    is RelationalExpr.SetOp -> setOpColumns(exprColumns(expr.left), exprColumns(expr.right))
     is RelationalExpr.OuterJoin -> {
         val left = exprColumns(expr.left)
         left + exprColumns(expr.right).filter { it !in left }
     }
 }
+
+/**
+ * The columns a set operation exposes (this file's "Definition column naming" KDoc): the left
+ * operand's columns — a set operation is positional, so [rightColumns] contributes no names of
+ * its own, only an arity check ([requireDistinctSetOp]'s size check here,
+ * [civictech.query.parse.WellFormednessAnalysis]'s ARITY_MISMATCH report there); it is a
+ * parameter here only so a caller has it in hand to check before calling, the same shape
+ * [outerJoinRightRename] takes both operands' columns in. Shared with
+ * [civictech.query.parse.WellFormednessAnalysis], whose definition-arity check must compute the
+ * same exposed columns as [normalizeExpr]/[exprColumns] do here, or a change to this rule could
+ * pass planning while the analysis still accepts (or rejects) a definition by the old rule.
+ */
+internal fun setOpColumns(leftColumns: List<String>, rightColumns: List<String>): List<String> = leftColumns
 
 /**
  * The rename an outer join's right operand undergoes when merged against [leftColumns] (this
@@ -703,7 +716,8 @@ private fun normalizeExpr(expr: RelationalExpr, scopeTag: String): RelationalExp
             "${expr.kind} operands have different arity: left $leftColumns (arity " +
                 "${leftColumns.size}) vs right $rightColumns (arity ${rightColumns.size})"
         }
-        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(leftColumns).toMap()))
+        val targetColumns = setOpColumns(leftColumns, rightColumns)
+        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(targetColumns).toMap()))
     }
     is RelationalExpr.OuterJoin -> {
         val left = normalizeExpr(expr.left, "${scopeTag}L/")

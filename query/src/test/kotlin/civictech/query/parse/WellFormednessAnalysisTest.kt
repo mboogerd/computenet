@@ -274,4 +274,22 @@ class WellFormednessAnalysisTest {
         val parse = parsed(source, catalog("r" to 2))
         WellFormednessAnalysis.analyze(parse.query, parse.spans).shouldBeEmpty()
     }
+
+    /**
+     * `define o(X, Y, Z) := (r(X, Y) union s(A, B)) left outer join t(X, Z) on X = X.`: the
+     * union's left operand, `r(X, Y)`, is what the set-operation rule (left operand wins) says
+     * the union exposes (`civictech.query.plan`'s `setOpColumns`), so the enclosing outer join
+     * sees `X, Y` as its left operand's columns and its key `X` resolves against them. If
+     * `columnsOf`'s `SetOp` branch exposed the *right* operand's columns instead (the shape a
+     * mutation of the shared function, or a reintroduced copy, could take), the outer join's `X`
+     * key would no longer be a column of the (wrongly `A, B`) left operand and this well-formed
+     * definition would be falsely rejected as UNPLANNABLE_STATEMENT — so this test discriminates
+     * the rule through the shared function rather than only through the totality corpus.
+     */
+    @Test
+    fun `union's left-operand-wins column feeds a key check in an enclosing outer join`() {
+        val source = "define o(X, Y, Z) := (r(X, Y) union s(A, B)) left outer join t(X, Z) on X = X."
+        val parse = parsed(source, catalog("r" to 2, "s" to 2, "t" to 2))
+        WellFormednessAnalysis.analyze(parse.query, parse.spans).shouldBeEmpty()
+    }
 }
