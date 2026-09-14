@@ -252,8 +252,8 @@ class GatingEvidenceTest {
      *
      * Limit: this measures one equal-provenance shape (a filter-over-filter arm) on seeds
      * [SEEDS]; it shows the depth rule refuses at least one gate that would withhold, not that
-     * every two-deep arm withholds — [F15_HOP_CONTROL_QUERY]'s test is a two-deep arm that does
-     * not. The earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was
+     * every wave on a two-deep arm withholds — [F15_HOP_CONTROL_QUERY]'s test is a two-deep arm
+     * whose outer-dropped wave does not (and whose inner-dropped wave does). The earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was
      * replaced because its forced-gate withholding was already produced by `f`'s phantom
      * expected edge before any F-15 wave (computenet-cab.4.8 task review).
      */
@@ -304,10 +304,18 @@ class GatingEvidenceTest {
      * the OUTER one, which links straight into the gated inlet, so its absorb-ack lands on the
      * expected edge (F-15's safe case). With the gate forced on, the same script settles with
      * nothing buffered and agrees with the batch fold. What discriminates is how deep the
-     * ABSORBER sits, not how deep the arm is — the depth rule is a conservative proxy for it.
+     * absorber of THAT WAVE sits, not how deep the arm is.
+     *
+     * Limit (computenet-cab.4.9 task review): this is a per-wave control, not evidence that the
+     * swapped shape is safe to gate. Its inner filter (`Y > 0`) drops waves too, and a final
+     * `e.add(5,-1)` it drops is held at rest here exactly as in the pin — asserted below. On the
+     * scripts measured the held wave changes no answer (a row with `Y <= 0` can only block a
+     * left row with `X <= 0`, which the arm never carries), so `q` still equals the batch fold,
+     * but by this suite's own `bufferedWaves == 0` settling bar the depth rule's refusal of this
+     * shape is not a measured over-refusal.
      */
     @Test
-    fun `F-15 hop-order control - the same two-filter arm with the dropping filter outermost settles under a forced gate`() {
+    fun `F-15 hop-order control - the outer filter's dropped wave settles under a forced gate, the inner filter's is still held at rest`() {
         val catalog = PlanFixtures.catalog("e" to 2)
         assertTwoFilterArm(F15_HOP_CONTROL_QUERY, innerColumn = "Y", catalog)
         val compiled = compile(F15_HOP_CONTROL_QUERY, catalog)
@@ -326,6 +334,13 @@ class GatingEvidenceTest {
             e.add(row(1, 2)); world.runToIdle() // the OUTER filter (X > 1) drops it and acks onto the gate
             withClue("seed=$seed forced gate, dropping filter outermost: nothing held, (2,1) retracted") {
                 cell.bufferedWaves shouldBe 0
+                q.current() shouldBe emptySet()
+            }
+
+            e.add(row(5, -1)); world.runToIdle() // the INNER filter (Y > 0) drops it: F-15 on this arm too
+            // Batch fold over e = {(2,1),(1,2),(5,-1)}: (5,-1) fails Y > 0 and (2,1) stays blocked.
+            withClue("seed=$seed forced gate, final wave dropped by the inner filter: held at rest, q unchanged") {
+                cell.bufferedWaves shouldBeGreaterThanOrEqual 1
                 q.current() shouldBe emptySet()
             }
         }

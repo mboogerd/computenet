@@ -52,8 +52,10 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  * further hop below it, not the arm's depth as such, and depth is the maximum over every
  * child, not only the children carrying the shared relation. `GatingEvidenceTest` measures
  * both sides on one equal-provenance two-`Filter` arm (computenet-cab.4.9): with the gate
- * forced on it withholds when the dropping filter is the inner one, and settles when it is the
- * outer one — a refusal of a gate that would have been safe. The equality check claims no
+ * forced on, a wave the inner filter drops is held at rest and a wave the outer filter drops
+ * settles. No over-refusal by the depth check is measured: every two-`Filter` arm has an inner
+ * filter, and the swapped shape still holds an inner-dropped final wave at rest (its answers
+ * happen to stay equal to the batch fold on the scripts run). The equality check claims no
  * such over-refusal: per `WaveGate` G-13 a one-arm-only source's waves never reach the other
  * inlet, so neither an ack nor a later wave of that source can release them there.
  */

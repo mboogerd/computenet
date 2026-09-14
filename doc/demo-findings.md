@@ -618,8 +618,12 @@ reproduces this finding (computenet-cab.4.9). After `e.add(2,1)` nothing is
 buffered; `e.add(1,2)` then blocks `(2,1)`, the inner filter drops it on the
 left arm and its absorb-ack dies at the outer filter, so the wave stays
 buffered at rest and the stale `(2,1)` stays in `q`. The shipped ungated
-lowering retracts it. Swapping the two comparisons, so the dropping filter
-links straight into the gate, settles with nothing buffered. The depth-two
+lowering retracts it. Swapping the two comparisons, so the filter that drops
+`(1,2)` links straight into the gate, settles that wave with nothing buffered;
+the swapped shape is not safe to gate either, because a final `e.add(5,-1)`
+that its now-inner `Y > 0` filter drops is still held at rest (its answer set
+stays equal to the batch fold, since such a row blocks nothing the arm
+carries). The depth-two
 self-join `q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z).` does **not**
 reproduce it when forced either: `src:e` also feeds the join's other inlet, so
 the join absorb-acks straight onto the gated edge, which is this entry's safe
