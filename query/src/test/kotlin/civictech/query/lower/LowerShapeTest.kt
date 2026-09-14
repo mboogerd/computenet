@@ -15,7 +15,7 @@ import java.io.Serializable
  * factory is a `data class`. The completeness half fails naming a sealed subtype of
  * [LoweringResult] or [LoweringDiagnostic] added without updating [shapeTypes]
  * (`HierarchyCompleteness.missingFrom`, computenet-njvps), or a [CellFactory] implementation in
- * the package's main sources missing from [factoryTypes].
+ * the package's compiled main classes missing from [factoryTypes].
  */
 class LowerShapeTest {
 
@@ -90,11 +90,18 @@ class LowerShapeTest {
     @Test
     fun `factoryTypes names every CellFactory implementation declared in the lower package`() {
         // CellFactory is not sealed (it is a kernel `fun interface`), so permittedSubclasses
-        // cannot enumerate it: the declared set is read from the package's source text instead.
-        val declaration = Regex("""\bclass\s+(\w+)\s*\([^)]*\)\s*:\s*(?:Typed)?CellFactory\b""")
-        val declared = File("src/main/kotlin/civictech/query/lower").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .flatMap { file -> declaration.findAll(file.readText()).map { it.groupValues[1] } }
+        // cannot enumerate it. The declared set is read from the package's COMPILED classes, not
+        // its source text: a source regex misses a `data object`, a supertype list not led by
+        // CellFactory, and a constructor whose parameter list contains a parenthesis (a default
+        // `listOf()`), all of which a class-file walk sees as the CellFactory it is.
+        val classesRoot = File(SetSourceFactory::class.java.protectionDomain.codeSource.location.toURI())
+        val packageDir = File(classesRoot, "civictech/query/lower")
+        withClue("the lower package's main classes are a directory: $packageDir") { packageDir.isDirectory shouldBe true }
+        val loader = SetSourceFactory::class.java.classLoader
+        val declared = packageDir.listFiles { file -> file.isFile && file.extension == "class" }!!
+            .map { Class.forName("civictech.query.lower." + it.nameWithoutExtension, false, loader) }
+            .filter { CellFactory::class.java.isAssignableFrom(it) && !it.isInterface && !it.isSynthetic }
+            .map { it.simpleName }
             .toSet()
         withClue("non-vacuity: the scan finds the factories") { declared.isEmpty() shouldBe false }
 

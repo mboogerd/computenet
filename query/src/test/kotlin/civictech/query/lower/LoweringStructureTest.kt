@@ -322,6 +322,18 @@ class LoweringStructureTest {
         result.outputHandles shouldBe mapOf("q" to "q/0:union")
     }
 
+    @Test
+    fun `a Union whose branches are the same shared source links that source to its inlet once`() {
+        val plan = LogicalPlan(mapOf("q" to f.union(f.scan("r", "x"), f.scan("r", "x"))))
+        val result = f.lowered(plan, f.catalog("r" to 1))
+
+        result.spec.steps shouldContainExactly listOf(
+            SpawnStep("src:r", SetSourceFactory("r")),
+            SpawnStep("q/0:union", UnionFactory(listOf("x"))),
+            ConnectStep("src:r", "outlet", "q/0:union", "inlet"),
+        )
+    }
+
     // ---------------------------------------------------------------- planner-built examples
 
     @Test
