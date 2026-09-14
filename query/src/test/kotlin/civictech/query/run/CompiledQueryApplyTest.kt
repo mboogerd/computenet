@@ -2,6 +2,8 @@ package civictech.query.run
 
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
+import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.CountSetApi
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
@@ -19,6 +21,7 @@ import civictech.query.plan.Planner
 import civictech.query.schema.Catalog
 import civictech.query.schema.Row
 import civictech.testkit.SimWorld
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
@@ -224,5 +227,33 @@ class CompiledQueryApplyTest {
         r.remove(row(2, 20))
         world.runToIdle()
         cnt.current() shouldBe mapOf(row(1) to 2L) // a group's last retraction removes it.
+    }
+
+    @Test
+    fun `QRY1 §SEM-01§SEM-02 a scalar COUNT counts distinct body rows, not distinct group-key values`() {
+        // c(count X) :- e(X, Y).   e = {(1,a), (1,b)} — same X, different Y: Planner.kt's
+        // aggregate-construction KDoc ([QRY1-SEM-01], [QRY1-SEM-02]) says the population
+        // COUNT aggregates over is the distinct body rows the rule binds, so this answers 2,
+        // not 1 (the count of distinct X values a narrowing projection would have produced,
+        // which [QRY1-SEM-02] forbids the planner from inserting).
+        val catalog = PlanFixtures.catalog("e" to 2)
+        val compiled = compile("@count c(X) :- e(X, Y).", catalog)
+        compiled.outputShapes["c"] shouldBe OutputShape.COUNTER
+
+        val world = SimWorld(seed = 8)
+        val applied = compiled.applyTo(world.host.managementInlet)
+        val e = writerOf(world, applied.sources.getValue("e"))
+        val counts = mutableListOf<CounterDelta>()
+        world.host.lookup(TypedRef<CountSetApi<Row>>(applied.outputs.getValue("c").ref))!!
+            .outlet.subscribe(Use.fixed(Propagate { delta -> counts += delta }, PortRef.generate()))
+
+        e.add(row(1, 10)) // (1, a)
+        e.add(row(1, 11)) // (1, b) — same X, so a distinct-X population would not grow here
+        world.runToIdle()
+
+        val total = counts.sumOf { it.amount }
+        withClue("2 distinct (X, Y) body rows, not 1 distinct X value") {
+            total shouldBe 2L
+        }
     }
 }
