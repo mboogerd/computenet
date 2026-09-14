@@ -176,27 +176,17 @@ data class QueryCase(val source: String, val catalog: Catalog, val compiled: Com
  * script wins when present.
  */
 fun RunOutcome.describe(case: QueryCase, script: Script? = null): String {
-    val headline = when (this) {
+    val (seed, headline) = when (this) {
         RunOutcome.Success -> return "success"
-        is RunOutcome.ModelEvaluationFailure ->
+        is RunOutcome.ModelEvaluationFailure -> seed to
             "reference-evaluation failure (BatchEvaluator threw), not a compilation defect: seed=$seed cause=$cause"
-        is RunOutcome.Mismatch ->
+        is RunOutcome.Mismatch -> seed to
             "mismatch: seed=$seed terminal='$terminal' expected=$expected actual=$actual difference=$difference"
-        is RunOutcome.NonQuiescence -> "non-quiescence: seed=$seed stepBudget=$stepBudget"
-        is RunOutcome.DeadLetterFailure -> "dead-letter failure: seed=$seed deadLetters=$deadLetters"
-        is RunOutcome.WavePrefixViolation -> "wave-prefix violation: seed=$seed terminal='$terminal' kind=$kind"
-        is RunOutcome.ReplicaDivergence -> "replica divergence: seed=$seed logicalId=$logicalId"
-        is RunOutcome.ReplicasAgreeButWrong -> "replicas agree but wrong: seed=$seed logicalId=$logicalId"
-    }
-    val seed = when (this) {
-        is RunOutcome.ModelEvaluationFailure -> seed
-        is RunOutcome.Mismatch -> seed
-        is RunOutcome.NonQuiescence -> seed
-        is RunOutcome.DeadLetterFailure -> seed
-        is RunOutcome.WavePrefixViolation -> seed
-        is RunOutcome.ReplicaDivergence -> seed
-        is RunOutcome.ReplicasAgreeButWrong -> seed
-        RunOutcome.Success -> error("unreachable")
+        is RunOutcome.NonQuiescence -> seed to "non-quiescence: seed=$seed stepBudget=$stepBudget"
+        is RunOutcome.DeadLetterFailure -> seed to "dead-letter failure: seed=$seed deadLetters=$deadLetters"
+        is RunOutcome.WavePrefixViolation -> seed to "wave-prefix violation: seed=$seed terminal='$terminal' kind=$kind"
+        is RunOutcome.ReplicaDivergence -> seed to "replica divergence: seed=$seed logicalId=$logicalId"
+        is RunOutcome.ReplicasAgreeButWrong -> seed to "replicas agree but wrong: seed=$seed logicalId=$logicalId"
     }
     val replayScript = (this as? RunOutcome.Mismatch)?.script ?: script
     return buildString {
