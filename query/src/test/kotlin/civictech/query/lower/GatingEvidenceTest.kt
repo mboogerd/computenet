@@ -236,8 +236,12 @@ class GatingEvidenceTest {
      * path to the antijoin's left inlet. The lowering leaves it ungated
      * ([LoweringDiagnostic.GateNotProvable]) — on two grounds since computenet-cab.4.8: the arms
      * are `{e,f}` and `{e}` (the provenance-equality check reports it first), and the left arm
-     * is two operators deep. The withholding pinned here is F-15's, not the phantom edge's: the
-     * final wave is an `e` wave, which the right inlet DOES carry. Forcing the gate on in test scope and ending on an
+     * is two operators deep. CAVEAT (computenet-cab.4.8 task review, residual computenet-cab.4.9):
+     * this script's prefix `e.add(5,1)`, `f.add(1,-1)` is the phantom-edge pin's, and with the gate
+     * forced on that `f` wave is already buffered and `(5,-1)` already missing before any
+     * `e`-removal (seeds 0..4), so the forced-arm assertions below are satisfied by the phantom
+     * edge alone and do NOT isolate F-15's absorb-ack withholding. As written, the claim that
+     * follows is not established by this test. Forcing the gate on in test scope and ending on an
      * `e`-removal the filter drops but the witness carries — the removal that should RE-ADMIT a
      * blocked answer — leaves that wave buffered at rest and the answer MISSING from `q`: the
      * withheld-at-rest signature of `FrontierGatedEmissionTest`'s two-hop case, through a
