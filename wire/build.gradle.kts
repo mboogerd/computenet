@@ -108,8 +108,27 @@ tasks.register<JavaExec>("wireVectors") {
     // A checker task with no declared outputs must run every time, never be
     // treated UP-TO-DATE off `corpus`'s unchanged timestamp alone.
     outputs.upToDateWhen { false }
+    // computenet-e2f9f: `hasProperty` tests PRESENCE, not value, so
+    // `-Pwire.vectors.write=false` used to activate write mode exactly like
+    // `=true` (measured: printed the write-mode "repaired ... manifest
+    // regenerated" line instead of check mode's "manifest consistent").
+    // Every documented spelling of this flag is `=true` — nothing documents a
+    // meaningful `=false` — so rather than silently accepting a value that
+    // could still be typo'd into an unintended write (`=yes`, `=1`, a bare
+    // `-Pwire.vectors.write` with no `=value`), fail configuration outright on
+    // anything but the two exact spellings. That is the option that CANNOT
+    // silently rewrite the corpus: check mode only runs when the property is
+    // absent, write mode only when it is exactly "true", and every other
+    // spelling is a loud build failure instead of a guess.
     if (project.hasProperty("wire.vectors.write")) {
-        args("--write")
+        when (val value = project.property("wire.vectors.write") as String) {
+            "true" -> args("--write")
+            "false" -> {}
+            else -> throw GradleException(
+                "wire.vectors.write must be \"true\" or \"false\" (got \"$value\"); " +
+                    "omit the property entirely to run check mode.",
+            )
+        }
     }
 }
 
