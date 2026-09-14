@@ -18,10 +18,13 @@ sealed interface LoweringDiagnostic : Serializable {
 
     /**
      * The operator's arms share a source relation, so the within-wave flicker the
-     * `emitOnFrontier` gate removes can occur — but the gate was withheld because an arm is
-     * more than one operator deep from the source, where the gate is known to withhold
-     * output at rest (`doc/demo-findings.md` F-15, `WaveGate`'s "One root is NOT sufficient").
-     * The cell runs ungated and may flicker transiently; it still converges.
+     * `emitOnFrontier` gate removes can occur — but the gate was withheld because a shape
+     * where the gate is known to withhold output at rest was found, named in [reason]:
+     * either a source feeds only one arm, so the other inlet is a phantom expected edge for
+     * its waves (`WaveGate`'s "The phantom expected edge (G-13)", computenet-cab.4.8), or an
+     * arm is more than one operator deep from the source (`doc/demo-findings.md` F-15,
+     * `WaveGate`'s "One root is NOT sufficient"). The cell runs ungated and may flicker
+     * transiently; it still converges.
      */
     data class GateNotProvable(
         override val locus: Locus.PlanNode,

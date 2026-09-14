@@ -267,7 +267,7 @@ class LoweringStructureTest {
     }
 
     @Test
-    fun `QRY1 §LOWER-08 §LOWER-09 AntiJoin gating - shared shallow gated, shared deep GateNotProvable, disjoint EventuallyConsistent`() {
+    fun `QRY1 §LOWER-08 §LOWER-09 AntiJoin gating - shared shallow gated, shared deep GateNotProvable, disjoint EventuallyConsistent, unequal GateNotProvable`() {
         val catalog = f.catalog("e" to 2, "s" to 1)
 
         // 1. Shared source, both arms at most one operator deep: gated, no diagnostic.
@@ -300,6 +300,16 @@ class LoweringStructureTest {
         val eventual = disjointResult.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.EventuallyConsistent>()
         eventual.handle shouldBe "q/0:antijoin"
         eventual.specId shouldBe "[24-OP-SEMIJOIN-04]/[24-OP-OUTERJOIN-02]"
+
+        // 4. Shared but UNEQUAL provenance, both arms shallow (computenet-cab.4.8): `s` feeds only
+        //    the input arm, so the witness inlet is a phantom expected edge: ungated, GateNotProvable.
+        val unequal = f.antiJoin(f.join(f.scan("e", "x", "y"), f.scan("s", "y"), "y"), f.scan("e", "x", "y"), "x", "y")
+        val unequalResult = f.lowered(LogicalPlan(mapOf("q" to unequal)), catalog)
+        antiJoinFactory(unequalResult).emitOnFrontier shouldBe false
+        val phantom = unequalResult.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>()
+        phantom.handle shouldBe "q/0:antijoin"
+        phantom.reason shouldContain "phantom expected edge"
+        phantom.reason shouldContain "[s]"
     }
 
     @Test
@@ -484,7 +494,7 @@ class LoweringStructureTest {
     }
 
     @Test
-    fun `QRY1 §LOWER-08 §LOWER-09 Difference is gated by the AntiJoin rule - shared shallow gated, shared deep GateNotProvable`() {
+    fun `QRY1 §LOWER-08 §LOWER-09 Difference is gated by the AntiJoin rule - shared shallow gated, shared deep and unequal GateNotProvable`() {
         val catalog = f.catalog("e" to 2)
         val shallow = Difference(
             f.scan("e", "x", "y"),
@@ -504,6 +514,17 @@ class LoweringStructureTest {
         differenceFactory(deepResult).emitOnFrontier shouldBe false
         val notProvable = deepResult.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>()
         notProvable shouldBe Gating.decide(deep.left, deep.right, Locus.PlanNode("q/0:difference"), "q/0:difference").diagnostic
+
+        // Shared but unequal provenance, both arms shallow (computenet-cab.4.8): ungated, phantom edge.
+        val unequal = Difference(
+            f.scan("e", "x", "y"),
+            f.join(f.scan("e", "x", "y"), f.scan("s", "y"), "y"),
+            listOf("x", "y"), setOf("e", "s"), false,
+        )
+        val unequalResult = f.lowered(LogicalPlan(mapOf("q" to unequal)), f.catalog("e" to 2, "s" to 1))
+        differenceFactory(unequalResult).emitOnFrontier shouldBe false
+        unequalResult.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>()
+            .reason shouldContain "phantom expected edge"
     }
 
     @Test

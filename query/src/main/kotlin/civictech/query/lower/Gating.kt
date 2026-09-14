@@ -22,11 +22,19 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  * `[QRY1-LOWER-09]`, cab.4-D3, cab.4-D6). This task applies it to `AntiJoin`; the completion
  * task reuses it for `Difference` and `OuterJoin`, so the rule has one statement.
  *
- * The gate is set iff BOTH hold:
+ * The gate is set iff ALL hold:
  * 1. **Shared provenance** — the arms' [PlanNode.provenance] sets intersect. With no shared
  *    source there is no common wave frontier: the gate would wait on an edge that never
  *    arrives, so the operator runs ungated and is reported [LoweringDiagnostic.EventuallyConsistent].
- * 2. **Carry precondition** — each arm is at most ONE operator deep from the sources: either a
+ * 2. **Equal provenance** — every source feeds BOTH arms. The gate's frontier is a static link
+ *    set with no upstream traversal, so an inlet whose arm structurally never carries a source
+ *    is still an expected edge for that source's waves (`WaveGate` "The phantom expected edge
+ *    (G-13)"): a final wave from a one-arm-only source is held at rest. `q(X, Z) :- e(X, Y),
+ *    f(Y, Z), not e(X, Z).` — arms `{e,f}` and `{e}` — withheld `(5,-1)` after `e.add(5,1)`,
+ *    `f.add(1,-1)` while the rule only required (1) (computenet-cab.4.8; `GatingEvidenceTest`
+ *    pins it for the antijoin, `Difference` and `OuterJoin`). Unequal arms stay ungated and are
+ *    reported [LoweringDiagnostic.GateNotProvable].
+ * 3. **Carry precondition** — each arm is at most ONE operator deep from the sources: either a
  *    `Scan` (the `src:*` cell links straight into the gated inlet) or a node whose children are
  *    all `Scan`s. `SemiJoinCell`'s KDoc and `WaveGate`'s "One root is NOT sufficient" section
  *    (computenet-23bf, `doc/demo-findings.md` F-15) establish that an absorbing operator's
@@ -34,10 +42,15 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  *    swallows the ack and the gate withholds output at rest. Deeper arms stay ungated and are
  *    reported [LoweringDiagnostic.GateNotProvable].
  *
- * Limit of the claim: the depth rule is a sufficient condition read from the kernel's
- * documented mechanism, measured only for the shapes computenet-23bf ran. It is conservative —
- * depth is the maximum over every child, not only the children carrying the shared relation —
- * so it can withhold a gate that would have been safe, never grant one that is not.
+ * Limit of the claim: (2) and (3) together are a sufficient condition read from the kernel's
+ * documented mechanism, measured only for the shapes computenet-23bf, computenet-cab.4.5 and
+ * computenet-cab.4.8 ran (`GatingEvidenceTest`) — it is not a proof over every plan shape. An
+ * earlier version of this paragraph claimed the intersect-plus-depth rule "can withhold a gate
+ * that would have been safe, never grant one that is not"; the unequal-provenance case above
+ * falsified that, so treat a newly found withholding shape as a gap in this rule, not in the
+ * kernel. Both checks are conservative in the direction they are known to err — depth is the
+ * maximum over every child, not only the children carrying the shared relation, and equality
+ * refuses arms that differ in a source even where that source's waves happen to be acked.
  */
 object Gating {
 
@@ -48,6 +61,21 @@ object Gating {
             return GateDecision(
                 emitOnFrontier = false,
                 diagnostic = LoweringDiagnostic.EventuallyConsistent(locus, handle, EVENTUALLY_CONSISTENT_SPEC),
+            )
+        }
+        if (left.provenance != right.provenance) {
+            val leftOnly = (left.provenance - right.provenance).sorted()
+            val rightOnly = (right.provenance - left.provenance).sorted()
+            return GateDecision(
+                emitOnFrontier = false,
+                diagnostic = LoweringDiagnostic.GateNotProvable(
+                    locus,
+                    handle,
+                    "arms share a source but not every source: $leftOnly feed only the left arm and " +
+                        "$rightOnly only the right, so the other inlet is a phantom expected edge for " +
+                        "those sources' waves and a final wave from one is withheld at rest " +
+                        "(WaveGate \"The phantom expected edge (G-13)\")",
+                ),
             )
         }
         val leftDepth = operatorDepth(left)
