@@ -1,19 +1,20 @@
 package civictech.query.diag
 
+import civictech.query.run.CompiledQuery
 import java.io.Serializable
 
 /**
- * The outcome of compiling a query (epic computenet-cab §2.3): intended full shape
- * `Compiled | Rejected`.
+ * The outcome of compiling a query (epic computenet-cab §2.3): `Compiled | Rejected`.
  *
- * Only [Rejected] is landed here. `Compiled` is deliberately NOT landed by this task: per the
- * epic it must carry a `CompiledQuery` (§2.3), a type owned by the later lowering/API
- * features — a stub `CompiledQuery` in a not-yet-existing `civictech.query.run` package would
- * trespass on their scope. Adding `Compiled` later is the same additive pattern cab.1-D1
- * establishes for [RejectionCode] variants: a sibling/later feature adds the variant it needs
- * without touching this file's existing shape.
+ * `Compiled` was deliberately withheld until computenet-cab.4.4 landed `CompiledQuery` in
+ * `civictech.query.run` (this file's own earlier KDoc explained the wait); it is landed now
+ * that type exists. The `Refused` (lowering) -> `Rejected` (this sealed interface's) mapping
+ * — the `NO_LOWERING` `RejectionCode` — remains computenet-cab.5's, not this task's.
  */
 sealed interface CompileResult : Serializable {
+
+    /** The query compiled; [query] is the applyable, `Serializable` lowered artifact. */
+    data class Compiled(val query: CompiledQuery) : CompileResult
 
     /** The query was rejected; every reason it was rejected, each with its own [Locus]. */
     data class Rejected(val rejections: List<Rejection>) : CompileResult
