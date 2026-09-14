@@ -598,10 +598,19 @@ an open gap.
 
 **Recurrence surface: QRY1's compiled antijoins (computenet-cab.4.5,
 2026-09-14)**. The query lowering (`:query`, `Gating.decide`) sets
-`emitOnFrontier` on an absence-based operator only when both arms share a
-source relation AND each arm is at most one operator deep from the sources
-(cab.4-D6); a deeper arm runs ungated with a `GateNotProvable` diagnostic
-citing this entry. `GatingEvidenceTest` (`:query`) makes that rule checkable
+`emitOnFrontier` on an absence-based operator only when both arms have the
+**same** source provenance AND each arm is at most one operator deep from the
+sources (cab.4-D6); a deeper arm runs ungated with a `GateNotProvable`
+diagnostic citing this entry. The equality requirement was added by
+computenet-cab.4.8: the rule first shipped requiring only that the arms'
+provenance *intersect*, and `q(X, Z) :- e(X, Y), f(Y, Z), not e(X, Z).`
+(arms `{e,f}` and `{e}`, both one operator deep) was then gated and withheld
+`(5,-1)` at rest after `e.add(5,1)`, `f.add(1,-1)` — `f`'s final wave never
+reaches the witness inlet, which is a phantom expected edge for it (`WaveGate`
+G-13), not this entry's absorb-ack mechanism. The same held for `Difference`
+and `OuterJoin`, which reuse the rule; all three now run ungated with a
+`GateNotProvable` naming the phantom edge, pinned with the gate forced on in
+`GatingEvidenceTest`. `GatingEvidenceTest` (`:query`) makes that rule checkable
 on a live `SimWorld` host. With the gate forced on in test scope,
 `q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` (left arm
 `src:e → FilterCell → JoinSetCell`, the join's other inlet fed by `f`)

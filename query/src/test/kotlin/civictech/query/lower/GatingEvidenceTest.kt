@@ -15,6 +15,11 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.query.parse.ParseResult
 import civictech.query.parse.QueryParser
+import civictech.query.plan.Difference
+import civictech.query.plan.JoinKey
+import civictech.query.plan.LogicalPlan
+import civictech.query.plan.OuterJoin
+import civictech.query.plan.OuterJoinSide
 import civictech.query.plan.Planner
 import civictech.query.run.AppliedQuery
 import civictech.query.run.CompiledQuery
@@ -228,8 +233,15 @@ class GatingEvidenceTest {
      * The F-15 pin, reproducing shape: `q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` The
      * arms share `e`; the left arm is `src:e → Filter → Join(·, src:f) → antijoin`, and this time
      * the join's other inlet is fed by `f`, so a wave on `e` that the filter drops has NO other
-     * path to the antijoin's left inlet. The depth rule correctly leaves it ungated
-     * ([LoweringDiagnostic.GateNotProvable]). Forcing the gate on in test scope and ending on an
+     * path to the antijoin's left inlet. The lowering leaves it ungated
+     * ([LoweringDiagnostic.GateNotProvable]) — on two grounds since computenet-cab.4.8: the arms
+     * are `{e,f}` and `{e}` (the provenance-equality check reports it first), and the left arm
+     * is two operators deep. CAVEAT (computenet-cab.4.8 task review, residual computenet-cab.4.9):
+     * this script's prefix `e.add(5,1)`, `f.add(1,-1)` is the phantom-edge pin's, and with the gate
+     * forced on that `f` wave is already buffered and `(5,-1)` already missing before any
+     * `e`-removal (seeds 0..4), so the forced-arm assertions below are satisfied by the phantom
+     * edge alone and do NOT isolate F-15's absorb-ack withholding. As written, the claim that
+     * follows is not established by this test. Forcing the gate on in test scope and ending on an
      * `e`-removal the filter drops but the witness carries — the removal that should RE-ADMIT a
      * blocked answer — leaves that wave buffered at rest and the answer MISSING from `q`: the
      * withheld-at-rest signature of `FrontierGatedEmissionTest`'s two-hop case, through a
@@ -269,6 +281,168 @@ class GatingEvidenceTest {
                         cell.bufferedWaves shouldBeGreaterThanOrEqual 1
                         q.current() shouldNotBe batch
                         batch.filterNot { it in q.current() } shouldHaveSize 1
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- phantom expected edge
+
+    /**
+     * computenet-cab.4.8, epic risk 3 (fail closed): `q(X, Z) :- e(X, Y), f(Y, Z), not e(X, Z).`
+     * Both arms are at most one operator deep and they share `e`, but `f` feeds only the left
+     * arm: the antijoin's right inlet (`src:e`) is a phantom expected edge for `f`'s waves
+     * (`WaveGate` "The phantom expected edge (G-13)"), so a gate would hold an `f`-only final
+     * wave forever. The lowering therefore leaves it ungated with a
+     * [LoweringDiagnostic.GateNotProvable] naming the phantom edge, and the ungated cell agrees
+     * with the batch fold at every idle point on a script that alternates `e` and `f` waves and
+     * ENDS on an `f`-only wave. (Idle-point agreement only; an ungated antijoin may flicker.)
+     */
+    @Test
+    fun `phantom edge - an antijoin whose arms have unequal provenance is ungated with GateNotProvable, and converges at idle after an f-only final wave`() {
+        val catalog = PlanFixtures.catalog("e" to 2, "f" to 2)
+        val compiled = compile(PHANTOM_QUERY, catalog)
+        val (antijoinHandle, factory) = antijoinOf(compiled)
+        factory.emitOnFrontier shouldBe false
+        compiled.diagnostics.single { it.handle == antijoinHandle }
+            .shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().reason shouldContain "phantom expected edge"
+
+        val totals = OpTally()
+        forEachSeed(SEEDS) { seed ->
+            val world = SimWorld(seed = seed)
+            val (applied, cell) = withCapturedAntijoin(compiled, antijoinHandle, world)
+            val e = writerOf(world, applied, "e")
+            val f = writerOf(world, applied, "f")
+            val q = viewOf(world, applied, "q")
+            val eRows = mutableSetOf<Row>()
+            val fRows = mutableSetOf<Row>()
+
+            val random = Random(seed)
+            val eScript = Script(random, domain = 1..4)
+            val fScript = Script(random, domain = 1..4)
+            repeat(STEPS) { step ->
+                eScript.step(eRows, e, totals)
+                world.runToIdle()
+                withClue("seed=$seed step=$step after e: e=$eRows f=$fRows") {
+                    q.current() shouldBe totals.idle(joinMinus(eRows, fRows, blocked = eRows))
+                }
+                // The step's LAST wave is f-only — the wave the right arm never carries.
+                fScript.step(fRows, f, totals)
+                world.runToIdle()
+                withClue("seed=$seed step=$step after f: e=$eRows f=$fRows") {
+                    cell.bufferedWaves shouldBe 0
+                    q.current() shouldBe totals.idle(joinMinus(eRows, fRows, blocked = eRows))
+                }
+            }
+        }
+        totals.assertRemovalRatio()
+    }
+
+    /**
+     * The phantom-edge pin: [PHANTOM_QUERY] with the antijoin's gate FORCED on in test scope.
+     * `e.add(5,1)` then `f.add(1,-1)`: the second wave is `f`-only, reaches the left inlet
+     * through the join, and never reaches the right inlet (`src:e`), so the forced gate buffers
+     * it at rest and the live answer `(5,-1)` is missing. The shipped (ungated) lowering is the
+     * control and re-admits it. This is the fail-open case computenet-cab.4.5's review found
+     * when the rule only required the arms' provenance to intersect.
+     */
+    @Test
+    fun `phantom edge pin - forcing the gate on the unequal-provenance antijoin withholds an f-only final wave at rest`() {
+        val catalog = PlanFixtures.catalog("e" to 2, "f" to 2)
+        val compiled = compile(PHANTOM_QUERY, catalog)
+        val (antijoinHandle, _) = antijoinOf(compiled)
+
+        val batch = setOf(row(5, -1)) // e = {(5,1)}, f = {(1,-1)}
+        assertPhantomPin(compiled, antijoinHandle, batch) { world, applied ->
+            writerOf(world, applied, "e").add(row(5, 1)); world.runToIdle()
+            writerOf(world, applied, "f").add(row(1, -1)); world.runToIdle() // LAST wave: f-only
+        }
+    }
+
+    /**
+     * `Difference` reuses [Gating.decide] (cab.4-D3), so it had the same fail-open shape:
+     * `e(x,y) − Join(e(x,y), f(y))` — provenance `{e}` against `{e,f}`, both arms at most one
+     * operator deep. The lowering now leaves it ungated with the phantom-edge diagnostic. With
+     * the gate forced on, the `f`-only final wave that puts `(1,2)` on the right arm never
+     * reaches the left inlet (`src:e`), so the retraction is held at rest and the stale `(1,2)`
+     * stays in `q`; the shipped lowering is the control and retracts it.
+     */
+    @Test
+    fun `phantom edge - Difference with unequal provenance is ungated, and forcing its gate withholds an f-only final wave`() {
+        val fx = PlanFixtures
+        val catalog = fx.catalog("e" to 2, "f" to 1)
+        val right = fx.join(fx.scan("e", "x", "y"), fx.scan("f", "y"), "y")
+        val node = Difference(fx.scan("e", "x", "y"), right, listOf("x", "y"), setOf("e", "f"), false)
+        val compiled = compilePlan(LogicalPlan(mapOf("q" to node)), catalog)
+        val (handle, factory) = antijoinOf(compiled)
+        factory.emitOnFrontier shouldBe false
+        compiled.diagnostics.single { it.handle == handle }
+            .shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().reason shouldContain "phantom expected edge"
+
+        // e = {(1,2)}, f = {(2)}: (1,2) is on both sides, so the difference is empty.
+        assertPhantomPin(compiled, handle, batch = emptySet()) { world, applied ->
+            writerOf(world, applied, "e").add(row(1, 2)); world.runToIdle()
+            writerOf(world, applied, "f").add(row(2)); world.runToIdle() // LAST wave: f-only
+        }
+    }
+
+    /**
+     * `OuterJoin` reuses [Gating.decide] for each of its antijoins. LEFT outer join of `e(k,a)`
+     * with `Join(e(k,b), f(b))`: the unmatched-antijoin's arms are `{e}` and `{e,f}`. The
+     * lowering leaves it ungated with the phantom-edge diagnostic. With the gate forced on, the
+     * `f`-only final wave that MATCHES the left row reaches only the antijoin's right inlet, so
+     * the retraction of the null-padded row is held at rest and the stale `(1,2,null)` stays.
+     */
+    @Test
+    fun `phantom edge - OuterJoin's antijoin with unequal provenance is ungated, and forcing its gate withholds an f-only final wave`() {
+        val fx = PlanFixtures
+        val catalog = fx.catalog("e" to 2, "f" to 1)
+        val left = fx.scan("e", "k", "a")
+        val right = fx.join(fx.scan("e", "k", "b"), fx.scan("f", "b"), "b")
+        val node = OuterJoin(
+            left, right, listOf(JoinKey("k", "k")), OuterJoinSide.LEFT, listOf("k", "a", "b"), setOf("e", "f"), false,
+        )
+        val compiled = compilePlan(LogicalPlan(mapOf("q" to node)), catalog)
+        val (handle, factory) = antijoinOf(compiled)
+        factory.emitOnFrontier shouldBe false
+        compiled.diagnostics.single { it.handle == handle }
+            .shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().reason shouldContain "phantom expected edge"
+
+        // e = {(1,2)}, f = {(2)}: the right arm holds (1,2), so (1,2) matches — (1,2,2), no null row.
+        val batch = setOf(Row(listOf(1, 2, 2)))
+        assertPhantomPin(compiled, handle, batch) { world, applied ->
+            writerOf(world, applied, "e").add(row(1, 2)); world.runToIdle()
+            writerOf(world, applied, "f").add(row(2)); world.runToIdle() // LAST wave: f-only
+        }
+    }
+
+    /**
+     * For each seed: the shipped lowering (control) settles with nothing buffered on [batch];
+     * the same spec with the gate at [handle] forced on buffers at least one wave at rest and
+     * disagrees with [batch].
+     */
+    private fun assertPhantomPin(
+        compiled: CompiledQuery,
+        handle: String,
+        batch: Set<Row>,
+        script: (SimWorld, AppliedQuery) -> Unit,
+    ) {
+        forEachSeed(SEEDS) { seed ->
+            for (forceGate in listOf(false, true)) {
+                val world = SimWorld(seed = seed)
+                val (applied, cell) = withCapturedAntijoin(compiled, handle, world, forceGate = forceGate)
+                val q = viewOf(world, applied, "q")
+                script(world, applied)
+                if (!forceGate) {
+                    withClue("seed=$seed control: the shipped ungated lowering agrees with the batch fold") {
+                        cell.bufferedWaves shouldBe 0
+                        q.current() shouldBe batch
+                    }
+                } else {
+                    withClue("seed=$seed forced gate: the f-only final wave is withheld at rest (q=${q.current()})") {
+                        cell.bufferedWaves shouldBeGreaterThanOrEqual 1
+                        q.current() shouldNotBe batch
                     }
                 }
             }
@@ -336,6 +510,10 @@ class GatingEvidenceTest {
         return CompiledQuery.from(lowered, plan)
     }
 
+    /** Lowers a hand-built [plan] through the production [Lowering] and [CompiledQuery.from]. */
+    private fun compilePlan(plan: LogicalPlan, catalog: Catalog): CompiledQuery =
+        CompiledQuery.from(Lowering.lower(plan, catalog).shouldBeInstanceOf<LoweringResult.Lowered>(), plan)
+
     /** The compiled query's one negated [SemiJoinFactory] spawn, by factory type. */
     private fun antijoinOf(compiled: CompiledQuery): Pair<String, SemiJoinFactory> {
         val antijoins = compiled.spec.lowered()
@@ -400,6 +578,15 @@ class GatingEvidenceTest {
 
         /** The depth case: `Y > 0` is pushed onto `e(X, Y)`'s scan, under the join. */
         const val DEEP_ARM_QUERY = "q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z)."
+
+        /** The phantom-edge case: `f` feeds only the antijoin's left arm. */
+        const val PHANTOM_QUERY = "q(X, Z) :- e(X, Y), f(Y, Z), not e(X, Z)."
+
+        /** Batch fold `{(x,z) | (x,y) ∈ E, (y,z) ∈ F, (x,z) ∉ blocked}`. */
+        fun joinMinus(e: Set<Row>, f: Set<Row>, blocked: Set<Row>): Set<Row> =
+            e.flatMap { first ->
+                f.filter { it.values[0] == first.values[1] }.map { Row(listOf(first.values[0], it.values[1])) }
+            }.filterNot { it in blocked }.toSet()
 
         /** Batch fold `{(x,z) | (x,y),(y,z) ∈ E, filter(y), (x,z) ∉ E}`. */
         fun selfJoinMinusE(edges: Set<Row>, filter: (Int) -> Boolean): Set<Row> =

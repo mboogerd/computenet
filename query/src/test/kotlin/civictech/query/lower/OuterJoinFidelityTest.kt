@@ -164,6 +164,19 @@ class OuterJoinFidelityTest {
         val semis = f.spawns(sharedResult.spec.steps).mapNotNull { it.factory as? SemiJoinFactory }
         semis.map { it.emitOnFrontier to it.negated } shouldContainExactly listOf(true to true, true to true)
 
+        // Shared but unequal provenance (computenet-cab.4.8): `s` feeds only the right input, so
+        // each antijoin has a phantom expected edge — both ungated, each with GateNotProvable.
+        val unequal = outerJoin(
+            OuterJoinSide.FULL,
+            left = f.scan("e", "k", "a"),
+            right = f.join(f.scan("e", "k", "b"), f.scan("s", "b"), "b"),
+        )
+        val unequalResult = f.lowered(LogicalPlan(mapOf("q" to unequal)), f.catalog("e" to 2, "s" to 1))
+        unequalResult.diagnostics.map { it.shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().handle } shouldContainExactly
+            listOf("$nodeHandle-left-only", "$nodeHandle-right-only")
+        f.spawns(unequalResult.spec.steps).mapNotNull { it.factory as? SemiJoinFactory }.map { it.emitOnFrontier } shouldContainExactly
+            listOf(false, false)
+
         // LEFT, disjoint: its one antijoin carries the AntiJoin rule's diagnostic.
         val left = f.lowered(LogicalPlan(mapOf("q" to outerJoin(OuterJoinSide.LEFT))), f.catalog("l" to 2, "r" to 2))
         left.diagnostics shouldContainExactly listOf(
