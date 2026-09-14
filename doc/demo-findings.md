@@ -596,6 +596,26 @@ expected there too, but "shares the code" is exactly the inference this
 measurement exists to not repeat on a third and fourth cell — that pair stays
 an open gap.
 
+**Recurrence surface: QRY1's compiled antijoins (computenet-cab.4.5,
+2026-09-14)**. The query lowering (`:query`, `Gating.decide`) sets
+`emitOnFrontier` on an absence-based operator only when both arms share a
+source relation AND each arm is at most one operator deep from the sources
+(cab.4-D6); a deeper arm runs ungated with a `GateNotProvable` diagnostic
+citing this entry. `GatingEvidenceTest` (`:query`) makes that rule checkable
+on a live `SimWorld` host. With the gate forced on in test scope,
+`q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` (left arm
+`src:e → FilterCell → JoinSetCell`, the join's other inlet fed by `f`)
+reproduces this finding through a `FilterCell`→`JoinSetCell` arm. A last
+`e`-removal that the filter drops stays buffered at rest, and the answer it
+re-admits is missing from `q`. The shipped ungated lowering answers correctly
+on the same script. The depth-two self-join
+`q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z).` does **not** reproduce it
+when forced. There `src:e` also feeds the join's other inlet, so the join
+absorb-acks straight onto the gated edge, which is this entry's safe case.
+Depth two is therefore the conservative proxy the rule claims to be, not the
+exact condition: the precise one is whether the silent arm has any other path
+from the root. The rule was not widened. Only these two shapes were measured.
+
 ## F-16 — BS-10 measured: the AGO1 pipeline's incremental credences equal the batch fold exactly on DAG transcripts, and sit 112x inside the cyclic bound
 
 **Observation** (computenet-2aw.6.1, AGO1 F6 T1): BS-10's sweep
