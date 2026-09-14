@@ -24,14 +24,22 @@ plugins {
 // `PublicKey` conversion (`Ed25519.publicKeyFromRaw`) and the one `fingerprint`
 // function in the repo. Deriving either here would be a second scheme.
 //
-// Still no `:wire`: this module has no business on another transport's
-// classpath. `:identity` itself depends only on `:kernel`, so the direction
-// stays `:iroh -> {:identity, :kernel} `, never the reverse.
+// Still no `:wire` in PRODUCTION: this module's main code has no business on
+// another transport's classpath. `:identity` itself depends only on `:kernel`,
+// so the production direction stays `:iroh -> {:identity, :kernel}`, never the
+// reverse.
+//
+// `:wire` is on the TEST classpath only, for exactly one reason (feature
+// computenet-5y8t.5, decision 5y8t.F5-D7): `IrohWireStableNameTest` proves one
+// stable name across both transports at one listener, and a test that proves
+// that must dial both. `runtimeClasspath` and `compileClasspath` carry no
+// `:wire`; nothing under `src/main` may import `civictech.wire`.
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":identity"))
 
     testImplementation(project(":testkit"))
+    testImplementation(project(":wire"))
 }
 
 if (project.hasProperty("iroh.enabled")) {
