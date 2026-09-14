@@ -134,19 +134,27 @@ this direction's shape on 2026-08-29** as a fourth, explicitly-argued option
 centrally-managed anchor's signed statement, verified offline — see
 `doc/distribution/findings.md`'s 2026-09-12 entry): the identity-is-key
 premise direction (1) shares was rejected, not merely direction (1)'s size.
-Design-decided, not implemented; owned by DSC4 (epic `computenet-5y8t`). (3) delta
+**Now built** by DSC4 (epic `computenet-5y8t`; `doc/distribution/findings.md`'s
+`2026-09-14 — DSC4 landed` entry): a dummy anchor signs stable-name statements,
+`:wire`/`:iroh` carry them in a versioned hello, and admission/allowlists/
+mirrored attribution resolve through the binding on the name rather than the
+key. (3) delta
 signatures per emitting peer (already the decided granularity in 40/42) using (1)'s
 keys — **landed for the wire hello's identity**; signing the `RegistryAnnounce`
 management frames themselves is `computenet-ssa.4`, in progress. At-rest encryption
 stays out of the kernel (host concern) and remains open. Key rotation against the
-`instanceId` lifecycle is **decided, unbuilt** as of 2026-08-29, superseding the
-DSC1 §7 risk 2 framing this entry previously recorded: a rotation is a new
-anchor-signed binding for the same stable name, so the name — not the key — is
-what allowlists and mirrored `Remote` locations key on going forward; that
-binding is DSC4's to build.
-Revocation over the same anchor-rebinding mechanism is likewise designed, not
-yet owned by anyone building it — `doc/distribution/findings.md`'s 2026-09-12
-entries. Neither is built at this commit.
+`instanceId` lifecycle, **decided as of 2026-08-29** (superseding the DSC1 §7
+risk 2 framing this entry previously recorded), **is now built by DSC4**: a
+rotation is a new anchor-signed binding for the same stable name, and both
+allowlists (`Peering.Side.allow`, `allowPeers`) and mirrored `Remote` locations
+key on the name rather than the key end to end, demonstrated over a real
+socket by `civictech.wire.WsStableNameRotationOfflineAnchorTest`
+(`doc/distribution/findings.md`'s `2026-09-14 — DSC4 landed` entry).
+Revocation over the same anchor-rebinding mechanism is likewise designed, but
+**still owned by nobody building it**: `AnchorVouchedBinding` carries the
+per-name `issuance` counter but compares it with nothing, so a superseding
+statement does not retire an earlier one — see `doc/distribution/findings.md`'s
+2026-09-12 and 2026-09-14 entries.
 **Actions**: threat-model pass over the three seams of 40/43 §BoundaryPolicy
 (spoofed announcements, replayed deltas, attention floods) to determine the minimum
 that defeats each — done for the hello seam (DSC1's adversarial suite: impersonation,
