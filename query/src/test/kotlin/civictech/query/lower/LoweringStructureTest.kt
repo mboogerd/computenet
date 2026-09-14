@@ -126,7 +126,8 @@ internal object PlanFixtures {
 
 /**
  * One structural test per lowering rule (computenet-cab.4.2, `[QRY1-LOWER-02]` for the
- * Scan/Select/Project/Join/SemiJoin/AntiJoin/Union rows): each asserts the emitted spawn's
+ * Scan/Select/Project/Join/SemiJoin/AntiJoin/Union rows; computenet-cab.4.3 for Intersect and
+ * Difference — OuterJoin is `OuterJoinFidelityTest`'s, GroupAggregate `AggregateLoweringTest`'s): each asserts the emitted spawn's
  * factory class and interpreter values and the connect topology, not any evaluated answer —
  * applying a spec to a host is the CompiledQuery task's.
  */
@@ -426,26 +427,83 @@ class LoweringStructureTest {
     }
 
     @Test
-    fun `Intersect, Difference, OuterJoin and a root GroupAggregate are refused as not yet lowered, all collected`() {
+    fun `Intersect lowers to IntersectSetCell with left and right connects`() {
+        val plan = LogicalPlan(mapOf("q" to Intersect(f.scan("r", "x"), f.scan("s", "x"), listOf("x"), setOf("r", "s"), false)))
+        val result = f.lowered(plan, f.catalog("r" to 1, "s" to 1))
+
+        result.spec.steps shouldContainExactly listOf(
+            SpawnStep("src:r", SetSourceFactory("r")),
+            SpawnStep("src:s", SetSourceFactory("s")),
+            SpawnStep("q/0:intersect", IntersectFactory(listOf("x"))),
+            ConnectStep("src:r", "outlet", "q/0:intersect", "left"),
+            ConnectStep("src:s", "outlet", "q/0:intersect", "right"),
+        )
+        result.outputHandles shouldBe mapOf("q" to "q/0:intersect")
+        f.spawns(result.spec.steps).single { it.handle == "q/0:intersect" }.factory.create(civictech.cell.CellRef(java.util.UUID.randomUUID()))
+            .shouldBeInstanceOf<civictech.cell.data.op.IntersectSetCell<*>>()
+    }
+
+    @Test
+    fun `Intersect or Difference whose operands disagree on columns is refused`() {
         val r = f.scan("r", "x")
-        val s = f.scan("s", "x")
+        val s = f.scan("s", "y")
         val plan = LogicalPlan(
             mapOf(
                 "a" to Intersect(r, s, listOf("x"), setOf("r", "s"), false),
                 "b" to Difference(r, s, listOf("x"), setOf("r", "s"), false),
-                "c" to OuterJoin(r, s, listOf(JoinKey("x", "x")), OuterJoinSide.LEFT, listOf("x"), setOf("r", "s"), false),
-                "d" to f.groupAggregate(f.scan("r", "x")),
             ),
         )
-        val refusals = f.refused(plan, f.catalog("r" to 1, "s" to 1)).refusals
-
-        refusals.map { it.nodeKind to it.locus.id } shouldContainExactly listOf(
+        f.refused(plan, f.catalog("r" to 1, "s" to 1)).refusals.map { it.nodeKind to it.locus.id } shouldContainExactly listOf(
             "Intersect" to "a/0:intersect",
             "Difference" to "b/0:difference",
-            "OuterJoin" to "c/0:outerjoin",
-            "GroupAggregate" to "d/0:groupaggregate",
         )
-        refusals.forEach { it.reason shouldBe Lowering.NOT_YET_LOWERED }
+    }
+
+    @Test
+    fun `Difference lowers to SemiJoinCell negated=true on identity RowKeys`() {
+        val plan = LogicalPlan(mapOf("q" to Difference(f.scan("r", "x", "y"), f.scan("s", "x", "y"), listOf("x", "y"), setOf("r", "s"), false)))
+        val result = f.lowered(plan, f.catalog("r" to 2, "s" to 2))
+
+        result.spec.steps shouldContainExactly listOf(
+            SpawnStep("src:r", SetSourceFactory("r")),
+            SpawnStep("src:s", SetSourceFactory("s")),
+            SpawnStep(
+                "q/0:difference",
+                SemiJoinFactory(
+                    leftKey = RowKey(listOf("x", "y"), listOf("x", "y")),
+                    rightKey = RowKey(listOf("x", "y"), listOf("x", "y")),
+                    negated = true,
+                    emitOnFrontier = false,
+                ),
+            ),
+            ConnectStep("src:r", "outlet", "q/0:difference", "left"),
+            ConnectStep("src:s", "outlet", "q/0:difference", "right"),
+        )
+        // Disjoint provenance: the same EventuallyConsistent diagnostic AntiJoin gets.
+        result.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.EventuallyConsistent>().handle shouldBe "q/0:difference"
+    }
+
+    @Test
+    fun `QRY1 §LOWER-08 §LOWER-09 Difference is gated by the AntiJoin rule - shared shallow gated, shared deep GateNotProvable`() {
+        val catalog = f.catalog("e" to 2)
+        val shallow = Difference(
+            f.scan("e", "x", "y"),
+            f.select(f.scan("e", "x", "y"), f.v("y"), ComparisonOp.GT, f.int(0)),
+            listOf("x", "y"), setOf("e"), false,
+        )
+        val shallowResult = f.lowered(LogicalPlan(mapOf("q" to shallow)), catalog)
+        differenceFactory(shallowResult).emitOnFrontier shouldBe true
+        shallowResult.diagnostics.shouldBeEmpty()
+
+        val deep = Difference(
+            f.scan("e", "x", "y"),
+            f.project(f.select(f.scan("e", "x", "y"), f.v("y"), ComparisonOp.GT, f.int(0)), "x", "y"),
+            listOf("x", "y"), setOf("e"), false,
+        )
+        val deepResult = f.lowered(LogicalPlan(mapOf("q" to deep)), catalog)
+        differenceFactory(deepResult).emitOnFrontier shouldBe false
+        val notProvable = deepResult.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>()
+        notProvable shouldBe Gating.decide(deep.left, deep.right, Locus.PlanNode("q/0:difference"), "q/0:difference").diagnostic
     }
 
     @Test
@@ -522,6 +580,9 @@ class LoweringStructureTest {
 
     private fun stripComments(source: String): String =
         source.replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "").replace(Regex("""//[^\n]*"""), "")
+
+    private fun differenceFactory(result: LoweringResult.Lowered): SemiJoinFactory =
+        f.spawns(result.spec.steps).single { it.handle == "q/0:difference" }.factory.shouldBeInstanceOf<SemiJoinFactory>()
 
     private fun antiJoinFactory(result: LoweringResult.Lowered): SemiJoinFactory =
         f.spawns(result.spec.steps).single { it.handle == "q/0:antijoin" }.factory.shouldBeInstanceOf<SemiJoinFactory>()

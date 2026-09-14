@@ -213,6 +213,28 @@ data class RowCombinePadded(
 }
 
 /**
+ * `(Row) -> Iterable<Row>`: the null-padding transform of an outer join's unmatched rows
+ * (`RelationalGraphs`' `$name-null` `FlatMapSetCell`, which applies `combine(a, null)`). Reads
+ * each of [outputColumns] by name from a [inputColumns]-shaped row, and pads `null` for every
+ * column the row does not carry — the missing side's columns. A column both sides share (the
+ * merged join key the planner emits as ONE output column) is read from the present row, so a
+ * right-only row of a RIGHT/FULL outer join carries its own key value, not `null`. Always
+ * returns exactly one row.
+ */
+data class RowPad(val inputColumns: List<String>, val outputColumns: List<String>) :
+    (Row) -> Iterable<Row>, Serializable {
+
+    private val inputIndex: Map<String, Int> = inputColumns.withIndex().associate { it.value to it.index }
+
+    override fun invoke(row: Row): Iterable<Row> {
+        require(row.values.size == inputColumns.size) {
+            "RowPad: row arity ${row.values.size} != inputColumns arity ${inputColumns.size}"
+        }
+        return listOf(Row(outputColumns.map { name -> inputIndex[name]?.let { row.values[it] } }))
+    }
+}
+
+/**
  * `(Row) -> Any?`: the `Aggregators.minOf`/`maxOf`/`topK` selector — reads [column] out of a
  * [columns]-shaped row without widening it.
  */
