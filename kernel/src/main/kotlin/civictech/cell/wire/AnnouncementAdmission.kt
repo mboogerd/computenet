@@ -214,14 +214,17 @@ data class AnnouncementRejection(val reason: DenialReason, val detail: String)
  *   too; the key check reports [DenialReason.ID_MISMATCH] only because it runs
  *   first.
  *
- * **Caveat, stated here rather than only in the review:** the ordering pin
- * that was measured is `WsAnnouncementIdentityTest`'s connection-bound case
- * (`computenet-ssa.4.4`). `SignedAnnouncementTest`'s BS-08 was measured, before
- * this feature, to stay green with the blocks moved below the verify call,
- * because its directory verifier was then asked about the frame's claimed
- * minting peer; now that the verifier is asked about the bound identity, that
- * measurement is stale and has not been re-run. The order is a deliberate
- * choice for the first bullet's sake.
+ * **Caveat, stated here rather than only in the review:** before this feature
+ * the order was pinned only by `WsAnnouncementIdentityTest`'s connection-bound
+ * case (`computenet-ssa.4.4`); `SignedAnnouncementTest`'s BS-08 stayed green
+ * with the binding check moved below the verify call, because its directory
+ * verifier was then asked about the frame's claimed minting peer. Re-measured
+ * at the `computenet-5y8t.7.1` review, with only the
+ * `KeyId(signerKeyId) != boundKey` block moved below the verify call (the two
+ * null-binding blocks cannot move — there is no identity to verify under): it
+ * compiles, and BS-08, the named-peer key-mismatch case, the secrecy test and
+ * `WsAnnouncementIdentityTest`'s ordering case all report `BAD_SIGNATURE`
+ * instead — both suites now pin the order, for both verifier shapes.
  */
 class AnnouncementAdmission private constructor(
     private val config: AnnouncementVerification,

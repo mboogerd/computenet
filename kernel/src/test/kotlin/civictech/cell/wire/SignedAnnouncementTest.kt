@@ -848,9 +848,10 @@ class SignedAnnouncementTest {
      * binding check reported ID_MISMATCH on either side of the verify call
      * (measured then). Since that feature the verifier is asked about the bound
      * identity A, so B's signature verifies `false` and a verify-first order
-     * would report BAD_SIGNATURE here too — a changed premise, not re-measured
-     * for the ordering. The ordering pin of record is `:wire`'s
-     * `WsAnnouncementIdentityTest`.
+     * reports BAD_SIGNATURE here too — measured at the `computenet-5y8t.7.1`
+     * review by moving the `KeyId(signerKeyId) != boundKey` block below the
+     * verify call: this case goes red at its `reason` line, so it now pins the
+     * order as well as `:wire`'s `WsAnnouncementIdentityTest` does.
      *
      * The discriminating half is the second feed: **the very same bytes** are
      * accepted on a connection bound to B. So the refusal is about the
