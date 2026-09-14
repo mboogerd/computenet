@@ -52,8 +52,9 @@ enum class RejectionCode {
     UNSAFE_RULE,
 
     /**
-     * A rule's head predicate is also a relation declared in the [Catalog][civictech.query.schema.Catalog]
-     * — a rule cannot redefine an EDB (extensional database) relation.
+     * A rule's head predicate, or a `define` statement's head predicate (computenet-bmq7i),
+     * is also a relation declared in the [Catalog][civictech.query.schema.Catalog] — neither a
+     * rule nor a `define` statement can redefine an EDB (extensional database) relation.
      *
      * [QRY1-LANG-08]
      */
