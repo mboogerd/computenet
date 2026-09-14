@@ -110,12 +110,54 @@ class VectorDocument(
         }
 
         /**
+         * `[a-numeric literal RFC 8259 §6 permits]`: an optional `-`, then `0` or a
+         * non-zero digit followed by more digits (no leading zero), an optional
+         * `.` fraction of one-or-more digits, and an optional `e`/`E` exponent
+         * with an optional sign and one-or-more digits. Anything else that
+         * [Json.parseToJsonElement] accepted as an unquoted, non-boolean,
+         * non-null literal (`01`, `.5`, `1.`, `NaN`, a bare word) is not valid
+         * JSON and this parser must not be more permissive than SCHEMA.md's
+         * "implementation-neutral" corpus requires.
+         */
+        private val RFC8259_NUMBER: Regex = Regex("^-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?$")
+
+        /**
+         * Walks every primitive under [element], refusing a non-string
+         * [JsonPrimitive] whose content is not `true`, `false`, `null`, or an
+         * [RFC8259_NUMBER]. `Json.parseToJsonElement`'s default parser is
+         * lenient and accepts unquoted literals RFC 8259 does not (`01`, `.5`,
+         * `1.`, `NaN`, `abc`) — see the class doc and this task's bead
+         * (computenet-v7s6t). [path] is a `$`-rooted JSON-path-like locator
+         * reported in the refusal.
+         */
+        private fun requireRfc8259Literals(element: JsonElement, path: String, file: Path) {
+            when (element) {
+                is JsonObject -> element.forEach { (key, value) -> requireRfc8259Literals(value, "$path.$key", file) }
+                is JsonArray -> element.forEachIndexed { i, value -> requireRfc8259Literals(value, "$path[$i]", file) }
+                is JsonPrimitive -> {
+                    if (element.isString) return
+                    val content = element.content
+                    if (content != "true" && content != "false" && content != "null" && !RFC8259_NUMBER.matches(content)) {
+                        throw VectorSchemaException(
+                            "$file: $path: literal \"$content\" is not RFC 8259 JSON (must be true, false, null, or a " +
+                                "JSON number matching ${RFC8259_NUMBER.pattern}) — kotlinx's lenient parser accepted it " +
+                                "but a non-JVM driver reading this corpus would refuse it (SCHEMA.md's implementation " +
+                                "neutrality, computenet-v7s6t)",
+                        )
+                    }
+                }
+            }
+        }
+
+        /**
          * Enforces SCHEMA.md on an already-parsed [obj] as though it were the
          * content of [file]. Parse numbers only through [Json.parseToJsonElement]
          * so 64-bit literals keep their spelling.
          */
         fun parse(obj: JsonObject, file: Path, corpusRoot: Path): VectorDocument {
             fun refuse(rule: String): Nothing = throw VectorSchemaException("$file: $rule")
+
+            requireRfc8259Literals(obj, "$", file)
 
             val unknown = obj.keys - TOP_LEVEL_KEYS
             if (unknown.isNotEmpty()) {
