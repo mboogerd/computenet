@@ -1,0 +1,29 @@
+{
+  "id": "WV-PAYLOAD-DOUBLE-01",
+  "title": "Double args pinning kotlin.Double's discriminator and JVM Double.toString renderings",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C11", "WIR1-C16", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I18"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "kotlin.Double", "value": 1.0},
+        {"type": "kotlin.Double", "value": 0.1},
+        {"type": "kotlin.Double", "value": 1e21}
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"kotlin.Double\",1.0],[\"kotlin.Double\",0.1],[\"kotlin.Double\",1.0E21]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1sia290bGluLkRvdWJsZSIsMS4wXSxbImtvdGxpbi5Eb3VibGUiLDAuMV0sWyJrb3RsaW4uRG91YmxlIiwxLjBFMjFdXX0="
+  },
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here. Three args on a one-parameter contract is legal for this codec vector: WireCodec.encode/decodeFrame perform no arity check against the contract descriptor (a codec vector, not a deliverable invocation). OBSERVED on the wire: 1.0 -> 1.0, 0.1 -> 0.1, 1e21 -> 1.0E21 — exactly JDK Double.toString's shortest-round-trip rendering (Java's scientific-notation threshold and mantissa spelling), pinned-because-current ([WIR1-C16]): another runtime's shortest-round-trip formatter may spell 1e21 differently, and that is a NONDETERMINISM.md matter for whichever driver hits it, not a defect here. OBSERVED discriminator spelling: `\"kotlin.Double\"` (quoted, in discriminator position), resolving SCHEMA.md's `unverified:` call-out for Double and NONDETERMINISM.md's Findings entry for this feature ([WIR1-I18]) — this is the first vector anywhere in the corpus to pin a primitive discriminator's bytes. Confirmed identical across three independent JVM runs (two EncodingDeterminismTest --rerun forks plus the :wire:wireVectors JavaExec)."
+}
