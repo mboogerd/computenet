@@ -9,6 +9,7 @@ import civictech.query.diag.Locus
 import civictech.query.diag.Rejection
 import civictech.query.diag.RejectionCode
 import civictech.query.plan.outerJoinRightRename
+import civictech.query.plan.setOpColumns
 
 /**
  * The fence in front of `civictech.query.plan.Planner` (cab.5-D6, computenet-cab.5.1): every
@@ -50,12 +51,11 @@ import civictech.query.plan.outerJoinRightRename
  *
  * The definition-expression column computation mirrors the planner's private
  * `normalizeExpr`/`exprColumns` (positional set-operation operands, outer-join right columns
- * after key merging and renaming apart). The set-operation column rule (left operand wins) is
- * still a copy: `normalizeExpr`/`exprColumns` stay private to `Planner.kt`, so if that rule
- * changes, this mirror has to change with it, and the totality corpus is what notices a
- * divergence. The outer-join key-merge/rename-apart rule is not a copy: it calls
- * [civictech.query.plan.outerJoinRightRename], the same function `normalizeExpr` calls, so a
- * change to that rename is felt here directly rather than only through the totality corpus.
+ * after key merging and renaming apart). Neither rule is a copy any more: the set-operation
+ * column rule calls [civictech.query.plan.setOpColumns] and the outer-join key-merge/rename-apart
+ * rule calls [civictech.query.plan.outerJoinRightRename], the same functions `normalizeExpr`
+ * calls, so a change to either is felt here directly rather than only through the totality
+ * corpus.
  */
 object WellFormednessAnalysis {
 
@@ -255,7 +255,7 @@ object WellFormednessAnalysis {
                             "(arity ${left.size}) vs right $right (arity ${right.size})",
                     )
                 }
-                left
+                setOpColumns(left, right)
             }
             is RelationalExpr.OuterJoin -> {
                 val left = columnsOf(at, expr.left, "${scope}L/")
