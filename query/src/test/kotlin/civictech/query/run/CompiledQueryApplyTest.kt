@@ -2,6 +2,8 @@ package civictech.query.run
 
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
@@ -201,20 +203,26 @@ class CompiledQueryApplyTest {
     }
 
     @Test
-    fun `OutputShape - a grouped-count root reports MAP_BY_GROUP where lowering succeeds, else refuses (not yet lowered)`() {
-        // On this base a root GroupAggregate always refuses (Lowering.NOT_YET_LOWERED); this
-        // asserts that refusal rather than stubbing the completion task's rule (bead
-        // instruction: "assert the refusal and note it, do not stub").
+    fun `OutputShape - a grouped-count root lowers, reports MAP_BY_GROUP, and its MapView holds live per-group counts`() {
         val catalog = PlanFixtures.catalog("r" to 2)
-        val logicalPlan = plan("@count cnt(X, C) :- r(X, C).", catalog)
-        val result = Lowering.lower(logicalPlan, catalog)
+        val compiled = compile("@count cnt(X, C) :- r(X, C).", catalog)
+        compiled.outputShapes["cnt"] shouldBe OutputShape.MAP_BY_GROUP
 
-        val refused = result.shouldBeInstanceOf<LoweringResult.Refused>()
-        refused.refusals.shouldHaveExactlyOneRefusalNotYetLowered()
-    }
+        val world = SimWorld(seed = 7)
+        val applied = compiled.applyTo(world.host.managementInlet)
+        val r = writerOf(world, applied.sources.getValue("r"))
+        val cnt = MapView<Row, Long>()
+        world.host.lookup(TypedRef<GroupByApi<Row, Row, Long>>(applied.outputs.getValue("cnt").ref))!!
+            .outlet.subscribe(Use.fixed(Propagate { delta -> cnt.apply(delta) }, PortRef.generate()))
 
-    private fun List<civictech.query.lower.LoweringRefusal>.shouldHaveExactlyOneRefusalNotYetLowered() {
-        this.size shouldBe 1
-        this.single().reason shouldBe Lowering.NOT_YET_LOWERED
+        r.add(row(1, 10))
+        r.add(row(1, 11))
+        r.add(row(2, 20))
+        world.runToIdle()
+        cnt.current() shouldBe mapOf(row(1) to 2L, row(2) to 1L)
+
+        r.remove(row(2, 20))
+        world.runToIdle()
+        cnt.current() shouldBe mapOf(row(1) to 2L) // a group's last retraction removes it.
     }
 }
