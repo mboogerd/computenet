@@ -26,6 +26,18 @@ package civictech.query.diag
  * `civictech.query.diag.DiagSerializationTest`'s KDoc for what is proven in the meantime).
  *
  * [QRY1-REJECT-02], [QRY1-REJECT-05]
+ *
+ * **Five codes deliberately absent (cab.5-D5).** [NON_TOTAL_ORDER] ([QRY1-SEM-06]),
+ * [MULTIWRITER_NONCONVERGENT] ([QRY1-SEM-07]), [WINDOW_CLOSE_UNSUPPORTED] ([QRY1-REJECT-07]),
+ * [GLOBAL_ORDER_UNSUPPORTED] ([QRY1-REJECT-08]) and [EXCLUSIVE_PAYLOAD] ([QRY1-REJECT-09]) are
+ * NOT variants of this enum: every antecedent they would name is unexpressible in today's
+ * admissible vocabulary (no tie-ambiguous selector — every `AttrType.runtimeType` is a
+ * totally-ordered `Comparable`; no declared multi-writer relation; no window or global-order
+ * construct in the AST or grammar; no `Owned`/`Leased`/`Frozen` `AttrType`), so adding one now
+ * would be a variant with no producing test, forbidden by [QRY1-REJECT-05]/cab.1-D1. Each
+ * unexpressibility is pinned by a named test in
+ * `civictech.query.diag.AdmissibleVocabularyTest` whose failure — the antecedent becoming
+ * constructible — names the code to add.
  */
 enum class RejectionCode {
 

@@ -163,12 +163,12 @@ private class RootWalk(
                 val expr = Expr.Cmp(node.condition.op, toExpr(node.condition.left), toExpr(node.condition.right))
                 when (val typed = ExprTyping.typeOf(expr, ColumnTypes.asMap(input.columns, input.types))) {
                     is TypingResult.Typed -> if (typed.type != AttrType.BOOL) {
-                        return refuse("[QRY1-HONEST-02] selection condition types to ${typed.type}, not BOOL")
+                        return refuse("[QRY1-LOWER-07] selection condition types to ${typed.type}, not BOOL")
                     }
                     is TypingResult.TypeMismatch ->
-                        return refuse("[QRY1-HONEST-02] comparison ${node.condition} compares ${typed.left} with ${typed.right}")
+                        return refuse("[QRY1-LOWER-07] comparison ${node.condition} compares ${typed.left} with ${typed.right}")
                     is TypingResult.UnknownAttribute ->
-                        return refuse("[QRY1-HONEST-02] comparison references unknown column '${typed.name}'")
+                        return refuse("[QRY1-LOWER-07] comparison references unknown column '${typed.name}'")
                 }
                 addSpawn(handle, FilterFactory(ExprPredicate(input.columns, expr)))
                 addConnect(input, handle, "inlet")
@@ -373,7 +373,7 @@ private class RootWalk(
     /**
      * A root `GroupAggregate` (cab.4-D8). Grouped → `GroupByCell` keyed on the group-by columns;
      * scalar `COUNT` → `CountCell` (`[24-OP-COUNT-01]`); any other scalar → `GroupByCell.global`.
-     * SUM/AVG are refused over anything but an INT/LONG column (`[QRY1-HONEST-02]`).
+     * SUM/AVG are refused over anything but an INT/LONG column (`[24-AGG-01]`).
      */
     private fun lowerAggregate(
         node: GroupAggregate,
@@ -405,7 +405,7 @@ private class RootWalk(
                 val (name, type) = needColumn() ?: return refuse("$kind needs an aggregated column")
                 if (type != AttrType.INT && type != AttrType.LONG) {
                     return refuse(
-                        "[QRY1-HONEST-02] $kind over $type column '$name' is refused: the kernel sums Long " +
+                        "[24-AGG-01] $kind over $type column '$name' is refused: the kernel sums Long " +
                             "only, never Double, because float sums are order-sensitive (Aggregator.kt:30)",
                     )
                 }
@@ -441,7 +441,7 @@ private class RootWalk(
         left.columns != columns || right.columns != columns ->
             "operand columns ${left.columns} and ${right.columns} differ from the output's $columns"
         left.types != right.types ->
-            "[QRY1-HONEST-02] operand column types ${left.types} and ${right.types} differ"
+            "[QRY1-LOWER-07] operand column types ${left.types} and ${right.types} differ"
         else -> null
     }
 
@@ -488,7 +488,7 @@ private class RootWalk(
             left.types[left.columns.indexOf(key.left)] != right.types[right.columns.indexOf(key.right)]
         }
         if (mismatched.isNotEmpty()) {
-            return "[QRY1-HONEST-02] join keys $mismatched equate columns of different types"
+            return "[QRY1-LOWER-07] join keys $mismatched equate columns of different types"
         }
         return null
     }
