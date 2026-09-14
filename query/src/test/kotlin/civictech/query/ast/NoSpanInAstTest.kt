@@ -1,5 +1,6 @@
 package civictech.query.ast
 
+import civictech.query.architecture.HierarchyCompleteness
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
@@ -89,6 +90,20 @@ class NoSpanInAstTest {
      */
     private fun instanceFields(type: Class<*>): List<Field> =
         type.declaredFields.filterNot { it.isSynthetic || Modifier.isStatic(it.modifiers) }
+
+    @Test
+    fun `astTypes names every permitted subclass of Term, Literal and RelationalExpr`() {
+        // The fourth hand-maintained type-list guard in this module (computenet-njvps),
+        // added in the same pass as DiagShapeTest/PlanNoFunctionTypedPropertyTest/
+        // schema.NoFunctionTypedPropertyTest's completeness guards even though a review had
+        // already confirmed astTypes covers all 21 declared ast types today.
+        val missing = HierarchyCompleteness.missingFrom(Term::class.java, astTypes) +
+            HierarchyCompleteness.missingFrom(Literal::class.java, astTypes) +
+            HierarchyCompleteness.missingFrom(RelationalExpr::class.java, astTypes)
+        withClue("astTypes is missing sealed-hierarchy members: $missing") {
+            missing.shouldBeEmpty()
+        }
+    }
 
     @Test
     fun `no ast type declares a source span or producer marker`() {

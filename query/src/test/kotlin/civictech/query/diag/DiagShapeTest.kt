@@ -1,5 +1,6 @@
 package civictech.query.diag
 
+import civictech.query.architecture.HierarchyCompleteness
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import org.junit.jupiter.api.Test
@@ -37,6 +38,20 @@ class DiagShapeTest {
         val nonSerializable = diagTypes.filterNot { Serializable::class.java.isAssignableFrom(it) }
         withClue("diag types not implementing java.io.Serializable: $nonSerializable") {
             nonSerializable.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `diagTypes names every permitted subclass of the Locus and CompileResult hierarchies`() {
+        // This is the completeness backstop the class KDoc's "extend diagTypes" discipline
+        // itself has no guard for: computenet-cab.2.3 added Locus.RuleStatement and this list
+        // did not name it until a review caught it (computenet-njvps). Locus and
+        // CompileResult are the sealed roots in this package; RejectionCode and Rejection are
+        // plain (non-sealed) diag types with no permitted-subclass set to check.
+        val missing = HierarchyCompleteness.missingFrom(Locus::class.java, diagTypes) +
+            HierarchyCompleteness.missingFrom(CompileResult::class.java, diagTypes)
+        withClue("diagTypes is missing sealed-hierarchy members: $missing") {
+            missing.shouldBeEmpty()
         }
     }
 

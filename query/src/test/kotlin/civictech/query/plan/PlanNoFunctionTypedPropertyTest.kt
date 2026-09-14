@@ -1,5 +1,6 @@
 package civictech.query.plan
 
+import civictech.query.architecture.HierarchyCompleteness
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -48,6 +49,17 @@ class PlanNoFunctionTypedPropertyTest {
         }
         withClue("Function-typed fields found on plan types (violates [QRY1-LANG-06]): $offenders") {
             offenders.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `planTypes names every permitted subclass of PlanNode`() {
+        // planTypes is the same style of hand-maintained list DiagShapeTest.diagTypes is
+        // (computenet-njvps); PlanNode is sealed with an exhaustive `when` backstop
+        // elsewhere (PlanOrder.allNodes) but this list has none of its own without this test.
+        val missing = HierarchyCompleteness.missingFrom(PlanNode::class.java, planTypes)
+        withClue("planTypes is missing sealed-hierarchy members: $missing") {
+            missing.shouldBeEmpty()
         }
     }
 
