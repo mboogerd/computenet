@@ -31,12 +31,18 @@ name: iroh-sidecar
 # Decided (2026-08-31, sync-report follow-up): warm runs of this lane measured
 # ~2m10s-2m50s over 10 recent PRs (this workflow's own timed steps corroborate
 # that figure); acceptable added latency on every required PR. This job is the
-# ONLY place the sidecar-backed JVM tests (23 total, run below under
+# ONLY place the sidecar-backed JVM tests (run below under
 # `:iroh:check -Piroh.enabled=true`) execute — none of the other six required
 # lanes passes `-Piroh.enabled`, so they build/run only :iroh's
-# flag-independent sources — SidecarCodecTest (12) and IrohSessionHelloTest
-# (4), 16 of the 23. A Linux regression in IrohTransport, SidecarClient or
-# SidecarProcess now blocks auto-merge, as intended.
+# flag-independent sources (SidecarCodecTest and IrohSessionHelloTest); every
+# other test class in the module — including IrohPeeringTest, IrohReconnectTest,
+# SidecarExchangeTest and SidecarHandshakeTest — runs only here. A Linux
+# regression in IrohTransport, SidecarClient or SidecarProcess now blocks
+# auto-merge, as intended. (Deliberately no test-count figure: annotation
+# counts and executed counts have drifted apart before — computenet-5erzg —
+# so this comment states the coverage split instead of a number that goes
+# stale. For the executed count on a given run, read the `:iroh:test` step's
+# PASSED/FAILED/SKIPPED tally in that run's job log.)
 #
 # A cold run (cache miss) is not yet measured here; the 20-minute job timeout
 # above is the current backstop. If a cold run turns out to dominate merge
@@ -240,8 +246,9 @@ jobs:
       # (iroh/build.gradle.kts's own comment makes the same point about
       # cargoTest re-building). Since computenet-egl.2, :iroh applies
       # buildsrc.convention.kotlin-jvm, so `:iroh:check` now also runs
-      # `:iroh:test` — the module's 23 JVM tests, including IrohPeeringTest,
-      # IrohReconnectTest, SidecarExchangeTest and SidecarHandshakeTest.
+      # `:iroh:test` — the module's JVM tests, including IrohPeeringTest,
+      # IrohReconnectTest, SidecarExchangeTest and SidecarHandshakeTest (no
+      # fixed count here; see the header's note on why, computenet-5erzg).
       # `check` is still the right target (it subsumes `test` plus the
       # cargoTest wiring), not a substitute for a missing `:iroh:test` task.
       # See the workflow header (computenet-eys1) for the coverage and
