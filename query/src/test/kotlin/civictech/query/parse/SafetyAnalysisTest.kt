@@ -22,10 +22,11 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * [SafetyAnalysis]'s UNSAFE_RULE ([QRY1-LANG-07]) and EDB_REDEFINED ([QRY1-LANG-08]) checks,
- * plus the cross-cutting totality and multi-rejection-aggregation properties both checks
- * share with RECURSION_UNSUPPORTED. `RecursionRefusalTest` covers RECURSION_UNSUPPORTED
- * itself.
+ * [SafetyAnalysis]'s UNSAFE_RULE ([QRY1-LANG-07]) and EDB_REDEFINED ([QRY1-LANG-08]) checks —
+ * the latter over both [civictech.query.ast.Query.rules] and [civictech.query.ast.Query.definitions]
+ * (computenet-bmq7i) — plus the cross-cutting totality and multi-rejection-aggregation
+ * properties both checks share with RECURSION_UNSUPPORTED. `RecursionRefusalTest` covers
+ * RECURSION_UNSUPPORTED itself.
  */
 class SafetyAnalysisTest {
 
@@ -167,10 +168,40 @@ class SafetyAnalysisTest {
     }
 
     @Test
+    fun `a define statement's head redefining a declared EDB relation rejects EDB_REDEFINED`() {
+        // Catalog declares EDB relation r; define r(X) := s(X). — same collision as the
+        // rule-head case above, but via Query.definitions instead of Query.rules
+        // (computenet-bmq7i: edbRedefinedRejections walked only rules before this fix).
+        val definition = Definition(
+            head = Atom("r", listOf(x())),
+            expr = RelationalExpr.Relation(Atom("s", listOf(x()))),
+        )
+        val query = Query(rules = emptyList(), catalog = edbCatalog, definitions = listOf(definition))
+
+        val rejections = SafetyAnalysis.analyze(query)
+
+        rejections shouldHaveSize 1
+        rejections.single().code shouldBe RejectionCode.EDB_REDEFINED
+        rejections.single().locus shouldBe Locus.RuleStatement(ruleIndex = 0, headPredicate = "r")
+    }
+
+    @Test
+    fun `a define statement's head naming a predicate absent from the Catalog does not reject EDB_REDEFINED`() {
+        val definition = Definition(
+            head = Atom("derivedOnly", listOf(x())),
+            expr = RelationalExpr.Relation(Atom("s", listOf(x()))),
+        )
+        val query = Query(rules = emptyList(), catalog = edbCatalog, definitions = listOf(definition))
+
+        SafetyAnalysis.analyze(query).shouldBeEmpty()
+    }
+
+    @Test
     fun `a definition's set-op operand leaf variables do not confuse the safety check for the rule sharing its predicate`() {
-        // Only Query.rules are subject to UNSAFE_RULE / EDB_REDEFINED (see this file's own
-        // and SafetyAnalysis's KDoc for why); this asserts the presence of a definitions list
-        // entry alongside a rule does not perturb the rule's own analysis.
+        // Only Query.rules are subject to UNSAFE_RULE (see this file's own and SafetyAnalysis's
+        // KDoc for why); this asserts the presence of a definitions list entry alongside a rule
+        // does not perturb the rule's own analysis. This definition's head ("either") does not
+        // collide with the empty catalog, so it also draws no EDB_REDEFINED.
         val safeRule = Rule(
             head = Atom("q", listOf(x())),
             body = listOf(Literal.Positive(Atom("r", listOf(x())))),

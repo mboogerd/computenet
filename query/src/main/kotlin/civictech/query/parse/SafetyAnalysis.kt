@@ -14,19 +14,21 @@ import civictech.query.diag.RejectionCode
  *
  * - **UNSAFE_RULE** ([QRY1-LANG-07]): a rule head, negated-atom, or comparison variable that
  *   does not occur in any positive body atom of the same rule.
- * - **EDB_REDEFINED** ([QRY1-LANG-08]): a rule head predicate that is also a relation
- *   declared in the [Query.catalog].
+ * - **EDB_REDEFINED** ([QRY1-LANG-08]): a rule head predicate, or a `define` statement's
+ *   head predicate ([civictech.query.ast.Definition], computenet-bmq7i), that is also a
+ *   relation declared in the [Query.catalog].
  * - **RECURSION_UNSUPPORTED** ([QRY1-LANG-09]): a rule that reaches its own head predicate
  *   through [RuleGraph]'s head-predicate dependency graph — self- or mutual recursion.
  *
- * Both UNSAFE_RULE and EDB_REDEFINED are checked over [Query.rules] only, per the acceptance
- * criteria's own wording ("a rule is unsafe", "a rule head predicate") — [civictech.query.ast.Definition]
- * has no body literals (no negation, no comparison) for UNSAFE_RULE to check, and no
- * acceptance criterion asks whether a definition's head redefines an EDB relation. Only
- * RECURSION_UNSUPPORTED's [RuleGraph] walks [Query.definitions] as well as [Query.rules] —
- * see [RuleGraph]'s KDoc for why, and the danger this project's own AGENTS.md names: an
- * analysis that walks only [Query.rules] would make every `define` statement unreachable
- * through the very refusal it exists to raise for recursive statements.
+ * UNSAFE_RULE is checked over [Query.rules] only, per the acceptance criteria's own wording
+ * ("a rule is unsafe") — [civictech.query.ast.Definition] has no body literals (no negation,
+ * no comparison) for it to check. EDB_REDEFINED and RECURSION_UNSUPPORTED both walk
+ * [Query.definitions] as well as [Query.rules] — see [RuleGraph]'s KDoc for why
+ * RECURSION_UNSUPPORTED does, and the danger this project's own AGENTS.md names: an analysis
+ * that walks only [Query.rules] would make every `define` statement unreachable through the
+ * very refusal it exists to raise. Nothing downstream consumes [Query.definitions] yet, but
+ * the window in which an EDB-redefining `define` would produce a wrong answer opens exactly
+ * when definitions are lowered (computenet-cab.4) — this closes it ahead of that.
  *
  * All three analyses are **total**: [analyze] never throws on any well-formed [Query]
  * ([QRY1-REJECT-03]'s front-door share) and no `LogicalPlan`/graph is compiled here or on
@@ -114,6 +116,17 @@ object SafetyAnalysis {
                     locus = ruleLocus(query, index, spans),
                     specId = "[QRY1-LANG-08]: rule head redefines EDB relation " +
                         "'${rule.head.predicate}' declared in the Catalog",
+                )
+            }
+        }
+        query.definitions.forEachIndexed { index, definition ->
+            if (definition.head.predicate in query.catalog.relations) {
+                rejections += Rejection(
+                    code = RejectionCode.EDB_REDEFINED,
+                    locus = spans?.definitionSpan(index)
+                        ?: Locus.RuleStatement(index, definition.head.predicate),
+                    specId = "[QRY1-LANG-08]: define statement head redefines EDB relation " +
+                        "'${definition.head.predicate}' declared in the Catalog",
                 )
             }
         }
