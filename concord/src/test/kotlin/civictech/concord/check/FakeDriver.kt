@@ -27,6 +27,11 @@ class FakeDriver(
     private val effects: Map<CellId, List<Effect>> = emptyMap(),
     private val emissions: Map<CellId, Long> = emptyMap(),
     private val refusals: Map<CellId, Long> = emptyMap(),
+    // Cells whose replica has departed (despawned/evicted): readView throws
+    // NoSuchElementException for these, exactly as the real in-process binding
+    // does for a removed cell table key (see Checks.replicasConverge's KDoc,
+    // G-45). Lets tests simulate the departed-replica shape without a kernel.
+    private val departed: Set<CellId> = emptySet(),
 ) : Driver {
     override fun createHost(hostId: HostId) {}
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {}
@@ -35,8 +40,10 @@ class FakeDriver(
     override fun disconnect(linkRef: LinkRef): LinkResult = LinkResult.Connected(linkRef)
     override fun apply(cellId: CellId, op: String, value: Value?) {}
     override fun quiesce(budget: Int): QuiesceReport = QuiesceReport(settled = true, steps = 0)
-    override fun readView(cellId: CellId): Value =
-        views[cellId] ?: error("FakeDriver: no view fixture for '$cellId'")
+    override fun readView(cellId: CellId): Value {
+        if (cellId in departed) throw NoSuchElementException("FakeDriver: '$cellId' has departed")
+        return views[cellId] ?: error("FakeDriver: no view fixture for '$cellId'")
+    }
     override fun observationLog(cellId: CellId): List<Value> = observations[cellId].orEmpty()
     // A bounded read is an *event* the runner performs and records into
     // CheckContext.reads; a check never calls these back. The fixtures the two
