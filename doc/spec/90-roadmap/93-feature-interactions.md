@@ -10988,8 +10988,14 @@ unauthenticated (legacy or uncredentialed) hello at `TransportVouched`, while
 (`WsTransport.Session.onLegacyHello`) so every peer admitted under it is
 `Authenticated` — **no central lookup service, no global identity
 registry** (P4, P10). An anchor-bound side (`AnchorVouchedBinding`) is not
-byte-for-byte under either policy: a statement-less hello is refused
-`UNVOUCHED` independent of `PeerAuthPolicy` (43-security.md §G-29, §Phasing).
+byte-for-byte under either policy: a statement-less HELLO2/HELLO3 (or
+IROH-HELLO1) is refused `UNVOUCHED` independent of `PeerAuthPolicy` — their
+admission body resolves identity before any policy check runs. Its legacy
+hello differs: `WsTransport.Session.onLegacyHello` checks `side.auth` before
+it reads the binding's resolution, so under `RequireAuthenticated` it is
+refused `AUTH_REQUIRED` instead — the same downgrade an Interim-bound side
+gives — and only under `Open` does an anchor-bound side reach the resolution
+and refuse the legacy hello `UNVOUCHED` (43-security.md §G-29, §Phasing).
 Sybil resistance = the *cost* of minting an `Authenticated` identity
 plus per-`Principal` quotas (§4.4).
 
@@ -11135,8 +11141,13 @@ class*:
    unlocking the predicates (`integrity`, high-`minAuth` protocol authority) that
    transport-vouched identity cannot safely satisfy. An anchor-bound side
    (`AnchorVouchedBinding`) is not byte-for-byte under either policy: a statement-less
-   hello is refused `UNVOUCHED` independent of `PeerAuthPolicy` (43-security.md §G-29,
-   §Phasing). Encryption-in-transit stays transport
+   HELLO2/HELLO3 (or IROH-HELLO1) is refused `UNVOUCHED` independent of `PeerAuthPolicy`
+   — their admission body resolves identity before any policy check runs. Its legacy
+   hello differs: `onLegacyHello` checks `side.auth` before it reads the binding's
+   resolution, so under `RequireAuthenticated` it is refused `AUTH_REQUIRED` instead —
+   the same downgrade an Interim-bound side gives — and only under `Open` does an
+   anchor-bound side reach the resolution and refuse the legacy hello `UNVOUCHED`
+   (43-security.md §G-29, §Phasing). Encryption-in-transit stays transport
    config (`wss://`, `40/43`); encryption-at-rest remains a follow-on (§8).
 
 ##### 4.5 The load-bearing summary
