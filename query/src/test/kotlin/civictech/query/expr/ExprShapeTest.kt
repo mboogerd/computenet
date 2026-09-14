@@ -39,6 +39,7 @@ class ExprShapeTest {
         RowKey::class.java,
         RowCombine::class.java,
         RowCombinePadded::class.java,
+        RowPad::class.java,
         RowSelector::class.java,
         RowLongSelector::class.java,
     )

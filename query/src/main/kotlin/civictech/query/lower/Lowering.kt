@@ -5,6 +5,7 @@ import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.GraphStep
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
+import civictech.query.ast.AggregateKind
 import civictech.query.ast.Term
 import civictech.query.diag.Locus
 import civictech.query.expr.Expr
@@ -12,7 +13,10 @@ import civictech.query.expr.ExprPredicate
 import civictech.query.expr.ExprTyping
 import civictech.query.expr.RowCombine
 import civictech.query.expr.RowKey
+import civictech.query.expr.RowLongSelector
+import civictech.query.expr.RowPad
 import civictech.query.expr.RowProjection
+import civictech.query.expr.RowSelector
 import civictech.query.expr.TypingResult
 import civictech.query.plan.AntiJoin
 import civictech.query.plan.Difference
@@ -22,6 +26,7 @@ import civictech.query.plan.Join
 import civictech.query.plan.JoinKey
 import civictech.query.plan.LogicalPlan
 import civictech.query.plan.OuterJoin
+import civictech.query.plan.OuterJoinSide
 import civictech.query.plan.PlanNode
 import civictech.query.plan.PlanOrder
 import civictech.query.plan.Project
@@ -54,14 +59,15 @@ import civictech.query.schema.Catalog
  * this path iterates a hash-ordered collection, which with data-class factories is what makes
  * two lowerings of one plan `==` and byte-identical (`[QRY1-LOWER-05]`).
  *
- * **Rules owned here:** Scan, Select, Project, Join, SemiJoin, AntiJoin, Union. Intersect,
- * Difference, OuterJoin and a root GroupAggregate refuse as "not yet lowered" until the
- * completion task replaces them. A non-root GroupAggregate refuses permanently: its outlet is
- * a `MapDelta` stream and no kernel operator consumes one as a relation.
+ * **Rules:** every [PlanNode] kind — Scan, Select, Project, Join, SemiJoin, AntiJoin, Union
+ * (computenet-cab.4.2); Intersect, Difference, OuterJoin (a mirror of the `RelationalGraphs`
+ * composition, see `lowerOuterJoin`) and a root GroupAggregate (computenet-cab.4.3). A non-root
+ * GroupAggregate refuses permanently: its outlet is a `MapDelta` stream and no kernel operator
+ * consumes one as a relation. §3.2's `LookupJoinCell`, `Windows` and `QuorumSetCell` rows are
+ * unreachable from the plan vocabulary (no map-shaped input, no window construct, excluded by
+ * cab.4-D4), not unimplemented.
  */
 object Lowering {
-
-    const val NOT_YET_LOWERED = "not yet lowered"
 
     const val AGGREGATE_NOT_A_RELATION =
         "aggregate output is a MapDelta stream; no kernel operator consumes it as a relation"
@@ -237,28 +243,206 @@ private class RootWalk(
             }
 
             is GroupAggregate -> {
-                lower(node.input, isRoot = false)
-                refuse(if (isRoot) Lowering.NOT_YET_LOWERED else Lowering.AGGREGATE_NOT_A_RELATION)
+                val input = lower(node.input, isRoot = false)
+                if (!isRoot) return refuse(Lowering.AGGREGATE_NOT_A_RELATION)
+                if (input == null) return null
+                lowerAggregate(node, input, handle, ::refuse)
             }
 
             is Intersect -> {
-                lower(node.left, isRoot = false)
-                lower(node.right, isRoot = false)
-                refuse(Lowering.NOT_YET_LOWERED)
+                val left = lower(node.left, isRoot = false)
+                val right = lower(node.right, isRoot = false)
+                if (left == null || right == null) return null
+                setOperandProblem(node.outputColumns, left, right)?.let { return refuse("intersect: $it") }
+                addSpawn(handle, IntersectFactory(node.outputColumns))
+                addConnect(left, handle, "left")
+                addConnect(right, handle, "right")
+                LoweredNode(handle, node.outputColumns, left.types)
             }
 
             is Difference -> {
-                lower(node.left, isRoot = false)
-                lower(node.right, isRoot = false)
-                refuse(Lowering.NOT_YET_LOWERED)
+                val left = lower(node.left, isRoot = false)
+                val right = lower(node.right, isRoot = false)
+                if (left == null || right == null) return null
+                setOperandProblem(node.outputColumns, left, right)?.let { return refuse("difference: $it") }
+                // The identity-key antijoin: a Row is its own key ([24-OP-SEMIJOIN-01]).
+                addSpawn(
+                    handle,
+                    SemiJoinFactory(
+                        leftKey = RowKey(left.columns, left.columns),
+                        rightKey = RowKey(right.columns, right.columns),
+                        negated = true,
+                        emitOnFrontier = gate(node.left, node.right, locus, handle),
+                    ),
+                )
+                addConnect(left, handle, "left")
+                addConnect(right, handle, "right")
+                LoweredNode(handle, node.outputColumns, left.types)
             }
 
             is OuterJoin -> {
-                lower(node.left, isRoot = false)
-                lower(node.right, isRoot = false)
-                refuse(Lowering.NOT_YET_LOWERED)
+                val left = lower(node.left, isRoot = false)
+                val right = lower(node.right, isRoot = false)
+                if (left == null || right == null) return null
+                keyProblem(node.keys, left, right)?.let { return refuse(it) }
+                val derived = ColumnTypes.byName(
+                    node.outputColumns,
+                    listOf(left.columns to left.types, right.columns to right.types),
+                )
+                when (derived) {
+                    is ColumnTypes.Derived.Failure -> refuse("outer join: ${derived.reason}")
+                    is ColumnTypes.Derived.Types -> {
+                        lowerOuterJoin(node, left, right, handle, locus)
+                        LoweredNode(handle, node.outputColumns, derived.types)
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * `RelationalGraphs.leftJoin`/`rightJoin`/`fullJoin`, mirrored step for step (cab.4-D6): the
+     * same cells under the same handle suffixes (`<h>-matched`, `<h>-unmatched`, `<h>-null`,
+     * or FULL's `<h>-left-only`/`<h>-left-null`/`<h>-right-only`/`<h>-right-null`), the union
+     * under the node's own handle `<h>`, and the same connects in the same order. RIGHT is LEFT
+     * with the plan's inputs and key lists swapped, exactly as `rightJoin` delegates. Each
+     * antijoin is gated by [Gating.decide] on the node's two inputs; the join and union never gate.
+     */
+    private fun lowerOuterJoin(node: OuterJoin, left: LoweredNode, right: LoweredNode, handle: String, locus: Locus.PlanNode) {
+        val out = node.outputColumns
+        val leftKey = RowKey(left.columns, node.keys.map { it.left })
+        val rightKey = RowKey(right.columns, node.keys.map { it.right })
+        when (node.side) {
+            OuterJoinSide.LEFT -> mirrorLeftJoin(handle, locus, node.left, node.right, left, right, leftKey, rightKey, out)
+            OuterJoinSide.RIGHT -> mirrorLeftJoin(handle, locus, node.right, node.left, right, left, rightKey, leftKey, out)
+            OuterJoinSide.FULL -> {
+                val matched = "$handle-matched"
+                val leftOnly = "$handle-left-only"
+                val leftNull = "$handle-left-null"
+                val rightOnly = "$handle-right-only"
+                val rightNull = "$handle-right-null"
+                addSpawn(matched, JoinFactory(leftKey, rightKey, RowCombine(left.columns, right.columns, out)))
+                addSpawn(leftOnly, SemiJoinFactory(leftKey, rightKey, true, gate(node.left, node.right, locus, leftOnly)))
+                addSpawn(leftNull, PadFactory(RowPad(left.columns, out)))
+                addSpawn(rightOnly, SemiJoinFactory(rightKey, leftKey, true, gate(node.right, node.left, locus, rightOnly)))
+                addSpawn(rightNull, PadFactory(RowPad(right.columns, out)))
+                addSpawn(handle, UnionFactory(out))
+                addConnect(left, matched, "left")
+                addConnect(right, matched, "right")
+                addConnect(left, leftOnly, "left")
+                addConnect(right, leftOnly, "right")
+                addConnect(right, rightOnly, "left")
+                addConnect(left, rightOnly, "right")
+                steps += ConnectStep(leftOnly, "outlet", leftNull, "inlet")
+                steps += ConnectStep(rightOnly, "outlet", rightNull, "inlet")
+                steps += ConnectStep(matched, "outlet", handle, "inlet")
+                steps += ConnectStep(leftNull, "outlet", handle, "inlet")
+                steps += ConnectStep(rightNull, "outlet", handle, "inlet")
+            }
+        }
+    }
+
+    /** `RelationalGraphs.leftJoin` with [preserved] the side whose unmatched rows are null-padded. */
+    private fun mirrorLeftJoin(
+        handle: String,
+        locus: Locus.PlanNode,
+        preservedNode: PlanNode,
+        otherNode: PlanNode,
+        preserved: LoweredNode,
+        other: LoweredNode,
+        preservedKey: RowKey,
+        otherKey: RowKey,
+        out: List<String>,
+    ) {
+        val matched = "$handle-matched"
+        val unmatched = "$handle-unmatched"
+        val nullCompleted = "$handle-null"
+        addSpawn(matched, JoinFactory(preservedKey, otherKey, RowCombine(preserved.columns, other.columns, out)))
+        addSpawn(unmatched, SemiJoinFactory(preservedKey, otherKey, true, gate(preservedNode, otherNode, locus, unmatched)))
+        addSpawn(nullCompleted, PadFactory(RowPad(preserved.columns, out)))
+        addSpawn(handle, UnionFactory(out))
+        addConnect(preserved, matched, "left")
+        addConnect(other, matched, "right")
+        addConnect(preserved, unmatched, "left")
+        addConnect(other, unmatched, "right")
+        steps += ConnectStep(unmatched, "outlet", nullCompleted, "inlet")
+        steps += ConnectStep(matched, "outlet", handle, "inlet")
+        steps += ConnectStep(nullCompleted, "outlet", handle, "inlet")
+    }
+
+    /**
+     * A root `GroupAggregate` (cab.4-D8). Grouped → `GroupByCell` keyed on the group-by columns;
+     * scalar `COUNT` → `CountCell` (`[24-OP-COUNT-01]`); any other scalar → `GroupByCell.global`.
+     * SUM/AVG are refused over anything but an INT/LONG column (`[QRY1-HONEST-02]`).
+     */
+    private fun lowerAggregate(
+        node: GroupAggregate,
+        input: LoweredNode,
+        handle: String,
+        refuse: (String) -> LoweredNode?,
+    ): LoweredNode? {
+        val missing = node.groupByColumns.filterNot { it in input.columns }
+        if (missing.isNotEmpty()) return refuse("group-by columns $missing are produced by no input ${input.columns}")
+        val kind = node.aggregate.kind
+        val column = node.aggregatedColumn
+        val columnType = if (column == null) {
+            null
+        } else {
+            val index = input.columns.indexOf(column)
+            if (index < 0) return refuse("aggregated column '$column' is produced by no input ${input.columns}")
+            input.types[index]
+        }
+        if (node.groupByColumns.isEmpty() && kind == AggregateKind.COUNT) {
+            addSpawn(handle, CountFactory(input.columns))
+            addConnect(input, handle, "inlet")
+            return LoweredNode(handle, node.outputColumns, emptyList())
+        }
+        fun needColumn(): Pair<String, AttrType>? = if (column == null || columnType == null) null else column to columnType
+        val spec: AggregateSpec = when (kind) {
+            AggregateKind.COUNT -> AggregateSpec.Count
+            AggregateKind.COLLECT_TO_SET -> AggregateSpec.CollectToSet
+            AggregateKind.SUM, AggregateKind.AVG -> {
+                val (name, type) = needColumn() ?: return refuse("$kind needs an aggregated column")
+                if (type != AttrType.INT && type != AttrType.LONG) {
+                    return refuse(
+                        "[QRY1-HONEST-02] $kind over $type column '$name' is refused: the kernel sums Long " +
+                            "only, never Double, because float sums are order-sensitive (Aggregator.kt:30)",
+                    )
+                }
+                val selector = RowLongSelector(input.columns, name)
+                if (kind == AggregateKind.SUM) AggregateSpec.Sum(selector) else AggregateSpec.Avg(selector)
+            }
+            AggregateKind.MIN, AggregateKind.MAX, AggregateKind.TOP_K -> {
+                val (name, type) = needColumn() ?: return refuse("$kind needs an aggregated column")
+                val selector = RowSelector(input.columns, name)
+                when (kind) {
+                    AggregateKind.MIN -> AggregateSpec.Min(selector, type)
+                    AggregateKind.MAX -> AggregateSpec.Max(selector, type)
+                    else -> AggregateSpec.TopK(checkNotNull(node.aggregate.k), selector, type)
+                }
+            }
+        }
+        val key = if (node.groupByColumns.isEmpty()) null else RowKey(input.columns, node.groupByColumns)
+        addSpawn(handle, GroupByFactory(key, spec))
+        addConnect(input, handle, "inlet")
+        // A root aggregate's outlet is a MapDelta stream; no parent reads its column types.
+        return LoweredNode(handle, node.outputColumns, emptyList())
+    }
+
+    /** [Gating.decide] for one absence-based cell [handle], recording its diagnostic. */
+    private fun gate(left: PlanNode, right: PlanNode, locus: Locus.PlanNode, handle: String): Boolean {
+        val decision = Gating.decide(left, right, locus, handle)
+        decision.diagnostic?.let { diagnostics += it }
+        return decision.emitOnFrontier
+    }
+
+    /** Why [left] and [right] cannot be operands of a set operation producing [columns], or `null`. */
+    private fun setOperandProblem(columns: List<String>, left: LoweredNode, right: LoweredNode): String? = when {
+        left.columns != columns || right.columns != columns ->
+            "operand columns ${left.columns} and ${right.columns} differ from the output's $columns"
+        left.types != right.types ->
+            "[QRY1-HONEST-02] operand column types ${left.types} and ${right.types} differ"
+        else -> null
     }
 
     private fun lowerSemiJoin(
@@ -278,13 +462,7 @@ private class RootWalk(
             return refuse("output columns ${node.outputColumns} differ from its input's ${input.columns}")
         }
         keyProblem(keys, input, witness)?.let { return refuse(it) }
-        val emitOnFrontier = if (negated) {
-            val decision = Gating.decide(inputNode, witnessNode, locus, handle)
-            decision.diagnostic?.let { diagnostics += it }
-            decision.emitOnFrontier
-        } else {
-            false
-        }
+        val emitOnFrontier = if (negated) gate(inputNode, witnessNode, locus, handle) else false
         addSpawn(
             handle,
             SemiJoinFactory(

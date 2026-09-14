@@ -78,10 +78,9 @@ data class CompiledQuery(
          * more `groupByColumns` reads as [OutputShape.MAP_BY_GROUP]; a scalar (no
          * `groupByColumns`) `COUNT` aggregate reads as [OutputShape.COUNTER]; any other scalar
          * aggregate reads as [OutputShape.MAP_BY_GROUP] under the single `"global"` key; every
-         * other root kind is [OutputShape.SET_OF_ROWS]. A root [GroupAggregate] refuses to
-         * lower on this task's base (`Lowering.NOT_YET_LOWERED`) so only the `SET_OF_ROWS`
-         * branch is reachable today — the aggregate branches are here for when the completion
-         * task lands a rule for it.
+         * other root kind is [OutputShape.SET_OF_ROWS]. The aggregate branches match
+         * `Lowering`'s root-aggregate rule: grouped and non-`COUNT` scalars lower to `GroupByCell`
+         * (a `MapDelta` outlet), a scalar `COUNT` to `CountCell` (a `CountDelta` outlet).
          */
         internal fun outputShapeOf(node: PlanNode): OutputShape = when {
             node is GroupAggregate && node.groupByColumns.isNotEmpty() -> OutputShape.MAP_BY_GROUP

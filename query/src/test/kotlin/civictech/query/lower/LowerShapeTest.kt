@@ -26,9 +26,24 @@ class LowerShapeTest {
         JoinFactory::class.java,
         SemiJoinFactory::class.java,
         UnionFactory::class.java,
+        IntersectFactory::class.java,
+        PadFactory::class.java,
+        GroupByFactory::class.java,
+        CountFactory::class.java,
     )
 
-    private val shapeTypes: List<Class<*>> = factoryTypes + listOf(
+    private val aggregateSpecTypes: List<Class<*>> = listOf(
+        AggregateSpec::class.java,
+        AggregateSpec.Count::class.java,
+        AggregateSpec.Sum::class.java,
+        AggregateSpec.Avg::class.java,
+        AggregateSpec.Min::class.java,
+        AggregateSpec.Max::class.java,
+        AggregateSpec.TopK::class.java,
+        AggregateSpec.CollectToSet::class.java,
+    )
+
+    private val shapeTypes: List<Class<*>> = factoryTypes + aggregateSpecTypes + listOf(
         LoweringResult::class.java,
         LoweringResult.Lowered::class.java,
         LoweringResult.Refused::class.java,
@@ -79,9 +94,44 @@ class LowerShapeTest {
     }
 
     @Test
+    fun `QRY1 §LOWER-05 the completion task's factories round-trip equals through Java serialization`() {
+        val columns = listOf("g", "v")
+        val selector = civictech.query.expr.RowSelector(columns, "v")
+        val longSelector = civictech.query.expr.RowLongSelector(columns, "v")
+        val key = civictech.query.expr.RowKey(columns, listOf("g"))
+        val factories: List<CellFactory> = listOf(
+            IntersectFactory(columns),
+            PadFactory(civictech.query.expr.RowPad(columns, listOf("g", "w", "v"))),
+            CountFactory(columns),
+            GroupByFactory(null, AggregateSpec.Count),
+            GroupByFactory(key, AggregateSpec.Sum(longSelector)),
+            GroupByFactory(key, AggregateSpec.Avg(longSelector)),
+            GroupByFactory(key, AggregateSpec.Min(selector, civictech.query.schema.AttrType.STRING)),
+            GroupByFactory(key, AggregateSpec.Max(selector, civictech.query.schema.AttrType.DOUBLE)),
+            GroupByFactory(key, AggregateSpec.TopK(3, selector, civictech.query.schema.AttrType.LONG)),
+            GroupByFactory(key, AggregateSpec.CollectToSet),
+        )
+        withClue("non-vacuity: every new factory class appears") {
+            factories.map { it.javaClass }.toSet() shouldBe
+                setOf(IntersectFactory::class.java, PadFactory::class.java, CountFactory::class.java, GroupByFactory::class.java)
+        }
+        factories.forEach { factory ->
+            val bytes = java.io.ByteArrayOutputStream().also { out ->
+                java.io.ObjectOutputStream(out).use { it.writeObject(factory) }
+            }.toByteArray()
+            val back = java.io.ObjectInputStream(java.io.ByteArrayInputStream(bytes)).use { it.readObject() }
+            withClue("$factory") {
+                back shouldBe factory
+                back.hashCode() shouldBe factory.hashCode()
+            }
+        }
+    }
+
+    @Test
     fun `shapeTypes names every permitted subclass of LoweringResult and LoweringDiagnostic`() {
         val missing = HierarchyCompleteness.missingFrom(LoweringResult::class.java, shapeTypes) +
-            HierarchyCompleteness.missingFrom(LoweringDiagnostic::class.java, shapeTypes)
+            HierarchyCompleteness.missingFrom(LoweringDiagnostic::class.java, shapeTypes) +
+            HierarchyCompleteness.missingFrom(AggregateSpec::class.java, shapeTypes)
         withClue("shapeTypes is missing sealed-hierarchy members: $missing") {
             missing.shouldBeEmpty()
         }
