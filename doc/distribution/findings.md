@@ -627,7 +627,7 @@ Six features and two out-of-band fixes, all merged to `main`:
   the minting check and the replay high-water mark re-keyed onto the bound
   name, not the signer key fingerprint) — PR #872, `621ac28e2`.
 - `computenet-5y8t.6` (hello-sendable credentials validated at transport
-  start, not on the sidecar reader thread) — PR #876, `30c3a36b9`.
+  start, not on the sidecar reader thread) — PR #876, `c0abd6d96`.
 - `computenet-tlb83` (an anchor-bound side refuses a nameless legacy hello
   `UNVOUCHED`) — PR #871, `9ee7ea5ec`.
 - `computenet-28pnr` (43-security's Interim-bound-vs-anchor-bound admission
@@ -764,7 +764,7 @@ itself is never touched.
   or stolen-key resistance — both keys are admitted because the anchor
   vouched for each, and a thief holding either key with its statement is
   alice exactly as anyone else would be.
-- Both classes require `iroh/build.gradle.kts` to add
+- The second class requires `iroh/build.gradle.kts` to add
   `testImplementation(project(":wire"))` — needed because the cross-
   transport test dials the same listener over `WsTransport`, defined in
   `:wire` — and `testImplementation(libs.java.websocket)`, needed to compile
