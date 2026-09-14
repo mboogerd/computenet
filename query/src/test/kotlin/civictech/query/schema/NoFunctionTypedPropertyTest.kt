@@ -40,6 +40,7 @@ class NoFunctionTypedPropertyTest {
         Attribute::class.java,
         RelationSchema::class.java,
         Catalog::class.java,
+        Row::class.java,
         // civictech.query.ast
         Term::class.java,
         Term.Var::class.java,

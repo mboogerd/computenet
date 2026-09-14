@@ -30,6 +30,7 @@ class DiagShapeTest {
         Locus.RuleStatement::class.java,
         Rejection::class.java,
         CompileResult::class.java,
+        CompileResult.Compiled::class.java,
         CompileResult.Rejected::class.java,
     )
 

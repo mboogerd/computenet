@@ -4,9 +4,14 @@ import civictech.query.ast.Aggregate
 import civictech.query.ast.AggregateKind
 import civictech.query.ast.Atom
 import civictech.query.ast.ComparisonOp
+import civictech.query.ast.Definition
+import civictech.query.ast.JoinKey as AstJoinKey
 import civictech.query.ast.Literal
+import civictech.query.ast.OuterJoinSide as AstOuterJoinSide
 import civictech.query.ast.Query
+import civictech.query.ast.RelationalExpr
 import civictech.query.ast.Rule
+import civictech.query.ast.SetOpKind
 import civictech.query.ast.Term
 import civictech.query.schema.AttrType
 import civictech.query.schema.Attribute
@@ -163,6 +168,87 @@ class PlannerDeterminismTest {
             "BS-15, owned by computenet-cab.7 and not asserted here") {
             bytesA shouldBe bytesB
         }
+    }
+
+    // ---------------------------------------------------------------- definitions (cab.4.6)
+
+    private fun v(name: String) = Term.Var(name)
+
+    private fun rel(predicate: String, vararg variables: String) =
+        RelationalExpr.Relation(Atom(predicate, variables.map(::v)))
+
+    // define reach(x, y) := edge(x, y) union blocked(p, q).
+    private val reachDefinition = Definition(
+        head = Atom("reach", listOf(v("x"), v("y"))),
+        expr = RelationalExpr.SetOp(SetOpKind.UNION, rel("edge", "x", "y"), rel("blocked", "p", "q")),
+    )
+
+    // define open(x, y) := path(x, y) except blocked(x, y).   -- over a rule-defined head.
+    private val openDefinition = Definition(
+        head = Atom("open", listOf(v("x"), v("y"))),
+        expr = RelationalExpr.SetOp(SetOpKind.DIFFERENCE, rel("path", "x", "y"), rel("blocked", "x", "y")),
+    )
+
+    // define padded(x, y, z, w) := reach(x, y) full outer join weight(p, z, w) on y = p.
+    private val paddedDefinition = Definition(
+        head = Atom("padded", listOf(v("x"), v("y"), v("z"), v("w"))),
+        expr = RelationalExpr.OuterJoin(
+            AstOuterJoinSide.FULL,
+            rel("reach", "x", "y"),
+            rel("weight", "p", "z", "w"),
+            listOf(AstJoinKey(v("y"), v("p"))),
+        ),
+    )
+
+    // openCount(x, y) :- open(x, y), not reach(y, x).   -- a rule consuming two definitions.
+    private val openRule = Rule(
+        head = Atom("openCount", listOf(v("x"), v("y"))),
+        body = listOf(
+            Literal.Positive(Atom("open", listOf(v("x"), v("y")))),
+            Literal.Negated(Atom("reach", listOf(v("y"), v("x")))),
+        ),
+    )
+
+    private fun definitionsSeedA(): Query = Query(
+        rules = listOf(pathRule1, pathRule2, summaryRule, openRule),
+        catalog = catalogSeedA(),
+        definitions = listOf(reachDefinition, openDefinition, paddedDefinition),
+    )
+
+    /** The reverse of [definitionsSeedA]'s definitions and catalog, and a rotated rules list. */
+    private fun definitionsSeedB(): Query = Query(
+        rules = listOf(openRule, summaryRule, pathRule1, pathRule2),
+        catalog = catalogSeedB(),
+        definitions = listOf(paddedDefinition, openDefinition, reachDefinition),
+    )
+
+    /**
+     * 5pplz's third criterion: [QRY1-PLAN-01]'s two-seed guarantee over a query whose
+     * definitions (a union, a difference over a rule head, a full outer join over a
+     * definition) and a rule consuming them are listed in different orders. The seeds are
+     * first shown to differ in list order and agree in content, for the same reason the
+     * rule-only mechanism test above does.
+     */
+    @Test
+    fun `QRY1 §PLAN-01 a definitions-bearing query plans equals-equal and byte-identical from two seeds`() {
+        val seedA = definitionsSeedA()
+        val seedB = definitionsSeedB()
+        withClue("identical definition lists would make this test vacuous") {
+            seedA.definitions shouldNotBe seedB.definitions
+            seedA.definitions.toSet() shouldBe seedB.definitions.toSet()
+            seedA.rules.toSet() shouldBe seedB.rules.toSet()
+        }
+
+        val planA = Planner.plan(seedA)
+        val planB = Planner.plan(seedB)
+
+        planA.roots.keys shouldBe setOf("open", "openCount", "padded", "path", "reach", "summary")
+        withClue("the root map's iteration order is a function of the head names alone") {
+            planA.roots.keys.toList() shouldBe planA.roots.keys.sorted()
+            planB.roots.keys.toList() shouldBe planA.roots.keys.toList()
+        }
+        planA shouldBe planB
+        serialize(planA) shouldBe serialize(planB)
     }
 
     private fun serialize(plan: LogicalPlan): ByteArray =

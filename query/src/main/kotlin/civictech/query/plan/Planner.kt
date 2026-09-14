@@ -2,9 +2,12 @@ package civictech.query.plan
 
 import civictech.query.ast.Atom
 import civictech.query.ast.ComparisonOp
+import civictech.query.ast.Definition
 import civictech.query.ast.Literal
 import civictech.query.ast.Query
+import civictech.query.ast.RelationalExpr
 import civictech.query.ast.Rule
+import civictech.query.ast.SetOpKind
 import civictech.query.ast.Term
 import civictech.query.schema.Catalog
 
@@ -36,13 +39,40 @@ import civictech.query.schema.Catalog
  * - A body atom over an IDB predicate (one defined by rules rather than declared in the
  *   [Catalog]) takes that predicate's plan as its input; a head predicate with more than one
  *   rule combines its rules by [Union] (set semantics, `[QRY1-LOWER-10]`).
+ * - A [Definition] (`define h(...) := expr.`, `[QRY1-LANG-04]`) plans its [RelationalExpr]:
+ *   `union`/`intersect`/`except` become [Union]/[Intersect]/[Difference] and an outer join
+ *   becomes [OuterJoin] (computenet-cab.4.6). A defined head is a root exactly like a rule
+ *   head, and a rule body atom or a definition leaf naming it takes its plan as input. A
+ *   predicate defined by two definitions, or by a rule and a definition, is a fail-fast
+ *   `require`, as is an `ALL` set operation — bag semantics is `BAG_SEMANTICS_REQUIRED`'s
+ *   refusal (`[QRY1-SEM-04]`), never silently planned as the `DISTINCT` form.
+ *
+ * **Definition column naming.** A definition's head names the derived relation's columns
+ * **positionally**, the way a SQL view's column list does: `define h(Y, X) := a(X, Y).` makes
+ * `h`'s first column `a`'s first column, named `Y` — the head's variable names are *names*,
+ * not a by-name projection of the expression. An expression's own columns are defined
+ * recursively: a leaf `Relation(atom)` exposes the atom's distinct variables in
+ * first-occurrence order (exactly [PlanningContext.planAtom]'s output); a set operation
+ * exposes its left operand's columns, and its right operand must have the same arity and is
+ * matched to them positionally; an outer join exposes its left operand's columns followed by
+ * its right operand's columns that are not its key columns. Since there is no rename node,
+ * every rename is a substitution applied to the leaf atoms *before* they are planned — the
+ * order [renameRule] already uses — in two steps: [normalizeExpr] makes the operand columns
+ * agree (a set operation's right operand is substituted to the left's names; an outer join's
+ * right key variable is substituted to its left key variable, so the node's keys are
+ * `JoinKey(k, k)` over one merged column, and a right non-key variable that merely shares a
+ * name with a left column is renamed apart, because only the `on` clause joins), and then the
+ * whole normalized expression is substituted positionally to the caller's head names. After
+ * normalization every variable of an expression is one of its columns, so that final
+ * substitution is total and injective and cannot capture a name.
  *
  * **Determinism (cab.3-D1).** Nothing on the planning path iterates a hash-ordered
  * collection. Rule bodies, atom terms and head terms are `List`s and are consumed in their
  * declared order; head predicates are planned in sorted name order; every [PlanNode.provenance]
  * set is built from a sorted list into a `LinkedHashSet`. The only `Map`s read here —
- * [Catalog.relations] and the rules-by-head index — are used for point lookups, never
- * iterated.
+ * [Catalog.relations], the rules-by-head index and the definitions-by-head index — are used
+ * for point lookups, never iterated, and the substitution maps of definition renaming are
+ * likewise only looked up.
  *
  * **Column naming.** A plan node's `outputColumns` are *variable* names, not relation
  * attribute names, so that a join key is the shared variable itself. A [Scan]'s columns are
@@ -82,6 +112,10 @@ import civictech.query.schema.Catalog
  *   preserve the caller's own list order — never re-sorted, because a multi-rule head's
  *   [Union] branch order is part of its observable shape and must track the rules' own
  *   textual order, not a hash.
+ * - `definitionsByHead` (built in [Planner.plan], computenet-cab.4.6) is a `LinkedHashMap`
+ *   read only by point lookup; the roots loop walks the *sorted* union of its keys with
+ *   `rulesByHead`'s, so a definitions-bearing query's root order is still a function of names
+ *   alone. `PlannerDeterminismTest` extends its two-seed check to such a query.
  * - [PlanningContext.catalog]'s `relations` map ([civictech.query.schema.Catalog]) is read
  *   only by point lookup (`catalog.relations[atom.predicate]`) — never iterated — so its
  *   concrete `Map` implementation and insertion order are both irrelevant to the plan built
@@ -111,19 +145,35 @@ import civictech.query.schema.Catalog
  */
 object Planner {
 
-    /** Translates [query] into a [LogicalPlan] with one root per head predicate. */
+    /**
+     * Translates [query] into a [LogicalPlan] with one root per head predicate — every rule
+     * head and every definition head.
+     */
     fun plan(query: Query): LogicalPlan {
         val rulesByHead = LinkedHashMap<String, MutableList<Rule>>()
         for (rule in query.rules) {
             rulesByHead.getOrPut(rule.head.predicate) { mutableListOf() } += rule
         }
-        val context = PlanningContext(query.catalog, rulesByHead)
+        val definitionsByHead = LinkedHashMap<String, Definition>()
+        for (definition in query.definitions) {
+            val predicate = definition.head.predicate
+            require(predicate !in rulesByHead) {
+                "Planner does not support predicate '$predicate' defined by both a rule and a " +
+                    "define statement; a head predicate has exactly one kind of definition."
+            }
+            require(definitionsByHead.put(predicate, definition) == null) {
+                "Planner does not support predicate '$predicate' defined by more than one " +
+                    "define statement; combine the expressions with union instead."
+            }
+        }
+        val context = PlanningContext(query.catalog, rulesByHead, definitionsByHead)
         val roots = LinkedHashMap<String, PlanNode>()
         // Sorted so the root map's own iteration order is a function of the predicate names
-        // alone, not of insertion or hash order (cab.3-D1).
-        for (predicate in rulesByHead.keys.sorted()) {
-            val rules = rulesByHead.getValue(predicate)
-            val canonicalHeadNames = headVariables(rules.first().head)
+        // alone, not of insertion or hash order (cab.3-D1). The two key sets are disjoint
+        // (checked above), so this is every head exactly once.
+        for (predicate in (rulesByHead.keys + definitionsByHead.keys).sorted()) {
+            val canonicalHeadNames = rulesByHead[predicate]?.let { headVariables(it.first().head) }
+                ?: headVariables(definitionsByHead.getValue(predicate).head)
             roots[predicate] = context.planPredicate(
                 predicate = predicate,
                 headNames = canonicalHeadNames,
@@ -139,13 +189,14 @@ object Planner {
 private fun headVariables(atom: Atom): List<String> {
     val names = atom.terms.map { term ->
         require(term is Term.Var) {
-            "Planner does not support a constant in a rule head: ${atom.predicate} carries $term. " +
-                "A head position must be a variable bound by a positive body atom."
+            "Planner does not support a constant in a head: ${atom.predicate} carries $term. " +
+                "A head position must be a variable (bound by a positive body atom, or naming " +
+                "a definition's column)."
         }
         term.name
     }
     require(names.distinct().size == names.size) {
-        "Planner does not support a repeated variable in a rule head: ${atom.predicate}($names)."
+        "Planner does not support a repeated variable in a head: ${atom.predicate}($names)."
     }
     return names
 }
@@ -195,19 +246,22 @@ private fun projectTo(input: PlanNode, columns: List<String>): PlanNode {
 }
 
 /**
- * Everything one rule's translation needs: the [catalog] (EDB predicates) and the
- * rules-by-head index (IDB predicates). Both are read by point lookup only.
+ * Everything one statement's translation needs: the [catalog] (EDB predicates) and the
+ * rules-by-head and definitions-by-head indexes (IDB predicates). All are read by point
+ * lookup only.
  */
 private class PlanningContext(
     val catalog: Catalog,
     val rulesByHead: Map<String, List<Rule>>,
+    val definitionsByHead: Map<String, Definition>,
 ) {
 
     /**
      * Plans head predicate [predicate] so that its output columns are exactly [headNames],
-     * combining its rules by [Union] when it has more than one (`[QRY1-LOWER-10]`).
-     * [stack] carries the predicates currently being expanded, so a recursive definition
-     * fails loudly here rather than looping.
+     * combining its rules by [Union] when it has more than one (`[QRY1-LOWER-10]`), or
+     * planning its one [Definition]. [stack] carries the predicates currently being expanded,
+     * so a recursive definition — through rules, definitions or both — fails loudly here
+     * rather than looping.
      */
     fun planPredicate(
         predicate: String,
@@ -218,6 +272,9 @@ private class PlanningContext(
         require(predicate !in stack) {
             "Planner does not support recursion: ${(stack + predicate).joinToString(" -> ")}. " +
                 "Recursive rule sets are rejected upstream by the safety/rejection feature."
+        }
+        definitionsByHead[predicate]?.let { definition ->
+            return planDefinition(definition, headNames, "$scopeTag$predicate#def/", stack + predicate)
         }
         val rules = rulesByHead[predicate]
         require(!rules.isNullOrEmpty()) { "No rules define predicate '$predicate'" }
@@ -324,6 +381,26 @@ private class PlanningContext(
 
         // 6. Aggregate-annotated head: group by every head variable but the last, aggregate
         //    over the last. See this file's KDoc for why the column comes from the head shape.
+        //
+        // Aggregate input population: [GroupAggregate] is built over the FULL body plan
+        // `plan`, not over a [Project] narrowed to `groupByColumns` + the aggregated column.
+        // The body plan is already a set of distinct rows ([QRY1-SEM-01]: "every compiled
+        // operator's result is a set of rows, and duplicate elimination is a consequence of
+        // the algebra rather than an added step"), so the population COUNT/SUM/AVG aggregate
+        // over is the distinct body rows the rule binds, not the distinct values of the
+        // grouped/aggregated columns alone. Concretely, `c(count X) :- e(X, Y).` over
+        // `e = {(1,a), (1,b)}` counts the 2 distinct `(X, Y)` body rows, answering 2 — not 1,
+        // the count of distinct `X` values.
+        //
+        // A narrowing [Project] to grouping keys + aggregated column before the aggregate
+        // would be exactly the distinct-semantics approximation [QRY1-SEM-02] forbids: that
+        // projection is not key-preserving, and SEM-02 requires the compiler to reject a
+        // non-key-preserving projection feeding a multiplicity-sensitive consumer
+        // (`count`/`sum`/`avg`) with `RejectionCode.BAG_SEMANTICS_REQUIRED` rather than
+        // silently compile an approximation. This planner does not yet implement that
+        // rejection (computenet-cab.5); until it does, a rule whose aggregated head variable
+        // set is a strict subset of its body variables silently aggregates over full body
+        // rows rather than being refused.
         require(headVars.isNotEmpty()) {
             "Rule ${rule.head.predicate} is aggregate-annotated but has a nullary head; " +
                 "the aggregated column is the last head variable, so there must be one."
@@ -349,6 +426,90 @@ private class PlanningContext(
     }
 
     /**
+     * Plans one [Definition] so that its output columns are exactly [headNames]: the
+     * expression is normalized, substituted positionally to [headNames], then planned (see
+     * this file's "Definition column naming" KDoc). [stack] already includes the head.
+     */
+    fun planDefinition(
+        definition: Definition,
+        headNames: List<String>,
+        scopeTag: String,
+        stack: List<String>,
+    ): PlanNode {
+        val predicate = definition.head.predicate
+        val declared = headVariables(definition.head)
+        require(declared.size == headNames.size) {
+            "Head predicate '$predicate' is used at arity ${headNames.size} but defined at arity " +
+                "${declared.size}"
+        }
+        val normalized = normalizeExpr(definition.expr, scopeTag)
+        val columns = exprColumns(normalized)
+        require(columns.size == headNames.size) {
+            "Definition '$predicate' declares arity ${headNames.size} in its head but its " +
+                "expression has arity ${columns.size} (columns $columns)"
+        }
+        val bound = substituteExpr(normalized, columns.zip(headNames).toMap())
+        val node = planExpr(bound, scopeTag, stack)
+        check(node.outputColumns == headNames) {
+            "Definition '$predicate' planned to columns ${node.outputColumns}, expected $headNames"
+        }
+        return node
+    }
+
+    /**
+     * Plans a normalized, head-substituted expression. Operand columns already agree by
+     * construction ([normalizeExpr]); the checks here are planner-bug guards.
+     */
+    private fun planExpr(expr: RelationalExpr, scopeTag: String, stack: List<String>): PlanNode = when (expr) {
+        is RelationalExpr.Relation -> planAtom(expr.atom, scopeTag, stack)
+        is RelationalExpr.SetOp -> {
+            requireDistinctSetOp(expr)
+            val left = planExpr(expr.left, "${scopeTag}L/", stack)
+            val right = planExpr(expr.right, "${scopeTag}R/", stack)
+            check(left.outputColumns == right.outputColumns) {
+                "${expr.kind} operands disagree on output columns: ${left.outputColumns} vs ${right.outputColumns}"
+            }
+            val columns = left.outputColumns
+            val provenance = provenanceOf(listOf(left, right))
+            when (expr.kind) {
+                SetOpKind.UNION -> union(listOf(left, right))
+                SetOpKind.INTERSECTION -> {
+                    val key = PlanAnalyses.intersectKey(left, right, columns)
+                    Intersect(left, right, columns, provenance, key.keyPreserving, key.preservedKey)
+                }
+                SetOpKind.DIFFERENCE -> {
+                    val key = PlanAnalyses.differenceKey(left, columns)
+                    Difference(left, right, columns, provenance, key.keyPreserving, key.preservedKey)
+                }
+            }
+        }
+        is RelationalExpr.OuterJoin -> {
+            val left = planExpr(expr.left, "${scopeTag}L/", stack)
+            val right = planExpr(expr.right, "${scopeTag}R/", stack)
+            val keys = expr.on.map { JoinKey(it.left.name, it.right.name) }
+            check(keys.all { it.left == it.right && it.left in left.outputColumns && it.right in right.outputColumns }) {
+                "OuterJoin keys $keys are not merged columns of ${left.outputColumns} and ${right.outputColumns}"
+            }
+            val columns = left.outputColumns + right.outputColumns.filter { it !in left.outputColumns }
+            val key = PlanAnalyses.outerJoinKey(left, right, columns)
+            OuterJoin(
+                left = left,
+                right = right,
+                keys = keys,
+                side = when (expr.side) {
+                    civictech.query.ast.OuterJoinSide.LEFT -> OuterJoinSide.LEFT
+                    civictech.query.ast.OuterJoinSide.RIGHT -> OuterJoinSide.RIGHT
+                    civictech.query.ast.OuterJoinSide.FULL -> OuterJoinSide.FULL
+                },
+                outputColumns = columns,
+                provenance = provenanceOf(listOf(left, right)),
+                keyPreserving = key.keyPreserving,
+                preservedKey = key.preservedKey,
+            )
+        }
+    }
+
+    /**
      * Plans one body atom into a node whose output columns are exactly the atom's distinct
      * variables, in first-occurrence order.
      */
@@ -369,8 +530,8 @@ private class PlanningContext(
                 preservedKey = key.preservedKey,
             )
         } else {
-            require(atom.predicate in rulesByHead) {
-                "Atom '${atom.predicate}' names neither a catalog relation nor a rule head"
+            require(atom.predicate in rulesByHead || atom.predicate in definitionsByHead) {
+                "Atom '${atom.predicate}' names neither a catalog relation nor a rule or definition head"
             }
             planPredicate(atom.predicate, columns, scopeTag, stack)
         }
@@ -472,6 +633,103 @@ private fun classifySemiJoinAtoms(atomVariables: List<List<String>>, headVariabl
         }
     }
     return isSemiJoin
+}
+
+/** `ALL` set operations are bag semantics, refused by `BAG_SEMANTICS_REQUIRED` (`[QRY1-SEM-04]`). */
+private fun requireDistinctSetOp(expr: RelationalExpr.SetOp) {
+    require(!expr.all) {
+        "Planner does not plan ${expr.kind} ALL: bag semantics is refused as BAG_SEMANTICS_REQUIRED " +
+            "([QRY1-SEM-04], the rejection front door's, computenet-cab.5) and is never planned " +
+            "as the DISTINCT form."
+    }
+}
+
+/**
+ * The columns an expression exposes, in order (this file's "Definition column naming"
+ * KDoc). Meaningful for a [normalizeExpr]-normalized expression, whose operand columns agree.
+ */
+private fun exprColumns(expr: RelationalExpr): List<String> = when (expr) {
+    is RelationalExpr.Relation -> variablesOf(expr.atom)
+    is RelationalExpr.SetOp -> exprColumns(expr.left)
+    is RelationalExpr.OuterJoin -> {
+        val left = exprColumns(expr.left)
+        left + exprColumns(expr.right).filter { it !in left }
+    }
+}
+
+/**
+ * Rewrites [expr] so every operator's operands agree on column names without a rename node:
+ * a set operation's right operand is substituted positionally to its left operand's columns,
+ * and an outer join's right operand has each key variable substituted by its left key
+ * variable and each other variable that collides with a left column renamed apart
+ * (`name!scope`, which no surface identifier can be). Afterwards every variable of the
+ * expression is one of [exprColumns]' columns. [scopeTag] keeps renamed-apart names unique
+ * per operator position.
+ */
+private fun normalizeExpr(expr: RelationalExpr, scopeTag: String): RelationalExpr = when (expr) {
+    is RelationalExpr.Relation -> expr
+    is RelationalExpr.SetOp -> {
+        requireDistinctSetOp(expr)
+        val left = normalizeExpr(expr.left, "${scopeTag}L/")
+        val right = normalizeExpr(expr.right, "${scopeTag}R/")
+        val leftColumns = exprColumns(left)
+        val rightColumns = exprColumns(right)
+        require(leftColumns.size == rightColumns.size) {
+            "${expr.kind} operands have different arity: left $leftColumns (arity " +
+                "${leftColumns.size}) vs right $rightColumns (arity ${rightColumns.size})"
+        }
+        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(leftColumns).toMap()))
+    }
+    is RelationalExpr.OuterJoin -> {
+        val left = normalizeExpr(expr.left, "${scopeTag}L/")
+        val right = normalizeExpr(expr.right, "${scopeTag}R/")
+        val leftColumns = exprColumns(left)
+        val rightColumns = exprColumns(right)
+        val leftKeys = expr.on.map { it.left.name }
+        val rightKeys = expr.on.map { it.right.name }
+        require(leftKeys.all { it in leftColumns } && rightKeys.all { it in rightColumns }) {
+            "${expr.side} outer join keys ${expr.on.map { "${it.left.name} = ${it.right.name}" }} must " +
+                "name a left column of $leftColumns and a right column of $rightColumns"
+        }
+        require(leftKeys.distinct().size == leftKeys.size && rightKeys.distinct().size == rightKeys.size) {
+            "Planner does not support an outer join key column used twice: " +
+                expr.on.map { "${it.left.name} = ${it.right.name}" }
+        }
+        val keyTarget = rightKeys.zip(leftKeys).toMap()
+        val substitution = rightColumns.associateWith { column ->
+            keyTarget[column] ?: if (column in leftColumns) "$column!$scopeTag" else column
+        }
+        val merged = leftKeys.map { Term.Var(it) }
+        expr.copy(
+            left = left,
+            right = substituteExpr(right, substitution),
+            on = merged.map { civictech.query.ast.JoinKey(it, it) },
+        )
+    }
+}
+
+/**
+ * [expr] with every variable renamed simultaneously through [substitution] (absent names kept),
+ * at the leaf atoms and in outer-join keys. Callers pass an injective map covering every
+ * variable of a normalized expression, so no renamed variable can capture another.
+ */
+private fun substituteExpr(expr: RelationalExpr, substitution: Map<String, String>): RelationalExpr {
+    if (substitution.all { (from, to) -> from == to }) return expr
+    fun rename(v: Term.Var): Term.Var = Term.Var(substitution[v.name] ?: v.name)
+    return when (expr) {
+        is RelationalExpr.Relation -> RelationalExpr.Relation(
+            Atom(expr.atom.predicate, expr.atom.terms.map { if (it is Term.Var) rename(it) else it }),
+        )
+        is RelationalExpr.SetOp -> expr.copy(
+            left = substituteExpr(expr.left, substitution),
+            right = substituteExpr(expr.right, substitution),
+        )
+        is RelationalExpr.OuterJoin -> expr.copy(
+            left = substituteExpr(expr.left, substitution),
+            right = substituteExpr(expr.right, substitution),
+            on = expr.on.map { civictech.query.ast.JoinKey(rename(it.left), rename(it.right)) },
+        )
+    }
 }
 
 /**

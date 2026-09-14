@@ -1,5 +1,8 @@
 package civictech.query.diag
 
+import civictech.cell.graph.GraphSpec
+import civictech.query.plan.LogicalPlan
+import civictech.query.run.CompiledQuery
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
@@ -60,6 +63,21 @@ class DiagSerializationTest {
             code = RejectionCode.UNSAFE_RULE,
             locus = Locus.RuleStatement(ruleIndex = 0, headPredicate = "q"),
             specId = "[QRY1-LANG-07]: rule head 'q' is unsafe — variable(s) not bound by any positive body atom: Z",
+        )
+        roundTrip(original) shouldBe original
+    }
+
+    @Test
+    fun `CompileResult Compiled carrying a small CompiledQuery round-trips to an equal value`() {
+        val original: CompileResult = CompileResult.Compiled(
+            CompiledQuery(
+                plan = LogicalPlan(emptyMap()),
+                spec = GraphSpec(emptyList()),
+                sourceHandles = emptyMap(),
+                outputHandles = emptyMap(),
+                outputShapes = emptyMap(),
+                diagnostics = emptyList(),
+            ),
         )
         roundTrip(original) shouldBe original
     }
