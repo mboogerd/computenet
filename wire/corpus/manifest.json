@@ -11,14 +11,29 @@
       "category": "frames/port-api",
       "kind": "frame",
       "file": "frames/port-api/WV-PORT-API-STALL-RESUME-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-DOUBLE-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-DOUBLE-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-MAPDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-MAPDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-TAGGEDMAPDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-TAGGEDMAPDELTA-01.json"
     }
   ],
   "pending": [
-    {"discriminator": "kotlin.String", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "kotlin.Long", "owedBy": "computenet-ncz.3"},
     {"discriminator": "kotlin.Int", "owedBy": "computenet-ncz.3"},
     {"discriminator": "kotlin.Boolean", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "kotlin.Double", "owedBy": "computenet-ncz.2"},
     {"discriminator": "Uuid", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Timestamp", "owedBy": "computenet-ncz.3"},
     {"discriminator": "CellRef", "owedBy": "computenet-ncz.3"},
@@ -29,8 +44,6 @@
     {"discriminator": "PnCounterDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "WatermarkDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "SetDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "MapDelta", "owedBy": "computenet-ncz.2"},
-    {"discriminator": "TaggedMapDelta", "owedBy": "computenet-ncz.2"},
     {"discriminator": "ListDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "RoutedCommand", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Stamped", "owedBy": "computenet-ncz.3"},

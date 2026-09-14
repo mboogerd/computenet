@@ -1,0 +1,39 @@
+{
+  "id": "WV-PAYLOAD-MAPDELTA-01",
+  "title": "MapDelta with structured-key String puts (not sorted) and one polymorphic removal",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C11", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {
+          "type": "MapDelta",
+          "fields": {
+            "puts": {
+              "entries": [
+                {"key": {"type": "kotlin.String", "value": "b"}, "value": {"type": "kotlin.Long", "value": 1}},
+                {"key": {"type": "kotlin.String", "value": "a"}, "value": {"type": "kotlin.Long", "value": 2}},
+                {"key": {"type": "kotlin.String", "value": "c"}, "value": {"type": "kotlin.Long", "value": 3}}
+              ]
+            },
+            "removals": [{"type": "kotlin.String", "value": "d"}]
+          }
+        }
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"MapDelta\",{\"puts\":[[\"kotlin.String\",\"b\"],[\"kotlin.Long\",1],[\"kotlin.String\",\"a\"],[\"kotlin.Long\",2],[\"kotlin.String\",\"c\"],[\"kotlin.Long\",3]],\"removals\":[[\"kotlin.String\",\"d\"]]}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siTWFwRGVsdGEiLHsicHV0cyI6W1sia290bGluLlN0cmluZyIsImIiXSxbImtvdGxpbi5Mb25nIiwxXSxbImtvdGxpbi5TdHJpbmciLCJhIl0sWyJrb3RsaW4uTG9uZyIsMl0sWyJrb3RsaW4uU3RyaW5nIiwiYyJdLFsia290bGluLkxvbmciLDNdXSwicmVtb3ZhbHMiOltbImtvdGxpbi5TdHJpbmciLCJkIl1dfV1dfQ=="
+  },
+  "notes": "Generated, not transcribed (WIR1-F1-D1 applies to seed vectors only; this one is produced by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded` and then read back). Deliberately NOT sorted (feature E4's subject): puts are inserted b, a, c. OBSERVED: encoding preserved the document's insertion order exactly (puts encoded as b,1,a,2,c,3, not sorted) — the order is a pure function of the vector because the codec's own decoder (NeutralValues -> WireCodec.decodeFrame, ncz.2.1-D1) builds a LinkedHashMap from the JSON entries in document order and MapDelta.puts is re-encoded in that same order. No NONDETERMINISM.md entry needed for this vector: the E4 'not a pure function' branch did not trigger. Confirmed identical across three independent JVM runs (two `EncodingDeterminismTest --rerun` forks plus the `:wire:wireVectors` JavaExec) — see the feature's landing comment. covers [WIR1-C05] (payload registration), [WIR1-C11] (order pinned, not normalised, and asserted deterministic), [WIR1-I01]-[WIR1-I03]."
+}

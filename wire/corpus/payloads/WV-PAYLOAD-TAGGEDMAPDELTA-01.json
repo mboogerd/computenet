@@ -1,0 +1,53 @@
+{
+  "id": "WV-PAYLOAD-TAGGEDMAPDELTA-01",
+  "title": "TaggedMapDelta with two sourceIds, multi-dot puts and one tombstoned del",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-C11", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {
+          "type": "TaggedMapDelta",
+          "fields": {
+            "sources": ["00000000-0000-0000-0000-0000000000a1", "00000000-0000-0000-0000-0000000000a2"],
+            "puts": [
+              {
+                "key": {"type": "kotlin.String", "value": "k1"},
+                "groups": [
+                  {"source": 0, "counters": [1, 3], "values": [{"type": "kotlin.Long", "value": 10}, {"type": "kotlin.Long", "value": 30}]},
+                  {"source": 1, "counters": [2], "values": [{"type": "kotlin.Long", "value": 20}]}
+                ]
+              },
+              {
+                "key": {"type": "kotlin.String", "value": "k2"},
+                "groups": [
+                  {"source": 1, "counters": [4], "values": [{"type": "kotlin.String", "value": "v"}]}
+                ]
+              }
+            ],
+            "dels": [
+              {
+                "key": {"type": "kotlin.String", "value": "k3"},
+                "groups": [{"source": 0, "counters": [5]}]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"TaggedMapDelta\",{\"sources\":[\"00000000-0000-0000-0000-0000000000a1\",\"00000000-0000-0000-0000-0000000000a2\"],\"puts\":[{\"key\":[\"kotlin.String\",\"k1\"],\"groups\":[{\"source\":0,\"counters\":[1,3],\"values\":[[\"kotlin.Long\",10],[\"kotlin.Long\",30]]},{\"source\":1,\"counters\":[2],\"values\":[[\"kotlin.Long\",20]]}]},{\"key\":[\"kotlin.String\",\"k2\"],\"groups\":[{\"source\":1,\"counters\":[4],\"values\":[[\"kotlin.String\",\"v\"]]}]}],\"dels\":[{\"key\":[\"kotlin.String\",\"k3\"],\"groups\":[{\"source\":0,\"counters\":[5]}]}]}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siVGFnZ2VkTWFwRGVsdGEiLHsic291cmNlcyI6WyIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYTEiLCIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYTIiXSwicHV0cyI6W3sia2V5IjpbImtvdGxpbi5TdHJpbmciLCJrMSJdLCJncm91cHMiOlt7InNvdXJjZSI6MCwiY291bnRlcnMiOlsxLDNdLCJ2YWx1ZXMiOltbImtvdGxpbi5Mb25nIiwxMF0sWyJrb3RsaW4uTG9uZyIsMzBdXX0seyJzb3VyY2UiOjEsImNvdW50ZXJzIjpbMl0sInZhbHVlcyI6W1sia290bGluLkxvbmciLDIwXV19XX0seyJrZXkiOlsia290bGluLlN0cmluZyIsImsyIl0sImdyb3VwcyI6W3sic291cmNlIjoxLCJjb3VudGVycyI6WzRdLCJ2YWx1ZXMiOltbImtvdGxpbi5TdHJpbmciLCJ2Il1dfV19XSwiZGVscyI6W3sia2V5IjpbImtvdGxpbi5TdHJpbmciLCJrMyJdLCJncm91cHMiOlt7InNvdXJjZSI6MCwiY291bnRlcnMiOls1XX1dfV19XV19"
+  },
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here. Written in the TaggedMapWire SURROGATE's wire keys (sources/puts/groups/dels), per SCHEMA.md's rule that `fields` holds the registered serializer's wire keys (decision ncz.2.5-D1: the surrogate the codec registers, not TaggedMapDelta's own public shape). Two sourceIds a1, a2 satisfy the feature's >=2-sourceIds requirement. OBSERVED: `sources` encoded in first-seen order over puts then dels (a1 first, from k1's first group; a2 second, from k1's second group) exactly as TaggedMapDeltaSerializer.toWire numbers them (WireCodec kt, first-seen ordinal assignment) — confirmed by [WIR1-I03]'s decode(encode(v))==v passing, which would fail on a renumbering. No NONDETERMINISM.md entry: bytes agreed across three independent JVM runs (two EncodingDeterminismTest --rerun forks plus the :wire:wireVectors JavaExec). covers [WIR1-C05] (payload registration), [WIR1-C09], [WIR1-C11] (pinned ordering, not normalised), [WIR1-I01]-[WIR1-I03]."
+}
