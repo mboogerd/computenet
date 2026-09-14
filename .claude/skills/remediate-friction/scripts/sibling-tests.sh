@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the sibling test of every script this branch changes under
 # .claude/skills/*/scripts/. Step 4 of remediate-friction gates the PROSE
-# (validate-skills.rb, the line-budget ratchet, reachability.py) and gated no
+# (validate-skills.rb, reachability.py) and gated no
 # script at all, so a script edit shipped with its suite unrun — twice in the
 # 2026-08-29 drain, both caught by a dispatched reviewer rather than by the
 # lane, once with the lane's OWN discrimination suite left red
@@ -19,7 +19,7 @@
 #      name sibling and are both covered by feedback.test.sh; a strict name
 #      rule would call the lane's own tooling untested.
 # Neither found: NO-TEST, reported and non-fatal — some scripts are one-liners
-# and the ratchet here is "do not ship a RED suite", not "write a suite now".
+# and the rule here is "do not ship a RED suite", not "write a suite now".
 #
 # Usage: sibling-tests.sh [base-ref]        (default origin/main)
 # Exit 0: every suite that ran passed (or nothing changed).

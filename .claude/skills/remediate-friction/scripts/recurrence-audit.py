@@ -37,9 +37,8 @@ here rather than scanning everything.
 
 Usage: recurrence-audit.py [--epic computenet-wpvy] [--jsonl .beads/issues.jsonl]
 Prints FAILED-FIX lines (strong), CITED lines (weak), then a summary that
-breaks the rate down by metadata.fix_kind -- `mechanical` fixes (a script, a
-changed default, normalised data: they work whether or not anyone reads them)
-against `prose` fixes (an instruction someone must remember).
+breaks the rate down by metadata.friction_class (the error class triage
+records, references/error-classes.md).
 Exit: 0 = audit ran (read the numbers); 2 = bad usage; 3 = the export is
       missing or unreadable -- NOTHING was checked, do not read silence as a
       clean bill of health.
@@ -167,9 +166,11 @@ def main(argv):
             near = " ".join(s for s in re.split(r"(?<=[.\n])", body) if fid in s)
             (strong if STRONG.search(near) else weak).append((fid, later["id"]))
 
+    def cls(f):
+        return (f.get("metadata") or {}).get("friction_class") or "?"
+
     for fid, lid in sorted(strong):
-        kind = (by_id[fid].get("metadata") or {}).get("fix_kind", "?")
-        print(f"FAILED-FIX  {fid} [{kind}]  ->  {lid}")
+        print(f"FAILED-FIX  {fid} [{cls(by_id[fid])}]  ->  {lid}")
     for fid, lid in sorted(weak):
         print(f"CITED       {fid}  ->  {lid}")
 
@@ -179,19 +180,13 @@ def main(argv):
           f"{len(failed)} recurred ({len(strong)} reports), "
           f"{len(weak)} weaker citations to eyeball")
 
-    # The comparison the lane exists to act on.
-    for kind in ("mechanical", "prose", "?"):
-        pool = [f for f in fixes
-                if ((f.get("metadata") or {}).get("fix_kind") or "?") == kind]
-        if not pool:
-            continue
+    # Recurrence per class: the rate the lane exists to push down.
+    for kind in sorted({cls(f) for f in fixes}):
+        pool = [f for f in fixes if cls(f) == kind]
         bad = len([f for f in pool if f["id"] in failed])
-        print(f"  {kind:<11} {len(pool):>4} fixes, {bad} recurred "
+        print(f"  {kind:<5} {len(pool):>4} fixes, {bad} recurred "
               f"({100.0 * bad / len(pool):.1f}%)")
-    if any(((f.get("metadata") or {}).get("fix_kind") or "?") == "?"
-           for f in fixes):
-        print("  ('?' = closed before fix_kind was recorded; the split is only "
-              "meaningful once those age out)")
+    print("  ('?' = closed before friction_class was recorded)")
     return 0
 
 
