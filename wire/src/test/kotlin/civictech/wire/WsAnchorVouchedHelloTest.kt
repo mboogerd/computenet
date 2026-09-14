@@ -28,6 +28,7 @@ import civictech.identity.anchor.AnchorVouchedBinding
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.string.shouldStartWith
@@ -370,21 +371,13 @@ class WsAnchorVouchedHelloTest {
      * answers the other's challenge, reaches `Authenticated`, and attributes
      * the other's `Remote` locations to its stable name.
      *
-     * **Both sides are `Open` and sign no announcements, deliberately, and
-     * that is a known gap, not a choice of fixture.** Under
-     * `RequireAuthenticated` a `:wire` side must sign announcements
-     * (`requireAnnouncementIdentity`), and the kernel's announcement gate
-     * (`civictech.cell.wire.AnnouncementAdmission`) still reads the minting
-     * identity as `PeerId(signerKeyId)` — the signing key's fingerprint —
-     * while the connection is bound to the stable name, so every signed
-     * announcement from a named peer is refused `ID_MISMATCH` and no `Remote`
-     * location ever appears (observed while writing this test). Re-keying that
-     * gate is a DSC4 residual in `:kernel`, outside task
-     * `computenet-5y8t.3.4`'s files, owned by feature `computenet-5y8t.7`; the
-     * `RequireAuthenticated`, signed-announcement variant of this case belongs
-     * there. The hello and its `PROOF` are exercised here in full — credentials
-     * are held, so both sides challenge — and only the announcement signature
-     * is absent.
+     * **Both sides are `Open` and sign no announcements, deliberately.** The
+     * hello and its `PROOF` are exercised here in full — credentials are held,
+     * so both sides challenge — and only the announcement signature is absent;
+     * that shape (`HELLO3` + `PROOF` with credentials held, no announcement
+     * signature) is worth pinning on its own. The `RequireAuthenticated` form,
+     * where both sides also sign and verify announcements, is the next case
+     * below.
      */
     @Test
     fun `two named identities peer over a socket at Authenticated, each attributed to its stable name`() {
@@ -416,6 +409,73 @@ class WsAnchorVouchedHelloTest {
             (server.registry.location(writer.ref) as LocationRegistry.Remote).peer shouldBe PeerId("client-name")
             listener.admissionDenialCount shouldBe 0L
             connection.admissionDenialCount shouldBe 0L
+        } finally {
+            connection.shutdown()
+            runCatching { listener.stop(1000) }
+        }
+    }
+
+    /**
+     * The `RequireAuthenticated` form of the case above, and feature
+     * `computenet-5y8t.7`'s own reason to exist — the signed analogue of BS-01
+     * for names. Same `named(...)` construction and `AnchorVouchedBinding`;
+     * both `Side`s here keep `openUnsigned` at its default (`false`), so both
+     * sign and verify announcements (`socketAnnouncementSigning()` +
+     * `socketAnnouncementVerification()`).
+     *
+     * Before task `computenet-5y8t.7.1`, `civictech.cell.wire.AnnouncementAdmission`
+     * read the minting identity as `PeerId(signerKeyId)` — the signing key's
+     * fingerprint — while the connection was bound to the stable name, so
+     * every signed announcement from a named peer was refused `ID_MISMATCH`
+     * and no `Remote` location ever appeared. `computenet-5y8t.7.1` re-keyed
+     * the gate: it now holds a signed announcement's `signerKeyId` to
+     * `boundKey` (the key the connection was *proven* on) and mints under
+     * `boundPeer` (the connection's bound *name*, decisions 5y8t.7-D1..D4) — so
+     * this case asserts, beyond the open case above, that neither side ever
+     * refused a signed announcement and that the replay ledger is keyed by the
+     * stable name, not by the signing key's fingerprint.
+     */
+    @Test
+    fun `two named identities peer over a socket with signed announcements, reaching Authenticated attributed to their stable names`() {
+        val anchor = AnchorIssuer(keyed("socket-anchor-signed"))
+        fun named(name: String): PeerIdentity {
+            val store = FilePeerKeyStore(keyDirs.resolve(name))
+            val keyed = store.loadOrGenerate()
+            store.storeStatements(listOf(anchor.bind(PeerId(name), keyed.keyId)))
+            return store.loadNamed()
+        }
+        val binding = AnchorVouchedBinding(mapOf(anchor.issuerId to anchor.publicKey))
+        val serverName = "server-name-signed"
+        val clientName = "client-name-signed"
+        val serverIdentity = named(serverName)
+        val clientIdentity = named(clientName)
+        val server = Side(serverIdentity, binding)
+        val client = Side(clientIdentity, binding)
+        val collector = WsAuthenticatedHelloTest.CollectingCell()
+        server.host.managementInlet.call.spawn(collector)
+        val writer = WsAuthenticatedHelloTest.CollectingCell()
+        client.host.managementInlet.call.spawn(writer)
+
+        val listener = WsTransport.listen(0, server.side)
+        val connection = WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side) { 0L }
+        try {
+            await("both sides learned each other's cells at Authenticated") {
+                client.registry.location(collector.ref) is LocationRegistry.Remote &&
+                    server.registry.location(writer.ref) is LocationRegistry.Remote &&
+                    connection.achievedAuthLevel == AuthLevel.Authenticated &&
+                    listener.achievedAuthLevels == listOf(AuthLevel.Authenticated)
+            }
+            (client.registry.location(collector.ref) as LocationRegistry.Remote).peer shouldBe PeerId(serverName)
+            (server.registry.location(writer.ref) as LocationRegistry.Remote).peer shouldBe PeerId(clientName)
+            listener.admissionDenialCount shouldBe 0L
+            connection.admissionDenialCount shouldBe 0L
+            val serverAdmission = requireNotNull(server.side.announcementAdmission)
+            val clientAdmission = requireNotNull(client.side.announcementAdmission)
+            serverAdmission.rejectedAnnouncements shouldBe 0L
+            clientAdmission.rejectedAnnouncements shouldBe 0L
+            serverAdmission.highWaterFor(PeerId(clientName)) shouldNotBe null
+            serverAdmission.highWaterFor(PeerId(clientIdentity.keyId.name)).shouldBeNull()
+            isKeyDerivedPeerIdForm(clientName) shouldBe false
         } finally {
             connection.shutdown()
             runCatching { listener.stop(1000) }
