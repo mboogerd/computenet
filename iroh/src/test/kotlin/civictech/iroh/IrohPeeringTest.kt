@@ -137,9 +137,12 @@ class IrohPeeringTest {
     @Test
     fun `a peer off the listening side's allowlist is refused and accounted, an admitted one peers`() {
         val binary = SidecarBinary.orSkip()
-        // Since computenet-egl.3 the allowlist judges the KEY the QUIC
-        // connection authenticated, not a name anyone writes — so the admitted
-        // peer's NodeId has to be known before the listener exists. Pin its
+        // Since computenet-egl.3 the key a connection is proven on comes from
+        // the QUIC handshake, not a name anyone writes; the allowlist judges
+        // the identity that key resolves to through the side's
+        // `identityBinding` (epic `computenet-5y8t`), never the key itself —
+        // so the admitted peer's NodeId has to be known before the listener
+        // exists. Pin its
         // sidecar's secret key (the `IrohReconnectTest` pattern), spawn it once
         // to read the NodeId that key yields, and dial later with the same args
         // so the endpoint is the same endpoint.
