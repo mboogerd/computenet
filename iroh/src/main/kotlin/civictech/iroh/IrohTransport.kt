@@ -281,6 +281,60 @@ object IrohTransport {
     const val REFUSED_DIAL_LIMIT: Int = 5
 
     /**
+     * A [Peering.Side] whose credentials no [HELLO2_PREFIX] line can carry:
+     * more than [MAX_HELLO_STATEMENTS] statements, a name that is empty or
+     * holds a space, or a statement `encodeIdentityStatementToken` refuses (an
+     * unsigned one). Thrown by [listen] and [connect] **before a sidecar is
+     * spawned** (computenet-5y8t.6).
+     *
+     * Why at start rather than only in `Session.hello`, which refuses the same
+     * credentials and still does: a dialler's `hello` runs inside the re-dial
+     * loop, which would log and retry it forever; and a listener's runs from
+     * `onHello` on the `SidecarClient` reader thread, whose catch-all fails
+     * every link on the sidecar — so one admitted hello would have taken down
+     * every peering the listener held. A configuration fault is refused at the
+     * call that configured it instead.
+     *
+     * Credentials with **no** statements are never refused here: they send
+     * [HELLO_PREFIX]'s line, which carries no name.
+     *
+     * `WsTransport.UnsendableHelloCredentialsException` is the same refusal on
+     * `:wire`, declared twice by name because this module does not depend on
+     * `:wire` (see [DEFAULT_RECONNECT_BACKOFF] for the same trade).
+     */
+    class UnsendableHelloCredentialsException internal constructor(message: String, cause: Throwable? = null) :
+        IllegalArgumentException(message, cause)
+
+    /** Refuses [side] with [UnsendableHelloCredentialsException] when `Session.hello` could not send its credentials. */
+    private fun requireSendableHelloCredentials(side: Peering.Side) {
+        val credentials = side.credentials ?: return
+        val statements = credentials.statements
+        if (statements.isEmpty()) return
+        val name = credentials.peerId.name
+        if (statements.size > MAX_HELLO_STATEMENTS) {
+            throw UnsendableHelloCredentialsException(
+                "credentials for $name hold ${statements.size} statements; an IROH-HELLO2 line carries at most " +
+                    "$MAX_HELLO_STATEMENTS",
+            )
+        }
+        if (name.isEmpty() || ' ' in name) {
+            throw UnsendableHelloCredentialsException(
+                "credentials name '$name' cannot be an IROH-HELLO2 name token (empty or contains a space)",
+            )
+        }
+        statements.forEachIndexed { index, statement ->
+            try {
+                encodeIdentityStatementToken(statement)
+            } catch (e: IllegalArgumentException) {
+                throw UnsendableHelloCredentialsException(
+                    "credentials for $name: statement $index cannot be an IROH-HELLO2 token: ${e.message}",
+                    e,
+                )
+            }
+        }
+    }
+
+    /**
      * Serve peerings on a fresh sidecar. Returns once the sidecar is listening;
      * [IrohListener.nodeId] and [IrohListener.addresses] are what a dialler
      * needs ([connect]'s two first arguments).
@@ -293,6 +347,9 @@ object IrohTransport {
      * [sidecarArgs] when the JVM system property `iroh.relay.url` is set and
      * [sidecarArgs] names neither `--offline` nor `--relay-url` itself — see
      * its KDoc.
+     *
+     * @throws UnsendableHelloCredentialsException before any sidecar is
+     *   spawned, when [side]'s credentials cannot be sent in a hello.
      */
     fun listen(
         side: Peering.Side,
@@ -301,6 +358,7 @@ object IrohTransport {
         stderrSink: (String) -> Unit = {},
         sidecarArgs: List<String> = emptyList(),
     ): IrohListener {
+        requireSendableHelloCredentials(side)
         val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         val listener = try {
             IrohListener(process, process.connect(timeout), side)
@@ -335,6 +393,9 @@ object IrohTransport {
      * **refusing** it: [refusedDialLimit] consecutive links that came up and
      * went down without ever being admitted end the re-dialling for good
      * ([IrohConnection.abandonedAfterRefusals]). See [REFUSED_DIAL_LIMIT].
+     *
+     * @throws UnsendableHelloCredentialsException before any sidecar is
+     *   spawned, when [side]'s credentials cannot be sent in a hello.
      */
     fun connect(
         side: Peering.Side,
@@ -348,6 +409,7 @@ object IrohTransport {
         sidecarArgs: List<String> = emptyList(),
         refusedDialLimit: Int = REFUSED_DIAL_LIMIT,
     ): IrohConnection {
+        requireSendableHelloCredentials(side)
         val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         return try {
             val client = process.connect(timeout)
@@ -612,7 +674,10 @@ object IrohTransport {
          * Credentials that could only produce a line the receiving side must
          * refuse — more than [MAX_HELLO_STATEMENTS] statements, or a name that
          * is empty or holds a space — fail here, loudly, rather than being
-         * truncated into a different claim.
+         * truncated into a different claim. [listen] and [connect] refuse the
+         * same credentials before a sidecar exists
+         * ([UnsendableHelloCredentialsException]); these checks stay as defence
+         * in depth for a Session built directly.
          */
         private fun hello(): ByteArray {
             val credentials = side.credentials
