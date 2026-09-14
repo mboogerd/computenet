@@ -445,10 +445,8 @@ class QueryParserTest {
     fun `two independent syntax errors among five statements yield two rejections and a partial query of the other three`() {
         // Statements 2 and 4 (1-indexed) are broken; 1, 3 and 5 are good. cab.5-D7: recovery
         // is per statement, so one bad statement must not swallow the ones after it. Each
-        // broken statement fails on its own terminating '.' (an unexpected token where a
-        // literal is expected), so recovery consumes exactly that statement and stops there —
-        // a broken statement with no '.' of its own would otherwise hunt forward into the
-        // next statement's text for one, which is a separate risk this test does not probe.
+        // broken statement here fails on its own terminating '.'; the sibling test below
+        // covers the other stop condition, a statement missing its terminator entirely.
         val source = """
             reach(X, Y) :- link(X, Y).
             bad1(X) :- .
@@ -471,6 +469,25 @@ class QueryParserTest {
         result.spans.ruleSpan(0) shouldBe Locus.SourceSpan(1, 1, 1, lines[0].length)
         result.spans.ruleSpan(1) shouldBe Locus.SourceSpan(3, 1, 3, lines[2].length)
         result.spans.ruleSpan(2) shouldBe Locus.SourceSpan(5, 1, 5, lines[4].length)
+    }
+
+    @Test
+    fun `a statement missing its terminator entirely does not swallow the well-formed statement after it`() {
+        // The task review's exact probe (computenet-cab.5.3, 2026-09-14): `bad`'s body never
+        // reaches a '.' before `good`'s text starts. A blind skip-to-next-DOT recovery hunts
+        // straight through `good` looking for a terminator, silently consuming it: `good`
+        // gets no rejection of its own and is absent from the partial query. cab.5-D7 forbids
+        // exactly this cascade. `recover`'s statement-start stop condition must instead
+        // recognise `good(` as the start of a fresh statement and resume there unconsumed.
+        val result = rejected("bad(X) :- link(X, Y)\ngood(X, Y) :- link(X, Y).")
+
+        result.rejections shouldHaveSize 1
+        result.rejections.single().code shouldBe RejectionCode.SYNTAX_ERROR
+
+        result.partial.rules shouldHaveSize 1
+        result.partial.rules.single().head.predicate shouldBe "good"
+        result.spans.rules shouldHaveSize 1
+        result.spans.ruleSpan(0) shouldBe Locus.SourceSpan(2, 1, 2, 25)
     }
 
     @Test

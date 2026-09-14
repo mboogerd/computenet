@@ -78,11 +78,32 @@ import civictech.query.schema.Catalog
  * an unexpected token, a missing terminator, an unbalanced parenthesis, an unterminated
  * string, a nesting depth beyond [MAX_NESTING], an aggregate name outside the closed seven —
  * becomes one [Rejection] located at the offending [Locus.SourceSpan]. [Parser.program]
- * catches it there, records it, and recovers by skipping to the token after that statement's
- * next `.` (or EOF) before continuing with the next statement (cab.5-D7): one bad statement
- * never cascades into the rest of the source being swallowed as a single failure.
- * [ParseResult.Rejected] therefore carries every statement's rejection together with the
- * *partial* query of the statements that did parse ([QRY1-REJECT-10]).
+ * catches it there, records it, and recovers (cab.5-D7) before continuing with the next
+ * statement.
+ *
+ * **Synchronization rule.** [Parser.recover] first checks the exact token the failure left it
+ * on — never a token reached later by skipping — against [Parser.canStartStatement]: an
+ * identifier immediately followed by `(` (a rule or definition head), `define` followed by an
+ * identifier, or `@` followed by an identifier (an aggregate-annotated rule). If it matches,
+ * recovery consumes nothing and [program] attempts that token as a fresh statement. Otherwise
+ * it falls back to skipping token-by-token to the next `.` (consumed) or EOF, exactly as if no
+ * statement-start check existed. The check fires once, at the failure point only, rather than
+ * on every token skipped: a construct like unbounded nesting fails deep inside an *unclosed*
+ * parenthesis run, where a coincidental `IDENT (` further along (still inside those
+ * parentheses) is not a new statement at all, and continuously re-checking during the skip
+ * would misread it as one and split a single failure into two — that regressed
+ * `` `nesting beyond the bound is refused rather than overflowing the stack` `` under an
+ * earlier version of this rule that scanned for the pattern throughout the skip, not only at
+ * entry. Checking only the failure token is what keeps a *missing* terminator from cascading
+ * without over-splitting a mid-expression failure: a statement whose next token IS a fresh
+ * head (the reviewer's probe: `bad(X) :- link(X, Y)` with no `.`, directly followed by
+ * `good(X, Y) :- ...`) resumes at `good` untouched, while a deeply nested failure's debris —
+ * all closing parentheses and no real statement boundary until the eventual `.` — is skipped
+ * in one run exactly as before. Whichever branch [program] takes on a resumed token
+ * ([Parser.definition] or [Parser.rule]) consumes at least the two tokens that matched before
+ * it could fail again, so the token position strictly advances and [program] always
+ * terminates. [ParseResult.Rejected] therefore carries every statement's rejection together
+ * with the *partial* query of the statements that did parse ([QRY1-REJECT-10]).
  *
  * ## Order-dependent aggregates
  *
@@ -275,15 +296,33 @@ object QueryParser {
         }
 
         /**
-         * Recovery after one statement's [ParseError] (cab.5-D7): skip to the token after the
-         * next `.`, or to EOF when the rest of the source has none, so [program] can attempt
-         * the next statement. Per statement, never per source — one missing terminator skips
-         * only its own statement, not everything after it.
+         * Recovery after one statement's [ParseError] (cab.5-D7). If the token the failure
+         * left [pos] on already [canStartStatement], recovery consumes nothing — [program]
+         * retries right there rather than treating a perfectly good next statement as more of
+         * the failed one's debris (the fix for the missing-terminator cascade the task review
+         * caught, computenet-cab.5.3, 2026-09-14). Otherwise it falls back to skipping
+         * token-by-token to the next `.` (consumed here, so [program] starts the next
+         * statement clean) or EOF. The statement-start check runs only once, at the failure
+         * token, never again while skipping — see the class KDoc's "Synchronization rule" for
+         * why continuous re-checking misfires on nested constructs.
          */
         private fun recover() {
+            if (canStartStatement()) return
             while (!at(TokenKind.EOF) && !at(TokenKind.DOT)) advance()
             if (at(TokenKind.DOT)) advance()
         }
+
+        /**
+         * Whether the current token could begin a fresh [definition] or [rule], the same
+         * shapes [program] itself dispatches on: `define` followed by an identifier, `@`
+         * followed by an identifier (an aggregate-annotated rule), or an identifier
+         * immediately followed by `(` (a bare rule/definition head). Used only by [recover],
+         * and only at the moment a statement's [ParseError] is caught.
+         */
+        private fun canStartStatement(): Boolean =
+            (atKeyword("define") && peek(1).kind == TokenKind.IDENT) ||
+                (at(TokenKind.AT) && peek(1).kind == TokenKind.IDENT) ||
+                (at(TokenKind.IDENT) && peek(1).kind == TokenKind.LPAREN)
 
         private fun spanning(start: Token, end: Token) = Locus.SourceSpan(
             startLine = start.span.startLine,
