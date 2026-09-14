@@ -90,13 +90,19 @@ import java.util.UUID
  * frontier already recorded it). Every effect arm in the corpus is now driven
  * from a journaled source.
  *
- * One boundary this fix does not touch: a frame that reaches an `Effectful`
- * inlet with **no** `MessageContext` — the externally-driven-root shape, e.g. a
- * connector ingress calling in directly — has no `(sourceId, counter)` position
- * to be deduped against at all, so it is never suppressed and re-fires on
- * replay. That is a decided, recorded bounded limit against `24-DUR-05`
- * (KFX-16), not an oversight; see `concord/corpus/DISPUTES.md`'s W4-B section
- * for the full boundary notes, including this one.
+ * A frame that reaches an `Effectful` inlet with **no** `MessageContext` — the
+ * externally-driven-root shape, e.g. a connector ingress calling in directly —
+ * has no `(sourceId, counter)` position to be deduped against at all. That used
+ * to be a decided, recorded bounded limit (KFX-16, against `24-DUR-05`): such a
+ * frame was never suppressed and re-fired on replay. It is now closed by an
+ * admission rule instead of a dedup: such a frame is refused as undeliverable
+ * at the `Effectful` inlet (`[24-DUR-06]`), its exclusive payloads discharged
+ * and the refusal accounted, so it never fires at all — covered by
+ * `DUR-CONTEXTLESS-01` (`computenet-em9i`, #578). The admitted counterpart, an
+ * externally-driven frame through a stamped actor lane, fires exactly once
+ * across crash/replay — covered by `DUR-STAMPED-01` (`computenet-8ohq`, #582).
+ * See `concord/corpus/DISPUTES.md`'s W4-B section, "The second boundary", for
+ * the full retirement notes.
  *
  * ## Scenario surface (neutral, expressed through the existing script verbs)
  *
