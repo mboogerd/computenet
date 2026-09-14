@@ -32,7 +32,7 @@
 #
 # Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`.
 # Exit: 0 = at least one READY; 1 = none ready; 2 = bad usage;
-#       3 = a `bd dep list` call failed — NOTHING was checked, do not route
+#       3 = a `bd dep list` (or this id's `bd show`) call failed — NOTHING was checked, do not route
 #           on this (the ready-in-epic.sh exit-3 class).
 set -eu
 
@@ -49,8 +49,12 @@ for id in "$@"; do
   own_parent=
   for dep in $(printf '%s\n' "$deps" | grep -E 'via (blocks|conditional-blocks)$' \
                | grep -E '\(closed\) via ' | sed -E 's/^ *([^: ]+):.*/\1/'); do
-    [ -n "$own_parent" ] || own_parent=$(bd show "$id" --json 2>/dev/null \
-      | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // "-"')
+    if [ -z "$own_parent" ]; then
+      own_parent=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // "" | if . == "" then "-" else . end')
+      # Empty = the lookup failed; comparing against "" would flag a blocker
+      # under this task's OWN open feature as unmerged.
+      [ -n "$own_parent" ] || { echo "verify-ready: 'bd show $id' failed; NOTHING was checked" >&2; exit 3; }
+    fi
     dep_parent=$(bd show "$dep" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // empty')
     [ -n "$dep_parent" ] && [ "$dep_parent" != "$own_parent" ] || continue
     fp=$(bd show "$dep_parent" --json 2>/dev/null | sed -n '/^[[{]/,$p' \

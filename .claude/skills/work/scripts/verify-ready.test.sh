@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "5 passed, 0 failed".
+# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "6 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-ready.sh"}
@@ -11,7 +11,8 @@ cat > "$ROOT/bin/bd" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
   dep) cat "$CTRL/deps.$3" ;;
-  show) read -r p ty st < "$CTRL/show.$2" 2>/dev/null
+  show) [ -f "$CTRL/show.$2" ] || exit 1
+        read -r p ty st < "$CTRL/show.$2"
         printf '[{"id":"%s","parent":"%s","issue_type":"%s","status":"%s"}]\n' "$2" "$p" "$ty" "$st" ;;
 esac
 STUB
@@ -40,6 +41,11 @@ echo "  t41: x [P2] (closed) via blocks" > "$ROOT/deps.t6"
 check "closed blocker under a closed feature is ready" t6 READY
 echo "  u1: x [P2] (closed) via blocks" > "$ROOT/deps.t6"
 check "closed direct child of the epic is ready" t6 READY
+
+echo "  t62: x [P2] (closed) via blocks" > "$ROOT/deps.t7"   # no show.t7: its bd show fails
+sh "$SCRIPT" t7 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] && { pass=$((pass+1)); echo "  PASS own bd show failing exits 3, not a false BLOCKED"; } \
+  || { fail=$((fail+1)); echo "  FAIL own bd show failing: exit $rc, wanted 3"; }
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
