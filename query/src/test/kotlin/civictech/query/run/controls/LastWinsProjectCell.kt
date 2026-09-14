@@ -35,7 +35,9 @@ import java.util.UUID
  * `0 until 50` — measured at base 46d4e795 for computenet-cab.6.4 (0 failures over the hand
  * script and a 40-step `QueryScripts` sweep). Owning the output row across deltas is the same
  * last-wins-instead-of-union error, applied to the output's accumulated tag set rather than to
- * one delta's map.
+ * one delta's map. The stateless shape itself is covered where it CAN diverge — downstream of a
+ * join, by [StatelessLastWinsProjectCell] (computenet-cab.6.6; measured on darwin/arm64 over
+ * seeds `0 until 50`: 207 in-delta collisions, generated sweep caught on 22 of 50 seeds).
  *
  * Test scope only: `NoCellClassArchitectureTest` gates `query/src/main` (`[QRY1-LOWER-03]`).
  * It emits on every delta (never absorbs a wave), because `absorbAck` is kernel-internal.
