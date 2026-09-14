@@ -80,5 +80,11 @@ internal object RejectionCoverage {
         RejectionCode.UNPLANNABLE_STATEMENT to listOf(
             text("a fact", "q(1).", catalog("r" to 1)),
         ),
+        RejectionCode.ORDER_DEPENDENT_AGGREGATE to listOf(
+            text("the arrival-order aggregate @first", "@first f(X) :- r(X, Y).", catalog("r" to 2)),
+            text("the arrival-order aggregate @last", "@last f(X) :- r(X, Y).", catalog("r" to 2)),
+            text("the arrival-order aggregate @scan", "@scan f(X) :- r(X, Y).", catalog("r" to 2)),
+            text("an aggregate name outside the closed seven", "@foo f(X) :- r(X, Y).", catalog("r" to 2)),
+        ),
     )
 }

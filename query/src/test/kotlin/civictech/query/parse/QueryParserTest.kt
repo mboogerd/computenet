@@ -19,6 +19,7 @@ import civictech.query.schema.RelationSchema
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
@@ -210,10 +211,32 @@ class QueryParserTest {
     }
 
     @Test
-    fun `an aggregate outside the closed seven is refused`() {
-        // Refused as SYNTAX_ERROR — see QueryParser's "Known limitation": [QRY1-SEM-05]
-        // wants ORDER_DEPENDENT_AGGREGATE, which is the semantic feature's variant to add.
-        rejected("@first deg(X) :- link(X, Y).")
+    fun `an aggregate outside the closed seven is refused as ORDER_DEPENDENT_AGGREGATE, not SYNTAX_ERROR`() {
+        val rejection = rejected("@first deg(X) :- link(X, Y).").rejections.single()
+        rejection.code shouldBe RejectionCode.ORDER_DEPENDENT_AGGREGATE
+    }
+
+    @Test
+    fun `first, last and scan are refused citing the arrival-order exclusion`() {
+        listOf("first", "last", "scan").forEach { name ->
+            withClue("aggregate '@$name'") {
+                val rejection = rejected("@$name deg(X) :- link(X, Y).").rejections.single()
+                rejection.code shouldBe RejectionCode.ORDER_DEPENDENT_AGGREGATE
+                rejection.specId shouldBe
+                    "[QRY1-SEM-05] '@$name' is an arrival-order aggregate; [24-AGG-01] excludes it by rule"
+                val span = rejection.locus.shouldBeInstanceOf<Locus.SourceSpan>()
+                span shouldBe Locus.SourceSpan(1, 2, 1, 1 + name.length)
+            }
+        }
+    }
+
+    @Test
+    fun `an unknown aggregate name outside first, last and scan is refused as not admitted`() {
+        val rejection = rejected("@foo deg(X) :- link(X, Y).").rejections.single()
+        rejection.code shouldBe RejectionCode.ORDER_DEPENDENT_AGGREGATE
+        rejection.specId shouldBe "[QRY1-SEM-05] '@foo' is not an aggregate [QRY1-LANG-03] admits"
+        val span = rejection.locus.shouldBeInstanceOf<Locus.SourceSpan>()
+        span shouldBe Locus.SourceSpan(1, 2, 1, 4)
     }
 
     @Test
@@ -416,6 +439,55 @@ class QueryParserTest {
         rejected(deep).rejections.single().code shouldBe RejectionCode.SYNTAX_ERROR
     }
 
+    // ------------------------------------------------------------------ statement-level recovery
+
+    @Test
+    fun `two independent syntax errors among five statements yield two rejections and a partial query of the other three`() {
+        // Statements 2 and 4 (1-indexed) are broken; 1, 3 and 5 are good. cab.5-D7: recovery
+        // is per statement, so one bad statement must not swallow the ones after it. Each
+        // broken statement fails on its own terminating '.' (an unexpected token where a
+        // literal is expected), so recovery consumes exactly that statement and stops there —
+        // a broken statement with no '.' of its own would otherwise hunt forward into the
+        // next statement's text for one, which is a separate risk this test does not probe.
+        val source = """
+            reach(X, Y) :- link(X, Y).
+            bad1(X) :- .
+            far(X, Y) :- dist(X, Y, D).
+            bad2(X) :- link(X, Y), .
+            near(X, Y) :- dist(X, Y, 10).
+        """.trimIndent()
+        val result = rejected(source)
+
+        result.rejections shouldHaveSize 2
+        result.rejections.forEach { it.code shouldBe RejectionCode.SYNTAX_ERROR }
+
+        result.partial.rules shouldHaveSize 3
+        result.partial.rules.map { it.head.predicate } shouldContainExactly
+            listOf("reach", "far", "near")
+        result.spans.rules shouldHaveSize 3
+
+        // The good statements' spans still point at their own text.
+        val lines = source.lines()
+        result.spans.ruleSpan(0) shouldBe Locus.SourceSpan(1, 1, 1, lines[0].length)
+        result.spans.ruleSpan(1) shouldBe Locus.SourceSpan(3, 1, 3, lines[2].length)
+        result.spans.ruleSpan(2) shouldBe Locus.SourceSpan(5, 1, 5, lines[4].length)
+    }
+
+    @Test
+    fun `recovery skips to the token after the failing statement's own terminator, never past it`() {
+        // A single bad statement, failing on its own trailing '.', followed by a good one:
+        // recovery must land exactly on the next statement, not consume it too.
+        val result = rejected(
+            """
+            bad(X) :- .
+            reach(X, Y) :- link(X, Y).
+            """.trimIndent(),
+        )
+        result.rejections shouldHaveSize 1
+        result.partial.rules shouldHaveSize 1
+        result.partial.rules.single().head.predicate shouldBe "reach"
+    }
+
     // ------------------------------------------------------------------ totality sweep
 
     /**
@@ -463,12 +535,19 @@ class QueryParserTest {
                     outcome.isSuccess shouldBe true
                 }
                 when (val result = outcome.getOrThrow()) {
+                    // Statement-level recovery (cab.5-D7) means a mutant can now carry more
+                    // than one rejection — each is checked, not just the first.
                     is ParseResult.Rejected -> withClue("rejection shape for <<<$mutant>>>") {
-                        val rejection = result.rejections.single()
-                        rejection.code shouldBe RejectionCode.SYNTAX_ERROR
-                        val span = rejection.locus.shouldBeInstanceOf<Locus.SourceSpan>()
-                        (span.startLine >= 1 && span.startColumn >= 1) shouldBe true
-                        (span.endLine >= span.startLine) shouldBe true
+                        result.rejections.shouldNotBeEmpty()
+                        result.rejections.forEach { rejection ->
+                            (
+                                rejection.code == RejectionCode.SYNTAX_ERROR ||
+                                    rejection.code == RejectionCode.ORDER_DEPENDENT_AGGREGATE
+                                ) shouldBe true
+                            val span = rejection.locus.shouldBeInstanceOf<Locus.SourceSpan>()
+                            (span.startLine >= 1 && span.startColumn >= 1) shouldBe true
+                            (span.endLine >= span.startLine) shouldBe true
+                        }
                     }
                     // A mutant that still parses is a fine outcome — deleting a body literal
                     // leaves a valid rule. The claim under test is only that nothing throws.

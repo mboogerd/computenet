@@ -72,24 +72,26 @@ import civictech.query.schema.Catalog
  * constant whose type disagrees with its column is a semantic rejection owned by the
  * analysis feature, and refusing it here would mis-attribute it to a syntax error.
  *
- * ## Totality
+ * ## Totality and per-statement recovery
  *
- * [parse] never throws ([QRY1-REJECT-03]'s front-door half). Every failure — an unexpected
- * token, a missing terminator, an unbalanced parenthesis, an unterminated string, a nesting
- * depth beyond [MAX_NESTING] — becomes [ParseResult.Rejected] carrying one [Rejection] with
- * [RejectionCode.SYNTAX_ERROR] and the offending [Locus.SourceSpan]. Exactly one rejection
- * is reported: multi-error aggregation ([QRY1-REJECT-10]) is cab.5's policy, not this
- * task's.
+ * [parse] never throws ([QRY1-REJECT-03]'s front-door half). A failure inside one statement —
+ * an unexpected token, a missing terminator, an unbalanced parenthesis, an unterminated
+ * string, a nesting depth beyond [MAX_NESTING], an aggregate name outside the closed seven —
+ * becomes one [Rejection] located at the offending [Locus.SourceSpan]. [Parser.program]
+ * catches it there, records it, and recovers by skipping to the token after that statement's
+ * next `.` (or EOF) before continuing with the next statement (cab.5-D7): one bad statement
+ * never cascades into the rest of the source being swallowed as a single failure.
+ * [ParseResult.Rejected] therefore carries every statement's rejection together with the
+ * *partial* query of the statements that did parse ([QRY1-REJECT-10]).
  *
- * ## Known limitation, deliberately left here
+ * ## Order-dependent aggregates
  *
- * An aggregate name outside `[QRY1-LANG-03]`'s closed seven — `@first`, `@last` — is
- * refused as [RejectionCode.SYNTAX_ERROR], because `AggregateKind` has no value to carry it
- * and this task owns no other code. `[QRY1-SEM-05]` requires it to be refused as
- * `ORDER_DEPENDENT_AGGREGATE` instead; re-attributing it is the semantic-rejection
- * feature's, which will add that variant with its own named test (cab.1-D1). Until then a
- * caller must not read `SYNTAX_ERROR` on an aggregate annotation as "not a known aggregate
- * *name* at all".
+ * An aggregate name outside `[QRY1-LANG-03]`'s closed seven is syntactically well-formed —
+ * `@`, then an identifier — so refusing it is not a syntax error. `@first`, `@last` and
+ * `@scan` are refused as [RejectionCode.ORDER_DEPENDENT_AGGREGATE] because the set-semantic
+ * operator algebra excludes arrival-order aggregates by rule ([24-AGG-01]); any other unknown
+ * name is refused with the same code, because it is likewise not an aggregate
+ * `[QRY1-LANG-03]` admits ([QRY1-SEM-05]).
  */
 object QueryParser {
 
@@ -111,6 +113,12 @@ object QueryParser {
         "full" to OuterJoinSide.FULL,
     )
 
+    /**
+     * Aggregate names that are syntactically well-formed but semantically excluded as
+     * arrival-order-dependent ([QRY1-SEM-05], citing [24-AGG-01]) rather than merely unknown.
+     */
+    private val ORDER_DEPENDENT_NAMES = setOf("first", "last", "scan")
+
     private val AGGREGATES = mapOf(
         "count" to AggregateKind.COUNT,
         "sum" to AggregateKind.SUM,
@@ -123,13 +131,20 @@ object QueryParser {
 
     /**
      * Parses [source] against [catalog]. Total: returns [ParseResult.Rejected] rather than
-     * throwing, for every input.
+     * throwing, for every input. [Parser.program] recovers per statement internally, so this
+     * only ever sees a [ParseError] the recovery loop itself cannot come from — none does
+     * today, but the catch stays as the totality backstop the class KDoc promises.
      */
     fun parse(source: String, catalog: Catalog = Catalog(emptyMap())): ParseResult =
         try {
             Parser(Lexer.lex(source), catalog).program()
         } catch (e: ParseError) {
-            ParseResult.Rejected(listOf(e.rejection))
+            val empty = Query(rules = emptyList(), catalog = catalog, definitions = emptyList())
+            ParseResult.Rejected(
+                rejections = listOf(e.rejection),
+                partial = empty,
+                spans = SpanTable(rules = emptyList(), definitions = emptyList()),
+            )
         }
 
     /**
@@ -189,6 +204,30 @@ object QueryParser {
             )
         }
 
+        /**
+         * [name] is an identifier outside `[QRY1-LANG-03]`'s closed seven: syntactically a
+         * fine aggregate name, semantically excluded ([QRY1-SEM-05]). `first`/`last`/`scan`
+         * cite [24-AGG-01]'s arrival-order exclusion by name; anything else is simply not an
+         * aggregate the language admits.
+         */
+        private fun failOrderDependent(name: Token): Nothing {
+            val specId = if (name.text.lowercase() in ORDER_DEPENDENT_NAMES) {
+                "[QRY1-SEM-05] '@${name.text}' is an arrival-order aggregate; " +
+                    "[24-AGG-01] excludes it by rule"
+            } else {
+                "[QRY1-SEM-05] '@${name.text}' is not an aggregate [QRY1-LANG-03] admits"
+            }
+            throw ParseError(
+                rejection = Rejection(
+                    code = RejectionCode.ORDER_DEPENDENT_AGGREGATE,
+                    locus = name.span,
+                    specId = specId,
+                ),
+                detail = "unknown aggregate '${name.text}', but found it at line " +
+                    "${name.span.startLine}, column ${name.span.startColumn}",
+            )
+        }
+
         private fun <T> nested(block: () -> T): T {
             if (++depth > MAX_NESTING) fail(peek(), "nesting deeper than $MAX_NESTING")
             return try {
@@ -205,24 +244,45 @@ object QueryParser {
             val definitions = mutableListOf<Definition>()
             val ruleSpans = mutableListOf<Locus.SourceSpan>()
             val definitionSpans = mutableListOf<Locus.SourceSpan>()
+            val rejections = mutableListOf<Rejection>()
 
             while (!at(TokenKind.EOF)) {
-                if (at(TokenKind.ERROR)) fail(peek(), peek().text)
                 val start = peek()
-                if (atKeyword("define") && peek(1).kind == TokenKind.IDENT) {
-                    val (definition, end) = definition()
-                    definitions += definition
-                    definitionSpans += spanning(start, end)
-                } else {
-                    val (rule, end) = rule()
-                    rules += rule
-                    ruleSpans += spanning(start, end)
+                try {
+                    if (at(TokenKind.ERROR)) fail(peek(), peek().text)
+                    if (atKeyword("define") && peek(1).kind == TokenKind.IDENT) {
+                        val (definition, end) = definition()
+                        definitions += definition
+                        definitionSpans += spanning(start, end)
+                    } else {
+                        val (rule, end) = rule()
+                        rules += rule
+                        ruleSpans += spanning(start, end)
+                    }
+                } catch (e: ParseError) {
+                    rejections += e.rejection
+                    recover()
                 }
             }
-            return ParseResult.Parsed(
-                query = Query(rules = rules, catalog = catalog, definitions = definitions),
-                spans = SpanTable(rules = ruleSpans, definitions = definitionSpans),
-            )
+
+            val query = Query(rules = rules, catalog = catalog, definitions = definitions)
+            val spans = SpanTable(rules = ruleSpans, definitions = definitionSpans)
+            return if (rejections.isEmpty()) {
+                ParseResult.Parsed(query = query, spans = spans)
+            } else {
+                ParseResult.Rejected(rejections = rejections, partial = query, spans = spans)
+            }
+        }
+
+        /**
+         * Recovery after one statement's [ParseError] (cab.5-D7): skip to the token after the
+         * next `.`, or to EOF when the rest of the source has none, so [program] can attempt
+         * the next statement. Per statement, never per source — one missing terminator skips
+         * only its own statement, not everything after it.
+         */
+        private fun recover() {
+            while (!at(TokenKind.EOF) && !at(TokenKind.DOT)) advance()
+            if (at(TokenKind.DOT)) advance()
         }
 
         private fun spanning(start: Token, end: Token) = Locus.SourceSpan(
@@ -260,8 +320,7 @@ object QueryParser {
         private fun aggregate(): Aggregate {
             advance() // '@'
             val name = expect(TokenKind.IDENT, "an aggregate name after '@'")
-            val kind = AGGREGATES[name.text.lowercase()]
-                ?: fail(name, "unknown aggregate '${name.text}'")
+            val kind = AGGREGATES[name.text.lowercase()] ?: failOrderDependent(name)
             var k: Int? = null
             if (at(TokenKind.LPAREN)) {
                 advance()
