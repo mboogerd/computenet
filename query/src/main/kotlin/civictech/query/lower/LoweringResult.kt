@@ -13,9 +13,11 @@ sealed interface LoweringResult : Serializable {
 
     /**
      * The plan lowered. [spec] is the ordered step list (sources first, then each root in
-     * sorted root-name order, children before parents); [sourceHandles] maps each EDB relation
-     * scanned by the plan to its `src:<relation>` spawn handle; [outputHandles] maps each
-     * root name to the handle of the cell producing that root's rows. [diagnostics] records
+     * sorted root-name order, children before parents; a subtree value-equal to one already
+     * lowered is emitted only there, under the earlier root, `[QRY1-LOWER-11]`);
+     * [sourceHandles] maps each EDB relation scanned by the plan to its `src:<relation>` spawn
+     * handle; [outputHandles] maps each root name to the handle of the cell producing that
+     * root's rows, which for a shared subtree may lie under another root's prefix. [diagnostics] records
      * non-fatal facts about the lowering, such as a gate that could not be proven.
      */
     data class Lowered(
