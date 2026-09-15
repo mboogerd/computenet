@@ -32,8 +32,8 @@ sealed interface LoweringResult : Serializable {
 /**
  * One plan node that could not be lowered: [locus] names the node by its numbered path
  * (`<root>/<n>:<kind>`), [nodeKind] is the plan node's simple class name (`GroupAggregate`,
- * `Intersect`, ...), and [reason] says why. The value `computenet-cab.5` maps onto its
- * `NO_LOWERING` rejection code; this task does not add that code.
+ * `Intersect`, ...), and [reason] says why. `civictech.query.QueryCompiler` maps each one
+ * onto its own `NO_LOWERING` rejection, located at [locus] and naming [nodeKind] and [reason].
  */
 data class LoweringRefusal(
     val locus: Locus.PlanNode,

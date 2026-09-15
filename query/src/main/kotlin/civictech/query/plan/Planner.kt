@@ -397,10 +397,13 @@ private class PlanningContext(
         // projection is not key-preserving, and SEM-02 requires the compiler to reject a
         // non-key-preserving projection feeding a multiplicity-sensitive consumer
         // (`count`/`sum`/`avg`) with `RejectionCode.BAG_SEMANTICS_REQUIRED` rather than
-        // silently compile an approximation. This planner does not yet implement that
-        // rejection (computenet-cab.5); until it does, a rule whose aggregated head variable
-        // set is a strict subset of its body variables silently aggregates over full body
-        // rows rather than being refused.
+        // silently compile an approximation. That rejection is [BagSemantics]', read from this
+        // node's `input.keyPreserving` (cab.5-D3). A rule whose aggregated head variable set is
+        // a strict subset of its body variables is deliberately NOT refused (cab.5-D8, closing
+        // computenet-cab.4.7's question): no projection precedes the aggregate, so over a
+        // relation with a declared row key its input is key-preserving and the population is
+        // the distinct body rows. The same aggregate over an intermediate predicate that
+        // projects the key away is refused.
         require(headVars.isNotEmpty()) {
             "Rule ${rule.head.predicate} is aggregate-annotated but has a nullary head; " +
                 "the aggregated column is the last head variable, so there must be one."
@@ -650,10 +653,48 @@ private fun requireDistinctSetOp(expr: RelationalExpr.SetOp) {
  */
 private fun exprColumns(expr: RelationalExpr): List<String> = when (expr) {
     is RelationalExpr.Relation -> variablesOf(expr.atom)
-    is RelationalExpr.SetOp -> exprColumns(expr.left)
+    is RelationalExpr.SetOp -> setOpColumns(exprColumns(expr.left), exprColumns(expr.right))
     is RelationalExpr.OuterJoin -> {
         val left = exprColumns(expr.left)
         left + exprColumns(expr.right).filter { it !in left }
+    }
+}
+
+/**
+ * The columns a set operation exposes (this file's "Definition column naming" KDoc): the left
+ * operand's columns — a set operation is positional, so [rightColumns] contributes no names of
+ * its own, only an arity check ([requireDistinctSetOp]'s size check here,
+ * [civictech.query.parse.WellFormednessAnalysis]'s ARITY_MISMATCH report there); it is a
+ * parameter here only so a caller has it in hand to check before calling, the same shape
+ * [outerJoinRightRename] takes both operands' columns in. Shared with
+ * [civictech.query.parse.WellFormednessAnalysis], whose definition-arity check must compute the
+ * same exposed columns as [normalizeExpr]/[exprColumns] do here, or a change to this rule could
+ * pass planning while the analysis still accepts (or rejects) a definition by the old rule.
+ */
+internal fun setOpColumns(leftColumns: List<String>, rightColumns: List<String>): List<String> = leftColumns
+
+/**
+ * The rename an outer join's right operand undergoes when merged against [leftColumns] (this
+ * file's "Definition column naming" KDoc): a right key variable — paired with its left key
+ * variable positionally via [leftKeys]/[rightKeys] — is substituted to that left key variable,
+ * so the merged join key is one column under the left's name; any other right column
+ * ([rightColumns]) that merely collides with a left column's name is renamed apart
+ * (`name!scopeTag`, which no surface identifier can be), because only the `on` clause is meant
+ * to merge columns. Shared with [civictech.query.parse.WellFormednessAnalysis], whose
+ * definition-arity check must compute the same exposed columns as [normalizeExpr]/[exprColumns]
+ * do here, or a change to this rename could pass planning while the analysis still accepts (or
+ * rejects) a definition by the old rule.
+ */
+internal fun outerJoinRightRename(
+    leftColumns: List<String>,
+    rightColumns: List<String>,
+    leftKeys: List<String>,
+    rightKeys: List<String>,
+    scopeTag: String,
+): Map<String, String> {
+    val keyTarget = rightKeys.zip(leftKeys).toMap()
+    return rightColumns.associateWith { column ->
+        keyTarget[column] ?: if (column in leftColumns) "$column!$scopeTag" else column
     }
 }
 
@@ -678,7 +719,8 @@ private fun normalizeExpr(expr: RelationalExpr, scopeTag: String): RelationalExp
             "${expr.kind} operands have different arity: left $leftColumns (arity " +
                 "${leftColumns.size}) vs right $rightColumns (arity ${rightColumns.size})"
         }
-        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(leftColumns).toMap()))
+        val targetColumns = setOpColumns(leftColumns, rightColumns)
+        expr.copy(left = left, right = substituteExpr(right, rightColumns.zip(targetColumns).toMap()))
     }
     is RelationalExpr.OuterJoin -> {
         val left = normalizeExpr(expr.left, "${scopeTag}L/")
@@ -695,10 +737,7 @@ private fun normalizeExpr(expr: RelationalExpr, scopeTag: String): RelationalExp
             "Planner does not support an outer join key column used twice: " +
                 expr.on.map { "${it.left.name} = ${it.right.name}" }
         }
-        val keyTarget = rightKeys.zip(leftKeys).toMap()
-        val substitution = rightColumns.associateWith { column ->
-            keyTarget[column] ?: if (column in leftColumns) "$column!$scopeTag" else column
-        }
+        val substitution = outerJoinRightRename(leftColumns, rightColumns, leftKeys, rightKeys, scopeTag)
         val merged = leftKeys.map { Term.Var(it) }
         expr.copy(
             left = left,

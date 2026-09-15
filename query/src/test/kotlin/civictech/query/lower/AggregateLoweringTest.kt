@@ -128,14 +128,14 @@ class AggregateLoweringTest {
     }
 
     @Test
-    fun `QRY1 §HONEST-02 SUM and AVG over a DOUBLE, STRING or BOOL column are refused citing the Long-only rationale`() {
+    fun `QRY1 §24-AGG-01 SUM and AVG over a DOUBLE, STRING or BOOL column are refused citing the Long-only rationale`() {
         listOf(AttrType.DOUBLE, AttrType.STRING, AttrType.BOOL).forEach { type ->
             listOf(AggregateKind.SUM, AggregateKind.AVG).forEach { kind ->
                 withClue("$kind over $type") {
                     val refusal = f.refused(LogicalPlan(mapOf("q" to aggregate(kind, grouped = true))), catalog(type))
                         .refusals.single()
                     refusal.nodeKind shouldBe "GroupAggregate"
-                    refusal.reason shouldContain "[QRY1-HONEST-02]"
+                    refusal.reason shouldContain "[24-AGG-01]"
                     refusal.reason shouldContain "Aggregator.kt:30"
                     refusal.reason shouldContain "order-sensitive"
                 }

@@ -85,6 +85,34 @@ class PlannerDefinitionsTest {
         root.keyAnalysis() shouldBe PlanAnalyses.unionKey(root.inputs)
     }
 
+    /**
+     * `define h(M, N) := a(X, Y) union b(P, Q).`: the head names (`M, N`) differ from both
+     * operands' own variable names, so reaching them at all depends on [normalizeExpr] first
+     * renaming the union's operands to agree with each other — via [setOpColumns], "left operand
+     * wins" — before the head substitution runs. If [normalizeExpr]'s `SetOp` branch renamed the
+     * right operand to something other than the left's columns (e.g. a mutation that hands the
+     * right operand's own columns back as the target, making the rename a no-op), the head
+     * substitution would only ever touch the operand `normalizeExpr` actually renamed, and the
+     * other operand would keep its own variable names — failing [Planner]'s own
+     * `outputColumns == headNames` check rather than silently planning wrong. This is a
+     * Planner-level, not WellFormedness-level, proof that [normalizeExpr] routes through the
+     * same [setOpColumns] rule [exprColumns] does.
+     */
+    @Test
+    fun `a union definition renames both operands to the head names via the left-wins column rule`() {
+        val q = query(catalog) {
+            define(derived("h")(v("M"), v("N"))) {
+                rel(relation("a")(v("X"), v("Y"))) union rel(relation("b")(v("P"), v("Q")))
+            }
+        }
+
+        val root = Planner.plan(q).roots.getValue("h").shouldBeInstanceOf<Union>()
+        root.outputColumns shouldContainExactly listOf("M", "N")
+        root.inputs.size shouldBe 2
+        root.inputs[0].outputColumns shouldContainExactly listOf("M", "N")
+        root.inputs[1].outputColumns shouldContainExactly listOf("M", "N")
+    }
+
     // ---------------------------------------------------------------- (b) intersect / except
 
     @Test
