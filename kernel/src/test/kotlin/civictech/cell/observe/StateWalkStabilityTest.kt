@@ -4,7 +4,6 @@ import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Cursor
-import civictech.cell.Propagate
 import civictech.cell.ReadCaveat
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -20,7 +19,6 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.observe.StateWalkOutcome.Stability
-import civictech.cell.proxy.Invocation
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldNotContain
@@ -76,10 +74,9 @@ class StateWalkStabilityTest {
         return spawn(cell)
     }
 
-    /** A remote delta through `deltaInlet`, the shape `BoundedStateReadTest.deliver` uses. */
+    /** A remote delta merged the way the wire does — through `deltaInlet`. */
     private fun deliver(cell: SetCell<String>, delta: SetDelta<String>) {
-        val propagate = Propagate::class.java.getMethod("propagate", Any::class.java)
-        Invocation.of(propagate, arrayOf<Any?>(delta), null).invoke(cell.deltaInlet.call)
+        cell.deltaInlet.call.propagate(delta)
         controller.runToIdle()
     }
 
