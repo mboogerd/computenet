@@ -62,11 +62,23 @@ sealed interface ParseResult {
      * caller's original statement list. A caller that only wants the diagnostics may ignore
      * [partial]; `civictech.query.QueryCompiler` runs its later phases over it so a good
      * statement's own rejections surface alongside a bad statement's syntax error in one pass.
+     *
+     * [excludedHeads] names the head predicate of every rejected statement whose head was
+     * still lexically recoverable, even though the statement itself failed to parse and so has
+     * no entry in [partial] (computenet-l3338). cab.5-D7 excludes a statement's dependents by
+     * head predicate; a statement that never parsed cannot be excluded by index the way
+     * `civictech.query.QueryCompiler`'s later-phase rejections are, so it is named here instead
+     * — the compiler taints these predicates before well-formedness runs, exactly as if a
+     * parsed, rejected statement with that head had been excluded. A rejected statement whose
+     * head could not be recovered lexically (the syntax error lies at or before the head
+     * identifier) contributes nothing here; its dependents are rejected on their own account
+     * rather than excluded, which [QueryParser]'s KDoc records as a stated limit.
      */
     data class Rejected(
         val rejections: List<Rejection>,
         val partial: Query,
         val spans: SpanTable,
+        val excludedHeads: Set<String> = emptySet(),
     ) : ParseResult {
         init {
             require(rejections.isNotEmpty()) { "ParseResult.Rejected requires a reason" }

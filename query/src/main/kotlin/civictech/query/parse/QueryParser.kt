@@ -113,6 +113,38 @@ import civictech.query.schema.Catalog
  * operator algebra excludes arrival-order aggregates by rule ([24-AGG-01]); any other unknown
  * name is refused with the same code, because it is likewise not an aggregate
  * `[QRY1-LANG-03]` admits ([QRY1-SEM-05]).
+ *
+ * A failure inside [Parser.aggregate] never lets [Parser.recover]'s statement-start check
+ * fire (computenet-l3338): every such failure happens before the statement's own head atom is
+ * even reached, so the very next token is that head — `f (` in `@first f(V) :- r(W).` —
+ * which satisfies [Parser.canStartStatement] exactly as a genuine following statement would,
+ * and would otherwise be mistaken for one. Treating it as fresh re-parsed the rejected
+ * aggregate rule's own tail as a second, unannotated rule and reported its independent faults
+ * (e.g. `UNSAFE_RULE`) alongside the `ORDER_DEPENDENT_AGGREGATE` rejection — two rejections
+ * for one statement, breaking cab.5-D7. [Parser.canStartStatement] cannot distinguish "the
+ * debris of the statement that just failed" from "an unrelated statement that happens to start
+ * the same way" from a single token of lookahead, so these failures go to
+ * [Parser.discardAnnotatedTail] instead: it parses the rejected statement's own head and body
+ * and discards them unreported, and only a failure *inside* that tail resumes the ordinary
+ * synchronization rule — which is what keeps an annotated statement that also lacks its `.`
+ * from swallowing the well-formed statement after it. Not every such failure leaves the parser
+ * on the head: `@topK(abc) f(V) ...` fails at `abc`, so leftover parameter tokens are skipped
+ * first.
+ *
+ * ## Exclusion of unparseable heads
+ *
+ * cab.5-D7 excludes every statement that transitively references the head predicate of an
+ * excluded statement — but a statement whose own head could not be parsed (a syntax error
+ * inside or before the head atom) never becomes part of [ParseResult.Rejected.partial], so
+ * `civictech.query.QueryCompiler` has no statement there to exclude by index. When the failed
+ * statement's head is still lexically recoverable — its first tokens, skipping a leading
+ * `define` or aggregate annotation, are `IDENT '('` — [program] records that name in
+ * [ParseResult.Rejected.excludedHeads] so the compiler can taint it before well-formedness
+ * runs, exactly as if a statement with that head had been excluded. A head that cannot be
+ * recovered this way (the syntax error lands before or inside the head identifier itself) is
+ * not recorded; a dependent of such a statement is rejected on its own account rather than
+ * excluded — a stated limit, not a soundness gap, since a whole-query rejection was already
+ * going to happen from the unparseable statement's own [RejectionCode.SYNTAX_ERROR].
  */
 object QueryParser {
 
@@ -172,8 +204,14 @@ object QueryParser {
      * Internal control flow only — caught by [parse], which is why it carries no stack
      * trace. Nothing outside this file can observe it: totality means the *caller* never
      * sees a throw, not that the implementation avoids one internally.
+     *
+     * [allowResync] is false for a failure inside [Parser.aggregate] (computenet-l3338): such a
+     * failure leaves [Parser] on the annotation's debris or on the still-unparsed head of the
+     * *same* statement, which [Parser.canStartStatement] cannot tell apart from a genuine
+     * following statement, so [Parser.program] routes it to [Parser.discardAnnotatedTail]
+     * rather than the resync check.
      */
-    private class ParseError(val rejection: Rejection, detail: String) :
+    private class ParseError(val rejection: Rejection, detail: String, val allowResync: Boolean = true) :
         Exception(detail, null, false, false)
 
     private class Parser(private val tokens: List<Token>, private val catalog: Catalog) {
@@ -201,18 +239,19 @@ object QueryParser {
 
         private fun advance(): Token = peek().also { if (pos < tokens.size - 1) pos++ }
 
-        private fun expect(kind: TokenKind, what: String): Token {
-            if (peek().kind == TokenKind.ERROR) fail(peek(), peek().text)
-            if (peek().kind != kind) fail(peek(), "expected $what")
+        private fun expect(kind: TokenKind, what: String, allowResync: Boolean = true): Token {
+            if (peek().kind == TokenKind.ERROR) fail(peek(), peek().text, allowResync)
+            if (peek().kind != kind) fail(peek(), "expected $what", allowResync)
             return advance()
         }
 
         /**
          * [message] is developer-facing only — it rides on the internal [ParseError] for a
          * stack trace a maintainer might print, and is deliberately NOT part of the
-         * [Rejection], whose shape [QRY1-REJECT-02] fixes to code + locus + spec id.
+         * [Rejection], whose shape [QRY1-REJECT-02] fixes to code + locus + spec id. See
+         * [ParseError.allowResync] for [allowResync].
          */
-        private fun fail(token: Token, message: String): Nothing {
+        private fun fail(token: Token, message: String, allowResync: Boolean = true): Nothing {
             val seen = if (token.kind == TokenKind.EOF) "end of input" else "'${token.text}'"
             val where = "line ${token.span.startLine}, column ${token.span.startColumn}"
             throw ParseError(
@@ -222,6 +261,7 @@ object QueryParser {
                     specId = SPEC_ID,
                 ),
                 detail = "$message, but found $seen at $where",
+                allowResync = allowResync,
             )
         }
 
@@ -246,6 +286,7 @@ object QueryParser {
                 ),
                 detail = "unknown aggregate '${name.text}', but found it at line " +
                     "${name.span.startLine}, column ${name.span.startColumn}",
+                allowResync = false,
             )
         }
 
@@ -266,9 +307,11 @@ object QueryParser {
             val ruleSpans = mutableListOf<Locus.SourceSpan>()
             val definitionSpans = mutableListOf<Locus.SourceSpan>()
             val rejections = mutableListOf<Rejection>()
+            val excludedHeads = mutableSetOf<String>()
 
             while (!at(TokenKind.EOF)) {
                 val start = peek()
+                val startPos = pos
                 try {
                     if (at(TokenKind.ERROR)) fail(peek(), peek().text)
                     if (atKeyword("define") && peek(1).kind == TokenKind.IDENT) {
@@ -282,7 +325,12 @@ object QueryParser {
                     }
                 } catch (e: ParseError) {
                     rejections += e.rejection
-                    recover()
+                    if (e.allowResync) {
+                        recoverableHead(startPos)?.let { excludedHeads += it }
+                        recover(allowResync = true)
+                    } else {
+                        discardAnnotatedTail()?.let { excludedHeads += it }
+                    }
                 }
             }
 
@@ -291,23 +339,30 @@ object QueryParser {
             return if (rejections.isEmpty()) {
                 ParseResult.Parsed(query = query, spans = spans)
             } else {
-                ParseResult.Rejected(rejections = rejections, partial = query, spans = spans)
+                ParseResult.Rejected(
+                    rejections = rejections,
+                    partial = query,
+                    spans = spans,
+                    excludedHeads = excludedHeads,
+                )
             }
         }
 
         /**
-         * Recovery after one statement's [ParseError] (cab.5-D7). If the token the failure
-         * left [pos] on already [canStartStatement], recovery consumes nothing — [program]
-         * retries right there rather than treating a perfectly good next statement as more of
-         * the failed one's debris (the fix for the missing-terminator cascade the task review
-         * caught, computenet-cab.5.3, 2026-09-14). Otherwise it falls back to skipping
-         * token-by-token to the next `.` (consumed here, so [program] starts the next
+         * Recovery after one statement's [ParseError] (cab.5-D7). When [allowResync] is true
+         * (the failure is [ParseError.allowResync]) and the token the failure left [pos] on
+         * already [canStartStatement], recovery consumes nothing — [program] retries right
+         * there rather than treating a perfectly good next statement as more of the failed
+         * one's debris (the fix for the missing-terminator cascade the task review caught,
+         * computenet-cab.5.3, 2026-09-14). Otherwise — including a failure inside [aggregate]
+         * that [discardAnnotatedTail] found no head after (computenet-l3338) — it falls back to
+         * skipping token-by-token to the next `.` (consumed here, so [program] starts the next
          * statement clean) or EOF. The statement-start check runs only once, at the failure
          * token, never again while skipping — see the class KDoc's "Synchronization rule" for
          * why continuous re-checking misfires on nested constructs.
          */
-        private fun recover() {
-            if (canStartStatement()) return
+        private fun recover(allowResync: Boolean) {
+            if (allowResync && canStartStatement()) return
             while (!at(TokenKind.EOF) && !at(TokenKind.DOT)) advance()
             if (at(TokenKind.DOT)) advance()
         }
@@ -323,6 +378,66 @@ object QueryParser {
             (atKeyword("define") && peek(1).kind == TokenKind.IDENT) ||
                 (at(TokenKind.AT) && peek(1).kind == TokenKind.IDENT) ||
                 (at(TokenKind.IDENT) && peek(1).kind == TokenKind.LPAREN)
+
+        /**
+         * Recovery after a failure inside [aggregate] (`allowResync = false`, computenet-l3338).
+         * The failure leaves [pos] somewhere in the annotation's debris — on the head itself
+         * (`@first f(V) ...`, `@topK(3 f(V) ...`), or before it (`@topK(abc) f(V) ...`,
+         * `@first(3) f(V) ...`). Leftover parameter tokens (`(`, `)`, integers, and identifiers
+         * not followed by `(`) are skipped; if an `IDENT '('` then follows, it is this statement's
+         * own head, and the rest of the rule is parsed by [ruleTail] and **discarded** — never
+         * added to the partial query, never reported, so the statement yields exactly the one
+         * annotation rejection. If that tail itself fails (a missing terminator, say), recovery
+         * continues from *its* failure point under the ordinary [recover] rule, so a well-formed
+         * statement after an annotated one that also lacks its `.` is not swallowed. Returns the
+         * head predicate for [ParseResult.Rejected.excludedHeads], or `null` — after skipping to
+         * the next `.` — when no head follows the debris.
+         */
+        private fun discardAnnotatedTail(): String? {
+            while (
+                at(TokenKind.LPAREN) || at(TokenKind.RPAREN) || at(TokenKind.INT_LIT) ||
+                (at(TokenKind.IDENT) && peek(1).kind != TokenKind.LPAREN)
+            ) {
+                advance()
+            }
+            if (!(at(TokenKind.IDENT) && peek(1).kind == TokenKind.LPAREN)) {
+                recover(allowResync = false)
+                return null
+            }
+            val head = peek().text
+            try {
+                ruleTail(aggregate = null)
+            } catch (e: ParseError) {
+                recover(e.allowResync)
+            }
+            return head
+        }
+
+        /**
+         * The head predicate of the statement that started at [startPos], read lexically —
+         * without re-parsing, since the statement is known to have failed — when it is
+         * unambiguously recoverable: an optional `define`, an optional `@ IDENT ('(' INT ')')?`
+         * aggregate annotation, and then `IDENT '('`, the shape every rule and definition head
+         * shares. `null` when the tokens from [startPos] do not fit that shape (the syntax
+         * error lies before or inside the head identifier itself), per the class KDoc's
+         * "Exclusion of unparseable heads": `civictech.query.QueryCompiler` treats a `null`
+         * here as an unrecoverable head, not as "no exclusion needed".
+         */
+        private fun recoverableHead(startPos: Int): String? {
+            var i = startPos
+            fun tok(offset: Int = 0) = tokens[minOf(i + offset, tokens.size - 1)]
+            if (tok().kind == TokenKind.IDENT && tok().text.lowercase() == "define") i++
+            if (tok().kind == TokenKind.AT) {
+                i++
+                if (tok().kind == TokenKind.IDENT) i++
+                if (tok().kind == TokenKind.LPAREN) {
+                    i++
+                    if (tok().kind == TokenKind.INT_LIT) i++
+                    if (tok().kind == TokenKind.RPAREN) i++
+                }
+            }
+            return tok().text.takeIf { tok().kind == TokenKind.IDENT && tok(1).kind == TokenKind.LPAREN }
+        }
 
         private fun spanning(start: Token, end: Token) = Locus.SourceSpan(
             startLine = start.span.startLine,
@@ -344,6 +459,11 @@ object QueryParser {
         /** `aggregate? atom (':-' body)? '.'` — returns the rule and its final token. */
         private fun rule(): Pair<Rule, Token> {
             val aggregate = if (at(TokenKind.AT)) aggregate() else null
+            return ruleTail(aggregate)
+        }
+
+        /** `atom (':-' body)? '.'` — the part of [rule] after its optional annotation. */
+        private fun ruleTail(aggregate: Aggregate?): Pair<Rule, Token> {
             val head = atom()
             val body = if (at(TokenKind.IMPLIES)) {
                 advance()
@@ -355,24 +475,29 @@ object QueryParser {
             return Rule(head, body, aggregate) to dot
         }
 
-        /** `'@' IDENT ('(' INT ')')?` over `[QRY1-LANG-03]`'s closed seven. */
+        /**
+         * `'@' IDENT ('(' INT ')')?` over `[QRY1-LANG-03]`'s closed seven. Every failure here
+         * (`allowResync = false`) happens before the statement's own head atom is parsed, so
+         * [recover] must never treat the token it is left on as a fresh statement's start; see
+         * [discardAnnotatedTail] and the class KDoc's "Order-dependent aggregates" section.
+         */
         private fun aggregate(): Aggregate {
             advance() // '@'
-            val name = expect(TokenKind.IDENT, "an aggregate name after '@'")
+            val name = expect(TokenKind.IDENT, "an aggregate name after '@'", allowResync = false)
             val kind = AGGREGATES[name.text.lowercase()] ?: failOrderDependent(name)
             var k: Int? = null
             if (at(TokenKind.LPAREN)) {
                 advance()
-                val kTok = expect(TokenKind.INT_LIT, "an integer k")
+                val kTok = expect(TokenKind.INT_LIT, "an integer k", allowResync = false)
                 k = kTok.value as Int
-                if (k <= 0) fail(kTok, "topK's k must be positive")
-                expect(TokenKind.RPAREN, "')' after the aggregate parameter")
+                if (k <= 0) fail(kTok, "topK's k must be positive", allowResync = false)
+                expect(TokenKind.RPAREN, "')' after the aggregate parameter", allowResync = false)
             }
             if (kind == AggregateKind.TOP_K && k == null) {
-                fail(name, "topK requires a positive k, as '@topK(n)'")
+                fail(name, "topK requires a positive k, as '@topK(n)'", allowResync = false)
             }
             if (kind != AggregateKind.TOP_K && k != null) {
-                fail(name, "'${name.text}' takes no parameter")
+                fail(name, "'${name.text}' takes no parameter", allowResync = false)
             }
             return Aggregate(kind, k)
         }
