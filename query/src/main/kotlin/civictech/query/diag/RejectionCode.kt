@@ -28,6 +28,12 @@ package civictech.query.diag
  *
  * [QRY1-REJECT-02], [QRY1-REJECT-05]
  *
+ * **Every variant above is pinned by a named test in
+ * `civictech.query.diag.RejectionTest`** (one per code, driven by the shared producer
+ * registry in `civictech.query.diag.RejectionCoverage`), and the enum-to-registry agreement
+ * in both directions — no variant without a producer, no producer registered under a code it
+ * does not produce — is enforced by `civictech.query.diag.RejectionExhaustivenessTest` (BS-13).
+ *
  * **Five codes deliberately absent (cab.5-D5).** [NON_TOTAL_ORDER] ([QRY1-SEM-06]),
  * [MULTIWRITER_NONCONVERGENT] ([QRY1-SEM-07]), [WINDOW_CLOSE_UNSUPPORTED] ([QRY1-REJECT-07]),
  * [GLOBAL_ORDER_UNSUPPORTED] ([QRY1-REJECT-08]) and [EXCLUSIVE_PAYLOAD] ([QRY1-REJECT-09]) are
