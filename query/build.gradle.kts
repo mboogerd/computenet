@@ -27,3 +27,10 @@ dependencies {
     testImplementation(project(":testkit"))
     testImplementation(project(":oracle"))
 }
+
+// `-Pquery.seeds=N` sets how many seeds `civictech.query.run.QuerySweepTest` runs (epic
+// computenet-cab §8, "nightly / on demand"); without it the sweep runs its default 200. The
+// `:oracle` `oracle.seeds` precedent, verbatim.
+tasks.test {
+    (project.findProperty("query.seeds") as String?)?.let { systemProperty("query.seeds", it) }
+}
