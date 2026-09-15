@@ -168,7 +168,8 @@ data class RowCombine(
         }
         return Row(
             outputColumns.map { name ->
-                leftIndex[name]?.let { left.values[it] } ?: right.values[rightIndex.getValue(name)]
+                val li = leftIndex[name]
+                if (li != null) left.values[li] else right.values[rightIndex.getValue(name)]
             },
         )
     }
