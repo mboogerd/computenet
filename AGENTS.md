@@ -301,10 +301,8 @@ command line, and does not force upstream tasks the named task depends on;
 use `--rerun-tasks` for a repo-wide run.
 
 If the change touches `.claude/skills/`, it is a skill change and the Gradle
-gates say nothing about it. Run the rubric gate, which checks every skill
-against Anthropic's skill-creator criteria (frontmatter, and the shape rules
-its own script omits — the SKILL.md line budget and a table of contents on
-long reference files):
+gates say nothing about it. Run the rubric gate, which checks every skill's
+frontmatter, cited script paths and hard line caps:
 
 ```bash
 ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
