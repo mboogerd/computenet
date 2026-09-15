@@ -472,7 +472,7 @@ class InspectorPagedStateTest {
             val server = started()
             serving = server
             val snapshotsConsulted = AtomicLong()
-            server.snapshots =SnapshotSource { snapshotsConsulted.incrementAndGet(); null }
+            server.snapshots = SnapshotSource { snapshotsConsulted.incrementAndGet(); null }
 
             registry.unpublish(unplaced.ref)
 
