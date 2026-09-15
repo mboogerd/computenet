@@ -564,4 +564,32 @@ class RejectionTest {
 
         rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
     }
+
+    @Test
+    fun `exclusion limit - a stray identifier after define skips its head atom as debris, so its dependent is not excluded`() {
+        // QueryParser's class KDoc, "A missing comma versus a missing terminator" (computenet-6atl9,
+        // computenet-cab.8): `define X both(X, Y) := ...` fails parsing its head atom right after
+        // `define`, at `both(`. That atom closes before the statement's own `.`, but is followed by
+        // `:=` rather than `.` or `:-` -- neither of which a rule/definition head can be followed by
+        // -- so headAtomEndsAtBoundary() rejects it as a resync point and it is skipped as debris of
+        // the failed definition instead of being recorded. `uses`, which depends on `both`, therefore
+        // draws UNKNOWN_PREDICATE instead of being excluded.
+        val catalog = catalog("link" to 2)
+        val source = """
+            define X both(X, Y) := link(X, Y).
+            uses(X, Y) :- both(X, Y).
+        """.trimIndent()
+
+        val parsed = QueryParser.parse(source, catalog).shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: $parsed") {
+            parsed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+            parsed.excludedHeads shouldBe emptySet()
+        }
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit: $rejections") {
+            rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
+        }
+    }
 }
