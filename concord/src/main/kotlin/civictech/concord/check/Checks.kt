@@ -78,8 +78,25 @@ object Checks {
         }
     }
 
-    /** All listed views hold equal folds at quiescence. */
+    /**
+     * All listed views hold equal folds at quiescence.
+     *
+     * **Every named view must match a cell in the graph** (computenet-1j2oz, same
+     * idiom as [replicasConverge]). A `views:` id that names no cell — a typo, a
+     * renamed view, a copy-paste from another scenario — fails naming the
+     * unmatched id, rather than reaching `ctx.driver.readView` (which throws) or,
+     * for the fewer-than-two-views shape below, short-circuiting to `Passed`
+     * without ever touching the graph.
+     */
     fun viewsConverge(check: ViewsConverge, ctx: CheckContext): CheckResult {
+        val graphIds = ctx.scenario.graph?.cells.orEmpty().map { it.id }.toSet()
+        val unmatched = check.views.filter { it !in graphIds }
+        if (unmatched.isNotEmpty()) {
+            return CheckResult.Failed(
+                "views-converge: ${unmatched.joinToString(", ")} match no cell in the graph " +
+                    "(check for a typo or a stale rename)",
+            )
+        }
         if (check.views.size < 2) return CheckResult.Passed
         val ref = check.views.first()
         val refType = viewType(ctx.scenario, ref)
@@ -369,8 +386,24 @@ object Checks {
      * Still *not* asserted unkeyed: a key the sink produced that the scenario never
      * fed it, at the stated count, passes (effect *fabrication* is a third
      * direction, outside this check's "exactly N per key" reading).
+     *
+     * **`check.sink` must name a cell in the graph** (computenet-1j2oz, same idiom
+     * as [replicasConverge]). `ctx.driver.effectLog` resolves an unknown id to an
+     * empty log the same as a real sink that legitimately fired nothing — the
+     * driver has no way to distinguish "this cell does not exist" from "this cell
+     * exists and produced zero effects" — so `exactly: 0` (and a keyed lookup
+     * against a key that never fired) previously passed vacuously on a typo, a
+     * renamed sink, or a copy-paste from another scenario. Cell existence is
+     * checked against the graph before the log is read at all, for both the
+     * keyed and unkeyed (`exactly: 0`) forms.
      */
     fun effectCount(check: EffectCount, ctx: CheckContext): CheckResult {
+        if (ctx.scenario.graph?.cells.orEmpty().none { it.id == check.sink }) {
+            return CheckResult.Failed(
+                "effect-count(${check.sink}): no cell in the graph names this sink " +
+                    "(check for a typo or a stale rename)",
+            )
+        }
         val effects = ctx.driver.effectLog(check.sink)
         val byKey: Map<String?, Int> = effects.groupingBy { it.key }.eachCount()
         val relevant: Map<String?, Int> = when {
