@@ -8,6 +8,8 @@ dependencies {
     implementation(project(":demo:shell"))
 
     testImplementation(project(":testkit"))
+    testImplementation(project(":query"))
+    testImplementation(project(":oracle"))
 }
 
 application {
