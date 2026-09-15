@@ -132,6 +132,8 @@ object CrossJvmMain {
                     read
                 }
                 OutputShape.COUNTER -> {
+                    // Same fold as oracle's ScalarTerminalFold (QueryCase's COUNTER choice). Unexercised by
+                    // CrossJvmCompiledQueryTest: its fixture has no scalar COUNT root.
                     var total = 0L
                     host.lookup(applied.counterOutput(root))!!.outlet
                         .subscribe(Use.fixed(Propagate { delta -> total += delta.amount }, PortRef.generate()))
