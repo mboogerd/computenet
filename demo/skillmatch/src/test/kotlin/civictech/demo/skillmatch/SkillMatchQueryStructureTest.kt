@@ -178,7 +178,7 @@ class SkillMatchQueryStructureTest {
             "matches" to "matchCounts/1:join",
             "matchCounts" to "matchCounts/0:groupaggregate",
             "required" to "required/0:groupaggregate",
-            "gap" to "gap/0:semijoin",
+            "gap" to "gap/0:antijoin",
             "supply" to "supply/0:groupaggregate",
             "demand" to "demand/0:groupaggregate",
         )
@@ -203,7 +203,7 @@ class SkillMatchQueryStructureTest {
             compiledOnlySpawns = mapOf(CAND_HAS to FlatMapSetCell::class),
             compiledOnlyLinks = setOf(
                 ConnectStep("src:candSkills", "outlet", CAND_HAS, "inlet"),
-                ConnectStep(CAND_HAS, "outlet", "gap/0:semijoin", "right"),
+                ConnectStep(CAND_HAS, "outlet", "gap/0:antijoin", "right"),
             ),
             classMismatches = emptyMap(),
         )
