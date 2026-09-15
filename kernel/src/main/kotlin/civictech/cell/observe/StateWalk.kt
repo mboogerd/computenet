@@ -33,11 +33,16 @@ import java.util.concurrent.CompletionException
  * it read" structural instead of a convention each arm has to remember, and
  * leaves exactly one place — [isComplete] — where completeness is decided.
  *
- * **No stability verdict is computed here.** [openingFrontier] and
- * [closingFrontier] are the two stamps verbatim; comparing them is the
- * stability check [civictech.cell.StatePage] describes, and it belongs to the
- * sibling that owns it (computenet-t6b.3.4), which extends this type. A walk
- * that answers "stable" is answering a question this primitive did not ask.
+ * **The stability verdict is [stability], computed once from the two endpoint
+ * stamps** (computenet-t6b.3.4.1, KRD-16..KRD-20). [openingFrontier] and
+ * [closingFrontier] stay verbatim beside it; [stability] is the [21-PULL-03]
+ * comparison [civictech.cell.StatePage] describes, decided in exactly one place
+ * so no consumer re-derives it with a different reading. It reads *only* the
+ * two stamps: [caveats] is not consulted, so an intermediate page's
+ * [ReadCaveat.STALE_FRONTIER] neither downgrades the verdict nor is filtered
+ * out of the union (KRD-20). It is `null` on every walk that did not complete
+ * (KRD-14): a truncated walk's closing stamp is whatever its last page carried,
+ * and there is no whole walk for a verdict to describe.
  *
  * @property termination How the walk ended; see [Termination].
  * @property entries Every page's entries concatenated in arrival order. **No
@@ -63,8 +68,12 @@ import java.util.concurrent.CompletionException
  *   nullability. On a completed walk both stamps are exact (`StatePage.frontier`
  *   documents the two ends of a walk as the exact points); on a truncated one
  *   the closing stamp is whatever the last page carried, which may be a stale
- *   frontier declared as [ReadCaveat.STALE_FRONTIER] — another reason no verdict
- *   is computed here.
+ *   frontier declared as [ReadCaveat.STALE_FRONTIER] — which is why
+ *   [stability] is `null` there.
+ * @property stability The verdict of comparing [openingFrontier] with
+ *   [closingFrontier] on a completed walk — see [Stability] for its three arms
+ *   and what each does and does not promise — or `null` exactly when
+ *   [isComplete] is false.
  *
  * `StatePage.attributes` is deliberately **not** accumulated. It is cell-level
  * state that rides *every* page precisely so a caller starting at page 4 still
@@ -80,7 +89,67 @@ data class StateWalkOutcome(
     val exclusivesElided: Int,
     val openingFrontier: TagFrontier?,
     val closingFrontier: TagFrontier?,
+    val stability: Stability?,
 ) {
+
+    /**
+     * What comparing a completed walk's two endpoint frontier stamps can
+     * honestly say about the entries it accumulated ([21-PULL-03],
+     * computenet-t6b.3.4.1). Exactly three arms (KRD-19).
+     *
+     * ### Why there is no unqualified "snapshot" arm
+     *
+     * [21-PULL-03] makes equal stamps a *necessary* condition for the union of a
+     * walk's pages to be the state at that frontier, not a sufficient one, and
+     * no family shipped today closes the gap. A tag frontier is a per-source
+     * maximum: a reordered remote delta whose dot sits below a maximum the
+     * replica already holds — an OR-set remove carrying an older del-dot — is
+     * absorbed, changes membership, and moves no stamp. Operator families'
+     * frontiers are not even monotone (`concord/corpus/DISPUTES.md`,
+     * "21-PULL-03 — frontier-representation-gap"). An arm claiming "stamps equal,
+     * therefore the union *is* the state" would be false for every family, so
+     * the vocabulary does not carry one, and no `Boolean` sufficiency flag
+     * stands in for it.
+     *
+     * When a family with a gap-free, monotone frontier exists — the research
+     * item that closes the frontier-representation gap — an unqualified arm is
+     * an **additive** extension of this interface; nothing here needs to change
+     * shape for it.
+     */
+    sealed interface Stability {
+
+        /**
+         * The opening or the closing stamp is `null`: the family's pages carry no
+         * frontier (a `MapCell`, a `ListCell`), so there is nothing to compare
+         * (KRD-18). This is **not** "stable" — the walk completed, and whether
+         * the state moved under it is simply not determinable from what it read.
+         * A caveat such as [ReadCaveat.POSITIONAL_CURSOR] does not change the
+         * arm.
+         */
+        data object Undeterminable : Stability
+
+        /**
+         * Both stamps are present and differ: the cell's frontier moved during
+         * the walk, so the accumulated entries mix pages read at different
+         * points and are not the state at either stamp (KRD-17). Carries both
+         * stamps verbatim, so a caller can tell how far it moved.
+         */
+        data class Smeared(val opening: TagFrontier, val closing: TagFrontier) : Stability
+
+        /**
+         * Both stamps are present and equal to [frontier] (KRD-16) — the
+         * condition [21-PULL-03] requires of a snapshot, **qualified**: it is
+         * necessary but not sufficient. The frontier is a per-source maximum, so
+         * a reordered remote remove whose del-dot is below a maximum already
+         * held can change membership mid-walk without moving either stamp; a
+         * walk that reports this arm may then still name a retracted element
+         * present. The qualification stands until the research item on the
+         * frontier-representation gap closes it
+         * (`concord/corpus/DISPUTES.md`, "21-PULL-03"). Read it as "no movement
+         * the frontier can see", never as "the union is the state".
+         */
+        data class QualifiedSnapshot(val frontier: TagFrontier) : Stability
+    }
 
     /**
      * How a walk ended. Every arm is a case the walk *decided*; there is no arm
@@ -289,6 +358,23 @@ class StateWalk internal constructor(
         }
     }
 
+    /**
+     * The one place the [21-PULL-03] stamp comparison is made. Reads the two
+     * endpoint stamps only — never the caveats (KRD-20) — and answers `null`
+     * for any walk that is not complete, deciding that through
+     * [StateWalkOutcome.isComplete] rather than a second `is Completed` test.
+     */
+    private fun stabilityOf(outcome: StateWalkOutcome): StateWalkOutcome.Stability? {
+        val opening = outcome.openingFrontier
+        val closing = outcome.closingFrontier
+        return when {
+            !outcome.isComplete -> null
+            opening == null || closing == null -> StateWalkOutcome.Stability.Undeterminable
+            opening == closing -> StateWalkOutcome.Stability.QualifiedSnapshot(opening)
+            else -> StateWalkOutcome.Stability.Smeared(opening, closing)
+        }
+    }
+
     private fun deadlinePassed(): Boolean = deadline != null && !clock.instant().isBefore(deadline)
 
     private fun finish(termination: Termination) {
@@ -301,7 +387,8 @@ class StateWalk internal constructor(
                 exclusivesElided = exclusivesElided,
                 openingFrontier = openingFrontier,
                 closingFrontier = closingFrontier,
-            )
+                stability = null,
+            ).let { it.copy(stability = stabilityOf(it)) }
         }
         // Outside the lock — this runs the caller's dependent stages — and
         // `complete` is the exactly-once gate: a later arm (a cancel racing a
@@ -337,8 +424,14 @@ class StateWalk internal constructor(
  * - **It does not treat a short or empty page as the end.** Only
  *   `next == null` terminates (KRD-10); a page emptied by
  *   `since`/`scope`/`byteBudget` skipping still carries a resume token.
- * - **It does not compute a stability verdict.** The opening and closing
- *   frontier stamps are retained verbatim for the sibling that does.
+ * - **Its stability verdict is qualified, and only for a completed walk.**
+ *   [StateWalkOutcome.stability] compares the opening and closing frontier
+ *   stamps (retained verbatim beside it): equal stamps give
+ *   [StateWalkOutcome.Stability.QualifiedSnapshot] — necessary, not sufficient,
+ *   for the union to be the state — differing stamps give
+ *   [StateWalkOutcome.Stability.Smeared], a missing stamp gives
+ *   [StateWalkOutcome.Stability.Undeterminable], and a walk that did not
+ *   complete gives `null`. It does not repair a smeared walk.
  *
  * ### The deadline is cooperative, and that is a real limit
  *
