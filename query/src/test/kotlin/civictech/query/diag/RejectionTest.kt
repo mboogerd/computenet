@@ -521,6 +521,36 @@ class RejectionTest {
     }
 
     @Test
+    fun `exclusion limit - an unclosed statement after a missing terminator is skipped as debris, so its dependent is not excluded`() {
+        // The other side of the ambiguity QueryParser's "A missing comma versus a missing
+        // terminator" states (computenet-6atl9 second read): `q(X` never closes before the '.',
+        // so the lookahead reads it as `fact`'s debris, exactly as it reads `s(X, .` in the
+        // exclusion test above. `q` earns no rejection and is not recorded, so `z` draws an
+        // UNKNOWN_PREDICATE for it instead of being excluded.
+        val catalog = catalog("r" to 1)
+        val source = "fact(1)\nq(X :- r(X).\nz(X) :- q(X)."
+
+        val parsed = QueryParser.parse(source, catalog).shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: $parsed") {
+            parsed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+            parsed.excludedHeads shouldBe setOf("fact")
+        }
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit: $rejections") {
+            rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
+        }
+
+        // Missing its own '.' as well, it takes the well-formed statement after it along.
+        val swallowed = QueryParser.parse("fact(1)\nq(X :- r(X)\ngood(X) :- r(X).", catalog)
+            .shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: $swallowed") {
+            swallowed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+            swallowed.partial.rules shouldBe emptyList()
+        }
+    }
+
+    @Test
     fun `exclusion limit - a dependent of a statement whose head is not lexically recoverable is UNKNOWN_PREDICATE`() {
         // The limit QueryCompiler's KDoc states (computenet-l3338): the syntax error lies before
         // the head identifier, so no head is recovered and `good` is rejected on its own account.

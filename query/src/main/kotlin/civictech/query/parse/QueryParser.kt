@@ -113,10 +113,20 @@ import civictech.query.schema.Catalog
  * missing-terminator cascade fix (computenet-cab.5.3) needs [Parser.recover] to resume there. So
  * for a bare `IDENT '('` start, [Parser.recover] also reads ahead — without skipping, and
  * without moving the position — to that atom's closing `)`, and resumes only when the atom
- * closes before any `.` and is followed by `.` or `:-`, the only tokens a rule head can be
- * followed by. Debris that continues the body (`foo(X) :- r(X) baz(X), s(X).`) or never closes
- * (`a(X) :- r(X) s(X, .`) cannot begin a statement, so it is skipped to the `.` as part of the
- * failed statement and yields no second rejection.
+ * closes before any `.` and is followed by `.` or `:-` (the only tokens a rule head can be
+ * followed by) or by another statement start (a fact that is itself missing its terminator:
+ * `bad(X) :- r(X)` / `fact(1)` / `good(X) :- r(X).` must still resume at `fact` so the
+ * well-formed `good` is not swallowed). Debris that continues the body
+ * (`foo(X) :- r(X) baz(X), s(X).`) or never closes (`a(X) :- r(X) s(X, .`) cannot begin a
+ * well-formed statement, so it is skipped to the `.` as part of the failed statement and yields
+ * no second rejection. That skip is the same ambiguity resolved the other way, a stated limit:
+ * a statement after a missing terminator that is itself unclosed, or malformed right after its
+ * head, is skipped as debris — it earns no rejection of its own and its head is not recorded
+ * in [ParseResult.Rejected.excludedHeads], so a dependent draws
+ * [RejectionCode.UNKNOWN_PREDICATE] instead of being excluded (`fact(1)` / `q(X :- r(X).` /
+ * `z(X) :- q(X).`); if it also lacks its own `.`, a well-formed statement after it is swallowed
+ * with it. `civictech.query.diag.RejectionTest`'s `` `exclusion limit - an unclosed statement
+ * after a missing terminator is skipped as debris, so its dependent is not excluded` `` pins it.
  *
  * The residue is a genuine ambiguity, not a lookahead shortfall: `foo(X) :- r(X) baz(Y).` is,
  * token for token, also `foo(X) :- r(X)` missing its `.` followed by the fact `baz(Y).`, so no
@@ -175,7 +185,8 @@ import civictech.query.schema.Catalog
  * unrelated well-formed `s(X) :- r(X).` elsewhere is not tainted.
  * `civictech.query.diag.RejectionTest`'s `` `exclusion - a failing fragment after a missing
  * comma does not taint an unrelated statement's head` `` pins it. A resumed fragment is still
- * recorded when it fails *inside* an atom that closes and is followed by `.` or `:-` —
+ * recorded when it fails *inside* an atom that closes and is followed by `.`, `:-` or a
+ * statement start —
  * `a(X) :- r(X) s(X X).` records `s` — because that text is equally a statement after a
  * missing terminator whose own arguments are malformed, the same ambiguity the double report
  * above has; this over-exclusion needs two faults in one statement and is a stated limit.
@@ -406,18 +417,24 @@ object QueryParser {
          * shapes [program] itself dispatches on: `define` followed by an identifier, `@`
          * followed by an identifier (an aggregate-annotated rule), or an identifier
          * immediately followed by `(` (a bare rule/definition head). Used only by [recover],
-         * and only at the moment a statement's [ParseError] is caught.
+         * and only at the moment a statement's [ParseError] is caught — at [offset] tokens past
+         * [pos] when [headAtomEndsAtBoundary] asks it about the token after a closed atom.
          */
-        private fun canStartStatement(): Boolean =
-            (atKeyword("define") && peek(1).kind == TokenKind.IDENT) ||
-                (at(TokenKind.AT) && peek(1).kind == TokenKind.IDENT) ||
-                (at(TokenKind.IDENT) && peek(1).kind == TokenKind.LPAREN)
+        private fun canStartStatement(offset: Int = 0): Boolean {
+            val first = peek(offset)
+            val second = peek(offset + 1).kind
+            return (first.kind == TokenKind.IDENT && first.text.lowercase() == "define" && second == TokenKind.IDENT) ||
+                (first.kind == TokenKind.AT && second == TokenKind.IDENT) ||
+                (first.kind == TokenKind.IDENT && second == TokenKind.LPAREN)
+        }
 
         /**
          * The bounded lookahead [recover] adds to [canStartStatement] for a bare `IDENT '('`
          * start (computenet-6atl9): the atom's parenthesis run must close before any `.` or EOF,
          * and the token after its `)` must be `.` or `:-` — the only tokens that can follow a
-         * rule head. A body atom after a missing comma is followed by `,` (more body) or never
+         * rule head — or a [canStartStatement] shape, for a fact that is missing its own
+         * terminator before the next statement. A body atom after a missing comma is followed
+         * by `,` (more body) or never
          * closes, and neither can begin a statement, so that debris is skipped as part of the
          * failed statement instead of being re-parsed, and its name never reaches
          * [ParseResult.Rejected.excludedHeads]. `true` for the `define`/`@` starts, which this
@@ -438,7 +455,7 @@ object QueryParser {
                 i++
             }
             val after = tokens[minOf(i, tokens.size - 1)].kind
-            return after == TokenKind.DOT || after == TokenKind.IMPLIES
+            return after == TokenKind.DOT || after == TokenKind.IMPLIES || canStartStatement(i - pos)
         }
 
         /**
