@@ -869,6 +869,12 @@ object BoundedReadFixtures {
 
         while (true) {
             val t0 = System.nanoTime()
+            // KRD-27 recorded exception: a measurement fixture must drive the seam
+            // it measures — one awaited page per round trip with per-page wall time
+            // (onPage), host-addressed (this function takes a ManagedHost, not a
+            // LocationRegistry), because the pipelining prohibition above is the
+            // claim under test. Routing this through walkRouted would measure the
+            // primitive's callback chain instead of the seam.
             val result = host.readState(ref, StateRead(cursor = cursor, limit = limit)).get()
             latencies += (System.nanoTime() - t0) / 1_000_000.0
             // Fired before the result is unpacked so a caller that shapes a concurrent
@@ -916,6 +922,9 @@ object BoundedReadFixtures {
             // Both endpoint stamps are exact by SetCell's contract. Two nulls mean a
             // family that carries no frontier at all, which is not stability — see
             // PagedWalkOutcome.frontierStable.
+            // KRD-27 recorded exception: reported as an observation E3's original
+            // could not make (see the field KDoc above), never as a snapshot claim
+            // consumers act on — it is the bench's number, not a verdict.
             frontierStable = openingFrontier != null && openingFrontier == closingFrontier,
             caveats = caveats,
         )
