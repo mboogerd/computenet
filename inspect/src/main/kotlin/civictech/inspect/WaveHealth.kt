@@ -432,6 +432,11 @@ internal class WaveHealth(
                 emissions += row
             }
 
+            // KRD-27: row-shape dedup between two independently raised WaveHealthRow
+            // snapshots (this call's row vs. the previously open one for the same
+            // id), not the bounded-read walk's opening/closing frontier-stability
+            // comparison that BoundedReadConsumerFenceTest's R2 exists to police
+            // (computenet-t6b.3.5-D2, computenet-yderi).
             prior.wave != row.wave || prior.lagWaves != row.lagWaves || prior.frontier != row.frontier ->
                 emissions += row
         }

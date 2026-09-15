@@ -35,19 +35,18 @@ import java.io.File
  *   `inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:435`
  *   (`prior.frontier != row.frontier`), a same-shape-row dedup check between
  *   two independently raised `WaveHealthRow`s that has nothing to do with a
- *   bounded-read walk's opening/closing stamp — outside this feature's five
- *   named sites and outside this task's file claim (WaveHealth.kt is not in
- *   computenet-t6b.3.5's metadata.files), so it cannot be marked at its site
- *   here. An earlier version of this test instead required the literal word
- *   `opening` or `closing` on every R2 hit's line, to make WaveHealth.kt's
- *   comparison fall out of the pattern rather than the allowlist. Reverted:
- *   that weakens R2 project-wide, not just for WaveHealth.kt — any future
- *   unmarked frontier comparison written without those exact words (a stamp
- *   compared against a differently-named variable, say) would silently pass.
- *   [KRD-27]'s own exception mechanism is a marker at the site, not a
- *   pattern narrowing; until WaveHealth.kt:435 gets one, [WAVE_HEALTH_EXCEPTION]
- *   below names that one line, and only that line, as exempt — the real marker
- *   is filed as computenet-yderi (residual from this task's review).
+ *   bounded-read walk's opening/closing stamp. An earlier version of this
+ *   test instead required the literal word `opening` or `closing` on every
+ *   R2 hit's line, to make WaveHealth.kt's comparison fall out of the
+ *   pattern rather than the allowlist. Reverted: that weakens R2
+ *   project-wide, not just for WaveHealth.kt — any future unmarked frontier
+ *   comparison written without those exact words (a stamp compared against a
+ *   differently-named variable, say) would silently pass. A short-lived
+ *   version after that carried a single hardcoded `WAVE_HEALTH_EXCEPTION`
+ *   site allowlist as a stopgap (computenet-yderi's starting state); that is
+ *   gone too, replaced by the real mechanism: a `KRD-27` marker comment at
+ *   WaveHealth.kt:435 itself, stating the row-dedup rationale, like every
+ *   other recorded site.
  *
  * ### Marker window
  *
@@ -83,17 +82,6 @@ class BoundedReadConsumerFenceTest {
         private const val MARKER_WINDOW = 12
 
         private const val ALLOWLIST_PREFIX = "kernel/src/main/kotlin/civictech/cell/observe/"
-
-        /**
-         * One recorded, site-specific exception, not a pattern narrowing: see the
-         * class KDoc "Matched patterns" R2 note. `prior.frontier != row.frontier`
-         * is a same-shape-row dedup check unrelated to a bounded-read walk's
-         * opening/closing stamp; it needs a real `KRD-27` marker at its own site,
-         * filed as a residual (out of this task's file claim), not a change to
-         * what R2 matches everywhere else.
-         */
-        private const val WAVE_HEALTH_EXCEPTION =
-            "inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:435"
 
         private val READ_STATE_CALL = Regex("""\.readState\(""")
         // The negative lookahead must swallow the separating whitespace itself
@@ -199,7 +187,6 @@ class BoundedReadConsumerFenceTest {
                     if (!isCall && !isCompare) return@forEachIndexed
 
                     val siteId = "$relative:${index + 1}"
-                    if (isCompare && siteId == WAVE_HEALTH_EXCEPTION) return@forEachIndexed
 
                     if (isCall) readStateHits++
                     if (isCompare) frontierHits++
