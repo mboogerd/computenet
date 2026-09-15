@@ -1,0 +1,72 @@
+# Concord corpus scenario (computenet-9sm.6.3 authored, computenet-cthi landed; profile: dist).
+# Canonical schema — see concord/schema/scenario.md.
+#
+# The graph, script and checks are the ones `concord/corpus/DISPUTES.md`
+# `## KE3-GC-RECLAIM-FRONTIER` recorded under "Check to restore", unchanged.
+# The scenario was withheld until the dist binding could produce a non-empty
+# stable frontier; computenet-cthi gave each driver host its own `Replication`
+# (`KernelDriverDist`), so each replica now contributes its own
+# delivered-watermark row and a scripted `snapshot` really runs
+# `SetCell.compactBelow`'s discard branch.
+#
+# What `covers: [24-TAG-04]` claims, and what it does NOT. It exercises the two
+# clauses of `[24-TAG-04]`'s compaction sentence: the discard rule (the `dels`
+# entry for `a` — r1's add-tag at counter 1 and its del-dot at counter 3 — is
+# discarded only once both are at or below the stable frontier, which the two
+# quiesces establish) and the re-admission rule (the retransmitted add-tag is
+# NOT re-admitted: `a` stays absent from both views). It does NOT cover the
+# same requirement's below-floor `StateRequest(since)` fallback clause
+# (DISPUTES.md `42-GC-FALLBACK-01`, still barred by a schema absence) nor the
+# bounded-retention reading epic clause `[KE3-37]` gives it
+# (`KE3-GC-BS16-RETAINED`, still barred by G-42). The concordance row is
+# per-id, so it reads `covered` on the strength of this scenario alone.
+#
+# The two checks discriminate in opposite directions. `emission-count ...
+# exactly: 1` fails (observed 0, 20 of 20 runs before computenet-cthi) if the
+# reclaimer never ran: an intact tombstone absorbs the duplicate silently. Had
+# r2 reclaimed, `SetCell.applyRemote` finds `(r1,1)` novel against an emptied
+# `adds`, fences it via `ReclaimedDots`, and answers with exactly one repair
+# `dels` emission. `final-view`/`views-converge` fail if the discard happened
+# WITHOUT the fence: the retransmitted tag would resurrect `a` at r2.
+#
+# Counters are deterministic: `SetCell` mints exactly one tag per local `add`
+# and per effective `remove`, in call order (the argument 42-REPL-DELDOT-01
+# records).
+id: 42-GC-RECLAIM-01
+title: A replica reclaims a tombstone below the stable frontier and does not re-admit a retransmitted discarded tag
+covers: [24-TAG-04]
+profile: dist
+kind: example
+narrative:
+  given: two set-source replicas of one logical cell, one per host, each observed through its own set view
+  when: r1 adds a and b, r2 adds c, r1 removes a, the mesh delivers everything, both replicas checkpoint, and r2 is handed back r1's discarded add-tag for a
+  then: r2 answers the discarded tag with exactly one repair emission and a is not resurrected at either view
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: a}        # r1 counter 1
+  - {type: apply, on: r1, op: add, value: b}        # r1 counter 2, live throughout
+  - {type: apply, on: r2, op: add, value: c}        # r2 counter 1
+  - {type: quiesce}
+  - {type: apply, on: r1, op: remove, value: a}     # r1 counter 3, the del-dot
+  - {type: quiesce}                                 # both replicas must DELIVER the remove, not just the add
+  - {type: snapshot, on: r2, as: r2-post-reclaim}   # the production reclaim trigger
+  - {type: snapshot, on: r1, as: r1-post-reclaim}
+  # clause 2: a later delta carrying a discarded tag
+  - {type: retransmit, on: r2, source: r1, counter: 1, op: add, value: a}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v1, equals: [b, c]}
+  - {type: final-view, view: v2, equals: [b, c]}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: replicas-converge, logical: shared}
+  - {type: no-dead-letters}
+  - {type: emission-count, cell: r2, since: 7, exactly: 1}

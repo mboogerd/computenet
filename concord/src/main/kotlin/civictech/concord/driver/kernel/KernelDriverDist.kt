@@ -11,6 +11,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
@@ -21,6 +22,7 @@ import civictech.concord.driver.CellId
 import civictech.concord.driver.HostId
 import civictech.concord.driver.LinkResult
 import civictech.concord.value.Value
+import java.util.IdentityHashMap
 import java.util.UUID
 
 /**
@@ -52,8 +54,48 @@ import java.util.UUID
  */
 internal class KernelDriverDist(private val driver: KernelDriver) {
 
-    /** The mergeable-set replication mesh over the driver's single shared registry (spec 42, one mesh). */
-    private val replication by lazy { Replication(driver.registry) }
+    /**
+     * One [Replication] **per driver host**, all over the driver's single shared
+     * registry (computenet-cthi, resolving DISPUTES.md `KE3-GC-RECLAIM-FRONTIER`).
+     *
+     * A `Replication` is one peer's view of the mesh: it memoises ONE
+     * delivered-watermark companion per logical id (`Replication.trackDeliveries`,
+     * `watermarks.getOrPut(cell.ref.id)`). A single mesh-wide instance therefore
+     * gave N replicas one companion — one watermark row — while
+     * `CausalStability.stableFrontier` opens N distinct slots (one per replica
+     * instance id); the N-1 rowless slots dragged every source to bottom, the
+     * stable frontier was permanently empty, and no scripted `snapshot` ever
+     * reclaimed. Keying the `Replication` by host gives every replica its own
+     * companion and row, which is the shape every kernel replication fixture
+     * uses (`CheckpointReclaimTest`, `StableFrontierMeshTest`: one `Replication`
+     * per peer).
+     *
+     * Unlike those fixtures, the hosts keep sharing ONE registry rather than one
+     * registry each bridged by `Peering.Loopback`: [connectCrossHost], [migrate],
+     * [retransmit] and `interest:` staging all route through `driver.registry`,
+     * and a shared registry already carries gossip between hosts as a
+     * scheduler-queue hop. Each `Replication` subscribes to that registry's
+     * publish events but links only its OWN local replicas (`localReplicas`) to
+     * their peers, so N instances over one registry wire the mesh the way N peers
+     * would. The eight `42-replication/` scenarios are the evidence this
+     * re-wiring kept gossip routing observably unchanged; no link-count claim
+     * beyond that is made here.
+     *
+     * Keyed on the [ManagedHost] object, not the scenario's host id: [migrate]
+     * re-points a cell's binding to another host object, and a later replica
+     * spawned there belongs to that host's peer.
+     *
+     * **Limit: one replica per logical id per host.** Two `replica-of` cells of
+     * the same group placed on ONE host share that host's `Replication`, hence
+     * one companion, and the stable frontier is empty again for that group
+     * exactly as before this change. Every corpus `replica-of` scenario places
+     * one replica per host (review of computenet-cthi, 2026-09-15); nothing
+     * here refuses the co-placed shape.
+     */
+    private val replications = IdentityHashMap<ManagedHost, Replication>()
+
+    private fun replicationFor(host: ManagedHost): Replication =
+        replications.getOrPut(host) { Replication(driver.registry) }
 
     /** Stable logical id per `replica-of` group; instance ids counted within a group. */
     private val logicalIds = LinkedHashMap<String, UUID>()
@@ -185,7 +227,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         // `replicate` spawns the replica on the host and wires the gossip mesh to
         // every peer already published under this logical id (and, via onPublish,
         // every peer that joins later).
-        replication.replicate(replica, host)
+        replicationFor(host).replicate(replica, host)
 
         // A co-hosted read companion: the replica re-emits every effective delta
         // (local writes AND merged gossip — `applyRemote` → `outlet.originate`)
