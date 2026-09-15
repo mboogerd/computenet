@@ -42,7 +42,8 @@ import org.junit.jupiter.api.Test
  * `CompiledQuery.outputShapes` (which `QueryCase.buildGraph` turns into terminals) covers every
  * `LogicalPlan` root, and then, per root, substitutes a reference that is wrong for that root alone
  * and requires a `Mismatch` naming it. A root with no linked terminal, or a comparison that is not
- * armed, fails the seed.
+ * armed, fails the seed. The report also asserts that most admissible cases have a non-empty
+ * reference answer at some root, so agreement is not mostly agreement on empty relations.
  *
  * **Seeds.** `0 until seedCount()`: the `query.seeds` system property (`-Pquery.seeds=N`, wired in
  * `query/build.gradle.kts`), default [DEFAULT_SEEDS]. The report is printed on every run; its
@@ -76,6 +77,7 @@ class QuerySweepTest {
         var chainCases = 0
         var chainDeletionCases = 0
         var controlledRoots = 0
+        var nonEmptyCases = 0
 
         fun render(config: GeneratorConfig, seeds: Int): String = buildString {
             val total = admissible + inadmissible
@@ -87,6 +89,7 @@ class QuerySweepTest {
             appendLine("  AggregateKinds: $aggregates")
             appendLine("  scripts: deletionRatio=${config.deletionRatio} steps=${config.steps} adds=${scripts.adds} removes=${scripts.removes} (${fraction(scripts.removes, scripts.ops)} of ops)")
             appendLine("  join chains (>=3 atoms): $chainCases cases, $chainDeletionCases with a deletion on a chain relation")
+            appendLine("  admissible cases with a non-empty answer at some root: $nonEmptyCases of $admissible")
             append("  mismatch controls: $controlledRoots roots")
         }
 
@@ -167,6 +170,8 @@ class QuerySweepTest {
         }
 
         val reference = case.reference()
+        val answers = reference.evaluate(scripts.script)
+        if (answers.values.any { !isEmpty(it) }) tally.nonEmptyCases++
         plan.roots.keys.sorted().forEach { root ->
             val wrong = Reference { script ->
                 val states = reference.evaluate(script)
@@ -191,6 +196,13 @@ class QuerySweepTest {
             }
         }
         (fromAst as CompileResult.Rejected).rejections.map { it.code }.distinct().forEach { tally.codes.merge(it, 1, Int::plus) }
+    }
+
+    /** Whether [state] is the empty answer of its shape (a scalar count of zero included). */
+    private fun isEmpty(state: ModelState): Boolean = when (state) {
+        is ModelState.SetState -> state.elements.isEmpty()
+        is ModelState.MapState -> state.entries.isEmpty()
+        is ModelState.ScalarState -> (state.value as? Number)?.toLong() == 0L
     }
 
     /** A state that differs from [state] and has its shape: the control's deliberately wrong answer. */
@@ -219,6 +231,9 @@ class QuerySweepTest {
         }
         withClue("at least one deletion must hit a relation inside a >=3-atom join chain [QRY1-ORA-06]") {
             (tally.chainDeletionCases >= 1) shouldBe true
+        }
+        withClue("non-vacuity: most admissible cases must answer something (150 of 164 at the default config, measured) — got ${tally.nonEmptyCases} of ${tally.admissible}") {
+            (tally.nonEmptyCases * 2 >= tally.admissible) shouldBe true
         }
         withClue("non-vacuity: the mismatch control must have run") {
             (tally.controlledRoots >= 1) shouldBe true
