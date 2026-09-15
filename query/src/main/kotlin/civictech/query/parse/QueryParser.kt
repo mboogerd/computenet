@@ -127,6 +127,11 @@ import civictech.query.schema.Catalog
  * `z(X) :- q(X).`); if it also lacks its own `.`, a well-formed statement after it is swallowed
  * with it. `civictech.query.diag.RejectionTest`'s `` `exclusion limit - an unclosed statement
  * after a missing terminator is skipped as debris, so its dependent is not excluded` `` pins it.
+ * The same skip reaches one single-fault shape: a stray identifier after `define`
+ * (`define X both(X, Y) := ...`) fails at `both(`, whose atom is followed by `:=` rather than
+ * `.` or `:-`, so `both` is skipped and not recorded, and a dependent of `both` draws
+ * [RejectionCode.UNKNOWN_PREDICATE] (before computenet-6atl9 this resumed at `both`, reporting a
+ * second [RejectionCode.SYNTAX_ERROR] and excluding `both`). Unpinned.
  *
  * The residue is a genuine ambiguity, not a lookahead shortfall: `foo(X) :- r(X) baz(Y).` is,
  * token for token, also `foo(X) :- r(X)` missing its `.` followed by the fact `baz(Y).`, so no
