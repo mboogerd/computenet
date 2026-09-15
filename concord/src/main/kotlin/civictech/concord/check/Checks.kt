@@ -396,19 +396,59 @@ object Checks {
      * renamed sink, or a copy-paste from another scenario. Cell existence is
      * checked against the graph before the log is read at all, for both the
      * keyed and unkeyed (`exactly: 0`) forms.
+     *
+     * **`check.sink` must also be *declared* [EFFECT_SINK_TYPE]** (computenet-n4vom,
+     * one level down from the existence guard above). `KernelDriver.effectLog`
+     * resolves *any* non-durable cell — a `set-view`, a `set-source`, a renamed or
+     * copy-pasted id that happens to match a real but unrelated cell — to the same
+     * empty log a genuine effect-sink reads back after firing nothing, so a
+     * `sink:` naming the wrong cell type was exactly as vacuous as a `sink:`
+     * naming no cell at all. This is a **graph type guard** here in
+     * [effectCount], not a driver-level refusal in `KernelDriver.effectLog`
+     * (chosen over the [refusalCount]-style loud-driver-refusal idiom): the
+     * driver's neutral [civictech.concord.driver.Driver] SPI has no scenario-graph
+     * access, so it cannot itself tell "wrong type" from "right type, empty log"
+     * — only the harness, which already holds the graph for the existence check
+     * right above, can. Keeping both guards scenario-side also means neither
+     * requires a driver change or weakens `Driver.effectLog`'s contract for
+     * other callers. Scoped like [expectedEffectKeys]'s own type gate: only the
+     * two forms that would otherwise read an empty log as "fired zero times" —
+     * the keyed lookup and the unkeyed `exactly: 0` form — need it, since the
+     * unkeyed non-zero form already refuses on a non-effect-sink sink via
+     * [expectedEffectKeys]'s own `EFFECT_SINK_TYPE` check (returning `null`,
+     * "cannot be derived").
      */
     fun effectCount(check: EffectCount, ctx: CheckContext): CheckResult {
-        if (ctx.scenario.graph?.cells.orEmpty().none { it.id == check.sink }) {
-            return CheckResult.Failed(
+        val sinkCell = ctx.scenario.graph?.cells.orEmpty().find { it.id == check.sink }
+            ?: return CheckResult.Failed(
                 "effect-count(${check.sink}): no cell in the graph names this sink " +
                     "(check for a typo or a stale rename)",
             )
-        }
         val effects = ctx.driver.effectLog(check.sink)
         val byKey: Map<String?, Int> = effects.groupingBy { it.key }.eachCount()
         val relevant: Map<String?, Int> = when {
-            check.key != null -> mapOf(check.key to (byKey[check.key] ?: 0))
-            check.exactly == 0 -> byKey
+            check.key != null -> {
+                if (sinkCell.type != EFFECT_SINK_TYPE) {
+                    return CheckResult.Failed(
+                        "effect-count(${check.sink}, key=${check.key}): the graph declares '${check.sink}' as type " +
+                            "'${sinkCell.type}', not '$EFFECT_SINK_TYPE' — only an effect-sink can produce effects, " +
+                            "and a wrong-type sink's log reads back empty the same as a real effect-sink that " +
+                            "fired nothing (check for a typo or a stale rename)",
+                    )
+                }
+                mapOf(check.key to (byKey[check.key] ?: 0))
+            }
+            check.exactly == 0 -> {
+                if (sinkCell.type != EFFECT_SINK_TYPE) {
+                    return CheckResult.Failed(
+                        "effect-count(${check.sink}): the graph declares this cell as type '${sinkCell.type}', not " +
+                            "'$EFFECT_SINK_TYPE' — only an effect-sink can produce effects, and a wrong-type " +
+                            "sink's log reads back empty the same as a real effect-sink that fired nothing " +
+                            "(check for a typo or a stale rename)",
+                    )
+                }
+                byKey
+            }
             else -> {
                 val expected = expectedEffectKeys(ctx.scenario, check.sink)
                     ?: return CheckResult.Failed(

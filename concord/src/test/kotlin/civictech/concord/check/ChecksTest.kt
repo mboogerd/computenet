@@ -661,6 +661,59 @@ class ChecksTest {
     }
 
     /**
+     * computenet-n4vom: one level down from the existence guard above. The sink
+     * cell **exists** in the graph — it is a `set-view`, not an `effect-sink` — so
+     * `ctx.driver.effectLog` still resolves it to an empty log, indistinguishable
+     * from a genuine effect-sink that fired zero times. Before this guard,
+     * `exactly: 0` against a copy-pasted or mistyped-but-still-valid id passed
+     * vacuously the same way an unmatched id used to (1j2oz). The message names
+     * both the id and its declared type.
+     */
+    @Test
+    fun `effect-count fails when the sink is a declared cell that is not an effect-sink (unkeyed, exactly zero)`() {
+        val r = Checks.effectCount(
+            EffectCount(sink = "v", exactly = 0),
+            FakeContext(FakeDriver(), scenario(listOf(cell("v", "set-view")), emptyList())),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "v"
+        r.message shouldContain "set-view"
+    }
+
+    /**
+     * The keyed form's own vacuity, same family as the unkeyed one above: a
+     * keyed lookup against a key that never fired reads back count 0 from a
+     * wrong-type sink's (always-empty) log exactly as it would from a genuine
+     * effect-sink, so `exactly: 0` needs the type guard too. (`exactly: 1` here
+     * would already fail on the count mismatch alone and would not discriminate
+     * the guard's removal — same reasoning as the unmatched-id keyed test above.)
+     */
+    @Test
+    fun `effect-count fails when the sink is a declared cell that is not an effect-sink (keyed)`() {
+        val r = Checks.effectCount(
+            EffectCount(sink = "v", key = "k1", exactly = 0),
+            FakeContext(FakeDriver(), scenario(listOf(cell("v", "set-view")), emptyList())),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "v"
+        r.message shouldContain "set-view"
+    }
+
+    /**
+     * The positive control: a *declared* effect-sink that fired nothing still
+     * passes `exactly: 0` — the type guard must not turn the genuine "exists and
+     * fired zero times" case into a failure. Same scenario shape as the existing
+     * `without a key and exactly zero asserts an empty effect log` test above,
+     * restated here to pin it directly against the new guard.
+     */
+    @Test
+    fun `effect-count against a declared effect-sink that fired nothing still passes exactly zero`() {
+        val scen = scenario(listOf(cell("sink", "effect-sink")), emptyList())
+        pass(Checks.effectCount(EffectCount(sink = "sink", exactly = 0), FakeContext(FakeDriver(), scen)))
+        pass(Checks.effectCount(EffectCount(sink = "sink", key = "k1", exactly = 0), FakeContext(FakeDriver(), scen)))
+    }
+
+    /**
      * A *partial* derivation is the vacuous pass again (review of computenet-61w).
      * `srcA` feeds the sink directly, so the derivation resolves; `srcB` feeds it
      * **through** `mid`, so its adds are not keys this derivation can name. Deriving
