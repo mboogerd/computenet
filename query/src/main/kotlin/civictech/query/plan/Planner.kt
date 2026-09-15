@@ -397,10 +397,13 @@ private class PlanningContext(
         // projection is not key-preserving, and SEM-02 requires the compiler to reject a
         // non-key-preserving projection feeding a multiplicity-sensitive consumer
         // (`count`/`sum`/`avg`) with `RejectionCode.BAG_SEMANTICS_REQUIRED` rather than
-        // silently compile an approximation. This planner does not yet implement that
-        // rejection (computenet-cab.5); until it does, a rule whose aggregated head variable
-        // set is a strict subset of its body variables silently aggregates over full body
-        // rows rather than being refused.
+        // silently compile an approximation. That rejection is [BagSemantics]', read from this
+        // node's `input.keyPreserving` (cab.5-D3). A rule whose aggregated head variable set is
+        // a strict subset of its body variables is deliberately NOT refused (cab.5-D8, closing
+        // computenet-cab.4.7's question): no projection precedes the aggregate, so over a
+        // relation with a declared row key its input is key-preserving and the population is
+        // the distinct body rows. The same aggregate over an intermediate predicate that
+        // projects the key away is refused.
         require(headVars.isNotEmpty()) {
             "Rule ${rule.head.predicate} is aggregate-annotated but has a nullary head; " +
                 "the aggregated column is the last head variable, so there must be one."
