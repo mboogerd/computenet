@@ -2795,7 +2795,32 @@ property is statable at the driver and not in the corpus.
   churn-rig half of this same gap (no mechanism reaches a churn peer's crash
   at all, a distinct but related negative result).
 
-## `KE3-GC-RECLAIM-FRONTIER` — the dist driver's stable frontier is permanently empty, so no corpus scenario can reach the checkpoint reclaimer (`driver-wiring-gap`)
+## `KE3-GC-RECLAIM-FRONTIER` — the dist driver's stable frontier is permanently empty, so no corpus scenario can reach the checkpoint reclaimer (`driver-wiring-gap`) — **RESOLVED** by `computenet-cthi` (commit `cfeea931`, "one Replication per dist driver host; commit 42-GC-RECLAIM-01")
+
+- **Resolution** (`computenet-cthi`, 2026-09-15): the revisit trigger below
+  was taken. `KernelDriverDist` now holds one `Replication` **per driver
+  host** (`replications`, keyed on the `ManagedHost` object), still over the
+  driver's single shared `LocationRegistry` rather than a registry per peer
+  bridged by `Peering.Loopback` — cross-host `connect`, `migrate`,
+  `retransmit` and `interest:` staging all route through that one registry.
+  Each replica therefore gets its own delivered-watermark companion and row,
+  and `42-GC-RECLAIM-01` is committed at
+  `concord/corpus/42-replication/42-GC-RECLAIM-01.yaml` with the graph,
+  script and checks of "Check to restore" below unchanged, the
+  `{type: emission-count, cell: r2, since: 7, exactly: 1}` non-vacuity check
+  included. Measured on darwin/arm64 with `-Pconcord.profiles=dist --rerun`:
+  against the unfixed driver (scenario added, driver untouched) it failed
+  exactly as recorded below — `emission-count(r2, since 7): expected exactly
+  1 emission(s) but observed 0`, 20 of 20 runs — and after the re-wiring it
+  passes, with all seven pre-existing `42-replication/` scenarios still
+  green. `[24-TAG-04]` now reads `covered` in `CONCORDANCE.md`. **What that
+  row does and does not mean**: the scenario covers the compaction sentence's
+  discard rule and re-admission rule only. The same requirement's
+  bounded-retention reading (`KE3-GC-BS16-RETAINED`) and below-floor
+  `StateRequest(since)` fallback clause (`42-GC-FALLBACK-01`) stay uncovered;
+  the concordance row is per-id and cannot show that split, so those two
+  entries are the ledger for it. The historical record below is kept as
+  filed.
 
 - **Requirement it would cover**: `[24-TAG-04]`
   (`doc/spec/20-dataflow-semantics/24-data-cells.md` §Tag continuity,
@@ -2989,10 +3014,13 @@ property is statable at the driver and not in the corpus.
   falsely covered. Cross-reference: `KE3-GC-DEL-LANE` (the re-admission half of
   `[24-TAG-04]`, CLOSED by `computenet-pay7`), `KE3-GC-PROOF` (the GC safety
   property is a bounded seeded check, not a proof) and
-  `KE3-GC-RECLAIM-FRONTIER` (the same reclaimer is unreachable from the dist
-  driver at all).
+  `KE3-GC-RECLAIM-FRONTIER` (the same reclaimer was unreachable from the dist
+  driver at all; RESOLVED by `computenet-cthi`, so `42-GC-RECLAIM-01` now makes
+  the `[24-TAG-04]` concordance row read `covered` on the discard and
+  re-admission clauses alone — this entry's bounded-retention reading is still
+  what that per-id row does not show).
 
-## `42-GC-FALLBACK-01` — the same empty dist frontier, plus a schema-level absence, together bar the below-floor `[24-TAG-04]` fallback clause from the corpus (`schema-gap` + `driver-wiring-gap`)
+## `42-GC-FALLBACK-01` — the same empty dist frontier, plus a schema-level absence, together bar the below-floor `[24-TAG-04]` fallback clause from the corpus (`schema-gap` + `driver-wiring-gap`) — blocker 1 CLOSED by `computenet-cthi`; blocker 2 (the schema absence) still bars it
 
 - **Requirement it would cover**: `[24-TAG-04]`
   (`doc/spec/20-dataflow-semantics/24-data-cells.md`, grep anchor `below the
@@ -3009,12 +3037,15 @@ property is statable at the driver and not in the corpus.
 - **Two missing capabilities, both required, neither present**:
   1. **The dist stable frontier is permanently empty** — the identical
      structural blocker `KE3-GC-RECLAIM-FRONTIER` above records in full:
-     `KernelDriverDist` holds ONE `Replication` for the whole mesh
+     `KernelDriverDist` held ONE `Replication` for the whole mesh
      (`concord/src/main/kotlin/civictech/concord/driver/kernel/KernelDriverDist.kt`,
      anchor `private val replication by lazy { Replication(driver.registry) }`),
-     so `CausalStability.stableFrontier` is always empty and no scripted
-     `snapshot` ever runs `compactBelow`'s discard branch. Tracked as
-     `computenet-cthi` (open, unclaimed) — cite, do not touch.
+     so `CausalStability.stableFrontier` was always empty and no scripted
+     `snapshot` ever ran `compactBelow`'s discard branch. **CLOSED** by
+     `computenet-cthi` (one `Replication` per driver host; `42-GC-RECLAIM-01`
+     now reclaims on the dist profile). The scenario below was NOT re-run
+     after that fix: blocker 2 alone still leaves it without a request the
+     fallback branch fires on.
   2. **The corpus has no `since`-carrying pull step.** `concord/schema/scenario.md`
      §retransmit, grep anchor `would need a real`: "a scenario needing THAT
      [incremental-pull currency] would need a real `StateRequest` path," which
@@ -3060,7 +3091,10 @@ property is statable at the driver and not in the corpus.
   late-join step that never issues a `since`-bounded request — a scenario that
   would claim `[24-TAG-04]` fallback coverage while exercising neither of its
   two clauses (below-floor detection or full-state fallback reply). `[24-TAG-04]`
-  therefore stays uncovered in `CONCORDANCE.md` rather than falsely covered.
+  therefore stayed uncovered in `CONCORDANCE.md` rather than falsely covered.
+  (Since `computenet-cthi` the row reads `covered` via `42-GC-RECLAIM-01`, on
+  the discard and re-admission clauses only; the fallback clause this entry
+  names is still uncovered, which the per-id row cannot show.)
   No `concord/src` or `concord/schema` change was made (single-writer,
   schema-change-gated, and both are non-goals of `computenet-9sm.7.3`), and no
   kernel change was made.
@@ -3107,7 +3141,8 @@ property is statable at the driver and not in the corpus.
 - **Revisit trigger**: BOTH close, together:
   1. `computenet-cthi` lands (`KernelDriverDist` gives each driver host its
      own `Replication`, per `KE3-GC-RECLAIM-FRONTIER`'s revisit trigger above),
-     so a scripted `snapshot` can actually reclaim on the dist profile; AND
+     so a scripted `snapshot` can actually reclaim on the dist profile —
+     **met** (`computenet-cthi`); AND
   2. a `since`-carrying pull step is admitted to `concord/schema/scenario.md`
      (a real `StateRequest(since)` verb, not `connect`/`catchUpOnLinked`) —
      this is a gated schema change (single-writer, `concord/schema/*.md`'s own
