@@ -84,6 +84,13 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * Keyed on the [ManagedHost] object, not the scenario's host id: [migrate]
      * re-points a cell's binding to another host object, and a later replica
      * spawned there belongs to that host's peer.
+     *
+     * **Limit: one replica per logical id per host.** Two `replica-of` cells of
+     * the same group placed on ONE host share that host's `Replication`, hence
+     * one companion, and the stable frontier is empty again for that group
+     * exactly as before this change. Every corpus `replica-of` scenario places
+     * one replica per host (review of computenet-cthi, 2026-09-15); nothing
+     * here refuses the co-placed shape.
      */
     private val replications = IdentityHashMap<ManagedHost, Replication>()
 
