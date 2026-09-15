@@ -13,6 +13,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.observe.StateWalkOutcome.Stability
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -21,6 +22,7 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.time.Instant
@@ -35,10 +37,13 @@ import java.util.concurrent.TimeUnit
  *
  * Scaffolding follows [StateWalkTest]: a [LocationRegistry], a
  * [SimulationController], a [ManagedHost] over its scheduler, and
- * `controller.step()`/`runToIdle()` as the only clock. The sibling task
- * (computenet-t6b.3.4.1) owns [StateWalkOutcome.stability]; this file compares
- * [StateWalkOutcome.openingFrontier]/[StateWalkOutcome.closingFrontier]
- * directly rather than reading that field.
+ * `controller.step()`/`runToIdle()` as the only clock. The verdict itself is
+ * the sibling's (computenet-t6b.3.4.1, [StateWalkOutcome.stability]); this file
+ * reads it only to pin the seam between the two: the walk an escalation starts
+ * from carries the verdict BS-35 names for it (`Smeared`, `Undeterminable`),
+ * the delta walk carries its own verdict over its own two stamps (a quiescent
+ * delta is `QualifiedSnapshot` — about the delta walk, never about the fold),
+ * and a refused delta carries none.
  *
  * The order in which the scheduler runs an already-queued page request versus
  * a later-enqueued mutation is UNVERIFIED, so every mid-walk mutation below
@@ -117,6 +122,7 @@ class StateWalkEscalationTest {
         baseOutcome.isComplete.shouldBeTrue()
         cell.membership() shouldBe setOf("e1", "e2", "e3", "e4", "e5", "e6", "late1", "late2")
         baseOutcome.openingFrontier shouldNotBe baseOutcome.closingFrontier
+        baseOutcome.stability shouldBe Stability.Smeared(baseOutcome.openingFrontier!!, baseOutcome.closingFrontier!!)
         entriesOf(baseOutcome).map { it.element } shouldContainExactlyInAnyOrder
             listOf("e1", "e2", "e3", "e4", "e5", "e6")
 
@@ -125,6 +131,11 @@ class StateWalkEscalationTest {
         val deltaOutcome = delta.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
 
         deltaOutcome.isComplete.shouldBeTrue()
+        // The delta walk's verdict is over its OWN stamps: nothing moved while it
+        // ran, so it is QualifiedSnapshot at the base's closing frontier. That says
+        // the delta was not smeared; it says nothing about base + delta as a state.
+        deltaOutcome.openingFrontier shouldBe baseOutcome.closingFrontier
+        deltaOutcome.stability shouldBe Stability.QualifiedSnapshot(baseOutcome.closingFrontier!!)
         val deltaEntries = entriesOf(deltaOutcome)
         deltaEntries.map { it.element } shouldContainExactlyInAnyOrder listOf("late1", "late2")
         val openingCounter = baseOutcome.openingFrontier!!.perSource.values.firstOrNull() ?: 0L
@@ -154,6 +165,7 @@ class StateWalkEscalationTest {
         val baseOutcome = base.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
         baseOutcome.isComplete.shouldBeTrue()
         baseOutcome.openingFrontier shouldBe null
+        baseOutcome.stability shouldBe Stability.Undeterminable
 
         val stepsBefore = controller.runToIdle() // drain to a known-quiescent point
 
@@ -163,6 +175,7 @@ class StateWalkEscalationTest {
         val deltaOutcome = delta.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
         deltaOutcome.termination shouldBe StateWalkOutcome.Termination.Refused(StateReadResult.Reason.SINCE_UNSUPPORTED)
         deltaOutcome.isComplete.shouldBeFalse()
+        deltaOutcome.stability shouldBe null
         deltaOutcome.pages shouldBe 0
         deltaOutcome.entries.shouldBeEmpty()
         controller.runToIdle() shouldBe 0 // nothing was ever queued for it
@@ -219,6 +232,7 @@ class StateWalkEscalationTest {
         baseOutcome.isComplete.shouldBeTrue()
         cell.membership() shouldBe setOf("b", "c", "d", "e", "f")
         baseOutcome.openingFrontier shouldNotBe baseOutcome.closingFrontier // the del-dot moved the stamp
+        baseOutcome.stability.shouldBeInstanceOf<Stability.Smeared>()
 
         val delta = escalateRouted(registry, cell.ref, StateRead(limit = 1), baseOutcome)
         controller.runToIdle()
