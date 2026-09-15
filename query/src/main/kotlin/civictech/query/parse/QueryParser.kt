@@ -131,7 +131,9 @@ import civictech.query.schema.Catalog
  * (`define X both(X, Y) := ...`) fails at `both(`, whose atom is followed by `:=` rather than
  * `.` or `:-`, so `both` is skipped and not recorded, and a dependent of `both` draws
  * [RejectionCode.UNKNOWN_PREDICATE] (before computenet-6atl9 this resumed at `both`, reporting a
- * second [RejectionCode.SYNTAX_ERROR] and excluding `both`). Unpinned.
+ * second [RejectionCode.SYNTAX_ERROR] and excluding `both`).
+ * `civictech.query.diag.RejectionTest`'s `` `exclusion limit - a stray identifier after define
+ * skips its head atom as debris, so its dependent is not excluded` `` pins it.
  *
  * The residue is a genuine ambiguity, not a lookahead shortfall: `foo(X) :- r(X) baz(Y).` is,
  * token for token, also `foo(X) :- r(X)` missing its `.` followed by the fact `baz(Y).`, so no
