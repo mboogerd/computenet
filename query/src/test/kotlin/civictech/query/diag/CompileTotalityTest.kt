@@ -36,11 +36,12 @@ import org.junit.jupiter.api.Test
  * own; this corpus running clean is the evidence they are unreachable behind well-formedness
  * and safety.
  *
- * Deliberately absent: `union all` / `intersect all` / `except all` — the planner's `ALL`
- * precondition is the bag-semantics sibling task's to fence (`BAG_SEMANTICS_REQUIRED`), not
- * computenet-cab.5.1's. A `RelationalExpr` nested deep enough to exhaust the JVM stack is also
- * outside this corpus: the AST case below nests 200 levels, three times the parser's
- * `MAX_NESTING`, and no deeper.
+ * `union all` / `intersect all` / `except all` are refused before planning by
+ * [civictech.query.plan.BagSemantics.refuseAllSetOps] (`BAG_SEMANTICS_REQUIRED`), which this
+ * corpus's three `ALL` cases exercise; that is also what keeps the planner's own `ALL` guard
+ * (`civictech.query.plan.Planner`) unreachable, per `BagSemanticsTest`. A `RelationalExpr`
+ * nested deep enough to exhaust the JVM stack is also outside this corpus: the AST case below
+ * nests 200 levels, three times the parser's `MAX_NESTING`, and no deeper.
  */
 class CompileTotalityTest {
 
@@ -88,6 +89,9 @@ class CompileTotalityTest {
         TextCase("atom arity vs catalog", "q(X) :- r(X, Y).", r1s1),
         TextCase("rule head used at another arity", "p(X) :- r(X).\nq(X) :- p(X, Y), r(Y).", r1s1),
         TextCase("two rules of one head at different arities", "q(X) :- r(X).\nq(X, Y) :- r(X), s(Y).", r1s1),
+        TextCase("BAG_SEMANTICS_REQUIRED union all", "define h(X) := r(X) union all s(X).", r1s1),
+        TextCase("BAG_SEMANTICS_REQUIRED intersect all", "define h(X) := r(X) intersect all s(X).", r1s1),
+        TextCase("BAG_SEMANTICS_REQUIRED except all", "define h(X) := r(X) except all s(X).", r1s1),
         TextCase("set-operation operand arity", "define h(X) := r(X) union s(X, Y).", catalog("r" to 1, "s" to 2)),
         TextCase("nested set-operation operand arity", "define h(X) := r(X) union (s(X) intersect t(X, Y)).", catalog("r" to 1, "s" to 1, "t" to 2)),
         TextCase("outer join key not a column", "define h(X, Y) := r(X) left outer join s(Y) on X = Z.", r1s1),
