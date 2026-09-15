@@ -92,6 +92,28 @@ class LoweringDeterminismTest {
     }
 
     @Test
+    fun `QRY1 §LOWER-05 §LOWER-11 a multi-root plan with a shared subgraph lowers identically twice`() {
+        val shared = f.antiJoin(f.join(f.scan("e", "x", "y"), f.scan("e", "y", "z"), "y"), f.scan("s", "z"), "z")
+        val sharedPlan = LogicalPlan(
+            mapOf(
+                "b" to f.union(f.project(shared, "x"), f.project(f.scan("s", "x"), "x")),
+                "a" to shared,
+                "c" to f.semiJoin(shared, f.project(shared, "x"), "x"),
+            ),
+        )
+        val first = f.lowered(sharedPlan, catalog)
+        val second = f.lowered(sharedPlan, catalog)
+
+        withClue("non-vacuity: the shared antijoin and join are each spawned once across three roots") {
+            f.spawns(first.spec.steps).count { it.factory is JoinFactory } shouldBe 1
+            f.spawns(first.spec.steps).count { (it.factory as? SemiJoinFactory)?.negated == true } shouldBe 1
+        }
+        first shouldBe second
+        bytes(first.spec).contentEquals(bytes(second.spec)) shouldBe true
+        roundTrip(first) shouldBe first
+    }
+
+    @Test
     fun `QRY1 §LOWER-06 a spec round-trips through Java serialization equal to the original`() {
         val result = f.lowered(plan, catalog)
 
