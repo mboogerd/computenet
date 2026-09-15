@@ -322,6 +322,7 @@ internal class PagedState(
         smearedSoFar -> false
         opening == null || page.frontier == null -> null
         ReadCaveat.STALE_FRONTIER in page.caveats -> null
+        // KRD-27 recorded exception: the per-page stamp comparison — reason in this function's KDoc
         page.frontier == opening -> true
         else -> false
     }

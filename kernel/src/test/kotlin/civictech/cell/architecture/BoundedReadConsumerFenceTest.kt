@@ -32,8 +32,8 @@ import java.io.File
  *   anything other than `null`, exactly as computenet-t6b.3.5-D3 specifies
  *   (`[Ff]rontier\b\s*[!=]=\s*(?!null\b)`, with the whitespace-inside-the-
  *   lookahead fix below). Applied unnarrowed, this also matches
- *   `inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:435`
- *   (`prior.frontier != row.frontier`), a same-shape-row dedup check between
+ *   `inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt`'s
+ *   `prior.frontier != row.frontier`, a same-shape-row dedup check between
  *   two independently raised `WaveHealthRow`s that has nothing to do with a
  *   bounded-read walk's opening/closing stamp. An earlier version of this
  *   test instead required the literal word `opening` or `closing` on every
@@ -45,24 +45,20 @@ import java.io.File
  *   version after that carried a single hardcoded `WAVE_HEALTH_EXCEPTION`
  *   site allowlist as a stopgap (computenet-yderi's starting state); that is
  *   gone too, replaced by the real mechanism: a `KRD-27` marker comment at
- *   WaveHealth.kt:435 itself, stating the row-dedup rationale, like every
+ *   that WaveHealth.kt line itself, stating the row-dedup rationale, like every
  *   other recorded site.
  *
  * ### Marker window
  *
- * computenet-t6b.3.5-D3 says 8 lines above the hit. Measured at this
- * feature's merged tree: `PagedState.verdict`'s recorded exception is a KDoc
- * block whose closing delimiter sits directly above the function signature, and the
- * function has two other `when` arms before the marked comparison
- * (`page.frontier == opening -> true`) — the token (`PagedState.kt:313`) is
- * 12 lines above the hit it explains (`PagedState.kt:325`), not 8. An 8-line
- * window would fail this test on the merged tree, contradicting this task's
- * own acceptance criterion that it SHALL pass there, and would make the
- * criterion "removing the token there fails naming that line" untestable
- * (the baseline would already be red). [MARKER_WINDOW] is widened to 12 —
- * the minimum that keeps that site compliant — and no other recorded site
- * needs more than 8. This is a real gap in computenet-t6b.3.5-D3, not a
- * hypothesis; comment filed on the bead.
+ * [MARKER_WINDOW] is 8 lines, as computenet-t6b.3.5-D3 and the feature's
+ * [KRD-27] acceptance criterion say. An earlier version widened it to 12
+ * because `PagedState.verdict`'s only marker was its KDoc block, 12 lines
+ * above the `page.frontier == opening` arm it explains; the feature review
+ * instead placed a one-line `KRD-27` comment directly above that arm (the
+ * KDoc keeps the reason), so every recorded site now sits within 8 lines of
+ * its marker and the fence enforces the criterion as written rather than a
+ * looser one. A wider window is also a weaker fence: a token removed at one
+ * site stays masked by any other site's marker inside the window.
  *
  * ### Known limits (textual scan, stated per ExtractionFenceTest's own
  * precedent)
@@ -71,15 +67,20 @@ import java.io.File
  * stamp comparison written as `.distinct().size` (`Checks.pagesEqualView`'s
  * shape — it carries a `KRD-27` comment but R1/R2 cannot see it at all), is
  * invisible to this scan; `git grep -n 'KRD-27'` across every module's
- * `src/main/kotlin` remains the human enumeration. Only `src/main/kotlin` is scanned by design
+ * `src/main/kotlin` remains the human enumeration. The same holds for the
+ * inspector's one routing pre-check (`BoundedReadSource.routed` in
+ * inspect's Observations.kt, `registry.location(ref) is
+ * LocationRegistry.Remote`): it is a recorded `KRD-27` exception to the
+ * routing expression, but neither R1 nor R2 matches it, so deleting its
+ * token does not fail this test. Only `src/main/kotlin` is scanned by design
  * (a walk in a test drives the seam under test; it does not consume it, so
  * `src/test/kotlin` is out of scope).
  */
 class BoundedReadConsumerFenceTest {
 
     companion object {
-        /** [computenet-t6b.3.5-D3] says 8; see the KDoc "Marker window" section above for why 12. */
-        private const val MARKER_WINDOW = 12
+        /** [computenet-t6b.3.5-D3]'s window; see the KDoc "Marker window" section above. */
+        private const val MARKER_WINDOW = 8
 
         private const val ALLOWLIST_PREFIX = "kernel/src/main/kotlin/civictech/cell/observe/"
 
