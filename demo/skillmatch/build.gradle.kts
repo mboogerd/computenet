@@ -11,6 +11,11 @@ dependencies {
     implementation(project(":inspect"))
 
     testImplementation(project(":testkit"))
+    // query-equivalence tests (computenet-cab.7, cab.7-D9): the skillmatch
+    // query and its structural/extensional comparisons live in the TEST source
+    // set — `:query`'s own ModuleDependencyTest forbids the reverse direction.
+    testImplementation(project(":query"))
+    testImplementation(project(":oracle"))
 }
 
 application {

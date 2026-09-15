@@ -4,8 +4,10 @@ import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
+import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
@@ -83,9 +85,17 @@ object SkillPipeline {
         val market: TypedRef<CombineLatestApi<String, Long, Long, MarketEntry>>,
     )
 
-    fun build(host: ManagedHost): Refs {
-        lateinit var refs: Refs
-        graph(host.managementInlet) {
+    fun build(host: ManagedHost): Refs = buildWithSpec(host).first
+
+    /**
+     * [build], also returning the [GraphSpec] its builder recorded while applying
+     * the wiring (computenet-cab.7.5, cab.7-D8) — the hand-wired side of the
+     * skillmatch query's structural comparison. The steps are exactly the ones
+     * [build] applies; the live topology cannot stand in for them, because its
+     * links carry no port names.
+     */
+    fun buildWithSpec(host: ManagedHost): Pair<Refs, GraphSpec> =
+        graphOf(host.managementInlet) {
             // Factories stay pure (replay-safe): each spawn's lambda constructs
             // the cell from the resolved ref, and `spawn` returns a
             // TypedCellHandle whose `.cell` exposes the typed ports for `link`.
@@ -175,7 +185,7 @@ object SkillPipeline {
             link(jobs.cell.outlet, demand.cell.inlet)
             link(supply.cell.outlet, market.cell.left)
             link(demand.cell.outlet, market.cell.right)
-            refs = Refs(
+            Refs(
                 candSkills = cand.refAs(),
                 jobSkills = jobs.refAs(),
                 matches = matches.refAs(),
@@ -188,8 +198,6 @@ object SkillPipeline {
                 market = market.refAs(),
             )
         }
-        return refs
-    }
 }
 
 /**
