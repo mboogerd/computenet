@@ -422,4 +422,26 @@ class RejectionTest {
             )
         }
     }
+
+    @Test
+    fun `exclusion - a dependent of a statement whose head could not be parsed is excluded, not UNKNOWN_PREDICATE`() {
+        // computenet-l3338: `bad`'s own statement fails to parse (a missing ')' before ':-')
+        // and so never becomes a Statement the compiler could exclude by index -- but its head
+        // is still lexically recoverable as `bad`, so QueryParser names it in
+        // ParseResult.Rejected.excludedHeads and QueryCompiler taints it before well-formedness
+        // runs. `good`, which references `bad`, must therefore be excluded exactly as it would
+        // be had `bad` parsed and been rejected some other way -- not reported UNKNOWN_PREDICATE.
+        val source = """
+            bad(X :- r(X).
+            good(X) :- bad(X).
+        """.trimIndent()
+        val catalog = catalog("r" to 1)
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        withClue("a dependent of an unparseable head must not add a rejection of its own: $rejections") {
+            rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+        }
+    }
 }

@@ -73,7 +73,7 @@ object QueryCompiler {
     fun compile(source: String, catalog: Catalog): CompileResult =
         when (val parsed = QueryParser.parse(source, catalog)) {
             is ParseResult.Rejected -> {
-                val laterPhases = compile(parsed.partial, parsed.spans)
+                val laterPhases = compile(parsed.partial, parsed.spans, parsed.excludedHeads)
                 val laterRejections = (laterPhases as? CompileResult.Rejected)?.rejections.orEmpty()
                 CompileResult.Rejected(parsed.rejections + laterRejections)
             }
@@ -93,8 +93,14 @@ object QueryCompiler {
      * untrusted as one of the wrong size: it is ignored, and loci fall back to
      * [Locus.RuleStatement], which locates by index and is never ambiguous. A text parse never
      * produces duplicate spans, so this only guards the AST overload's hand-built tables. Total.
+     *
+     * [excludedHeads] (computenet-l3338) names head predicates of statements that were rejected
+     * before they could parse — so they hold no place in [query] a [Statement] index could name
+     * — but whose head [QueryParser] could still recover lexically. They are tainted before
+     * well-formedness runs, so a statement in [query] that depends on one of them is excluded
+     * exactly as cab.5-D7 requires, rather than reported UNKNOWN_PREDICATE.
      */
-    fun compile(query: Query, spans: SpanTable? = null): CompileResult {
+    fun compile(query: Query, spans: SpanTable? = null, excludedHeads: Set<String> = emptySet()): CompileResult {
         val rejections = mutableListOf<Rejection>()
         val usableSpans = spans?.takeIf {
             it.rules.size == query.rules.size &&
@@ -102,6 +108,9 @@ object QueryCompiler {
                 (it.rules + it.definitions).let { all -> all.size == all.toSet().size }
         }
         var remaining = Remainder.of(query, usableSpans)
+        if (excludedHeads.isNotEmpty()) {
+            remaining = remaining.excluding(emptyList(), excludedHeads)
+        }
 
         // Well-formedness: runs over the whole query, so its loci are already the caller's.
         val wellFormedness = WellFormednessAnalysis.findings(remaining.query, remaining.spans)
@@ -163,16 +172,21 @@ object QueryCompiler {
 
         /**
          * This remainder without [rejected] (indices into [query]) and without every statement
-         * that transitively references an excluded, non-catalog head predicate.
+         * that transitively references an excluded, non-catalog head predicate. [extraTaint]
+         * (computenet-l3338) seeds the taint set directly with predicate names that name no
+         * statement in [query] at all — a lexically recoverable head of a statement that failed
+         * to parse, so it never became a [Statement] to index. A dependent of one of those is
+         * excluded exactly as a dependent of a [rejected] statement's head would be.
          */
-        fun excluding(rejected: Collection<Statement>): Remainder {
-            if (rejected.isEmpty()) return this
+        fun excluding(rejected: Collection<Statement>, extraTaint: Set<String> = emptySet()): Remainder {
+            if (rejected.isEmpty() && extraTaint.isEmpty()) return this
             val excludedRules = rejected.filterIsInstance<Statement.RuleAt>().mapTo(HashSet()) { it.index }
             val excludedDefinitions = rejected.filterIsInstance<Statement.DefinitionAt>().mapTo(HashSet()) { it.index }
             val tainted = HashSet<String>()
             fun taint(predicate: String) {
                 if (predicate !in query.catalog.relations) tainted += predicate
             }
+            extraTaint.forEach(::taint)
             excludedRules.forEach { taint(query.rules[it].head.predicate) }
             excludedDefinitions.forEach { taint(query.definitions[it].head.predicate) }
 
