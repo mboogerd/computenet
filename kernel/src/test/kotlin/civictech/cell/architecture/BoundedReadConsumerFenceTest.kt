@@ -83,7 +83,14 @@ class BoundedReadConsumerFenceTest {
         private const val ALLOWLIST_PREFIX = "kernel/src/main/kotlin/civictech/cell/observe/"
 
         private val READ_STATE_CALL = Regex("""\.readState\(""")
-        private val FRONTIER_COMPARE = Regex("""[Ff]rontier\b\s*[!=]=\s*(?!null\b)""")
+        // The negative lookahead must swallow the separating whitespace itself
+        // (`(?!\s*null\b)`, not `\s*(?!null\b)`): with the whitespace outside the
+        // lookahead, a greedy `\s*` that fails the lookahead after consuming the
+        // space backtracks to consuming zero characters, where the very next
+        // characters are " null" rather than "null" — so the lookahead trivially
+        // passes and `page.frontier == null` wrongly matches. Verified with a
+        // standalone regex check before wiring it into this scan.
+        private val FRONTIER_COMPARE = Regex("""[Ff]rontier\b\s*[!=]=(?!\s*null\b)""")
         private val OPENING_OR_CLOSING = Regex("(?i)opening|closing")
 
         private fun isReadStateCall(codeLine: String) = READ_STATE_CALL.containsMatchIn(codeLine)
