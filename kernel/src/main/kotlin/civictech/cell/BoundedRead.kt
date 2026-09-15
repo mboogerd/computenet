@@ -331,8 +331,18 @@ enum class ReadCaveat {
      * production. The cell declined to rescan its whole tag state per page,
      * which would be O(n) per page and O(n²) per walk — the cost the C7
      * measurement gate ruled out. The first and last page of a walk always
-     * carry an exact frontier, and a [TagFrontier] is monotone, so the
-     * stability check of [StatePage] is unaffected.
+     * carry an exact frontier, and
+     * [civictech.cell.observe.StateWalkOutcome.Stability] is computed from
+     * only those two exact endpoint stamps — never an intermediate page's
+     * frontier or caveats — so a stale stamp on this page is not itself
+     * read by that check. A [TagFrontier] is monotone for
+     * [civictech.cell.data.SetCell]'s fold (see [StatePage]'s "What a walk
+     * promises" section above); it is not for operator (derived) families
+     * (`concord/corpus/DISPUTES.md`, "21-PULL-03 —
+     * frontier-representation-gap"). Whether a non-monotone interior stamp
+     * could, for those families, mask movement that an exact reading at the
+     * same point would have shown is not established either way here — only
+     * that the stability check as computed does not consult it.
      */
     STALE_FRONTIER,
 
