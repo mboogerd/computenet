@@ -90,6 +90,48 @@ class ChecksTest {
         fail(Checks.viewsConverge(ViewsConverge(listOf("v", "w")), ctx))
     }
 
+    /**
+     * computenet-1j2oz: a `views:` id that matches no cell in the graph must FAIL,
+     * naming the unmatched id, rather than reaching `readView` (which would throw
+     * for a FakeDriver missing the key, and NoSuchElementException on the real
+     * driver) or, below the two-view threshold, silently returning `Passed`
+     * without ever touching the graph.
+     */
+    @Test
+    fun `views-converge fails when a named view matches no cell in the graph`() {
+        val ctx = FakeContext(
+            FakeDriver(views = mapOf("v" to list(s("a")), "w" to list(s("a")))),
+            scenario(listOf(cell("v", "set-view"), cell("w", "set-view")), emptyList()),
+        )
+        val r = Checks.viewsConverge(ViewsConverge(listOf("v", "w-x")), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "w-x"
+    }
+
+    /**
+     * The fewer-than-two-views short-circuit previously returned `Passed` before
+     * ever touching the graph, so a single unmatched view id went undetected.
+     */
+    @Test
+    fun `views-converge fails on an unmatched id even with fewer than two views named`() {
+        val ctx = FakeContext(
+            FakeDriver(views = mapOf("v" to list(s("a")))),
+            scenario(listOf(cell("v", "set-view")), emptyList()),
+        )
+        val r = Checks.viewsConverge(ViewsConverge(listOf("v-x")), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "v-x"
+    }
+
+    @Test
+    fun `views-converge still passes vacuously below two views when the named view exists`() {
+        val ctx = FakeContext(
+            FakeDriver(views = mapOf("v" to list(s("a")))),
+            scenario(listOf(cell("v", "set-view")), emptyList()),
+        )
+        pass(Checks.viewsConverge(ViewsConverge(listOf("v")), ctx))
+    }
+
     // --- incremental-equals-batch -------------------------------------------
 
     @Test
@@ -482,7 +524,9 @@ class ChecksTest {
                     ),
                 ),
             ),
-            scenario(emptyList(), emptyList()),
+            // The sink cell is declared so this pins the duplicate-count failure, not
+            // computenet-1j2oz's unmatched-id failure (a different message, still Failed).
+            scenario(listOf(cell("sink", "effect-sink")), emptyList()),
         )
         fail(Checks.effectCount(EffectCount(sink = "sink", key = "k1", exactly = 1), ctx))
     }
@@ -544,20 +588,31 @@ class ChecksTest {
             EffectCount(sink = "sink", exactly = 1),
             FakeContext(
                 FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))),
-                scenario(emptyList(), emptyList()),
+                // The sink cell is declared (computenet-1j2oz's existence check must pass) but has
+                // no upstream link at all, which is what the derivation-refusal path asserts.
+                scenario(listOf(cell("sink", "effect-sink")), emptyList()),
             ),
         )
         fail(r)
         (r as CheckResult.Failed).message shouldContain "cannot be derived"
     }
 
-    /** `exactly: 0` needs no derivation: the assertion is that the log is empty. */
+    /**
+     * `exactly: 0` needs no derivation: the assertion is that the log is empty.
+     *
+     * The scenario now *declares* the sink cell (computenet-1j2oz): before this
+     * check existed, `scenario(emptyList(), emptyList())` — a graph with no cells
+     * at all — still passed here, which was indistinguishable from "sink" being a
+     * typo. Declaring the cell keeps this test pinning the genuine "exists and
+     * fired zero times" case; the unmatched-id case is pinned separately below.
+     */
     @Test
     fun `effect-count without a key and exactly zero asserts an empty effect log`() {
+        val scen = scenario(listOf(cell("sink", "effect-sink")), emptyList())
         pass(
             Checks.effectCount(
                 EffectCount(sink = "sink", exactly = 0),
-                FakeContext(FakeDriver(), scenario(emptyList(), emptyList())),
+                FakeContext(FakeDriver(), scen),
             ),
         )
         fail(
@@ -565,10 +620,44 @@ class ChecksTest {
                 EffectCount(sink = "sink", exactly = 0),
                 FakeContext(
                     FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))),
-                    scenario(emptyList(), emptyList()),
+                    scen,
                 ),
             ),
         )
+    }
+
+    /**
+     * computenet-1j2oz: a `sink:` id that matches no cell in the graph must FAIL,
+     * naming the unmatched id, rather than silently passing because an unknown
+     * id and a genuine zero-effect sink both read back an empty effect log. Both
+     * the unkeyed `exactly: 0` form and the keyed form are covered — the driver
+     * resolves an unknown id to `emptyList()` for either.
+     */
+    @Test
+    fun `effect-count fails when the sink matches no cell in the graph (unkeyed, exactly zero)`() {
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink-x", exactly = 0),
+            FakeContext(FakeDriver(), scenario(emptyList(), emptyList())),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "sink-x"
+    }
+
+    /**
+     * `exactly = 0` here, not 1: the keyed form's own logic (`byKey[check.key] ?: 0`)
+     * already reads a nonexistent key as count 0, so a keyed check with `exactly: 1`
+     * fails on the count mismatch alone and would not discriminate the existence
+     * guard's removal. `exactly: 0` is the shape that would pass vacuously without it
+     * — the same vacuity as the unkeyed `exactly: 0` form above, one level deeper.
+     */
+    @Test
+    fun `effect-count fails when the sink matches no cell in the graph (keyed)`() {
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink-x", key = "k1", exactly = 0),
+            FakeContext(FakeDriver(), scenario(emptyList(), emptyList())),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "sink-x"
     }
 
     /**
