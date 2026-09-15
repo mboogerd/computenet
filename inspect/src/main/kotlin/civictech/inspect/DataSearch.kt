@@ -336,6 +336,7 @@ internal class DataSearch(
      */
     private fun read(ref: CellRef, withinMs: Long): Read {
         observed(ref)?.let { return Read.State(it.value) }
+        val request = StateRead(limit = SEARCH_PAGE_LIMIT, allowWholeCopy = true)
         // KRD-27 recorded exception: exactly ONE page per cell, deliberately not
         // the kernel's walk loop. This search reads one bounded page under its
         // budget and reports `partial` from `next != null` (see [classify]); it is
@@ -343,7 +344,6 @@ internal class DataSearch(
         // paragraph is why (a page-by-page walk re-creates the whole copy). The
         // routing itself is the primitive's, via [BoundedReadSource.routed]:
         // null (a Remote placement) and NOT_HOSTED are both Read.None.
-        val request = StateRead(limit = SEARCH_PAGE_LIMIT, allowWholeCopy = true)
         val pending = reads.readState(ref, request) ?: return Read.None
         // completed inline for every refusal the kernel decides on the caller's
         // thread: no host task was ever submitted, so this is a cheap skip
