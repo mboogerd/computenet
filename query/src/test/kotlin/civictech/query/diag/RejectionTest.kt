@@ -1,6 +1,8 @@
 package civictech.query.diag
 
 import civictech.query.QueryCompiler
+import civictech.query.ast.Aggregate
+import civictech.query.ast.AggregateKind
 import civictech.query.ast.Atom
 import civictech.query.ast.Literal
 import civictech.query.ast.Query
@@ -15,6 +17,7 @@ import civictech.query.schema.Catalog
 import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldStartWith
@@ -109,6 +112,22 @@ class RejectionTest {
     fun `UNPLANNABLE_STATEMENT - a fact is rejected, not thrown by the planner`() {
         val codes = rejectionsOf(RejectionCode.UNPLANNABLE_STATEMENT).map { it.code }.toSet()
         codes shouldBe setOf(RejectionCode.UNPLANNABLE_STATEMENT)
+    }
+
+    @Test
+    fun `ORDER_DEPENDENT_AGGREGATE - every registered producer is refused with the arrival-order-aggregate code alone`() {
+        // AMENDS computenet-cab.5.3 (2026-09-15): cab.5.3 registered ORDER_DEPENDENT_AGGREGATE's
+        // producers in RejectionCoverage but RejectionTest had no per-code entry for it — added
+        // here, following the BAG_SEMANTICS_REQUIRED test just below as the pattern for a code
+        // with more than one registered producer.
+        RejectionCoverage.producers.getValue(RejectionCode.ORDER_DEPENDENT_AGGREGATE).forEach { producer ->
+            val rejections = withClue(producer.name) {
+                producer.compile().shouldBeInstanceOf<CompileResult.Rejected>().rejections
+            }
+            withClue("${producer.name} -> $rejections") {
+                rejections.map { it.code } shouldBe listOf(RejectionCode.ORDER_DEPENDENT_AGGREGATE)
+            }
+        }
     }
 
     @Test
@@ -267,5 +286,140 @@ class RejectionTest {
     fun `a query with no rejection in any phase compiles`() {
         QueryCompiler.compile("q(X) :- r(X, Y), Y > 3.", catalog("r" to 2))
             .shouldBeInstanceOf<CompileResult.Compiled>()
+    }
+
+    // ------------------------------------------------------------------ BS-14: three independent
+    // faults in one pass ([QRY1-REJECT-10]). The design's illustrative text (cab.5's design field)
+    // reuses one relation `r` at both arity 1 (the unsafe rule and the order-dependent aggregate)
+    // and arity 2 (the key-dropping sum) — an arity clash that would itself add a fourth
+    // ARITY_MISMATCH rejection. Renamed the sum's underlying relation to `e` (row key `{K}`,
+    // same shape the design names) to keep exactly the three intended codes; the acceptance
+    // criteria names the codes, not the relation names.
+
+    @Test
+    fun `BS-14 - an unsafe rule, an order-dependent aggregate and a key-dropping sum are all reported from one compile`() {
+        val source = """
+            @first f(V) :- r(V).
+            bad(X) :- r(Y).
+            @sum t(V) :- p(V).
+            p(V) :- e(K, V).
+        """.trimIndent()
+        val catalog = Catalog(catalog("r" to 1).relations + keyed(Triple("e", 2, listOf(0))).relations)
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        rejections shouldHaveSize 3
+        rejections.map { it.code } shouldContainExactlyInAnyOrder listOf(
+            RejectionCode.UNSAFE_RULE,
+            RejectionCode.ORDER_DEPENDENT_AGGREGATE,
+            RejectionCode.BAG_SEMANTICS_REQUIRED,
+        )
+        withClue("the three rejections must name three different statements: $rejections") {
+            rejections.map { it.locus }.toSet() shouldHaveSize 3
+        }
+    }
+
+    @Test
+    fun `BS-14 - the same three faults spread across parse, safety, plan and lowering, plus a NO_LOWERING trigger, yield four rejections`() {
+        val source = """
+            @first f(V) :- r(V).
+            bad(X) :- r(Y).
+            @sum t(V) :- p(V).
+            p(V) :- e(K, V).
+            @count c(X, N) :- g(X, N).
+            q(X) :- c(X, N).
+        """.trimIndent()
+        val catalog = Catalog(
+            catalog("r" to 1).relations +
+                keyed(Triple("e", 2, listOf(0))).relations +
+                keyed(Triple("g", 2, listOf(0))).relations,
+        )
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        rejections shouldHaveSize 4
+        rejections.map { it.code } shouldContainExactlyInAnyOrder listOf(
+            // parse phase
+            RejectionCode.ORDER_DEPENDENT_AGGREGATE,
+            // safety phase
+            RejectionCode.UNSAFE_RULE,
+            // plan-level semantics phase
+            RejectionCode.BAG_SEMANTICS_REQUIRED,
+            // lowering phase: `c` is a non-root GroupAggregate, consumed by `q`
+            RejectionCode.NO_LOWERING,
+        )
+    }
+
+    @Test
+    fun `BS-14 - a builder-produced query with no spans reports an unsafe rule and a key-dropping sum at RuleStatement and PlanNode loci`() {
+        fun v(name: String) = Term.Var(name)
+        val query = Query(
+            rules = listOf(
+                Rule(Atom("bad", listOf(v("X"))), listOf(Literal.Positive(Atom("r", listOf(v("Y")))))),
+                Rule(Atom("p", listOf(v("V"))), listOf(Literal.Positive(Atom("e", listOf(v("K"), v("V")))))),
+                Rule(
+                    Atom("t", listOf(v("V"))),
+                    listOf(Literal.Positive(Atom("p", listOf(v("V"))))),
+                    Aggregate(AggregateKind.SUM),
+                ),
+            ),
+            catalog = Catalog(catalog("r" to 1).relations + keyed(Triple("e", 2, listOf(0))).relations),
+        )
+
+        val rejections = QueryCompiler.compile(query).shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        rejections shouldHaveSize 2
+        rejections.map { it.code } shouldContainExactlyInAnyOrder listOf(
+            RejectionCode.UNSAFE_RULE,
+            RejectionCode.BAG_SEMANTICS_REQUIRED,
+        )
+        rejections.single { it.code == RejectionCode.UNSAFE_RULE }.locus.shouldBeInstanceOf<Locus.RuleStatement>()
+        rejections.single { it.code == RejectionCode.BAG_SEMANTICS_REQUIRED }.locus.shouldBeInstanceOf<Locus.PlanNode>()
+    }
+
+    // ------------------------------------------------------------------ exclusion is not a cascade
+    // (cab.5-D2): a rule consuming a rejected head reports no rejection of its own and the
+    // compiler never throws over it.
+
+    @Test
+    fun `exclusion - a rule consuming a rejected head adds no rejection and does not throw`() {
+        val source = """
+            bad(X) :- r(Y).
+            c(X) :- bad(X).
+        """.trimIndent()
+        val catalog = catalog("r" to 1)
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        withClue("a rule consuming a rejected head must not add a rejection of its own: $rejections") {
+            rejections.map { it.code } shouldBe listOf(RejectionCode.UNSAFE_RULE)
+        }
+    }
+
+    @Test
+    fun `exclusion - fixing the one genuine fault stops the cascade, and the consumer surfaces nothing new`() {
+        // Same shape as the previous test, but `bad` is now safe: `c` is no longer excluded and
+        // must compile without adding a rejection of its own alongside the other genuine faults.
+        val source = """
+            bad(X) :- r(X).
+            c(X) :- bad(X).
+            @first f(V) :- r(V).
+            @sum t(V) :- p(V).
+            p(V) :- e(K, V).
+        """.trimIndent()
+        val catalog = Catalog(catalog("r" to 1).relations + keyed(Triple("e", 2, listOf(0))).relations)
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        withClue("fixing `bad` alone must leave only the two still-genuine faults, with nothing new from `c`: $rejections") {
+            rejections.map { it.code } shouldContainExactlyInAnyOrder listOf(
+                RejectionCode.ORDER_DEPENDENT_AGGREGATE,
+                RejectionCode.BAG_SEMANTICS_REQUIRED,
+            )
+        }
     }
 }

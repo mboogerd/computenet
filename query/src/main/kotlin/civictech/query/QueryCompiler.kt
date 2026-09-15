@@ -26,6 +26,10 @@ import civictech.query.schema.Catalog
  * The compiler front door (epic computenet-cab §2.3, cab.5-D10): source text or a [Query] in,
  * [CompileResult] out. **Total** ([QRY1-REJECT-03]): every input returns `Compiled` or
  * `Rejected`; no phase is allowed to throw on a query an earlier phase could have rejected.
+ * A rejection is always whole-query: there is no partial, approximate, or best-effort
+ * `CompiledQuery` for an input any phase below refuses ([QRY1-REJECT-01]) — the accumulator
+ * this file builds only ever feeds a single `Rejected(all)` or the one `Compiled`, never a
+ * mix of the two.
  *
  * **Phases (cab.5-D2).** parse → well-formedness ([WellFormednessAnalysis]) → safety
  * ([SafetyAnalysis]) → `ALL` set operations ([BagSemantics.refuseAllSetOps]) → plan
