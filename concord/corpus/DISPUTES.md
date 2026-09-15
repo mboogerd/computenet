@@ -1422,7 +1422,10 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   `concord/corpus/21-propagation/` — a settled source, a mutation accepted while
   a walk is in flight, then the assertion that equal opening and closing stamps
   imply the union is exactly the snapshot at that frontier.
-- **Why it cannot be checked honestly — two independent reasons.**
+- **Why it cannot be checked honestly — three independent reasons.** (This
+  entry previously named two; the third was added by the routed-walk admission
+  pass, computenet-t6b.3.6.1, once the kernel computed the verdict it would
+  have to observe.)
   1. **The one qualifying family violates the requirement it qualifies for.**
      The antecedent is *satisfiable* — this entry previously said it was not,
      and that is no longer true. Since computenet-v2ka, `SetCell` reaches it on
@@ -1469,6 +1472,16 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
      for a qualifying family, the only instance a scenario could build is the
      quiescent one — where the antecedent is trivially satisfied and the
      consequent is exactly what `24-BOUND-02` already asserts, at every limit.
+  3. **The read-side check vocabulary has no verdict observation.** The two
+     checks that read a walk are `wave-plane-unchanged` and `pages-equal-view`,
+     and `pages-equal-view` *fails* on a page with a null frontier stamp and
+     *fails* on unequal stamps — by design, since for it a smeared read is a
+     broken read. So neither the undeterminable arm (no stamp) nor the smeared
+     arm (stamps differ) of the determination is assertable by any scenario,
+     not even for the quiescent instance, and a paged step alone — resolve (b)
+     below — would not make them so: a scenario could then order a mutation
+     mid-walk, and still have no check that says "this walk is smeared" rather
+     than failing. The need is filed as computenet-d3u7c.
 - **What was NOT done instead** (this is the point of the filing): no
   `21-PULL-03.yaml` was authored over `set-source` at quiescence. Such a
   scenario would pass, and would appear as `covered` in `CONCORDANCE.md`, while
@@ -1478,11 +1491,40 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   qualification nor by narrowing that qualification to families the frontier
   check can already police. What the requirement asserts of `set-source` is
   currently false, and the repair is the frontier, not the sentence.
+- **The routed-walk admission pass lands its stability scenarios here, not as
+  files** (computenet-t6b.3.6.1; epic computenet-t6b.3's corpus-worthy rows,
+  full table on computenet-t6b.3.6). **BS-30** (a quiescent walk is a
+  snapshot) is exactly the trivial quiescent instance this entry forbids
+  authoring as a `21-PULL-03` cover, and its `[24-BOUND-02]` observable is
+  already `24-BOUND-02.yaml`. **BS-31** (concurrent mutation yields smeared)
+  needs a mutation ordered against a page boundary (reason 2; computenet-jsdn2)
+  and a check that can name "smeared" rather than fail on it (reason 3;
+  computenet-d3u7c). **BS-32** (no frontier means undeterminable) cannot be
+  driven: the kernel binding lowers only set entries on a read, so a
+  frontier-less family's walk errors at lowering, and `pages-equal-view` fails
+  on the null stamp it would carry (reason 3; computenet-d3u7c). **BS-33** (the
+  OR-set qualification) is reason 1 itself: the boundary cannot order the
+  reordered remote del against a page, and asserting equal stamps over
+  `set-source` would assert something false of it.
 - **What is not lost.** The property is pinned implementation-side by
   `V1C-KERNEL`'s own kernel tests (`BoundedReadWaveNeutralityTest` and the
-  bounded-read suite around it). What this filing forgoes is the
-  *cross-implementation* obligation: a second, non-kernel binding would not be
-  held to it by the corpus.
+  bounded-read suite around it). The *determination* is now also computed
+  kernel-side, once, by `StateWalkOutcome.stability`
+  (`kernel/src/main/kotlin/civictech/cell/observe/StateWalk.kt`), in three
+  arms: `Undeterminable` (an endpoint stamp is null), `Smeared` (both stamps
+  present and differing, carrying both), and `QualifiedSnapshot` (equal
+  stamps — explicitly necessary but not sufficient, for reason 1; there is
+  deliberately no unqualified arm). `escalateRouted`
+  (`kernel/src/main/kotlin/civictech/cell/observe/StateWalkEscalation.kt`) is
+  the documented `since` escalation as one further walk from the opening stamp,
+  and it inherits the per-source-max limit rather than repairing it. Pins,
+  landed with PR #899 (computenet-t6b.3.4): `StateWalkStabilityTest` (`BS-30 a
+  quiescent walk …`, `BS-31 an add landing mid-walk …`, the two `BS-32 …`
+  tests, `BS-33 a reordered remote del …`, the two `BS-34 …` tests) and
+  `StateWalkEscalationTest` (including `the delta inherits the covered-adds
+  limit …`). What this filing forgoes is the *cross-implementation*
+  obligation: a second, non-kernel binding would not be held to the property,
+  nor to the determination, by the corpus.
 - **Resolves**: either (a) a frontier that *names* a state — a set, or any
   gap-free witness, rather than a per-source max (the research item the shipped
   `StatePage` contract names), after which absorbing a reordered remote del-tag
@@ -1490,10 +1532,17 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   way for a scenario to order an operation against a page boundary
   — e.g. a paged form of the step (`{type: read-page, on: s, limit: N, as: w}`
   plus a `resume` step) that the current whole-walk form deliberately does not
-  provide. (a) alone would still leave only the quiescent instance reachable.
-  With both, author `21-PULL-03.yaml`: walk, mutate mid-walk, resume to
-  completion, and assert stamps-equal ⟹ union-equals-snapshot over a family for
-  which that implication actually holds.
+  provide (filed as computenet-jsdn2); **and** (c) a verdict observation in
+  the check vocabulary — a check that names undeterminable / smeared /
+  qualified rather than failing on a null or unequal stamp (filed as
+  computenet-d3u7c). (a) alone would still leave only the quiescent instance
+  reachable, and (b) without (c) would reach the mid-walk case with nothing to
+  assert about it. (a) remains the open research item; it is not the
+  routed-walk epic's (computenet-t6b.3, KRD) to resolve, and that epic's kernel
+  verdict does not resolve it. With all three, author `21-PULL-03.yaml`: walk,
+  mutate mid-walk, resume to completion, and assert stamps-equal ⟹
+  union-equals-snapshot over a family for which that implication actually
+  holds.
 
 ---
 
