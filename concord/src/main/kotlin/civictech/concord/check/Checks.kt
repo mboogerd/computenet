@@ -755,6 +755,11 @@ object Checks {
                     return CheckResult.Failed("$where: page #$p carries no frontier stamp")
                 }
             }
+            // KRD-27 recorded exception: a stamp-equality check over the
+            // implementation-neutral ReadPage.frontier, in a module that must not
+            // depend on the kernel (only civictech.concord.driver.kernel may import
+            // civictech.cell.*) — it is the corpus's check of the implementation,
+            // so it cannot be the implementation's own verdict.
             val stamps = walk.pages.mapNotNull { it.frontier }.distinct()
             if (stamps.size != 1) {
                 return CheckResult.Failed(

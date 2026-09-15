@@ -321,6 +321,12 @@ class KernelDriver(seed: Long? = null) : Driver {
      */
     override fun readState(cellId: CellId, cursor: ReadCursor?, limit: Int): ReadPage {
         val bound = cells.getValue(cellId)
+        // KRD-27 recorded exception: the corpus SPI's page verb (Driver.readState,
+        // concord/schema/Step.kt) is one page per step by schema; the loop over it
+        // is the runner's (CorpusRunner.walk), and this kernel driver is the
+        // binding, not a consumer — routing through `bound.host` is the binding by
+        // construction. Only civictech.concord.driver.kernel may import
+        // civictech.cell.*, so the runner cannot call walkRouted itself.
         val pending = bound.host.readState(bound.ref, StateRead(cursor = cursor as Cursor?, limit = limit))
         var steps = 0
         while (!pending.isDone && steps < READ_STEP_BUDGET) {
