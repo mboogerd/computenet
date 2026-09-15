@@ -438,6 +438,65 @@ class InspectorPagedStateTest {
         registry.release(cell.ref)
     }
 
+    /**
+     * KRD-27 — the routing migration's taxonomy mapping, through the **default**
+     * `reads` ([BoundedReadSource.routed] over `readRouted`; no substitute is
+     * installed). A ref the model still knows but the registry no longer places
+     * answers `unreadable: "remote"`, the same body the pre-KRD-27
+     * `locate(ref) == null → NoSource → snapshots → REMOTE` path served — but
+     * now decided by the primitive's `NOT_HOSTED`, which the counting
+     * [SnapshotSource] proves: the NoSource fallback would have consulted it.
+     *
+     * "Known but unplaced" is caught at the one instant it exists without a new
+     * rig: a registry `onUnpublish` listener registered **before** the server's
+     * own hooks runs after the location is gone and before the model retracts
+     * the node (the registry notifies listeners in registration order, on the
+     * unpublishing thread). The held half is the same default read answering
+     * `MIGRATING` (also pinned by `a held ref answers migrating, never a stale
+     * local read` above).
+     */
+    @Test
+    fun `through the routed default, an unplaced ref is NOT_HOSTED as remote and a held ref is MIGRATING`() {
+        val unplaced = set("a", "b")
+        val held = set("c")
+
+        var duringUnpublish: CellState? = null
+        var knownDuringUnpublish: Boolean? = null
+        var serving: InspectorServer? = null
+        val armed = registry.onUnpublish { ref ->
+            if (ref != unplaced.ref) return@onUnpublish
+            knownDuringUnpublish = serving!!.knowsNow(ref)
+            duringUnpublish = stateOnce(ref)
+        }
+        try {
+            val server = started()
+            serving = server
+            val snapshotsConsulted = AtomicLong()
+            server.snapshots = SnapshotSource { snapshotsConsulted.incrementAndGet(); null }
+
+            registry.unpublish(unplaced.ref)
+
+            knownDuringUnpublish shouldBe true
+            registry.location(unplaced.ref) shouldBe null
+            val state = duringUnpublish!!
+            state.kind shouldBe CellState.UNAVAILABLE
+            state.unreadable shouldBe CellState.REMOTE
+            state.page shouldBe null
+            // decided by NOT_HOSTED, not by the NoSource → SnapshotSource path
+            snapshotsConsulted.get() shouldBe 0L
+
+            registry.hold(held.ref)
+            val migrating = stateOnce(held.ref)
+            migrating.kind shouldBe CellState.UNAVAILABLE
+            migrating.unreadable shouldBe CellState.MIGRATING
+            migrating.page shouldBe null
+            snapshotsConsulted.get() shouldBe 0L
+            registry.release(held.ref)
+        } finally {
+            armed.close()
+        }
+    }
+
     @Test
     fun `heat is readable for hot, suspended and drained, and cold for exactly the two that can be woken`() {
         Heat.HOT.isReadable shouldBe true

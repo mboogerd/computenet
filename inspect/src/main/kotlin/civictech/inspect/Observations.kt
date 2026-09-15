@@ -29,6 +29,7 @@ import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
+import civictech.cell.observe.readRouted
 import civictech.cell.partition.ShardCell
 import civictech.nature.ContractRegistry
 import civictech.nature.PortDirection
@@ -143,14 +144,42 @@ fun interface SnapshotSource {
 fun interface BoundedReadSource {
     /**
      * [ref]'s next page for [request], to be captured on its host's execution
-     * context; null when this seam did not answer at all (no local host, or a
-     * caller that installed [Unavailable]).
+     * context; null when this seam did not answer at all — for [routed], a
+     * [LocationRegistry.Remote] placement; otherwise a caller that installed
+     * [Unavailable]. A ref the registry does not place at all is *answered*,
+     * not null: [routed] hands back the primitive's `NOT_HOSTED`.
      */
     fun readState(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult>?
 
     companion object {
         /** No bounded read: every `GET state` falls through to [SnapshotSource]. */
         val Unavailable = BoundedReadSource { _, _ -> null }
+
+        /**
+         * The inspector's one routed bounded read (KRD-27): the kernel
+         * primitive [readRouted] decides held (`MIGRATING`), locally hosted
+         * (the host's own `readState` future, unwrapped) and unplaced
+         * (`NOT_HOSTED`) refs. Both [InspectorServer]'s default `reads` and
+         * [DataSearch]'s per-cell read go through this, and nothing else in
+         * the inspector resolves a ref to a host for a read.
+         *
+         * The single registry lookup made here is vocabulary, not routing —
+         * see the comment on it.
+         */
+        fun routed(registry: LocationRegistry): BoundedReadSource = BoundedReadSource { ref, request ->
+            // KRD-27 recorded exception — the one registry lookup outside the
+            // primitive. readRouted answers a LocationRegistry.Remote placement
+            // MIGRATING by design (RoutedRead.kt, KRD-03/KRD-05), but the
+            // inspector's HTTP contract keeps "remote" (never local:
+            // CellState.REMOTE) apart from "migrating" (held for a flip, or
+            // already migrated: CellState.MIGRATING), and InspectorNetTest pins
+            // "remote" for a peer-published cell. So a Remote placement answers
+            // this seam's existing null ("no local host"), exactly as the
+            // pre-KRD-27 `registry.locate(ref)?.readState` did — including for a
+            // held Remote ref, which also answered null before. Held, Local and
+            // unplaced refs are the primitive's decision, not this line's.
+            if (registry.location(ref) is LocationRegistry.Remote) null else readRouted(registry, ref, request)
+        }
     }
 }
 
