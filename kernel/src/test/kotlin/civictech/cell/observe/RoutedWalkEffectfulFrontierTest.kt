@@ -51,19 +51,25 @@ import java.util.concurrent.atomic.AtomicInteger
  * is discarded; a new host is built over the same journal and registry; the
  * sink is re-spawned under the same logical [CellRef]; `recoverFrom` replays.
  *
- * **Why the scenario checkpoints before the walk.** `[24-DUR-05]` drops a
- * suppressed invocation *whole*: during `recoverFrom` replay the sink does not
- * run, so an `Effectful` cell's own state is NOT rebuilt from journaled frames
- * it already acted on — only a checkpoint's `snapshot()` carries it across a
- * crash. The acceptance clause "a second walk SHALL yield 1..N+1" therefore
- * needs the recovered cell to hold 1..N, which only a checkpoint provides. It
- * is taken *before* the walk, so everything the walk could have made durable
- * (a `FrontierRecord`, a frame) lands in the journal tail that recovery
- * replays: a walk that touched the frontier would change what recovery
- * restores, and so the post-recovery delivery of N+1. The cost is that no
- * already-acted frame remains in the journal to be suppressed on replay — that
- * half of `[24-DUR-05]` is `EffectfulRecoveryTest`'s first test, not repeated
- * here; the post-recovery live-delivery half is exercised by N+1.
+ * **Two recovery shapes, because one cannot carry both halves.** `[24-DUR-05]`
+ * drops a suppressed invocation *whole*: during `recoverFrom` replay the sink
+ * does not run, so an `Effectful` cell's own state is NOT rebuilt from journaled
+ * frames it already acted on — only a checkpoint's `snapshot()` carries it
+ * across a crash (observed while writing this test: with no checkpoint the
+ * recovered cell walks as `[N+1]`, not `1..N+1`).
+ *
+ * - The checkpointed shape carries the acceptance clause "a second walk SHALL
+ *   yield 1..N+1". Its checkpoint is taken *before* the walk, so anything the
+ *   walk could have made durable (a `FrontierRecord`, a frame) lands in the
+ *   journal tail that recovery replays and would change the post-recovery
+ *   delivery of N+1. It leaves no already-acted frame in the journal to
+ *   suppress on replay.
+ * - The frame-replay shape keeps all N acted-on frames and their frontier
+ *   records in the journal while the walk runs, so recovery suppresses all N
+ *   on replay — the replay half of `[24-DUR-05]` — and that suppression count
+ *   must equal the walk-free control's. Its second walk sees only what the
+ *   kernel restores there, compared against the control rather than asserted
+ *   as 1..N+1.
  */
 class RoutedWalkEffectfulFrontierTest {
 
@@ -126,9 +132,9 @@ class RoutedWalkEffectfulFrontierTest {
      * One full scenario on its own controller, registry, journal and world.
      * With [walk] true the pre-crash walk is driven step by step and every
      * observable is re-checked after each step; with [walk] false that call is
-     * simply absent — the control.
+     * simply absent — the control. [checkpoint] picks the recovery shape (class KDoc).
      */
-    private fun runScenario(walk: Boolean): RunResult {
+    private fun runScenario(walk: Boolean, checkpoint: Boolean): RunResult {
         val controller = SimulationController(seed = 7)
         val registry = LocationRegistry()
         val journal = InMemoryJournal() // "the disk": the only thing that survives the crash
@@ -164,7 +170,7 @@ class RoutedWalkEffectfulFrontierTest {
         host.supervisionAccounting().deadLetters shouldBe 0L
 
         // carries the cell's state (1..N) and frontier across the crash; see class KDoc
-        host.checkpoint(journal)
+        if (checkpoint) host.checkpoint(journal)
 
         if (walk) {
             val journalBefore = journal.replay().size
@@ -239,8 +245,8 @@ class RoutedWalkEffectfulFrontierTest {
     fun `a routed walk leaves the Effectful frontier untouched and recovery matches a walk-free control`() {
         N shouldBeGreaterThan 19 // the bead's N >= 20, so the walk is genuinely multi-page
 
-        val walked = runScenario(walk = true)
-        val control = runScenario(walk = false)
+        val walked = runScenario(walk = true, checkpoint = true)
+        val control = runScenario(walk = false, checkpoint = true)
 
         // [24-DUR-05]: recovery neither re-fired nor lost anything
         walked.worldAfterRecovery shouldBe (1..N).toList()
@@ -260,6 +266,36 @@ class RoutedWalkEffectfulFrontierTest {
 
         // the read after recovery still sees the recovered state plus the live delivery
         walked.secondWalkEntries shouldBe (1..N + 1).toList()
+        walked.secondWalkEntries shouldBe control.secondWalkEntries
+    }
+
+    /**
+     * The replay half of `[24-DUR-05]`: the walk runs over a journal still
+     * holding all N acted-on frames and their frontier advances; recovery
+     * replays and suppresses every one of them, exactly as the walk-free
+     * control's does. A walk that had advanced the frontier would append to the
+     * journal during the walk (caught per step); one that had perturbed it any
+     * other way would change the suppression count or re-fire into [world].
+     */
+    @Test
+    fun `across a frame-replay recovery the walked run suppresses exactly what the walk-free control suppresses`() {
+        val walked = runScenario(walk = true, checkpoint = false)
+        val control = runScenario(walk = false, checkpoint = false)
+
+        // every pre-crash frame was replayed and suppressed, none re-fired
+        walked.worldAfterRecovery shouldBe (1..N).toList()
+        walked.accountingAfterRecovery.effectfulSuppressionsDischarged shouldBe N.toLong()
+        walked.accountingAfterRecovery.effectfulContextlessRefusals shouldBe 0L
+        walked.accountingAfterRecovery shouldBe control.accountingAfterRecovery
+        walked.worldAfterRecovery shouldBe control.worldAfterRecovery
+
+        // N+1 is ahead of the restored frontier: it lands once, nothing further suppressed
+        walked.worldAfterLiveDelivery shouldBe (1..N + 1).toList()
+        walked.accountingAfterLiveDelivery shouldBe walked.accountingAfterRecovery
+        walked.accountingAfterLiveDelivery shouldBe control.accountingAfterLiveDelivery
+        walked.worldAfterLiveDelivery shouldBe control.worldAfterLiveDelivery
+
+        // no checkpoint carried state, so both see only what replay could restore
         walked.secondWalkEntries shouldBe control.secondWalkEntries
     }
 
