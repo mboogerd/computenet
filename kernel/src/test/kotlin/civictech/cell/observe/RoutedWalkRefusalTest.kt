@@ -102,7 +102,7 @@ class RoutedWalkRefusalTest {
      * escaping as [StateWalkOutcome.Termination.Failed].
      */
     @Test
-    fun `a cell throw never surfaces as the walk's own Failed arm, on any of the three fixtures above`() {
+    fun `a cell throw never surfaces as the walk's own Failed arm, on either throwing fixture`() {
         val alwaysThrows = spawn(ThrowingBoundedCell())
         val throwsAfterFirstPage = spawn(ThrowingAfterFirstPageCell())
 

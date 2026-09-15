@@ -56,7 +56,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * does not run, so an `Effectful` cell's own state is NOT rebuilt from journaled
  * frames it already acted on — only a checkpoint's `snapshot()` carries it
  * across a crash (observed while writing this test: with no checkpoint the
- * recovered cell walks as `[N+1]`, not `1..N+1`).
+ * recovered cell walks as `[N+1]`, not `1..N+1`). That loss is a kernel/spec
+ * gap between `[24-DUR-02]` and `[24-DUR-05]`, not something a walk causes, and
+ * is filed as computenet-rhhry; the frame-replay shape below therefore compares
+ * its second walk with the walk-free control and does NOT claim state survives.
  *
  * - The checkpointed shape carries the acceptance clause "a second walk SHALL
  *   yield 1..N+1". Its checkpoint is taken *before* the walk, so anything the
@@ -296,6 +299,7 @@ class RoutedWalkEffectfulFrontierTest {
         walked.worldAfterLiveDelivery shouldBe control.worldAfterLiveDelivery
 
         // no checkpoint carried state, so both see only what replay could restore
+        // (today [N+1], not 1..N+1 — computenet-rhhry; deliberately not pinned here)
         walked.secondWalkEntries shouldBe control.secondWalkEntries
     }
 
