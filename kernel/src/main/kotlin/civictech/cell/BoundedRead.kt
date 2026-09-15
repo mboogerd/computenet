@@ -218,12 +218,22 @@ data class StateRead(
  * walk, which is "viz blocks the graph" by construction. Detection is cheaper
  * than locking.
  *
- * **The escalation path for a caller who genuinely needs a snapshot**, for a
- * tag-carrying cell: record `frontier₀` from page 1, walk to completion, then
- * issue one final read with `since = frontier₀`; folding that delta over the
- * smeared union yields a real snapshot at the closing frontier. This reuses
- * [StateRead.since] rather than adding a second mechanism, and it is why
- * `since` belongs on a read at all. It is unavailable for a family whose
+ * **The escalation path for a caller who needs more than the smeared
+ * union**, for a tag-carrying cell: record `frontier₀` from page 1, walk to
+ * completion, then issue one further read with `since = frontier₀` and fold
+ * that delta over the base union. This reuses [StateRead.since] rather than
+ * adding a second mechanism, and it is why `since` belongs on a read at all.
+ * It is the supported operation
+ * [civictech.cell.observe.escalateRouted], and it **inherits the same limit
+ * documented above rather than yielding a real snapshot**: an element removed
+ * mid-walk reaches the delta as its tombstone's dot with no add-tags (the
+ * covered adds are at or below `since` and are filtered out along with it),
+ * so no fold can retract it, and a reordered remote deletion below a
+ * per-source max moves no stamp either walk can see. What it does repair is
+ * the class of mutation the base walk structurally misses: an element added
+ * after the base walk opened is never paged by the frozen enumeration order,
+ * and the delta names it with an add-tag beyond `frontier₀`. It is refused
+ * `SINCE_UNSUPPORTED` — never emulated by a full re-walk — for a family whose
  * [frontier] is null (see [BoundedStateful.supportsSince]).
  *
  * @property entries Whole entries, in the cell's own enumeration order. A cell
