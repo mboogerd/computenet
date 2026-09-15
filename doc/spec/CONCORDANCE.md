@@ -142,7 +142,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-TAG-01 | — | gap |
 | 24-TAG-02 | — | gap |
 | 24-TAG-03 | — | gap |
-| 24-TAG-04 | — | gap |
+| 24-TAG-04 | 42-GC-RECLAIM-01 | covered |
 | 24-TMAP-01 | 24-TMAP-MERGE-01 | covered |
 | 24-TMAP-02 | 24-TMAP-PRESENCE-01 | covered |
 | 24-TMAP-03 | 24-TMAP-LWW-01 | covered |
@@ -218,7 +218,6 @@ None.
 - Coverage gap: requirement '24-TAG-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-TAG-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '42-WM-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '42-WM-02' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-03' (40-distribution/42-replication.md) has no covering scenario
