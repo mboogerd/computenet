@@ -182,13 +182,23 @@ data class StateRead(
  *
  * A walk is a **sequence of per-page-consistent reads, not a snapshot**.
  *
- * - **If the frontier is unchanged from the first page to the last, the union
- *   of the pages is exactly a snapshot of that fold at that frontier** — for a
- *   family in which every state change mints or absorbs a tag. This is a claim
- *   the caller *checks*, not one the kernel promises. A [TagFrontier] is
- *   monotone, so comparing the walk's opening and closing stamps is sufficient
- *   to detect any tag the fold *gained*, and both stamps are exact (see
- *   [frontier]); no intermediate stamp can differ from two equal endpoints.
+ * - **Equal opening and closing frontier stamps are necessary, but never
+ *   sufficient, evidence that the union of the pages is a snapshot of that
+ *   fold at that frontier** — for a family in which every state change mints
+ *   or absorbs a tag. This is a claim the caller *checks*, not one the kernel
+ *   promises, and the exact verdict — its three arms, and nothing beyond them
+ *   — is computed by [civictech.cell.observe.StateWalkOutcome.Stability];
+ *   this page does not restate that logic, only the raw stamps it runs on. A
+ *   [TagFrontier] is monotone for [civictech.cell.data.SetCell]'s fold, so
+ *   there comparing the walk's opening and closing stamps detects any tag the
+ *   fold *gained* (both stamps are exact — see [frontier]), and no
+ *   intermediate stamp can differ from two equal endpoints. It is **not**
+ *   monotone for every family, though: operator (derived) families' frontiers
+ *   are not even monotone, so a retraction there can *lower* the stamp
+ *   instead of merely failing to raise it
+ *   (`concord/corpus/DISPUTES.md`, "21-PULL-03 —
+ *   frontier-representation-gap"). Equal endpoints therefore say only "no
+ *   movement this frontier can see", never "the union is the state".
  *
  *   **The check detects tag gains, and only tag gains**, which is the whole of
  *   what a [TagFrontier] measures. A family whose mutations do not all mint
