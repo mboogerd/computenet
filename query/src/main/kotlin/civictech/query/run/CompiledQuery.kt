@@ -49,7 +49,7 @@ data class CompiledQuery(
         val outputs = outputHandles.mapValues { (_, handle) ->
             TypedRef<Any>(handles.getValue(handle))
         }
-        return AppliedQuery(handles, sources, outputs)
+        return AppliedQuery(handles, sources, outputs, outputShapes)
     }
 
     companion object {

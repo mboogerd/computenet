@@ -19,6 +19,8 @@ import civictech.query.expr.ExprPredicate
 import civictech.query.expr.RowCombine
 import civictech.query.expr.RowKey
 import civictech.query.expr.RowProjection
+import civictech.query.parse.ParseResult
+import civictech.query.parse.QueryParser
 import civictech.query.plan.AntiJoin
 import civictech.query.plan.Difference
 import civictech.query.plan.GroupAggregate
@@ -29,6 +31,7 @@ import civictech.query.plan.LogicalPlan
 import civictech.query.plan.OuterJoin
 import civictech.query.plan.OuterJoinSide
 import civictech.query.plan.PlanNode
+import civictech.query.plan.PlanOrder
 import civictech.query.plan.Planner
 import civictech.query.plan.Project
 import civictech.query.plan.Scan
@@ -421,6 +424,120 @@ class LoweringStructureTest {
         result.outputHandles.getValue("q") shouldBe unions.single().handle
         f.connects(result.spec.steps).filter { it.to == unions.single().handle }.map { it.inlet }
             .shouldContainExactly("inlet", "inlet")
+    }
+
+    // ---------------------------------------------------------------- cross-root sharing (cab.7-D7)
+
+    private fun parsedPlan(source: String, catalog: Catalog): LogicalPlan =
+        Planner.plan((QueryParser.parse(source, catalog) as ParseResult.Parsed).query)
+
+    @Test
+    fun `QRY1 §LOWER-11 two roots over one join body share ONE JoinSetCell, the aggregate reading from it`() {
+        val catalog = f.catalog("candSkills" to 2, "jobSkills" to 2)
+        val plan = parsedPlan(
+            """
+            matches(C, S, J) :- candSkills(C, S), jobSkills(J, S).
+            @count matchCounts(C, J, S) :- matches(C, S, J).
+            """.trimIndent(),
+            catalog,
+        )
+        withClue("premise: the planner inlined matches under matchCounts as a value-equal Join") {
+            val matchesJoin = plan.roots.getValue("matches").shouldBeInstanceOf<Join>()
+            (matchesJoin in PlanOrder.allNodes(plan.roots.getValue("matchCounts"))) shouldBe true
+        }
+        val result = f.lowered(plan, catalog)
+        val steps = result.spec.steps
+
+        val join = f.spawns(steps).filter { it.factory is JoinFactory }.shouldHaveSize(1).single()
+        withClue("the first root in sorted order (matchCounts) owns the shared handle") {
+            join.handle.startsWith("matchCounts/") shouldBe true
+        }
+        result.outputHandles.getValue("matches") shouldBe join.handle
+        val groupBy = f.spawns(steps).single { it.factory is GroupByFactory }
+        result.outputHandles.getValue("matchCounts") shouldBe groupBy.handle
+        f.connects(steps).filter { it.to == groupBy.handle } shouldContainExactly listOf(
+            ConnectStep(join.handle, "outlet", groupBy.handle, "inlet"),
+        )
+        withClue("the shared join is spawned and wired once") {
+            f.connects(steps).filter { it.to == join.handle }.shouldHaveSize(2)
+            steps.filterIsInstance<SpawnStep>().map { it.handle }.distinct().size shouldBe f.spawns(steps).size
+        }
+    }
+
+    @Test
+    fun `QRY1 §LOWER-11 a helper IDB used as an antijoin witness lowers once`() {
+        val catalog = f.catalog("candSkills" to 2, "jobSkills" to 2)
+        val plan = parsedPlan(
+            """
+            candHas(S) :- candSkills(C, S).
+            gap(J, S) :- jobSkills(J, S), not candHas(S).
+            """.trimIndent(),
+            catalog,
+        )
+        val steps = f.lowered(plan, catalog).spec.steps
+
+        val projection = f.spawns(steps).filter { it.factory is FlatMapFactory }.shouldHaveSize(1).single()
+        val antiJoin = f.spawns(steps).filter { it.factory is SemiJoinFactory }.shouldHaveSize(1).single()
+        f.connects(steps).single { it.to == antiJoin.handle && it.inlet == "right" }.from shouldBe projection.handle
+    }
+
+    @Test
+    fun `QRY1 §LOWER-11 the key is value equality - one body under different variable names is NOT shared`() {
+        val catalog = f.catalog("r" to 2, "s" to 1)
+        val renamed = parsedPlan("a(X, Y) :- r(X, Y), s(Y).\nb(P, Q) :- r(P, Q), s(Q).", catalog)
+        val sameNames = parsedPlan("a(X, Y) :- r(X, Y), s(Y).\nb(X, Y) :- r(X, Y), s(Y).", catalog)
+
+        fun cellCount(plan: LogicalPlan) =
+            f.spawns(f.lowered(plan, catalog).spec.steps).count { it.factory !is SetSourceFactory }
+        withClue("control: the identical body under the same names is one node, lowered once") {
+            (sameNames.roots.getValue("a") == sameNames.roots.getValue("b")) shouldBe true
+            (cellCount(sameNames) > 0) shouldBe true
+        }
+        withClue("renamed columns make unequal nodes: each root keeps its own cells") {
+            (renamed.roots.getValue("a") == renamed.roots.getValue("b")) shouldBe false
+            cellCount(renamed) shouldBe 2 * cellCount(sameNames)
+        }
+    }
+
+    @Test
+    fun `a memo hit consumes its subtree's pre-order numbers, so later handles under that root keep theirs`() {
+        val shared = f.join(f.scan("r", "x", "y"), f.scan("s", "y", "z"), "y")
+        val plan = LogicalPlan(
+            mapOf(
+                "a" to shared,
+                "b" to f.union(f.project(shared, "x"), f.project(f.scan("t", "x"), "x")),
+            ),
+        )
+        val result = f.lowered(plan, f.catalog("r" to 2, "s" to 2, "t" to 1))
+
+        // Under b, pre-order: 0 union, 1 project, 2 join (shared: 2..4 with its scans), 5 project, 6 scan.
+        f.spawns(result.spec.steps).map { it.handle } shouldContainExactly listOf(
+            "src:r", "src:s", "src:t", "a/0:join", "b/1:project", "b/5:project", "b/0:union",
+        )
+        f.connects(result.spec.steps).single { it.to == "b/1:project" }.from shouldBe "a/0:join"
+        result.outputHandles shouldBe mapOf("a" to "a/0:join", "b" to "b/0:union")
+    }
+
+    @Test
+    fun `a refused node shared by two roots is not memoized - the refusal is reported under both loci`() {
+        val illTyped = f.select(f.scan("r", "x", "y"), f.v("y"), ComparisonOp.EQ, f.str("three"))
+        val plan = LogicalPlan(mapOf("a" to illTyped, "b" to f.project(illTyped, "x")))
+
+        f.refused(plan, f.catalog("r" to 2)).refusals.map { it.nodeKind to it.locus.id } shouldContainExactly listOf(
+            "Select" to "a/0:select",
+            "Select" to "b/1:select",
+        )
+    }
+
+    @Test
+    fun `a root GroupAggregate reused below another root still refuses there, never shared as a relation`() {
+        val aggregate = f.groupAggregate(f.scan("r", "g", "v"))
+        val plan = LogicalPlan(mapOf("a" to aggregate, "b" to f.select(aggregate, f.v("v"), ComparisonOp.GT, f.int(1))))
+
+        val refusal = f.refused(plan, f.catalog("r" to 2)).refusals.single()
+        refusal.nodeKind shouldBe "GroupAggregate"
+        refusal.locus shouldBe Locus.PlanNode("b/1:groupaggregate")
+        refusal.reason shouldBe Lowering.AGGREGATE_NOT_A_RELATION
     }
 
     // ---------------------------------------------------------------- refusals and totality

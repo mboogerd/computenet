@@ -990,3 +990,59 @@ nothing about what a batched inlet should do with an exclusive payload, with a
 partially-failing batch, or across a wire boundary where the batch would have
 to survive framing — all of which a kernel-level `addAll` would have to settle
 and this finding does not.
+
+## F-20 — skillmatch as a `query { }`: the compiled graph matches the hand-wired `SkillPipeline` on its relational core, with a two-part residual
+
+**Observation**: `computenet-cab.7.5` wrote the relational core of
+`:demo:skillmatch`'s `SkillPipeline` as a `query { }`
+(`demo/skillmatch/src/test/kotlin/civictech/demo/skillmatch/SkillMatchQuery.kt`)
+and compared its compiled `GraphSpec` with the one the hand-wired builder
+records (`SkillPipeline.buildWithSpec`). `SkillMatchQueryStructureTest` maps
+handles through the compiled symbol table (`sourceHandles` for `candSkills`
+and `jobSkills`, `outputHandles` for `matches`, `matchCounts`, `required`,
+`gap`, `supply` and `demand`), then checks that each mapped pair builds the
+same cell class (`SetCell`, `JoinSetCell`, `GroupByCell`, `SemiJoinCell`) and
+that the renamed `ConnectStep`s are equal, port names included. Eight of the
+ten hand-wired cells and seven of its twelve links map one-for-one. That
+depends on `[QRY1-LOWER-11]`'s shared lowering (`computenet-cab.7.1`):
+without it the `matches` join would be lowered twice, once for its own root
+and once inside `matchCounts`. Everything else is the residual, and the test
+pins it exactly:
+
+- **R1, hand-wired only: `qualification` (`LookupJoinCell`) and `market`
+  (`CombineLatestCell`) and their four links** (`matchCounts → qualification.fact`,
+  `required → qualification.dimension`, `supply → market.left`,
+  `demand → market.right`). Both compute values from two aggregate outputs:
+  `QualEntry` holds a boolean `matched == need && need > 0`, `MarketEntry`
+  holds `dv > sv`, and both apply `?: 0L` defaults. `[QRY1-LANG-01]` terms can
+  only be variables or constants. `Planner.headVariables` refuses even a
+  constant in a head. A non-root aggregate cannot feed another rule
+  (`Lowering.AGGREGATE_NOT_A_RELATION`). So neither cell can be written in
+  the language.
+- **R2, one routing difference at `gap`.** The hand-wired antijoin keys
+  `candSkills` by skill directly (`gap.right ← candSkills`). The query cannot
+  do that: `not candSkills(C, S)` leaves `C` bound by no positive atom, which
+  `[QRY1-LANG-07]` rejects as UNSAFE_RULE (`SafetyAnalysis.positivelyBoundVars`;
+  `_` is an ordinary variable name, not a wildcard). The query therefore needs
+  `candHas(S) :- candSkills(C, S).`, which compiles to one extra
+  `FlatMapSetCell` (`candHas/0:project`) with links
+  `src:candSkills → candHas/0:project.inlet` and
+  `candHas/0:project → gap/0:antijoin.right`. The hand-wired link
+  `candSkills → gap.right` has no compiled counterpart.
+
+**Why it matters**: `[QRY1-API-04]` / BS-11 asks for "same cells, same
+links". Read literally, R1 and R2 fall short of that. Read as "as far as the
+language reaches", the relational core does meet it. This entry records the
+measurement; it does not choose between those readings. That choice is the
+human decision bead `computenet-cab.7.10`, under feature `computenet-cab.7`.
+The two ways to close the gap, wildcards in negation (for R2) and computed
+head columns (for R1), are both language changes, and that bead is where
+either would be decided.
+
+**Honest limit of this entry**: the comparison is structural only. It checks
+cell classes and links, not what the factories do: keyFn, predicate and
+aggregator lambdas cannot be compared. Whether the two graphs compute the same
+answers is the extensional half of BS-11 (`computenet-cab.7.6`). The pinned
+compiled handles belong to the lowering's current numbering, so a change to
+`Lowering` that renumbers nodes fails the test by design, and the residual
+must then be measured again rather than re-pinned without checking.

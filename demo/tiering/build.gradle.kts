@@ -22,6 +22,13 @@ dependencies {
     implementation(project(":demo:shell"))
 
     testImplementation(project(":testkit"))
+    // computenet-cab.7.8 ([QRY1-ORA-10]): tiering's relational core expressed as a query
+    // ( TieringQuery.kt) and checked for extensional agreement with the hand-wired
+    // TierPipeline through :oracle's DifferentialRunner (cab.7-D9: :query forbids a
+    // :demo:* dependency even in test scope, so the query and its test live here, not
+    // in :query's own test source set).
+    testImplementation(project(":query"))
+    testImplementation(project(":oracle"))
 }
 
 application {
