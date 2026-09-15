@@ -28,7 +28,9 @@ import java.util.concurrent.TimeUnit
  * scheduler task; what this file adds is everything between that primitive and
  * the wire: the cursor table, the render/re-read reconciliation, the verified
  * stability verdict, and the vocabulary that says *which* nothing an
- * `unavailable` is.
+ * `unavailable` is. Three sites here are deliberate `KRD-27` exceptions to the
+ * kernel's single walk loop and stamp comparison, each marked and reasoned at
+ * its own site: [read]'s page fetch, [paged]'s narrowing re-read, and [verdict].
  *
  * ### Read-only, and checkably so (P6)
  *
@@ -114,6 +116,11 @@ internal class PagedState(
             // how the detail panel knows no bounded read was available.
             allowWholeCopy = true,
         )
+        // KRD-27 recorded exception: this is one page of a walk the HTTP client
+        // drives, not the kernel walk loop. The pace and the cursor table's
+        // lifetime (CursorTable, the one-id-per-served-page rule, the 410 on an
+        // already-consumed id, CURSOR_TTL_MS) belong to the browser; a kernel-side
+        // walkRouted cannot own a client's pace and would defeat that rule.
         val pending = reads().readState(ref, request) ?: return Outcome.NoSource
 
         return when (val result = await(pending)) {
@@ -237,6 +244,10 @@ internal class PagedState(
         while (rendered < page.entries.size) {
             if (retries >= InspectorServer.PAGE_RENDER_RETRIES) return null
             retries += 1
+            // KRD-27 recorded exception: the encoder-budget reconciliation re-issues
+            // the same page narrower so the minted cursor names exactly the entries
+            // shown — this is the same client-driven walk as `read`'s page above,
+            // not a second loop.
             val narrowed = reads().readState(ref, request.copy(limit = rendered.coerceAtLeast(1)))
                 ?: return null
             val result = await(narrowed) as? StateReadResult.Page ?: return null
@@ -298,11 +309,20 @@ internal class PagedState(
      *
      * What `true` licenses is deliberately narrow, and narrower still for some
      * families — see [StatePageView.walkStable].
+     *
+     * KRD-27 recorded exception: this is a stability comparison computed per page
+     * from cursor-table state (`CursorTable.Walk.opening`, the `smeared` latch),
+     * because the walk closes on the client's schedule, not the kernel's. The
+     * kernel's own verdict (computenet-t6b.3.4, computed once over a completed
+     * in-process `StateWalkOutcome`) cannot serve a page that does not yet know
+     * whether it is the walk's last — aligning this verdict's vocabulary with
+     * that one is a follow-up, not this site's job.
      */
     private fun verdict(opening: TagFrontier?, page: StatePage, smearedSoFar: Boolean): Boolean? = when {
         smearedSoFar -> false
         opening == null || page.frontier == null -> null
         ReadCaveat.STALE_FRONTIER in page.caveats -> null
+        // KRD-27 recorded exception: the per-page stamp comparison — reason in this function's KDoc
         page.frontier == opening -> true
         else -> false
     }
