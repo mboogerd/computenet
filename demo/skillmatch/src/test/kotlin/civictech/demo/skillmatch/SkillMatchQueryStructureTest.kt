@@ -56,6 +56,8 @@ class SkillMatchQueryStructureTest {
         val compiledOnlySpawns: Map<String, KClass<*>>,
         val compiledOnlyLinks: Set<ConnectStep>,
         val classMismatches: Map<String, Pair<KClass<*>, KClass<*>>>,
+        /** A [ConnectStep] recorded more than once on either side — invisible to the set comparison otherwise. */
+        val duplicateLinks: Set<ConnectStep> = emptySet(),
     )
 
     @Test
@@ -114,6 +116,9 @@ class SkillMatchQueryStructureTest {
         require(missing.isEmpty()) { "mapped handles absent from a spec: $missing" }
 
         val rename = { h: String -> map[h] ?: h }
+        val duplicates = listOf(handWired, compiled).flatMap { spec ->
+            spec.steps.filterIsInstance<ConnectStep>().groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+        }.toSet()
         val handLinks = handWired.steps.filterIsInstance<ConnectStep>()
             .associateBy { it.copy(from = rename(it.from), to = rename(it.to)) }
         val compiledLinks = compiled.steps.filterIsInstance<ConnectStep>().toSet()
@@ -127,6 +132,7 @@ class SkillMatchQueryStructureTest {
                 val pair = handSpawns.getValue(hand) to compiledSpawns.getValue(comp)
                 if (pair.first == pair.second) null else hand to pair
             }.toMap(),
+            duplicateLinks = duplicates,
         )
     }
 
@@ -152,6 +158,7 @@ class SkillMatchQueryStructureTest {
             "$hand (renamed: ${hand.copy(from = map[hand.from] ?: hand.from, to = map[hand.to] ?: hand.to)})"
         }
         compare("compiled-only link", actual.compiledOnlyLinks, PINNED.compiledOnlyLinks)
+        compare("duplicate link", actual.duplicateLinks, PINNED.duplicateLinks)
         return out
     }
 
