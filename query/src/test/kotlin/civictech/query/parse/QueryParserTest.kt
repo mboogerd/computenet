@@ -288,6 +288,30 @@ class QueryParserTest {
         result.excludedHeads shouldBe setOf("f")
     }
 
+    @Test
+    fun `an annotated statement missing its terminator does not swallow the well-formed statement after it`() {
+        // computenet-l3338 feature review: skipping a failed annotation's statement blindly to
+        // the next '.' re-opened computenet-cab.5.3's missing-terminator cascade -- `good`,
+        // well-formed, vanished with no diagnostic. The discarded tail must fail at `good`
+        // and resume there.
+        val result = rejected("@first f(V) :- link(V, Y)\ngood(X, Y) :- link(X, Y).")
+
+        result.rejections.map { it.code } shouldBe listOf(RejectionCode.ORDER_DEPENDENT_AGGREGATE)
+        result.partial.rules.map { it.head.predicate } shouldBe listOf("good")
+        result.excludedHeads shouldBe setOf("f")
+    }
+
+    @Test
+    fun `an aggregate failure before the head still recovers that head for exclusion`() {
+        // `@topK(abc)` fails at `abc`, not at the head: the parameter debris is skipped, so the
+        // head `f` is still named, and the statement still yields one rejection.
+        val result = rejected("@topK(abc) f(V) :- link(V, Y).")
+
+        result.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+        result.partial.rules shouldHaveSize 0
+        result.excludedHeads shouldBe setOf("f")
+    }
+
     // ------------------------------------------------------------------ set operations
 
     @Test

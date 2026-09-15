@@ -47,7 +47,13 @@ import civictech.query.schema.Catalog
  * (the planner scans a declared relation before it looks for a head). Every statement whose
  * head lies on a recursion cycle is excluded too, not only the one the RECURSION_UNSUPPORTED
  * rejection is located at. Loci always refer to the caller's query: a [Locus.RuleStatement]
- * produced over the reduced query is translated back to the original index.
+ * produced over the reduced query is translated back to the original index. A statement that
+ * failed to parse has no index to exclude; its head predicate is tainted instead when
+ * [QueryParser] could recover it lexically ([ParseResult.Rejected.excludedHeads],
+ * computenet-l3338). **Limit:** when the syntax error lies at or before the head identifier
+ * (`1bad(X) :- r(X).`), no head is recovered, and a statement referencing that predicate is
+ * rejected `UNKNOWN_PREDICATE` on its own account rather than excluded. The query is rejected
+ * either way; only the diagnostic list is longer.
  *
  * **Parse.** [QueryParser] recovers per statement (cab.5-D7): a [ParseResult.Rejected] carries
  * both its rejections and the *partial* query built from the statements that did parse. The

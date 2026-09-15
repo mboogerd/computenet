@@ -444,4 +444,19 @@ class RejectionTest {
             rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
         }
     }
+
+    @Test
+    fun `exclusion limit - a dependent of a statement whose head is not lexically recoverable is UNKNOWN_PREDICATE`() {
+        // The limit QueryCompiler's KDoc states (computenet-l3338): the syntax error lies before
+        // the head identifier, so no head is recovered and `good` is rejected on its own account.
+        val source = """
+            1bad(X) :- r(X).
+            good(X) :- bad(X).
+        """.trimIndent()
+
+        val rejections = QueryCompiler.compile(source, catalog("r" to 1))
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+
+        rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
+    }
 }
