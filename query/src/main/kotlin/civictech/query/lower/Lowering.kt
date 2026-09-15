@@ -59,6 +59,25 @@ import civictech.query.schema.Catalog
  * this path iterates a hash-ordered collection, which with data-class factories is what makes
  * two lowerings of one plan `==` and byte-identical (`[QRY1-LOWER-05]`).
  *
+ * **Shared subgraphs (`[QRY1-LOWER-11]`, cab.7-D7).** Sharing extends past sources: one memo,
+ * keyed on the [PlanNode] *value* and shared by every root's walk within one [lower] call,
+ * records each node that lowered successfully. Two nodes share one subgraph exactly when they
+ * are `==` — structure, columns and provenance alike, since provenance is a constructor
+ * property — which is what the planner produces when it inlines an IDB predicate at a use
+ * site written with the defining rule's own variable names. No weaker key (name or shape
+ * only) is used, so the same body under different variable names is lowered twice. A node
+ * met again, under the same root or a later one, emits nothing: it is connected from the
+ * handle of its first lowering (the first root in sorted order that reached it, so a root's
+ * [LoweringResult.Lowered.outputHandles] entry may name a handle under another root's prefix,
+ * as a bare `Scan` root already names `src:<relation>`), and it consumes the pre-order
+ * numbers of its whole subtree, so every later handle under that root keeps its number.
+ * Refused nodes are never memoized: each root that reaches one walks it again and reports the
+ * refusal at its own locus. A non-root `GroupAggregate` never takes a memo hit, because it
+ * refuses where the same node at a root lowers. Fan-out from a shared cell reconverges only
+ * in the cells this lowering already emits — `UnionSetCell` (one link per distinct branch
+ * handle), `JoinSetCell`, `SemiJoinCell` — never in a duplicate-blind merge. Gating
+ * ([Gating.decide]) reads plan-node provenance, which sharing does not change.
+ *
  * **Rules:** every [PlanNode] kind — Scan, Select, Project, Join, SemiJoin, AntiJoin, Union
  * (computenet-cab.4.2); Intersect, Difference, OuterJoin (a mirror of the `RelationalGraphs`
  * composition, see `lowerOuterJoin`) and a root GroupAggregate (computenet-cab.4.3). A non-root
@@ -93,8 +112,10 @@ object Lowering {
         }
 
         val outputHandles = LinkedHashMap<String, String>()
+        // Looked up, never iterated: its hash order cannot reach the step list.
+        val memo = HashMap<PlanNode, LoweredNode>()
         for (rootName in plan.roots.keys.sorted()) {
-            val walk = RootWalk(rootName, catalog, steps, refusals, diagnostics)
+            val walk = RootWalk(rootName, catalog, steps, refusals, diagnostics, memo)
             walk.lower(plan.roots.getValue(rootName), isRoot = true)?.let { outputHandles[rootName] = it.handle }
         }
 
@@ -129,18 +150,36 @@ object Lowering {
 /** A lowered node: the [handle] whose `outlet` carries its rows, positional against [columns]. */
 private data class LoweredNode(val handle: String, val columns: List<String>, val types: List<AttrType>)
 
-/** One root's walk; the counter numbers nodes in [PlanOrder.allNodes]' pre-order. */
+/**
+ * One root's walk; the counter numbers nodes in [PlanOrder.allNodes]' pre-order. [memo] is the
+ * whole [Lowering.lower] call's, shared across roots: successful lowerings only.
+ */
 private class RootWalk(
     private val rootName: String,
     private val catalog: Catalog,
     private val steps: MutableList<GraphStep>,
     private val refusals: MutableList<LoweringRefusal>,
     private val diagnostics: MutableList<LoweringDiagnostic>,
+    private val memo: MutableMap<PlanNode, LoweredNode>,
 ) {
     private var counter = 0
 
     /** Lowers [node] and its subtree; `null` when this node or anything below it refused. */
     fun lower(node: PlanNode, isRoot: Boolean): LoweredNode? {
+        // A non-root aggregate refuses where the same node at a root lowers, so it never hits.
+        val shareable = isRoot || node !is GroupAggregate
+        if (shareable) {
+            memo[node]?.let { shared ->
+                // Every node is otherwise walked in full, so the counter tracks pre-order;
+                // skipping the subtree's numbers keeps each later handle's number unchanged.
+                counter += PlanOrder.allNodes(node).size
+                return shared
+            }
+        }
+        return lowerUnshared(node, isRoot)?.also { if (shareable) memo[node] = it }
+    }
+
+    private fun lowerUnshared(node: PlanNode, isRoot: Boolean): LoweredNode? {
         val handle = "$rootName/${counter++}:${Lowering.kindName(node)}"
         val locus = Locus.PlanNode(handle)
         fun refuse(reason: String): LoweredNode? {
