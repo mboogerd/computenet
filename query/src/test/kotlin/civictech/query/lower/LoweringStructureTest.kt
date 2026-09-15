@@ -168,13 +168,13 @@ class LoweringStructureTest {
     }
 
     @Test
-    fun `QRY1 §HONEST-02 an ill-typed Select is refused, not lowered and not thrown`() {
+    fun `QRY1 §LOWER-07 an ill-typed Select is refused, not lowered and not thrown`() {
         val plan = LogicalPlan(mapOf("q" to f.select(f.scan("r", "x", "y"), f.v("y"), ComparisonOp.EQ, f.str("three"))))
         val refusal = f.refused(plan, f.catalog("r" to 2)).refusals.single()
 
         refusal.nodeKind shouldBe "Select"
         refusal.locus shouldBe Locus.PlanNode("q/0:select")
-        refusal.reason shouldContain "[QRY1-HONEST-02]"
+        refusal.reason shouldContain "[QRY1-LOWER-07]"
     }
 
     @Test

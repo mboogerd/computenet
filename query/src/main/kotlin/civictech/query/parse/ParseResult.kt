@@ -52,14 +52,22 @@ sealed interface ParseResult {
     data class Parsed(val query: Query, val spans: SpanTable) : ParseResult
 
     /**
-     * The text did not parse. [rejections] is non-empty.
+     * One or more statements did not parse. [rejections] is non-empty, one per statement that
+     * failed ([QRY1-REJECT-10]'s multi-error aggregation, cab.5-D7's per-statement recovery in
+     * [QueryParser.program]): a bad statement is recorded and skipped to its next `.` (or EOF),
+     * and parsing continues with the rest of the source.
      *
-     * This task reports exactly one rejection — the first syntax error — because
-     * multi-error aggregation policy ([QRY1-REJECT-10]) is cab.5's, not this task's. The
-     * field is a list rather than a single value so that policy can land here without
-     * changing the type.
+     * [partial] is the [Query] built from the statements that DID parse, and [spans] locates
+     * them exactly as [Parsed.spans] would — both positional over [partial], never over the
+     * caller's original statement list. A caller that only wants the diagnostics may ignore
+     * [partial]; `civictech.query.QueryCompiler` runs its later phases over it so a good
+     * statement's own rejections surface alongside a bad statement's syntax error in one pass.
      */
-    data class Rejected(val rejections: List<Rejection>) : ParseResult {
+    data class Rejected(
+        val rejections: List<Rejection>,
+        val partial: Query,
+        val spans: SpanTable,
+    ) : ParseResult {
         init {
             require(rejections.isNotEmpty()) { "ParseResult.Rejected requires a reason" }
         }
