@@ -446,6 +446,111 @@ class RejectionTest {
     }
 
     @Test
+    fun `SYNTAX_ERROR limit - a missing comma before a final atom resynchronises as a second statement, doubling the rejection`() {
+        // QueryParser's class KDoc, "A missing comma versus a missing terminator"
+        // (computenet-6atl9): `foo(X) :- r(X) baz(Y).` is token for token also `foo(X) :- r(X)`
+        // missing its '.' followed by the fact `baz(Y).`, so recovery resumes at `baz` as it
+        // must for a genuine statement after a missing terminator (computenet-cab.5.3), and the
+        // fact earns its own rejection alongside `foo`'s SYNTAX_ERROR.
+        val catalog = Catalog(catalog("r" to 1).relations + catalog("e" to 2).relations)
+
+        val rejections = QueryCompiler.compile("foo(X) :- r(X) baz(Y).", catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit: one bad statement, two rejections: $rejections") {
+            rejections.map { it.code } shouldBe
+                listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNPLANNABLE_STATEMENT)
+        }
+
+        // The same ambiguity after an aggregate-annotated head missing its ':-': the annotation
+        // parsed, so the failure at `e(` is an ordinary resync-allowed one, and `e(X, Y).` reads
+        // as a fact after a missing terminator.
+        val rejections2 = QueryCompiler.compile("@count c(X) e(X, Y).", catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit, annotated head: $rejections2") {
+            rejections2.map { it.code } shouldBe
+                listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNPLANNABLE_STATEMENT)
+        }
+    }
+
+    @Test
+    fun `SYNTAX_ERROR - a missing comma before a continuing body is one rejection`() {
+        // The shape the bounded head-atom lookahead separates (computenet-6atl9): `baz(X)` is
+        // followed by ',', which no rule head can be, so it is skipped as `foo`'s own debris
+        // rather than re-parsed as a statement that fails again at the ','.
+        val catalog = catalog("r" to 1)
+
+        val parsed = QueryParser.parse("foo(X) :- r(X) baz(X), r(X).", catalog)
+            .shouldBeInstanceOf<ParseResult.Rejected>()
+        parsed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+        parsed.excludedHeads shouldBe setOf("foo")
+    }
+
+    @Test
+    fun `exclusion - a failing fragment after a missing comma does not taint an unrelated statement's head`() {
+        // QueryParser's class KDoc, "Exclusion of unparseable heads" (computenet-6atl9): `a`'s
+        // body fails at the missing comma before `s(X, .`, whose '(' never closes before the
+        // '.', so it cannot be a statement start and is skipped as `a`'s debris. `s` is not
+        // recorded, the real `s(X) :- r(X).` stays in the partial query, and `t`, which depends
+        // on it, is evaluated on its own account: its UNKNOWN_PREDICATE for `zz` is reported.
+        val catalog = catalog("r" to 1)
+        val source = """
+            a(X) :- r(X) s(X, .
+            s(X) :- r(X).
+            t(X) :- s(X), zz(X).
+        """.trimIndent()
+
+        val parsed = QueryParser.parse(source, catalog).shouldBeInstanceOf<ParseResult.Rejected>()
+        parsed.excludedHeads shouldBe setOf("a")
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
+    }
+
+    @Test
+    fun `exclusion limit - a fragment that closes before its terminator and fails inside is still recorded`() {
+        // The residue QueryParser's "Exclusion of unparseable heads" states (computenet-6atl9):
+        // `s(X X).` closes and is followed by '.', so it is equally a statement after a missing
+        // terminator whose arguments are malformed; recovery resumes there and its head is
+        // recorded.
+        val parsed = QueryParser.parse("a(X) :- r(X) s(X X).", catalog("r" to 1))
+            .shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: ${parsed.excludedHeads}") {
+            parsed.excludedHeads shouldBe setOf("a", "s")
+        }
+    }
+
+    @Test
+    fun `exclusion limit - an unclosed statement after a missing terminator is skipped as debris, so its dependent is not excluded`() {
+        // The other side of the ambiguity QueryParser's "A missing comma versus a missing
+        // terminator" states (computenet-6atl9 second read): `q(X` never closes before the '.',
+        // so the lookahead reads it as `fact`'s debris, exactly as it reads `s(X, .` in the
+        // exclusion test above. `q` earns no rejection and is not recorded, so `z` draws an
+        // UNKNOWN_PREDICATE for it instead of being excluded.
+        val catalog = catalog("r" to 1)
+        val source = "fact(1)\nq(X :- r(X).\nz(X) :- q(X)."
+
+        val parsed = QueryParser.parse(source, catalog).shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: $parsed") {
+            parsed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+            parsed.excludedHeads shouldBe setOf("fact")
+        }
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit: $rejections") {
+            rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
+        }
+
+        // Missing its own '.' as well, it takes the well-formed statement after it along.
+        val swallowed = QueryParser.parse("fact(1)\nq(X :- r(X)\ngood(X) :- r(X).", catalog)
+            .shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: $swallowed") {
+            swallowed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+            swallowed.partial.rules shouldBe emptyList()
+        }
+    }
+
+    @Test
     fun `exclusion limit - a dependent of a statement whose head is not lexically recoverable is UNKNOWN_PREDICATE`() {
         // The limit QueryCompiler's KDoc states (computenet-l3338): the syntax error lies before
         // the head identifier, so no head is recovered and `good` is rejected on its own account.

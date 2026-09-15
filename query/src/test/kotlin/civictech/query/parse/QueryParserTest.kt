@@ -553,6 +553,20 @@ class QueryParserTest {
     }
 
     @Test
+    fun `a fact missing its terminator between a failed statement and a well-formed one does not swallow the well-formed one`() {
+        // computenet-6atl9 second read: the bounded head-atom lookahead first resumed only at an
+        // atom followed by '.' or ':-', so `fact(1)` (followed by `good(`) was skipped as `bad`'s
+        // debris to the next '.', swallowing the well-formed `good` -- and `use`, which depends
+        // on it, then drew an UNKNOWN_PREDICATE for `good`. Two bad statements, two rejections;
+        // `good` and `use` stay in the partial query.
+        val result = rejected("bad(X) :- link(X, Y)\nfact(1)\ngood(X, Y) :- link(X, Y).\nuse(X, Y) :- good(X, Y).")
+
+        result.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.SYNTAX_ERROR)
+        result.partial.rules.map { it.head.predicate } shouldBe listOf("good", "use")
+        result.excludedHeads shouldBe setOf("bad", "fact")
+    }
+
+    @Test
     fun `recovery skips to the token after the failing statement's own terminator, never past it`() {
         // A single bad statement, failing on its own trailing '.', followed by a good one:
         // recovery must land exactly on the next statement, not consume it too.
