@@ -105,6 +105,26 @@ import civictech.query.schema.Catalog
  * terminates. [ParseResult.Rejected] therefore carries every statement's rejection together
  * with the *partial* query of the statements that did parse ([QRY1-REJECT-10]).
  *
+ * ## A missing comma is indistinguishable from a missing terminator
+ *
+ * [Parser.canStartStatement]'s one-token check cannot tell "the token after a missing comma,
+ * mid-body" from "the token after a missing terminator, a genuine following statement" — both
+ * leave [Parser.recover] on the identical `IDENT '('` shape (computenet-6atl9). Resolving the
+ * missing-terminator cascade (computenet-cab.5.3) by resuming at that token whenever it
+ * satisfies [Parser.canStartStatement] is exactly what makes a missing comma inside a body
+ * re-parse the rest of the body as a second, independent statement instead of folding it into
+ * the first one's own [RejectionCode.SYNTAX_ERROR]: `foo(X) :- r(X) baz(Y).` yields both a
+ * [RejectionCode.SYNTAX_ERROR] for `foo` (at the missing comma) and a second rejection for the
+ * re-parsed `baz(Y)` fragment — two rejections for one bad statement, where cab.5-D7 asks for
+ * two only when the source genuinely holds two statements. No one-token lookahead resolves
+ * this: the fix for the cascade (stop resyncing at a token that already looks like a fresh
+ * head) and the fix for this double report (keep consuming as the failed statement's own
+ * debris) select opposite actions from the identical token sequence, and [recover] cannot know
+ * which the source meant without parsing further ahead than the failure token it is required to
+ * stop at. This is a stated limit, not an oversight; `civictech.query.diag.RejectionTest`'s
+ * `` `SYNTAX_ERROR limit - a missing comma mid-body resynchronises as a second statement,
+ * doubling the rejection` `` pins the shape.
+ *
  * ## Order-dependent aggregates
  *
  * An aggregate name outside `[QRY1-LANG-03]`'s closed seven is syntactically well-formed —
@@ -145,6 +165,19 @@ import civictech.query.schema.Catalog
  * not recorded; a dependent of such a statement is rejected on its own account rather than
  * excluded — a stated limit, not a soundness gap, since a whole-query rejection was already
  * going to happen from the unparseable statement's own [RejectionCode.SYNTAX_ERROR].
+ *
+ * A resynchronised fragment that is itself debris from a missing comma (the previous section)
+ * still runs through [Parser.recoverableHead] like a genuine statement when it fails again:
+ * `a(X) :- r(X) s(X, .` misreads its own body debris `s(X, .` as a fresh statement, which then
+ * fails on its own unbalanced `(` and lexically recovers `s` for
+ * [ParseResult.Rejected.excludedHeads] — even when `s` is also the head of an unrelated,
+ * well-formed statement elsewhere in the source. That statement is then wrongly tainted and any
+ * dependent of it excluded instead of evaluated on its own account, hiding whatever rejection
+ * the dependent would otherwise have earned (computenet-6atl9). This over-exclusion is the same
+ * one-token-lookahead limit as the double report above, applied to
+ * [ParseResult.Rejected.excludedHeads] rather than to the rejection list;
+ * `civictech.query.diag.RejectionTest`'s `` `exclusion limit - a mis-recovered resync fragment's
+ * head can taint an unrelated statement in excludedHeads` `` pins it.
  */
 object QueryParser {
 

@@ -446,6 +446,64 @@ class RejectionTest {
     }
 
     @Test
+    fun `SYNTAX_ERROR limit - a missing comma mid-body resynchronises as a second statement, doubling the rejection`() {
+        // The class KDoc's "A missing comma is indistinguishable from a missing terminator"
+        // (computenet-6atl9): Parser.canStartStatement's one-token lookahead cannot tell a
+        // missing comma before `baz(Y)` from a missing terminator before a genuine next
+        // statement -- both leave the same `IDENT '('` shape at the failure token, and
+        // computenet-cab.5.3 already requires resuming there for the genuine case. `baz(Y)` is
+        // therefore re-parsed as its own statement and, having no positive body atom of its
+        // own, earns a second, independent rejection alongside `foo`'s.
+        val catalog = Catalog(catalog("r" to 1).relations + catalog("e" to 2).relations)
+
+        val rejections = QueryCompiler.compile("foo(X) :- r(X) baz(Y).", catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit: one bad statement, two rejections: $rejections") {
+            rejections.map { it.code } shouldBe
+                listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNPLANNABLE_STATEMENT)
+        }
+
+        // Same shape through the aggregate path: the missing comma before `e(X, Y)` leaves
+        // `@count c(X)` incomplete and `e(X, Y)` is resynced as its own factless statement.
+        val rejections2 = QueryCompiler.compile("@count c(X) e(X, Y).", catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue("stated limit, aggregate path: $rejections2") {
+            rejections2.map { it.code } shouldBe
+                listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNPLANNABLE_STATEMENT)
+        }
+    }
+
+    @Test
+    fun `exclusion limit - a mis-recovered resync fragment's head can taint an unrelated statement in excludedHeads`() {
+        // The class KDoc's "Exclusion of unparseable heads" trailing paragraph
+        // (computenet-6atl9): `a`'s body fails on a missing comma before `s(X, .`, which is
+        // misread as a fresh statement (the limit above) and itself fails on the unbalanced
+        // `(`. Its lexically recovered head `s` is added to excludedHeads even though the real
+        // `s(X) :- r(X).` two lines down parsed cleanly, so `t`, which depends on that genuine
+        // `s`, is wrongly excluded -- hiding the UNKNOWN_PREDICATE it would otherwise earn for
+        // the undeclared `zz`.
+        val catalog = catalog("r" to 1)
+        val source = """
+            a(X) :- r(X) s(X, .
+            s(X) :- r(X).
+            t(X) :- s(X), zz(X).
+        """.trimIndent()
+
+        val parsed = QueryParser.parse(source, catalog).shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("both `a`'s own head and the misread `s` fragment end up excluded: ${parsed.excludedHeads}") {
+            parsed.excludedHeads shouldBe setOf("a", "s")
+        }
+
+        val rejections = QueryCompiler.compile(source, catalog)
+            .shouldBeInstanceOf<CompileResult.Rejected>().rejections
+        withClue(
+            "stated limit: t's genuine UNKNOWN_PREDICATE for zz is hidden by the mis-taint: $rejections",
+        ) {
+            rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.SYNTAX_ERROR)
+        }
+    }
+
+    @Test
     fun `exclusion limit - a dependent of a statement whose head is not lexically recoverable is UNKNOWN_PREDICATE`() {
         // The limit QueryCompiler's KDoc states (computenet-l3338): the syntax error lies before
         // the head identifier, so no head is recovered and `good` is rejected on its own account.
