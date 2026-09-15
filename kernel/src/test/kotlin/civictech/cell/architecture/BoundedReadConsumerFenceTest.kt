@@ -29,23 +29,25 @@ import java.io.File
  *   declaration (no leading dot) and not a KDoc mention (comments are
  *   stripped first).
  * - R2: a `.frontier`/`frontier` equality or inequality compared against
- *   anything other than `null`, **on a line that also mentions `opening` or
- *   `closing`** (case-insensitive). The `opening`/`closing` requirement is
- *   this test's own narrowing of computenet-t6b.3.5-D3's plain
- *   `[Ff]rontier\b\s*[!=]=\s*(?!null\b)`: applied unnarrowed, that regex also
- *   matches `inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:435`
+ *   anything other than `null`, exactly as computenet-t6b.3.5-D3 specifies
+ *   (`[Ff]rontier\b\s*[!=]=\s*(?!null\b)`, with the whitespace-inside-the-
+ *   lookahead fix below). Applied unnarrowed, this also matches
+ *   `inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:435`
  *   (`prior.frontier != row.frontier`), a same-shape-row dedup check between
  *   two independently raised `WaveHealthRow`s that has nothing to do with a
  *   bounded-read walk's opening/closing stamp — outside this feature's five
- *   named sites and outside this task's file claim, so it cannot be marked
- *   here. [KRD-27]'s own acceptance criterion names the target precisely as
- *   comparing "a walk's *opening and closing* frontier stamps", which both
- *   real sites' code says explicitly (`openingFrontier`/`closingFrontier` in
- *   `BoundedReadFixtures.pagedWalk`; `page.frontier == opening` in
- *   `PagedState.verdict`) and WaveHealth's row diff does not — so requiring
- *   that word on the line is a closer reading of the criterion than the
- *   design prose's regex, not a weakening of it. Filed as
- *   computenet-t6b.3.5.3's bead comment for anyone tightening this further.
+ *   named sites and outside this task's file claim (WaveHealth.kt is not in
+ *   computenet-t6b.3.5's metadata.files), so it cannot be marked at its site
+ *   here. An earlier version of this test instead required the literal word
+ *   `opening` or `closing` on every R2 hit's line, to make WaveHealth.kt's
+ *   comparison fall out of the pattern rather than the allowlist. Reverted:
+ *   that weakens R2 project-wide, not just for WaveHealth.kt — any future
+ *   unmarked frontier comparison written without those exact words (a stamp
+ *   compared against a differently-named variable, say) would silently pass.
+ *   [KRD-27]'s own exception mechanism is a marker at the site, not a
+ *   pattern narrowing; until WaveHealth.kt:435 gets one, [WAVE_HEALTH_EXCEPTION]
+ *   below names that one line, and only that line, as exempt — the real marker
+ *   is filed as computenet-yderi (residual from this task's review).
  *
  * ### Marker window
  *
@@ -82,6 +84,17 @@ class BoundedReadConsumerFenceTest {
 
         private const val ALLOWLIST_PREFIX = "kernel/src/main/kotlin/civictech/cell/observe/"
 
+        /**
+         * One recorded, site-specific exception, not a pattern narrowing: see the
+         * class KDoc "Matched patterns" R2 note. `prior.frontier != row.frontier`
+         * is a same-shape-row dedup check unrelated to a bounded-read walk's
+         * opening/closing stamp; it needs a real `KRD-27` marker at its own site,
+         * filed as a residual (out of this task's file claim), not a change to
+         * what R2 matches everywhere else.
+         */
+        private const val WAVE_HEALTH_EXCEPTION =
+            "inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:435"
+
         private val READ_STATE_CALL = Regex("""\.readState\(""")
         // The negative lookahead must swallow the separating whitespace itself
         // (`(?!\s*null\b)`, not `\s*(?!null\b)`): with the whitespace outside the
@@ -91,12 +104,10 @@ class BoundedReadConsumerFenceTest {
         // passes and `page.frontier == null` wrongly matches. Verified with a
         // standalone regex check before wiring it into this scan.
         private val FRONTIER_COMPARE = Regex("""[Ff]rontier\b\s*[!=]=(?!\s*null\b)""")
-        private val OPENING_OR_CLOSING = Regex("(?i)opening|closing")
 
         private fun isReadStateCall(codeLine: String) = READ_STATE_CALL.containsMatchIn(codeLine)
 
-        private fun isFrontierStabilityCompare(codeLine: String) =
-            FRONTIER_COMPARE.containsMatchIn(codeLine) && OPENING_OR_CLOSING.containsMatchIn(codeLine)
+        private fun isFrontierStabilityCompare(codeLine: String) = FRONTIER_COMPARE.containsMatchIn(codeLine)
     }
 
     private fun repoRoot(): File {
@@ -187,13 +198,16 @@ class BoundedReadConsumerFenceTest {
                     val isCompare = isFrontierStabilityCompare(codeLine)
                     if (!isCall && !isCompare) return@forEachIndexed
 
+                    val siteId = "$relative:${index + 1}"
+                    if (isCompare && siteId == WAVE_HEALTH_EXCEPTION) return@forEachIndexed
+
                     if (isCall) readStateHits++
                     if (isCompare) frontierHits++
 
                     val windowStart = maxOf(0, index - MARKER_WINDOW)
                     val marked = (windowStart..index).any { rawLines[it].contains("KRD-27") }
                     if (!marked) {
-                        violations += "$relative:${index + 1}: ${rawLines[index].trim()}"
+                        violations += "$siteId: ${rawLines[index].trim()}"
                     }
                 }
             }
