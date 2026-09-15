@@ -446,14 +446,12 @@ class RejectionTest {
     }
 
     @Test
-    fun `SYNTAX_ERROR limit - a missing comma mid-body resynchronises as a second statement, doubling the rejection`() {
-        // The class KDoc's "A missing comma is indistinguishable from a missing terminator"
-        // (computenet-6atl9): Parser.canStartStatement's one-token lookahead cannot tell a
-        // missing comma before `baz(Y)` from a missing terminator before a genuine next
-        // statement -- both leave the same `IDENT '('` shape at the failure token, and
-        // computenet-cab.5.3 already requires resuming there for the genuine case. `baz(Y)` is
-        // therefore re-parsed as its own statement and, having no positive body atom of its
-        // own, earns a second, independent rejection alongside `foo`'s.
+    fun `SYNTAX_ERROR limit - a missing comma before a final atom resynchronises as a second statement, doubling the rejection`() {
+        // QueryParser's class KDoc, "A missing comma versus a missing terminator"
+        // (computenet-6atl9): `foo(X) :- r(X) baz(Y).` is token for token also `foo(X) :- r(X)`
+        // missing its '.' followed by the fact `baz(Y).`, so recovery resumes at `baz` as it
+        // must for a genuine statement after a missing terminator (computenet-cab.5.3), and the
+        // fact earns its own rejection alongside `foo`'s SYNTAX_ERROR.
         val catalog = Catalog(catalog("r" to 1).relations + catalog("e" to 2).relations)
 
         val rejections = QueryCompiler.compile("foo(X) :- r(X) baz(Y).", catalog)
@@ -463,25 +461,37 @@ class RejectionTest {
                 listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNPLANNABLE_STATEMENT)
         }
 
-        // Same shape through the aggregate path: the missing comma before `e(X, Y)` leaves
-        // `@count c(X)` incomplete and `e(X, Y)` is resynced as its own factless statement.
+        // The same ambiguity after an aggregate-annotated head missing its ':-': the annotation
+        // parsed, so the failure at `e(` is an ordinary resync-allowed one, and `e(X, Y).` reads
+        // as a fact after a missing terminator.
         val rejections2 = QueryCompiler.compile("@count c(X) e(X, Y).", catalog)
             .shouldBeInstanceOf<CompileResult.Rejected>().rejections
-        withClue("stated limit, aggregate path: $rejections2") {
+        withClue("stated limit, annotated head: $rejections2") {
             rejections2.map { it.code } shouldBe
                 listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNPLANNABLE_STATEMENT)
         }
     }
 
     @Test
-    fun `exclusion limit - a mis-recovered resync fragment's head can taint an unrelated statement in excludedHeads`() {
-        // The class KDoc's "Exclusion of unparseable heads" trailing paragraph
-        // (computenet-6atl9): `a`'s body fails on a missing comma before `s(X, .`, which is
-        // misread as a fresh statement (the limit above) and itself fails on the unbalanced
-        // `(`. Its lexically recovered head `s` is added to excludedHeads even though the real
-        // `s(X) :- r(X).` two lines down parsed cleanly, so `t`, which depends on that genuine
-        // `s`, is wrongly excluded -- hiding the UNKNOWN_PREDICATE it would otherwise earn for
-        // the undeclared `zz`.
+    fun `SYNTAX_ERROR - a missing comma before a continuing body is one rejection`() {
+        // The shape the bounded head-atom lookahead separates (computenet-6atl9): `baz(X)` is
+        // followed by ',', which no rule head can be, so it is skipped as `foo`'s own debris
+        // rather than re-parsed as a statement that fails again at the ','.
+        val catalog = catalog("r" to 1)
+
+        val parsed = QueryParser.parse("foo(X) :- r(X) baz(X), r(X).", catalog)
+            .shouldBeInstanceOf<ParseResult.Rejected>()
+        parsed.rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR)
+        parsed.excludedHeads shouldBe setOf("foo")
+    }
+
+    @Test
+    fun `exclusion - a failing fragment after a missing comma does not taint an unrelated statement's head`() {
+        // QueryParser's class KDoc, "Exclusion of unparseable heads" (computenet-6atl9): `a`'s
+        // body fails at the missing comma before `s(X, .`, whose '(' never closes before the
+        // '.', so it cannot be a statement start and is skipped as `a`'s debris. `s` is not
+        // recorded, the real `s(X) :- r(X).` stays in the partial query, and `t`, which depends
+        // on it, is evaluated on its own account: its UNKNOWN_PREDICATE for `zz` is reported.
         val catalog = catalog("r" to 1)
         val source = """
             a(X) :- r(X) s(X, .
@@ -490,16 +500,23 @@ class RejectionTest {
         """.trimIndent()
 
         val parsed = QueryParser.parse(source, catalog).shouldBeInstanceOf<ParseResult.Rejected>()
-        withClue("both `a`'s own head and the misread `s` fragment end up excluded: ${parsed.excludedHeads}") {
-            parsed.excludedHeads shouldBe setOf("a", "s")
-        }
+        parsed.excludedHeads shouldBe setOf("a")
 
         val rejections = QueryCompiler.compile(source, catalog)
             .shouldBeInstanceOf<CompileResult.Rejected>().rejections
-        withClue(
-            "stated limit: t's genuine UNKNOWN_PREDICATE for zz is hidden by the mis-taint: $rejections",
-        ) {
-            rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.SYNTAX_ERROR)
+        rejections.map { it.code } shouldBe listOf(RejectionCode.SYNTAX_ERROR, RejectionCode.UNKNOWN_PREDICATE)
+    }
+
+    @Test
+    fun `exclusion limit - a fragment that closes before its terminator and fails inside is still recorded`() {
+        // The residue QueryParser's "Exclusion of unparseable heads" states (computenet-6atl9):
+        // `s(X X).` closes and is followed by '.', so it is equally a statement after a missing
+        // terminator whose arguments are malformed; recovery resumes there and its head is
+        // recorded.
+        val parsed = QueryParser.parse("a(X) :- r(X) s(X X).", catalog("r" to 1))
+            .shouldBeInstanceOf<ParseResult.Rejected>()
+        withClue("stated limit: ${parsed.excludedHeads}") {
+            parsed.excludedHeads shouldBe setOf("a", "s")
         }
     }
 

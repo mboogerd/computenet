@@ -84,8 +84,9 @@ import civictech.query.schema.Catalog
  * **Synchronization rule.** [Parser.recover] first checks the exact token the failure left it
  * on — never a token reached later by skipping — against [Parser.canStartStatement]: an
  * identifier immediately followed by `(` (a rule or definition head), `define` followed by an
- * identifier, or `@` followed by an identifier (an aggregate-annotated rule). If it matches,
- * recovery consumes nothing and [program] attempts that token as a fresh statement. Otherwise
+ * identifier, or `@` followed by an identifier (an aggregate-annotated rule), where a bare
+ * identifier start must also pass the bounded head-atom lookahead described under "A missing
+ * comma versus a missing terminator" below. If it matches, recovery consumes nothing and [program] attempts that token as a fresh statement. Otherwise
  * it falls back to skipping token-by-token to the next `.` (consumed) or EOF, exactly as if no
  * statement-start check existed. The check fires once, at the failure point only, rather than
  * on every token skipped: a construct like unbounded nesting fails deep inside an *unclosed*
@@ -105,25 +106,27 @@ import civictech.query.schema.Catalog
  * terminates. [ParseResult.Rejected] therefore carries every statement's rejection together
  * with the *partial* query of the statements that did parse ([QRY1-REJECT-10]).
  *
- * ## A missing comma is indistinguishable from a missing terminator
+ * ## A missing comma versus a missing terminator
  *
- * [Parser.canStartStatement]'s one-token check cannot tell "the token after a missing comma,
- * mid-body" from "the token after a missing terminator, a genuine following statement" — both
- * leave [Parser.recover] on the identical `IDENT '('` shape (computenet-6atl9). Resolving the
- * missing-terminator cascade (computenet-cab.5.3) by resuming at that token whenever it
- * satisfies [Parser.canStartStatement] is exactly what makes a missing comma inside a body
- * re-parse the rest of the body as a second, independent statement instead of folding it into
- * the first one's own [RejectionCode.SYNTAX_ERROR]: `foo(X) :- r(X) baz(Y).` yields both a
- * [RejectionCode.SYNTAX_ERROR] for `foo` (at the missing comma) and a second rejection for the
- * re-parsed `baz(Y)` fragment — two rejections for one bad statement, where cab.5-D7 asks for
- * two only when the source genuinely holds two statements. No one-token lookahead resolves
- * this: the fix for the cascade (stop resyncing at a token that already looks like a fresh
- * head) and the fix for this double report (keep consuming as the failed statement's own
- * debris) select opposite actions from the identical token sequence, and [recover] cannot know
- * which the source meant without parsing further ahead than the failure token it is required to
- * stop at. This is a stated limit, not an oversight; `civictech.query.diag.RejectionTest`'s
- * `` `SYNTAX_ERROR limit - a missing comma mid-body resynchronises as a second statement,
- * doubling the rejection` `` pins the shape.
+ * At the failure token alone, "a body atom after a missing comma" and "a genuine statement
+ * after a missing terminator" are the identical `IDENT '('` shape (computenet-6atl9), and the
+ * missing-terminator cascade fix (computenet-cab.5.3) needs [Parser.recover] to resume there. So
+ * for a bare `IDENT '('` start, [Parser.recover] also reads ahead — without skipping, and
+ * without moving the position — to that atom's closing `)`, and resumes only when the atom
+ * closes before any `.` and is followed by `.` or `:-`, the only tokens a rule head can be
+ * followed by. Debris that continues the body (`foo(X) :- r(X) baz(X), s(X).`) or never closes
+ * (`a(X) :- r(X) s(X, .`) cannot begin a statement, so it is skipped to the `.` as part of the
+ * failed statement and yields no second rejection.
+ *
+ * The residue is a genuine ambiguity, not a lookahead shortfall: `foo(X) :- r(X) baz(Y).` is,
+ * token for token, also `foo(X) :- r(X)` missing its `.` followed by the fact `baz(Y).`, so no
+ * amount of lookahead can tell which the author meant. It resumes at `baz` like any statement
+ * after a missing terminator, and yields a [RejectionCode.SYNTAX_ERROR] for `foo` plus the
+ * fragment's own rejection — two rejections where cab.5-D7 asks for one if the author meant a
+ * missing comma. This is a stated limit; `civictech.query.diag.RejectionTest`'s
+ * `` `SYNTAX_ERROR limit - a missing comma before a final atom resynchronises as a second
+ * statement, doubling the rejection` `` pins it, and `` `SYNTAX_ERROR - a missing comma before
+ * a continuing body is one rejection` `` pins the shape the lookahead separates.
  *
  * ## Order-dependent aggregates
  *
@@ -166,18 +169,16 @@ import civictech.query.schema.Catalog
  * excluded — a stated limit, not a soundness gap, since a whole-query rejection was already
  * going to happen from the unparseable statement's own [RejectionCode.SYNTAX_ERROR].
  *
- * A resynchronised fragment that is itself debris from a missing comma (the previous section)
- * still runs through [Parser.recoverableHead] like a genuine statement when it fails again:
- * `a(X) :- r(X) s(X, .` misreads its own body debris `s(X, .` as a fresh statement, which then
- * fails on its own unbalanced `(` and lexically recovers `s` for
- * [ParseResult.Rejected.excludedHeads] — even when `s` is also the head of an unrelated,
- * well-formed statement elsewhere in the source. That statement is then wrongly tainted and any
- * dependent of it excluded instead of evaluated on its own account, hiding whatever rejection
- * the dependent would otherwise have earned (computenet-6atl9). This over-exclusion is the same
- * one-token-lookahead limit as the double report above, applied to
- * [ParseResult.Rejected.excludedHeads] rather than to the rejection list;
- * `civictech.query.diag.RejectionTest`'s `` `exclusion limit - a mis-recovered resync fragment's
- * head can taint an unrelated statement in excludedHeads` `` pins it.
+ * Missing-comma debris that continues the body or never closes is skipped rather than resumed
+ * (the section "A missing comma versus a missing terminator"), so it never reaches
+ * [Parser.recoverableHead] (computenet-6atl9): `a(X) :- r(X) s(X, .` records only `a`, and an
+ * unrelated well-formed `s(X) :- r(X).` elsewhere is not tainted.
+ * `civictech.query.diag.RejectionTest`'s `` `exclusion - a failing fragment after a missing
+ * comma does not taint an unrelated statement's head` `` pins it. A resumed fragment is still
+ * recorded when it fails *inside* an atom that closes and is followed by `.` or `:-` —
+ * `a(X) :- r(X) s(X X).` records `s` — because that text is equally a statement after a
+ * missing terminator whose own arguments are malformed, the same ambiguity the double report
+ * above has; this over-exclusion needs two faults in one statement and is a stated limit.
  */
 object QueryParser {
 
@@ -395,7 +396,7 @@ object QueryParser {
          * why continuous re-checking misfires on nested constructs.
          */
         private fun recover(allowResync: Boolean) {
-            if (allowResync && canStartStatement()) return
+            if (allowResync && canStartStatement() && headAtomEndsAtBoundary()) return
             while (!at(TokenKind.EOF) && !at(TokenKind.DOT)) advance()
             if (at(TokenKind.DOT)) advance()
         }
@@ -411,6 +412,34 @@ object QueryParser {
             (atKeyword("define") && peek(1).kind == TokenKind.IDENT) ||
                 (at(TokenKind.AT) && peek(1).kind == TokenKind.IDENT) ||
                 (at(TokenKind.IDENT) && peek(1).kind == TokenKind.LPAREN)
+
+        /**
+         * The bounded lookahead [recover] adds to [canStartStatement] for a bare `IDENT '('`
+         * start (computenet-6atl9): the atom's parenthesis run must close before any `.` or EOF,
+         * and the token after its `)` must be `.` or `:-` — the only tokens that can follow a
+         * rule head. A body atom after a missing comma is followed by `,` (more body) or never
+         * closes, and neither can begin a statement, so that debris is skipped as part of the
+         * failed statement instead of being re-parsed, and its name never reaches
+         * [ParseResult.Rejected.excludedHeads]. `true` for the `define`/`@` starts, which this
+         * check does not concern. Reads ahead without moving [pos]; the scan stops at the first
+         * `.` or EOF, so it cannot run past the failed statement's own terminator.
+         */
+        private fun headAtomEndsAtBoundary(): Boolean {
+            if (!(at(TokenKind.IDENT) && peek(1).kind == TokenKind.LPAREN)) return true
+            var i = pos + 2
+            var open = 1
+            while (open > 0) {
+                when (tokens[minOf(i, tokens.size - 1)].kind) {
+                    TokenKind.LPAREN -> open++
+                    TokenKind.RPAREN -> open--
+                    TokenKind.DOT, TokenKind.EOF -> return false
+                    else -> Unit
+                }
+                i++
+            }
+            val after = tokens[minOf(i, tokens.size - 1)].kind
+            return after == TokenKind.DOT || after == TokenKind.IMPLIES
+        }
 
         /**
          * Recovery after a failure inside [aggregate] (`allowResync = false`, computenet-l3338).
