@@ -3,6 +3,8 @@ package civictech.query.architecture
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.File
 
@@ -15,12 +17,12 @@ import java.io.File
  * `civictech.oracle.model.ReferenceOp` documents for its own independence, per
  * `oracle/src/main/kotlin/civictech/oracle/model/ReferenceOp.kt`).
  *
- * The `civictech.query.ref` package does NOT exist yet — this task does not create it (git
- * tracks no empty directory) — so the live-tree scan below passes vacuously. The gate is
- * proven ARMED by the synthetic-source negative controls, following the feature's own
- * example: a scratch file importing `civictech.cell.data.op.FilterCell` must be flagged. The
- * BatchEvaluator feature that later populates `civictech.query.ref` inherits this test
- * already red-when-violated.
+ * The gate is proven ARMED by the synthetic-source negative controls, following the feature's
+ * own example: a scratch file importing `civictech.cell.data.op.FilterCell` must be flagged.
+ * Since computenet-cab.6.1 populated `civictech.query.ref` (`BatchEvaluator`, `RelationValue`)
+ * the live-tree scan is no longer vacuous: it asserts the package directory exists and that it
+ * scanned at least two `.kt` files, so a moved or renamed package fails the scan instead of
+ * passing it with zero files read.
  *
  * Plain-JUnit source-text scan (cab.1-D2, no ArchUnit) — same technique as
  * `NoCellClassArchitectureTest` and `civictech.oracle.ModuleDependencyTest`.
@@ -73,16 +75,16 @@ class RefImportBoundaryTest {
     }
 
     @Test
-    fun `QRY1 §ORA-03 the civictech-query-ref package scans clean or is absent`() {
+    fun `QRY1 §ORA-03 the civictech-query-ref package exists and scans clean`() {
         val root = File("src/main/kotlin/civictech/query/ref")
-        // computenet-cab.1.3 does not create civictech.query.ref (git tracks no empty
-        // directory), so today this scans zero files and passes vacuously — the gate's
-        // arming is proven above by the synthetic-source controls, not by this scan. Written
-        // to scan real files rather than assert absence so a later feature that populates the
-        // package inherits an already-live gate instead of a test that has to be rewritten.
-        if (!root.isDirectory) return
+        withClue("civictech.query.ref must exist at ${root.absolutePath} — a missing package is a vacuous scan, not a pass") {
+            root.isDirectory shouldBe true
+        }
 
         val ktFiles = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        withClue("civictech.query.ref scanned ${ktFiles.map { it.name }} — a scan of fewer than two files is vacuous") {
+            ktFiles.size shouldBeGreaterThanOrEqual 2
+        }
         val offenders = ktFiles.flatMap { file ->
             classify(file.readText()).map { import -> "${file.path}: $import" }
         }

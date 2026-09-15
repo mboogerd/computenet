@@ -109,6 +109,15 @@ class ExprInterpreterTest {
         combine(Row(listOf(1, 2)), Row(listOf(2, 3))) shouldBe Row(listOf(1, 2, 3))
     }
 
+    @Test
+    fun `RowCombine reads a null left value, not the right row, for a column only the left carries`() {
+        // computenet-67vnx: a left row whose value for a left-only column is null must not fall
+        // through to the right row. leftColumns=[K,A,B], rightColumns=[K,Z], outputColumns=[K,A,B,Z]
+        // mirrors the bug's q(K,B,Z) :- j(K,A,B), c(K,Z). over a left-outer-join-padded j.
+        val combine = RowCombine(listOf("K", "A", "B"), listOf("K", "Z"), listOf("K", "A", "B", "Z"))
+        combine(Row(listOf(1, 10, null)), Row(listOf(1, 5))) shouldBe Row(listOf(1, 10, null, 5))
+    }
+
     // ---- RowCombinePadded ----
 
     @Test
