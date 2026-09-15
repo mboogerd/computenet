@@ -18,6 +18,9 @@ package civictech.query.diag
  *   `civictech.query.plan.Planner`'s preconditions (computenet-cab.5.1, cab.5-D6).
  * - [ORDER_DEPENDENT_AGGREGATE] — the text parser, re-attributed from [SYNTAX_ERROR]
  *   (computenet-cab.5.3, [QRY1-SEM-05]).
+ * - [BAG_SEMANTICS_REQUIRED] — `civictech.query.plan.BagSemantics`, run by
+ *   `civictech.query.QueryCompiler` before and after planning (computenet-cab.5.2,
+ *   [QRY1-SEM-02], [QRY1-SEM-04]).
  *
  * [Rejection] pairs a [RejectionCode] with a [Locus] (offending source span, statement, or
  * plan node) and a `specId` naming the spec text, gap marker, or roadmap item that forbids
@@ -141,4 +144,22 @@ enum class RejectionCode {
      * [QRY1-SEM-05]
      */
     ORDER_DEPENDENT_AGGREGATE,
+
+    /**
+     * The query's answer would differ between bag and set semantics, and the operator algebra
+     * is set-semantic (`[QRY1-SEM-01]`; weighted/bag semantics is owned by 96 §E6 / 95 R17).
+     * Two producers, both in `civictech.query.plan.BagSemantics`:
+     *
+     * - an `EXCEPT ALL` / `UNION ALL` / `INTERSECT ALL` set operation in a `define` statement,
+     *   located at that statement (`[QRY1-SEM-04]`); and
+     * - a `COUNT`, `SUM` or `AVG` `GroupAggregate` whose input is not key-preserving per the
+     *   planner's `[QRY1-PLAN-06]` annotation, located at that plan node (`<root>/<n>:<kind>`)
+     *   and naming the lost row key or the relations with no declared row key
+     *   (`[QRY1-SEM-02]`). `MIN`, `MAX`, `TOP_K` and `COLLECT_TO_SET` never produce it.
+     *
+     * Never a distinct-semantics approximation compiled in its place.
+     *
+     * [QRY1-SEM-02], [QRY1-SEM-04], [QRY1-REJECT-01]
+     */
+    BAG_SEMANTICS_REQUIRED,
 }

@@ -7,6 +7,7 @@ import civictech.query.ast.Query
 import civictech.query.ast.Rule
 import civictech.query.ast.Term
 import civictech.query.diag.RejectionCoverage.catalog
+import civictech.query.diag.RejectionCoverage.keyed
 import civictech.query.lower.Lowering
 import civictech.query.parse.ParseResult
 import civictech.query.parse.QueryParser
@@ -110,6 +111,43 @@ class RejectionTest {
         codes shouldBe setOf(RejectionCode.UNPLANNABLE_STATEMENT)
     }
 
+    @Test
+    fun `exceptAll is refused with the bag-semantics code`() {
+        // BS-1 ([QRY1-SEM-04], [QRY1-REJECT-01], [QRY1-REJECT-04]).
+        val source = "define h(X) := r(X) except all s(X)."
+        val catalog = catalog("r" to 1, "s" to 1)
+        val world = SimWorld(seed = 43)
+        var published = 0
+        world.registry.onPublish { published++ }
+
+        val result = QueryCompiler.compile(source, catalog)
+
+        withClue("an EXCEPT ALL compile must not be Compiled (no GraphSpec exists by type)") {
+            (result is CompileResult.Compiled) shouldBe false
+        }
+        val rejection = result.shouldBeInstanceOf<CompileResult.Rejected>().rejections.single()
+        rejection.code shouldBe RejectionCode.BAG_SEMANTICS_REQUIRED
+        rejection.locus shouldBe spansOf(source, catalog).definitionSpan(0)
+        rejection.specId shouldStartWith "[QRY1-SEM-04] EXCEPT ALL"
+        rejection.specId shouldContain "[24-OP-SEMIJOIN-01]"
+        rejection.specId shouldContain "96 §E6 / 95 R17"
+        world.runToIdle() shouldBe 0
+        withClue("cells published on the host after a rejected EXCEPT ALL compile") { published shouldBe 0 }
+    }
+
+    @Test
+    fun `BAG_SEMANTICS_REQUIRED - every registered producer is refused with the bag-semantics code alone, naming the owners`() {
+        RejectionCoverage.producers.getValue(RejectionCode.BAG_SEMANTICS_REQUIRED).forEach { producer ->
+            val rejections = withClue(producer.name) {
+                producer.compile().shouldBeInstanceOf<CompileResult.Rejected>().rejections
+            }
+            withClue("${producer.name} -> $rejections") {
+                rejections.map { it.code } shouldBe listOf(RejectionCode.BAG_SEMANTICS_REQUIRED)
+                rejections.single().specId shouldContain "owners: 96 §E6 / 95 R17"
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ NO_LOWERING mapping
 
     @Test
@@ -121,7 +159,7 @@ class RejectionTest {
             q(X) :- c(X, N).
             t(X) :- r(X, Y), Y = "three".
             """.trimIndent(),
-            catalog("r" to 2),
+            keyed(Triple("r", 2, listOf(0))),
         )
         val rejections = result.shouldBeInstanceOf<CompileResult.Rejected>().rejections
         rejections.map { it.code } shouldBe listOf(RejectionCode.NO_LOWERING, RejectionCode.NO_LOWERING)
@@ -139,7 +177,10 @@ class RejectionTest {
         var published = 0
         world.registry.onPublish { published++ }
 
-        val result = QueryCompiler.compile("q(X) :- nope(X).\n@count c(X, N) :- r(X, N).\nu(X) :- c(X, N).", catalog("r" to 2))
+        val result = QueryCompiler.compile(
+            "q(X) :- nope(X).\n@count c(X, N) :- r(X, N).\nu(X) :- c(X, N).",
+            keyed(Triple("r", 2, listOf(0))),
+        )
 
         result.shouldBeInstanceOf<CompileResult.Rejected>()
         world.runToIdle() shouldBe 0
@@ -168,7 +209,9 @@ class RejectionTest {
             dep(X) :- q(X), r(X, X).
             ok(X) :- r(X, Y).
         """.trimIndent()
-        val catalog = catalog("r" to 2)
+        // `r` is keyed so the COUNT's input is key-preserving: this test is about the three
+        // phases above, not BAG_SEMANTICS_REQUIRED.
+        val catalog = keyed(Triple("r", 2, listOf(0)))
         val spans = spansOf(source, catalog)
 
         val rejections = QueryCompiler.compile(source, catalog).shouldBeInstanceOf<CompileResult.Rejected>().rejections

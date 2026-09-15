@@ -17,6 +17,7 @@ import civictech.query.parse.SafetyAnalysis
 import civictech.query.parse.SpanTable
 import civictech.query.parse.WellFormednessAnalysis
 import civictech.query.parse.WellFormednessAnalysis.Statement
+import civictech.query.plan.BagSemantics
 import civictech.query.plan.Planner
 import civictech.query.run.CompiledQuery
 import civictech.query.schema.Catalog
@@ -27,8 +28,9 @@ import civictech.query.schema.Catalog
  * `Rejected`; no phase is allowed to throw on a query an earlier phase could have rejected.
  *
  * **Phases (cab.5-D2).** parse → well-formedness ([WellFormednessAnalysis]) → safety
- * ([SafetyAnalysis]) → plan ([Planner]) → plan-level semantics (the set/bag and aggregate
- * sibling tasks plug in between planning and lowering) → lowering ([Lowering]). Every phase
+ * ([SafetyAnalysis]) → `ALL` set operations ([BagSemantics.refuseAllSetOps]) → plan
+ * ([Planner]) → plan-level semantics ([BagSemantics.refuseLossyAggregates]) → lowering
+ * ([Lowering]). Every phase
  * appends to one rejection list, and the result is `Rejected(all)` iff that list is non-empty
  * ([QRY1-REJECT-10]).
  *
@@ -51,7 +53,8 @@ import civictech.query.schema.Catalog
  *
  * **No side effect ([QRY1-REJECT-04]).** Neither overload takes a host, and
  * [CompileResult.Rejected] carries no `GraphSpec`: a rejection cannot have spawned a cell.
- * A plan-node locus of a [RejectionCode.NO_LOWERING] rejection names the node in the plan of
+ * A plan-node locus of a [RejectionCode.NO_LOWERING] or plan-level
+ * [RejectionCode.BAG_SEMANTICS_REQUIRED] rejection names the node in the plan of
  * the reduced query; exclusion removes whole head predicates' dependents, so a root that is
  * planned keeps its own numbering unless one of its own rules was excluded.
  */
@@ -107,10 +110,18 @@ object QueryCompiler {
         val cyclic = RuleGraph.of(remaining.query).cycles().flatten().toSet()
         remaining = remaining.excluding(safety.mapNotNull { remaining.statementOf(it) } + remaining.statementsWithHeadIn(cyclic))
 
+        // ALL set operations ([QRY1-SEM-04]): refused and excluded here, so the planner's own
+        // ALL guard is never reached.
+        val bagSetOps = BagSemantics.refuseAllSetOps(remaining.query, remaining.spans)
+        rejections += bagSetOps.map { remaining.toOriginal(it) }
+        remaining = remaining.excluding(bagSetOps.mapNotNull { remaining.statementOf(it) })
+
         // Plan: every reachable Planner precondition is fenced above.
         val plan = Planner.plan(remaining.query)
 
-        // Plan-level semantic analyses (set/bag, order-dependent aggregates) append here.
+        // Plan-level semantics: a COUNT/SUM/AVG over a non-key-preserving input ([QRY1-SEM-02]).
+        // Lowering still runs over the whole plan, so its independent refusals are reported too.
+        rejections += BagSemantics.refuseLossyAggregates(plan)
 
         // Lowering: every refusal is its own NO_LOWERING rejection ([QRY1-REJECT-06]).
         return when (val lowered = Lowering.lower(plan, query.catalog)) {
