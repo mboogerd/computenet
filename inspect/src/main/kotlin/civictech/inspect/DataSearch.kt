@@ -129,6 +129,13 @@ internal class DataSearch(
 ) {
 
     /**
+     * The inspector's one routed bounded read (KRD-27) — the same source
+     * `InspectorServer`'s default `reads` is, so this search resolves a ref to
+     * a read exactly as `GET state` does.
+     */
+    private val reads: BoundedReadSource = BoundedReadSource.routed(registry)
+
+    /**
      * Run one bounded content search. A blank query matches nothing and queries
      * nothing — the same rule `name` mode follows, and here it also means an
      * empty submit never spends a single host read.
@@ -315,7 +322,8 @@ internal class DataSearch(
      * One cell's state — since V1C-BE, **one bounded page** of it.
      *
      * An open observation answers for free; otherwise the host is asked for one
-     * page through `ManagedHost.readState`, abandoned if it does not land inside
+     * page through `ManagedHost.readState` (routed, since KRD-27, by
+     * [BoundedReadSource.routed]), abandoned if it does not land inside
      * [withinMs] — a slow or wedged cell costs this search its remaining budget,
      * never the whole request, and never the graph. The deadline discipline is
      * M5's verbatim: the `isDone` short-circuit for a read that never reached a
@@ -328,9 +336,15 @@ internal class DataSearch(
      */
     private fun read(ref: CellRef, withinMs: Long): Read {
         observed(ref)?.let { return Read.State(it.value) }
-        val host = registry.locate(ref) ?: return Read.None
+        // KRD-27 recorded exception: exactly ONE page per cell, deliberately not
+        // the kernel's walk loop. This search reads one bounded page under its
+        // budget and reports `partial` from `next != null` (see [classify]); it is
+        // not a walk and must not become one — the class KDoc's "What it costs"
+        // paragraph is why (a page-by-page walk re-creates the whole copy). The
+        // routing itself is the primitive's, via [BoundedReadSource.routed]:
+        // null (a Remote placement) and NOT_HOSTED are both Read.None.
         val request = StateRead(limit = SEARCH_PAGE_LIMIT, allowWholeCopy = true)
-        val pending = host.readState(ref, request)
+        val pending = reads.readState(ref, request) ?: return Read.None
         // completed inline for every refusal the kernel decides on the caller's
         // thread: no host task was ever submitted, so this is a cheap skip
         // rather than an abandoned read

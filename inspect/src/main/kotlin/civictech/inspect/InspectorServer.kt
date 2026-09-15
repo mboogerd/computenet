@@ -295,11 +295,17 @@ class InspectorServer internal constructor(
 
     /**
      * V1C-BE — the **bounded** read seam (see [BoundedReadSource]), wired by
-     * default to [ManagedHost.readState]: `registry.locate(ref)` is null for a
-     * cell with no local host (mirrored, remote, or unknown) and this resolves
-     * to null without ever reaching a host, which is exactly the
-     * "this seam did not answer" case [PagedState] falls through to [snapshots]
-     * on.
+     * default (KRD-27) to [BoundedReadSource.routed], i.e. the kernel's routed
+     * read `civictech.cell.observe.readRouted`: a held ref is answered
+     * `MIGRATING`, a locally hosted one by its host's own
+     * [ManagedHost.readState] future, and a ref this registry does not place at
+     * all by `NOT_HOSTED` — which [PagedState.unreadableOf] renders as
+     * `unreadable: "remote"`, the same word the older fallback produced for it.
+     * The one exception is a [LocationRegistry.Remote] placement: `routed`
+     * pre-checks it and answers null, the "this seam did not answer" case
+     * [PagedState] falls through to [snapshots] on, so a peer-published cell
+     * keeps its "remote" rather than the primitive's "migrating" (see the
+     * KRD-27 comment in `routed`).
      *
      * The deadline is **not** applied here — [PagedState] owns it, so one
      * request spends exactly one bounded wait and a miss is reported as
@@ -311,9 +317,7 @@ class InspectorServer internal constructor(
      * its own after construction, and [PagedState] reads through this field
      * rather than capturing today's value.
      */
-    internal var reads: BoundedReadSource = BoundedReadSource { ref, request ->
-        registry.locate(ref)?.readState(ref, request)
-    }
+    internal var reads: BoundedReadSource = BoundedReadSource.routed(registry)
 
     /**
      * V1C-BE — the paged `GET /cell/{ref}/state` (see [PagedState]), and the
@@ -668,8 +672,12 @@ class InspectorServer internal constructor(
                         ?: CellState(
                             ref = encoded,
                             kind = CellState.UNAVAILABLE,
-                            // the bounded seam answers null exactly when this
-                            // registry places no local host for the ref
+                            // since KRD-27 the default bounded seam answers
+                            // null only for a LocationRegistry.Remote placement
+                            // (an unplaced ref is answered NOT_HOSTED upstream);
+                            // a caller that installed BoundedReadSource.Unavailable
+                            // also lands here. locate == null is REMOTE for both:
+                            // no local host
                             unreadable = if (locations.locate(ref) == null) CellState.REMOTE else CellState.UNKNOWN,
                         ),
                 )
