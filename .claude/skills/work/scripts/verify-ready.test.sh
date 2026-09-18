@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "12 passed, 0 failed".
+# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "13 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-ready.sh"}
@@ -19,18 +19,16 @@ case "$1" in
 esac
 STUB
 chmod +x "$ROOT/bin/bd"
-# Fixture: CTRL/refs holds one origin branch name per line that exists here;
-# CTRL/merged holds those already contained in origin/main.
-cat > "$ROOT/bin/git" <<'STUB'
+# Fixture: CTRL/prstate holds the PR state `gh pr list --head <branch>` returns
+# (MERGED / CLOSED / OPEN), or is empty for "no PR state available". PR state,
+# not git ancestry: a squash merge leaves the branch tip a non-ancestor of main,
+# so an ancestry check reports every landed branch as unmerged.
+cat > "$ROOT/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-case "$1 $2" in
-  "rev-parse --verify") grep -qx "${4#refs/remotes/origin/}" "$CTRL/refs" ;;
-  "merge-base --is-ancestor") grep -qx "${3#origin/}" "$CTRL/merged" ;;
-  *) exit 0 ;;
-esac
+cat "$CTRL/prstate"
 STUB
-chmod +x "$ROOT/bin/git"
-: > "$ROOT/refs"; : > "$ROOT/merged"
+chmod +x "$ROOT/bin/gh"
+: > "$ROOT/prstate"
 export PATH="$ROOT/bin:$PATH" CTRL="$ROOT"
 
 pass=0; fail=0
@@ -72,17 +70,20 @@ note "no base_branch emits no base note" t6 "READY t6"
 [ "$(sh "$SCRIPT" t6 | wc -l)" -eq 1 ] && { pass=$((pass+1)); echo "  PASS silent when the field is unset"; }   || { fail=$((fail+1)); echo "  FAIL emitted a base note with no base_branch"; }
 
 echo "feature/computenet-lioe" > "$ROOT/base.t6"
-printf 'feature/computenet-lioe\n' > "$ROOT/refs"
-printf 'feature/computenet-lioe\n' > "$ROOT/merged"
+echo MERGED > "$ROOT/prstate"
 note "a merged base_branch is STALE, not trusted" t6 "STALE-BASE"
-# The silent-failure shape: the ref still EXISTS on origin after the merge.
+# The silent-failure shape: the branch still EXISTS on origin after the merge,
+# and its tip is NOT an ancestor of main, because merges here are squashes.
 note "still READY despite the stale base" t6 "READY t6"
 
-: > "$ROOT/merged"
-note "an unmerged base_branch is LIVE" t6 "LIVE-BASE"
+echo CLOSED > "$ROOT/prstate"
+note "a closed-unmerged base_branch is STALE too" t6 "STALE-BASE"
 
-: > "$ROOT/refs"
-note "a base_branch with no local ref is UNCHECKED, not assumed" t6 "UNCHECKED-BASE"
+echo OPEN > "$ROOT/prstate"
+note "an open base_branch is LIVE" t6 "LIVE-BASE"
+
+: > "$ROOT/prstate"
+note "no PR state is UNCHECKED, not assumed either way" t6 "UNCHECKED-BASE"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -90,12 +90,21 @@ for id in "$@"; do
   base=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
          | jq -r '.[0].metadata.base_branch // empty' 2>/dev/null || true)
   [ -n "$base" ] || continue
-  if ! git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null 2>&1; then
-    echo "    UNCHECKED-BASE base_branch=$base: no origin/$base here; fetch, or check its PR state by hand"
-  elif git merge-base --is-ancestor "origin/$base" origin/main 2>/dev/null; then
-    echo "    STALE-BASE base_branch=$base is already on origin/main: clear the field, cut from origin/main, and say so on the bead"
-  else
-    echo "    LIVE-BASE base_branch=$base is not yet on origin/main: cut from it and target the PR at it"
-  fi
+  # The branch's PR STATE, not its git ancestry. A squash merge writes a new
+  # commit that is not a descendant of the branch tip, so
+  # `git merge-base --is-ancestor origin/<base> origin/main` is FALSE for every
+  # branch this repo has ever landed — measured on friction/computenet-pwb9 and
+  # friction/computenet-wfgba, both merged, both reported "not ancestor". An
+  # ancestry check here would have been a no-op for the exact case it was
+  # written for, and its stubbed tests passed anyway because the stub encoded
+  # the same misunderstanding.
+  state=$(gh pr list --head "$base" --state all --limit 1 --json state \
+          --jq '.[0].state // empty' 2>/dev/null || true)
+  case "$state" in
+    MERGED) echo "    STALE-BASE base_branch=$base has MERGED: clear the field, cut from origin/main, and say so on the bead" ;;
+    CLOSED) echo "    STALE-BASE base_branch=$base's PR is CLOSED unmerged: do not cut from it; decide the base by hand" ;;
+    OPEN)   echo "    LIVE-BASE base_branch=$base is open: cut from it and target the PR at it" ;;
+    *)      echo "    UNCHECKED-BASE base_branch=$base: no PR state available; check it by hand before cutting" ;;
+  esac
 done
 exit $any_ready
