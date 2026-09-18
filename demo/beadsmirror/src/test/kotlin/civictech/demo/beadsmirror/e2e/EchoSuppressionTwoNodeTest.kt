@@ -103,6 +103,21 @@ import java.util.UUID
  * or await condition of clauses 2/3 changed; what changed is that their
  * precondition is now established instead of assumed.
  *
+ * **Three samples, in order, same harness and machine.** 2/20 unfixed; 3/20
+ * with `mutate` alone — and the failures had MOVED: two of the three were the
+ * final `bd show` on the dialer reading 1 while everything upstream had
+ * converged to 2, an instantaneous read of a store whose own applier was
+ * still mid-pass, which is why that line is now a bounded await like the
+ * listener's beside it; **0/12 with both changes.** 0/12 is not a proof of
+ * absence — at the ~10-15% per-run rate measured above, a 12-run sample comes
+ * back clean about a quarter of the time by chance — so this is recorded as a
+ * rate that dropped below what the slot could resolve, not as a flake shown
+ * to be gone. The residual shape to watch for is run 2's third failure: the
+ * genuine-edit classification await timing out with the dialer's checkpoint
+ * at head and 0 records classified, i.e. `mutate`'s head-advance satisfied by
+ * the applier's own import commit rather than by the edit (see
+ * [TwoNodeRig.mutate]'s stated limit).
+ *
  * Guarded exactly like [WriteBackTwoNodeTest] and [TwoNodeRigTest]:
  * green-but-**skipped** where `bd`/`dolt` are not on PATH.
  */
