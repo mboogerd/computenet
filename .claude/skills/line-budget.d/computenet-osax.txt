@@ -33,6 +33,8 @@ work +6
 #
 # The +6 is the prose that mechanism cannot carry: 5a saying the field is a
 # snapshot to validate rather than metadata to obey, and review.md telling the
-# FILER not to set it when the subject will reach main soon — record a
-# dependency on the green PR instead. That second half is what stops the field
-# being written stale in the first place, and no script can decide it.
+# FILER not to set it when the subject will reach main soon — when its PR is
+# ready and green, leave the field unset and let the residual be cut from main
+# after the merge, which is the normal path anyway. That second half is what
+# stops the field being written stale in the first place, and no script can
+# decide it.
