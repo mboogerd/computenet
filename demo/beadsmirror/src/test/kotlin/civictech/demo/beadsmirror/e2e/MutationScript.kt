@@ -30,9 +30,11 @@ import civictech.demo.beadsmirror.projector.MirrorEdge
  *    itself is an excluded field on both sides (design amendment 1,
  *    [civictech.demo.beadsmirror.baseline.BaselineBuilder.EXCLUDED_FIELDS]).
  * 7. `update A --set-metadata k=v` — an ordinary metadata edit, reaching the
- *    feed as `to_metadata`. Deliberately **not** a `cn_dot` key: echo-drop is
- *    [civictech.demo.beadsmirror.projector.EchoDropTest]'s business, and the
- *    last step of the script must be one that does produce a diff row, so the
+ *    feed as `to_metadata`. Deliberately **not** a `cn_dot`/`cn_echo` key: echo
+ *    classification is
+ *    [civictech.demo.beadsmirror.projector.EchoGateTest]'s business (feature
+ *    computenet-6wc.3 replaced the BDS1 echo *drop* this line used to name), and
+ *    the last step of the script must be one that does produce a diff row, so the
  *    checkpoint can reach the workspace head (the poller advances it to the
  *    last *record's* commit, not to head).
  *

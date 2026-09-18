@@ -5,6 +5,7 @@ import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.feed.DoltFeedPoller
 import civictech.demo.beadsmirror.feed.FeedCheckpoint
 import civictech.demo.beadsmirror.feed.FeedCondition
+import civictech.demo.beadsmirror.projector.Classification
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
@@ -60,11 +61,13 @@ sealed interface RebaselineReason {
  * Something the mirror did that an operator or a test needs to observe, as a
  * typed value.
  *
- * Sealed so a consumer's `when` stays exhaustive as more outcomes are added;
- * today re-baselining is the only one — an ordinary incremental resume is
- * deliberately *not* an event, because the whole point of rule 5 is that a
- * rebuild is distinguishable from a resume, and a resume that also emitted an
- * event would blur exactly that line.
+ * Sealed so a consumer's `when` stays exhaustive as more outcomes are added.
+ * Today there are three — a re-baseline ([Rebaselined]), a dead poll loop
+ * ([PollLoopDied]) and one echo classification per feed record
+ * ([RecordClassified]). An ordinary incremental resume is deliberately *not* an
+ * event, because the whole point of rule 5 is that a rebuild is distinguishable
+ * from a resume, and a resume that also emitted an event would blur exactly
+ * that line.
  *
  * **Every event names the workspace it came from** ([workspaceIdentity], task
  * computenet-3bso.1.1). One process now hosts N workspace mirrors sharing one
@@ -96,6 +99,33 @@ sealed interface MirrorEvent {
         val reason: RebaselineReason,
         val headCommit: String,
         val issueCount: Int,
+        override val workspaceIdentity: String,
+    ) : MirrorEvent
+
+    /**
+     * One feed record was classified by the mirror's
+     * [civictech.demo.beadsmirror.projector.EchoGate] (feature
+     * computenet-6wc.3 clause 5, decision 6wc.3-D6) — emitted for **every**
+     * record, echo and local alike, because a suppression nobody can observe
+     * is a suppression nobody can debug.
+     *
+     * [cnDot] and [cnEcho] are the record's `metadata` provenance as it
+     * arrived, whether or not it took part in the decision: the classification
+     * turns on `cn_echo`'s two diff sides plus a pending expectation, so
+     * reporting the raw values is what makes a misclassification readable
+     * without re-querying Dolt. Both are `null` on an ordinary local edit that
+     * never went through the applier.
+     *
+     * This is the module's highest-volume event by far — one per record, not
+     * one per anomaly — which is why it carries no derived state and does no
+     * work beyond naming what it saw.
+     */
+    data class RecordClassified(
+        val commitHash: String,
+        val issueId: String,
+        val classification: Classification,
+        val cnDot: String?,
+        val cnEcho: String?,
         override val workspaceIdentity: String,
     ) : MirrorEvent
 }

@@ -34,7 +34,7 @@ import org.junit.jupiter.api.Test
  *
  * Two halves, matching `DoltCommitFeedTest`'s split:
  * - [OverHandBuiltRows] drives every translation rule (field exclusion, edge
- *   key names, metadata/cn_dot rebuild, ordinals, determinism) over
+ *   key names, stamped metadata, ordinals, determinism) over
  *   hand-written export lines — no `bd`, no `dolt`, so it is a real CI gate.
  * - [AgainstAScratchWorkspace] runs the whole path against a real
  *   `bd --sandbox init` workspace, which is the only way to know the export's
@@ -158,35 +158,35 @@ class BaselineBuilderTest {
         }
 
         /**
-         * The export's `metadata` rides both ways: as an ordinary field key
-         * (the feed carries a `metadata` column too) and as the record's
-         * `newMetadata`, which is what rebuilds the projector's held-dot
-         * registry through its normal admits path. The observable proof is that
-         * a later feed record carrying that same cn_dot is echo-dropped.
+         * Feature computenet-6wc.3 clause 4: **a baseline row is never gated.**
+         * A row the write-back applier stamped carries `cn_dot`/`cn_echo` in
+         * its `metadata`, and the baseline projects that `metadata` as an
+         * ordinary field like any other column — it builds no suppression state
+         * (there is none to build since decision 6wc.3-D5 removed the held-dot
+         * registry) and it withholds nothing.
+         *
+         * The two tests this replaced asserted the opposite: that a baseline
+         * row's `cn_dot` was *registered*, so a later feed record carrying it
+         * was dropped. That is exactly the false positive the feature removed —
+         * the stamp is durable, so every later genuine edit of that row carries
+         * it.
          */
         @Test
-        fun `metadata rebuilds the cn_dot registry through the projector's own admits path`() {
-            val withDot = """{"id":"ws-a","status":"open","metadata":{"cn_dot":"src-9:41"}}"""
+        fun `a stamped baseline row projects metadata as an ordinary field and gates nothing`() {
+            val stamped =
+                """{"id":"ws-a","status":"open","metadata":{"cn_dot":"src-9:41","cn_echo":"tok-1"}}"""
 
-            val projector = builder.build(rows(withDot), "headhash", 7)
+            val projector = builder.build(rows(stamped), "headhash", 7)
 
             projector.view().getValue("ws-a").keys shouldContainExactly setOf("id", "metadata", "status")
-            projector.echoDropCount shouldBe 0
+            projector.view().getValue("ws-a")["metadata"] shouldBe
+                """{"cn_dot":"src-9:41","cn_echo":"tok-1"}"""
 
-            projector.apply(echoRecord("ws-a", "src-9:41", height = 8))
+            // and a later feed record on that same row — the shape the removed
+            // rule dropped forever — applies in full.
+            projector.apply(laterEditOn("ws-a", "src-9:41", height = 8))
 
-            projector.echoDropCount shouldBe 1
-            projector.view().getValue("ws-a")["status"] shouldBe "\"open\"" // unchanged by the echo
-        }
-
-        @Test
-        fun `a record whose cn_dot the baseline did not hold is still applied`() {
-            val projector = builder.build(rows(beta), "headhash", 7)
-
-            projector.apply(echoRecord("ws-b", "someone-else:1", height = 8))
-
-            projector.echoDropCount shouldBe 0
-            projector.view().getValue("ws-b")["status"] shouldBe "\"in_progress\""
+            projector.view().getValue("ws-a")["status"] shouldBe "\"in_progress\""
         }
 
         /**
@@ -250,8 +250,12 @@ class BaselineBuilderTest {
             builder.build(rows(*many.toTypedArray()), "headhash", 7).view().size shouldBe 4096
         }
 
-        /** A feed-shaped record carrying [cnDot] as its provenance — the echo the baseline should already hold. */
-        private fun echoRecord(issueId: String, cnDot: String, height: Long) = ChangeRecord(
+        /**
+         * A feed-shaped record on a row the applier stamped: the stamp sits on
+         * `newMetadata` unchanged, which is precisely what a later genuine
+         * `bd update` on a stamped row looks like.
+         */
+        private fun laterEditOn(issueId: String, cnDot: String, height: Long) = ChangeRecord(
             commitHash = "commit-$height",
             position = FeedPosition(height, 0),
             issueId = issueId,

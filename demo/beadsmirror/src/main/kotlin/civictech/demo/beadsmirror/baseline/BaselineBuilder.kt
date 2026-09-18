@@ -22,11 +22,21 @@ import kotlinx.serialization.json.JsonPrimitive
  * synthesised into one [DiffType.ADDED] [ChangeRecord] and fed through a
  * FRESH [MirrorProjector] by its ordinary [MirrorProjector.apply] path. That
  * reuse is the whole design: the presence key at slot 0, one `TaggedMapDelta`
- * per issue, the dependency `SetCell` adds, the cn_dot echo-drop registry
- * rebuild and every dot-packing rule fall out unchanged, so a baselined mirror
- * and a feed-replayed one are the same object built by the same code. A
- * separate "load state directly" path would be a second implementation of the
- * projection rules, drifting silently.
+ * per issue, the dependency `SetCell` adds and every dot-packing rule fall out
+ * unchanged, so a baselined mirror and a feed-replayed one are the same object
+ * built by the same code. A separate "load state directly" path would be a
+ * second implementation of the projection rules, drifting silently.
+ *
+ * **A baseline record never passes an echo gate** (feature computenet-6wc.3,
+ * decision 6wc.3-D4). `apply` is called directly here, and
+ * [civictech.demo.beadsmirror.projector.EchoGate] sits on the *poller's* path
+ * only. So a row whose `metadata` carries the applier's `cn_dot`/`cn_echo`
+ * stamp projects that `metadata` as an ordinary field like any other, and
+ * rebuilds no suppression state of any kind — there is none to rebuild since
+ * the BDS1 held-dot registry was removed (decision 6wc.3-D5). Gating the
+ * baseline would be wrong twice over: an export row is not a commit, and its
+ * stamp is the *durable* one every stamped row carries forever, not the mark of
+ * a commit this mirror just produced.
  *
  * **Baseline records mint AT the head height, and nothing else ever does.**
  * The head commit is *consumed* by the baseline — the checkpoint handed to the
