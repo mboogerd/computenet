@@ -149,6 +149,18 @@ def main(argv):
         print(USAGE)
         print("  --expect-classes takes a COUNT, not a class list, and may "
               "go before or after the paths")
+        # The exit codes, not the counts, are what callers branch on, and the
+        # whole point of this tool is that these outcomes must not be read as
+        # one another. Printing them here is what stops that costing a read of
+        # the file — which is exactly what --help exists to avoid.
+        print("exit: 0 counted (failures included — read the numbers)")
+        print("      2 bad usage, or a path that does not exist "
+              "(NEVER the same answer as NO-RESULTS)")
+        print("      3 an xml file would not parse "
+              "(an unreadable result is not a pass)")
+        print("      4 NO xml files matched at all (NO-RESULTS)")
+        print("      6 fewer result files than --expect-classes "
+              "(SHORT-COVERAGE)")
         return 0
     # THE SILENTLY-DROPPED-FILTER CHECK (computenet-xt0b). Measured on this
     # build: `:gen:test --tests <real> --tests <nonexistent> --rerun` prints
