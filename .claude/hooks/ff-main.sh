@@ -11,7 +11,8 @@
 # firing at that moment would have run a stale `work` skill for a whole 5h
 # slot, because its session worktree is cut from local main.
 #
-# Wired as a SessionStart hook in .claude/settings.json.
+# Wired as a SessionStart hook in both .claude/settings.json and
+# .codex/hooks.json.
 #
 # SAFETY — this must never surprise a human working in that checkout, and must
 # never fail a session start. It no-ops unless ALL of these hold:

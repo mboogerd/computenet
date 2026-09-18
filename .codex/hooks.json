@@ -34,6 +34,17 @@
           }
         ],
         "matcher": "startup|resume|clear"
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/ff-main.sh\"",
+            "statusMessage": "Refreshing the main checkout when safe",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume|clear"
       }
     ],
     "UserPromptSubmit": [
