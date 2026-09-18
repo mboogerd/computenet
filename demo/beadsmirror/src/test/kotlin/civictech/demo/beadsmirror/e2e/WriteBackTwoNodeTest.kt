@@ -228,6 +228,12 @@ class WriteBackTwoNodeTest {
         // nothing, gossips nothing, and therefore provokes no further write —
         // the dialer's `dolt_log` is identical, commit for commit, across the
         // quiescent window.
+        //
+        // CAVEAT: this asserts that suppression did not BREAK quiescence; it is
+        // not evidence that suppression is what produces it. An un-suppressed
+        // echo re-mints the same value, so the planner's next pass is a NoOp and
+        // adds no commit either. The discriminating evidence for suppression is
+        // [EchoSuppressionTwoNodeTest]'s dot and classification assertions.
         dialer.logHead() shouldBe logAtConvergence
     }
 

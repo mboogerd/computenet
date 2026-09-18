@@ -43,7 +43,10 @@ import java.util.UUID
  *
  * - "the dialer's own imposition is stamped, recognised and never re-minted"
  *   — clause 1's `dolt_diff_issues` half, clause 2 whole, clause 4 whole
- *   (6wc.3-D8's 8-poll-interval quiescence window, on both nodes).
+ *   (6wc.3-D8's 8-poll-interval quiescence window, on both nodes). Clause 4's
+ *   `dolt_log`/`PreFlight` half is a **weak** discriminator — see the caveat
+ *   beside those assertions; the clause-2 block is what would go red if
+ *   suppression stopped working.
  * - "a genuine dialer edit on a stamped row is local and converges the
  *   listener" — clause 3, the no-false-positive regression, deliberately run on
  *   a row the applier has ALREADY stamped. That is the case decision 6wc.3-D5
@@ -205,6 +208,19 @@ class EchoSuppressionTwoNodeTest {
         // A bounded sleep, not an await: this is a NEGATIVE assertion (nothing
         // further happens), which awaitUntil cannot express. 8 poll intervals
         // is decision 6wc.3-D8's constant.
+        //
+        // CAVEAT — this half is a WEAK discriminator, and nothing below should
+        // be read as evidence that suppression is what keeps the logs still.
+        // An un-suppressed echo re-mints a dot carrying the SAME value, so the
+        // next planner pass still finds fold == export, emits NoOp, and runs no
+        // import: no PreFlight, no Dolt commit. So these four assertions hold
+        // with the gate disabled too (verified by review, 2026-09-18: under
+        // `EchoGate.classify -> always LOCAL` the earlier dot assertions fire
+        // first and these are never reached). What actually discriminates
+        // suppression is the clause-2 block above — the classification, the
+        // winning dot's source and the un-advanced high-water counters. These
+        // are kept because clause 4 states quiescence as an observable the
+        // feature must not break, not because they detect its absence.
         Thread.sleep(rigOrFail.pollIntervalMs() * QUIESCENT_POLL_INTERVALS)
 
         listener.logHead() shouldBe listenerLog
