@@ -102,9 +102,10 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
      *
      * It does **not** promise that a *reader* can see it yet. The commit is
      * observed through a `dolt sql` subprocess, and that process's own start
-     * cost is the whole of the delay: 187-710 ms idle, up to 31.5 s under this
-     * module's suite, up to 130 s at load ~300 — i.e. one read can outlast a
-     * 30 s convergence budget by itself. A test that mutates and then waits on
+     * cost is the whole of the delay: 184-710 ms idle and up to 31.5 s under
+     * this module's suite (and 130 s to a changed head at load ~300, on a
+     * coarser probe — see that KDoc) — i.e. one read can outlast a 30 s
+     * convergence budget by itself. A test that mutates and then waits on
      * anything downstream of the feed must therefore wait for the commit to
      * be READ, not merely for this call to return:
      * [civictech.demo.beadsmirror.e2e.TwoNodeRig.mutate] is that wait.

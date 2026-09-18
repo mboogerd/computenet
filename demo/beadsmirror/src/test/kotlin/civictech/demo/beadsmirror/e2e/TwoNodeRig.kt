@@ -242,11 +242,18 @@ class TwoNodeRig private constructor(
      *   window in which a finished `dolt sql` reports the old head.
      * - **The observed lag is exactly one reader invocation.** `observe - bd
      *   exit` equalled that single `dolt sql` call's own wall time to the
-     *   millisecond, and ranged **187-710 ms idle, 489 ms-31.5 s under the
-     *   module's own suite, 23-130 s at load ~300** — i.e. a SINGLE `dolt sql`
-     *   process start on a contended host can outlast [AWAIT_CONVERGENCE_MS]
-     *   on its own. (`bd` itself stretched the same way: 0.5-5.4 s under the
-     *   suite, up to 216 s at load ~300.)
+     *   millisecond, and ranged **184-710 ms idle and 489 ms-31.5 s under the
+     *   module's own suite** — i.e. a SINGLE `dolt sql` process start on a
+     *   contended host can outlast [AWAIT_CONVERGENCE_MS] on its own. (`bd`
+     *   itself stretched the same way: 0.5-5.4 s under the suite.)
+     * - **The load ~300 run is coarser evidence, stated as such.** It reports
+     *   23-130 s to a changed head (and `bd` up to 216 s), but it came from
+     *   the earlier probe, which recorded neither commit timestamps nor a
+     *   poll count and ran with a second `bd` writer in the same workspace.
+     *   There the figure is "time until some read returned a changed head",
+     *   and its zero-loss count cannot exclude that the noise writer's commit
+     *   is what satisfied the check. The commit-before-exit and one-read
+     *   findings above rest on the reader-only samples (idle, under-suite).
      *
      * So the vacuous-`quiesce` failure is a reader that has not caught up, not
      * a writer that has not written — and in the poller's case an in-flight
@@ -283,7 +290,7 @@ class TwoNodeRig private constructor(
      *   feed and folds to the same value.
      * - **Non-rig e2e tests** — `MultiWorkspaceMirrorTest`,
      *   `CrossWorkspaceResolutionTest`, `DivergenceControlTest`,
-     *   `TwoJvmMirrorTest`, `PullRebaselineTest`. They drive workspaces that
+     *   `ScriptedSequenceTest`, `TwoJvmMirrorTest`. They drive workspaces that
      *   no `TwoNodeRig.Node` owns, so there is no `Node` to wait on; their own
      *   waits are over a single app's fold, where the same read-path lag shows
      *   up as an ordinary slow convergence rather than as a vacuous `quiesce`.
@@ -299,7 +306,15 @@ class TwoNodeRig private constructor(
      * then awaits equal folds. The creates want [createIssue]; the schedule
      * driver additionally needs `ScheduleStep.apply` to take a [Node] rather
      * than a bare workspace, which is why it is a separate item and not a
-     * two-line edit.
+     * two-line edit. `PullRebaselineTest` belongs here too, and NOT in the
+     * immune list above: it *is* a rig test — it passes
+     * [civictech.demo.beadsmirror.BdScratchWorkspace.createSyncedPair]'s two
+     * workspaces straight into [create], so the listener node owns
+     * `pair.pusher` — and its `pair.pusher.run("update", a1, "--title", …)`
+     * runs after [startListener]/[startDialer] and is followed immediately by
+     * a `rig.await` on the dialer's fold, which is exactly the non-immune
+     * shape. (Its `createIssue` calls there are pre-start and immune by the
+     * rule above.) Corrected by this bug's feature review, 2026-09-18.
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
