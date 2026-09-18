@@ -89,6 +89,9 @@ class WriteBackApplierTest {
     /** A marker recorded into the same ordered list as the events, so ordering is assertable. */
     private data class ImporterCalled(val row: JsonObject)
 
+    /** An [WriteBackApplier]'s `expectEcho` call, recorded the same way. */
+    private data class EchoExpected(val issueId: String, val token: String)
+
     // --------------------------------------------------------------- the tests
 
     /**
@@ -403,6 +406,127 @@ class WriteBackApplierTest {
             // The destination's own created_at survives untouched — bd's
             // business, not adjudicated here.
             (observed["created_at"] as JsonPrimitive).content shouldNotContain "2020-01-01"
+        }
+    }
+
+    // ------------------------------------------------ 6wc.3-D1..D3: echo seam
+
+    /**
+     * Feature computenet-6wc.3 clause 2: `expectEcho` fires with the EXACT
+     * token the imported row's `metadata.cn_echo` carries, strictly before
+     * the importer runs — the same ordered-trace idiom [R2] uses for
+     * `PreFlight`.
+     */
+    @Test
+    fun `R7 - expectEcho fires with the row's exact cn_echo token strictly before the importer runs`() {
+        BdScratchWorkspace.create().use { ws ->
+            val id = createIssue(ws, "echo order subject")
+            val winner = mapOf(id to winnerFieldsFrom(row(ws, id)).apply { put("priority", "1") })
+
+            val trace = mutableListOf<Any>()
+            val real = BdImport(ws.root)
+            val importer: (JsonObject) -> ImportResult = { row ->
+                trace += ImporterCalled(row)
+                real.importRow(row)
+            }
+
+            val report = WriteBackApplier(
+                { export(ws) },
+                importer,
+                { winner },
+                expectEcho = { issueId, token -> trace += EchoExpected(issueId, token) },
+            ).applyOnce()
+
+            val importIndex = trace.indexOfFirst { it is ImporterCalled }
+            importIndex shouldBeGreaterThan -1
+            val expected = trace.subList(0, importIndex).filterIsInstance<EchoExpected>().single()
+            expected.issueId shouldBe id
+            val importedMetadata = (trace[importIndex] as ImporterCalled).row["metadata"] as JsonObject
+            (importedMetadata.getValue(Provenance.CN_ECHO) as JsonPrimitive).content shouldBe expected.token
+            report.imposed shouldBe 1
+        }
+    }
+
+    /**
+     * Feature computenet-6wc.3 clause 2's other half: a non-zero exit calls
+     * `cancelEcho` with the SAME token `expectEcho` was announced with — the
+     * token never reached bd, so nothing will ever echo it back.
+     */
+    @Test
+    fun `R8 - cancelEcho fires with the same token when the import exits non-zero`() {
+        BdScratchWorkspace.create().use { ws ->
+            val id = createIssue(ws, "echo cancel subject")
+            val winner = mapOf(id to winnerFieldsFrom(row(ws, id)).apply { put("priority", "1") })
+
+            var expectedToken: String? = null
+            var cancelledIssue: String? = null
+            var cancelledToken: String? = null
+
+            val report = WriteBackApplier(
+                { export(ws) },
+                { ImportResult(1, """{"error":"injected"}""", "") },
+                { winner },
+                expectEcho = { _, token -> expectedToken = token },
+                cancelEcho = { issueId, token ->
+                    cancelledIssue = issueId
+                    cancelledToken = token
+                },
+            ).applyOnce()
+
+            report.failed shouldBe 1
+            cancelledIssue shouldBe id
+            cancelledToken shouldBe expectedToken
+        }
+    }
+
+    /**
+     * Criterion 1's echo half against a REAL import: the row that actually
+     * lands in bd carries the exact `cn_echo` token
+     * [WriteBackEvent.Imposed.cnEcho] reports — so a later reader can
+     * correlate the two without re-reading bd.
+     */
+    @Test
+    fun `R9 - a real import reads back Imposed carrying the exact cn_echo that landed in bd`() {
+        BdScratchWorkspace.create().use { ws ->
+            val id = createIssue(ws, "echo readback subject")
+            val winner = mapOf(id to winnerFieldsFrom(row(ws, id)).apply { put("priority", "1") })
+
+            val report = WriteBackApplier.forWorkspace(ws.root, { winner }).applyOnce()
+
+            report.imposed shouldBe 1
+            val imposedEvent = report.events.filterIsInstance<WriteBackEvent.Imposed>().single()
+            val storedMetadata = row(ws, id).json["metadata"] as JsonObject
+            (storedMetadata.getValue(Provenance.CN_ECHO) as JsonPrimitive).content shouldBe imposedEvent.cnEcho
+        }
+    }
+
+    /**
+     * Clause 5 / 6wc.3-D3: the `previouslyFailed` key is computed from the
+     * TOKEN-LESS row, so a fresh (necessarily different) `cn_echo` minted on
+     * a retried pass does not defeat computenet-6wc.1 clause 6 — a failing
+     * winner still produces exactly one importer call across two passes.
+     */
+    @Test
+    fun `R10 - the previouslyFailed key is token-less, so a repeated failure is not re-imported`() {
+        BdScratchWorkspace.create().use { ws ->
+            val id = createIssue(ws, "retry subject")
+            val winner = mapOf(id to winnerFieldsFrom(row(ws, id)).apply { put("priority", "1") })
+
+            var calls = 0
+            val applier = WriteBackApplier(
+                { export(ws) },
+                { calls++; ImportResult(1, """{"error":"injected"}""", "") },
+                { winner },
+            )
+
+            val first = applier.applyOnce()
+            val second = applier.applyOnce()
+
+            first.importerInvocations shouldBe 1
+            second.importerInvocations shouldBe 0
+            calls shouldBe 1
+            second.events.filterIsInstance<WriteBackEvent.Skipped>()
+                .single().reason shouldBe SkipReason.PreviouslyFailed
         }
     }
 }

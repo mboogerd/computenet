@@ -111,8 +111,22 @@ sealed interface WriteBackEvent {
      * not bd's report — so a non-comparable field's stored value (E4
      * rounding, or bd's own immutable `created_at`) is reported rather than
      * adjudicated.
+     *
+     * [cnDot] and [cnEcho] are the stamp this task wove into the imported row
+     * (feature computenet-6wc.3, decisions 6wc.3-D1/D3): [cnEcho] is the
+     * exact token [WriteBackApplier] minted and [expectEcho]-announced for
+     * this invocation; [cnDot] is the provenance value the row carried, or
+     * `null` when the applier was run without a [cnDot] supplier (the
+     * pre-6wc.3 default). Carried here so a later reader — the echo gate,
+     * computenet-6wc.3.1/.3.3 — can correlate this imposition with its own
+     * classification without re-reading bd.
      */
-    data class Imposed(override val issueId: String, val observed: JsonObject) : WriteBackEvent
+    data class Imposed(
+        override val issueId: String,
+        val observed: JsonObject,
+        val cnDot: String?,
+        val cnEcho: String,
+    ) : WriteBackEvent
 
     /** No import was run for this issue; [reason] says which of the two decided cases applied. */
     data class Skipped(override val issueId: String, val reason: SkipReason) : WriteBackEvent

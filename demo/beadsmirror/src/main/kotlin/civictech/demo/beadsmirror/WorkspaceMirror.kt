@@ -11,7 +11,10 @@ import civictech.demo.beadsmirror.feed.FeedCheckpoint
 import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.feed.PollLoopStopped
 import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.EchoExpectations
+import civictech.demo.beadsmirror.projector.EchoGate
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import civictech.demo.beadsmirror.writeback.Provenance
 import civictech.demo.beadsmirror.writeback.WriteBackApplier
 import civictech.demo.beadsmirror.writeback.WriteBackEvent
 import java.nio.file.Path
@@ -102,6 +105,28 @@ class WorkspaceMirror private constructor(
      */
     val writeBackApplier: WriteBackApplier?,
     private val writeBackScheduler: WriteBackScheduler?,
+    /**
+     * This mirror's echo gate (feature computenet-6wc.3, decision 6wc.3-D4):
+     * every batch the poller produces passes through
+     * [EchoGate.admit] before reaching [state]'s projector, and the write-back
+     * applier announces its imports to it through [EchoExpectations].
+     *
+     * **One per mirror, never per projector** (decision 6wc.3-D7). A
+     * re-baseline swaps the projector wholesale ([MirrorState.swap]), and an
+     * expectation registered before that swap must still suppress the commit
+     * that arrives after it — so the gate has to outlive the object the records
+     * are folded into. It is exposed so a test can read [EchoGate.echoCount] /
+     * [EchoGate.localCount] without re-deriving the wiring, and so the applier
+     * wiring (task computenet-6wc.3.3) has one place to reach it.
+     *
+     * Constructed unconditionally, write-back on or off: with no applier
+     * nothing ever calls [EchoExpectations.expectEcho], so every record
+     * classifies [civictech.demo.beadsmirror.projector.Classification.LOCAL]
+     * and the gate is a pass-through that counts. That keeps one code path for
+     * both modes instead of a nullable gate whose absence would have to be
+     * handled in `onBatch`.
+     */
+    val echoGate: EchoGate,
 ) : AutoCloseable {
 
     /**
@@ -278,6 +303,13 @@ class WorkspaceMirror private constructor(
             val state = MirrorState(initial, onSwap = { next -> peering?.rebind(next) })
             peering?.attach(initial)
 
+            // One gate for the life of this mirror — NOT one per projector:
+            // a re-baseline replaces the projector under it, and an
+            // expectation registered before that swap must still suppress the
+            // commit that lands after it (decision 6wc.3-D7). Built BEFORE the
+            // applier because the applier announces its imports to it.
+            val echoGate = EchoGate(identity, onEvent)
+
             // Each mirror writes only to its OWN workspace — that falls out of
             // this being constructed per-[WorkspaceMirror] rather than a
             // process-wide singleton (feature computenet-6wc.1's non-goal: no
@@ -287,6 +319,21 @@ class WorkspaceMirror private constructor(
                     workspaceRoot = workspace,
                     winner = { state.current.view() },
                     onEvent = { event -> onWriteBackEvent(identity, event) },
+                    // The three seams that close feature computenet-6wc.3's
+                    // loop (task computenet-6wc.3.3). Both halves shipped with
+                    // no-op defaults, so until this wiring existed every
+                    // written-back row went out unstamped and every record
+                    // classified LOCAL — the gate was a counting pass-through.
+                    //
+                    // `state.current` is re-read per call rather than captured:
+                    // a re-baseline swaps the projector wholesale, and a
+                    // captured handle would stamp provenance read off a fold
+                    // nothing is folding into any more. The gate itself is
+                    // captured, because it is the one thing that must NOT be
+                    // swapped (6wc.3-D7).
+                    cnDot = { issueId -> Provenance.cnDotOf(state.current.cell.state(), issueId) },
+                    expectEcho = echoGate::expectEcho,
+                    cancelEcho = echoGate::cancelEcho,
                 )
             } else {
                 null
@@ -313,7 +360,13 @@ class WorkspaceMirror private constructor(
                 // [WriteBackScheduler]'s KDoc for the measured reason a
                 // purely onBatch-driven composition cannot observe a
                 // gossip-only winner change at all (task computenet-6wc.1.5).
-                onBatch = { records -> state.current.applyAll(records) },
+                // Every batch passes the echo gate first (feature
+                // computenet-6wc.3, decision 6wc.3-D4): a record this mirror's
+                // own write-back produced is withheld here, so the projector
+                // never mints a dot or gossips a delta for it, while everything
+                // else — including a later genuine edit on a row the applier
+                // stamped earlier — reaches `applyAll` exactly as before.
+                onBatch = { records -> state.current.applyAll(echoGate.admit(records)) },
                 onCondition = { condition ->
                     when (condition) {
                         is FeedCondition.CheckpointGone ->
@@ -361,6 +414,7 @@ class WorkspaceMirror private constructor(
                 peering,
                 writeBackApplier,
                 writeBackScheduler,
+                echoGate,
             )
         }
     }

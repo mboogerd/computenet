@@ -460,10 +460,12 @@ class BeadsMirrorAppTest {
             workspace.flatten()
             val flattenedHead = DoltCommitFeed(workspace.doltRoot).history().last()
 
-            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") { events.size == 2 }
+            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") {
+                events.filterIsInstance<MirrorEvent.Rebaselined>().size == 2
+            }
             app!!.pollerFailure shouldBe null
 
-            val rebuild = events[1] as MirrorEvent.Rebaselined
+            val rebuild = events.filterIsInstance<MirrorEvent.Rebaselined>()[1]
             (rebuild.reason is RebaselineReason.CheckpointGone) shouldBe true
             rebuild.headCommit shouldBe flattenedHead
             Files.readString(runDir.resolve("checkpoint")).trim() shouldBe flattenedHead
@@ -474,12 +476,20 @@ class BeadsMirrorAppTest {
             probe!!.get("/beads/issues/$idC").statusCode() shouldBe 200
 
             // Rule 2's resume half: the next mutation arrives through the
-            // ordinary incremental path — no third re-baseline.
+            // ordinary incremental path — no third re-baseline. Counted over
+            // the Rebaselined events specifically, not over the sink's whole
+            // contents: since feature computenet-6wc.3 (decision 6wc.3-D6) the
+            // same sink also carries one MirrorEvent.RecordClassified per feed
+            // record, so issue D's own record is an event too, and a raw size
+            // here would be asserting "the poller saw nothing", which is the
+            // opposite of what this half checks. The event count is still an
+            // assertion in its own right beside `rebaselineCount` below: that
+            // counter is MirrorState's, this is what reached `onEvent`.
             val idD = workspace.createIssue("Issue D")
             awaitUntil("issue $idD arrives incrementally after the re-baseline") {
                 probe!!.get("/beads/issues/$idD").statusCode() == 200
             }
-            events.size shouldBe 2
+            events.filterIsInstance<MirrorEvent.Rebaselined>().size shouldBe 2
             app!!.state.rebaselineCount shouldBe 2
         }
 
@@ -504,7 +514,9 @@ class BeadsMirrorAppTest {
             workspace.run("delete", idB, "--force")
             workspace.flatten()
 
-            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") { events.size == 2 }
+            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") {
+                events.filterIsInstance<MirrorEvent.Rebaselined>().size == 2
+            }
             app!!.pollerFailure shouldBe null
 
             app!!.state.current.view().keys shouldBe setOf(idA)

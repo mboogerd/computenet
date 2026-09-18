@@ -82,12 +82,30 @@ object ImposedFields {
      *   bd on the way in (E4), so the stored value is bd's business rather
      *   than a failure of the imposition — computenet-6wc.1.3/.1.4. Reported
      *   inside [WriteBackEvent.Imposed.observed], not adjudicated.
+     *
+     * `metadata` is a DIFFERENT exclusion mechanism, not a member of this
+     * set: it stays in [COMPARABLE] (a genuine user-metadata difference is
+     * still a real loss), but [WriteBackPlanner.preflight] strips
+     * [Provenance.STAMP_KEYS] from both sides of it before comparing
+     * (6wc.3-D2, feature computenet-6wc.3) — a whole-field exclusion would
+     * also hide a real user-metadata disagreement, which this task's stamp
+     * keys must never do.
      */
     val NON_COMPARABLE: Set<String> = setOf("created_at", "updated_at")
 
     /** [FIELDS] minus [NON_COMPARABLE] — what [WriteBackPlanner.preflight] actually compares. */
     val COMPARABLE: Set<String> = FIELDS - NON_COMPARABLE
 }
+
+/**
+ * The `metadata` field name, shared by [WriteBackPlanner] (which special-cases
+ * it to weave in [Provenance.CN_DOT] and strip [Provenance.STAMP_KEYS] before
+ * comparing) and [WriteBackApplier] (which merges [Provenance.CN_ECHO] into it
+ * immediately before import). `internal` rather than `private`: both files
+ * need the same literal, and a typo in a second copy would silently create a
+ * field `bd import` never imposes.
+ */
+internal const val METADATA_FIELD: String = "metadata"
 
 /**
  * Raised by [renderForImport] when a fold rendering is not JSON at all — the
@@ -211,14 +229,23 @@ object WriteBackPlanner {
      * does not is never visited here at all: a row absent from the fold is
      * never treated as a deletion (that is feature computenet-6wc.2's
      * boundary).
+     *
+     * [cnDot] supplies feature computenet-6wc.3's provenance stamp: the
+     * `metadata.cn_dot` value to weave into each issue's row, or `null` to
+     * stamp nothing (the default — every pre-6wc.3 caller keeps compiling and
+     * every existing test's expectations hold unchanged, per 6wc.3-D1).
      */
-    fun plan(view: Map<String, Map<String, String>>, export: List<ExportRow>): List<PlanOutcome> {
+    fun plan(
+        view: Map<String, Map<String, String>>,
+        export: List<ExportRow>,
+        cnDot: (issueId: String) -> String? = { null },
+    ): List<PlanOutcome> {
         val exportById = export.associateBy { it.id }
         return view.keys.sorted().map { issueId ->
             val foldFields = view.getValue(issueId)
             val exportRow = exportById[issueId]
             val row = try {
-                buildRow(issueId, foldFields, exportRow)
+                buildRow(issueId, foldFields, exportRow, cnDot)
             } catch (e: UnrenderableFieldException) {
                 return@map PlanOutcome.Unrenderable(issueId, e.field, e.rendering)
             }
@@ -234,14 +261,46 @@ object WriteBackPlanner {
      * destination's [exportRow] carries the field — its absence from [row]
      * clears it on import either way, per measured fact 2). No key outside
      * that set is ever written, regardless of what [exportRow] holds.
+     *
+     * [METADATA_FIELD] is built separately by [buildMetadata], not by the
+     * generic loop below, because it alone gets a value woven in
+     * ([cnDot]) rather than merely rendered.
      */
-    private fun buildRow(issueId: String, foldFields: Map<String, String>, exportRow: ExportRow?): JsonObject {
+    private fun buildRow(
+        issueId: String,
+        foldFields: Map<String, String>,
+        exportRow: ExportRow?,
+        cnDot: (String) -> String?,
+    ): JsonObject {
         val out = LinkedHashMap<String, JsonElement>()
         out[ID_FIELD] = JsonPrimitive(issueId)
         for (field in ImposedFields.FIELDS) {
+            if (field == METADATA_FIELD) continue
             val foldRendering = foldFields[field] ?: continue
             out[field] = renderForImport(field, foldRendering)
         }
+        val metadata = buildMetadata(issueId, foldFields[METADATA_FIELD], cnDot)
+        if (metadata != null) out[METADATA_FIELD] = metadata
+        return JsonObject(out)
+    }
+
+    /**
+     * The imposed row's `metadata`: the fold's own metadata object with
+     * [Provenance.STAMP_KEYS] stripped (6wc.3-D2 — a re-baselined fold's
+     * stale stamp is never re-imposed verbatim), plus [Provenance.CN_DOT] set
+     * to [cnDot]`(issueId)` when that is non-null. `null` — omitting the
+     * field, exactly as before feature computenet-6wc.3 — when the fold
+     * carries no metadata and [cnDot] returns `null`, so every planner test
+     * that never touches `metadata` sees no behaviour change.
+     */
+    private fun buildMetadata(issueId: String, foldRendering: String?, cnDot: (String) -> String?): JsonObject? {
+        val rendered = foldRendering?.let { renderForImport(METADATA_FIELD, it) }
+        val stripped = Provenance.strip(rendered as? JsonObject)
+        val dot = cnDot(issueId)
+        if (stripped == null && dot == null) return null
+        val out = LinkedHashMap<String, JsonElement>()
+        stripped?.let { out.putAll(it) }
+        if (dot != null) out[Provenance.CN_DOT] = JsonPrimitive(dot)
         return JsonObject(out)
     }
 
@@ -266,6 +325,14 @@ object WriteBackPlanner {
      * fields (`created_at`, `updated_at`) are excluded from every comparison
      * this method makes, on both call sites (computenet-6wc.1.6 clause 3).
      *
+     * [METADATA_FIELD] is compared through [Provenance.strip] on BOTH sides
+     * first, and the stripped (never the raw) values are what a resulting
+     * [FieldLoss] carries (6wc.3-D2/D3, feature computenet-6wc.3 clause 3): a
+     * winner whose metadata differs from the export ONLY in
+     * [Provenance.STAMP_KEYS] compares equal here, so it is a [PlanOutcome.NoOp]
+     * or (from the applier's post-import re-read) a successful [WriteBackEvent.Imposed],
+     * and no loss record this method produces ever names a stamp key.
+     *
      * [row]'s value for a field (or its absence) is compared against
      * [exportRow]'s (a JSON `null` on the export side counts as absent, the
      * same convention [civictech.demo.beadsmirror.equality.MirrorExportEquality]
@@ -285,8 +352,13 @@ object WriteBackPlanner {
     fun preflight(row: JsonObject, exportRow: ExportRow?): List<FieldLoss> {
         val losses = mutableListOf<FieldLoss>()
         for (field in ImposedFields.COMPARABLE) {
-            val newValue = row[field]
-            val oldValue = exportRow?.json?.get(field)?.takeUnless { it is JsonNull }
+            val rawNew = row[field]
+            val rawOld = exportRow?.json?.get(field)?.takeUnless { it is JsonNull }
+            val (newValue, oldValue) = if (field == METADATA_FIELD) {
+                Provenance.strip(rawNew as? JsonObject) to Provenance.strip(rawOld as? JsonObject)
+            } else {
+                rawNew to rawOld
+            }
             if (!valuesAgree(newValue, oldValue)) {
                 losses += FieldLoss(field, old = oldValue, new = newValue)
             }

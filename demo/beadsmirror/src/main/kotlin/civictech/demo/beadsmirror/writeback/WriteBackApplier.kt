@@ -3,7 +3,9 @@ package civictech.demo.beadsmirror.writeback
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.ExportRow
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.nio.file.Path
+import java.util.UUID
 
 /** What one [WriteBackApplier.applyOnce] pass did. */
 data class ApplyReport(
@@ -75,12 +77,32 @@ data class ApplyReport(
  * while the winner is unchanged (clause 6 forbids a retry loop that
  * re-adjudicates), while a CHANGED winner produces a different row, misses the
  * set, and is a fresh imposition.
+ *
+ * **Provenance and the echo token (feature computenet-6wc.3, decisions
+ * 6wc.3-D1..D3).** [cnDot] supplies `metadata.cn_dot` -- passed straight
+ * through to [WriteBackPlanner.plan], which weaves it into the built row
+ * before [previouslyFailed]'s key is computed, so a re-stamped-but-otherwise-
+ * identical row still hashes to the same retry key. `cn_echo` is different:
+ * it is minted HERE, immediately before each import, because it must be
+ * unique to that one invocation -- [previouslyFailed]'s key is computed from
+ * the token-LESS row precisely so a `cn_echo` mint never defeats clause 6's
+ * "no retry while the winner is unchanged". Per Impose outcome: [expectEcho]
+ * is called with the fresh token strictly before [importer] runs (so a
+ * concurrent echo-recognizing reader can never observe the written token
+ * before the expectation that explains it); [cancelEcho] is called with the
+ * same token when the import exits non-zero (the token never reached bd, so
+ * nothing will ever echo it back); a zero exit keeps the expectation
+ * standing, whatever the read-back later decides -- a commit landed either
+ * way.
  */
 class WriteBackApplier(
     private val export: () -> List<ExportRow>,
     private val importer: (JsonObject) -> ImportResult,
     private val winner: () -> Map<String, Map<String, String>>,
     private val onEvent: (WriteBackEvent) -> Unit = {},
+    private val cnDot: (issueId: String) -> String? = { null },
+    private val expectEcho: (issueId: String, token: String) -> Unit = { _, _ -> },
+    private val cancelEcho: (issueId: String, token: String) -> Unit = { _, _ -> },
 ) {
 
     /** `(issueId, imposed row JSON text)` pairs whose import has already failed once. */
@@ -99,7 +121,7 @@ class WriteBackApplier(
             onEvent(event)
         }
 
-        for (outcome in WriteBackPlanner.plan(winner(), export())) {
+        for (outcome in WriteBackPlanner.plan(winner(), export(), cnDot)) {
             when (outcome) {
                 is PlanOutcome.NoOp -> {
                     skipped++
@@ -128,12 +150,20 @@ class WriteBackApplier(
                     // Clause 2: the loss record is observable BEFORE the import runs.
                     emit(WriteBackEvent.PreFlight(imposition.issueId, imposition.losses))
 
-                    val result = importer(imposition.row)
+                    // 6wc.3-D3: the echo token is minted per invocation and announced
+                    // BEFORE the importer runs, strictly after `key` above (which stays
+                    // token-less so clause 6's retry suppression is unaffected by it).
+                    val token = UUID.randomUUID().toString()
+                    expectEcho(imposition.issueId, token)
+                    val stampedRow = withEcho(imposition.row, token)
+
+                    val result = importer(stampedRow)
                     invocations++
 
                     if (!result.succeeded) {
                         failed++
                         previouslyFailed += key
+                        cancelEcho(imposition.issueId, token)
                         emit(
                             WriteBackEvent.Failed(
                                 imposition.issueId,
@@ -145,7 +175,9 @@ class WriteBackApplier(
                     }
 
                     // Clause 4's mechanism: ONE post-import re-read decides the
-                    // outcome — never the import report.
+                    // outcome — never the import report. The expectation registered
+                    // above is NOT cancelled here, whatever the read-back decides: a
+                    // commit landed either way (6wc.3-D3).
                     val observed = reRead(imposition.issueId)
                     val failure = readBackFailure(imposition, observed)
                     if (failure != null) {
@@ -156,7 +188,7 @@ class WriteBackApplier(
                     }
 
                     imposed++
-                    emit(WriteBackEvent.Imposed(imposition.issueId, observed!!.json))
+                    emit(WriteBackEvent.Imposed(imposition.issueId, observed!!.json, cnDotIn(stampedRow), token))
                 }
             }
         }
@@ -184,6 +216,26 @@ class WriteBackApplier(
 
     private fun reRead(issueId: String): ExportRow? = export().firstOrNull { it.id == issueId }
 
+    /**
+     * [row] with [Provenance.CN_ECHO] set to [token] inside its `metadata`
+     * object (creating that object when [row] carries none) — the row the
+     * importer actually receives, minted fresh for every import call
+     * (6wc.3-D1/D3). [row] itself is left untouched: `key` and
+     * [Imposition.losses] both continue to read the token-less row.
+     */
+    private fun withEcho(row: JsonObject, token: String): JsonObject {
+        val existingMetadata = row[METADATA_FIELD] as? JsonObject ?: JsonObject(emptyMap())
+        val stampedMetadata = JsonObject(existingMetadata + (Provenance.CN_ECHO to JsonPrimitive(token)))
+        return JsonObject(row + (METADATA_FIELD to stampedMetadata))
+    }
+
+    /** The `metadata.cn_dot` string [row] carries, or `null` when it carries none. */
+    private fun cnDotIn(row: JsonObject): String? {
+        val metadata = row[METADATA_FIELD] as? JsonObject ?: return null
+        val value = metadata[Provenance.CN_DOT] as? JsonPrimitive ?: return null
+        return value.takeIf { it.isString }?.content
+    }
+
     companion object {
 
         /**
@@ -200,10 +252,13 @@ class WriteBackApplier(
             workspaceRoot: Path,
             winner: () -> Map<String, Map<String, String>>,
             onEvent: (WriteBackEvent) -> Unit = {},
+            cnDot: (issueId: String) -> String? = { null },
+            expectEcho: (issueId: String, token: String) -> Unit = { _, _ -> },
+            cancelEcho: (issueId: String, token: String) -> Unit = { _, _ -> },
         ): WriteBackApplier {
             val reader = BdExportReader(workspaceRoot)
             val bdImport = BdImport(workspaceRoot)
-            return WriteBackApplier(reader::read, bdImport::importRow, winner, onEvent)
+            return WriteBackApplier(reader::read, bdImport::importRow, winner, onEvent, cnDot, expectEcho, cancelEcho)
         }
     }
 }
