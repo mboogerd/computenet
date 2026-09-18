@@ -8,6 +8,7 @@ import civictech.demo.allocatorobserve.view.ProjectDrift
 import civictech.demo.allocatorobserve.view.SubIntervalDiff
 import civictech.demo.allocatorobserve.view.TimeRange
 import civictech.demo.allocatorobserve.view.WindowReport
+import civictech.demo.shell.esc
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -226,3 +227,24 @@ fun ServedState.ingestJson(): String = json.encodeToString(IngestDto.serializer(
 
 /** The `report` member alone, for `GET /state/report` — byte-identical to `toJson`'s `report` field. */
 fun ServedState.reportJson(): String = json.encodeToString(ReportDto.serializer(), report.toDto())
+
+/**
+ * The same frozen-fold envelope `AllocatorRoutes`' `/state*` 503 body carries
+ * (fpml.4-D6) — `{"ingest":"frozen","failure":"<class>: <message>","stale_status":200,
+ * "stale":<this document>}` — reused by `AllocatorObserveApp`'s `/events` SSE frame
+ * so a client can tell a frozen fold from a quiet one by the SSE stream alone
+ * (computenet-w20a4). D6's own text ("SSE simply stops receiving frames") covers
+ * only an already-connected subscriber; this is the connect-after-death and
+ * still-connected-at-death cases D6 did not decide.
+ *
+ * Not a call to `AllocatorRoutes`' private `respondFold` — that class is not in
+ * this task's file claim — but byte-for-byte the same shape over the same
+ * [ServedState.toJson] body, built the same way (`esc` on `failure.toString()`).
+ */
+fun ServedState.frozenJson(frozen: PollLoopStopped): String = buildString {
+    append("""{"ingest":"frozen",""")
+    append("\"failure\":").append(esc(frozen.failure.toString()))
+    append(",\"stale_status\":200")
+    append(",\"stale\":").append(toJson())
+    append('}')
+}

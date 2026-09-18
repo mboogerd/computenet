@@ -278,6 +278,70 @@ class AllocatorObserveAppTest {
     }
 
     // -----------------------------------------------------------------
+    // computenet-w20a4 — the /events surface labels a frozen fold, same as
+    // /state's 503 envelope. D6 as written ("SSE simply stops receiving
+    // frames") covers only an already-connected subscriber, and even for that
+    // case never said it gets a signal rather than silence; this closes both
+    // gaps: a client connecting AFTER the loop has died, and one already
+    // connected WHEN it dies.
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `a client connecting to events after the poll loop has died sees the frozen envelope as its initial frame`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }.start()
+
+        broken.set(true)
+        awaitUntil("the poll loop to stop on the broken clock") { app.pollLoopStopped != null }
+
+        // Connects only now — never saw a live frame. A revert to the
+        // unlabelled `holder.current?.toJson()` initial frame would hand this
+        // client the same 3-record document a live fold would, with nothing
+        // to tell the two apart.
+        val tap = tap(app)
+        val initial = tap.awaitAtLeast(1, "the initial frame").first()
+
+        initial.obj("ingest").jsonPrimitive.content shouldBe "frozen"
+        initial.obj("failure").jsonPrimitive.content shouldContain "clock broke"
+        initial.obj("stale").recordCount() shouldBe 3
+    }
+
+    @Test
+    fun `an already-connected events subscriber receives the frozen envelope when the poll loop dies`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }.start()
+
+        val tap = tap(app)
+        tap.awaitAtLeast(1, "the initial frame")
+        tap.frames().first().recordCount() shouldBe 3
+
+        broken.set(true)
+        // Without the death-time broadcast this subscriber would see frames
+        // simply stop arriving — exactly the silence D6 describes as
+        // acceptable for the wrong reason: it never says the client learns
+        // anything. `runCatching` skips frames whose `ingest` is the normal
+        // object (not the frozen string), rather than throwing on them.
+        val frozenFrames = tap.awaitMatching("a frozen frame", timeoutMs = 5_000) { frame ->
+            runCatching { frame.obj("ingest").jsonPrimitive.content == "frozen" }.getOrDefault(false)
+        }
+
+        frozenFrames.shouldNotBeEmpty()
+        val frame = frozenFrames.first()
+        frame.obj("failure").jsonPrimitive.content shouldContain "clock broke"
+        frame.obj("stale").recordCount() shouldBe 3
+    }
+
+    // -----------------------------------------------------------------
     // fpml.4-D7 — re-baseline accounting
     // -----------------------------------------------------------------
 
