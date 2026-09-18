@@ -194,4 +194,69 @@ class WriteBackPlannerTest {
 
         losses shouldBe listOf(FieldLoss("priority", old = JsonPrimitive(3), new = JsonPrimitive(1)))
     }
+
+    // ------------------------------------------------ 6wc.3-D1..D3: provenance stamp
+
+    @Test
+    fun `9 - the built row's metadata carries cn_dot from the supplied lambda`() {
+        val view = mapOf("X" to mapOf("priority" to "1"))
+        val export = listOf(exportRow("""{"id":"X","priority":3}"""))
+
+        val outcomes = WriteBackPlanner.plan(view, export) { "srcA:123" }
+
+        val row = impose(outcomes, "X").imposition.row
+        row["metadata"] shouldBe JsonObject(mapOf(Provenance.CN_DOT to JsonPrimitive("srcA:123")))
+    }
+
+    @Test
+    fun `10 - a fold metadata carrying a stale stamp is stripped before the fresh cn_dot is woven in`() {
+        val view = mapOf(
+            "X" to mapOf(
+                "metadata" to """{"foo":"bar","cn_dot":"stale:1","cn_echo":"stale-tok"}""",
+                "priority" to "1",
+            ),
+        )
+        val export = listOf(exportRow("""{"id":"X","priority":3,"metadata":{"foo":"bar"}}"""))
+
+        val outcomes = WriteBackPlanner.plan(view, export) { "fresh:99" }
+
+        val row = impose(outcomes, "X").imposition.row
+        // Exactly one cn_dot, the fresh one, and no cn_echo (the applier mints that).
+        row["metadata"] shouldBe JsonObject(
+            mapOf("foo" to JsonPrimitive("bar"), Provenance.CN_DOT to JsonPrimitive("fresh:99")),
+        )
+    }
+
+    @Test
+    fun `11 - a winner whose metadata differs from the export ONLY in stamp keys is a NoOp`() {
+        val view = mapOf("X" to mapOf("metadata" to """{"foo":"bar"}"""))
+        val export = listOf(
+            exportRow(
+                """{"id":"X","metadata":{"foo":"bar","cn_dot":"stale:1","cn_echo":"stale-tok"}}""",
+            ),
+        )
+
+        val outcomes = WriteBackPlanner.plan(view, export)
+
+        outcomes shouldBe listOf(PlanOutcome.NoOp("X"))
+    }
+
+    @Test
+    fun `12 - a real user-metadata difference is a loss whose old and new omit every stamp key`() {
+        val view = mapOf("X" to mapOf("metadata" to """{"foo":"baz","cn_dot":"stale:1"}"""))
+        val export = listOf(
+            exportRow("""{"id":"X","metadata":{"foo":"bar","cn_dot":"stale:1","cn_echo":"stale-tok"}}"""),
+        )
+
+        val outcomes = WriteBackPlanner.plan(view, export)
+
+        val outcome = impose(outcomes, "X")
+        outcome.imposition.losses shouldBe listOf(
+            FieldLoss(
+                "metadata",
+                old = JsonObject(mapOf("foo" to JsonPrimitive("bar"))),
+                new = JsonObject(mapOf("foo" to JsonPrimitive("baz"))),
+            ),
+        )
+    }
 }
