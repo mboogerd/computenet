@@ -58,6 +58,31 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     // or the racing [broadcast] blocks until [sse] releases the lock and then
     // is guaranteed to write after it. Either way the newest frame a client
     // has been sent is never followed by an older one.
+    //
+    // **What it costs, stated where the lock is.** This lock is held across the
+    // frame COMPUTATION and across the write to EVERY client, and an SSE write
+    // is an unbounded blocking write into a socket. One client that is still
+    // connected but has stopped reading therefore stalls, for as long as its
+    // socket buffer stays full, BOTH the broadcasting thread — for every demo
+    // here that is the host's single scheduler virtual thread, so the demo's
+    // whole dataflow — and every new connection and every other route, because
+    // `server.executor = null` runs all handlers on one dispatcher thread,
+    // which then blocks in [sse] waiting for this lock. Only the first of those
+    // two stalled before this lock existed; the second is new, and is the price
+    // of the ordering guarantee above. Nothing here bounds the write. The
+    // inspector's `SseBroadcaster` (bounded, drop-oldest per-client queues) is
+    // the shape that does, and is what to reach for if a demo ever serves
+    // clients it does not control.
+    //
+    // **No lock-order inversion exists today, and it is not free.** The only
+    // locks taken *under* this one are each demo's own `state` monitor (inside
+    // the `frame()`/`initialFrame()` lambda) and the per-exchange monitor
+    // (inside [send]). No path takes either of those and *then* takes this one:
+    // every hub/observe callback releases `state` before it calls broadcast,
+    // and an `inlet.call` mutation made while holding `state` only enqueues
+    // onto the host scheduler rather than running the callback inline. A demo
+    // that calls [broadcast] while holding a lock its own frame computation
+    // takes would deadlock against a concurrently connecting client.
     private val clientsLock = Any()
 
     // Set by sse() for its one registration (no demo registers more than one
