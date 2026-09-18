@@ -65,7 +65,10 @@ data class AllocatorObserveConfig(
  * touching F1 at all.
  *
  * [last] is initialised from `delegate.read()` so a restarted process reports
- * the offset it resumed from rather than `null` until its first write, and is
+ * the offset it resumed from rather than `null` until its first write — that
+ * offset is the ONLY thing that crosses a restart today, so reporting it says
+ * nothing about the fold (see [AllocatorObserveApp]'s "A restart is NOT
+ * equivalent to an uninterrupted run") — and is
  * updated AFTER the delegate's write returns, so it never advertises an offset
  * that is not yet persisted.
  *
@@ -115,6 +118,23 @@ class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffset
  * would either have to reach back for state the views do not have, or publish a
  * second, differently shaped document. Building the served state inline after
  * `publish()` returns keeps one writer and one publication point.
+ *
+ * ## A restart is NOT equivalent to an uninterrupted run
+ *
+ * Stated here because this class is where the two halves meet and neither half
+ * says it on its own: the byte-offset checkpoint persists under
+ * `config.runDir`, but both cells this app folds into are **fresh and
+ * in-memory** — `SetCell`'s durability is the kernel's `Stateful`
+ * snapshot/restore seam, which nothing here wires up (`SpendLogIngester`'s
+ * `records` KDoc: a restarted ingester is meant to be "constructed over the
+ * same runDir *and* handed the fold it is resuming into"; this app hands it a
+ * new one). So a second process over the same run directory resumes the tail
+ * *past* the checkpoint into an empty fold, and serves a report over only the
+ * records appended after the restart, with a declaration history missing every
+ * event observed before it. Feature `computenet-fpml.5`'s oracle rule
+ * ("a restart equals an uninterrupted run") therefore cannot hold on this app
+ * as it stands; task `computenet-fpml.5.2` is scoped to make it hold, by a
+ * cold-start whole-file read plus a persisted declaration history.
  *
  * ## Threading
  *

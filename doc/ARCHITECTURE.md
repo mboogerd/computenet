@@ -410,6 +410,10 @@ else `$PORT`, else 8080. See the README for run commands.
   `/state/report` response and no `/events` frame ever mixes pre- and
   post-batch state; the routes are read-only (405 on any non-GET) and answer
   503 with the last good document under `stale` once the poll loop has died.
+  **A restart is not yet equivalent to an uninterrupted run**: the byte-offset
+  checkpoint persists under the run directory but neither cell is durable, so a
+  restarted process resumes the tail past the checkpoint into an empty fold and
+  serves only what arrived after it (`computenet-fpml.5.2` closes this).
   Still to come: the differential oracle against socaity's replay script
   (`computenet-fpml.5` — socaity has implemented neither the log nor the
   script yet, so that comparison is external evidence this module cannot
