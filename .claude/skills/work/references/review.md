@@ -71,7 +71,7 @@ Every claim in your verdict names its artifact: a count, a test name, a sha, or 
 
 Transcripts may be reformatted, have a warning preamble removed, or be cut with an explicit ellipsis. None of that is a defect. A changed value, a reordering the argument depends on, an invented field, or "verbatim" output that cannot be reproduced is a defect.
 
-Every Gradle or npm call follows [agent.md § Running commands](agent.md#running-commands). A build that stalls or dies before the tests run is probably contention, not a defect. See [evidence.md § Flakes and contention](evidence.md#flakes-and-contention), and say which attempt a build result came from.
+Every Gradle or npm call follows [agent.md § Running commands](agent.md#running-commands). A build that stalls, dies before the tests run, or fails in a module your diff cannot reach is probably contention, not a defect — including when it fails an assertion rather than timing out. See [evidence.md § Flakes and contention](evidence.md#flakes-and-contention), and say which attempt a build result came from.
 
 ### Your machine is not CI
 

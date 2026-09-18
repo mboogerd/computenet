@@ -241,12 +241,70 @@ aside after each failing iteration.
 
 **Contention comes from sibling agents** sharing Gradle caches and daemons: a
 run that stalls, times out or dies before tests run is probably not your
-defect. Read `uptime` before each long run.
+defect. Read `uptime` before each long run — but **the load number is not the
+gate**. Contention has been measured producing a red suite at 0.75x cores, far
+under every rung named here, and a moderate load average read as an all-clear
+is what turns a flake into a false finding against good work (computenet-sbgxs).
+
+**The test is reachability, not load, and not the shape of the failure.** A red
+suite in a module your diff does not touch: is there a dependency path from a
+module you changed to the module that failed? Answer it before re-running
+anything — the session that had been told this cleared a red `:inspect` suite in
+one isolated run, where the session that had not spent two full repo-wide runs
+plus a git-history investigation on the same shape.
+
+**Three changes have no honest reachability answer, and a "no path" reading of
+any of them licenses dismissing a real defect:**
+
+- **`:gen`.** `buildSrc`'s `ksp-cell` convention injects `ksp(project(":gen"))`
+  into all 19 modules that apply it, and exactly one of their build files names
+  `:gen`. Generated descriptors are authoritative runtime metadata, so a
+  generator regression's natural manifestation is a wrong value in an arbitrary
+  downstream module — reading build files finds no path and is wrong.
+- **`buildSrc/` itself**, and anything outside every module (`settings.gradle.kts`,
+  `gradle.properties`, shared test resources): "a module you changed" is empty,
+  so the question has no input rather than a negative answer.
+- **Test-scope and `api`-transitive edges**, which a build file's own text does
+  not show. `./gradlew :<module>:dependencies` is the authoritative answer — a
+  configuration-time run needing the sandbox disabled, not a seconds-long read.
+
+Outside those, reading the build files is quick and a genuine "no path" is
+strong evidence. It is never the whole clearing procedure: run the suite alone
+and then the gate, below.
+
+Contention does not only present as a timeout. A generative or property suite
+failing an **assertion** is the same phenomenon and reads exactly like a
+regression, which is why it costs the most: seed 132 of `OrMapGcSafetySweepTest`
+did this at load ~12 on a 16-core host. So does a known flaky seed in an
+untouched suite. Clear it the same way: reachability first, then the suite alone,
+then the whole gate with `--rerun-tasks` — quoting its `N actionable tasks: N
+executed` line, because a plain re-run is mostly cache and proves nothing.
+
+Before you report a red in an untouched module, spend the two reads that
+usually name it — a known flaky seed is recorded far more often than it is
+rediscovered:
+
+```bash
+git log -1 --format='%h %s' -- <path/to/FailingTest.kt>
+bd list --all --json | grep -i -e '<TestName>' -e 'seed <n>'
+```
+
+The first instance found its own answer this way: the file's last commit named
+seed 132 as a known stranded-reorder-frame artifact (`ce9f7d137`,
+computenet-pa5l). Quote whichever names it in your report.
+
+**If it reproduces under load and passes alone, do not stop there.** That is
+also the signature of a genuine race, and "re-run in isolation until it passes"
+is a procedure that discards the only condition under which such a defect is
+observable. Attribute it to an existing flake bead or file one, naming the load
+at which it reproduced; never dismiss it as cleared.
 
 | symptom | do |
 |---|---|
 | a long wait on a Gradle lock, then failure | retry once; name the signature in your report |
 | Kotlin daemon `OutOfMemoryError` | `pkill -f KotlinCompileDaemon`, then retry once — it kills every daemon on the machine, so only for this signature |
-| an `awaitUntil`-style timeout under high load | re-run that suite alone before reporting it |
+| an `awaitUntil`-style timeout, at any load | re-run that suite alone before reporting it |
+| a generative/property suite failing an assertion, in a module your diff cannot reach | the same contention shape as a timeout; clear it by reachability, isolated re-run, then `--rerun-tasks` — and if it passed alone after failing under load, also file or attribute it per the row below. The gate being green and the flake being recorded are both required, not alternatives |
 | a red suite in a module your diff did not touch | your change invalidated its cache and exposed a latent flake; attribute it, do not dismiss it |
-| a wrong value | never contention; it is yours |
+| it reproduces under load and passes alone | a genuine race presents exactly this way; attribute or file it, naming the load — do not record it as cleared |
+| a wrong value in a suite your diff CAN reach | never contention; it is yours |
