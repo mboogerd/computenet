@@ -28,3 +28,26 @@ dependencies {
 application {
     mainClass = "civictech.demo.allocatorobserve.AllocatorObserveAppKt"
 }
+
+// F5's external-oracle channel (computenet-fpml.5.4, fpml.5-D7):
+// `oracle/ExternalOracleComparisonTest` reads its four inputs plus the
+// optional window length from system properties, but `-D` on the
+// `./gradlew` command line reaches Gradle's own JVM, never the test JVM —
+// only `-P` project properties (read here via `providers.gradleProperty`,
+// evaluated at configuration time) survive to invoke a task at all, so each
+// property has to be forwarded explicitly. Same idiom `wire/build.gradle.kts`
+// uses for its own `-D`-to-test-JVM channel, adapted to `-P` because that is
+// what actually reaches a Gradle command line's test run.
+val forwardedOracleProperties = listOf(
+    "allocator.oracle.report",
+    "allocator.oracle.log",
+    "allocator.oracle.declarations",
+    "allocator.oracle.now",
+    "allocator.oracle.windowHours",
+)
+
+tasks.withType<Test>().configureEach {
+    forwardedOracleProperties.forEach { key ->
+        providers.gradleProperty(key).orNull?.let { systemProperty(key, it) }
+    }
+}

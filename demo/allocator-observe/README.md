@@ -192,4 +192,76 @@ sides share a definition cannot detect a mistake in that definition.
 
 ## Running against the socaity replay script
 
-Filled in by the harness task (`computenet-fpml.5.4`).
+**Status as of 2026-09-18: `socaity-9wu` (the replay script) is open and no
+script exists in socaity.dev yet, so the command below has never been run
+against a real script.** `oracle/ExternalOracleComparisonTest` is written and
+gated — see the class KDoc — and `oracle/ExternalHarnessSelfTest` proves its
+plumbing against `oracle/ReferenceReport` standing in for the external
+producer, but that self-test is emphatically not a run of the real
+comparison; do not read a green build of this module as evidence the two
+implementations agree, only as evidence the harness itself works.
+
+### Inputs
+
+The harness needs four values, each an external-oracle Gradle project
+property (`-P`, not `-D` — see `build.gradle.kts`'s forwarding block):
+
+- `allocator.oracle.report` — the `report` exchange document (see "The
+  `report` document" above) that the socaity replay script produced for the
+  same log and history below.
+- `allocator.oracle.log` — the spend log the script was run over, byte for
+  byte the same file.
+- `allocator.oracle.declarations` — the declaration history the script was
+  run over, as a JSON array of `{"observedAt", "declaration": {"weights",
+  "monthlyCapHours", "window"}}` objects, one per observed declaration, in any
+  order:
+
+  ```json
+  [
+    {
+      "observedAt": "2026-08-08T00:00:00Z",
+      "declaration": { "weights": { "computenet": 60, "glass-factory": 40 }, "monthlyCapHours": 100, "window": null }
+    },
+    {
+      "observedAt": "2026-08-12T00:00:00Z",
+      "declaration": { "weights": { "computenet": 30, "glass-factory": 70 }, "monthlyCapHours": 100, "window": null }
+    }
+  ]
+  ```
+
+- `allocator.oracle.now` — the ISO-8601 instant the script published its
+  report at (the window's exclusive upper bound and `cap.now`).
+
+`allocator.oracle.windowHours` is optional and defaults to `168` (one week).
+
+### Command
+
+```
+./gradlew :demo:allocator-observe:test --tests '*ExternalOracleComparisonTest' --rerun \
+  -Pallocator.oracle.report=<file> \
+  -Pallocator.oracle.log=<file> \
+  -Pallocator.oracle.declarations=<file> \
+  -Pallocator.oracle.now=<ISO-8601 instant> \
+  [-Pallocator.oracle.windowHours=168]
+```
+
+### What SKIPPED means, and what CI does with this
+
+Run the module's test task with `-Pallocator.oracle.report` omitted (the
+default: `./gradlew :demo:allocator-observe:test`), and the test is reported
+**skipped**, not passing — `Assumptions.assumeTrue` fails the assumption, and
+JUnit records that as a distinct outcome from green, visible as a `<skipped>`
+element in the result XML. **CI never supplies these properties, so this test
+is always skipped there and CI never claims the external comparison ran.**
+That is deliberate, not a gap to close: the comparison is evidence this
+module cannot produce on its own, and a CI-reported pass with no real
+socaity report behind it would be worse than no evidence at all.
+
+### Reading a divergence
+
+A non-empty divergence list is a finding, not a failure to suppress — either
+side can be wrong. Record it with the input that produced it: file a bead
+under epic `computenet-fpml` naming the exact log line (or declaration event)
+and the `report.<path>` field that diverged, whether the divergence looks
+like a ComputeNet bug or a socaity-script bug, and the command (with its
+input files, or copies of them) that reproduces it.
