@@ -333,23 +333,31 @@ implementer builds on it literally:
 - `acceptance-placement.sh`: MISPLACED → move criteria into the field; ABSENT →
   check the description, then write criteria to [breakdown.md](references/breakdown.md)'s
   standard and say so in the prompt.
-- Test **every claim the bead makes about state outside itself** against the
-  artifact that would show it, not a commit subject: a blocker, a precondition,
-  a prescribed repro, a handoff instruction, a cited baseline or prior
-  measurement, an assertion about what earlier work did or did not establish.
-  That list is illustrative, and deliberately so — enumerating kinds is what
-  let a superseded baseline and a false "prior work never tested this" through
-  (computenet-d5y5); neither is a blocker, a precondition or a repro.
+- Test **every load-bearing claim the bead makes about state outside itself** —
+  one the implementer would act on or build against — for the cost of a grep or
+  a file read, against the artifact that would show it, not a commit subject: a
+  blocker, a precondition, a prescribed repro, a handoff instruction, a cited
+  baseline or prior measurement, an assertion about what earlier work did or
+  did not establish. That list is illustrative, and deliberately so —
+  enumerating kinds is what let a superseded baseline and a false "prior work
+  never tested this" through (computenet-d5y5); neither is a blocker, a
+  precondition or a repro. Background prose nobody will act on is not
+  load-bearing; anything dearer than a grep goes in as `unverified:`
+  ([breakdown.md](references/breakdown.md)).
 - A cited record needs two answers, not one: does it still say what the bead
   says it says, **and is it still the current version of itself?** A superseded
   record usually sits exactly where it was with its original numbers intact,
-  and is corrected by a LATER entry elsewhere in the same file — so grep the
-  corpus for the correction instead of reading only the lines cited. A
-  measurement also carries its host: figures from another machine or JVM are
-  not a baseline for this one, and dispersion is the quantity most sensitive to
-  both. Where they are, authorize a same-host control arm rather than the
-  cross-host comparison. Stale → correct the bead. Only checkable by doing the
-  work → call it a hypothesis in the prompt; disproving it is a result.
+  and is corrected by a LATER entry elsewhere in the record — so search the
+  whole record for a later entry that corrects it, not only the lines cited.
+  Where that record is a bead the correction is a later comment, and where it
+  is a findings journal it is a later entry in the same file.
+- A measurement also carries its host and configuration: figures from another
+  machine, JVM or config are not a baseline for this one, and dispersion is the
+  quantity most sensitive of all. Say so in the prompt as a limit on what the
+  comparison can support, and where a same-host control arm is available
+  authorize that instead — a control arm defeats confounds a single arm cannot
+  even detect. Stale → correct the bead. Only checkable by doing the work →
+  mark it `unverified:` in the prompt; disproving it is a result.
 - Files claim: run `check-files-claim.sh`, then reason about what else must
   change ([breakdown.md](references/breakdown.md), "The files claim"); widen and
   comment why, then amend any acceptance clause the widening contradicts (old
