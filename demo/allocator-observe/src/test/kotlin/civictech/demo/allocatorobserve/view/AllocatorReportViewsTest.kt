@@ -447,6 +447,22 @@ class AllocatorReportViewsTest {
                 // regardless of incidental luck.
                 (fixture.windowStraddler in fixture.finalMembership) shouldBe true
                 (fixture.monthStraddler in fixture.finalMembership) shouldBe true
+
+                // computenet-dyi4i: the intersection this bead targets —
+                // straddles a boundary AND goes through removal/re-add —
+                // pinned directly rather than inferred from finalMembership
+                // alone (which a session that was simply never removed
+                // would also satisfy). Both constructed straddlers must
+                // actually appear in this seed's removed and reAdded
+                // samples, by construction, not by the random draw's luck.
+                withClue("constructed window-straddler (seed=$seed) did not go through removal/re-add") {
+                    (fixture.windowStraddler in fixture.removed) shouldBe true
+                    (fixture.windowStraddler in fixture.reAdded) shouldBe true
+                }
+                withClue("constructed month-straddler (seed=$seed) did not go through removal/re-add") {
+                    (fixture.monthStraddler in fixture.removed) shouldBe true
+                    (fixture.monthStraddler in fixture.reAdded) shouldBe true
+                }
                 val windowStraddlerSession =
                     (sessionOf(fixture.windowStraddler) as? SessionParse.Valid)?.session.shouldNotBeNull()
                 val monthStraddlerSession =
@@ -477,8 +493,7 @@ class AllocatorReportViewsTest {
      * 200 generated records spread across a span that straddles both the UTC
      * month start and the window start, about one in ten of them
      * unattributable (fpml.3-D6), under a three-event declaration history —
-     * plus two fixed sessions, [windowStraddler] and [monthStraddler],
-     * appended after the random draw so they are never subject to removal.
+     * plus two fixed sessions, [windowStraddler] and [monthStraddler].
      *
      * The random draw alone puts a window- or month-straddling session in the
      * fixture only incidentally (computenet-1kuib: measured at seed 5, the
@@ -486,6 +501,16 @@ class AllocatorReportViewsTest {
      * sessions guarantee at least one of each kind BY CONSTRUCTION, for every
      * seed, independent of what the random draw happens to produce — pinned
      * by the count-based assertion in the test above.
+     *
+     * computenet-dyi4i: the random draw also decides, independently, which
+     * records take the removal/re-add path — so a boundary-straddling
+     * session landing in that sample was, before this fixture, left to
+     * chance same as the straddle itself was. [windowStraddler] and
+     * [monthStraddler] are therefore forced into both [removed] and
+     * [reAdded] BY CONSTRUCTION (never into the surviving [dropped] set),
+     * so every seed exercises the removal/re-add path with a
+     * boundary-straddling session, pinned by the membership assertions in
+     * the test above.
      *
      * Every record gets a distinct `ended` instant (the index is added as
      * nanoseconds). That is deliberate: `SessionLedger` indexes sessions by
@@ -518,10 +543,6 @@ class AllocatorReportViewsTest {
                 DeclarationEvent(Instant.parse("2026-08-15T06:00:00Z"), declaration(50.0, 50.0)),
             )
 
-        val removed = records.filter { random.nextInt(5) == 0 }
-        val reAdded = removed.filter { random.nextInt(4) != 0 }
-        val dropped = removed.toSet() - reAdded.toSet()
-
         val windowStraddler =
             record(
                 CN,
@@ -537,6 +558,18 @@ class AllocatorReportViewsTest {
                 "month-straddle-seed$seed",
             )
         val constructed = listOf(windowStraddler, monthStraddler)
+
+        // computenet-dyi4i: `constructed` is appended to the removal pool
+        // and forced into the re-add pool (the `it in constructed` arm
+        // short-circuits before consuming a random draw, so the original
+        // 200 records' removed/reAdded split, and every other random draw
+        // in this method, is unaffected). That guarantees both constructed
+        // straddlers go through the removal/re-add path on every seed,
+        // rather than leaving it to chance whether any randomly-removed
+        // record happens to straddle a boundary.
+        val removed = records.filter { random.nextInt(5) == 0 } + constructed
+        val reAdded = removed.filter { it in constructed || random.nextInt(4) != 0 }
+        val dropped = removed.toSet() - reAdded.toSet()
 
         return Fixture(
             records = records + constructed,
