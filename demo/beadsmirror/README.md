@@ -170,6 +170,21 @@ local, and the gate is a pass-through that counts.
 - **A restart between an import and the poll that would have seen its commit
   loses the pending token.** The start-time re-baseline consumes that commit
   instead, so no phantom follows — but that corner is reasoned, not measured.
+- **An import that exits non-zero AFTER its Dolt commit already landed loses
+  the pending token the same way.** `WriteBackApplier.applyOnce` calls
+  `cancelEcho(issueId, token)` on any non-zero exit, withdrawing the
+  expectation regardless of whether the commit actually happened — `bd`'s exit
+  code is the only signal available, and it does not distinguish "nothing
+  committed" from "committed, then failed on the way out" (a crash, a kill
+  signal, or a post-commit report-writing failure). The poller then sees that
+  commit with no matching expectation and classifies it **local**, minting a
+  fresh dot for it. Same harmless-but-noisy outcome as the restart corner
+  above: the value imposed is the one the mirror itself just wrote, so the
+  fold still converges, just noisily. Empirically, every non-zero exit
+  observed from ordinary `bd import` failures (schema/validation errors,
+  malformed JSONL) happens *before* any commit; whether `bd` can itself exit
+  non-zero after a successful commit in the ordinary (non-killed) case was not
+  settled — this bullet records the corner rather than closing the question.
 - **Multi-hop topologies are out of scope.** Everything above is stated and
   tested for the two-node rig only.
 
