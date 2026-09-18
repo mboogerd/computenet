@@ -107,6 +107,9 @@ for documentation maintenance.
     `demo/backlog-triage/`: incremental dataflow demos (quorum sets, joins,
     score fusion, ranking) that showcase the operator suite and surface kernel
     gaps into `doc/demo-findings.md`.
+  - `demo/social/` (`:demo:social`): LDBC-SNB social graph as four per-key
+    `KeyedCells<Long>` families behind one ingress API (SOC1, epic
+    `computenet-07k`).
 - `inspect/` (`:inspect`): the Inspector backend — a read-only HTTP/SSE view
   of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`);
   consumes `:kernel` and `:demo:shell`, opt-in via `--inspect-port` on
