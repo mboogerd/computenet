@@ -78,21 +78,6 @@ class MirrorProjectorSeamTest {
         newMetadata = if (type != DiffType.REMOVED) metadata(cnDot) else null,
     )
 
-    private fun mapEmissions(cell: OrMapCell<MirrorKey, String>): MutableList<TaggedMapDelta<MirrorKey, String>> {
-        val out = mutableListOf<TaggedMapDelta<MirrorKey, String>>()
-        cell.outlet.subscribe(
-            Use.fixed(
-                object : Propagate<TaggedMapDelta<MirrorKey, String>> {
-                    override fun propagate(value: TaggedMapDelta<MirrorKey, String>) {
-                        out += value
-                    }
-                },
-                PortRef.generate(),
-            )
-        )
-        return out
-    }
-
     private fun setEmissions(cell: SetCell<MirrorEdge>): MutableList<SetDelta<MirrorEdge>> {
         val out = mutableListOf<SetDelta<MirrorEdge>>()
         cell.outlet.subscribe(
