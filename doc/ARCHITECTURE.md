@@ -427,19 +427,20 @@ else `$PORT`, else 8080. See the README for run commands.
   uninterrupted process's fold alone, while a restarted process has nothing to
   re-read and serves an empty report until the log returns (measured; which
   reading is right is undecided because the log's lifecycle is socaity's).
-  Still to come: the differential oracle against socaity's replay script
-  (`computenet-fpml.5` — socaity has implemented neither the log nor the
-  script yet, so that comparison is external evidence this module cannot
-  produce on its own). Feature `computenet-fpml.5` lands both halves of that
-  oracle in `oracle/`: an in-repo differential suite that runs in CI,
-  comparing the served report against `ReferenceReport` — a reference fold
+  Feature `computenet-fpml.5` lands both halves of the differential oracle
+  against socaity's replay script in `oracle/`: an in-repo differential suite
+  that runs in CI, comparing the served report against `ReferenceReport` — a
+  reference fold
   written from the README's exchange-shape section alone, with no import
   from `view`, `http`, `ingest` or `declaration` (`ReferenceIndependenceTest`
   enforces that lexically) — and, task `computenet-fpml.5.4`, the gated
   `oracle/ExternalOracleComparisonTest`, which accepts an oracle report
   produced by socaity's own script via the `allocator.oracle.*` project
   properties and is reported SKIPPED, not passing, whenever that report is
-  absent, so CI never claims the cross-repo comparison ran.
+  absent, so CI never claims the cross-repo comparison ran. That cross-repo
+  half is still to come: socaity has implemented neither the log nor the
+  script yet (`socaity-9wu`), so it is external evidence this module cannot
+  produce on its own.
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.

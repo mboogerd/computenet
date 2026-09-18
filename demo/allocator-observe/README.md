@@ -7,10 +7,10 @@ the allocation actually did — declared versus enacted share per project, the
 drift between them, and cap tracking with a projected month-end burn. Epic
 `computenet-fpml` carries the design: F1 ingest (checkpointed tail reader,
 truncation/replacement detection), F2 declarations, F3 the derived views
-(`view/`), F4 the HTTP/SSE serving over `:demo:shell` (`unverified:` until
-`feature/computenet-fpml.4` merges — it adds `GET /state`, `GET /state/ingest`,
-`GET /state/report` and an `/events` SSE stream), F5 the differential oracle
-this README's next section documents.
+(`view/`), F4 the HTTP/SSE serving over `:demo:shell` (`GET /state`,
+`GET /state/ingest`, `GET /state/report` and an `/events` SSE stream; merged
+to `main` 2026-09-18 as PR #915), F5 the differential oracle this README's next
+section documents.
 
 The log's location is never named in this module's sources; it reaches the
 ingester as a parameter, and `NoHardcodedLogPathTest` keeps it that way.

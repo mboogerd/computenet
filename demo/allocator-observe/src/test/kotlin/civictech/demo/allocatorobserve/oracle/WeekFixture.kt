@@ -109,8 +109,11 @@ val LINES: List<String> = listOf(R1, R2, R3, R4, R5, R6, R7, R8, R9, R10)
 /**
  * The log content after the mid-week re-baseline: the first seven lines are
  * replaced by a five-line corrected file (r1..r4, r5c) and r6..r10 are then
- * appended, so the final content is r1..r4, r5c, r6..r10 — one line shorter in
- * the middle of the week and three enacted hours heavier for `computenet`.
+ * appended, so the final content is r1..r4, r5c, r6..r10 — the same ten lines
+ * as [LINES] but with r5 corrected from two hours to three, which is one
+ * enacted hour heavier for `computenet` (12h straight through, 13h here). The
+ * replacement file itself is five lines and, in bytes, shorter than the seven
+ * it replaces, which is why the re-baseline is detected as a truncation.
  */
 val REBASELINE_FINAL_LINES: List<String> =
     listOf(R1, R2, R3, R4, R5_CORRECTED, R6, R7, R8, R9, R10)
