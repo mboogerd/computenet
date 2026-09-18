@@ -1,0 +1,46 @@
+work +21
+# computenet-d5y5: 5b's re-validate bullet enumerated NOUNS — blocker,
+# precondition, repro, handoff — so a session holding a bead that cites a
+# measurement had no reason to think the bullet addressed it. Two instances got
+# through, neither of which is any of those nouns:
+#
+#  - 2026-08-26 (computenet-x9e.14): the bead quoted a dispersion baseline that
+#    the corpus itself marks superseded, in plain text, in the same file — and
+#    both baselines were measured on another machine, for the quantity most
+#    sensitive to host and JVM. Followed literally it would have published a
+#    cross-host, cross-vendor-JVM comparison against superseded JDK-26 numbers,
+#    looking entirely reasonable. Two agents caught it separately.
+#  - 2026-09-02: "prior work never tested X" relayed into a dispatch prompt as
+#    established fact, in the orchestrator's voice. False — the prior session's
+#    21 preserved logs already contained the experiment. 24 runs bought nothing.
+#
+# So the bullet now leads with the general rule (every claim the bead makes
+# about state outside itself) and keeps the nouns as illustration, which is the
+# remedy the second reporter proposed on the bead.
+#
+# The second bullet is the part the nouns could never have covered: a cited
+# record needs TWO answers — does it still say this, and is it still the current
+# version of itself — because a superseded record keeps its original numbers and
+# is corrected by a later entry elsewhere in the file. Plus the host clause and
+# the same-host control arm, which is what the 08-26 session actually did and
+# which defeated a run-order confound no single sweep could separate.
+#
+# +8 of the +21 came from the review of PR #922, which FAILED the first draft on
+# three counts, all taken:
+#  - the host clause implemented half its acceptance. It named hardware and JVM
+#    but not configuration, said nothing about stating the limit IN THE PROMPT
+#    (which is the whole remedy in the common case where no same-host arm is
+#    available), and buried "a control arm defeats confounds a single arm cannot
+#    even detect" in this ledger, which is a budget file nobody reads at 5b.
+#  - the rule was WIDER than its own acceptance and carried no cost bound:
+#    "every claim about state outside itself" sweeps in background prose for
+#    every bead, every batch. Now "every LOAD-BEARING claim … for the cost of a
+#    grep or a file read", reusing breakdown.md's existing vocabulary. Both
+#    reported instances remain caught; both are load-bearing.
+#  - "grep the corpus" was specific to the one append-only markdown journal it
+#    came from (doc/bench/findings.md), where a correcting entry lands in the
+#    same file. It does not transfer to a bead (a later comment) or a lane (a
+#    later run), and "corpus" already means concord/corpus/ here.
+#
+# Also: the tail now says mark it `unverified:` rather than "call it a
+# hypothesis", which is implement.md's existing machine-checkable marker.
