@@ -1,4 +1,4 @@
-work +30
+work +61
 # computenet-sbgxs: the contention guidance was keyed to ONE symptom (a timeout)
 # and ONE regime (high load). Measured counter-example: a generative property
 # suite failing an ASSERTION at load ~12 on a 16-core host — 0.75x cores, under
@@ -14,7 +14,7 @@ work +30
 # What the lines buy, and why prose rather than a script: the fix is a test an
 # agent applies to a failure it is looking at, and no gate can run it for them.
 #
-# +30 covers four things, each measured rather than reasoned:
+# +61 covers six things, each measured rather than reasoned:
 #  - REACHABILITY stated first, ahead of re-running: "is there a dependency path
 #    from a module I changed to the one that failed" is answerable from the
 #    build files in seconds and is conclusive when the answer is no. The second
@@ -34,3 +34,17 @@ work +30
 # signature of a genuine race, so "re-run in isolation until it passes" is a
 # procedure that discards the only condition under which the defect is
 # observable. Attribute or file it; do not record it as cleared.
+#
+# The last two came from the review of PR #921, which FAILED the first draft:
+#  - the reachability test was stated as CONCLUSIVE on a "no path" answer, which
+#    licenses dismissing a real defect in three cases. Measured: buildSrc's
+#    ksp-cell convention injects ksp(project(":gen")) into all 19 modules that
+#    apply it, and exactly ONE of their build files names :gen — so a generator
+#    regression, whose natural manifestation is a wrong value downstream, reads
+#    as contention. Likewise a buildSrc/settings.gradle.kts change (no module
+#    changed, so the question has no input) and test-scope or api-transitive
+#    edges (not visible in a build file's text). Naming the three, and demoting
+#    "answerable in seconds" to where it is true, is what the extra lines buy.
+#  - the git-history/tracker recipe the acceptance asked for and the first draft
+#    omitted: two reads that usually name a known flaky seed outright, which is
+#    how the first instance found seed 132 in ce9f7d137.
