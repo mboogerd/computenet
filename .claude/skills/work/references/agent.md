@@ -53,6 +53,17 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   daemon started from a sandboxed call survives it and poisons later calls,
   other agents' worktrees included. Run `./gradlew --stop`, then re-run with
   the sandbox disabled.
+- **Never write an unquoted `=` separator between batched commands.** zsh
+  expands an `=`-initial word to that command's path, so `echo ===` fails with
+  `(eval):1: == not found` **and kills every command batched after it** — the
+  later half reads as having run and produced nothing. Quote it (`echo '==='`)
+  or use a `# ---` comment. This is the single most-reported friction from
+  dispatched agents (computenet-wfgba): five hit it independently in one slot,
+  because the separator is written reflexively while batching. **Do not delete
+  this rule to save lines** — it was stated here and in two role references
+  until the 2026-09-14 distillation (`e6ecc3d1`) condensed all three away, and
+  every recurrence since is from the fortnight that followed. The rest of the
+  zsh family is in AGENTS.md "Implementation conventions".
 - Redirect long output to a log in your scratch directory. Proving a test run
   executed is in [evidence.md](evidence.md).
 - Scope your Gradle gate to the modules you touched unless your dispatch
