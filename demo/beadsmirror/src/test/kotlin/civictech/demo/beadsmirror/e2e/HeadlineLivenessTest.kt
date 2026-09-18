@@ -70,8 +70,18 @@ class HeadlineLivenessTest {
 
         // seeded on the listener, before the dialer joins — arrival on the
         // dialer is setup for the edge case below, not itself the assertion.
-        x = rig.listenerWorkspace.createIssue("x")
-        y = rig.listenerWorkspace.createIssue("y")
+        //
+        // Every mutation in this file goes through the rig's own
+        // [TwoNodeRig.createIssue]/[TwoNodeRig.mutate] rather than a bare
+        // `listenerWorkspace.run`/`createIssue` (bug computenet-3zr5k clause
+        // 2): the listener is already started here, so each of these is
+        // followed by a wait on a fold that can only see the edit once it is a
+        // commit a feed has READ — and on a contended host a single `dolt sql`
+        // read can outlast the whole convergence budget on its own. Routing
+        // through the rig makes that a named precondition instead of an
+        // unexplained convergence timeout further down.
+        x = rig.createIssue(listener, "x")
+        y = rig.createIssue(listener, "y")
 
         val dialer = rig.startDialer()
         dialer.quiesce()
@@ -92,7 +102,7 @@ class HeadlineLivenessTest {
         dialerHeadBeforeMutations = dialer.logHead()
 
         // --- the headline mutation: content -------------------------------
-        idHeadline = rig.listenerWorkspace.createIssue("headline")
+        idHeadline = rig.createIssue(listener, "headline")
         rig.await("the headline create reaches the dialer's served fold") {
             dialer.servedStatus(idHeadline) == 200
         }
@@ -101,7 +111,7 @@ class HeadlineLivenessTest {
         }
 
         // --- the structure mutation: a dependency edge ---------------------
-        rig.listenerWorkspace.run("dep", "add", x, y, "--type", "blocks")
+        rig.mutate(listener, "dep", "add", x, y, "--type", "blocks")
         rig.await("the dependency edge reaches the dialer's edge view") {
             dialer.edgeView().contains(MirrorEdge(x, y, "blocks"))
         }
