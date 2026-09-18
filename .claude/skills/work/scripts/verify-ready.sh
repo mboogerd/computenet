@@ -30,7 +30,26 @@
 # (computenet-frxh6: cab.6.5 read READY while QueryCompiler existed only on
 # feature/computenet-cab.5). Such lines are suffixed `[unmerged on <feature>]`.
 #
-# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`.
+# ALSO CHECKS metadata.base_branch, which goes stale within MINUTES of being
+# written. A review-filed residual names the branch under review, and that
+# branch is normally about to merge — that is what the review was for. Five
+# instances (computenet-osax): computenet-4jpd and computenet-dmkp on
+# 2026-08-25, the second stale ~15 minutes after it was written; computenet-
+# 5yavt (PR #870 merged ~2 minutes later); computenet-tlb83 (merged in the same
+# orchestrator turn); and a feature carrying another feature's branch. The
+# failure is SILENT, not loud: a merged branch's ref still exists on origin, so
+# a session that trusts the field gets a plausible worktree cut from spent code
+# and re-derives what main already has. Checked here rather than left to prose
+# because the check has to happen at selection, which is when this runs.
+#
+# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`, plus one
+# note under either when metadata.base_branch is set:
+#   STALE-BASE     its PR has MERGED, or is CLOSED unmerged — do not cut from it
+#   LIVE-BASE      its PR is open — cut from it and target the PR at it
+#   UNCHECKED-BASE no PR state available (no PR, or `gh` failed) — check by hand
+# The notes are advisory and do not change the exit code: an id whose base is
+# stale is still ready, it just has to be cut from origin/main with the field
+# cleared.
 # Exit: 0 = at least one READY; 1 = none ready; 2 = bad usage;
 #       3 = a `bd dep list` (or this id's `bd show`) call failed — NOTHING was checked, do not route
 #           on this (the ready-in-epic.sh exit-3 class).
@@ -70,5 +89,25 @@ for id in "$@"; do
     echo "READY $id"
     any_ready=0
   fi
+
+  base=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+         | jq -r '.[0].metadata.base_branch // empty' 2>/dev/null || true)
+  [ -n "$base" ] || continue
+  # The branch's PR STATE, not its git ancestry. A squash merge writes a new
+  # commit that is not a descendant of the branch tip, so
+  # `git merge-base --is-ancestor origin/<base> origin/main` is FALSE for every
+  # branch this repo has ever landed — measured on friction/computenet-pwb9 and
+  # friction/computenet-wfgba, both merged, both reported "not ancestor". An
+  # ancestry check here would have been a no-op for the exact case it was
+  # written for, and its stubbed tests passed anyway because the stub encoded
+  # the same misunderstanding.
+  state=$(gh pr list --head "$base" --state all --limit 1 --json state \
+          --jq '.[0].state // empty' 2>/dev/null || true)
+  case "$state" in
+    MERGED) echo "    STALE-BASE base_branch=$base has MERGED: clear the field, cut from origin/main, and say so on the bead" ;;
+    CLOSED) echo "    STALE-BASE base_branch=$base's PR is CLOSED unmerged: do not cut from it; decide the base by hand" ;;
+    OPEN)   echo "    LIVE-BASE base_branch=$base is open: cut from it and target the PR at it" ;;
+    *)      echo "    UNCHECKED-BASE base_branch=$base: no PR state available; check it by hand before cutting" ;;
+  esac
 done
 exit $any_ready

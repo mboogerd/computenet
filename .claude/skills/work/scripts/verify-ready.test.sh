@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "6 passed, 0 failed".
+# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "15 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-ready.sh"}
@@ -13,10 +13,28 @@ case "$1" in
   dep) cat "$CTRL/deps.$3" ;;
   show) [ -f "$CTRL/show.$2" ] || exit 1
         read -r p ty st < "$CTRL/show.$2"
-        printf '[{"id":"%s","parent":"%s","issue_type":"%s","status":"%s"}]\n' "$2" "$p" "$ty" "$st" ;;
+        b=""; [ -f "$CTRL/base.$2" ] && read -r b < "$CTRL/base.$2"
+        printf '[{"id":"%s","parent":"%s","issue_type":"%s","status":"%s","metadata":{"base_branch":"%s"}}]\n' \
+          "$2" "$p" "$ty" "$st" "$b" ;;
 esac
 STUB
 chmod +x "$ROOT/bin/bd"
+# Fixture: CTRL/prstate holds the PR state `gh pr list --head <branch>` returns
+# (MERGED / CLOSED / OPEN), or is empty for "no PR state available". PR state,
+# not git ancestry: a squash merge leaves the branch tip a non-ancestor of main,
+# so an ancestry check reports every landed branch as unmerged.
+cat > "$ROOT/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+# --state all is LOAD-BEARING: without it real `gh pr list` returns only OPEN
+# PRs, so a merged branch comes back empty and STALE-BASE degrades silently to
+# UNCHECKED-BASE — the defect, restored. A stub that ignores argv cannot see
+# that, which is the blind spot that let this check's first (ancestry) version
+# ship green. So record argv and assert on it.
+printf '%s\n' "$*" >> "$CTRL/gh.log"
+cat "$CTRL/prstate"
+STUB
+chmod +x "$ROOT/bin/gh"
+: > "$ROOT/prstate"
 export PATH="$ROOT/bin:$PATH" CTRL="$ROOT"
 
 pass=0; fail=0
@@ -46,6 +64,40 @@ echo "  t62: x [P2] (closed) via blocks" > "$ROOT/deps.t7"   # no show.t7: its b
 sh "$SCRIPT" t7 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && { pass=$((pass+1)); echo "  PASS own bd show failing exits 3, not a false BLOCKED"; } \
   || { fail=$((fail+1)); echo "  FAIL own bd show failing: exit $rc, wanted 3"; }
+
+# --- metadata.base_branch staleness (computenet-osax) ---
+note() { # $1 name, $2 id, $3 expected substring
+  out=$(sh "$SCRIPT" "$2" 2>&1)
+  case "$out" in *"$3"*) pass=$((pass+1)); echo "  PASS $1" ;;
+                 *) fail=$((fail+1)); echo "  FAIL $1: $out" ;; esac
+}
+echo "  u1: x [P2] (closed) via blocks" > "$ROOT/deps.t6"
+note "no base_branch emits no base note" t6 "READY t6"
+[ "$(sh "$SCRIPT" t6 | wc -l)" -eq 1 ] && { pass=$((pass+1)); echo "  PASS silent when the field is unset"; }   || { fail=$((fail+1)); echo "  FAIL emitted a base note with no base_branch"; }
+
+echo "feature/computenet-lioe" > "$ROOT/base.t6"
+echo MERGED > "$ROOT/prstate"
+note "a merged base_branch is STALE, not trusted" t6 "STALE-BASE"
+# The silent-failure shape: the branch still EXISTS on origin after the merge,
+# and its tip is NOT an ancestor of main, because merges here are squashes.
+note "still READY despite the stale base" t6 "READY t6"
+
+echo CLOSED > "$ROOT/prstate"
+note "a closed-unmerged base_branch is STALE too" t6 "STALE-BASE"
+
+echo OPEN > "$ROOT/prstate"
+note "an open base_branch is LIVE" t6 "LIVE-BASE"
+
+: > "$ROOT/prstate"
+note "no PR state is UNCHECKED, not assumed either way" t6 "UNCHECKED-BASE"
+
+# The stub above ignores argv by design; this is what makes --state all visible.
+grep -q -- '--state all' "$CTRL/gh.log" \
+  && { pass=$((pass+1)); echo "  PASS asks gh for ALL states, not just open PRs"; } \
+  || { fail=$((fail+1)); echo "  FAIL gh call omits --state all: $(cat "$CTRL/gh.log")"; }
+grep -q -- '--head feature/computenet-lioe' "$CTRL/gh.log" \
+  && { pass=$((pass+1)); echo "  PASS asks about the recorded base_branch"; } \
+  || { fail=$((fail+1)); echo "  FAIL gh call does not name the base: $(cat "$CTRL/gh.log")"; }
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
