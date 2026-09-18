@@ -199,19 +199,38 @@ class TwoNodeRig private constructor(
      * payload — computenet-7em.1.5's defect — a socket that never linked, a
      * fold frozen at 503) is invisible in a bare "timed out awaiting: …", and
      * the state that names it is one field read away.
+     *
+     * **A timeout reports MOTION, not only state** (bug computenet-rl2qx
+     * clause 2). The served folds alone cannot distinguish "a loop is dead or
+     * starved" from "a loop is running and merely slower than the budget":
+     * the bug this was written for timed out with both folds reading the
+     * pre-edit value and `pollerFailure == null` on both nodes, and its
+     * diagnosis — "a starved poll loop" — was therefore inference rather than
+     * a reading. So a snapshot of every counter that advances when a loop
+     * makes progress ([Node.progress]) is taken BEFORE the wait and again on
+     * timeout, and the failure names each node's deltas. A node whose
+     * checkpoint and record counts are unchanged across the whole budget did
+     * not advance; a node whose counts moved was running and did not get far
+     * enough.
+     *
+     * The before-snapshot is deliberately in-memory plus one small file read
+     * — no `dolt` subprocess — because it runs on EVERY await in the module,
+     * including the ones that return immediately. The subprocess reads
+     * (`dolt_log` head, the served fold) happen only on the failure path.
      */
     fun await(what: String, timeoutMs: Long = AWAIT_CONVERGENCE_MS, condition: () -> Boolean) {
+        val before = started.associate { it.role to it.progress() }
         try {
             awaitUntil(what, timeoutMs, condition)
         } catch (e: AssertionFailedError) {
-            throw AssertionFailedError("$what\n${diagnostics()}", e)
+            throw AssertionFailedError("$what\n${diagnostics(before, timeoutMs)}", e)
         }
     }
 
-    private fun diagnostics(): String = started.joinToString("\n") { node ->
-        "  ${node.role}: pollerFailure=${node.app.pollerFailure}, " +
-            "http=${runCatching { node.servedFold() }.getOrElse { "unreadable: $it" }}"
-    }
+    private fun diagnostics(before: Map<String, Node.Progress>, timeoutMs: Long): String =
+        started.joinToString("\n") { node ->
+            node.progressReport(before[node.role], timeoutMs)
+        }
 
     /** Best-effort teardown: probes, apps (which close their sockets), workspaces, temp dirs. */
     override fun close() {
@@ -374,16 +393,127 @@ class TwoNodeRig private constructor(
          * "every record of my own workspace applied". Says nothing about
          * gossip from the peer; that is what [TwoNodeRig.await] is for.
          */
-        fun quiesce() {
+        fun quiesce(timeoutMs: Long = AWAIT_CONVERGENCE_MS) {
             val feed = DoltCommitFeed(workspace.doltRoot)
-            awaitUntil("$role reaches its own workspace's head commit") {
-                app.pollerFailure == null && checkpoint() == feed.history().last()
+            val before = progress()
+            try {
+                awaitUntil("$role reaches its own workspace's head commit", timeoutMs) {
+                    app.pollerFailure == null && checkpoint() == feed.history().last()
+                }
+            } catch (e: AssertionFailedError) {
+                // Same reason as TwoNodeRig.await's: "the checkpoint never
+                // reached head" is not diagnosable without knowing whether the
+                // poll loop moved at all while we waited.
+                throw AssertionFailedError(
+                    "$role never reached its own workspace's head commit\n${progressReport(before, timeoutMs)}",
+                    e,
+                )
             }
             check(app.pollerFailure == null) { "$role's poll loop died: ${app.pollerFailure}" }
         }
 
         private fun checkpoint(): String? =
             runDir.resolve("checkpoint").takeIf { Files.exists(it) }?.let { Files.readString(it).trim() }
+
+        /**
+         * Everything about this node that ADVANCES when one of its two loops
+         * makes progress, read cheaply enough to sample on every await
+         * (bug computenet-rl2qx clause 2): no `dolt` subprocess, no HTTP — one
+         * small file read plus in-memory counters.
+         *
+         * - [checkpoint] is the poll loop's own record of the last commit of
+         *   **this** workspace it has applied: it is written after the batch
+         *   reaches the projector, so it moving means records were folded.
+         * - [echoCount] + [localCount] is every record this node's [EchoGate]
+         *   has classified since start — the poll loop's throughput counter,
+         *   and the one that still moves when the checkpoint is already at
+         *   head.
+         * - [importerAttempts] counts the write-back events that imply a `bd
+         *   import` ran ([WriteBackEvent.Imposed] and [WriteBackEvent.Failed]);
+         *   [WriteBackEvent.Skipped] and `PreFlight` do not invoke the
+         *   importer. It is an event-derived count rather than the applier's
+         *   own `ApplyReport.importerInvocations`, which is per-pass and not
+         *   retained anywhere a test can read.
+         * - the two failures are the "this loop is dead" answers; both `null`
+         *   with nothing advancing is the *starved* reading, which is the one
+         *   the original occurrence of this bug could not distinguish.
+         */
+        data class Progress(
+            val checkpoint: String?,
+            val echoCount: Int,
+            val localCount: Int,
+            val pendingEchoes: Int,
+            val mirrorEvents: Int,
+            val writeBackEvents: Int,
+            val importerAttempts: Int,
+            val pollerFailure: String?,
+            val writeBackFailure: String?,
+        ) {
+            /** Records folded through the gate — the poll loop's throughput counter. */
+            val recordsClassified: Int get() = echoCount + localCount
+        }
+
+        /** This node's [Progress] right now. Cheap: one file read plus field reads. */
+        fun progress(): Progress {
+            val mirror = runCatching { app.mirrors.single() }.getOrNull()
+            val writeBack = writeBackEvents()
+            return Progress(
+                checkpoint = runCatching { checkpoint() }.getOrElse { "unreadable: $it" },
+                echoCount = mirror?.echoGate?.echoCount ?: -1,
+                localCount = mirror?.echoGate?.localCount ?: -1,
+                pendingEchoes = mirror?.echoGate?.pendingCount() ?: -1,
+                mirrorEvents = events().size,
+                writeBackEvents = writeBack.size,
+                importerAttempts = writeBack.count { it is WriteBackEvent.Imposed || it is WriteBackEvent.Failed },
+                pollerFailure = app.pollerFailure?.toString(),
+                writeBackFailure = mirror?.writeBackFailure?.toString(),
+            )
+        }
+
+        /**
+         * This node's progress since [before], rendered for a timeout message,
+         * plus the expensive reads worth paying for once a test is already
+         * failing: this workspace's own `dolt_log` head (so "the checkpoint is
+         * N commits behind head" is a reading) and the served fold.
+         *
+         * The verdict line is deliberately mechanical — `POLL LOOP DID NOT
+         * ADVANCE` only when neither the checkpoint nor the classified-record
+         * count moved across the whole budget — so the next occurrence names
+         * the starved loop instead of leaving it to be inferred.
+         */
+        internal fun progressReport(before: Progress?, timeoutMs: Long): String {
+            val now = progress()
+            val head = runCatching { logHead().firstOrNull() }.getOrElse { "unreadable: $it" }
+            val behind = runCatching {
+                val log = logHead()
+                now.checkpoint?.let { cp -> log.indexOf(cp).takeIf { it >= 0 } }
+            }.getOrNull()
+            val pollMoved = before == null ||
+                now.checkpoint != before.checkpoint || now.recordsClassified != before.recordsClassified
+            val writeBackMoved = before == null ||
+                now.writeBackEvents != before.writeBackEvents || now.importerAttempts != before.importerAttempts
+            fun delta(from: Int?, to: Int) = if (from == null) "$to" else "$from->$to (${plus(to - from)})"
+            return buildString {
+                append("  $role over ${timeoutMs}ms:")
+                append(" poll=${if (pollMoved) "advanced" else "DID NOT ADVANCE"}")
+                append(" writeBack=${if (writeBackMoved) "advanced" else "did not advance"}\n")
+                append("    checkpoint=${before?.checkpoint ?: "?"}->${now.checkpoint}")
+                append(", workspace head=$head")
+                append(behind?.let { ", checkpoint is $it commit(s) behind head" } ?: "")
+                append("\n")
+                append("    recordsClassified=${delta(before?.recordsClassified, now.recordsClassified)}")
+                append(" (echo=${delta(before?.echoCount, now.echoCount)},")
+                append(" local=${delta(before?.localCount, now.localCount)},")
+                append(" pendingEchoes=${delta(before?.pendingEchoes, now.pendingEchoes)})")
+                append(", mirrorEvents=${delta(before?.mirrorEvents, now.mirrorEvents)}\n")
+                append("    writeBackEvents=${delta(before?.writeBackEvents, now.writeBackEvents)}")
+                append(", importerAttempts=${delta(before?.importerAttempts, now.importerAttempts)}")
+                append(", pollerFailure=${now.pollerFailure}, writeBackFailure=${now.writeBackFailure}\n")
+                append("    http=${runCatching { servedFold() }.getOrElse { "unreadable: $it" }}")
+            }
+        }
+
+        private fun plus(n: Int): String = if (n >= 0) "+$n" else "$n"
 
         override fun close() {
             runCatching { probe.close() }
