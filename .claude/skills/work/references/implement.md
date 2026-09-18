@@ -114,9 +114,12 @@ dispatch prompt says whether your final gate is repo-wide or module-scoped.
 
 - A test whose verdict turns on concurrency, scheduling or timing is proven by
   its module gate, not a narrow `--tests` run.
-- Check `uptime` before each long Gradle run. A timeout in a module you did
-  not touch, under high load, is contention: re-run that suite alone before
-  reporting it ([evidence.md](evidence.md#flakes-and-contention)).
+- Check `uptime` before each long Gradle run, but do not gate on the number: a
+  red suite in a module your diff cannot reach is contention at any load, and
+  it presents as an assertion failure as readily as a timeout. Ask first
+  whether a module you changed has a dependency path to the one that failed;
+  if not, re-run that suite alone
+  ([evidence.md](evidence.md#flakes-and-contention)).
 - Qualify results by platform: "green on darwin/arm64", with `uname -sm` in
   the report. You have not run the required checks.
 

@@ -1,0 +1,36 @@
+work +30
+# computenet-sbgxs: the contention guidance was keyed to ONE symptom (a timeout)
+# and ONE regime (high load). Measured counter-example: a generative property
+# suite failing an ASSERTION at load ~12 on a 16-core host — 0.75x cores, under
+# every rung the skill names, so its own thresholds said there was nothing to be
+# suspicious of. The reviewer spent two extra repo-wide runs plus a git-history
+# investigation clearing it.
+#
+# The dangerous direction is not the cost. Read literally, the old clause told
+# an agent seeing a non-timeout failure at moderate load that contention was NOT
+# a candidate, leaving only "real regression" (a false finding against good
+# work) or a weakened assertion.
+#
+# What the lines buy, and why prose rather than a script: the fix is a test an
+# agent applies to a failure it is looking at, and no gate can run it for them.
+#
+# +30 covers four things, each measured rather than reasoned:
+#  - REACHABILITY stated first, ahead of re-running: "is there a dependency path
+#    from a module I changed to the one that failed" is answerable from the
+#    build files in seconds and is conclusive when the answer is no. The second
+#    instance, which had been told this, cleared a red :inspect suite in one
+#    isolated run where the first spent two full runs.
+#  - the SHAPES enumerated: assertion failure and known-flaky-seed, not just a
+#    timeout. Both table rows are new.
+#  - the LOAD GATE dropped, and the old "a wrong value | never contention; it is
+#    yours" row corrected — a property assertion failure IS a wrong value, so
+#    that row actively contradicted the fix. Now scoped to suites the diff can
+#    reach.
+#  - --rerun-tasks with its executed-count line named as what makes a clean
+#    re-run admissible; a plain re-run is mostly cache and proves nothing.
+#
+# And the step the old text had no answer for (raised as a QUESTION on the bead,
+# not a claim): if it reproduces under load and passes alone, that is also the
+# signature of a genuine race, so "re-run in isolation until it passes" is a
+# procedure that discards the only condition under which the defect is
+# observable. Attribute or file it; do not record it as cleared.
