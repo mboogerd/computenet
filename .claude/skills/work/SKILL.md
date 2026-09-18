@@ -334,7 +334,7 @@ implementer builds on it literally:
   check the description, then write criteria to [breakdown.md](references/breakdown.md)'s
   standard and say so in the prompt.
 - Test **every load-bearing claim the bead makes about state outside itself** —
-  one the implementer would act on or build against — for the cost of a grep or
+  one the implementer or the review would act on or build against — for the cost of a grep or
   a file read, against the artifact that would show it, not a commit subject: a
   blocker, a precondition, a prescribed repro, a handoff instruction, a cited
   baseline or prior measurement, an assertion about what earlier work did or
@@ -342,8 +342,9 @@ implementer builds on it literally:
   enumerating kinds is what let a superseded baseline and a false "prior work
   never tested this" through (computenet-d5y5); neither is a blocker, a
   precondition or a repro. Background prose nobody will act on is not
-  load-bearing; anything dearer than a grep goes in as `unverified:`
-  ([breakdown.md](references/breakdown.md)).
+  load-bearing. Stale → correct the bead. Only checkable by doing the work, or
+  dearer than a grep → mark it `unverified:` in the prompt
+  ([breakdown.md](references/breakdown.md)); disproving it is a result.
 - A cited record needs two answers, not one: does it still say what the bead
   says it says, **and is it still the current version of itself?** A superseded
   record usually sits exactly where it was with its original numbers intact,
@@ -356,8 +357,7 @@ implementer builds on it literally:
   quantity most sensitive of all. Say so in the prompt as a limit on what the
   comparison can support, and where a same-host control arm is available
   authorize that instead — a control arm defeats confounds a single arm cannot
-  even detect. Stale → correct the bead. Only checkable by doing the work →
-  mark it `unverified:` in the prompt; disproving it is a result.
+  even detect.
 - Files claim: run `check-files-claim.sh`, then reason about what else must
   change ([breakdown.md](references/breakdown.md), "The files claim"); widen and
   comment why, then amend any acceptance clause the widening contradicts (old
