@@ -130,9 +130,38 @@ def line(label, files, t, f, e, s, newest):
             f"{e} errors, {s} skipped{tail}")
 
 
+USAGE = ("usage: junit-count.py [--expect-classes N] "
+         "<results-dir | result-file.xml> "
+         "[<results-dir | result-file.xml>...]")
+
+
 def main(argv):
     argv = argv[1:]
     expect = None
+    # -h/--help, because an UNRECOGNISED flag falls through to `dirs` and
+    # prints NO-SUCH-PATH — which is what this tool prints when results are
+    # missing, so an agent asking how to invoke it reads the answer as "the
+    # suite did not run" (computenet-x8h92). Same failure family as the
+    # --expect-classes position bug below: a check whose misuse mode resembles
+    # its negative result stops being a check. Usage goes to STDOUT and exits
+    # 0, because it was asked for; the error paths keep stderr and exit 2.
+    if "-h" in argv or "--help" in argv:
+        print(USAGE)
+        print("  --expect-classes takes a COUNT, not a class list, and may "
+              "go before or after the paths")
+        # The exit codes, not the counts, are what callers branch on, and the
+        # whole point of this tool is that these outcomes must not be read as
+        # one another. Printing them here is what stops that costing a read of
+        # the file — which is exactly what --help exists to avoid.
+        print("exit: 0 counted (failures included — read the numbers)")
+        print("      2 bad usage, or a path that does not exist "
+              "(NEVER the same answer as NO-RESULTS)")
+        print("      3 an xml file would not parse "
+              "(an unreadable result is not a pass)")
+        print("      4 NO xml files matched at all (NO-RESULTS)")
+        print("      6 fewer result files than --expect-classes "
+              "(SHORT-COVERAGE)")
+        return 0
     # THE SILENTLY-DROPPED-FILTER CHECK (computenet-xt0b). Measured on this
     # build: `:gen:test --tests <real> --tests <nonexistent> --rerun` prints
     # BUILD SUCCESSFUL and exits 0. Gradle only errors when NO filter matches,
@@ -151,9 +180,7 @@ def main(argv):
     if "--expect-classes" in argv:
         i = argv.index("--expect-classes")
         if i + 1 >= len(argv) or not argv[i + 1].isdigit():
-            print("usage: junit-count.py [--expect-classes N] "
-                  "<results-dir | result-file.xml> "
-                  "[<results-dir | result-file.xml>...]", file=sys.stderr)
+            print(USAGE, file=sys.stderr)
             print("  --expect-classes takes a COUNT, not a class list, and may "
                   "go before or after the paths", file=sys.stderr)
             return 2
@@ -161,8 +188,7 @@ def main(argv):
         argv = argv[:i] + argv[i + 2:]
     dirs = argv
     if not dirs:
-        print("usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]",
-              file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     # A path that does not RESOLVE is a different answer from one that resolves
     # to an empty tree, and it must not be able to look like NO-RESULTS.

@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# STDOUT IS THE BRANCH AND WORKTREE, TAB-SEPARATED, AND NOTHING ELSE — every
+# diagnostic, bd's "✓ Updated issue" confirmations included, goes to stderr, so
+# `read br wt < <(feature-branch.sh <id>)` works. It did not: both writing paths
+# printed bd's confirmation ahead of the pair, so a caller reading the FIRST
+# line got br="✓" and wt="Updated issue: <id>" (computenet-x8h92; the same
+# defect computenet-5ari fixed in create-ticket.sh, never applied here). The
+# suite could not see it, because its bd stub printed nothing on update while
+# the real bd prints to stdout.
+#
+# If you are reading a "✓ Updated issue" line in your terminal and concluding
+# stdout is dirty: the Bash tool MERGES stderr into what it shows you. Both this
+# script and create-ticket.sh are clean on stdout alone, asserted by their
+# suites. computenet-ssvsg was filed on exactly that misreading.
+#
 # Resolve which branch and worktree a feature (or a bug/chore worked like one)
 # continues on, encoding 5a's resume rules:
 #   - no metadata.branch yet -> record branch + worktree metadata FIRST (a
@@ -35,7 +49,7 @@ br=$(bd show "$id" --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].metadata.bra
 
 if [ -z "$br" ]; then
   br="feature/$id"
-  bd update "$id" --set-metadata "branch=$br" --set-metadata "worktree=$WT_ROOT/$id" \
+  bd update "$id" --set-metadata "branch=$br" --set-metadata "worktree=$WT_ROOT/$id" >&2 \
     || { echo "bd update failed; branch NOT recorded — do not create it yet" >&2; exit 1; }
   printf '%s\t%s\n' "$br" "$WT_ROOT/$id"
   exit 0
@@ -61,7 +75,7 @@ n=$(printf '%s' "$br" | sed -n 's/.*-r\([0-9][0-9]*\)$/\1/p')
 n=$(( ${n:-1} + 1 ))
 new="feature/$id-r$n"
 bd update "$id" --set-metadata "branch=$new" \
-  --set-metadata "worktree=$WT_ROOT/$id-r$n" --unset-metadata pr \
+  --set-metadata "worktree=$WT_ROOT/$id-r$n" --unset-metadata pr >&2 \
   || { echo "bd update failed; still recorded on spent branch $br" >&2; exit 1; }
 note "PR $merged_url merged by squash; $br is spent. Continuing on $new cut from origin/main."
 printf '%s\t%s\n' "$new" "$WT_ROOT/$id-r$n"
