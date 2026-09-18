@@ -3,6 +3,7 @@ package civictech.demo.allocatorobserve
 import civictech.cell.data.SetCell
 import civictech.demo.allocatorobserve.declaration.DeclarationEvent
 import civictech.demo.allocatorobserve.declaration.DeclarationIngester
+import civictech.demo.allocatorobserve.declaration.DeclarationPollOutcome
 import civictech.demo.allocatorobserve.http.AllocatorRoutes
 import civictech.demo.allocatorobserve.http.IngestFailureCounts
 import civictech.demo.allocatorobserve.http.IngestHealth
@@ -16,6 +17,7 @@ import civictech.demo.allocatorobserve.ingest.OffsetCheckpoint
 import civictech.demo.allocatorobserve.ingest.SpendLogIngester
 import civictech.demo.allocatorobserve.ingest.SpendOffsetStore
 import civictech.demo.allocatorobserve.ingest.TailReason
+import civictech.demo.allocatorobserve.restart.DeclarationHistoryJournal
 import civictech.demo.allocatorobserve.view.AllocatorReportViews
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
@@ -65,13 +67,15 @@ data class AllocatorObserveConfig(
  * caller can observe that seam — so decorating it reads the offset without
  * touching F1 at all.
  *
- * [last] is initialised from `delegate.read()` so a restarted process reports
- * the offset it resumed from rather than `null` until its first write — that
- * offset is the ONLY thing that crosses a restart today, so reporting it says
- * nothing about the fold (see [AllocatorObserveApp]'s "A restart is NOT
- * equivalent to an uninterrupted run") — and is
- * updated AFTER the delegate's write returns, so it never advertises an offset
- * that is not yet persisted.
+ * [last] is initialised from `delegate.read()` and updated AFTER the delegate's
+ * write returns, so it never advertises an offset that is not yet persisted.
+ *
+ * Since `computenet-fpml.5.2` the delegate under it is a [ColdStartOffsetStore],
+ * whose `read()` answers `null` until this process has written a checkpoint
+ * once — so [last] now starts `null` in EVERY process, restarted or not, and is
+ * set by the first tick that delivers lines. That is the honest reading: a
+ * process that has not yet re-read the log has consumed nothing of it, and the
+ * persisted offset is not the position this process is at.
  *
  * The limit of the number this produces, stated where the number is produced:
  * it is the last offset this *store* saw written, which the reader writes only
@@ -92,6 +96,44 @@ class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffset
     override fun write(state: CheckpointState) {
         delegate.write(state)
         last = state
+    }
+}
+
+/**
+ * A [SpendOffsetStore] that hides the persisted checkpoint from the FIRST read
+ * of each process, so every process's first spend-log poll is a
+ * `TailReason.FirstStart` whole-file read (design entry fpml.5-D4a).
+ *
+ * **Why this is what makes a restart equal an uninterrupted run.** The app's
+ * spend fold is a fresh in-memory `SetCell`; the spend log is its durable form,
+ * exactly as the socaity replay script treats it. Resuming a fresh fold from a
+ * persisted byte offset would fold only the bytes appended after the restart —
+ * so the offset must be ignored precisely once, while the fold is empty, and
+ * honoured from then on.
+ *
+ * Within the process nothing changes: once this store's own [write] has run,
+ * both calls delegate, so later polls resume incrementally from the checkpoint
+ * and keep the truncation/replacement detection that the checkpoint's
+ * fingerprint provides.
+ *
+ * **The cost, stated where it is paid** (fpml.5-D4a): a restart re-reads the
+ * whole spend log once, which is O(log size) per process start rather than per
+ * poll. And a truncation or replacement that happened while the app was DOWN is
+ * absorbed silently by that whole read — the fold converges on the log's current
+ * content, which is correct, but the event is not counted in `reBaselineCount`,
+ * because nothing in this process ever saw the pre-replacement bytes. Only
+ * re-baselines observed between two polls of one process are counted.
+ */
+private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : SpendOffsetStore {
+
+    @Volatile
+    private var writtenHere = false
+
+    override fun read(): CheckpointState? = if (writtenHere) delegate.read() else null
+
+    override fun write(state: CheckpointState) {
+        delegate.write(state)
+        writtenHere = true
     }
 }
 
@@ -120,22 +162,54 @@ class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffset
  * second, differently shaped document. Building the served state inline after
  * `publish()` returns keeps one writer and one publication point.
  *
- * ## A restart is NOT equivalent to an uninterrupted run
+ * ## A restart IS equivalent to an uninterrupted run — and how, without durable cells
  *
  * Stated here because this class is where the two halves meet and neither half
- * says it on its own: the byte-offset checkpoint persists under
- * `config.runDir`, but both cells this app folds into are **fresh and
- * in-memory** — `SetCell`'s durability is the kernel's `Stateful`
- * snapshot/restore seam, which nothing here wires up (`SpendLogIngester`'s
- * `records` KDoc: a restarted ingester is meant to be "constructed over the
- * same runDir *and* handed the fold it is resuming into"; this app hands it a
- * new one). So a second process over the same run directory resumes the tail
- * *past* the checkpoint into an empty fold, and serves a report over only the
- * records appended after the restart, with a declaration history missing every
- * event observed before it. Feature `computenet-fpml.5`'s oracle rule
- * ("a restart equals an uninterrupted run") therefore cannot hold on this app
- * as it stands; task `computenet-fpml.5.2` is scoped to make it hold, by a
- * cold-start whole-file read plus a persisted declaration history.
+ * says it on its own. Both cells this app folds into are still **fresh and
+ * in-memory**: `SetCell`'s durability is the kernel's `Stateful`
+ * snapshot/restore seam, which nothing here wires up (the epic's non-goal).
+ * Restart equivalence is instead reached by making the two folds re-derivable
+ * from what the run directory and the log already hold (task
+ * `computenet-fpml.5.2`, design fpml.5-D4):
+ *
+ * - **The spend fold is re-read, not resumed.** [ColdStartOffsetStore] hides the
+ *   persisted checkpoint from this process's first poll, so that poll is a
+ *   whole-file read and the fold is rebuilt from the log — the log is the
+ *   durable fold. Later polls in the same process resume from the checkpoint as
+ *   before.
+ * - **The declaration history is journalled.** `allocation.yaml` holds only the
+ *   current declaration, so [DeclarationHistoryJournal] persists one line per
+ *   observed event under `config.runDir` and replays them into the declarations
+ *   cell at construction, before the first poll.
+ *
+ * With both, a process restarted over the same run directory and log serves the
+ * report an uninterrupted process would (feature `computenet-fpml.5`'s rule 2,
+ * asserted at every poll boundary of the fixture week by
+ * `restart/AppRestartEquivalenceTest`).
+ *
+ * **What is still not equivalent**, stated precisely rather than dropped:
+ * - `ingest` health is per-process by construction and says so — [polls],
+ *   [reBaselineCount], `lastPollAt` and the ingesters' failure counters all
+ *   start at zero in the new process, and `checkpointOffset` reads `null` until
+ *   its first tick has written one. Only the *fold* crosses a restart, not the
+ *   account of how this process got there.
+ * - A truncation or replacement of the log that happens while the app is DOWN
+ *   is absorbed uncounted by the cold-start read ([ColdStartOffsetStore]): the
+ *   fold converges on the log's current content, but `reBaselineCount` does not
+ *   see an event no process observed.
+ * - A log that is DELETED while the app is down diverges in the *fold*, not
+ *   merely in the account: `TailReason.LogAbsent` leaves the fold alone (a log
+ *   that has not arrived yet is not an empty log), so an uninterrupted process
+ *   keeps every record it had folded while a restarted one starts empty and
+ *   serves an empty report until the log comes back (measured during this
+ *   task's review: three records folded, uninterrupted 3, restarted 0). Which
+ *   of the two readings is right is not decided here — the spend log's
+ *   lifecycle is socaity's and unpinned (fpml.1-D1) — so the divergence is
+ *   stated rather than papered over.
+ * - A crash between a declaration's fold and its journal append loses that
+ *   line; the next poll re-observes the declaration as a new event with a later
+ *   `observedAt`, which moves one sub-interval boundary rather than losing it
+ *   (see [DeclarationHistoryJournal]).
  *
  * ## Threading
  *
@@ -159,7 +233,20 @@ class AllocatorObserveApp(
     private val records = SetCell<SpendRecord>()
     private val declarations = SetCell<DeclarationEvent>()
 
-    private val offsets = RecordingOffsetStore(OffsetCheckpoint(config.runDir))
+    private val journal = DeclarationHistoryJournal(config.runDir)
+
+    init {
+        // BEFORE the ingesters are constructed and before any poll: the
+        // declaration ingester reads its "current declaration" from this very
+        // cell, so a history replayed after it exists would still be correct,
+        // but a history replayed after the first poll would make that poll
+        // re-append the declaration it already knows. Property initialisers and
+        // `init` blocks run in declaration order, which is what sequences this
+        // against the two ingesters below.
+        journal.replayInto(declarations)
+    }
+
+    private val offsets = RecordingOffsetStore(ColdStartOffsetStore(OffsetCheckpoint(config.runDir)))
 
     private val spendIngester =
         SpendLogIngester(config.logPath, config.runDir, records = records, checkpoint = offsets)
@@ -213,6 +300,16 @@ class AllocatorObserveApp(
     /** The port the shell actually bound; meaningful only after [start]. */
     val boundPort: Int get() = shell.boundPort
 
+    /**
+     * Journal lines this process could not parse while replaying the declaration
+     * history at construction (see [DeclarationHistoryJournal.replayFailures]).
+     *
+     * Exposed so the loss is reachable from the process rather than only from
+     * the file. It is deliberately NOT in the served `ingest` document: that
+     * shape is `http/ServedState.kt`'s, which this task does not own.
+     */
+    val declarationReplayFailures: Long get() = journal.replayFailures
+
     /** Non-null once the background poll loop has exited on a throwable (fpml.4-D6). */
     val pollLoopStopped: PollLoopStopped? get() = holder.stopped
 
@@ -232,7 +329,12 @@ class AllocatorObserveApp(
      */
     fun pollOnce() {
         val spend = spendIngester.poll()
-        declarationIngester.poll()
+        val declaration = declarationIngester.poll()
+        // AFTER the poll returned: the event is already in the cell by then, so
+        // this persists a fold that has happened — the checkpoint's own
+        // fold-before-persist order. The reverse would let a crash leave a
+        // journal line for an event no fold ever saw.
+        if (declaration is DeclarationPollOutcome.Appended) journal.append(declaration.event)
         if (spend.reason is TailReason.ReBaselined) reBaselineCount++
         polls++
         lastPollAt = now()
