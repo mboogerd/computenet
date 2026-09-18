@@ -197,6 +197,15 @@ private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : Spe
  *   is absorbed uncounted by the cold-start read ([ColdStartOffsetStore]): the
  *   fold converges on the log's current content, but `reBaselineCount` does not
  *   see an event no process observed.
+ * - A log that is DELETED while the app is down diverges in the *fold*, not
+ *   merely in the account: `TailReason.LogAbsent` leaves the fold alone (a log
+ *   that has not arrived yet is not an empty log), so an uninterrupted process
+ *   keeps every record it had folded while a restarted one starts empty and
+ *   serves an empty report until the log comes back (measured during this
+ *   task's review: three records folded, uninterrupted 3, restarted 0). Which
+ *   of the two readings is right is not decided here — the spend log's
+ *   lifecycle is socaity's and unpinned (fpml.1-D1) — so the divergence is
+ *   stated rather than papered over.
  * - A crash between a declaration's fold and its journal append loses that
  *   line; the next poll re-observes the declaration as a new event with a later
  *   `observedAt`, which moves one sub-interval boundary rather than losing it

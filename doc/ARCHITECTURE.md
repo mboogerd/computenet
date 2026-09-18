@@ -417,11 +417,16 @@ else `$PORT`, else 8080. See the README for run commands.
   the checkpoint as before; and the declaration history, which `allocation.yaml`
   cannot reconstruct because it holds only the current declaration, is
   journalled line by line under the run directory and replayed into the cell
-  before the first poll. What still does not cross a restart is the *account* of
-  how the process got there rather than the fold: ingest health (`polls`,
-  `reBaselineCount`, `lastPollAt`, the failure counters, `checkpointOffset`) is
-  per-process by construction, and a log truncation or replacement that happened
-  while the app was down is absorbed uncounted by the cold-start whole read.
+  before the first poll. What still does not cross a restart is mostly the
+  *account* of how the process got there rather than the fold: ingest health
+  (`polls`, `reBaselineCount`, `lastPollAt`, the failure counters,
+  `checkpointOffset`) is per-process by construction, and a log truncation or
+  replacement that happened while the app was down is absorbed uncounted by the
+  cold-start whole read. The one case where the *fold* still diverges is a log
+  **deleted** while the app is down: `TailReason.LogAbsent` leaves an
+  uninterrupted process's fold alone, while a restarted process has nothing to
+  re-read and serves an empty report until the log returns (measured; which
+  reading is right is undecided because the log's lifecycle is socaity's).
   Still to come: the differential oracle against socaity's replay script
   (`computenet-fpml.5` — socaity has implemented neither the log nor the
   script yet, so that comparison is external evidence this module cannot
