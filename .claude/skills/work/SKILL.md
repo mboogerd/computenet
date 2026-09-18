@@ -288,7 +288,13 @@ the branch and worktree it prints for everything below:
 ```
 
 With `metadata.base_branch` set, base on `origin/<that branch>`; the PR targets
-it too. Verdicts: `OK-*` → proceed; `SQUASH-LEFTOVER` → use a new branch name
+it too — but **validate the field before you use it**, from `verify-ready.sh`'s
+`STALE-BASE`/`LIVE-BASE` note or by hand. It is a timestamped snapshot, not
+standing metadata: a review-filed residual names the branch under review, which
+is normally about to merge, so the field is routinely stale within minutes. A
+merged branch's ref still exists on origin, so trusting it fails silently —
+you get a plausible worktree cut from spent code — rather than loudly. `STALE-BASE`
+→ clear the field, cut from `origin/main`, say so on the bead. Verdicts: `OK-*` → proceed; `SQUASH-LEFTOVER` → use a new branch name
 recorded in `metadata.branch`, or delete the dead remote ref, and say which;
 `STOP-UNMERGED` → stop; `STOP-UNREACHABLE` → nothing was checked.
 

@@ -30,7 +30,23 @@
 # (computenet-frxh6: cab.6.5 read READY while QueryCompiler existed only on
 # feature/computenet-cab.5). Such lines are suffixed `[unmerged on <feature>]`.
 #
-# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`.
+# ALSO CHECKS metadata.base_branch, which goes stale within MINUTES of being
+# written. A review-filed residual names the branch under review, and that
+# branch is normally about to merge — that is what the review was for. Five
+# instances (computenet-osax): computenet-4jpd and computenet-dmkp on
+# 2026-08-25, the second stale ~15 minutes after it was written; computenet-
+# 5yavt (PR #870 merged ~2 minutes later); computenet-tlb83 (merged in the same
+# orchestrator turn); and a feature carrying another feature's branch. The
+# failure is SILENT, not loud: a merged branch's ref still exists on origin, so
+# a session that trusts the field gets a plausible worktree cut from spent code
+# and re-derives what main already has. Checked here rather than left to prose
+# because the check has to happen at selection, which is when this runs.
+#
+# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`, plus a
+# `STALE-BASE`/`MISSING-BASE`/`UNCHECKED-BASE` note under either when
+# metadata.base_branch is set and no longer usable. The notes are advisory and
+# do not change the exit code: an id whose base is stale is still ready, it just
+# has to be cut from origin/main with the field cleared.
 # Exit: 0 = at least one READY; 1 = none ready; 2 = bad usage;
 #       3 = a `bd dep list` (or this id's `bd show`) call failed — NOTHING was checked, do not route
 #           on this (the ready-in-epic.sh exit-3 class).
@@ -69,6 +85,17 @@ for id in "$@"; do
   else
     echo "READY $id"
     any_ready=0
+  fi
+
+  base=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+         | jq -r '.[0].metadata.base_branch // empty' 2>/dev/null || true)
+  [ -n "$base" ] || continue
+  if ! git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null 2>&1; then
+    echo "    UNCHECKED-BASE base_branch=$base: no origin/$base here; fetch, or check its PR state by hand"
+  elif git merge-base --is-ancestor "origin/$base" origin/main 2>/dev/null; then
+    echo "    STALE-BASE base_branch=$base is already on origin/main: clear the field, cut from origin/main, and say so on the bead"
+  else
+    echo "    LIVE-BASE base_branch=$base is not yet on origin/main: cut from it and target the PR at it"
   fi
 done
 exit $any_ready

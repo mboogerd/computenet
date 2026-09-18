@@ -1,0 +1,28 @@
+work +6
+# computenet-osax: metadata.base_branch is a TIMESTAMPED SNAPSHOT that reads as
+# standing metadata, and it goes stale within minutes. A review-filed residual
+# names the branch under review, and that branch is normally about to merge —
+# that is what the review was for. Five instances: computenet-4jpd and
+# computenet-dmkp (2026-08-25, the second stale ~15 minutes after it was
+# written), computenet-5yavt (PR #870 merged ~2 minutes later), computenet-tlb83
+# (merged within the same orchestrator turn), and a FEATURE carrying another
+# feature's branch, which would have re-landed a whole other feature's unsquashed
+# commits as conflicts.
+#
+# The failure is silent, not loud: a merged branch's ref still exists on origin,
+# so a session that trusts the field gets a plausible worktree cut from spent
+# code and re-derives what main already has.
+#
+# THE FIX IS MECHANICAL and costs no budget: verify-ready.sh, which already runs
+# per id at selection — exactly when the check has to happen — now prints
+# STALE-BASE / LIVE-BASE / UNCHECKED-BASE beside its verdict, from
+# `git merge-base --is-ancestor origin/<base> origin/main`. Advisory, so the
+# READY/BLOCKED contract and the exit codes are untouched. Six new tests; the
+# discrimination was proved by mutation (flipping the STALE label reddens
+# exactly one).
+#
+# The +6 is the prose that mechanism cannot carry: 5a saying the field is a
+# snapshot to validate rather than metadata to obey, and review.md telling the
+# FILER not to set it when the subject will reach main soon — record a
+# dependency on the green PR instead. That second half is what stops the field
+# being written stale in the first place, and no script can decide it.
