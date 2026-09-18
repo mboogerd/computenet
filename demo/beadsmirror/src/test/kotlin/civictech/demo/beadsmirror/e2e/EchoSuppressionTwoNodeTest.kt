@@ -131,7 +131,7 @@ class EchoSuppressionTwoNodeTest {
         val dialerHighWaterOnListener = highWaterCounter(listener, dialer.dotSourceId, PRIORITY)
         dialerHighWaterOnDialer.shouldNotBeNull()
 
-        rigOrFail.listenerWorkspace.run("update", x, "--priority", "1")
+        rigOrFail.mutate(listener, "update", x, "--priority", "1")
         listener.quiesce()
 
         rigOrFail.await("the dialer imposes X") {
@@ -255,7 +255,7 @@ class EchoSuppressionTwoNodeTest {
 
         // Get the dialer's row stamped first — that is the precondition this
         // test is about.
-        rigOrFail.listenerWorkspace.run("update", x, "--priority", "1")
+        rigOrFail.mutate(listener, "update", x, "--priority", "1")
         listener.quiesce()
         rigOrFail.await("the dialer imposes X") {
             dialer.writeBackEvents().any { it is WriteBackEvent.Imposed && it.issueId == x }
@@ -268,7 +268,7 @@ class EchoSuppressionTwoNodeTest {
 
         // The DIALER's own workspace this time — a human `bd update`, not an
         // imposition.
-        rigOrFail.dialerWorkspace.run("update", x, "--priority", "2")
+        rigOrFail.mutate(dialer, "update", x, "--priority", "2")
         dialer.quiesce()
 
         // The genuine edit's record: LOCAL, and carrying the stamp the earlier

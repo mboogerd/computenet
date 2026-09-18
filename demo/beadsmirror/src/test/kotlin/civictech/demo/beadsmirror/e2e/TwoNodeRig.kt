@@ -192,6 +192,55 @@ class TwoNodeRig private constructor(
     fun heal() = transport.heal()
 
     /**
+     * Run a `bd` mutation on [node]'s OWN workspace and return only once that
+     * mutation is a **commit in the workspace's `dolt_log`** — the only form
+     * in which a mirror's feed can ever see it.
+     *
+     * **Why a plain `workspace.run("update", …)` is not enough, and why
+     * [Node.quiesce] does not cover the gap** (bug computenet-rl2qx). `bd`
+     * exits 0 when the mutation is durable in *its* terms; the matching Dolt
+     * commit is not always visible in `dolt_log` by then. `quiesce` asks
+     * "has my poller applied every commit up to my workspace's head" — which
+     * a workspace whose head has not yet moved answers **yes, vacuously**,
+     * because the checkpoint still equals the stale head. The test then
+     * proceeds to await a convergence that nothing has been asked to carry
+     * yet, and burns its whole budget.
+     *
+     * That is the shape the bug's failing run had: at the timeout BOTH nodes
+     * read `checkpoint == head`, `0 commits behind`, `pollerFailure == null`
+     * and 0 records classified over 30 s, with the listener's edit nowhere in
+     * its own `dolt_log` — no poll loop was starved, the edit had simply
+     * never become a commit for one to read (measured 2026-09-18,
+     * darwin/arm64, bd 1.1.2 / dolt 2.2.3, under the loaded harness on the
+     * bead).
+     *
+     * So this is a **precondition made explicit, not a longer budget**: the
+     * caller's later awaits start from a state in which the edit demonstrably
+     * exists as a commit, and a mutation that never becomes one fails here,
+     * naming itself, instead of two steps later as an unexplained convergence
+     * timeout.
+     *
+     * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
+     * because each check is a `dolt` subprocess.
+     */
+    fun mutate(node: Node, vararg bdArgs: String, timeoutMs: Long = COMMIT_VISIBLE_MS): String {
+        val before = node.logHead().firstOrNull()
+        val output = node.workspace.run(*bdArgs)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (node.logHead().firstOrNull() == before) {
+            if (System.currentTimeMillis() > deadline) {
+                throw AssertionFailedError(
+                    "`bd ${bdArgs.joinToString(" ")}` exited 0 on the ${node.role}'s workspace but never " +
+                        "appeared in its dolt_log within ${timeoutMs}ms (head still $before) — " +
+                        "nothing downstream of it can converge\n${node.progressReport(null, timeoutMs)}",
+                )
+            }
+            Thread.sleep(pollInterval.toMillis())
+        }
+        return output
+    }
+
+    /**
      * [awaitUntil] with both nodes' diagnostics folded into the failure —
      * the in-process counterpart of [JvmPeer.await][civictech.testkit.JvmPeer]'s
      * child-output folding in [TwoJvmMirrorTest], and for the same reason: every
@@ -529,6 +578,22 @@ class TwoNodeRig private constructor(
          * process start.
          */
         const val AWAIT_CONVERGENCE_MS: Long = 30_000
+
+        /**
+         * Budget for [mutate]'s "this `bd` mutation has become a Dolt commit"
+         * wait. Separate from [AWAIT_CONVERGENCE_MS], and longer, because it
+         * covers something else entirely: not a poll tick plus a socket hop,
+         * but `bd`'s own commit becoming visible in `dolt_log` — a subprocess
+         * path that is the first thing to stretch when the machine is
+         * contended, and the one the bug computenet-rl2qx harness caught
+         * exceeding 30 s.
+         *
+         * **Not measured as a distribution.** It is a bound chosen to be
+         * comfortably past the longest delay that harness observed, not a
+         * percentile of one: a `bd` commit that takes minutes is a defect
+         * worth failing on, and this fails on it with a message that says so.
+         */
+        const val COMMIT_VISIBLE_MS: Long = 120_000
 
         /**
          * Two fresh scratch workspaces and a rig name nothing else can collide
