@@ -205,6 +205,23 @@ class SpendLogIngester(
         /** Re-baseline only: every valid record the whole re-read has produced. */
         private val desired = mutableSetOf<SpendRecord>()
 
+        /**
+         * Append only: `records.membership().size` as observed before this
+         * poll's first hand-off was folded in, captured once (`computenet-brvag`).
+         *
+         * The append branch only ever adds, so `added` — distinct records this
+         * poll put into the fold that were not already there — is exactly the
+         * membership size delta between "before this poll touched anything" and
+         * "after the last hand-off is folded in", however many hand-offs the
+         * poll took. Reading membership per hand-off (the previous shape) made
+         * an append's cost grow with the number of hand-offs, and so with the
+         * log size for a [TailReason.FirstStart] whole-file read — quadratic
+         * overall, since [SetCell.membership] is itself `O(fold size)`. Reading
+         * it once here and once more at the final hand-off bounds the call
+         * count at 2 per poll regardless of hand-off count.
+         */
+        private var appendBaseline: Int? = null
+
         fun absorb(batch: TailBatch) {
             val valid = mutableListOf<SpendRecord>()
             for (line in batch.lines) {
@@ -234,11 +251,14 @@ class SpendLogIngester(
                 // Append (or first start, or an absent log's empty batch):
                 // add-only, so each batch can be applied on arrival. Re-adding an
                 // element already present is a no-op for membership, which is
-                // what makes re-delivery safe. `live` is re-read per batch, so a
-                // record repeated across batches is counted added once.
-                val live = records.membership()
-                added += (valid.toSet() - live).size
+                // what makes re-delivery safe. The baseline is read once, before
+                // the first hand-off's adds land, so a record repeated within a
+                // batch, across batches, or already present is counted added
+                // exactly once either way — the delta is size-based, not a set
+                // difference per batch.
+                if (appendBaseline == null) appendBaseline = records.membership().size
                 valid.forEach { records.inlet.call.add(it) }
+                if (batch.last) added = records.membership().size - appendBaseline!!
             }
 
             if (batch.last) {
