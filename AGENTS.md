@@ -269,8 +269,10 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   hits it. Nine-plus instances (computenet-a49j, computenet-6eyp,
   computenet-5hqk1, computenet-wfgba), five in one slot, which is why it is
   here and in the top-level execution rules every dispatched agent reads first
-  (`.claude/skills/work/references/agent.md`) — twice fixed already by putting
-  the text somewhere agents did not reach in time.
+  (`.claude/skills/work/references/agent.md`). It had been fixed twice and
+  **held both times**; the 2026-09-14 distillation (`e6ecc3d1`) condensed all
+  three copies away, and every instance since is from the fortnight after. A
+  one-line trap costs a line and buys a batch: condense something else.
 
 ## Verification
 

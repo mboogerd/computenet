@@ -1,16 +1,17 @@
-AGENTS.md +15
-work +9
+AGENTS.md +17
+work +11
 # The zsh `=word` expansion (`echo ===` -> `(eval):1: == not found`, which also
 # kills every command batched AFTER it, so the later half reads as having run
 # and produced nothing) stated in the two places dispatched agents actually
-# read: AGENTS.md's zsh-trap family beside its six siblings (+15), and
-# agent.md's "Running commands" (+9) — the top-level execution rules every
+# read: AGENTS.md's zsh-trap family beside its six siblings (+17), and
+# agent.md's "Running commands" (+11) — the top-level execution rules every
 # dispatched agent reads before its role reference.
 #
-# What the lines buy is PLACEMENT, not wording. Nine-plus instances across
-# computenet-a49j, computenet-6eyp, computenet-5hqk1 and this bead; both prior
-# fixes landed where reviewers and implementers did not reach in time, and five
-# of them rediscovered it in one slot on 2026-09-14.
+# What the lines buy is SURVIVAL, not wording. Nine-plus instances across
+# computenet-a49j, computenet-6eyp, computenet-5hqk1 and this bead. Both prior
+# fixes HELD; the 2026-09-14 distillation (e6ecc3d1) condensed all three copies
+# away, and every recurrence since is from the fortnight after — five agents in
+# one slot. Each copy now says in its own text not to delete it.
 #
 # The mechanical fix — a PreToolUse hook prefixing `setopt noequals`, verified
 # by hand — could not be landed here: creating a harness hook and wiring it up
