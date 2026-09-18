@@ -69,13 +69,47 @@ class WriteBackTwoNodeTest {
 
     private val rigOrFail: TwoNodeRig get() = checkNotNull(rig) { "the rig was never built" }
 
-    /** Seeds [x] independently on both workspaces, at the same [priority], BEFORE either node starts. */
+    /**
+     * Seeds [x] independently on both workspaces, at the same [priority],
+     * BEFORE either node starts.
+     *
+     * **Deliberately a bare `workspace.run`, not [TwoNodeRig.mutate]** (bug
+     * computenet-3zr5k clause 2). Every *post-start* mutation in this file
+     * goes through `mutate`, because a mirror can only see an edit as a
+     * `dolt_log` commit its feed reads. A pre-start seed is immune to that:
+     * the node has no feed yet, and when it starts, its baseline is built
+     * from `bd export` — the live bd store, which `bd`'s own exit already
+     * guarantees — while the checkpoint is whatever `dolt_log` head the
+     * baseline reads. Should that head still be the pre-seed one, the seed
+     * commit is simply re-delivered through the feed and folds to the same
+     * value. There is no window in which the fold can be missing the seed.
+     */
     private fun seedOnBoth(priority: String = "3") {
         rigOrFail.listenerWorkspace.run("create", "shared issue $x", "--id", x, "--force", "-p", priority)
         rigOrFail.dialerWorkspace.run("create", "shared issue $x", "--id", x, "--force", "-p", priority)
     }
 
-    /** `bd show <id> --json` prints a one-element ARRAY, not a bare object — measured live, 2026-09-13. */
+    /**
+     * `bd show <id> --json` prints a one-element ARRAY, not a bare object —
+     * measured live, 2026-09-13.
+     *
+     * **This read is transiently non-monotonic on a write-back-enabled node,
+     * and that is permitted** (bug computenet-3zr5k clause 3; the semantics
+     * belong to feature computenet-6wc, where the window is recorded). A
+     * node's applier imposes *the fold's* winner onto its own bd store, and
+     * the fold learns of a human edit only through the poll loop. So between
+     * the instant a local `bd` edit commits and the instant that node's
+     * projector has folded that commit, an applier pass that runs sees
+     * `winner = pre-edit`, `export = post-edit`, plans an `Impose`, and writes
+     * the PRE-EDIT value back over the human edit — on the very node that
+     * made it. The window is bounded by one poll pass over that node's own
+     * workspace (poll interval + the `dolt sql` read latency measured in
+     * [TwoNodeRig.mutate]'s KDoc + the fold), after which the edit is the
+     * winner and the next pass re-imposes the edited value.
+     *
+     * Consequence for every caller here: assert this **inside a bounded
+     * await**, never as a bare equality straight after a mutation.
+     */
     private fun bdShowPriority(node: TwoNodeRig.Node, issueId: String): Int {
         val output = node.workspace.run("show", issueId, "--json")
         val start = output.indexOfFirst { it == '{' || it == '[' }
@@ -131,7 +165,7 @@ class WriteBackTwoNodeTest {
         Thread.sleep(rigOrFail.pollIntervalMs() * 3)
         val dialerLogBeforeEdit = dialer.logHead()
 
-        rigOrFail.listenerWorkspace.run("update", x, "--priority", "1")
+        rigOrFail.mutate(listener, "update", x, "--priority", "1")
         listener.quiesce()
 
         rigOrFail.await("the dialer imposes X") {
@@ -192,7 +226,7 @@ class WriteBackTwoNodeTest {
         }
         Thread.sleep(rigOrFail.pollIntervalMs() * 3)
 
-        rigOrFail.listenerWorkspace.run("update", x, "--priority", "1")
+        rigOrFail.mutate(listener, "update", x, "--priority", "1")
         listener.quiesce()
         rigOrFail.await("bd show on the dialer reports priority 1") {
             bdShowPriority(dialer, x) == 1
@@ -248,7 +282,7 @@ class WriteBackTwoNodeTest {
 
         dialer.app.mirrors.single().writeBackApplier shouldBe null
 
-        rigOrFail.listenerWorkspace.run("update", x, "--priority", "1")
+        rigOrFail.mutate(listener, "update", x, "--priority", "1")
         listener.quiesce()
         rigOrFail.await("the dialer's fold picks up the listener's edit") {
             dialer.view()[x]?.get("priority")?.contains("1") == true

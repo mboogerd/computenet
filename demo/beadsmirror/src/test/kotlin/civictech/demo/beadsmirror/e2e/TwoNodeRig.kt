@@ -199,26 +199,122 @@ class TwoNodeRig private constructor(
      * **Why a plain `workspace.run("update", …)` is not enough, and why
      * [Node.quiesce] does not cover the gap** (bug computenet-rl2qx). `bd`
      * exits 0 when the mutation is durable in *its* terms; the matching Dolt
-     * commit is not always visible in `dolt_log` by then. `quiesce` asks
-     * "has my poller applied every commit up to my workspace's head" — which
-     * a workspace whose head has not yet moved answers **yes, vacuously**,
-     * because the checkpoint still equals the stale head. The test then
-     * proceeds to await a convergence that nothing has been asked to carry
-     * yet, and burns its whole budget.
+     * commit is not always visible to a `dolt sql` READ by then. `quiesce`
+     * asks "has my poller applied every commit up to my workspace's head" —
+     * which a workspace whose head has not yet *been read as* moved answers
+     * **yes, vacuously**, because the checkpoint still equals the stale head.
+     * The test then proceeds to await a convergence that nothing has been
+     * asked to carry yet, and burns its whole budget.
      *
      * That is the shape the bug's failing run had: at the timeout BOTH nodes
      * read `checkpoint == head`, `0 commits behind`, `pollerFailure == null`
      * and 0 records classified over 30 s, with the listener's edit nowhere in
-     * its own `dolt_log` — no poll loop was starved, the edit had simply
-     * never become a commit for one to read (measured 2026-09-18,
-     * darwin/arm64, bd 1.1.2 / dolt 2.2.3, under the loaded harness on the
-     * bead).
+     * its own `dolt_log` — no poll loop was starved, the edit had simply not
+     * been *seen* as a commit yet (measured 2026-09-18, darwin/arm64, bd 1.1.2
+     * / dolt 2.2.3, under the loaded harness on the bead).
+     *
+     * ## The mechanism, measured (bug computenet-3zr5k clause 1)
+     *
+     * It is **not** a deferred commit and **not** a lost one. It is
+     * **read-path latency**: `bd` has already created the Dolt commit by the
+     * time it exits, and the whole of the invisible window is the cost of the
+     * `dolt sql` subprocess that goes looking for it.
+     *
+     * Direct probe, 2026-09-18 on this host (darwin/arm64, 16 cores, bd 1.1.2
+     * / dolt 2.2.3), over scratch workspaces built exactly as
+     * [civictech.demo.beadsmirror.BdScratchWorkspace] builds them, reading the
+     * head through the same `select commit_hash from dolt_log` the mirror and
+     * [Node.logHead] use. Per `bd update` that exited 0 it compared the new
+     * commit's own `dolt_log.date` against `bd`'s exit instant, and counted
+     * how many *completed* reads after that exit still saw the old head:
+     *
+     * - **145 / 145 mutations produced a visible commit. Zero losses.** Across
+     *   an idle run (15), three in-workspace contention shapes (24: a 200 ms
+     *   `dolt sql` reader loop, a second `bd` writer into the same workspace,
+     *   both), a run under the real `:demo:beadsmirror:test` suite (48, load
+     *   ~8-20) and a deliberately overloaded run (58 at load ~300).
+     * - **The commit predates `bd`'s own exit, always**: `commit date - bd
+     *   exit` was **-28 ms to -139 ms** on every one of the 53 timestamped
+     *   samples (5 idle + 48 under the suite). `bd` commits synchronously and
+     *   then exits.
+     * - **No completed read after that exit was ever stale**: the FIRST poll
+     *   saw the new head in 53 / 53 of those cases. There is no post-exit
+     *   window in which a finished `dolt sql` reports the old head.
+     * - **The observed lag is exactly one reader invocation.** `observe - bd
+     *   exit` equalled that single `dolt sql` call's own wall time to the
+     *   millisecond, and ranged **184-710 ms idle and 489 ms-31.5 s under the
+     *   module's own suite** — i.e. a SINGLE `dolt sql` process start on a
+     *   contended host can outlast [AWAIT_CONVERGENCE_MS] on its own. (`bd`
+     *   itself stretched the same way: 0.5-5.4 s under the suite.)
+     * - **The load ~300 run is coarser evidence, stated as such.** It reports
+     *   23-130 s to a changed head (and `bd` up to 216 s), but it came from
+     *   the earlier probe, which recorded neither commit timestamps nor a
+     *   poll count and ran with a second `bd` writer in the same workspace.
+     *   There the figure is "time until some read returned a changed head",
+     *   and its zero-loss count cannot exclude that the noise writer's commit
+     *   is what satisfied the check. The commit-before-exit and one-read
+     *   findings above rest on the reader-only samples (idle, under-suite).
+     *
+     * So the vacuous-`quiesce` failure is a reader that has not caught up, not
+     * a writer that has not written — and in the poller's case an in-flight
+     * read that *started* before the commit returns a legitimately pre-commit
+     * snapshot however long it takes to come back. The remedy is unchanged
+     * (make the wait explicit) but its content is "wait for a read to catch
+     * up", which is why [COMMIT_VISIBLE_MS] is sized against reader latency
+     * under contention rather than against anything `bd` does.
      *
      * So this is a **precondition made explicit, not a longer budget**: the
      * caller's later awaits start from a state in which the edit demonstrably
      * exists as a commit, and a mutation that never becomes one fails here,
      * naming itself, instead of two steps later as an unexplained convergence
      * timeout.
+     *
+     * ## Which `e2e/` callers must use this, and which are immune
+     *
+     * Inventory taken 2026-09-18 at `ac57be59` (bug computenet-3zr5k clause
+     * 2). A caller needs this wait when it mutates a **started** rig node's
+     * own workspace and then waits on a fold; everything else is immune, for
+     * the reason given.
+     *
+     * Routed through [mutate]/[createIssue]:
+     * - `EchoSuppressionTwoNodeTest`, `WriteBackCloseTwoNodeTest` (already, by
+     *   computenet-rl2qx and computenet-khqek).
+     * - `WriteBackTwoNodeTest`, `HeadlineLivenessTest` (by this bug).
+     *
+     * Immune, and why:
+     * - **Pre-start seeding** — `seedOnBoth` in `WriteBackTwoNodeTest`,
+     *   `EchoSuppressionTwoNodeTest` and `WriteBackCloseTwoNodeTest`. The node
+     *   has no feed yet; at start its baseline comes from `bd export` (the
+     *   live bd store, which `bd`'s exit already guarantees), and a seed
+     *   commit below the baseline's checkpoint is simply re-delivered by the
+     *   feed and folds to the same value.
+     * - **Non-rig e2e tests** — `MultiWorkspaceMirrorTest`,
+     *   `CrossWorkspaceResolutionTest`, `DivergenceControlTest`,
+     *   `ScriptedSequenceTest`, `TwoJvmMirrorTest`. They drive workspaces that
+     *   no `TwoNodeRig.Node` owns, so there is no `Node` to wait on; their own
+     *   waits are over a single app's fold, where the same read-path lag shows
+     *   up as an ordinary slow convergence rather than as a vacuous `quiesce`.
+     *   They are **not** proof against the lag — only outside this API.
+     *
+     * **Not immune and not yet converted** (outside this bug's file claim,
+     * filed as its own item): `TwoNodeRigTest`'s two POST-start
+     * `listenerWorkspace.createIssue` calls (`idAfterIdle`,
+     * `idDuringPartition`; its other two creates are pre-start and immune by
+     * the rule above), and `ConvergenceSuite`'s `runConcurrently` — used by
+     * it and by `ConvergenceDivergenceControlTest` — which applies seeded
+     * schedule steps to both already-started workspaces on driver threads and
+     * then awaits equal folds. The creates want [createIssue]; the schedule
+     * driver additionally needs `ScheduleStep.apply` to take a [Node] rather
+     * than a bare workspace, which is why it is a separate item and not a
+     * two-line edit. `PullRebaselineTest` belongs here too, and NOT in the
+     * immune list above: it *is* a rig test — it passes
+     * [civictech.demo.beadsmirror.BdScratchWorkspace.createSyncedPair]'s two
+     * workspaces straight into [create], so the listener node owns
+     * `pair.pusher` — and its `pair.pusher.run("update", a1, "--title", …)`
+     * runs after [startListener]/[startDialer] and is followed immediately by
+     * a `rig.await` on the dialer's fold, which is exactly the non-immune
+     * shape. (Its `createIssue` calls there are pre-start and immune by the
+     * rule above.) Corrected by this bug's feature review, 2026-09-18.
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
@@ -246,6 +342,21 @@ class TwoNodeRig private constructor(
             Thread.sleep(pollInterval.toMillis())
         }
         return output
+    }
+
+    /**
+     * [createIssue][civictech.demo.beadsmirror.e2e.createIssue] routed through
+     * [mutate]: creates an issue on [node]'s own workspace and returns its id
+     * only once the create is a commit a feed can read.
+     *
+     * The plain `rig.listenerWorkspace.createIssue(…)` is the same
+     * commit-visibility hole as a plain `workspace.run("update", …)` — it is
+     * `run("create", …)` underneath — so a test that creates and then awaits
+     * convergence wants this, not that.
+     */
+    fun createIssue(node: Node, title: String): String {
+        val output = mutate(node, "create", title, "--json")
+        return Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(output)!!.groupValues[1]
     }
 
     /**

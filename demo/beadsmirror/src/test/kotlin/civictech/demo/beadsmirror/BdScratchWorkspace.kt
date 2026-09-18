@@ -86,7 +86,30 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
     /** The Dolt database root for this workspace — NOT the `.dolt/` directory beneath it. */
     val doltRoot: Path = doltRootFor(root)
 
-    /** Runs a `bd` mutation (cwd = this workspace). Throws if `bd` exits non-zero. */
+    /**
+     * Runs a `bd` mutation (cwd = this workspace). Throws if `bd` exits
+     * non-zero.
+     *
+     * **What a zero exit does and does not promise** (bug computenet-3zr5k
+     * clause 1, measured 2026-09-18 on darwin/arm64, 16 cores, bd 1.1.2 /
+     * dolt 2.2.3; full method and numbers in
+     * [civictech.demo.beadsmirror.e2e.TwoNodeRig.mutate]'s KDoc). It does
+     * promise the Dolt commit: across 145 mutations — idle, under in-workspace
+     * reader/writer contention, under this module's own suite, and at load
+     * ~300 — every one produced a commit, and on all 53 timestamped samples
+     * the commit's `dolt_log.date` preceded `bd`'s exit by 28-139 ms. Nothing
+     * is deferred and nothing was lost.
+     *
+     * It does **not** promise that a *reader* can see it yet. The commit is
+     * observed through a `dolt sql` subprocess, and that process's own start
+     * cost is the whole of the delay: 184-710 ms idle and up to 31.5 s under
+     * this module's suite (and 130 s to a changed head at load ~300, on a
+     * coarser probe — see that KDoc) — i.e. one read can outlast a 30 s
+     * convergence budget by itself. A test that mutates and then waits on
+     * anything downstream of the feed must therefore wait for the commit to
+     * be READ, not merely for this call to return:
+     * [civictech.demo.beadsmirror.e2e.TwoNodeRig.mutate] is that wait.
+     */
     fun run(vararg bdArgs: String): String {
         val builder = ProcessBuilder(listOf("bd") + bdArgs)
             .directory(root.toFile())
