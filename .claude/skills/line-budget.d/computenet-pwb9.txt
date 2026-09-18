@@ -1,0 +1,11 @@
+work +3
+# computenet-pwb9: the conforming-repair exception to review.md's substantive
+# bound, plus the matching carve-out in SKILL.md 5c and the 5e READY row.
+#
+# The +3 is all orchestrator-side. 5c and 5e trigger a second reader for any
+# acceptance-named-file repair "whatever the reviewer called them", independent
+# of the verdict, so reclassifying at the reviewer alone would have left all
+# three recorded instances paying the same extra dispatch — the fix would have
+# read as landed and changed nothing. Found by the reviewer of PR #920.
+#
+# The review.md edits themselves are +0: they extend existing paragraphs.

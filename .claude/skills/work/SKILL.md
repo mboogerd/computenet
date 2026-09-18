@@ -420,7 +420,10 @@ ACTION`. Then:
 
 - A PASS: read the repair commits it names. Any that change behaviour, a test,
   or a file the acceptance names get a second reader first, whatever the
-  reviewer called them.
+  reviewer called them — except a repair the reviewer certified as a
+  *conforming* one ([review.md](references/review.md#repair-dont-bounce)) with
+  the governing rule quoted. Read that quote: if it decides the edit, the
+  reviewer's own read is the second read. If it does not, dispatch.
 - A FAIL whose only blocker is its `Repairs needing a second reader:` line →
   second reader for those commits; merge on its PASS.
 - Any other FAIL stays `in_progress` with its branch for the next batch.
@@ -478,7 +481,7 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 | no READY/DRAFT token | continue the agent until it states one |
 | you `TaskStop`ped it | DRAFT; route on what it wrote to the bead |
 | `REQUIRED ORCHESTRATOR ACTION` | run the commands; a merge of `main` goes through Ship step 1 |
-| READY | read the repairs it names (second reader for any that change behaviour, a test or an acceptance-named file), then ship |
+| READY | read the repairs it names (second reader for any that change behaviour, a test or an acceptance-named file, unless certified conforming with the rule quoted — same test as 5c), then ship |
 | READY naming a pending out-of-band measurement | ship once it reports, else leave for the next session |
 | DRAFT whose only blocker is its `Repairs needing a second reader:` line | second reader for those commits; ship on its READY |
 | DRAFT, tasks filed for gaps | 5b |
