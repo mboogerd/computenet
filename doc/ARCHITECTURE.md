@@ -392,13 +392,28 @@ else `$PORT`, else 8080. See the README for run commands.
   (`SpendIngestFailures`) so no bad line is silently dropped. The checkpoint
   and re-baseline idioms are copied from `:demo:beadsmirror` by example, not
   imported — the epic defers a shared connector SPI to CON2
-  (`computenet-rrf`). Still to come: allocation declarations
-  (`computenet-fpml.2`), the derived R5/R6 views (`computenet-fpml.3`),
-  HTTP/SSE serving over `:demo:shell` (`computenet-fpml.4`, which is why the
-  module has no `application` block yet), and the differential oracle against
-  socaity's replay script (`computenet-fpml.5` — socaity has implemented
-  neither the log nor the script yet, so that comparison is external evidence
-  this module cannot produce on its own).
+  (`computenet-rrf`). Feature `computenet-fpml.2` adds the declaration half:
+  `DeclarationIngester` polls a hand-edited `allocation.yaml` and appends one
+  timestamped `DeclarationEvent` per *parsed-content* change (a reformat is
+  not a change), counting read/parse failures rather than throwing. Feature
+  `computenet-fpml.3` derives the R5/R6 report: `AllocatorReportViews` folds
+  both cells' deltas privately and publishes one immutable `AllocatorReport`
+  — rolling-window enacted-vs-declared drift per project, plus the linear
+  month-end cap projection — at an explicit caller-supplied boundary, because
+  `SetCell` emits one wave per element and a poll's batch of N records is N
+  waves (recorded as kernel gap F-19 in `doc/demo-findings.md`). Feature
+  `computenet-fpml.4` makes the module runnable: `AllocatorObserveApp` is one
+  poll driver that, per tick, polls both ingesters, calls `publish()`, and
+  swaps a single immutable `ServedState` (report + ingest health + records +
+  declarations) into a volatile holder, then broadcasts that very instance as
+  one SSE frame. That single swap is why no `GET /state`, `/state/ingest`,
+  `/state/report` response and no `/events` frame ever mixes pre- and
+  post-batch state; the routes are read-only (405 on any non-GET) and answer
+  503 with the last good document under `stale` once the poll loop has died.
+  Still to come: the differential oracle against socaity's replay script
+  (`computenet-fpml.5` — socaity has implemented neither the log nor the
+  script yet, so that comparison is external evidence this module cannot
+  produce on its own).
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.
