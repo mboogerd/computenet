@@ -58,6 +58,19 @@ data class ImportResult(val exitCode: Int, val stdout: String, val stderr: Strin
  * spawn a process; `WriteBackPurityTest` exempts it **by this exact basename**
  * and flags every other file in the package. Renaming it holes that guard
  * open.
+ *
+ * **Removal boundary (feature computenet-6wc.2).** This class runs `bd
+ * import` and nothing else — `bd delete` is never invoked by the write-back
+ * layer. A hard delete has no wire representation (it is absence, and
+ * absence is indistinguishable from "not in this delta") and is anti-durable
+ * under bidirectional replication: the next hop from any peer still holding
+ * the row recreates it (spike claim (c) C4d and the B→A probe,
+ * `doc/spike/bds0/claim-c-close-replication.md`). Close (`status=closed`
+ * plus `closed_at`/`close_reason`, imposed like any other field — see
+ * [civictech.demo.beadsmirror.writeback.ImposedFields.FIELDS]) is the sole
+ * removal interface this module offers. `RemovalBoundaryTest` guards that no
+ * double-quoted string literal naming that command appears anywhere in this
+ * module's main sources.
  */
 class BdImport(private val workspaceRoot: Path) {
 
