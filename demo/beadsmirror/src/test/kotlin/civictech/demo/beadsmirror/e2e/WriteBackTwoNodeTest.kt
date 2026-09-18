@@ -39,10 +39,15 @@ import org.junit.jupiter.api.Test
  * Guarded exactly like [TwoNodeRigTest]: green-but-skipped where `bd`/`dolt`
  * are not on PATH.
  *
- * **Non-goals** (feature computenet-6wc.1's / this task's own): no echo
- * suppression (feature computenet-6wc.3 — the quiescence case below reports
- * any `dolt_log` growth after convergence rather than asserting it away), no
- * close/delete semantics (computenet-6wc.2), no lease plane.
+ * **Echo suppression is now wired** (feature computenet-6wc.3, task
+ * computenet-6wc.3.3), so the two `dolt_log` growth-after-convergence
+ * measurements below — which this file used to PRINT as the open boundary with
+ * that feature — are assertions of zero. They are the single-sided case (write-
+ * back on the dialer only); the both-sided case, and the classification itself,
+ * are [EchoSuppressionTwoNodeTest]'s.
+ *
+ * **Non-goals** (feature computenet-6wc.1's / this task's own): no close/delete
+ * semantics (computenet-6wc.2), no lease plane.
  */
 class WriteBackTwoNodeTest {
 
@@ -146,13 +151,18 @@ class WriteBackTwoNodeTest {
         imposedForX.single().observed["priority"]?.jsonPrimitive?.int shouldBe 1
 
         val dialerLogAfterConvergence = dialer.logHead()
-        val doltLogGrowth = dialerLogAfterConvergence.size - dialerLogBeforeEdit.size
-        println("WriteBackTwoNodeTest: dolt_log growth on the dialer attributable to the edit window = $doltLogGrowth")
-        (doltLogGrowth >= 1) shouldBe true
+        // The imposition itself IS a Dolt commit on the dialer's workspace, so
+        // the edit window must grow the log — that is the write actually
+        // landing, not an echo.
+        (dialerLogAfterConvergence.size - dialerLogBeforeEdit.size >= 1) shouldBe true
 
-        // No further Imposed(X) after convergence, over several more ticks.
+        // No further Imposed(X) after convergence, over several more ticks —
+        // and, since computenet-6wc.3.3 wired the echo gate, no further Dolt
+        // commit either: the commit the import produced is recognised as this
+        // mirror's own and never re-projected.
         Thread.sleep(rigOrFail.pollIntervalMs() * 8)
         dialer.writeBackEvents().filterIsInstance<WriteBackEvent.Imposed>().filter { it.issueId == x } shouldHaveSize 1
+        dialer.logHead() shouldBe dialerLogAfterConvergence
     }
 
     /**
@@ -211,15 +221,20 @@ class WriteBackTwoNodeTest {
         Thread.sleep(rigOrFail.pollIntervalMs() * 8)
 
         importedCountFor(dialer, x) shouldBe importedCountAtConvergence
-        val logAfterQuiescentTicks = dialer.logHead()
-        val doltLogGrowthAfterConvergence = logAfterQuiescentTicks.size - logAtConvergence.size
 
-        // Report, do not assert: this is the boundary with feature
-        // computenet-6wc.3 (echo suppression) — see class KDoc.
-        println(
-            "WriteBackTwoNodeTest: dolt_log growth on the dialer after convergence = " +
-                "$doltLogGrowthAfterConvergence (0 means no echo observed in this run)",
-        )
+        // Asserted since computenet-6wc.3.3, where this used to be a printed
+        // report of "0 means no echo observed in this run": with the echo gate
+        // wired, the dialer's own import commit is classified ECHO, mints
+        // nothing, gossips nothing, and therefore provokes no further write —
+        // the dialer's `dolt_log` is identical, commit for commit, across the
+        // quiescent window.
+        //
+        // CAVEAT: this asserts that suppression did not BREAK quiescence; it is
+        // not evidence that suppression is what produces it. An un-suppressed
+        // echo re-mints the same value, so the planner's next pass is a NoOp and
+        // adds no commit either. The discriminating evidence for suppression is
+        // [EchoSuppressionTwoNodeTest]'s dot and classification assertions.
+        dialer.logHead() shouldBe logAtConvergence
     }
 
     /** Feature computenet-6wc.1.5 clause 2: off by default, nothing about the mirror's existing behaviour changes. */

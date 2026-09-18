@@ -14,6 +14,7 @@ import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.dolt.DoltSql
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.EchoGate
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorKey
@@ -22,6 +23,9 @@ import civictech.demo.beadsmirror.sanitizedDoltDatabaseName
 import civictech.demo.beadsmirror.writeback.WriteBackEvent
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.opentest4j.AssertionFailedError
 import java.nio.file.Files
@@ -292,6 +296,66 @@ class TwoNodeRig private constructor(
         fun logHead(): List<String> =
             DoltSql(workspace.doltRoot).query("select commit_hash from dolt_log")
                 .map { it.getValue("commit_hash").jsonPrimitive.content }
+
+        /**
+         * Every [MirrorEvent.RecordClassified] this node's echo gate has
+         * emitted, oldest first (feature computenet-6wc.3 clause 5, decision
+         * 6wc.3-D6) — the per-commit echo/local verdict, read off the same
+         * typed event sink as [events] rather than off the gate's counters, so
+         * an assertion can name the *commit* it is talking about.
+         */
+        fun classifications(): List<MirrorEvent.RecordClassified> =
+            events().filterIsInstance<MirrorEvent.RecordClassified>()
+
+        /**
+         * `(echoCount, localCount)` of this node's [EchoGate] — the aggregate
+         * counters beside [classifications]' per-record detail. Read from the
+         * live gate, so this is the mirror's own bookkeeping and not a
+         * re-count of the event list.
+         *
+         * Reads `app.mirrors.single()`: every rig node runs exactly one
+         * workspace, which is also what `TwoNodeRig` assumes everywhere else it
+         * reaches into a node's mirror.
+         */
+        fun echoCounts(): Pair<Int, Int> =
+            app.mirrors.single().echoGate.let { it.echoCount to it.localCount }
+
+        /**
+         * This workspace's `dolt_diff_issues` rows that touch [issueId] —
+         * `to_commit`, `diff_type`, `from_metadata` and `to_metadata` — newest
+         * commit first, ordered by this workspace's own [logHead].
+         *
+         * The provenance surface feature computenet-6wc.3 clause 1 is stated
+         * against, read exactly the way [civictech.demo.beadsmirror.feed.DoltCommitFeed]
+         * reads it (`DoltSql`, the same `'`-escaping its `narrowedQuery` uses
+         * for hashes) so a test is asserting about the surface the mirror
+         * itself polls rather than a second rendering of it.
+         *
+         * **Compare the metadata structurally, never as text.** Dolt re-orders
+         * JSON object keys — `to_metadata` prints alphabetically regardless of
+         * the order the row was written in (measured on this feature's
+         * breakdown probe, 2026-09-18) — so a `toString()` comparison against a
+         * built object is a false negative waiting to happen. The values come
+         * back as [JsonElement]s for that reason.
+         *
+         * Both sides of the diff are matched (`to_id` or `from_id`) so a
+         * removal, which has no `to_` side at all, is not silently invisible
+         * here.
+         */
+        fun diffRowsFor(issueId: String): List<Map<String, JsonElement>> {
+            val quoted = "'" + issueId.replace("'", "''") + "'"
+            val rows = DoltSql(workspace.doltRoot).query(
+                "select to_commit, diff_type, from_metadata, to_metadata from dolt_diff_issues " +
+                    "where to_id = $quoted or from_id = $quoted",
+            )
+            // dolt_diff_issues has no ordering of its own that a test may rely
+            // on; dolt_log does, and this node already reads it newest-first.
+            val order = logHead().withIndex().associate { (index, hash) -> hash to index }
+            return rows.sortedBy { row ->
+                val commit = (row["to_commit"] as? JsonPrimitive)?.contentOrNull
+                order[commit] ?: Int.MAX_VALUE
+            }
+        }
 
         /**
          * Every live dot this node's mirror holds for [issueId]'s keys, as
