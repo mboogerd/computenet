@@ -1,6 +1,19 @@
 package civictech.demo.allocatorobserve.oracle
 
+import civictech.cell.data.SetCell
+import civictech.demo.allocatorobserve.LineClassification
+import civictech.demo.allocatorobserve.SpendRecord
+import civictech.demo.allocatorobserve.classifySpendLine
+import civictech.demo.allocatorobserve.declaration.AllocationDeclaration
+import civictech.demo.allocatorobserve.declaration.DeclarationEvent
+import civictech.demo.allocatorobserve.http.IngestFailureCounts
+import civictech.demo.allocatorobserve.http.IngestHealth
+import civictech.demo.allocatorobserve.http.ServedState
+import civictech.demo.allocatorobserve.http.reportJson
+import civictech.demo.allocatorobserve.view.AllocatorReportViews
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -204,8 +217,14 @@ class ReferenceReportTest {
         // cap: hoursToDate over [08-01, 08-14) = 2 (r0) + 32 (r1..r9) = 34h;
         //   elapsed 13/31 days = 312/744 = 0.4193548387;
         //   projected = 34 * 744 / 312 = 81.0769230769.
+        // Key set (computenet-nv04w): beforeFirstDeclarationHours is keyed
+        // over the GLOBAL project set (every project with any session in the
+        // log, plus every project named in any declaration) with explicit
+        // zeros, not just the projects with hours in the uncovered range.
+        // glass-factory has no hours in [08-07, 08-08) but appears anyway.
         doc.d("window", "beforeFirstDeclarationHours", "computenet") shouldBeNear 2.0
-        doc.at("window", "beforeFirstDeclarationHours").jsonObject.size shouldBe 1
+        doc.d("window", "beforeFirstDeclarationHours", "glass-factory") shouldBeNear 0.0
+        doc.at("window", "beforeFirstDeclarationHours").jsonObject.size shouldBe 2
 
         doc.d("window", "totalHours") shouldBeNear 32.0
         doc.d("window", "perProject", "computenet", "enactedHours") shouldBeNear 11.0
@@ -250,5 +269,83 @@ class ReferenceReportTest {
         doc.d("window", "perProject", "glass-factory", "drift") shouldBeNear 0.089076
         doc.d("cap", "hoursToDate") shouldBeNear 34.0
         doc.d("cap", "projectedMonthEndHours") shouldBeNear 75.285714
+    }
+
+    /**
+     * computenet-nv04w: the reference and the SERVED views on the exact same
+     * before-first-declaration input, compared through [ReportComparison] —
+     * the only way to prove the two sides agree rather than just each being
+     * internally consistent with itself. `glass-factory` has zero hours in
+     * the uncovered lead but a session (and a declared weight) elsewhere in
+     * the log, so it is exactly the input the README's key-set pin covers: a
+     * project with zero hours in ONE sub-range still gets an explicit key
+     * with a global key set, everywhere.
+     *
+     * The views are built the same way `AllocatorReportViewsTest` builds them
+     * (`AllocatorReportViews.derivedFrom` over two live `SetCell`s), fed
+     * through the real `classifySpendLine` parser — never by calling
+     * `windowReport`/`AllocatorReport` directly — so this is the same
+     * arithmetic path `AllocatorObserveApp` runs, serialised through the same
+     * `ServedState.reportJson()` the HTTP layer serves.
+     */
+    @Test
+    fun `production and the reference agree on the key set before the first declaration`() {
+        val r0 =
+            """{"v":1,"project":"computenet","machine":"m1","work_item":"w0",""" +
+                """"started":"2026-08-07T10:00:00Z","ended":"2026-08-07T12:00:00Z"}"""
+        val lines = listOf(r0) + LINES
+        val now = Instant.parse("2026-08-14T00:00:00Z")
+
+        val expected = ReferenceReport.compute(lines, HISTORY, now, WINDOW)
+
+        val records = SetCell<SpendRecord>()
+        val declarations = SetCell<DeclarationEvent>()
+        val views = AllocatorReportViews.derivedFrom(records, declarations, WINDOW, now = { now })
+
+        lines.forEach { line ->
+            val classification = classifySpendLine(line)
+            check(classification is LineClassification.Valid) { "fixture line was not a valid v1 record: $line" }
+            records.inlet.call.add(classification.record)
+        }
+        HISTORY.forEach { spec ->
+            declarations.inlet.call.add(
+                DeclarationEvent(
+                    observedAt = spec.observedAt,
+                    declaration = AllocationDeclaration(spec.weights, spec.monthlyCapHours, spec.window),
+                ),
+            )
+        }
+
+        val report = views.publish()
+        val servedState =
+            ServedState(
+                report = report,
+                ingest =
+                    IngestHealth(
+                        recordCount = 0,
+                        checkpointOffset = null,
+                        reBaselineCount = 0,
+                        polls = 0,
+                        lastPollAt = null,
+                        failures = IngestFailureCounts(0, 0, 0),
+                        declarationEvents = 0,
+                    ),
+                records = emptySet(),
+                declarations = emptyList(),
+            )
+        val actual = Json.parseToJsonElement(servedState.reportJson())
+
+        val divergences = ReportComparison.compare(expected, actual)
+        divergences.shouldBeEmpty()
+
+        // Non-vacuity: both sides actually carry the key this task is about,
+        // and agree on its value — a passing empty-divergence list from two
+        // documents that happened to both omit the key would prove nothing.
+        expected.jsonObject
+            .at("window", "beforeFirstDeclarationHours", "glass-factory")
+            .jsonPrimitive.content.toDouble() shouldBeNear 0.0
+        actual.jsonObject
+            .at("window", "beforeFirstDeclarationHours", "glass-factory")
+            .jsonPrimitive.content.toDouble() shouldBeNear 0.0
     }
 }

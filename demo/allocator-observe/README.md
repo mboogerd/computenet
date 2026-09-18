@@ -116,6 +116,23 @@ any of them will diverge, and correctly so.
   drift, and reported per project under `beforeFirstDeclarationHours`. The
   denominators — both the hours total and the duration weighting — count only
   covered time.
+- **Every project-keyed object shares one key set: the GLOBAL project set.**
+  `perProject`, each sub-interval's `enactedHours`/`enactedShare`/
+  `declaredShare`/`diff`, and `beforeFirstDeclarationHours` (whenever it is
+  non-empty) are all keyed over *every project with at least one attributed
+  session anywhere in the log, plus every project named in any declaration of
+  the history* — not "only the projects that happen to have hours in this
+  particular sub-range or sub-interval". A project with zero hours in a given
+  sub-range still gets an explicit key with value `0.0` there; a key is never
+  omitted because its value would be zero. (This is the production rule,
+  already shipped in `AllocatorReportViews.publish` / `windowReport` as
+  `ledger.projects() + declaredProjects`; pinned here rather than the
+  alternative — computing each object's key set from only what appears in
+  that sub-range — decided at computenet-nv04w.) `beforeFirstDeclarationHours`
+  is the empty object exactly when there is no gap before the first
+  declaration (a declaration's `observedAt` is at or before the window
+  start), never because every project's hours there happen to be zero — when
+  the gap exists, every global project appears in it, zeros included.
 - **Enacted share** within a sub-interval is the project's hours over that
   sub-interval's total hours (0 when the total is 0); in `perProject` it is the
   project's hours over the sum of all sub-intervals' hours. `diff` and `drift`

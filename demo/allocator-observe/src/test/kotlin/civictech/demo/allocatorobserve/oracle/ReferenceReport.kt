@@ -89,16 +89,29 @@ object ReferenceReport {
         val windowFrom = now.minus(windowLength)
         val subIntervals = subIntervalsOf(history, windowFrom, now)
 
-        val coverageStart = subIntervals.firstOrNull()?.range?.first ?: now
-        val beforeFirst = hoursByProject(sessions, windowFrom, coverageStart)
+        // The GLOBAL project set (README "Oracle exchange shape" pin): every
+        // project with any attributed session anywhere in the log, plus every
+        // project named in any declaration in the given history — regardless
+        // of window or coverage. Every project-keyed object below is keyed
+        // over this one set, with explicit zeros for a project that has no
+        // hours in a particular sub-range. This mirrors production's
+        // `AllocatorReportViews.publish` (`ledger.projects() + declaredProjects`),
+        // not the per-sub-interval "only projects that appear here" set this
+        // file used before (computenet-nv04w).
+        val globalProjects =
+            (sessions.map { it.project }.toSet() + history.flatMap { it.weights.keys }).toSortedSet()
 
-        val subIntervalReports = subIntervals.map { interval -> subIntervalReport(interval, sessions) }
+        val coverageStart = subIntervals.firstOrNull()?.range?.first ?: now
+        val beforeFirst = hoursByProject(sessions, windowFrom, coverageStart, globalProjects)
+
+        val subIntervalReports = subIntervals.map { interval -> subIntervalReport(interval, sessions, globalProjects) }
         val totalHours = subIntervalReports.sumOf { it.totalHours }
         val coveredNanos = subIntervalReports.sumOf { it.nanos }
 
-        val projects =
-            subIntervalReports.flatMap { it.projects }.toSortedSet()
+        val projects = globalProjects
 
+        // (`projects` is `globalProjects`: every project-keyed object in this
+        // document is keyed over the same set — see the comment above.)
         return buildJsonObject {
             put("publishedAt", JsonPrimitive(now.toString()))
             put(
@@ -256,22 +269,27 @@ object ReferenceReport {
         return if (start >= end) 0L else Duration.between(start, end).toNanos()
     }
 
-    private fun hoursByProject(sessions: List<Session>, from: Instant, to: Instant): Map<String, Double> {
+    /**
+     * Hours per project overlapping `[from, to)`, keyed over [projects] with
+     * an explicit 0.0 for a project with no overlap — the GLOBAL key set, not
+     * "only projects seen in this sub-range" (computenet-nv04w).
+     */
+    private fun hoursByProject(sessions: List<Session>, from: Instant, to: Instant, projects: Set<String>): Map<String, Double> {
         if (from >= to) return emptyMap()
-        val byProject = mutableMapOf<String, Double>()
+        val byProject = projects.associateWithTo(mutableMapOf()) { 0.0 }
         sessions.forEach { session ->
+            if (session.project !in byProject) return@forEach
             val hours = overlapHours(session, from, to)
             if (hours > 0.0) byProject.merge(session.project, hours, Double::plus)
         }
         return byProject
     }
 
-    private fun subIntervalReport(interval: SubInterval, sessions: List<Session>): SubIntervalReport {
+    private fun subIntervalReport(interval: SubInterval, sessions: List<Session>, projects: Set<String>): SubIntervalReport {
         val (from, to) = interval.range
-        val enacted = hoursByProject(sessions, from, to)
+        val enacted = hoursByProject(sessions, from, to, projects)
         val weights = interval.declaration.weights
         val weightSum = weights.values.sum()
-        val projects = (enacted.keys + weights.keys).toSortedSet()
         val totalHours = enacted.values.sum()
         val enactedHours = projects.associateWith { enacted[it] ?: 0.0 }
         val declaredShare =
