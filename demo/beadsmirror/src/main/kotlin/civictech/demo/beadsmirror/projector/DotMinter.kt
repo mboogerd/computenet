@@ -113,18 +113,22 @@ class DotMinter(val workspaceIdentity: String) {
          * then key index — because that is what makes the packed counter
          * monotone in feed order under `DOT_ORDER`.
          *
-         * **That freedom is conditional on BDS1's read-only stance, and the
-         * next split must re-check it.** The one place a packed counter leaves
-         * this process is `metadata.cn_dot`'s `<sourceId>:<counter>` rendering
-         * ([CnDotRegistry]), and in BDS1 nothing writes it back — the mirror
-         * only reads (`bd export`, `dolt sql`) and holds the registry in
-         * memory. Once a write-back path exists, counters minted under one
-         * split are persisted in the tracker itself under a [sourceId] that is
-         * a pure function of [workspaceIdentity] and therefore survives the
-         * re-split: a stale cn_dot could then numerically equal a dot freshly
-         * minted for a different feed position, and the echo drop would discard
-         * a real record. Re-splitting after that lands needs the source name
-         * changed with it, or the split frozen.
+         * **The split is now FROZEN, not merely conditionally free.** BDS1's
+         * read-only stance — the freedom this paragraph used to describe —
+         * ended with feature computenet-6wc.3: `civictech.demo.beadsmirror.writeback.WriteBackApplier`
+         * now writes `metadata.cn_dot`'s `<sourceId>:<counter>` rendering
+         * (`civictech.demo.beadsmirror.writeback.Provenance.render`) back into
+         * the tracker itself on every imposed row, under a [sourceId] that is a
+         * pure function of [workspaceIdentity] and therefore survives a
+         * restart. A re-split after that landing would leave every already
+         * written `cn_dot` decoding under the OLD layout while every freshly
+         * minted dot decodes under the NEW one: a stale persisted counter could
+         * then numerically equal a dot freshly minted for an unrelated feed
+         * position, and a reader keyed on that value (the echo gate,
+         * computenet-6wc.3.1) would misclassify a genuine local edit as an
+         * echo, or the reverse. Re-splitting the bits therefore requires
+         * changing [sourceId]'s source name together with it — never the split
+         * alone.
          */
         fun counter(position: FeedPosition, keyIndex: Int): Long {
             require(position.commitHeight in 0..MAX_COMMIT_HEIGHT) {
