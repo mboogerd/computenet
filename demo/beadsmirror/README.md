@@ -64,6 +64,83 @@ before any `bd import`) is ever built.
 beadsmirror --workspace <path> --write-back
 ```
 
+## Echo suppression: the mirror does not re-read its own writes
+
+Write-back creates a loop. Every `bd import` the applier runs produces a Dolt
+commit **in the workspace this same mirror polls**, so without suppression the
+poller sees that commit, the projector mints a fresh local dot for it, and the
+mirror gossips its own write back to the peer as if a human had made it — at
+best a phantom concurrent edit that dot order has to keep re-adjudicating.
+Feature computenet-6wc.3 closes that loop.
+
+**Two `metadata` keys, written by the applier on every imposed row.**
+
+| key | what it is |
+|---|---|
+| `cn_dot` | provenance: `"<sourceId>:<counter>"` of the dot-order-max winning dot across every live key of that issue in the fold — the mirror state the row was imposed *from*. Written by `WriteBackPlanner`, deterministic. |
+| `cn_echo` | the echo signal: a UUID unique to **one** `bd import` invocation. Minted by `WriteBackApplier` immediately before the import. |
+
+They are two keys rather than one because `cn_dot` cannot identify a commit: it
+legitimately repeats across two impositions of the same row (a local edit whose
+dot loses on height is re-overwritten by the same peer winner, re-stamping the
+same `cn_dot`). Both keys are stripped from **both** sides before any `metadata`
+comparison (`Provenance.strip`), and an object empty after stripping counts as
+absent — otherwise a re-baseline would project the stamp into the fold and the
+mirror would impose every issue on every restart.
+
+**The gate rule.** `EchoGate` sits between the poller and the projector
+(`onBatch = { applyAll(echoGate.admit(it)) }`), one per `WorkspaceMirror` — not
+per projector, because a re-baseline swaps the projector wholesale and an
+expectation registered before the swap must still suppress the commit that lands
+after it. The applier announces each token through `expectEcho` *before* the
+import and withdraws it with `cancelEcho` on a non-zero exit. A record is an
+**echo** if and only if both:
+
+1. its `to_metadata.cn_echo` is a JSON string equal to a token pending for that
+   issue, **and**
+2. its `from_metadata.cn_echo` differs — i.e. **this commit wrote the token**.
+
+A match consumes the expectation, so one announced token suppresses at most one
+commit. Everything else is **local** and reaches the projector unchanged. The
+second condition is the whole point: the stamp *persists* in `bd`'s `metadata`,
+so every later genuine edit on a stamped row carries the same token on both diff
+sides. A rule keyed on "have I seen this provenance before" — which is what the
+earlier `CnDotRegistry` drop did, and why it was removed — silently drops real
+edits on every stamped row, forever.
+
+**It is observable per commit.** Each record, echo and local alike, emits one
+`MirrorEvent.RecordClassified(commitHash, issueId, classification, cnDot,
+cnEcho, workspaceIdentity)` through the ordinary event sink, plus `echoCount` /
+`localCount` on the gate. A suppression nobody can observe is a suppression
+nobody can debug. There is no HTTP field for it.
+
+With write-back off, nothing ever calls `expectEcho`, every record classifies
+local, and the gate is a pass-through that counts.
+
+### Recorded limitations — known, not solved
+
+- **`dolt_diff_issues` is not a stable `bd` surface.** The whole provenance read
+  depends on it; a `bd` schema change can move it out from under this without
+  warning. Hardening against that is explicitly out of scope.
+- **`--dolt-auto-commit` batching coalesces commits**, and `bd compact` / `gc` /
+  `flatten` squash the feed. (The checkpoint half of that is already handled by
+  the `CheckpointGone` re-baseline; the classification half is not.)
+- **A local `bd` edit landing inside the import window on the SAME row is
+  misclassified** — the import's commit carries the token, and a concurrent
+  human edit folded into that same commit rides through suppressed. A narrow
+  race, documented rather than closed.
+- **A restart between an import and the poll that would have seen its commit
+  loses the pending token.** The start-time re-baseline consumes that commit
+  instead, so no phantom follows — but that corner is reasoned, not measured.
+- **Multi-hop topologies are out of scope.** Everything above is stated and
+  tested for the two-node rig only.
+
+The end-to-end evidence is `e2e.EchoSuppressionTwoNodeTest` (real `bd`/`dolt`, a
+real socket, write-back on **both** nodes): the stamp read back out of
+`dolt_diff_issues`, the classification of that exact commit, no dot minted for
+it on either node, and both stores, folds and `dolt_log`s quiescent over eight
+poll intervals afterwards.
+
 ## Real-workspace tests need `bd` and `dolt` on PATH
 
 This module's test suite mixes synthetic tests (in-process fixtures, no
