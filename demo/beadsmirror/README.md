@@ -64,6 +64,44 @@ before any `bd import`) is ever built.
 beadsmirror --workspace <path> --write-back
 ```
 
+## Removal: close is the only interface; bd delete is barred
+
+Feature computenet-6wc.2. Two ways an issue could stop existing, and they are
+handled completely differently:
+
+| | originate (`bd close` locally) | replicate (write-back applier) |
+|---|---|---|
+| close (`status=closed`) | `bd close` — guards fire (open blocking deps, open epic children) and a refusal mutates nothing | ordinary field imposition, same as any other field (`status`/`closed_at`/`close_reason` are members of `ImposedFields.FIELDS`) — no guard runs, by construction, because the import path has none. So a close that a guard refused when attempted locally can still land when it arrives as the dot-order winner from a peer (`writeback.WriteBackCloseTest`, `e2e.WriteBackCloseTwoNodeTest`). |
+| delete (hard delete) | `bd delete` — a real, unrecoverable row removal | **never invoked, anywhere in this module** — there is no removal path here at all |
+
+**Why `bd delete` is barred.** A hard delete has no wire representation: `bd
+export`/`bd import` carry rows, not tombstones, so a deleted row simply stops
+appearing — and "stopped appearing" is indistinguishable from "not part of
+this delta". Treating absence as a removal signal is anti-durable under
+bidirectional replication: the next hop from *any* peer that still holds the
+row reintroduces it, with no error and no diagnostic (spike claim (c) C4,
+`doc/spike/bds0/claim-c-close-replication.md`). Close does not have this
+problem — `status`/`closed_at`/`close_reason` are ordinary fields that ride
+the wire like any other, so a close converges the same way a priority edit
+does.
+
+**Accepted consequence.** Because close (not delete) is the only removal this
+module replicates, and the open-children guard `bd close` enforces locally is
+epic-only (not inherited by field imposition), a closed epic with
+an open child can exist, stably, on every machine after replication — the
+applier will not "fix" that by touching the child, because absence of the
+child from a winner is never a removal signal either.
+
+**Guard.** `RemovalBoundaryTest` scans this module's entire main source set
+for the double-quoted string literal `"delete"` (never flagged: backtick KDoc
+prose describing the boundary, such as this section's own).
+
+**Operational warning.** Running `bd delete` by hand against a workspace this
+mirror replicates does not do what it looks like: the row disappears locally,
+then comes back on the next converging poll from any peer that still has it —
+silently, with nothing in the mirror's output calling out a "restore".
+`bd close` is the operation that actually sticks.
+
 ## Echo suppression: the mirror does not re-read its own writes
 
 Write-back creates a loop. Every `bd import` the applier runs produces a Dolt

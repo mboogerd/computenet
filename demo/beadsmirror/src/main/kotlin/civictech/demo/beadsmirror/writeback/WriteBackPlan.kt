@@ -227,8 +227,11 @@ object WriteBackPlanner {
      * destination workspace) is still [PlanOutcome.Impose] — `bd import`
      * upserts, so the row creates it. An issue the export holds but the fold
      * does not is never visited here at all: a row absent from the fold is
-     * never treated as a deletion (that is feature computenet-6wc.2's
-     * boundary).
+     * never treated as a deletion — deletion is absence, and absence carries
+     * no wire representation to act on, which is exactly why the write-back
+     * layer never invokes `bd delete` either (feature computenet-6wc.2's
+     * boundary, pinned by `RemovalBoundaryTest`; see [BdImport]'s KDoc for
+     * the anti-durability reason).
      *
      * [cnDot] supplies feature computenet-6wc.3's provenance stamp: the
      * `metadata.cn_dot` value to weave into each issue's row, or `null` to
