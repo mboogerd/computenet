@@ -20,27 +20,29 @@ import kotlinx.serialization.json.buildJsonObject
 import org.junit.jupiter.api.Test
 
 /**
- * The seams between computenet-dqj.2.1 (issue-field OR-map), .2.2
- * (dependency-edge SetCell) and .2.3 (cn_dot echo drop) — the interactions no
- * single task's suite owns, because each task tested only its own half of a
- * projector all three of them edit.
+ * The seams between computenet-dqj.2.1 (issue-field OR-map) and .2.2
+ * (dependency-edge SetCell) — the interactions neither task's suite owns,
+ * because each tested only its own half of a projector both of them edit.
  *
- * Three properties, all feature-level (computenet-dqj.2):
+ * Two properties, both feature-level (computenet-dqj.2):
  *
- * 1. [admits] gates **both** halves: a dropped record mints no field dot *and*
- *    no edge tag. `EchoDropTest` proves the field half only — every record it
- *    builds carries `edgeDiffs = emptyList()` and it never constructs the
- *    projector with a [SetCell] at all.
- * 2. Field dots and edge tags are genuinely disjoint, read off the **emitted
+ * 1. Field dots and edge tags are genuinely disjoint, read off the **emitted
  *    deltas** rather than re-derived from [DotMinter] with the same formula the
  *    projector used. `MirrorEdgeProjectionTest`'s disjointness test recomputes
  *    the edge index as `minter.dot(position, fieldDots.size)`, so it agrees with
  *    an off-by-one in [MirrorProjector] instead of catching it.
- * 3. Replay idempotence of a **mixed** sequence — field edits and edge changes
- *    and an echoed record interleaved. Each task proved its own half replays;
- *    the two tombstone floors are implemented separately (`mintedLive` vs
- *    `mintedLiveEdges`) and the echo registry is shared across both, so the
- *    combination is its own property.
+ * 2. Replay idempotence of a **mixed** sequence — field edits and edge changes
+ *    interleaved, including a record carrying a `metadata.cn_dot` stamp. Each
+ *    task proved its own half replays; the two tombstone floors are implemented
+ *    separately (`mintedLive` vs `mintedLiveEdges`), so the combination is its
+ *    own property.
+ *
+ * **The stamped record is the point of the last two tests since feature
+ * computenet-6wc.3** (decision 6wc.3-D5). It used to be echo-*dropped* on every
+ * replay after the first, so replay idempotence was never actually exercised on
+ * it; with the drop gone it replays like any other record, which is what shows
+ * the idempotence rested on replay-identical dots all along rather than on the
+ * registry that was removed.
  *
  * Pure JVM — no `bd`, no `dolt`, no JUnit assumptions — so this is a real CI
  * gate like its three siblings.
@@ -109,46 +111,7 @@ class MirrorProjectorSeamTest {
     private fun json(value: String) = JsonPrimitive(value).toString()
 
     // -----------------------------------------------------------------
-    // seam 1 — admits() gates BOTH halves
-    // -----------------------------------------------------------------
-
-    @Test
-    fun `an echo-dropped record mints neither field dots nor edge tags`() {
-        val map = OrMapCell<MirrorKey, String>()
-        val set = SetCell<MirrorEdge>()
-        val projector = MirrorProjector(minter, map, set)
-
-        // seed "peerX:41" as held, via a record that carries it.
-        projector.apply(record(1, "A", DiffType.ADDED, fields = listOf("status" to "open"), cnDot = "peerX:41"))
-
-        val mapBefore = map.state()
-        val edgesBefore = set.membership()
-        val mapEmitted = mapEmissions(map)
-        val setEmitted = setEmissions(set)
-
-        // a record carrying the SAME held cn_dot, this time with BOTH a field
-        // diff and a dependency-edge diff: neither half may leave a trace.
-        val dropped = projector.apply(
-            record(
-                2, "B", DiffType.ADDED,
-                fields = listOf("status" to "closed"),
-                edges = listOf(Triple(DiffType.ADDED, "A", "blocks")),
-                cnDot = "peerX:41",
-            )
-        )
-
-        dropped shouldBe null
-        map.state() shouldBe mapBefore
-        set.membership() shouldBe edgesBefore
-        mapEmitted.isEmpty() shouldBe true
-        setEmitted.isEmpty() shouldBe true
-        projector.edgeView() shouldBe emptySet()
-        projector.view().keys shouldBe setOf("A")
-        projector.echoDropCount shouldBe 1
-    }
-
-    // -----------------------------------------------------------------
-    // seam 2 — the two halves' dots are disjoint, read off the deltas
+    // seam 1 — the two halves' dots are disjoint, read off the deltas
     // -----------------------------------------------------------------
 
     @Test
@@ -187,11 +150,11 @@ class MirrorProjectorSeamTest {
     }
 
     // -----------------------------------------------------------------
-    // seam 3 — a MIXED sequence replays idempotently
+    // seam 2 — a MIXED sequence replays idempotently
     // -----------------------------------------------------------------
 
     /**
-     * Field edits, edge add/remove/re-add and an echoed record interleaved.
+     * Field edits, edge add/remove/re-add and a stamped record interleaved.
      * Every record is replayed from the top on each pass, which is what a
      * crash-restart before the checkpoint advanced actually produces.
      */
@@ -200,7 +163,9 @@ class MirrorProjectorSeamTest {
         record(2, "B", DiffType.ADDED, fields = listOf("status" to "open"), edges = listOf(Triple(DiffType.ADDED, "A", "blocks"))),
         record(3, "A", DiffType.MODIFIED, fields = listOf("status" to "closed", "priority" to "1")),
         record(4, "B", DiffType.MODIFIED, edges = listOf(Triple(DiffType.REMOVED, "A", "blocks"))),
-        // an echoed record: carries a cn_dot, touches both halves.
+        // a stamped record: carries a cn_dot, touches both halves. Since
+        // computenet-6wc.3 the projector holds no cn_dot rule at all, so it is
+        // projected — and replayed — like any other record.
         record(5, "C", DiffType.ADDED, fields = listOf("status" to "open"), edges = listOf(Triple(DiffType.ADDED, "A", "related")), cnDot = "peerX:41"),
         record(6, "B", DiffType.MODIFIED, edges = listOf(Triple(DiffType.ADDED, "A", "blocks"))),
         record(7, "A", DiffType.MODIFIED, fields = listOf("priority" to null)),
@@ -243,13 +208,27 @@ class MirrorProjectorSeamTest {
         twice.keys().forEach { key -> twice.value(key) shouldBe once.value(key) }
     }
 
+    /**
+     * The stamped record specifically: replaying it neither duplicates issue C
+     * nor loses it, and its edge survives every pass. Before computenet-6wc.3
+     * this record was dropped whole from the second pass onwards, so nothing
+     * here was ever proven about replaying it.
+     */
     @Test
-    fun `the echoed record in a mixed sequence is dropped once per replay and never twice-minted`() {
-        val projector = MirrorProjector(minter, OrMapCell(), SetCell())
-        projector.applyAll(mixedSequence())
-        projector.echoDropCount shouldBe 0 // first pass: the cn_dot is new
+    fun `the stamped record in a mixed sequence replays to the same single value`() {
+        val map = OrMapCell<MirrorKey, String>()
+        val projector = MirrorProjector(minter, map, SetCell())
 
         projector.applyAll(mixedSequence())
-        projector.echoDropCount shouldBe 1 // second pass: it is held, dropped whole
+        val liveAfterOnce = map.state().liveDots(MirrorKey("C", "status"))
+        projector.applyAll(mixedSequence())
+        projector.applyAll(mixedSequence())
+
+        projector.view()["C"] shouldBe mapOf("status" to json("open"))
+        (MirrorEdge("C", "A", "related") in projector.edgeView()) shouldBe true
+        // one live dot, the same one: a replay re-mints it rather than adding
+        // a second live value beside it.
+        map.state().liveDots(MirrorKey("C", "status")) shouldBe liveAfterOnce
+        liveAfterOnce.size shouldBe 1
     }
 }

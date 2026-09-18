@@ -8,7 +8,6 @@ import civictech.cell.data.delta.TaggedMapDelta
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
 import civictech.demo.beadsmirror.feed.EdgeDiff
-import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * Folds the feed's [ChangeRecord]s into the mirror's issue-field OR-map
@@ -41,13 +40,23 @@ import kotlinx.serialization.json.JsonPrimitive
  * that same record reserves ([edgeDelta]) — so a field put and an edge add
  * minted by the same record never collide on one dot, even though the two
  * live in unrelated cells and a collision would cause no cell-level harm on
- * its own. [heldDots] is what makes that matter: it is one registry shared by
- * both halves, and two different puts rendering to the same cn_dot would
- * defeat "a dot identifies exactly one put".
+ * its own. The rule is kept anyway, because "a dot identifies exactly one put"
+ * is exactly what a `cn_dot` provenance stamp asserts about the value it names
+ * (feature computenet-6wc.3 decision 6wc.3-D1, where the write-back applier
+ * stamps the winning dot onto the row it imposes), and two different puts
+ * rendering to the same `<sourceId>:<counter>` would make that assertion false.
  *
- * **Scope.** Issue fields and dependency edges. The `metadata.cn_dot` echo
- * drop (computenet-dqj.2.3) gates both, before either mints anything
- * ([admits]); re-baseline (dqj.3) and HTTP serving (dqj.4) are later features.
+ * **Scope.** Issue fields and dependency edges. **This projector applies every
+ * record it is handed**: echo suppression is not its business and no longer
+ * lives here (feature computenet-6wc.3, decision 6wc.3-D5). The BDS1
+ * `metadata.cn_dot` held-dot drop that used to gate `apply` was removed with
+ * that feature, because a stamp persists in bd's own `metadata` — so "the
+ * mirror already holds this cn_dot" fires on every *later genuine* edit of a
+ * stamped row and drops it, permanently. Recognition now belongs to
+ * [EchoGate], which sits between the poller and this projector, keys on a
+ * writer-registered token's two diff sides rather than on a dot, and withholds
+ * an echo before `apply` ever sees it. Re-baseline (dqj.3) and HTTP serving
+ * (dqj.4) are separate features.
  *
  * **Both structural guards can be seeded away — for tests only.** The two
  * paragraphs above describe guards, and a guard nothing can switch off is a
@@ -135,78 +144,22 @@ class MirrorProjector(
     private val mintedLiveEdges = mutableMapOf<MirrorEdge, MutableSet<Timestamp>>()
 
     /**
-     * The held-dot registry (computenet-dqj.2.3): the cn_dot renderings of
-     * every dot this projector has itself minted, plus the cn_dot of every
-     * record it has applied. Consulted by [admits] before any minting.
-     */
-    private val heldDots = CnDotRegistry()
-
-    /**
-     * How many inbound records have been dropped whole because their
-     * `metadata.cn_dot` was already held — an observable counter so the drop
-     * is externally verifiable rather than only internally consistent.
-     */
-    var echoDropCount: Int = 0
-        private set
-
-    /**
      * Apply one record. Returns the delta injected, or `null` when the record
-     * was effective-nothing (an edge-only record, a dropped echo, or a replay
-     * that re-minted dots the map already holds and tombstoned nothing new).
+     * was effective-nothing (an edge-only record, or a replay that re-minted
+     * dots the map already holds and tombstoned nothing new).
      */
     fun apply(record: ChangeRecord): TaggedMapDelta<MirrorKey, String>? {
-        // ---- pre-apply hook (computenet-dqj.2.3, cn_dot echo drop) ----------
-        // A record whose metadata.cn_dot the mirror already holds is dropped
-        // whole, before any dot is minted, so the drop leaves no trace in the
-        // map or in `mintedLive`. `admits` is that decision point.
-        if (!admits(record)) return null
-
         val delta = fieldDelta(record)
         if (delta != null) cell.deltaInlet.call.propagate(delta)
 
         val edgeChange = edgeDelta(record)
         if (edgeChange != null) edges.deltaInlet.call.propagate(edgeChange)
 
-        cnDotOf(record)?.let(heldDots::add)
-
         return delta
     }
 
     /** Apply records in order; convenience for a feed batch. */
     fun applyAll(records: Iterable<ChangeRecord>) = records.forEach(::apply)
-
-    /**
-     * The record's `metadata.cn_dot`, or `null` when it carries none.
-     *
-     * Read from `newMetadata`; a [DiffType.REMOVED] row has no `to_` side, so
-     * its provenance is read off `oldMetadata` instead. Anything other than a
-     * JSON string is not a shape this envelope can carry, so it is treated as
-     * absent rather than coerced.
-     */
-    private fun cnDotOf(record: ChangeRecord): String? {
-        val source = record.newMetadata
-            ?: if (record.diffType == DiffType.REMOVED) record.oldMetadata else null
-        val element = source?.get(CN_DOT_FIELD)
-        return (element as? JsonPrimitive)?.takeIf { it.isString }?.content
-    }
-
-    /**
-     * Whether this record reaches the projection at all.
-     *
-     * A record without a `metadata.cn_dot` (the normal single-node case) is
-     * always admitted. One carrying a cn_dot this projector already holds —
-     * because it minted the dot itself, or because it applied this exact
-     * record before — is dropped whole and counted; anything else is admitted
-     * and its cn_dot is recorded as held once [apply] commits it.
-     */
-    private fun admits(record: ChangeRecord): Boolean {
-        val cnDot = cnDotOf(record) ?: return true
-        if (heldDots.holds(cnDot)) {
-            echoDropCount++
-            return false
-        }
-        return true
-    }
 
     /**
      * The record's field columns, in the deterministic order [keysOf] and
@@ -301,7 +254,6 @@ class MirrorProjector(
             tombstone(key)
             puts[key] = mapOf(dot to value)
             mintedLive.getOrPut(key) { LinkedHashSet() } += dot
-            heldDots.addMinted(dot)
         }
 
         when (record.diffType) {
@@ -369,7 +321,7 @@ class MirrorProjector(
      * ever minting it), never less. A record's edges therefore never mint
      * under a dot [fieldDelta] also minted, even though the two would land in
      * unrelated cells and a collision would cause no cell-level harm on its
-     * own — see the class doc's note on why [heldDots] makes it matter anyway.
+     * own — see the class doc's note on why the rule is kept anyway.
      *
      * **ADD and MODIFIED both mint an add-tag; MODIFIED also retracts the
      * stale old-type triple first (computenet-dqj.7).** `bd`'s own schema
@@ -414,7 +366,6 @@ class MirrorProjector(
                     val tag = minter.dot(record.position, keyIndex)
                     adds[edge] = setOf(tag)
                     mintedLiveEdges.getOrPut(edge) { LinkedHashSet() } += tag
-                    heldDots.addMinted(tag)
                 }
                 DiffType.MODIFIED -> {
                     // Retract the stale old-type triple first, in the same
@@ -426,7 +377,6 @@ class MirrorProjector(
                     val tag = minter.dot(record.position, keyIndex)
                     adds[edge] = setOf(tag)
                     mintedLiveEdges.getOrPut(edge) { LinkedHashSet() } += tag
-                    heldDots.addMinted(tag)
                 }
             }
         }
@@ -469,9 +419,6 @@ class MirrorProjector(
     /** The materialized dependency set: the workspace's current edges. */
     fun edgeView(): Set<MirrorEdge> = edges.membership()
 }
-
-/** The `metadata` JSON column's provenance field (epic computenet-dqj acceptance rule 5). */
-private const val CN_DOT_FIELD: String = "cn_dot"
 
 /**
  * Which of [MirrorProjector]'s two structural guards are **seeded away** —
