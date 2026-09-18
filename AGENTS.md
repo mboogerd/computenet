@@ -485,7 +485,11 @@ that time, unrecoverable the time the other machine mints the same id.
 this session has *claimed* are exclusive by that claim, cannot collide, and
 keep their readable dotted ids — `bd create --parent=` is correct there. Reads,
 updates, claims and closes through `bd` are unaffected; only *create* draws
-from the counter.
+from the counter. The one exception within a claim: epic->feature breakdown
+children still go through `create-ticket.sh --breakdown <token>`, because a
+partition can give the epic two claimants and the /work breakdown path routes
+them through create-ticket.sh with a breakdown stamp so a raced pair can be
+adjudicated (`.claude/skills/work/references/recovery.md`, "Collisions").
 
 `.beads/hooks/pre-push` warns (never blocks) when this machine has recently
 minted a dotted id under a parent it does not own — the `wpvy.47` signature.

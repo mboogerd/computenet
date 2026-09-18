@@ -1,0 +1,15 @@
+# computenet-mmovu (sibling task under feature computenet-6wc.5): wires the
+# breakdown-marker.sh mechanism (computenet-nvnys) into the /work breakdown
+# path. SKILL.md step 4 gains the acquire bracket (0/11/12/2/3 routing) before
+# the dispatch template, a token line inside the template, and a scripts-table
+# row for breakdown-marker.sh (+10). breakdown.md gains the epic-breakdown
+# `check` step ahead of the first create, the create-ticket.sh --breakdown
+# routing sentence, and one create-ticket.sh example under "Epic breakdown"
+# (+16). recovery.md's "Collisions" paragraph and traps.md's same-id row grew
+# in place (0 net lines — both are already single-line paragraphs/rows, so the
+# survivor-route and feature/epic-scope additions cost characters, not lines).
+work +26
+# AGENTS.md "Creating tickets under a shared epic" gains one clause carving
+# out the epic->feature breakdown exception to "claimed parents use
+# bd create --parent=", pointing at recovery.md's new Collisions route.
+AGENTS.md +4
