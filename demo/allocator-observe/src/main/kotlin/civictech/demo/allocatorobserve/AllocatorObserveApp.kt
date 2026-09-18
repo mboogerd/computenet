@@ -9,6 +9,7 @@ import civictech.demo.allocatorobserve.http.IngestHealth
 import civictech.demo.allocatorobserve.http.PollLoopStopped
 import civictech.demo.allocatorobserve.http.ServedState
 import civictech.demo.allocatorobserve.http.ServedStateHolder
+import civictech.demo.allocatorobserve.http.frozenJson
 import civictech.demo.allocatorobserve.http.toJson
 import civictech.demo.allocatorobserve.ingest.CheckpointState
 import civictech.demo.allocatorobserve.ingest.OffsetCheckpoint
@@ -188,7 +189,25 @@ class AllocatorObserveApp(
         // with exactly the document the next frame will replace — and with
         // exactly what `GET /state` answers (fpml.4-D2). The placeholder is
         // unreachable in normal operation: [start] runs a tick before binding.
-        shell.sse(EVENTS_PATH) { holder.current?.toJson() ?: NOT_YET_POLLED }
+        //
+        // computenet-w20a4: read the holder first, then the stopped flag — the
+        // same pessimistic order `AllocatorRoutes.handle` uses for `/state*`
+        // (fpml.4-D6) — so a connecting client is never handed a live-looking
+        // document for a fold that is actually frozen. While [holder.stopped]
+        // is non-null the frame carries the same `frozenJson` envelope the
+        // `/state*` 503 body does, so a client that connects AFTER the poll
+        // loop has died can tell a frozen fold from a merely quiet one from the
+        // SSE stream alone — the gap D6's "SSE simply stops receiving frames"
+        // sentence covers only an already-connected subscriber, not this one.
+        shell.sse(EVENTS_PATH) {
+            val state = holder.current
+            val frozen = holder.stopped
+            when {
+                state == null -> NOT_YET_POLLED
+                frozen != null -> state.frozenJson(frozen)
+                else -> state.toJson()
+            }
+        }
     }
 
     /** The port the shell actually bound; meaningful only after [start]. */
@@ -283,7 +302,17 @@ class AllocatorObserveApp(
                 } catch (t: Throwable) {
                     // Record BEFORE reporting, so a failing stderr write cannot
                     // leave the loop dead and the routes still answering 200.
-                    holder.stop(PollLoopStopped(t, lastPollAt))
+                    val stopped = PollLoopStopped(t, lastPollAt)
+                    holder.stop(stopped)
+                    // computenet-w20a4: an ALREADY-CONNECTED /events subscriber
+                    // would otherwise only see frames stop arriving — the exact
+                    // confusion fpml.4-D6 forbids on the HTTP side. Send the
+                    // same frozenJson envelope the next `/state*` request would
+                    // get, once, so a connected client is told rather than left
+                    // to infer death from silence. `holder.current` is non-null
+                    // here: [start] always completes one tick before this
+                    // thread starts, so some prior tick swapped a value in.
+                    holder.current?.let { last -> shell.broadcast { last.frozenJson(stopped) } }
                     System.err.println(
                         "allocator-observe: the poll loop has stopped for good on $t; its served state is " +
                             "frozen at ${lastPollAt ?: "(never polled)"} and every state route now answers 503.",
