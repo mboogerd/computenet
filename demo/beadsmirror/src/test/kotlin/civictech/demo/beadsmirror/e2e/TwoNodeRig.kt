@@ -222,6 +222,14 @@ class TwoNodeRig private constructor(
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
+     *
+     * **Limit of the check, stated where it is made.** "The head advanced" is
+     * a floor, not a proof that THIS mutation is the commit that advanced it:
+     * on a write-back-enabled node the applier commits its own imports into
+     * the same workspace, so a concurrent import can satisfy the wait. It
+     * removes the measured confound (a head that never moves at all) and
+     * nothing more; a caller that needs the mutation's own commit identified
+     * must still read `dolt_diff_issues`, as this file's callers do.
      */
     fun mutate(node: Node, vararg bdArgs: String, timeoutMs: Long = COMMIT_VISIBLE_MS): String {
         val before = node.logHead().firstOrNull()

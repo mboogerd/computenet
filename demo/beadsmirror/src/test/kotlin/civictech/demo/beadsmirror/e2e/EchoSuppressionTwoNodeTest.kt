@@ -72,6 +72,37 @@ import java.util.UUID
  * projected, a fresh dialer dot outranks the listener's on counter, and it
  * gossips across. Reported on the bead.
  *
+ * ## The load-sensitivity this test was filed for (bug computenet-rl2qx)
+ *
+ * "a genuine dialer edit on a stamped row is local and converges the listener"
+ * timed out under full-module load while passing in isolation. **Measured
+ * rate, darwin/arm64 (16 cores), bd 1.1.2 / dolt 2.2.3, 2026-09-18:
+ * 2 failures in 20 runs (10%)** of this method, against 0/20 for
+ * [WriteBackTwoNodeTest]'s `R1` and 0/20 for [TwoNodeRigTest]'s late-join
+ * case — so the two sibling classes do NOT share it at that sample size.
+ * The harness stood in for 20 full-module gates (~140 min) in ~15: the three
+ * methods looping concurrently in three JVMs plus 10 CPU burners, load
+ * average 11 -> 44 across the sample (`scripts/flake-loop/SuiteLoop.java`,
+ * `--method`, one run per iteration).
+ *
+ * **What the failures actually were, read off the rig's own progress dump
+ * rather than inferred.** Not the starved poll loop the bead's description
+ * guessed at. In BOTH reproductions — one at the first imposition await, one
+ * at the genuine-edit classification await — the timing-out node had
+ * `checkpoint == dolt_log head`, `0 commit(s) behind head`,
+ * `pollerFailure == null` and **0 records classified across the whole 30 s**,
+ * while its write-back scheduler kept ticking (+20 events). The poll loops
+ * were idle because their feeds were empty: the `bd update` the test had just
+ * run, and which had exited 0, **had not become a commit in its workspace's
+ * `dolt_log`**. `quiesce()` cannot catch that — "my checkpoint is at my head"
+ * is vacuously true of a head that never moved — so the test went on to await
+ * a convergence nothing had been asked to carry.
+ *
+ * Hence [TwoNodeRig.mutate] at every `bd` mutation site below: it returns only
+ * once the mutation is a commit the mirror's feed can see. No assertion, value
+ * or await condition of clauses 2/3 changed; what changed is that their
+ * precondition is now established instead of assumed.
+ *
  * Guarded exactly like [WriteBackTwoNodeTest] and [TwoNodeRigTest]:
  * green-but-**skipped** where `bd`/`dolt` are not on PATH.
  */
@@ -303,7 +334,15 @@ class EchoSuppressionTwoNodeTest {
             listener.view()[x]?.get("priority")?.contains("2") == true
         }
         rigOrFail.await("the listener's bd store follows") { bdShowPriority(listener, x) == 2 }
-        bdShowPriority(dialer, x) shouldBe 2
+        // Bounded, like the listener's line above, rather than an instantaneous
+        // read (bug computenet-rl2qx): the dialer's own applier can still be
+        // mid-pass with the pre-edit winner when this line is reached — two of
+        // the three failures measured on this method after the `mutate` fix
+        // were exactly this read returning 1 while everything upstream of it
+        // had already converged to 2. The asserted property is unchanged: the
+        // dialer's OWN bd store must hold its own edit. Only the instant it is
+        // sampled at became a window.
+        rigOrFail.await("the dialer's bd store still holds its own edit") { bdShowPriority(dialer, x) == 2 }
     }
 
     // ---------------------------------------------------------------- helpers
