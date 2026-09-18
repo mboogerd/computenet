@@ -57,16 +57,27 @@ import java.util.concurrent.atomic.AtomicReference
  * events land at exactly D1's and D2's fixture `observedAt` instants and the
  * final report's sub-interval boundary is the fixture's.
  *
+ * A restart at boundary `s` runs steps 0..s on the first app, stops it, and
+ * lets the SECOND app's `start()` tick be step `s + 1`'s poll — a restart takes
+ * wall-clock time, so the replacement process comes up with the clock already
+ * moved on. That detail is load-bearing rather than cosmetic: a restart at an
+ * unmoved clock would re-observe the current declaration at the very instant
+ * the lost event carried, so a lost history would reconstruct itself by
+ * coincidence and the journal would look unnecessary (measured: with the second
+ * app started before step `s + 1`'s inputs, `s = 0` passed with the replay
+ * commented out).
+ *
  * ## What each restart boundary discriminates
  *
  * The three boundaries are not three copies of one assertion; each kills a
  * different half of the fix, which is why all three are run:
  *
  * - **s = 0** (stop after the declaration, before any record) fails without the
- *   declaration-history journal: D1 is lost, so the restarted app sees only D2,
- *   the window's first sub-interval disappears and `beforeFirstDeclarationHours`
- *   becomes non-empty. It cannot fail for want of cold-start reading — no record
- *   had been consumed yet.
+ *   declaration-history journal: D1 is lost and re-observed three days late, so
+ *   the window's first sub-interval starts at the wrong instant and
+ *   `beforeFirstDeclarationHours` becomes non-empty. It cannot fail for want of
+ *   cold-start reading — no record had been consumed yet, and an empty log
+ *   leaves no checkpoint to resume past.
  * - **s = 1** (stop after r1..r6) fails without the cold-start whole-file read:
  *   the restarted app resumes past the checkpoint into an empty fold and never
  *   sees records 1..6. It also fails without the journal, for s = 0's reason.
@@ -188,11 +199,14 @@ class AppRestartEquivalenceTest {
         first.stop()
 
         // A second process over the SAME run directory and log. Its `start()`
-        // tick is the cold-start whole-file read, and its construction is where
-        // the journal replay happens.
+        // tick is step `boundary + 1`'s poll — a restart takes wall-clock time,
+        // so the app comes back with the clock already moved on rather than
+        // frozen at the instant it died. That tick is the cold-start whole-file
+        // read; the journal replay happened in the constructor before it.
+        rig.inputs(boundary + 1)
         val second = rig.app().start()
         second.declarationReplayFailures shouldBe 0L
-        for (step in boundary + 1..LAST_STEP) {
+        for (step in boundary + 2..LAST_STEP) {
             rig.inputs(step)
             second.pollOnce()
         }
