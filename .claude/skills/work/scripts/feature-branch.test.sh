@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for feature-branch.sh. Stubs `bd` and `gh` on PATH; runs inside a
 # throwaway git repo so the worktree root resolves under the tmpdir.
-# Exits 0 if all cases pass. Expect "6 passed, 0 failed".
+# Exits 0 if all cases pass. Expect "9 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/feature-branch.sh"}
@@ -19,6 +19,12 @@ echo "$*" >> "$BD_LOG"
 case "$1" in
   show)    cat "$CTRL/show.json" ;;
   update)  case "$*" in *--parent*) : ;; esac
+           # bd really does print this, on STDOUT — the whole of computenet-x8h92.
+           # The stub printed NOTHING here, so the suite could not see the leak
+           # it was meant to guard (computenet-5ari's twin defect in the sibling
+           # script). A stub that is quieter than the real tool hides exactly the
+           # class of bug the script is being tested for.
+           echo "✓ Updated issue: $2"
            [ -f "$CTRL/update-fail" ] && exit 1; exit 0 ;;
   comment) [ -f "$CTRL/comment-fail" ] && exit 1; exit 0 ;;
 esac
@@ -39,6 +45,11 @@ fixture() { CASE=$((CASE+1)); export CTRL="$ROOT/c$CASE" BD_LOG="$ROOT/c$CASE/bd
             mkdir -p "$CTRL"; : > "$BD_LOG"; }
 show_branch() { printf '[{"id":"computenet-f1","metadata":{"branch":"%s"}}]' "$1" > "$CTRL/show.json"; }
 run() { (cd "$ROOT/repo" && "$SCRIPT" computenet-f1 2>&1); }
+# STDOUT ONLY. run() merges stderr, and every case below reads it with `tail -1`
+# — which is the caller-side workaround computenet-x8h92 is about, baked into
+# the suite. A caller doing `read br wt < <(feature-branch.sh <id>)` gets the
+# FIRST line, so purity has to be asserted against stdout alone.
+run_out() { (cd "$ROOT/repo" && "$SCRIPT" computenet-f1 2>/dev/null); }
 
 # 1. no metadata.branch: record first, then print the defaults
 fixture; printf '[{"id":"computenet-f1","metadata":{}}]' > "$CTRL/show.json"
@@ -81,6 +92,23 @@ echo '[{"number":9,"state":"MERGED","url":"http://pr/9"}]' > "$CTRL/prs.json"
 out=$(run); st=$?
 [ "$st" = 0 ] && grep -q -- "--append-notes" "$BD_LOG" \
   && ok "refused comment falls back to --append-notes" || bad "notes: exit=$st log=$(cat "$BD_LOG")"
+
+# --- stdout carries only the branch/worktree line (computenet-x8h92) ---
+# Both writing paths print bd's "✓ Updated issue" ahead of the line callers
+# parse. The read-only path (case 2) never writes, so it was already clean.
+fixture; printf '[{"id":"computenet-f1","metadata":{}}]' > "$CTRL/show.json"
+out=$(run_out); st=$?
+[ "$st" = 0 ] && [ "$(printf '%s' "$out" | wc -l | tr -d ' ')" = 0 ]   && [ "$out" = "$(printf 'feature/computenet-f1\t%s/computenet-f1' "$WT_ROOT")" ]   && ok "fresh feature: stdout is one line, the branch/worktree pair"   || bad "fresh stdout: exit=$st out=$(printf %q "$out")"
+
+fixture; show_branch feature/computenet-f1
+echo '[{"number":9,"state":"MERGED","url":"http://pr/9"}]' > "$CTRL/prs.json"
+out=$(run_out); st=$?
+[ "$st" = 0 ] && [ "$out" = "$(printf 'feature/computenet-f1-r2\t%s/computenet-f1-r2' "$WT_ROOT")" ]   && ok "successor branch: stdout is one line, no bd confirmation"   || bad "successor stdout: exit=$st out=$(printf %q "$out")"
+
+# The first line is what `read br wt < <(...)` consumes — the failing shape.
+fixture; printf '[{"id":"computenet-f1","metadata":{}}]' > "$CTRL/show.json"
+read -r br wt < <(cd "$ROOT/repo" && "$SCRIPT" computenet-f1 2>/dev/null)
+[ "$br" = "feature/computenet-f1" ] && [ "$wt" = "$WT_ROOT/computenet-f1" ]   && ok "the FIRST stdout line parses as branch and worktree"   || bad "first line: br=$(printf %q "$br") wt=$(printf %q "$wt")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
