@@ -430,7 +430,16 @@ else `$PORT`, else 8080. See the README for run commands.
   Still to come: the differential oracle against socaity's replay script
   (`computenet-fpml.5` — socaity has implemented neither the log nor the
   script yet, so that comparison is external evidence this module cannot
-  produce on its own).
+  produce on its own). Feature `computenet-fpml.5` lands both halves of that
+  oracle in `oracle/`: an in-repo differential suite that runs in CI,
+  comparing the served report against `ReferenceReport` — a reference fold
+  written from the README's exchange-shape section alone, with no import
+  from `view`, `http`, `ingest` or `declaration` (`ReferenceIndependenceTest`
+  enforces that lexically) — and, task `computenet-fpml.5.4`, the gated
+  `oracle/ExternalOracleComparisonTest`, which accepts an oracle report
+  produced by socaity's own script via the `allocator.oracle.*` project
+  properties and is reported SKIPPED, not passing, whenever that report is
+  absent, so CI never claims the cross-repo comparison ran.
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.

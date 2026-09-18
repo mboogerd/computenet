@@ -225,8 +225,17 @@ fun ServedState.toJson(): String = json.encodeToString(ServedStateDto.serializer
 /** The `ingest` member alone, for `GET /state/ingest` — byte-identical to `toJson`'s `ingest` field. */
 fun ServedState.ingestJson(): String = json.encodeToString(IngestDto.serializer(), ingest.toDto(records))
 
+/**
+ * The `report` exchange document for one [AllocatorReport] alone — the same
+ * encoder [ServedState.reportJson] delegates to, so the F5 external-oracle
+ * harness (`oracle/ReportUnderTest`) and `GET /state/report` provably encode
+ * one way: neither can drift into a second, undetected serialisation of the
+ * same value.
+ */
+fun AllocatorReport.toReportJson(): String = json.encodeToString(ReportDto.serializer(), toDto())
+
 /** The `report` member alone, for `GET /state/report` — byte-identical to `toJson`'s `report` field. */
-fun ServedState.reportJson(): String = json.encodeToString(ReportDto.serializer(), report.toDto())
+fun ServedState.reportJson(): String = report.toReportJson()
 
 /**
  * The same frozen-fold envelope `AllocatorRoutes`' `/state*` 503 body carries
