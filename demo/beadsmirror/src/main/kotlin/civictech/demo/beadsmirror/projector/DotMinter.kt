@@ -122,13 +122,15 @@ class DotMinter(val workspaceIdentity: String) {
          * pure function of [workspaceIdentity] and therefore survives a
          * restart. A re-split after that landing would leave every already
          * written `cn_dot` decoding under the OLD layout while every freshly
-         * minted dot decodes under the NEW one: a stale persisted counter could
-         * then numerically equal a dot freshly minted for an unrelated feed
-         * position, and a reader keyed on that value (the echo gate,
-         * computenet-6wc.3.1) would misclassify a genuine local edit as an
-         * echo, or the reverse. Re-splitting the bits therefore requires
-         * changing [sourceId]'s source name together with it — never the split
-         * alone.
+         * minted dot decodes under the NEW one: a stale persisted `cn_dot`
+         * value would then decode to a counter it never actually meant,
+         * corrupting the provenance a later reader relies on to correlate an
+         * imported row with the mirror state that produced it (the echo
+         * gate's `provenance(...)` reporting, computenet-6wc.3.1 — `cn_dot`
+         * itself is never read for the echo/local classification, only
+         * carried through for reporting). Re-splitting the bits therefore
+         * requires changing [sourceId]'s source name together with it — never
+         * the split alone.
          */
         fun counter(position: FeedPosition, keyIndex: Int): Long {
             require(position.commitHeight in 0..MAX_COMMIT_HEIGHT) {

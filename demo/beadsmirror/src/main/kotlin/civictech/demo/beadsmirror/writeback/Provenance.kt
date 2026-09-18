@@ -36,7 +36,7 @@ object Provenance {
     /** Both stamp keys, stripped from every metadata comparison (6wc.3-D2) and from a re-baselined fold value. */
     val STAMP_KEYS: Set<String> = setOf(CN_DOT, CN_ECHO)
 
-    /** `"<sourceId>:<counter>"` — the exact rendering `cn_dot` carries and a later reader parses back. */
+    /** `"<sourceId>:<counter>"` — the exact rendering `cn_dot` carries. Opaque to every current reader: nothing parses it back, it is compared and reported verbatim. */
     fun render(dot: Timestamp): String = "${dot.sourceId}:${dot.counter}"
 
     /**

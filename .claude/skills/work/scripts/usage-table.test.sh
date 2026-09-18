@@ -39,8 +39,8 @@ SKILL=${1:-"$HERE/../SKILL.md"}
 
 # The mention list sibling-tests.sh keys on. Not read by the checker, which
 # globs the directory — this exists so that editing any one of them runs this.
-COVERS="bead.sh check-files-claim.sh claim-epic.sh claim-item.sh
-create-ticket.sh ensure-worktree.sh epic-of.sh feature-branch.sh
+COVERS="bead.sh breakdown-marker.sh check-files-claim.sh claim-epic.sh
+claim-item.sh create-ticket.sh ensure-worktree.sh epic-of.sh feature-branch.sh
 file-friction.sh junit-count.py merge-task.sh next-batch.py publish-beads.sh
 ready-in-epic.sh reclaim-worktrees.sh resumable-epics.sh session-holder.sh
 sweep-merged-prs.sh sweep-stale-claims.sh twin-scan.py verify-branch-sync.sh

@@ -158,13 +158,22 @@ block the dependents on it. When a feature needs another epic's feature, wire
 feature to feature and comment on your epic naming both ids; never substitute
 an epic-to-epic edge.
 
+For an EPIC breakdown, run `.claude/skills/work/scripts/breakdown-marker.sh
+check <epic-id>` immediately before your first create and proceed only on OWN
+(10) with the token the dispatch handed you: NONE means the local DB lost the
+marker, FOREIGN or BOTH mean stop and report.
+
 **Re-run `bd list --parent=<id> --all --json` immediately before your first
 create, and stop and report if the child set changed since your first read.**
 If your dotted ids skip numbers while you create, another writer is creating
 under this parent: stop and report rather than finish the set.
 
-Under the parent you were dispatched on, `bd create --parent=<id>` is safe;
-under any parent the session does not hold, use `.claude/skills/work/scripts/create-ticket.sh`.
+Under the parent you were dispatched on, `bd create --parent=<id>` is safe for
+a FEATURE breakdown's tasks; an EPIC breakdown's features always go through
+`.claude/skills/work/scripts/create-ticket.sh --parent <epic-id> --breakdown
+<token> ...` (6wc.5-D5 — under partition two claimants can both hold the epic,
+and dotted ids would then collide on `child_counters`). Under any parent the
+session does not hold, use `create-ticket.sh` either way.
 
 Backticks inside a double-quoted argument execute, so bodies go in files
 written with a quoted heredoc ([traps.md](traps.md#bd)):
@@ -193,6 +202,13 @@ Your children are features, each independently reviewable. Read the epic with
 - **If the prompt says this is a sub-epic under an epic the session holds, do
   not claim it, set an assignee, add an `owner:` label, or comment on it.** The
   orchestrator records its provenance.
+
+Create each feature with the token the dispatch handed you, never `bd create
+--parent=` (see "Metadata and edges" above):
+
+```bash
+.claude/skills/work/scripts/create-ticket.sh --type=feature --parent=<epic-id> --breakdown <token> --title="<outcome>" --desc-file <scratch>/<epic-id>-f1-desc.md --accept-file <scratch>/<epic-id>-f1-accept.md --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
+```
 
 ## Feature breakdown
 
