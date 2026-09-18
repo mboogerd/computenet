@@ -15,11 +15,21 @@ work +6
 #
 # THE FIX IS MECHANICAL and costs no budget: verify-ready.sh, which already runs
 # per id at selection — exactly when the check has to happen — now prints
-# STALE-BASE / LIVE-BASE / UNCHECKED-BASE beside its verdict, from
-# `git merge-base --is-ancestor origin/<base> origin/main`. Advisory, so the
-# READY/BLOCKED contract and the exit codes are untouched. Six new tests; the
-# discrimination was proved by mutation (flipping the STALE label reddens
+# STALE-BASE / LIVE-BASE / UNCHECKED-BASE beside its verdict, from the branch's
+# PR STATE (`gh pr list --head <base> --state all --json state`). Advisory, so
+# the READY/BLOCKED contract and the exit codes are untouched. Seven new tests;
+# the discrimination was proved by mutation (flipping the STALE label reddens
 # exactly one).
+#
+# NOT from git ancestry. The first draft used
+# `git merge-base --is-ancestor origin/<base> origin/main`, which is FALSE for
+# every branch this repo has ever landed: merges are squashes, so the squash
+# commit is not a descendant of the branch tip. Measured on three merged
+# branches; and on a real bead, computenet-utib7 (base_branch=feature/
+# computenet-fpml.5, PR #917 merged), the ancestry draft printed LIVE-BASE —
+# "cut from it and target the PR at it" — where the PR-state version prints
+# STALE-BASE. Its stubbed tests passed throughout, because the stub encoded the
+# same misunderstanding as the code.
 #
 # The +6 is the prose that mechanism cannot carry: 5a saying the field is a
 # snapshot to validate rather than metadata to obey, and review.md telling the

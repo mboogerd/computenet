@@ -42,11 +42,14 @@
 # and re-derives what main already has. Checked here rather than left to prose
 # because the check has to happen at selection, which is when this runs.
 #
-# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`, plus a
-# `STALE-BASE`/`MISSING-BASE`/`UNCHECKED-BASE` note under either when
-# metadata.base_branch is set and no longer usable. The notes are advisory and
-# do not change the exit code: an id whose base is stale is still ready, it just
-# has to be cut from origin/main with the field cleared.
+# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`, plus one
+# note under either when metadata.base_branch is set:
+#   STALE-BASE     its PR has MERGED, or is CLOSED unmerged — do not cut from it
+#   LIVE-BASE      its PR is open — cut from it and target the PR at it
+#   UNCHECKED-BASE no PR state available (no PR, or `gh` failed) — check by hand
+# The notes are advisory and do not change the exit code: an id whose base is
+# stale is still ready, it just has to be cut from origin/main with the field
+# cleared.
 # Exit: 0 = at least one READY; 1 = none ready; 2 = bad usage;
 #       3 = a `bd dep list` (or this id's `bd show`) call failed — NOTHING was checked, do not route
 #           on this (the ready-in-epic.sh exit-3 class).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "13 passed, 0 failed".
+# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "15 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-ready.sh"}
@@ -25,6 +25,12 @@ chmod +x "$ROOT/bin/bd"
 # so an ancestry check reports every landed branch as unmerged.
 cat > "$ROOT/bin/gh" <<'STUB'
 #!/usr/bin/env bash
+# --state all is LOAD-BEARING: without it real `gh pr list` returns only OPEN
+# PRs, so a merged branch comes back empty and STALE-BASE degrades silently to
+# UNCHECKED-BASE — the defect, restored. A stub that ignores argv cannot see
+# that, which is the blind spot that let this check's first (ancestry) version
+# ship green. So record argv and assert on it.
+printf '%s\n' "$*" >> "$CTRL/gh.log"
 cat "$CTRL/prstate"
 STUB
 chmod +x "$ROOT/bin/gh"
@@ -84,6 +90,14 @@ note "an open base_branch is LIVE" t6 "LIVE-BASE"
 
 : > "$ROOT/prstate"
 note "no PR state is UNCHECKED, not assumed either way" t6 "UNCHECKED-BASE"
+
+# The stub above ignores argv by design; this is what makes --state all visible.
+grep -q -- '--state all' "$CTRL/gh.log" \
+  && { pass=$((pass+1)); echo "  PASS asks gh for ALL states, not just open PRs"; } \
+  || { fail=$((fail+1)); echo "  FAIL gh call omits --state all: $(cat "$CTRL/gh.log")"; }
+grep -q -- '--head feature/computenet-lioe' "$CTRL/gh.log" \
+  && { pass=$((pass+1)); echo "  PASS asks about the recorded base_branch"; } \
+  || { fail=$((fail+1)); echo "  FAIL gh call does not name the base: $(cat "$CTRL/gh.log")"; }
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
