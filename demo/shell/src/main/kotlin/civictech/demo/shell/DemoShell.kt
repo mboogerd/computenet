@@ -33,6 +33,58 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     private val server: HttpServer = HttpServer.create(endpoint(port, bindAddress), 0)
     private val clients = CopyOnWriteArrayList<HttpExchange>()
 
+    // computenet-tp93v: guards [sse]'s "compute the initial frame, register,
+    // write it" sequence against [broadcast] so the two can never interleave.
+    // The bug this closes: [sse] used to register the exchange into [clients]
+    // BEFORE computing and writing its initial frame. A [broadcast] landing in
+    // that window would find the exchange already registered and win the race
+    // to write to it — `HttpExchange.sseFrame`'s own per-exchange lock only
+    // stops two writes from tearing one frame, not from landing in the wrong
+    // ORDER, because it says nothing about which of two contending writers
+    // acquires it first. A client could then receive a newer broadcast frame
+    // (e.g. allocator-observe's terminal `frozenJson` envelope) followed by the
+    // stale frame its own connection had already computed — exactly the
+    // "frozen fold looks live again" confusion computenet-w20a4 removed for
+    // every non-racing case. A single lock shared between registration and
+    // broadcast — rather than only the per-exchange one [send] already takes —
+    // is what the fix needs: it is the only thing that can serialize "a client
+    // is joining" against "a broadcast is going out to whoever has joined so
+    // far", which a per-exchange lock cannot do (a broadcast touches every
+    // client's exchange, not just the one that is connecting). With it, [sse]
+    // either finishes registering-and-writing before a racing [broadcast] can
+    // even see the new client (so that client gets only its own initial
+    // frame, computed fresh — and if the loop had already died by then, that
+    // computation itself observes the frozen state and labels it correctly),
+    // or the racing [broadcast] blocks until [sse] releases the lock and then
+    // is guaranteed to write after it. Either way the newest frame a client
+    // has been sent is never followed by an older one.
+    //
+    // **What it costs, stated where the lock is.** This lock is held across the
+    // frame COMPUTATION and across the write to EVERY client, and an SSE write
+    // is an unbounded blocking write into a socket. One client that is still
+    // connected but has stopped reading therefore stalls, for as long as its
+    // socket buffer stays full, BOTH the broadcasting thread — for every demo
+    // here that is the host's single scheduler virtual thread, so the demo's
+    // whole dataflow — and every new connection and every other route, because
+    // `server.executor = null` runs all handlers on one dispatcher thread,
+    // which then blocks in [sse] waiting for this lock. Only the first of those
+    // two stalled before this lock existed; the second is new, and is the price
+    // of the ordering guarantee above. Nothing here bounds the write. The
+    // inspector's `SseBroadcaster` (bounded, drop-oldest per-client queues) is
+    // the shape that does, and is what to reach for if a demo ever serves
+    // clients it does not control.
+    //
+    // **No lock-order inversion exists today, and it is not free.** The only
+    // locks taken *under* this one are each demo's own `state` monitor (inside
+    // the `frame()`/`initialFrame()` lambda) and the per-exchange monitor
+    // (inside [send]). No path takes either of those and *then* takes this one:
+    // every hub/observe callback releases `state` before it calls broadcast,
+    // and an `inlet.call` mutation made while holding `state` only enqueues
+    // onto the host scheduler rather than running the callback inline. A demo
+    // that calls [broadcast] while holding a lock its own frame computation
+    // takes would deadlock against a concurrently connecting client.
+    private val clientsLock = Any()
+
     // Set by sse() for its one registration (no demo registers more than one
     // SSE endpoint). slotfinder is the one demo whose page JS relies on the
     // browser EventSource's onerror-reconnect, which only fires once the
@@ -53,26 +105,41 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     }
 
     /**
-     * Register an SSE endpoint at [path]. Each connecting client is added to
-     * the broadcast list and immediately sent [initialFrame] (computed at
-     * connect time) so a fresh tab catches up without waiting for the next
-     * change. [closeOnFailure] preserves slotfinder's original behavior of
-     * closing the exchange on a failed write (see [closeOnSendFailure]);
-     * every other demo leaves it at the default `false`.
+     * Register an SSE endpoint at [path]. Each connecting client is
+     * immediately sent [initialFrame] (computed at connect time, under
+     * [clientsLock]) and only then added to the broadcast list, so a fresh
+     * tab catches up without waiting for the next change, and — the
+     * computenet-tp93v guarantee — never receives that catch-up frame AFTER
+     * a broadcast that raced its connection (see [clientsLock]).
+     * [closeOnFailure] preserves slotfinder's original behavior of closing
+     * the exchange on a failed write (see [closeOnSendFailure]); every other
+     * demo leaves it at the default `false`.
      */
     fun sse(path: String, closeOnFailure: Boolean = false, initialFrame: () -> String) {
         closeOnSendFailure = closeOnFailure
         server.createContext(path) { exchange ->
             exchange.beginSse()
-            clients += exchange
-            send(exchange, initialFrame())
+            synchronized(clientsLock) {
+                val frame = initialFrame()
+                clients += exchange
+                send(exchange, frame)
+            }
         }
     }
 
-    /** Compute [frame] once and push it to every connected SSE client. */
+    /**
+     * Compute [frame] once and push it to every connected SSE client, under
+     * [clientsLock] so a client that is mid-registration in [sse] either
+     * completes first (and receives this broadcast afterward, correctly) or
+     * is not registered yet (and simply misses this one broadcast, having
+     * computed its own initial frame fresh) — never both registered and
+     * still short of its own initial write when this runs.
+     */
     fun broadcast(frame: () -> String) {
-        val json = frame()
-        clients.forEach { send(it, json) }
+        synchronized(clientsLock) {
+            val json = frame()
+            clients.forEach { send(it, json) }
+        }
     }
 
     private fun send(exchange: HttpExchange, json: String) {
