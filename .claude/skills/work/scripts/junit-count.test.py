@@ -255,5 +255,18 @@ with tempfile.TemporaryDirectory() as tmp:
     check("no args: exit 2", rc == 2, f"rc={rc}")
     check("no args: usage on stderr", "usage:" in err, err)
 
+    # -h/--help is ASKED FOR, so usage goes to stdout and exits 0. Before
+    # computenet-x8h92 the flag fell through to `dirs` and printed
+    # NO-SUCH-PATH — the same output this tool gives when results are missing,
+    # which an agent reads as "the suite did not run".
+    for flag in ("-h", "--help"):
+        rc, out, err = run(flag)
+        check(f"{flag}: exit 0", rc == 0, f"rc={rc}")
+        check(f"{flag}: usage on stdout", "usage:" in out, out)
+        check(f"{flag}: nothing on stderr", err == "", err)
+        check(f"{flag}: not mistaken for a path",
+              "NO-SUCH-PATH" not in out and "NO-SUCH-PATH" not in err,
+              out + err)
+
 print(f"{count - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
