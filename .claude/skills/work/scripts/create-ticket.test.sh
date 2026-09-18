@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "19 passed, 0 failed".
+# Expect "23 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -83,6 +83,33 @@ fixture
 out=$(run --model sonnet --metadata '["a.kt"]'); st=$?
 [ "$st" = 2 ] && ! grep -q "^create" "$BD_LOG" \
   && ok "--model refuses a non-object --metadata" || bad "model-badmeta: exit=$st log=$(cat "$BD_LOG")"
+
+# 4e. --breakdown alone lands in metadata (6wc.5-D5: the stamp the survivor
+#     rule reads to tell one breakdown's feature set from the other's)
+fixture
+out=$(run --breakdown deadbeefcafe0001); st=$?
+[ "$st" = 0 ] && grep "^create" "$BD_LOG" | grep -q '{"breakdown":"deadbeefcafe0001"}' \
+  && ok "--breakdown alone sets metadata" || bad "breakdown-alone: exit=$st log=$(cat "$BD_LOG")"
+
+# 4f. --breakdown merges with --metadata
+fixture
+out=$(run --breakdown deadbeefcafe0001 --metadata '{"files":["a.kt"]}'); st=$?
+[ "$st" = 0 ] && grep "^create" "$BD_LOG" | grep -q '"files":\["a.kt"\],"breakdown":"deadbeefcafe0001"' \
+  && ok "--breakdown merges into metadata" || bad "breakdown-merge: exit=$st log=$(cat "$BD_LOG")"
+
+# 4g. --breakdown and --model coexist: a breakdown-minted feature carries both
+fixture
+out=$(run --breakdown deadbeefcafe0001 --model sonnet --metadata '{"files":["a.kt"]}'); st=$?
+[ "$st" = 0 ] \
+  && grep "^create" "$BD_LOG" | grep -q '"files":\["a.kt"\],"model":"sonnet","breakdown":"deadbeefcafe0001"' \
+  && ok "--breakdown and --model both survive the merge" \
+  || bad "breakdown-model: exit=$st log=$(cat "$BD_LOG")"
+
+# 4h. a non-object --metadata is refused before anything is created
+fixture
+out=$(run --breakdown deadbeefcafe0001 --metadata '"nope"'); st=$?
+[ "$st" = 2 ] && ! grep -q "^create" "$BD_LOG" \
+  && ok "--breakdown refuses a non-object --metadata" || bad "breakdown-badmeta: exit=$st log=$(cat "$BD_LOG")"
 
 # 5. create returns non-JSON: exit 1, nothing parented
 fixture; touch "$CTRL/create-garbage"
