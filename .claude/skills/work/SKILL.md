@@ -96,7 +96,8 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `bead.sh` | `[-C <dir>] <id> [-r] [jq-filter]` — a bead's own fields; exit 3 = spilled to the file named on stderr |
 | `junit-count.py` | `[--expect-classes N] <results-dir \| result-file.xml>...` — JUnit XML counts and freshness |
 | `twin-scan.py` | `<parent-id>` — children filed twice by a double breakdown |
-| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--claim]` — the create path under a shared parent |
+| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim]` — the create path under a shared parent |
+| `breakdown-marker.sh` | `<subcommand> <epic-id>` — check, acquire (pull+push), or survivor (adjudicate) the epic's write-time breakdown marker |
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — files a friction item |
 | `publish-beads.sh` | `(no arguments)` — the publication push, with rejection recovery |
 
@@ -230,6 +231,14 @@ than make it up (say so in the prompt). `twin-scan.py <epic>` flags children
 filed twice: one twin closed soon after creation with no comments → trust the
 survivor; otherwise treat it as a collision ([recovery.md](references/recovery.md), "Collisions").
 
+Before dispatching, run `breakdown-marker.sh acquire <epic>` (timeout >= 300s;
+it pushes). Exit 0 → dispatch below with the printed `TOKEN`; 11 (FOREIGN) →
+already broken down elsewhere: list children again and continue at step 5, or
+park per "Still no children" below if that listing is empty; 12 (BOTH) → run
+`breakdown-marker.sh survivor <epic>` and route its `CLOSE` list per
+recovery.md "Collisions"; 2 → unpublished acquisition, stop and report; 3 is
+never an answer — treat it as 2.
+
 ```
 Agent({
   description: "Break down epic <epic-id>",
@@ -238,6 +247,7 @@ Agent({
   prompt: `You are breaking down epic <epic-id> into features. It is claimed for you; do not claim it.
 You have no worktree: work from <main-checkout>, read .claude/skills/work/references/agent.md and
 .claude/skills/work/references/breakdown.md with git show origin/main:<path>.
+The breakdown token is <token>; stamp every feature you create with it.
 Report the feature ids created, and any re-scope of the epic.`
 })
 ```
