@@ -256,6 +256,21 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   when the `cd` fails, manufacturing this same false zero from the other
   direction. The rule is about chaining PEER searches, not about dropping
   `&&` from a guard.
+- Seventh member, the most-reported of the family and the one that costs a
+  batch rather than a search: **an unquoted word starting with `=` is expanded
+  by zsh to the path of that command.** `echo ===` dies with
+  `(eval):1: == not found`, and — the damaging half — **every command batched
+  after it never runs**, so a batch whose later half was the actual work reads
+  as having run and produced nothing. Remedy: quote the separator
+  (`echo '==='`), or use a `# ---` comment. This one is close to
+  agent-specific: batching commands into one Bash call is the encouraged habit
+  here, and a decorative `====` separator between them is the natural way to
+  keep that output readable, while a human typing one command at a time never
+  hits it. Nine-plus instances (computenet-a49j, computenet-6eyp,
+  computenet-5hqk1, computenet-wfgba), five in one slot, which is why it is
+  here and in the top-level execution rules every dispatched agent reads first
+  (`.claude/skills/work/references/agent.md`) — twice fixed already by putting
+  the text somewhere agents did not reach in time.
 
 ## Verification
 
