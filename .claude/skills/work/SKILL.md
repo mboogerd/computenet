@@ -333,10 +333,23 @@ implementer builds on it literally:
 - `acceptance-placement.sh`: MISPLACED → move criteria into the field; ABSENT →
   check the description, then write criteria to [breakdown.md](references/breakdown.md)'s
   standard and say so in the prompt.
-- Test each stated blocker, precondition, prescribed repro or handoff
-  instruction against the artifact it names, not a commit subject. Stale →
-  correct the bead. Only checkable by doing the work → call it a hypothesis in
-  the prompt; disproving it is a result.
+- Test **every claim the bead makes about state outside itself** against the
+  artifact that would show it, not a commit subject: a blocker, a precondition,
+  a prescribed repro, a handoff instruction, a cited baseline or prior
+  measurement, an assertion about what earlier work did or did not establish.
+  That list is illustrative, and deliberately so — enumerating kinds is what
+  let a superseded baseline and a false "prior work never tested this" through
+  (computenet-d5y5); neither is a blocker, a precondition or a repro.
+- A cited record needs two answers, not one: does it still say what the bead
+  says it says, **and is it still the current version of itself?** A superseded
+  record usually sits exactly where it was with its original numbers intact,
+  and is corrected by a LATER entry elsewhere in the same file — so grep the
+  corpus for the correction instead of reading only the lines cited. A
+  measurement also carries its host: figures from another machine or JVM are
+  not a baseline for this one, and dispersion is the quantity most sensitive to
+  both. Where they are, authorize a same-host control arm rather than the
+  cross-host comparison. Stale → correct the bead. Only checkable by doing the
+  work → call it a hypothesis in the prompt; disproving it is a result.
 - Files claim: run `check-files-claim.sh`, then reason about what else must
   change ([breakdown.md](references/breakdown.md), "The files claim"); widen and
   comment why, then amend any acceptance clause the widening contradicts (old

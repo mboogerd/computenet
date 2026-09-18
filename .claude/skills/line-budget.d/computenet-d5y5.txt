@@ -1,0 +1,26 @@
+work +13
+# computenet-d5y5: 5b's re-validate bullet enumerated NOUNS — blocker,
+# precondition, repro, handoff — so a session holding a bead that cites a
+# measurement had no reason to think the bullet addressed it. Two instances got
+# through, neither of which is any of those nouns:
+#
+#  - 2026-08-26 (computenet-x9e.14): the bead quoted a dispersion baseline that
+#    the corpus itself marks superseded, in plain text, in the same file — and
+#    both baselines were measured on another machine, for the quantity most
+#    sensitive to host and JVM. Followed literally it would have published a
+#    cross-host, cross-vendor-JVM comparison against superseded JDK-26 numbers,
+#    looking entirely reasonable. Two agents caught it separately.
+#  - 2026-09-02: "prior work never tested X" relayed into a dispatch prompt as
+#    established fact, in the orchestrator's voice. False — the prior session's
+#    21 preserved logs already contained the experiment. 24 runs bought nothing.
+#
+# So the bullet now leads with the general rule (every claim the bead makes
+# about state outside itself) and keeps the nouns as illustration, which is the
+# remedy the second reporter proposed on the bead.
+#
+# The second bullet is the part the nouns could never have covered: a cited
+# record needs TWO answers — does it still say this, and is it still the current
+# version of itself — because a superseded record keeps its original numbers and
+# is corrected by a later entry elsewhere in the file. Plus the host clause and
+# the same-host control arm, which is what the 08-26 session actually did and
+# which defeated a run-order confound no single sweep could separate.
