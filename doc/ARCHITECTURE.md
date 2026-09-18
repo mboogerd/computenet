@@ -410,10 +410,18 @@ else `$PORT`, else 8080. See the README for run commands.
   `/state/report` response and no `/events` frame ever mixes pre- and
   post-batch state; the routes are read-only (405 on any non-GET) and answer
   503 with the last good document under `stale` once the poll loop has died.
-  **A restart is not yet equivalent to an uninterrupted run**: the byte-offset
-  checkpoint persists under the run directory but neither cell is durable, so a
-  restarted process resumes the tail past the checkpoint into an empty fold and
-  serves only what arrived after it (`computenet-fpml.5.2` closes this).
+  **A restart serves the report an uninterrupted run would**, without either
+  cell being durable (`computenet-fpml.5.2`): the app's first spend-log poll of
+  each process ignores the persisted byte offset and re-reads the log whole —
+  the log IS the durable fold — while later polls in that process resume from
+  the checkpoint as before; and the declaration history, which `allocation.yaml`
+  cannot reconstruct because it holds only the current declaration, is
+  journalled line by line under the run directory and replayed into the cell
+  before the first poll. What still does not cross a restart is the *account* of
+  how the process got there rather than the fold: ingest health (`polls`,
+  `reBaselineCount`, `lastPollAt`, the failure counters, `checkpointOffset`) is
+  per-process by construction, and a log truncation or replacement that happened
+  while the app was down is absorbed uncounted by the cold-start whole read.
   Still to come: the differential oracle against socaity's replay script
   (`computenet-fpml.5` — socaity has implemented neither the log nor the
   script yet, so that comparison is external evidence this module cannot
