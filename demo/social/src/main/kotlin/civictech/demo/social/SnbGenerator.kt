@@ -199,10 +199,16 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
         val forumById = (staticForums + dynamicForums.map { it.forum }).associateBy { it.id }
         val forumIds = (staticForums.map { it.id } + dynamicForums.map { it.forum.id })
 
-        // --- memberships: preferentially drawn from the moderator's knows neighbourhood ---
+        // --- memberships: preferentially drawn from the moderator's knows neighbourhood;
+        // (personId, forumId) is unique per SNB's forum_hasMember_person, so a drawn pair
+        // that already exists is skipped (never redrawn into a different pair silently) ---
         val staticMemberships = ArrayList<Membership>()
         val dynamicMemberships = ArrayList<IU5AddMembership>()
-        for (i in 0 until membershipCount) {
+        val membershipPairs = LinkedHashSet<Pair<Long, Long>>()
+        var membershipAttempts = 0
+        val maxMembershipAttempts = membershipCount * 30
+        while (membershipPairs.size < membershipCount && membershipAttempts < maxMembershipAttempts) {
+            membershipAttempts++
             val forumId = forumIds[random.nextInt(forumIds.size)]
             val moderatorId = forumById.getValue(forumId).moderatorId
             val neighbours = adjacency[moderatorId]
@@ -211,6 +217,9 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
             } else {
                 personIds[random.nextInt(personIds.size)]
             }
+            val pair = personId to forumId
+            if (pair in membershipPairs) continue
+            membershipPairs += pair
             val date = after(personById.getValue(personId).creationDate, forumById.getValue(forumId).creationDate)
             if (isDynamic(date)) {
                 dynamicMemberships += IU5AddMembership(personId, forumId, date)
@@ -219,10 +228,16 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
             }
         }
         if (dynamicMemberships.isEmpty()) {
-            val personId = dynamicPersonIds.last()
-            val forumId = forumIds.first()
-            val date = after(personById.getValue(personId).creationDate, forumById.getValue(forumId).creationDate)
-            dynamicMemberships += IU5AddMembership(personId, forumId, date)
+            fun firstUnusedForumFor(personId: Long): Long? = forumIds.firstOrNull { (personId to it) !in membershipPairs }
+            val forcedPersonId = dynamicPersonIds.lastOrNull { firstUnusedForumFor(it) != null }
+            if (forcedPersonId != null) {
+                val forumId = firstUnusedForumFor(forcedPersonId)!!
+                membershipPairs += forcedPersonId to forumId
+                val date = after(personById.getValue(forcedPersonId).creationDate, forumById.getValue(forumId).creationDate)
+                dynamicMemberships += IU5AddMembership(forcedPersonId, forumId, date)
+            }
+            // else: every (dynamic person, forum) pair is already taken; the natural draw
+            // above already exhausted the space, so there is no fresh pair left to force.
         }
 
         // --- messages: posts first, then comments as reply chains over the growing pool ---
@@ -307,13 +322,21 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
             dynamicComments += IU7AddComment(message)
         }
 
-        // --- likes ---
+        // --- likes: (personId, messageId) is unique per SNB's person_likes_*, so a drawn
+        // pair that already exists is skipped rather than emitted as a second like ---
         val staticLikes = ArrayList<Like>()
         val dynamicLikesPost = ArrayList<IU2LikePost>()
         val dynamicLikesComment = ArrayList<IU3LikeComment>()
-        for (i in 0 until likeCount) {
+        val likePairs = LinkedHashSet<Pair<Long, Long>>()
+        var likeAttempts = 0
+        val maxLikeAttempts = likeCount * 30
+        while (likePairs.size < likeCount && likeAttempts < maxLikeAttempts) {
+            likeAttempts++
             val message = messagePool[random.nextInt(messagePool.size)]
             val personId = personIds[random.nextInt(personIds.size)]
+            val pair = personId to message.id
+            if (pair in likePairs) continue
+            likePairs += pair
             val date = after(personById.getValue(personId).creationDate, message.creationDate)
             val isPost = message.forumId != null
             if (isDynamic(date)) {
@@ -324,16 +347,26 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
             }
         }
         if (dynamicLikesPost.isEmpty()) {
-            val personId = dynamicPersonIds.last()
-            val target = messagePool.first { it.forumId != null }
-            val date = after(personById.getValue(personId).creationDate, target.creationDate)
-            dynamicLikesPost += IU2LikePost(personId, target.id, date)
+            val posts = messagePool.filter { it.forumId != null }
+            fun firstUnusedPostFor(personId: Long): Message? = posts.firstOrNull { (personId to it.id) !in likePairs }
+            val forcedPersonId = dynamicPersonIds.lastOrNull { firstUnusedPostFor(it) != null }
+            if (forcedPersonId != null) {
+                val target = firstUnusedPostFor(forcedPersonId)!!
+                likePairs += forcedPersonId to target.id
+                val date = after(personById.getValue(forcedPersonId).creationDate, target.creationDate)
+                dynamicLikesPost += IU2LikePost(forcedPersonId, target.id, date)
+            }
         }
         if (dynamicLikesComment.isEmpty()) {
-            val personId = dynamicPersonIds.last()
-            val target = messagePool.first { it.replyOfId != null }
-            val date = after(personById.getValue(personId).creationDate, target.creationDate)
-            dynamicLikesComment += IU3LikeComment(personId, target.id, date)
+            val comments = messagePool.filter { it.replyOfId != null }
+            fun firstUnusedCommentFor(personId: Long): Message? = comments.firstOrNull { (personId to it.id) !in likePairs }
+            val forcedPersonId = dynamicPersonIds.lastOrNull { firstUnusedCommentFor(it) != null }
+            if (forcedPersonId != null) {
+                val target = firstUnusedCommentFor(forcedPersonId)!!
+                likePairs += forcedPersonId to target.id
+                val date = after(personById.getValue(forcedPersonId).creationDate, target.creationDate)
+                dynamicLikesComment += IU3LikeComment(forcedPersonId, target.id, date)
+            }
         }
 
         // --- assemble ---
