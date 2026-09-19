@@ -152,6 +152,38 @@ class SocialGeneratorTest {
         assertTrue(missingBySeed.isEmpty(), "seeds missing arms: $missingBySeed")
     }
 
+    // --- membership/like uniqueness (computenet-hn8qo) ------------------
+
+    @Test
+    fun `memberships and likes are unique per (person, forum) and (person, message) across seeds`() {
+        val cases = ((0L until 20L).toList() + listOf(42L)).map { it to 0.02 } + listOf(42L to 0.1)
+
+        for ((seed, scale) in cases) {
+            val generator = SnbGenerator(seed, scale)
+            val slice = generator.staticSlice()
+            val updates = generator.updates().toList()
+
+            val membershipPairs = ArrayList<Pair<Long, Long>>()
+            slice.memberships.forEach { membershipPairs += it.personId to it.forumId }
+            updates.filterIsInstance<IU5AddMembership>().forEach { membershipPairs += it.personId to it.forumId }
+            val duplicateMemberships = membershipPairs.groupingBy { it }.eachCount().filterValues { it > 1 }
+            assertTrue(
+                duplicateMemberships.isEmpty(),
+                "seed=$seed scale=$scale: duplicate (personId, forumId) memberships: $duplicateMemberships",
+            )
+
+            val likePairs = ArrayList<Pair<Long, Long>>()
+            slice.likes.forEach { likePairs += it.personId to it.messageId }
+            updates.filterIsInstance<IU2LikePost>().forEach { likePairs += it.personId to it.postId }
+            updates.filterIsInstance<IU3LikeComment>().forEach { likePairs += it.personId to it.commentId }
+            val duplicateLikes = likePairs.groupingBy { it }.eachCount().filterValues { it > 1 }
+            assertTrue(
+                duplicateLikes.isEmpty(),
+                "seed=$seed scale=$scale: duplicate (personId, messageId) likes: $duplicateLikes",
+            )
+        }
+    }
+
     // --- SocialLoader (loader half of SOC1-GEN-04) ----------------------
 
     @Test
