@@ -15,6 +15,12 @@
  * message id stays one keyed read, never a scan over every author's stream
  * ([SOC1-FEED-02]).
  *
+ * When [build] is handed a [LocationRegistry], each `snb-authored` cell
+ * registers the interest `Interest.Ranges([Range(k, k + 1)])` for its author
+ * key `k` as it is spawned (feature `computenet-8eb53` design 8eb53-D4), so a
+ * [FeedSession] can check a leg against `registry.interestOf(ref)` rather than
+ * the `Interest.Total` an unregistered ref reads as.
+ *
  * **Journal layout** (jo2jk-D4): each family gets its OWN subdirectory of
  * [build]'s `journalDir` — `person/`, `authored/`, `forum/`, `message/` —
  * because two [KeyedCells] families sharing one `journalDir` collide on the
@@ -82,7 +88,9 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.refAs
 import civictech.cell.host.KeyedCells
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.Interest
 import java.io.File
 
 object SnbPipeline {
@@ -110,8 +118,11 @@ object SnbPipeline {
      * [KeyedCells] family). Two `build` calls against two hosts mint the same
      * per-key refs for the same namespace+key ([SOC1-SCHEMA-05]), since
      * [KeyedCells]'s ref derivation is a pure function of namespace and key.
+     *
+     * [registry], when given, receives each `snb-authored` cell's per-author
+     * interest at spawn (8eb53-D4); `null` registers nothing.
      */
-    fun build(host: ManagedHost, journalDir: File?): Graph {
+    fun build(host: ManagedHost, journalDir: File?, registry: LocationRegistry? = null): Graph {
         val families = Families(
             person = KeyedCells<Long>(
                 host = host,
@@ -124,7 +135,10 @@ object SnbPipeline {
                 host = host,
                 journalDir = journalDir?.resolve("authored"),
                 namespace = "snb-authored",
-                factory = { _: Long, ref: CellRef -> SetCell<Message>(ref) },
+                factory = { key: Long, ref: CellRef ->
+                    registry?.setInterest(ref, Interest.Ranges(listOf(Interest.Ranges.Range(key, key + 1))))
+                    SetCell<Message>(ref)
+                },
                 parse = String::toLong,
             ),
             forum = KeyedCells<Long>(
