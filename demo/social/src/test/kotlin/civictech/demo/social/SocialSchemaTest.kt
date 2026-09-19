@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.testkit.HttpProbe
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
@@ -84,6 +85,21 @@ class SocialSchemaTest {
         graph.personFacts(bigId) shouldBe setOf(PersonFact.Profile(person))
     }
 
+    // --- SOC1-SCHEMA-02 (state half, task computenet-jo2jk.3) ---------------
+
+    @Test
+    fun `SOC1-SCHEMA-02 a big SNB id is preserved verbatim in state`() {
+        val app = SocialApp(port = 0).start()
+        try {
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            probe.post("action=person&id=8796093022390&firstName=Big&lastName=Id")
+            val json = probe.await { "\"id\":8796093022390" in it }
+            (json.contains("\"id\":8796093022390")) shouldBe true
+        } finally {
+            app.stop()
+        }
+    }
+
     // --- SOC1-SCHEMA-03 ------------------------------------------------------
 
     @Test
@@ -151,6 +167,23 @@ class SocialSchemaTest {
         val pipeline2 = SnbPipeline.build(host2, journalDir = null)
         pipeline2.families.person.getOrSpawn(1).ref shouldBe expectedRef
         controller2.runToIdle()
+    }
+
+    // --- SOC1-SCHEMA-05 (app half, task computenet-jo2jk.3) ------------------
+
+    @Test
+    fun `SOC1-SCHEMA-05 the per-person family ref is identical across two SocialApp instances`() {
+        val expectedRef = CellRef(UUID.nameUUIDFromBytes("snb-person:1".toByteArray()))
+
+        val app1 = SocialApp(port = 0).start()
+        val app2 = SocialApp(port = 0).start()
+        try {
+            app1.pipeline.families.person.getOrSpawn(1).ref shouldBe expectedRef
+            app2.pipeline.families.person.getOrSpawn(1).ref shouldBe expectedRef
+        } finally {
+            app1.stop()
+            app2.stop()
+        }
     }
 
     // --- unknown id ------------------------------------------------------------
