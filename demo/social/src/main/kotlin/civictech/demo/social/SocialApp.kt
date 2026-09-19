@@ -43,6 +43,11 @@ class SocialApp(
     port: Int = 8080,
     journalDir: File? = null,
     reader: (ManagedHost) -> BoundedReader = ::HostBoundedReader,
+    // computenet-suj6a: overridable only so a test can drive the TIMEOUT branch
+    // without a real 10s wait. `main` and every other caller take the default,
+    // so production behavior (and its accepted 10s blast radius, see the arg's
+    // own doc) is unchanged.
+    private val shortReadTimeoutSeconds: Long = SHORT_READ_TIMEOUT,
 ) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
@@ -205,7 +210,7 @@ class SocialApp(
      */
     private fun <T> respondOutcome(exchange: HttpExchange, future: CompletableFuture<ReadOutcome<T>>, body: (T) -> String) {
         val outcome = try {
-            future.get(SHORT_READ_TIMEOUT, TimeUnit.SECONDS)
+            future.get(shortReadTimeoutSeconds, TimeUnit.SECONDS)
         } catch (_: TimeoutException) {
             exchange.respond(503, """{"refused":"TIMEOUT"}""", "application/json")
             return
@@ -335,7 +340,20 @@ class SocialApp(
         /** Bounds the three /state arrays; counts stay total (jo2jk-D6). */
         const val STATE_LIMIT = 200
 
-        /** Bounds a short read's future at the HTTP boundary (rx8om-D8). */
+        /**
+         * Bounds a short read's future at the HTTP boundary (rx8om-D8).
+         *
+         * computenet-suj6a: DemoShell dispatches every route (`/state`,
+         * `/events` included) on one thread (`server.executor = null`), so a
+         * short read stuck past this bound stalls the whole app instance for
+         * up to [SHORT_READ_TIMEOUT] seconds, not just the read that timed
+         * out — verified in
+         * `SocialReadRefusalTest`'s `a stuck short read times out ... and
+         * stalls the dispatcher`. This is the accepted tradeoff for a demo
+         * app (same shape as `DialogueApp.onDriver`'s `ACTION_TIMEOUT_MS`):
+         * a shorter bound or a dedicated executor is deferred, not ruled out,
+         * should a real stall ever make 10s too slow in practice.
+         */
         const val SHORT_READ_TIMEOUT = 10L
     }
 }
