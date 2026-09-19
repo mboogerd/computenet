@@ -29,10 +29,16 @@
  * `/state` — two failed `action=person` posts left two persons with
  * `"name":""` for ever — which is a direct violation of [SOC1-HTTP-04]
  * ("...the response SHALL be 400 and /state SHALL be byte-identical before
- * and after"). The residue left behind is one line in `<journalDir>/<family>/keys`
- * with no journal record to match it; recovery spawns an empty cell for it,
- * which is inert, and a later successful create for the same id clears the
+ * and after"). A later successful create for the same id clears the
  * suppression.
+ *
+ * **The limit of that fix, stated where it is made:** the suppression set is
+ * in memory and dies with the process, while the residue it hides — one line
+ * in `<journalDir>/<family>/keys` with no journal record to match it — is on
+ * disk. A recovering app (F7, `computenet-v10ou`) pre-spawns that key into an
+ * empty cell nothing ever replays into, so the id comes BACK into
+ * [personIds] across a restart. Filed as `computenet-2v3e4`; the durable half
+ * is not fixed here.
  *
  * **Writes** go through the routed, journaled inlet
  * (`host.lookup(TypedRef<SetApi<F>>(cell.ref))!!.inlet.call`, jo2jk-D1) —
