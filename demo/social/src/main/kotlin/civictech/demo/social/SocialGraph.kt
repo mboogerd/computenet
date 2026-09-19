@@ -75,6 +75,7 @@ import civictech.cell.observe.observe
 import java.util.SortedSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SocialGraph(
     private val host: ManagedHost,
@@ -118,6 +119,20 @@ class SocialGraph(
     private val changeListeners = CopyOnWriteArrayList<() -> Unit>()
 
     /**
+     * Set by the first [onChange]; until then no sink carries a listener
+     * (computenet-v10ou.1). A listener is not free: each [ObservationSink]
+     * with one owns a dedicated dispatcher thread, minted on its first fire
+     * and never released (`kernel/.../observe/Observe.kt`, "The dispatcher is
+     * minted lazily"). Registering `{ fireChange() }` on every sink
+     * unconditionally cost one idle thread per keyed cell of every graph ever
+     * built — also for graphs nobody listens to (every sim-scheduler test
+     * graph) — and a test JVM building a handful of seed-42 graphs hit the
+     * per-process native-thread ceiling. [SocialApp] registers its broadcast
+     * only in `start()`, so an unstarted app now owns no sink threads.
+     */
+    private val listening = AtomicBoolean(false)
+
+    /**
      * Per family: ids whose creating write threw *after*
      * [civictech.cell.host.KeyedCells.getOrSpawn] had already minted their key,
      * and which have had no successful write since (`computenet-5ab6f`; see
@@ -136,7 +151,18 @@ class SocialGraph(
     /** Registers [listener] to fire on every settled change of every sink, present and future. */
     fun onChange(listener: () -> Unit) {
         changeListeners += listener
+        // Flag BEFORE iterating: a sink inserted concurrently is either seen by
+        // this iteration or sees the flag in [attach] (possibly both — a
+        // doubly-attached sink fires fireChange twice, which is harmless).
+        if (listening.compareAndSet(false, true)) {
+            (personSinks.values + forumSinks.values + messageSinks.values + authoredSinks.values)
+                .forEach { it.onChange { fireChange() } }
+        }
     }
+
+    /** Gives a newly created [sink] the change listener once any [onChange] exists. */
+    private fun <S> attach(sink: ObservationSink<S>): ObservationSink<S> =
+        sink.also { if (listening.get()) it.onChange { fireChange() } }
 
     private fun fireChange() {
         changeListeners.forEach { it() }
@@ -146,26 +172,42 @@ class SocialGraph(
 
     private fun personCell(id: Long): CellRef {
         val ref = graph.families.person.getOrSpawn(id).ref
-        personSinks.getOrPut(id) { host.observe(ref, View.set<PersonFact>()) { fireChange() } }
+        if (!personSinks.containsKey(id)) personSinks.getOrPut(id) { host.observe(ref, View.set<PersonFact>()) }.let(::attach)
         return ref
     }
 
     private fun forumCell(id: Long): CellRef {
         val ref = graph.families.forum.getOrSpawn(id).ref
-        forumSinks.getOrPut(id) { host.observe(ref, View.set<ForumFact>()) { fireChange() } }
+        if (!forumSinks.containsKey(id)) forumSinks.getOrPut(id) { host.observe(ref, View.set<ForumFact>()) }.let(::attach)
         return ref
     }
 
     private fun messageCell(id: Long): CellRef {
         val ref = graph.families.message.getOrSpawn(id).ref
-        messageSinks.getOrPut(id) { host.observe(ref, View.set<MessageFact>()) { fireChange() } }
+        if (!messageSinks.containsKey(id)) messageSinks.getOrPut(id) { host.observe(ref, View.set<MessageFact>()) }.let(::attach)
         return ref
     }
 
     private fun authoredCell(id: Long): CellRef {
         val ref = graph.families.authored.getOrSpawn(id).ref
-        authoredSinks.getOrPut(id) { host.observe(ref, View.set<Message>()) { fireChange() } }
+        if (!authoredSinks.containsKey(id)) authoredSinks.getOrPut(id) { host.observe(ref, View.set<Message>()) }.let(::attach)
         return ref
+    }
+
+    /**
+     * Spawns every durably-known key of all four families THROUGH this class
+     * (v10ou-D2): [personCell]/[forumCell]/[messageCell]/[authoredCell] for
+     * each id in the family's `keys()`, so each cell's observe sink exists
+     * before [SocialRecovery.stage] replays the host WAL into it. A bare
+     * `families.x.getOrSpawn(id)` would spawn the cell but register no sink,
+     * and every recovered cell would read as empty facts. Spawning a known key
+     * appends nothing to its `keys` log. Writes nothing to any cell.
+     */
+    fun spawnKnown() {
+        graph.families.person.keys().forEach { personCell(it) }
+        graph.families.forum.keys().forEach { forumCell(it) }
+        graph.families.message.keys().forEach { messageCell(it) }
+        graph.families.authored.keys().forEach { authoredCell(it) }
     }
 
     private fun requirePerson(id: Long) {
