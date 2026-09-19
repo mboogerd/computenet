@@ -4,10 +4,11 @@
  * jo2jk-D5.
  *
  * **Existence.** A person/forum/message is "known" exactly when its id is in
- * the owning family's [civictech.cell.host.KeyedCells.keys]: keys are only
- * ever touched by this class's own creation methods ([addPerson], [addForum],
+ * the owning family's [civictech.cell.host.KeyedCells.keys] **and its
+ * creating write actually succeeded**: keys are only ever touched by this
+ * class's own creation methods ([addPerson], [addForum],
  * a post/comment minting a `snb-message` key), so `family.keys()` is exactly
- * the set of ids this graph has itself admitted. Every method that
+ * the set of ids this graph has itself *attempted*. Every method that
  * *references* an id it did not itself just create validates ALL referenced
  * ids against `keys()` before touching any cell, and throws
  * [IllegalArgumentException] naming the kind and the id — before any
@@ -16,6 +17,28 @@
  * the ingress rather than only at the HTTP layer added in F1's next task).
  * Re-adding an already-known entity is an idempotent re-add (an OR-set
  * `add`), never an error.
+ *
+ * **The "and its creating write succeeded" half** (`computenet-5ab6f`) is not
+ * decoration: [civictech.cell.host.KeyedCells.getOrSpawn] mints the key —
+ * and fsyncs it into the family's durable `keys` log — *before* the inlet
+ * call, and that call can still throw (a journal that refuses the append, a
+ * payload the host WAL cannot encode). [KeyedCells] has no un-mint, so the
+ * minted key cannot be withdrawn; what this class does instead is refuse to
+ * *report* an id whose creating write failed and which has never since had a
+ * successful one ([creating]). Without it a rejected `/op` still changed
+ * `/state` — two failed `action=person` posts left two persons with
+ * `"name":""` for ever — which is a direct violation of [SOC1-HTTP-04]
+ * ("...the response SHALL be 400 and /state SHALL be byte-identical before
+ * and after"). A later successful create for the same id clears the
+ * suppression.
+ *
+ * **The limit of that fix, stated where it is made:** the suppression set is
+ * in memory and dies with the process, while the residue it hides — one line
+ * in `<journalDir>/<family>/keys` with no journal record to match it — is on
+ * disk. A recovering app (F7, `computenet-v10ou`) pre-spawns that key into an
+ * empty cell nothing ever replays into, so the id comes BACK into
+ * [personIds] across a restart. Filed as `computenet-2v3e4`; the durable half
+ * is not fixed here.
  *
  * **Writes** go through the routed, journaled inlet
  * (`host.lookup(TypedRef<SetApi<F>>(cell.ref))!!.inlet.call`, jo2jk-D1) —
@@ -44,11 +67,13 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetOps
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
+import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import java.util.SortedSet
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 class SocialGraph(
@@ -61,6 +86,23 @@ class SocialGraph(
     private val authoredSinks = LinkedHashMap<Long, ObservationSink<Set<Message>>>()
 
     private val changeListeners = CopyOnWriteArrayList<() -> Unit>()
+
+    /**
+     * Per family: ids whose creating write threw *after*
+     * [civictech.cell.host.KeyedCells.getOrSpawn] had already minted their key,
+     * and which have had no successful write since (`computenet-5ab6f`; see
+     * this class's KDoc, "Existence"). Subtracted from
+     * [personIds]/[forumIds]/[messageIds] and from `require*`, so such an id is
+     * neither reported by `/state` nor referenceable by a later op.
+     *
+     * Concurrent sets, unlike the sink maps above: these are written by the op
+     * thread and read by [personIds] and friends, which `/state` reaches from
+     * the SSE broadcast thread. (The sink maps' own read-race is
+     * `computenet-6x2d5`, not fixed here.)
+     */
+    private val unadmittedPersons = ConcurrentHashMap.newKeySet<Long>()
+    private val unadmittedForums = ConcurrentHashMap.newKeySet<Long>()
+    private val unadmittedMessages = ConcurrentHashMap.newKeySet<Long>()
 
     /** Registers [listener] to fire on every settled change of every sink, present and future. */
     fun onChange(listener: () -> Unit) {
@@ -98,15 +140,42 @@ class SocialGraph(
     }
 
     private fun requirePerson(id: Long) {
-        if (id !in graph.families.person.keys()) throw IllegalArgumentException("unknown person $id")
+        if (id !in personIds()) throw IllegalArgumentException("unknown person $id")
     }
 
     private fun requireForum(id: Long) {
-        if (id !in graph.families.forum.keys()) throw IllegalArgumentException("unknown forum $id")
+        if (id !in forumIds()) throw IllegalArgumentException("unknown forum $id")
     }
 
     private fun requireMessage(id: Long) {
-        if (id !in graph.families.message.keys()) throw IllegalArgumentException("unknown message $id")
+        if (id !in messageIds()) throw IllegalArgumentException("unknown message $id")
+    }
+
+    /**
+     * Runs [write] as the creating write for [id]'s cell in [family]
+     * (`computenet-5ab6f`). On success [id] is admitted — and any earlier
+     * suppression of it cleared. On failure, when this call is what first
+     * minted the key, [id] is recorded in [unadmitted] so the rejected op
+     * leaves `/state` byte-identical; the failure is rethrown either way, so
+     * the caller still reports it (a 400 at the HTTP layer).
+     *
+     * A failure on an id that already existed leaves the suppression set
+     * alone: a later op that fails against an established entity must not make
+     * that entity disappear.
+     */
+    private fun <T> creating(
+        family: KeyedCells<Long>,
+        unadmitted: MutableSet<Long>,
+        id: Long,
+        write: () -> T,
+    ): T {
+        val fresh = id !in family.keys()
+        return try {
+            write().also { unadmitted.remove(id) }
+        } catch (failure: Throwable) {
+            if (fresh) unadmitted.add(id)
+            throw failure
+        }
     }
 
     private inline fun <reified F : Any> writeApi(ref: CellRef): SetOps<F> =
@@ -114,7 +183,7 @@ class SocialGraph(
 
     // --- writes -------------------------------------------------------------
 
-    fun addPerson(p: Person) {
+    fun addPerson(p: Person) = creating(graph.families.person, unadmittedPersons, p.id) {
         val ref = personCell(p.id)
         writeApi<PersonFact>(ref).add(PersonFact.Profile(p))
     }
@@ -142,8 +211,10 @@ class SocialGraph(
 
     fun addForum(f: Forum) {
         requirePerson(f.moderatorId)
-        val ref = forumCell(f.id)
-        writeApi<ForumFact>(ref).add(ForumFact.Info(f))
+        creating(graph.families.forum, unadmittedForums, f.id) {
+            val ref = forumCell(f.id)
+            writeApi<ForumFact>(ref).add(ForumFact.Info(f))
+        }
     }
 
     fun joinForum(personId: Long, forumId: Long, date: Long) {
@@ -159,12 +230,14 @@ class SocialGraph(
         require(m.replyOfId == null) { "post ${m.id} must not set replyOfId" }
         requirePerson(m.creatorId)
         requireForum(forumId)
-        val authoredRef = authoredCell(m.creatorId)
-        val messageRef = messageCell(m.id)
-        val forumRef = forumCell(forumId)
-        writeApi<Message>(authoredRef).add(m)
-        writeApi<MessageFact>(messageRef).add(MessageFact.Body(m))
-        writeApi<ForumFact>(forumRef).add(ForumFact.Contains(m.id))
+        creating(graph.families.message, unadmittedMessages, m.id) {
+            val authoredRef = authoredCell(m.creatorId)
+            val messageRef = messageCell(m.id)
+            val forumRef = forumCell(forumId)
+            writeApi<Message>(authoredRef).add(m)
+            writeApi<MessageFact>(messageRef).add(MessageFact.Body(m))
+            writeApi<ForumFact>(forumRef).add(ForumFact.Contains(m.id))
+        }
     }
 
     /** `m.replyOfId` set: writes the author's and the message's cell, plus a `Reply` on the parent. */
@@ -172,12 +245,14 @@ class SocialGraph(
         val replyOfId = requireNotNull(m.replyOfId) { "comment ${m.id} must set replyOfId" }
         requirePerson(m.creatorId)
         requireMessage(replyOfId)
-        val authoredRef = authoredCell(m.creatorId)
-        val messageRef = messageCell(m.id)
-        val parentRef = messageCell(replyOfId)
-        writeApi<Message>(authoredRef).add(m)
-        writeApi<MessageFact>(messageRef).add(MessageFact.Body(m))
-        writeApi<MessageFact>(parentRef).add(MessageFact.Reply(m.id))
+        creating(graph.families.message, unadmittedMessages, m.id) {
+            val authoredRef = authoredCell(m.creatorId)
+            val messageRef = messageCell(m.id)
+            val parentRef = messageCell(replyOfId)
+            writeApi<Message>(authoredRef).add(m)
+            writeApi<MessageFact>(messageRef).add(MessageFact.Body(m))
+            writeApi<MessageFact>(parentRef).add(MessageFact.Reply(m.id))
+        }
     }
 
     fun addLike(l: Like) {
@@ -235,9 +310,9 @@ class SocialGraph(
 
     // --- reads: /state and tests read from here, never from the raw cells ---
 
-    fun personIds(): SortedSet<Long> = graph.families.person.keys().toSortedSet()
-    fun forumIds(): SortedSet<Long> = graph.families.forum.keys().toSortedSet()
-    fun messageIds(): SortedSet<Long> = graph.families.message.keys().toSortedSet()
+    fun personIds(): SortedSet<Long> = (graph.families.person.keys() - unadmittedPersons).toSortedSet()
+    fun forumIds(): SortedSet<Long> = (graph.families.forum.keys() - unadmittedForums).toSortedSet()
+    fun messageIds(): SortedSet<Long> = (graph.families.message.keys() - unadmittedMessages).toSortedSet()
 
     fun personFacts(id: Long): Set<PersonFact> = personSinks[id]?.current() ?: emptySet()
     fun authored(id: Long): Set<Message> = authoredSinks[id]?.current() ?: emptySet()
