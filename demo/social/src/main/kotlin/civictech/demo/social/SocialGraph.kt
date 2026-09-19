@@ -80,10 +80,40 @@ class SocialGraph(
     private val host: ManagedHost,
     private val graph: SnbPipeline.Graph,
 ) {
-    private val personSinks = LinkedHashMap<Long, ObservationSink<Set<PersonFact>>>()
-    private val forumSinks = LinkedHashMap<Long, ObservationSink<Set<ForumFact>>>()
-    private val messageSinks = LinkedHashMap<Long, ObservationSink<Set<MessageFact>>>()
-    private val authoredSinks = LinkedHashMap<Long, ObservationSink<Set<Message>>>()
+    /**
+     * Written by `getOrPut` in [personCell]/[forumCell]/[messageCell]/[authoredCell],
+     * which only ever run on DemoShell's single HTTP dispatcher thread
+     * (`server.executor = null`, `demo/shell/.../DemoShell.kt:99`, so `/op`,
+     * `/state` and `/events` are serialized against each other). Read by
+     * [personFacts]/[authored]/[forumFacts]/[messageFacts], which `/state`
+     * calls from that same HTTP thread, but ALSO from `graph.onChange {
+     * broadcast() }` (`SocialApp.kt`), which an [ObservationSink] fires from
+     * its own dedicated single-thread listener executor — "never the host
+     * thread" (`kernel/.../observe/Observe.kt:138-152`). So a `getOrPut`
+     * insert on the HTTP thread can race a `get` from a sink's listener
+     * thread; a plain `HashMap`/`LinkedHashMap` gives no safe-publication
+     * guarantee across that race (`computenet-6x2d5`). `ConcurrentHashMap`
+     * closes it: creation stays effectively single-threaded (only `/op`, on
+     * the HTTP thread, ever calls `getOrPut`), so only the read side needed
+     * the safe publication a `ConcurrentHashMap` gives; iteration order is
+     * never relied on here (`/state` sorts by [personIds]/[forumIds]/
+     * [messageIds], not by these maps).
+     *
+     * No deterministic test exercises the race itself: the hazard is a timing
+     * window between an insert and a concurrent read racing the same key, and
+     * the two candidate reproductions are both impractical here — a stress
+     * loop is inherently non-deterministic (the failure is a torn/missing read
+     * under resize, not something a fixed schedule can force), and forcing the
+     * interleaving would mean whitebox-instrumenting `ObservationSink`'s
+     * private dispatcher, which is kernel-internal and not a seam this class
+     * owns. `SocialServerTest`/`SocialSchemaTest` cannot observe it either:
+     * they poll `/state` on the HTTP thread via `HttpProbe.await`, which never
+     * touches the sink-dispatcher thread.
+     */
+    private val personSinks = ConcurrentHashMap<Long, ObservationSink<Set<PersonFact>>>()
+    private val forumSinks = ConcurrentHashMap<Long, ObservationSink<Set<ForumFact>>>()
+    private val messageSinks = ConcurrentHashMap<Long, ObservationSink<Set<MessageFact>>>()
+    private val authoredSinks = ConcurrentHashMap<Long, ObservationSink<Set<Message>>>()
 
     private val changeListeners = CopyOnWriteArrayList<() -> Unit>()
 
@@ -95,10 +125,9 @@ class SocialGraph(
      * [personIds]/[forumIds]/[messageIds] and from `require*`, so such an id is
      * neither reported by `/state` nor referenceable by a later op.
      *
-     * Concurrent sets, unlike the sink maps above: these are written by the op
-     * thread and read by [personIds] and friends, which `/state` reaches from
-     * the SSE broadcast thread. (The sink maps' own read-race is
-     * `computenet-6x2d5`, not fixed here.)
+     * Concurrent sets, like the sink maps above (`computenet-6x2d5`): these
+     * are written by the op thread and read by [personIds] and friends, which
+     * `/state` reaches from the SSE broadcast thread.
      */
     private val unadmittedPersons = ConcurrentHashMap.newKeySet<Long>()
     private val unadmittedForums = ConcurrentHashMap.newKeySet<Long>()
