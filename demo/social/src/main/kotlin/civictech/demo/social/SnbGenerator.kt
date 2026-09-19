@@ -15,11 +15,12 @@
  * the halved `(person, forum)` pair-space cap that keeps the redraw-to-count
  * membership loop below from saturating at the smallest scale (`0.02`), where
  * `persons * forums` is small enough that `persons * 4` alone would exhaust
- * or exceed it (computenet-oxsej). At every scale this repo's tests exercise
- * (`0.1`, `1.0`, seeds 42/7) the cap does not bind, so distinct memberships
- * equal `persons * 4`. The generator builds the whole timeline (persons, then
- * knows, forums, memberships, messages, likes, each dated no earlier than
- * what it depends on) and cuts it at the creation date below which roughly
+ * or exceed it (computenet-oxsej). The cap binds only while `forums < 8`,
+ * i.e. below scale `0.04` (at `0.02` the target is 40 of 80 pairs); at `0.1`
+ * and `1.0` (seeds 42/7, asserted in SocialGeneratorTest) it does not bind, so
+ * distinct memberships equal `persons * 4`. The generator builds the whole
+ * timeline (persons, then knows, forums, memberships, messages, likes, each
+ * dated no earlier than what it depends on) and cuts it at the creation date below which roughly
  * 80% of persons fall: everything before the cut is the [StaticSlice],
  * everything at or after it becomes an [UpdateEvent].
  *
@@ -210,8 +211,8 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
         // that already exists is skipped and redrawn (never silently discarded) until
         // membershipCount distinct pairs are collected or the attempt bound is spent.
         // membershipCount itself is capped at personCount * forumCount / 2 (99qcg-D7,
-        // computenet-oxsej) so the redraw loop cannot spin forever chasing a saturated
-        // (person, forum) pair space at the smallest scale (0.02) ---
+        // computenet-oxsej) so the (person, forum) pair space is not saturated at the
+        // smallest scale (0.02, SOC1-GEN-07); the attempt bound alone ensures termination ---
         val staticMemberships = ArrayList<Membership>()
         val dynamicMemberships = ArrayList<IU5AddMembership>()
         val membershipPairs = LinkedHashSet<Pair<Long, Long>>()
