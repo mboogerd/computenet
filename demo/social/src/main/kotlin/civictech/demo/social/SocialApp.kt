@@ -48,12 +48,23 @@ class SocialApp(
     // so production behavior (and its accepted 10s blast radius, see the arg's
     // own doc) is unchanged.
     private val shortReadTimeoutSeconds: Long = SHORT_READ_TIMEOUT,
+    // 99qcg-D2: appended LAST so every existing positional/named construction
+    // in other test files is unaffected. Null loads nothing (today's
+    // behavior); non-null loads once, in `init`, before the shell routes.
+    source: SnbSource? = null,
 ) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
 
     val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir)
     val graph: SocialGraph = SocialGraph(host, pipeline)
+
+    // 99qcg-D2/D10: null source means no dataset and no stream; /op action=step
+    // then answers 400 and /state's applied/remaining stay 0/0.
+    private val stream: UpdateStream? = source?.let {
+        SocialLoader.load(it, graph)
+        UpdateStream(it, graph)
+    }
 
     // rx8om-D7/D8: the short-read seam. `reader` is a factory, not a value,
     // because `host` is built above and private to this constructor.
@@ -180,6 +191,16 @@ class SocialApp(
                     val person = requiredLong("person")
                     if (person !in graph.personIds()) throw Bad("unknown person $person")
                     viewer = person
+                }
+
+                "step" -> {
+                    val s = stream ?: throw Bad("no stream")
+                    val n = if (params.containsKey("n")) {
+                        params["n"]?.toIntOrNull() ?: throw Bad("missing n")
+                    } else {
+                        1
+                    }
+                    s.step(n)
                 }
 
                 else -> throw Bad("unknown action")
@@ -331,6 +352,7 @@ class SocialApp(
         return """{"viewer":${viewer ?: "null"},""" +
             """"counts":{"persons":${personIds.size},"knows":$knowsTotal,"forums":${forumIds.size},""" +
             """"messages":${messageIds.size},"likes":$likesTotal,"tags":$tagsTotal},""" +
+            """"applied":${stream?.applied ?: 0},"remaining":${stream?.remaining ?: 0},""" +
             """"persons":$personsJson,"forums":$forumsJson,"messages":$messagesJson}"""
     }
 
@@ -358,14 +380,37 @@ class SocialApp(
     }
 }
 
+/**
+ * `main`'s `--scale`/`--seed` load parameters (99qcg-D2): `--scale` defaults
+ * to `0.05`, `--seed` to `42`. The defaults live here, not in [SocialApp]'s
+ * constructor, so every existing test construction (source-less) is
+ * unaffected.
+ */
+data class LaunchOptions(val scale: Double, val seed: Long) {
+    companion object {
+        const val DEFAULT_SCALE = 0.05
+        const val DEFAULT_SEED = 42L
+
+        fun parse(args: Array<String>): LaunchOptions {
+            val scale = args.value("--scale")?.let {
+                it.toDoubleOrNull() ?: throw IllegalArgumentException("--scale must be numeric, got $it")
+            } ?: DEFAULT_SCALE
+            val seed = args.value("--seed")?.let {
+                it.toLongOrNull() ?: throw IllegalArgumentException("--seed must be numeric, got $it")
+            } ?: DEFAULT_SEED
+            return LaunchOptions(scale, seed)
+        }
+    }
+}
+
 fun main(args: Array<String>) {
     val port = demoPort(args)
     val journalDir = args.value("--journal")?.let { File(it).apply { mkdirs() } }
-    val seed = args.value("--seed")
-    val scale = args.value("--scale")
-    val app = SocialApp(port, journalDir).start()
-    if (seed != null) println("seed=$seed")
-    if (scale != null) println("scale=$scale")
+    val opts = LaunchOptions.parse(args)
+    val source = SnbGenerator(opts.seed, opts.scale)
+    val app = SocialApp(port, journalDir, source = source).start()
+    println("seed=${opts.seed}")
+    println("scale=${opts.scale}")
     println("computenet social: http://localhost:${app.boundPort}")
 }
 
