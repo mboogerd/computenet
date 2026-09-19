@@ -52,6 +52,26 @@
  * No links are wired here (F1 non-goal): [SocialGraph] reaches each cell's
  * inlet directly through the routed, journaled write path
  * (`host.lookup(TypedRef<SetApi<F>>(cell.ref))!!.inlet.call`, jo2jk-D1).
+ *
+ * **Which read paths are glitch-free-routed: none of them** (`[SOC1-ATOM-03]`,
+ * feature `computenet-jadt6`). Every read this demo serves —
+ * `SocialApp`'s `/state` and its `/events` SSE stream (which re-serves the same
+ * `stateJson()`), and the IS1-IS7 short reads behind `/person/` and `/message/`
+ * through [BoundedReader] — is a
+ * [civictech.cell.host.ManagedHost.readState] page or a
+ * [civictech.cell.observe.ObservationSink] snapshot
+ * ([SocialGraph]'s per-cell sinks; F-21 records the same for [BoundedReader]),
+ * and **not** routed through a
+ * [civictech.cell.consistency.GlitchFreeCell]. No read path here waits for a
+ * wave to be complete across the three cells one
+ * [SocialGraph.addPost] writes, so a concurrent reader can see the post in one
+ * of those cells and not yet in another. `[SOC1-ATOM-03]` is therefore covered
+ * only by `SocialAtomicityTest`'s test-side, `manage.link`-fed (Consume-role)
+ * [civictech.cell.consistency.GlitchFreeCell] path — and there only as
+ * "the released contributions of one wave are contiguous and carry one wave
+ * id", since that cell groups a wave rather than combining it. The measured
+ * reason one `addPost` is three waves rather than one, and what a single-wave
+ * ingress would cost, is `doc/demo-findings.md` F-22.
  */
 package civictech.demo.social
 
