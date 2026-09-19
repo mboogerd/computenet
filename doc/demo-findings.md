@@ -1046,3 +1046,85 @@ answers is the extensional half of BS-11 (`computenet-cab.7.6`). The pinned
 compiled handles belong to the lowering's current numbering, so a change to
 `Lowering` that renumbers nodes fails the test by design, and the residual
 must then be measured again rather than re-pinned without checking.
+
+## F-21 — `BoundedReader` is the KRD stand-in: seven SNB short reads over `ManagedHost.readState`, and what the public primitive still lacks
+
+**Observation**: SOC1 F3 (`computenet-rx8om`) answers LDBC SNB's interactive
+short reads IS1-IS7 in `:demo:social` through a one-method seam,
+`demo/social/src/main/kotlin/civictech/demo/social/BoundedReader.kt`
+(`fun interface BoundedReader { fun read(ref, request): CompletableFuture<StateReadResult> }`,
+`HostBoundedReader`). Its KDoc names it explicitly (`BoundedReader.kt:5`):
+"This interface is the KRD stand-in `[SOC1-FIND-03]` names" — a Kernel
+Request/Response Dispatch primitive, per epic `computenet-07k` decision 07k-D4
+and §3.3's read seam. `ShortReads.kt` (`demo/social/src/main/kotlin/civictech/demo/social/ShortReads.kt`)
+depends on `BoundedReader` alone: `grep -c ManagedHost ShortReads.kt` is 0,
+and `HostBoundedReader` is the only place in the two files that names
+`ManagedHost` (`BoundedReader.kt:62-63`). A future KRD primitive drops in as a
+second `BoundedReader` implementation without reshaping IS1-IS7 at all.
+
+**What worked**: each short read is a per-request `CompletableFuture` the
+caller bounds itself — no link, no subscription, no `MessageContext` baseline
+to install (`BoundedReader.kt:18-20`). Host refusals arrive as values, not
+exceptions: `ManagedHost.readState` never completes exceptionally, so
+`StateReadResult.Unavailable(reason)` maps straight to `ReadOutcome.Refused`
+(`ShortReads.kt:128-131`, `ManagedHost.kt:1806-1851`), including `NOT_HOSTED`
+for a ref nothing ever spawned — a value, not a caught exception. `since` and
+`scope` are refused up front by name (`SINCE_UNSUPPORTED`, `SCOPE_UNSUPPORTED`)
+rather than silently answered against a wider or narrower set than asked.
+
+**Why it's a gap**: four things a public request/response read primitive would
+have to offer beyond `readState`, each pinned to the short read that hit it:
+
+- **ORDER BY / LIMIT.** `StateRead.limit` is a page size in the cell's frozen
+  enumeration order, not a row limit over an ordering (`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt:156`
+  declares it as a page-size default of 200). IS2 wants "the ten newest
+  messages"; `StateRead(limit = 10)` would return the first ten *enumerated*
+  messages, a wrong answer rather than a bounded one. So IS2 pages the whole
+  owning `snb-authored` cell to exhaustion and sorts `(creationDate desc, id
+  desc)` demo-side before taking ten (`ShortReads.kt:26-33`, `:182-199`). This
+  is the same absence KAGG-R and epic §2.3 already name; this entry does not
+  restate that finding, only confirms it costs a second demo the same way.
+- **A typed or keyed scope over facts within one cell.** `Profile` and every
+  `Knows` fact for a person share one `snb-person` `SetCell`
+  (`ShortReads.kt` header table, IS1/IS3 rows), so IS1 pays for whatever
+  prefix of that cell's pages it takes to see a `Profile`, even though it
+  wants only one fact kind out of two sharing the cell.
+- **Multi-ref or batched reads.** `MessageFact.Reply` carries only the child's
+  id (`ShortReads.kt:253` KDoc), so IS7 costs `2 + replyCount` reads: the
+  parent cell, one per reply child for that child's own `Body`, and one more
+  for the creator's `Knows` set (`ShortReads.kt:249-259`). IS6 costs reply
+  depth plus one, one `snb-message` read per hop up to the root post
+  (`ShortReads.kt:225-235`). A primitive that could resolve several refs, or
+  follow a reference field, in one request/response round trip would collapse
+  both to one call.
+- **A public, non-spawning key -> ref resolution on `KeyedCells`.**
+  `KeyedCells.refFor` is `private` (`kernel/src/main/kotlin/civictech/cell/host/KeyedCells.kt:99`);
+  the only public key->ref path is `getOrSpawn(key).ref`, which the demo is
+  therefore forced to guard behind its own admitted-id check
+  (`graph.personIds()`/`graph.messageIds()`, `ShortReads.kt:90-119`) rather
+  than being able to ask "does this key have a live cell, and if so what is
+  its ref" directly.
+
+One further gap the code carries but this task's sources do not measure the
+cost of: `StatePage.entries` is typed `List<Serializable>`
+(`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt:276`), so every reader
+downcasts — `ShortReads.kt` filters `entries.filterIsInstance<SetCell.SetStateEntry<*>>()`
+(`:323-327`) rather than receiving typed page members. `believed:` a primitive
+with typed pages would remove this cast; the demo does not exercise what a
+type-erasure failure there would look like, so this is recorded as a
+readability gap, not a measured one.
+
+**Honest limit of this entry**: everything above is read off the landed
+`BoundedReader.kt` and `ShortReads.kt` KDoc and code and the task reviewer's
+verdict on `computenet-rx8om.1` (task review, `computenet-rx8om.1`, PASS at
+`e354d08e`) — it is not a new measurement. The reviewer's own residual,
+`computenet-18ey0`, additionally notes that `SocialShortReadTest` does not yet
+discriminate IS7's `authorKnowsCreator = false` arm or a multi-page IS2 walk;
+those are coverage gaps in the test suite, not primitive gaps, and are left to
+that bead. `[SOC1-SREAD-04]`'s HTTP-level refusal surfacing (503 with the
+reason name) is `computenet-rx8om.2`'s, not observed here.
+
+**What SOC1 did not change**: no kernel edit, no `civictech.cell.protocol`
+import anywhere in `:demo:social`'s main sources (`grep -rn civictech.cell.protocol
+demo/social/src/main/kotlin/` is empty), no widening of the demo allowlist.
+This entry records findings only.
