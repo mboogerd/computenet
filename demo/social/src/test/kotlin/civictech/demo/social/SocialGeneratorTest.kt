@@ -184,6 +184,37 @@ class SocialGeneratorTest {
         }
     }
 
+    // --- membership pair space is not saturated at scale 0.02 (computenet-jjfyr) ---
+
+    @Test
+    fun `SOC1-GEN-07 the membership pair space is not saturated at scale 0-02`() {
+        val seeds = (0L until 20L).toList() + listOf(42L)
+        val saturatedBySeed = seeds.associateWith { seed ->
+            val generator = SnbGenerator(seed, 0.02)
+            val slice = generator.staticSlice()
+            val updates = generator.updates().toList()
+
+            val personIds = HashSet<Long>()
+            slice.persons.forEach { personIds += it.id }
+            updates.filterIsInstance<IU1AddPerson>().forEach { personIds += it.person.id }
+
+            val forumIds = HashSet<Long>()
+            slice.forums.forEach { forumIds += it.id }
+            updates.filterIsInstance<IU4AddForum>().forEach { forumIds += it.forum.id }
+
+            val membershipPairs = HashSet<Pair<Long, Long>>()
+            slice.memberships.forEach { membershipPairs += it.personId to it.forumId }
+            updates.filterIsInstance<IU5AddMembership>().forEach { membershipPairs += it.personId to it.forumId }
+
+            Triple(membershipPairs.size, personIds.size, forumIds.size)
+        }.filterValues { (distinct, persons, forums) -> distinct >= persons * forums }
+
+        assertTrue(
+            saturatedBySeed.isEmpty(),
+            "seeds where distinct (personId, forumId) memberships saturate persons x forums: $saturatedBySeed",
+        )
+    }
+
     // --- SocialLoader (loader half of SOC1-GEN-04) ----------------------
 
     @Test
