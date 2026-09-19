@@ -14,6 +14,7 @@ package civictech.demo.social
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.Interest
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
@@ -56,7 +57,7 @@ class SocialApp(
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
 
-    val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir)
+    val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir, registry)
     val graph: SocialGraph = SocialGraph(host, pipeline)
 
     // 99qcg-D2/D10: null source means no dataset and no stream; /op action=step
@@ -67,8 +68,19 @@ class SocialApp(
     }
 
     // rx8om-D7/D8: the short-read seam. `reader` is a factory, not a value,
-    // because `host` is built above and private to this constructor.
-    val shortReads: ShortReads = ShortReads(reader(host), GraphLocator(graph, pipeline.families))
+    // because `host` is built above and private to this constructor. Built
+    // once and shared by the short reads and every feed session (8eb53).
+    private val boundedReader: BoundedReader = reader(host)
+
+    val shortReads: ShortReads = ShortReads(boundedReader, GraphLocator(graph, pipeline.families))
+
+    /**
+     * A scatter-gather feed for [viewer] over the authored cells [scope]
+     * admits (feature `computenet-8eb53`). The scope is the caller's: this
+     * app does not derive it from `knows`, and there is no `/feed` route yet.
+     */
+    fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
+        FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
 
     // One observe sink per static dimension set (jo2jk-D2), read the same way
     // SocialGraph reads its keyed families: sink.current() only.
