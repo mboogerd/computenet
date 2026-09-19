@@ -8,6 +8,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -15,6 +16,8 @@ import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The API half of the SOC1-SREAD rules (feature `computenet-rx8om`, task
@@ -270,5 +273,101 @@ class SocialShortReadTest {
         val unreached = StubReader(onePage)
         ShortReads(unreached, StubLocator(null)).is1(1).answer() shouldBe ReadOutcome.Empty
         unreached.count shouldBe 0
+    }
+
+    // --- [SOC1-SREAD-01]/[SOC1-SREAD-03], HTTP half (task computenet-rx8om.2) ----------
+
+    /**
+     * Builds the same example graph as [exampleGraph] over `/op` against a
+     * real [SocialApp], and waits for it to settle the same way
+     * `SocialServerTest` does — `/state` carrying the last write's effect —
+     * rather than [settled], which reads [SocialGraph] sinks a `SocialApp`
+     * does not expose.
+     */
+    private fun exampleGraphOverHttp(probe: HttpProbe) {
+        probe.post("action=person&id=1&firstName=Ada&lastName=Lovelace")
+        probe.post("action=person&id=2&firstName=Bob&lastName=Brown")
+        probe.post("action=knows&a=1&b=2&date=5")
+        probe.post("action=forum&id=100&title=f&moderator=1")
+        probe.post("action=post&id=10&author=1&forum=100&content=hi&creationDate=7")
+        probe.post("action=comment&id=11&author=2&replyOf=10&content=reply&creationDate=8")
+        probe.post("action=comment&id=12&author=1&replyOf=11&content=reply2&creationDate=9")
+        probe.await { json ->
+            """"replies":[11]""" in json && """"replies":[12]""" in json && """"knows":[2]""" in json
+        }
+    }
+
+    @Test
+    fun `SOC1-SREAD-01 HTTP half all seven short-read routes are 200 with the pinned rx8om-D8 bodies`() {
+        val app = SocialApp(port = 0).start()
+        try {
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            exampleGraphOverHttp(probe)
+
+            val person1 = probe.get("/person/1")
+            assertEquals(200, person1.statusCode())
+            assertTrue(""""found":true""" in person1.body(), person1.body())
+            assertTrue(""""id":1""" in person1.body(), person1.body())
+
+            val messages = probe.get("/person/1/messages")
+            assertEquals(200, messages.statusCode())
+            assertTrue(""""found":true""" in messages.body(), messages.body())
+            assertTrue(""""id":12""" in messages.body(), messages.body())
+            assertTrue(""""id":10""" in messages.body(), messages.body())
+
+            val friends = probe.get("/person/1/friends")
+            assertEquals(200, friends.statusCode())
+            assertTrue(""""friends":[{"id":2,"creationDate":5}]""" in friends.body(), friends.body())
+
+            val message11 = probe.get("/message/11")
+            assertEquals(200, message11.statusCode())
+            assertTrue(""""found":true""" in message11.body(), message11.body())
+            assertTrue(""""id":11""" in message11.body(), message11.body())
+
+            val creator = probe.get("/message/11/creator")
+            assertEquals(200, creator.statusCode())
+            assertTrue(""""creatorId":2""" in creator.body(), creator.body())
+
+            val forum = probe.get("/message/12/forum")
+            assertEquals(200, forum.statusCode())
+            assertTrue(""""forumId":100""" in forum.body(), forum.body())
+
+            val replies = probe.get("/message/10/replies")
+            assertEquals(200, replies.statusCode())
+            assertTrue(""""authorKnowsCreator":true""" in replies.body(), replies.body())
+            assertTrue(""""found":true""" in replies.body(), replies.body())
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `SOC1-SREAD-03 HTTP half an unknown id is 200 found false and leaves state byte-identical`() {
+        val app = SocialApp(port = 0).start()
+        try {
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            exampleGraphOverHttp(probe)
+            val before = probe.state()
+
+            val person = probe.get("/person/999")
+            assertEquals(200, person.statusCode())
+            assertEquals("""{"found":false}""", person.body())
+
+            val messages = probe.get("/person/999/messages")
+            assertEquals(200, messages.statusCode())
+            assertEquals("""{"found":false}""", messages.body())
+
+            val message = probe.get("/message/999")
+            assertEquals(200, message.statusCode())
+            assertEquals("""{"found":false}""", message.body())
+
+            val forum = probe.get("/message/999/forum")
+            assertEquals(200, forum.statusCode())
+            assertEquals("""{"found":false}""", forum.body())
+
+            assertEquals(before, probe.state(), "/state must be byte-identical around a run of unknown-id short reads")
+        } finally {
+            app.stop()
+        }
     }
 }
