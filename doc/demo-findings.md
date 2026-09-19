@@ -1255,8 +1255,10 @@ the tree at `6263baaa`:
   `SocialApp` registers is glitch-free-routed — `/state`, the `/events` SSE
   re-serve and the IS1–IS7 short reads are `readState` pages and
   `ObservationSink` snapshots. So the three-wave shape has no observable victim
-  today. The route that would have one is `/feed`, which is F6
-  (`computenet-flfkm`) and is not built.
+  today. The feed does not change that: `[SOC1-FEED-07]` stamps every pull
+  reply as a catch-up baseline that is never counted toward wave
+  completeness, so a feed built to the epic's requirements consumes no wave
+  either.
 - **The one input adoption needs does not exist here.** `ActorIngress` takes an
   `actorId` rather than minting one, and both `[24-DUR-06]` and the class KDoc
   put minting and persisting it on a connector ingress (CON1), because it has
@@ -1296,11 +1298,11 @@ replaces:
   bite.
 
 **Trigger for re-deciding**, tracked as `computenet-w52fa` under epic
-`computenet-07k` rather than as prose here: whichever of F6
-(`computenet-flfkm`, the first read that would actually consume a wave — F-22
-measured that a `Consume`-linked `GlitchFreeCell` *wedges* under plain ingress)
-or F7 (`computenet-v10ou`, the instrument that could check the journal
-consequence) lands first.
+`computenet-07k` rather than as prose here: whichever comes first of a read
+route `:demo:social` serves that is routed through `GlitchFreeCell` /
+`WaveFrontier` (the first consumer of a wave — F-22 measured that a
+`Consume`-linked `GlitchFreeCell` *wedges* under plain ingress) or F7
+(`computenet-v10ou`, the instrument that could check the journal consequence).
 
 **Honest limit of this entry**: everything above is measured on the in-process
 `SimulationController` host with `journalDir = null`, on darwin/arm64. It says
