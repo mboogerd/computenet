@@ -117,11 +117,12 @@ data class PullReport(val legs: Map<CellRef, LegOutcome>)
  *
  * **Legs.** Keys are enumerated from [scope]'s ranges, never by scanning the
  * family. `KeyedCells.refFor` is private and `getOrSpawn` spawns for an
- * unknown key, so a key is resolved to a ref only if it is in ONE
- * `authored.keys()` snapshot taken per pull. A friend who has authored
- * nothing has no cell: no read is issued for them and they are not in the
- * [PullReport] (there is no ref to key them by); they join the pull that
- * follows their first post, reading from `since = null`.
+ * unknown key, so a key is resolved to a ref only if `KeyedCells.contains`
+ * admits it — one O(1) lookup per scope key, never a whole-family `keys()`
+ * copy (tbmhn: `FeedSession.pull` cost O(total authors) per pull before this).
+ * A friend who has authored nothing has no cell: no read is issued for them
+ * and they are not in the [PullReport] (there is no ref to key them by); they
+ * join the pull that follows their first post, reading from `since = null`.
  *
  * Not reentrant: one caller, one pull at a time.
  */
@@ -156,11 +157,10 @@ class FeedSession(
      */
     fun pull(): CompletableFuture<PullReport> {
         check(inFlight.compareAndSet(false, true)) { "FeedSession.pull() is not reentrant" }
-        val live = families.authored.keys()
         val legs = scope.ranges
             .flatMap { r -> (r.lo until r.hi).asIterable() }
             .distinct()
-            .filter { it in live }
+            .filter { families.authored.contains(it) }
             .map { families.authored.getOrSpawn(it).ref }
             .filter { registry.interestOf(it).overlaps(scope) }
         val outcomes = legs.map { ref ->
