@@ -1128,3 +1128,131 @@ reason name) is `computenet-rx8om.2`'s, not observed here.
 import anywhere in `:demo:social`'s main sources (`grep -rn civictech.cell.protocol
 demo/social/src/main/kotlin/` is empty), no widening of the demo allowlist.
 This entry records findings only.
+
+## F-22 — one `SocialGraph.addPost` is three waves, one per contributing outlet: extending F-19 from "no batch-as-one-wave path" to "no batch-as-one-wave path across CELLS"
+
+**Observation**: `:demo:social`'s `SocialGraph.addPost(m)` writes three cells
+in one logical operation — the author's `snb-authored` cell (the `Message` itself),
+the owning `snb-message` cell (`MessageFact.Body`) and the forum's
+`snb-forum` cell (`ForumFact.Contains`). SOC1 §4 ("multi-cell atomicity")
+predicted those three would reach downstream observers under **one** wave id.
+They do not. `SocialAtomicityTest` (`demo/social/src/test/kotlin/civictech/demo/social/SocialAtomicityTest.kt`)
+probes each contributing outlet and records the wave id of the downstream
+invocation. Seed 0, verbatim:
+
+```
+authored  Timestamp(sourceId=d30a69fb-7d43-431b-ae61-6956e47101a8, counter=1)
+message   Timestamp(sourceId=c5d27980-61f4-41c4-ac67-52791c699d06, counter=1)
+forum     Timestamp(sourceId=d6c43cba-e752-45c5-ba34-52682ea90624, counter=2)
+```
+
+Three source ids. **This is seed-independent**: the sweep runs
+`forEachSeed(0L until 20L)` with a seeded 0-10-event prefix before the probed
+post, and every seed gives three distinct source ids. The forum's `counter=2`
+is the same rule seen sideways — that outlet had already minted wave 1 for the
+`ForumFact.Info` of its own creation, so counters are per outlet as well.
+
+Reproduce:
+
+```
+./gradlew :demo:social:test --tests 'civictech.demo.social.SocialAtomicityTest' --rerun
+```
+
+**Cause** (read off the code, then confirmed by the run): `SocialGraph` writes
+through `host.lookup(TypedRef<SetApi<F>>(ref))!!.inlet.call`, a
+`HostedCellProxy`, which stamps whatever `CurrentContext` is ambient — and that
+is `null` for a call made from app code off the data path
+(`kernel/src/main/kotlin/civictech/cell/host/HostedCellProxy.kt`, and its own
+KDoc for `ActorIngress` says so in as many words). Each `SetCell` handler then
+emits with no ambient context, so `FanOutlet` takes the **origination** branch
+of [spec 20/22](spec/20-dataflow-semantics/22-consistency.md) rule 1 — "an
+external event entering the graph (a source cell emitting spontaneously) mints
+a fresh timestamp (wave id) from the emitting outlet's own monotonic counter" —
+and mints `Timestamp(sourceId, ++counter)` where `sourceId` is a field of the
+**outlet** (`kernel/src/main/kotlin/civictech/cell/port/FanOutlet.kt`, the
+`CurrentContext.get() ?: MessageContext(Timestamp(sourceId, …))` line). Three
+cells means three outlets means three source ids, whatever the scheduler does.
+No interleaving is involved, so no seed can make it otherwise.
+
+**What the glitch-free path did.** `[SOC1-ATOM-03]` was checked by spawning a
+`GlitchFreeCell` test-side and feeding it from the three contributing outlets
+with `manage.link` — a **Consume**-role link. (`streamTo` would not do: it
+installs an `Observe`-role link, and `WaveFrontier` excludes Observe edges from
+the frontier, so a `streamTo`-fed `GlitchFreeCell` gates nothing at all.) The
+link is accepted; nothing is refused, so `[SOC1-ATOM-03]` is checkable rather
+than blocked. Observed, on every seed:
+
+- under plain `addPost`, the cell releases **zero** invocations. Each source's
+  wave waits forever on the two sibling edges that structurally never carry
+  that source — `WaveFrontier.expectedLocalEdges` expects every open
+  Consume-role edge whose floor for the wave's source is below its counter, and
+  an edge that has never carried source A floors at `Long.MIN_VALUE`. This is
+  exactly the **phantom expected edge** spec 20/22 names (the static-link-set
+  residual, G-13): "an arm that structurally never carries a source is a phantom
+  expected edge for its waves until an ack, a later wave, or an `EdgeClose`
+  shrinks the condition". So the glitch-free wrapper does not merely fail to
+  help here — fed by three independently-originating outlets it **wedges**.
+- under `ActorIngress.drive` (below), exactly **three** released invocations,
+  contiguous, all carrying one timestamp.
+
+Note what `[SOC1-ATOM-03]` can therefore honestly assert, and what it cannot:
+`GlitchFreeCell` GROUPS a wave, it does not COMBINE one (its own KDoc), so the
+property tested is "the released contributions of one wave are contiguous and
+carry one wave id" — never "no observer ever sees torn state". And no read path
+`:demo:social` actually serves is glitch-free-routed: `/state`, the `/events`
+SSE stream that re-serves the same `stateJson()`, and the IS1-IS7 short reads
+behind `/person/` and `/message/` are `ManagedHost.readState` pages and
+`ObservationSink` snapshots (F-21 says the same for `BoundedReader`). Those are
+the read routes `SocialApp` registers today, and all of them; the `/feed` route
+SOC1 §3 anticipates belongs to F6 (`computenet-flfkm`) and is not built, so
+nothing here says anything about it. That sentence now lives in
+`SnbPipeline.kt`'s file KDoc, for F9 (`computenet-74yvm`) to lift into its
+VER-01 table.
+
+**Why it's a gap, and how it extends F-19.** F-19 recorded that a `SetCell` fed
+element-by-element has no batch-as-one-wave path: N elements into **one** cell
+are N waves. This is the same missing boundary one level up — N elements into
+**N different cells** are N waves, and here the "batch" is not a poll of a log
+but a single domain operation the application already treats as atomic. The two
+candidate shapes F-19 proposes (a batched `SetOps.addAll` minting one
+`SetDelta`; a producer-minted delta on the `Replicable` seam) would each fix
+F-19's case and **neither** fixes this one: both mint one delta at one cell's
+inlet, and the wave id would still be that cell's outlet's own. What is missing
+for a multi-cell write is a boundary that spans cells.
+
+**What a single-wave ingress would need — and the one seam that already exists.**
+`ActorIngress.drive { … }` (`kernel/.../host/HostedCellProxy.kt`, `[24-DUR-06]`)
+installs one `MessageContext(Timestamp(actorId, ++counter), ingressPort)` for the
+duration of a block; every hosted call inside carries it, and the contributing
+outlets then take spec 20/22 rule 2's transparent-flow branch and **copy** that
+one timestamp. Measured, wrapping the *unmodified* `addPost` test-side:
+
+```
+authored  Timestamp(sourceId=b06a8b0e-3c47-4151-96dc-3f226e0fb7ee, counter=1)
+message   Timestamp(sourceId=b06a8b0e-3c47-4151-96dc-3f226e0fb7ee, counter=1)
+forum     Timestamp(sourceId=b06a8b0e-3c47-4151-96dc-3f226e0fb7ee, counter=1)
+```
+
+One wave, on every seed, with no change to `SocialGraph`, `SocialApp` or the
+kernel. That pair of cases is also what keeps this finding non-vacuous: the two
+tests share one probe implementation and assert opposite outcomes, so a probe
+that recorded nothing, or a constant, would fail one of them.
+
+**The decision is deliberately left open.** Adopting `ActorIngress` at
+`:demo:social`'s ingress is not proposed here, because it is not free: every
+frame the demo journals would then carry an actor lane position, and the actor
+identity has to mean the same thing across a restart and across peers —
+`ActorIngress`'s KDoc is explicit that minting and persisting it is a connector
+ingress's job (CON1), and that a fresh id per process grows the durable
+frontier by one lane per session. That is a design fork for epic
+`computenet-07k`, not for this feature, which was scoped "verify, don't build".
+
+**Honest limit of this entry**: everything above is measured on the in-process
+`SimulationController` host with `journalDir = null`, on darwin/arm64. It says
+nothing about the same graph under journal recovery, across a wire boundary, or
+under `SocialApp`'s real HTTP ingress; and the `GlitchFreeCell` behaviour is
+measured with three arms on one inlet of one test-side cell, not with any
+downstream fold. No kernel path is touched by the change that produced it — the
+deliverable is this entry plus `SocialAtomicityTest` and one `SnbPipeline.kt`
+KDoc paragraph. No concord scenario was bound: B11 stays a candidate, because
+no honest 20-series requirement id states the divergence this test asserts.
