@@ -1238,14 +1238,69 @@ kernel. That pair of cases is also what keeps this finding non-vacuous: the two
 tests share one probe implementation and assert opposite outcomes, so a probe
 that recorded nothing, or a constant, would fail one of them.
 
-**The decision is deliberately left open.** Adopting `ActorIngress` at
-`:demo:social`'s ingress is not proposed here, because it is not free: every
-frame the demo journals would then carry an actor lane position, and the actor
-identity has to mean the same thing across a restart and across peers —
-`ActorIngress`'s KDoc is explicit that minting and persisting it is a connector
-ingress's job (CON1), and that a fresh id per process grows the durable
-frontier by one lane per session. That is a design fork for epic
-`computenet-07k`, not for this feature, which was scoped "verify, don't build".
+**The decision, taken 2026-09-19 (`computenet-oti5h`): `:demo:social` stays at
+three waves, and does not adopt an `ActorIngress` boundary yet.** This entry
+left the fork open; the epic took it, for four reasons, each checkable against
+the tree at `6263baaa`:
+
+- **`[24-DUR-06]` does not force it.** The rule binds `PORT_API` frames
+  arriving at an **`Effectful`** inlet, and spec 24 §Effectful says in the same
+  breath that for "any non-`Effectful` cell … a spontaneous contextless call
+  remains legitimate". Every cell `SnbPipeline` builds is a `SetCell` — the
+  four keyed families and the four static dimension cells — and `Effectful`
+  appears nowhere in `demo/social/src/`. The three contextless writes are
+  admitted by rule, not tolerated by oversight; the demo is not refused today
+  and adopting would not be closing a refusal.
+- **Nothing the demo serves consumes a wave.** As measured above, no read route
+  `SocialApp` registers is glitch-free-routed — `/state`, the `/events` SSE
+  re-serve and the IS1–IS7 short reads are `readState` pages and
+  `ObservationSink` snapshots. So the three-wave shape has no observable victim
+  today. The route that would have one is `/feed`, which is F6
+  (`computenet-flfkm`) and is not built.
+- **The one input adoption needs does not exist here.** `ActorIngress` takes an
+  `actorId` rather than minting one, and both `[24-DUR-06]` and the class KDoc
+  put minting and persisting it on a connector ingress (CON1), because it has
+  to mean the same thing across a restart and across peers. `SocialApp`'s HTTP
+  ingress carries no principal (there is no auth, and `:demo:social` declares
+  no `:wire` dependency and has no peer), so the only id available today is
+  process-scoped — the option the KDoc names explicitly "so the weaker one is
+  not chosen by accident". Adopting now would be choosing it by accident.
+- **It cannot be verified where it would cost.** Adoption changes what every
+  journaled frame carries, and the property that would check that is F7's
+  `[SOC1-DUR-03]` recovery equality (`computenet-v10ou`) — open, unbuilt (no
+  `recoverFrom` call exists in `demo/social/src/main` at `6263baaa`), and
+  itself blocked on F2 (`computenet-99qcg`). Shipping an unverifiable change to
+  durable frame content is the wrong order.
+
+**Two corrections to the cost, so the re-decision weighs the real one.**
+Checked while taking this decision, not inherited from the paragraph this one
+replaces:
+
+- Adoption would **not** change the demo's OR-set tag identity. `SetCell` mints
+  tags from a source *derived from its own ref* and says why in as many words —
+  "Tags are minted locally, not taken from the wave's `MessageContext` … a wave
+  timestamp repeats across every cell the wave touches (22)"
+  (`kernel/src/main/kotlin/civictech/cell/data/SetCell.kt`, the `tagSource`
+  comment). The cost is therefore bounded to the wave stamp each journaled
+  frame carries and the frontier lanes keyed on it, not to durable state
+  identity.
+- A narrower edge the adopt arm inherits: `ActorIngress.drive` installs **one**
+  position for the whole block, while the `Effectful` processed-frontier is
+  keyed `(CellRef, portName) -> sourceId -> counter` and suppresses at
+  `>= counter` (`kernel/.../host/HostDurability.kt:533`, `[24-DUR-05]`). Two
+  frames of one block that reach the *same* inlet would put the second at its
+  predecessor's position and it would be dropped as already-acted. Today's
+  multi-cell writes each address a distinct cell, so no two collide, and no
+  `:demo:social` cell is `Effectful` anyway — but `SocialGraph.addComment` on a
+  self-reply is the shape that would, and a connector egress is where it would
+  bite.
+
+**Trigger for re-deciding**, tracked as `computenet-w52fa` under epic
+`computenet-07k` rather than as prose here: whichever of F6
+(`computenet-flfkm`, the first read that would actually consume a wave — F-22
+measured that a `Consume`-linked `GlitchFreeCell` *wedges* under plain ingress)
+or F7 (`computenet-v10ou`, the instrument that could check the journal
+consequence) lands first.
 
 **Honest limit of this entry**: everything above is measured on the in-process
 `SimulationController` host with `journalDir = null`, on darwin/arm64. It says
