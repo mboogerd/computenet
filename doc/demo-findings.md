@@ -1199,9 +1199,13 @@ Note what `[SOC1-ATOM-03]` can therefore honestly assert, and what it cannot:
 `GlitchFreeCell` GROUPS a wave, it does not COMBINE one (its own KDoc), so the
 property tested is "the released contributions of one wave are contiguous and
 carry one wave id" — never "no observer ever sees torn state". And no read path
-`:demo:social` actually serves is glitch-free-routed: `/state`, `/feed` and the
-IS1-IS7 short reads are `ManagedHost.readState` pages and `ObservationSink`
-snapshots (F-21 says the same for `BoundedReader`). That sentence now lives in
+`:demo:social` actually serves is glitch-free-routed: `/state`, the `/events`
+SSE stream that re-serves the same `stateJson()`, and the IS1-IS7 short reads
+behind `/person/` and `/message/` are `ManagedHost.readState` pages and
+`ObservationSink` snapshots (F-21 says the same for `BoundedReader`). Those are
+the read routes `SocialApp` registers today, and all of them; the `/feed` route
+SOC1 §3 anticipates belongs to F4 (`computenet-8eb53`) and is not built, so
+nothing here says anything about it. That sentence now lives in
 `SnbPipeline.kt`'s file KDoc, for F9 (`computenet-74yvm`) to lift into its
 VER-01 table.
 

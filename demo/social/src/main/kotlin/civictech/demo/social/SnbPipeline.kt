@@ -55,8 +55,9 @@
  *
  * **Which read paths are glitch-free-routed: none of them** (`[SOC1-ATOM-03]`,
  * feature `computenet-jadt6`). Every read this demo serves —
- * `SocialApp`'s `/state` and `/feed`, and the IS1-IS7 short reads through
- * [BoundedReader] — is a
+ * `SocialApp`'s `/state` and its `/events` SSE stream (which re-serves the same
+ * `stateJson()`), and the IS1-IS7 short reads behind `/person/` and `/message/`
+ * through [BoundedReader] — is a
  * [civictech.cell.host.ManagedHost.readState] page or a
  * [civictech.cell.observe.ObservationSink] snapshot
  * ([SocialGraph]'s per-cell sinks; F-21 records the same for [BoundedReader]),
