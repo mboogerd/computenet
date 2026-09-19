@@ -1,0 +1,8 @@
+type|creationDate|personId|firstName|lastName|gender|birthday|locationIp|browserUsed|placeId|otherPersonId|postId|commentId|forumId|title|moderatorId|content|replyOfId
+IU1|2000|9|Nina|Nine|female|500000009|10.0.0.9|Firefox|||||||||
+IU1|2001|10|Owen|Ten|male|500000010|10.0.0.10|Chrome|||||||||
+IU6|2300|9|||||||||104||1|||Dynamic post|
+IU7|2400|10||||||||||203||||Dynamic comment|104
+IU2|2500|9|||||||||104||||||
+IU3|2600|10||||||||||203|||||
+IU8|2700|1||||||||9|||||||
