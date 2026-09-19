@@ -21,13 +21,28 @@
  * family-local `keys` file (observed: `demo/shopping`'s `Main.kt:136-139`
  * comment on its own per-key writer family). The host write-ahead journal
  * itself stays at the ROOT of `journalDir`
- * ([KeyedCells.hostJournal]`(journalDir)`), the same file every family's
- * per-key `keys` log sits alongside — never inside one family's own
- * subdirectory. A later feature (F7, `computenet-v10ou`) recovers by
- * pre-spawning every family's known keys FIRST, then calling
+ * ([KeyedCells.hostJournal]`(journalDir)`), one level ABOVE all four
+ * subdirectories: the tree is `<root>/host.journal` beside `<root>/person/`,
+ * `<root>/authored/`, `<root>/forum/` and `<root>/message/`, each holding its
+ * own `keys` log. No family's `keys` log is a sibling of the WAL (corrected
+ * under `computenet-5ab6f`; observed tree after the jo2jk-D6 op sequence:
+ * `<root>/host.journal`, `<root>/person/keys`, `<root>/authored/keys`,
+ * `<root>/forum/keys`, `<root>/message/keys`).
+ *
+ * A later feature (F7, `computenet-v10ou`) recovers by pre-spawning every
+ * family's known keys FIRST, then calling
  * `host.recoverFrom(KeyedCells.hostJournal(journalDir))` exactly ONCE against
- * the shared root WAL — never `family.recover()` four times, which would
- * replay the same host journal four times over.
+ * the shared root WAL. **Four `family.recover()` calls would replay nothing
+ * at all, silently** — not, as this KDoc claimed until `computenet-5ab6f`,
+ * replay the same host journal four times over. [KeyedCells.recover] resolves
+ * `hostJournal` against its OWN per-family `journalDir`
+ * (`kernel/src/main/kotlin/civictech/cell/host/KeyedCells.kt:89-92`), which
+ * here is `<root>/person/host.journal` — a file this pipeline never writes —
+ * so the replay half of each call finds an absent journal and does nothing.
+ * The other half of [KeyedCells.recover], pre-spawning that family's
+ * durably-known keys, is correct and is a perfectly good way to do the
+ * pre-spawn step above; it is only the root-WAL `recoverFrom` that must
+ * happen exactly once.
  *
  * `parse = String::toLong` is required on every family: [KeyedCells]'s
  * default `parse` is an unchecked identity cast from the keys-file `String`
