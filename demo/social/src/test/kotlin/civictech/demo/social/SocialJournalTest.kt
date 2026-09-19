@@ -10,7 +10,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.net.http.HttpResponse
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -70,10 +72,43 @@ class SocialJournalTest {
             val onJournal = HttpProbe("http://localhost:${journalled.boundPort}")
             val onMemory = HttpProbe("http://localhost:${ephemeral.boundPort}")
 
-            happyPath.forEach { op ->
-                assertEquals(200, onJournal.post(op), "journalled /op rejected: $op -> ${onJournal.postForm(op).body()}")
-                assertEquals(200, onMemory.post(op), "ephemeral /op rejected: $op")
+            // journalRequests/memoryRequests double as the acceptance criterion's
+            // demonstrable request log: each increment corresponds to one real
+            // HTTP POST dispatched over the wire (postForm always sends), so the
+            // counts below are direct evidence of how many /op requests reach
+            // each app, not a restatement of the loop's own iteration count.
+            // Before computenet-s0zdp's fix, kotlin.test.assertEquals evaluated
+            // its message argument eagerly, so the failure message's own
+            // `onJournal.postForm(op)` call fired a second, unwanted POST on
+            // every one of these 8 ops — journalRequests read 16, not 8.
+            val journalRequests = AtomicInteger(0)
+            val memoryRequests = AtomicInteger(0)
+            fun postToJournal(op: String): HttpResponse<String> {
+                journalRequests.incrementAndGet()
+                return onJournal.postForm(op)
             }
+            fun postToMemory(op: String): HttpResponse<String> {
+                memoryRequests.incrementAndGet()
+                return onMemory.postForm(op)
+            }
+
+            happyPath.forEach { op ->
+                val journalResponse = postToJournal(op)
+                assertEquals(200, journalResponse.statusCode(), "journalled /op rejected: $op -> ${journalResponse.body()}")
+                val memoryResponse = postToMemory(op)
+                assertEquals(200, memoryResponse.statusCode(), "ephemeral /op rejected: $op -> ${memoryResponse.body()}")
+            }
+
+            assertEquals(
+                happyPath.size,
+                journalRequests.get(),
+                "expected exactly one /op POST per happy-path op to reach the journalled app, saw ${journalRequests.get()}",
+            )
+            assertEquals(
+                happyPath.size,
+                memoryRequests.get(),
+                "expected exactly one /op POST per happy-path op to reach the ephemeral app, saw ${memoryRequests.get()}",
+            )
 
             val journalledState = onJournal.await { settledCounts in it }
             val ephemeralState = onMemory.await { settledCounts in it }
