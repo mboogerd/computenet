@@ -131,4 +131,104 @@ class SocialReadRefusalTest {
         result shouldBe StateReadResult.Unavailable(StateReadResult.Reason.NOT_HOSTED)
         result.asOutcome() shouldBe ReadOutcome.Refused(StateReadResult.Reason.NOT_HOSTED)
     }
+
+    // --- computenet-suj6a: SocialApp.respondOutcome's TIMEOUT branch ---------
+
+    /**
+     * Wraps a [BoundedReader], answering with a [CompletableFuture] that is
+     * never completed for any ref present in [stuck] and delegating
+     * otherwise — the never-completing-future case [RefusingReader] above
+     * cannot produce, since [RefusingReader] always hands back a completed
+     * future.
+     *
+     * [onStuckRead] is counted down synchronously, inside [read], the moment
+     * a stuck ref is looked up — which is the dispatcher thread's entry into
+     * the stuck path, since [ShortReads] calls [BoundedReader.read]
+     * synchronously while building its future chain, before
+     * `SocialApp.respondOutcome` ever blocks on `future.get`. A test awaiting
+     * that latch therefore knows the dispatcher thread is inside the stuck
+     * read, with no wall-clock guess.
+     */
+    private class StuckReader(
+        private val delegate: BoundedReader,
+        private val stuck: MutableMap<CellRef, CompletableFuture<StateReadResult>>,
+        private val onStuckRead: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(0),
+    ) : BoundedReader {
+        override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> {
+            val future = stuck[ref]
+            if (future != null) {
+                onStuckRead.countDown()
+                return future
+            }
+            return delegate.read(ref, request)
+        }
+    }
+
+    /**
+     * `[SOC1-SREAD-04]`/rx8om-D8 (computenet-suj6a): a short read whose future
+     * never completes answers 503 `{"refused":"TIMEOUT"}` within
+     * [SocialApp]'s configured bound, and — because [DemoShell] dispatches
+     * every route (`/state` included) on one thread (`server.executor =
+     * null`) — a concurrent `/state` request queued behind it is delayed by
+     * the same bound rather than answered promptly. This is the accepted
+     * tradeoff `SHORT_READ_TIMEOUT`'s KDoc documents for a demo app (mirrors
+     * `DialogueApp.onDriver`'s `ACTION_TIMEOUT_MS`); the test uses a short
+     * override so it does not have to wait out the real 10s production bound.
+     */
+    @Test
+    fun `SOC1-SREAD-04 a stuck short read times out with 503 TIMEOUT and stalls the dispatcher`() {
+        val stuck = ConcurrentHashMap<CellRef, CompletableFuture<StateReadResult>>()
+        val dispatcherEnteredStuckRead = java.util.concurrent.CountDownLatch(1)
+        val timeoutSeconds = 1L
+        val app = SocialApp(
+            port = 0,
+            reader = { host -> StuckReader(HostBoundedReader(host), stuck, dispatcherEnteredStuckRead) },
+            shortReadTimeoutSeconds = timeoutSeconds,
+        ).start()
+        try {
+            HttpProbe("http://localhost:${app.boundPort}").use { probe ->
+                probe.post("action=person&id=1&firstName=Ada&lastName=Lovelace")
+                probe.await { """"id":1""" in it }
+
+                val person1Ref = app.pipeline.families.person.getOrSpawn(1).ref
+                stuck[person1Ref] = CompletableFuture()
+
+                // Issue the stuck read on its own thread and a /state read
+                // right behind it: DemoShell's single dispatcher thread means
+                // /state cannot be answered until the stuck read gives up.
+                val readExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+                try {
+                    val stuckResponse = readExecutor.submit<java.net.http.HttpResponse<String>> { probe.get("/person/1") }
+                    // Wait for the dispatcher thread to be provably inside the
+                    // stuck read (StuckReader.read counts this down) before
+                    // measuring /state's elapsed time — no wall-clock guess.
+                    assertTrue(
+                        dispatcherEnteredStuckRead.await(10, TimeUnit.SECONDS),
+                        "dispatcher thread never entered the stuck read for person1Ref",
+                    )
+                    val stateBefore = System.nanoTime()
+                    val stateResponse = probe.get("/state")
+                    val stateElapsedMs = (System.nanoTime() - stateBefore) / 1_000_000
+
+                    assertEquals(503, stuckResponse.get(10, TimeUnit.SECONDS).statusCode())
+                    assertTrue(
+                        """"refused":"TIMEOUT"""" in stuckResponse.get().body(),
+                        stuckResponse.get().body(),
+                    )
+                    assertEquals(200, stateResponse.statusCode())
+                    assertTrue(
+                        stateElapsedMs >= (timeoutSeconds * 1000) - 100,
+                        "/state answered after ${stateElapsedMs}ms, measured from after the dispatcher " +
+                            "entered the stuck read, before the stuck read's ${timeoutSeconds}s bound " +
+                            "elapsed — expected it to queue behind the stuck read on DemoShell's single " +
+                            "dispatcher thread",
+                    )
+                } finally {
+                    readExecutor.shutdownNow()
+                }
+            }
+        } finally {
+            app.stop()
+        }
+    }
 }
