@@ -1,7 +1,10 @@
 package civictech.demo.social
 
 import civictech.cell.CellRef
+import civictech.cell.data.SetApi
 import civictech.cell.durability.Journal
+import civictech.cell.graph.TypedRef
+import civictech.cell.graph.lookup
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -287,6 +290,130 @@ class SocialCrashRestartTest {
     }
 
     /**
+     * A [Journal] decorator (v10ou-D8) over [inner] whose [replay] records, at
+     * the moment it is called, whether every on-disk key of every family
+     * under [dir] resolves to a live cell on [host] — the [SOC1-DUR-02] order
+     * assertion: pre-spawn ([SocialGraph.spawnKnown]) must have run before
+     * [ManagedHost.recoverFrom] ever calls [Journal.replay]. `append`/`reset`
+     * delegate straight through; only [replay] is observed.
+     */
+    private class RecordingJournal(
+        private val inner: Journal,
+        private val host: ManagedHost,
+        private val dir: File,
+    ) : Journal {
+        var replayCalls = 0
+            private set
+
+        var allLiveAtReplay: Boolean? = null
+            private set
+
+        override fun append(record: ByteArray) = inner.append(record)
+
+        override fun replay(): List<ByteArray> {
+            replayCalls++
+            allLiveAtReplay = onDiskKeys(dir).all { (namespace, key) ->
+                host.lookup(TypedRef<SetApi<Any>>(CellRef(UUID.nameUUIDFromBytes("$namespace:$key".toByteArray())))) != null
+            }
+            return inner.replay()
+        }
+
+        override fun reset(records: List<ByteArray>) = inner.reset(records)
+    }
+
+    /**
+     * [SOC1-DUR-02]: every key in every family's `keys` file must have a live
+     * cell at the moment [Journal.replay] is called — pre-spawn before
+     * replay, not after. Pieces-level, mirroring `SocialJournalTest`'s shape
+     * (`:169-174`).
+     *
+     * The positive case builds [SocialRecovery] directly (its own contract:
+     * [SocialGraph.spawnKnown] before `host.recoverFrom`) over a
+     * [RecordingJournal] — `replay()` must run exactly once and every
+     * on-disk key must already be live when it does.
+     *
+     * The discriminator is a THIRD host that calls `host3.recoverFrom` over
+     * its own [RecordingJournal] with no [SocialGraph]/`spawnKnown` ever run
+     * against it: the same on-disk keys read NOT live at `replay()`, and
+     * after `runToIdle` the host has dead-lettered every replayed frame.
+     */
+    @Test
+    fun `SOC1-DUR-02 keys are live before the first replayed frame is delivered`(@TempDir dir: File) {
+        crashAfterPrefix(dir)
+
+        // --- correct order: SocialRecovery.stage() spawns known keys first ---
+        val c2 = SimulationController(42)
+        val host2 = ManagedHost(scheduler = c2.scheduler(), registry = LocationRegistry(), journal = KeyedCells.hostJournal(dir))
+        val pipeline2 = SnbPipeline.build(host2, dir)
+        val graph2 = SocialGraph(host2, pipeline2)
+        val recording2 = RecordingJournal(KeyedCells.hostJournal(dir)!!, host2, dir)
+        SocialRecovery(host2, graph2, recording2).stage()
+        c2.runToIdle()
+
+        assertEquals(1, recording2.replayCalls, "replay() must run exactly once")
+        assertEquals(
+            true,
+            recording2.allLiveAtReplay,
+            "every on-disk key must be live at replay() when spawnKnown ran first",
+        )
+
+        // --- discriminator: recoverFrom with no cell ever pre-spawned --------
+        val c3 = SimulationController(42)
+        val host3 = ManagedHost(scheduler = c3.scheduler(), registry = LocationRegistry())
+        val recording3 = RecordingJournal(KeyedCells.hostJournal(dir)!!, host3, dir)
+        host3.recoverFrom(recording3)
+        c3.runToIdle()
+
+        assertEquals(1, recording3.replayCalls, "replay() must run exactly once")
+        assertEquals(
+            false,
+            recording3.allLiveAtReplay,
+            "no on-disk key can be live at replay() when recoverFrom ran before any cell was spawned",
+        )
+        assertTrue(
+            host3.supervisionAccounting().deadLetters > 0,
+            "the wrong order dead-letters every replayed frame",
+        )
+    }
+
+    /**
+     * B17 ([SOC1-DUR-04]): a `keys` file missing entries the WAL references
+     * makes recovery refuse loudly, naming the missing person, and the app
+     * never binds a port. [SocialApp.start] completes recovery ([SocialApp.completeRecovery])
+     * before it ever constructs `DemoShell` (v10ou-D3) — a thrown
+     * `completeRecovery()` propagates straight out of `start()`, so no shell
+     * is built and [SocialApp.boundPort] still throws "not started".
+     */
+    @Test
+    fun `B17 a truncated keys file fails recovery loudly and binds no port`(@TempDir dir: File) {
+        crashAfterPrefix(dir)
+
+        val keysFile = File(File(dir, "person"), KeyedCells.KEYS_FILE)
+        val lines = keysFile.readLines().filter { it.isNotBlank() }
+        assertTrue(lines.size >= 2, "the prefix must have minted at least two persons to truncate, had ${lines.size}")
+        val kept = lines.size / 2
+        val dropped = lines.drop(kept)
+        assertTrue(dropped.isNotEmpty(), "truncation must drop at least one line")
+        keysFile.writeText(lines.take(kept).joinToString("\n", postfix = "\n"))
+        val droppedId = dropped.first().trim()
+
+        val c2 = SimulationController(42)
+        val app2 = SocialApp(port = 0, journalDir = dir, scheduler = c2.scheduler())
+        c2.runToIdle()
+
+        val refusal = assertFailsWith<IllegalStateException> { app2.completeRecovery() }
+        assertTrue(
+            refusal.message?.contains("snb-person:$droppedId") == true,
+            "refusal must name the dropped person snb-person:$droppedId: ${refusal.message}",
+        )
+
+        // A refused recovery is not retried into serving: start() re-attempts
+        // completeRecovery(), throws the same way, and never builds DemoShell.
+        assertFailsWith<IllegalStateException> { app2.start() }
+        assertFailsWith<IllegalStateException> { app2.boundPort }
+    }
+
+    /**
      * The change broadcast after v10ou.1's lazy per-sink listeners: an app
      * whose sinks all exist BEFORE `start()` (a preloaded source) must still
      * push a change frame over `/events` for a write to one of those
@@ -332,3 +459,19 @@ class SocialCrashRestartTest {
         const val DATA_BAND = 20
     }
 }
+
+/**
+ * Every `(namespace, key)` pair on disk under [dir], one per line of each
+ * family's `keys` file — file-scope so [SocialCrashRestartTest.RecordingJournal],
+ * a plain nested class with no implicit outer access, can call it too.
+ */
+private fun onDiskKeys(dir: File): List<Pair<String, String>> =
+    listOf("person" to "snb-person", "authored" to "snb-authored", "forum" to "snb-forum", "message" to "snb-message")
+        .flatMap { (folder, namespace) ->
+            File(File(dir, folder), KeyedCells.KEYS_FILE)
+                .takeIf { it.isFile }
+                ?.readLines()
+                ?.filter { it.isNotBlank() }
+                ?.map { namespace to it.trim() }
+                .orEmpty()
+        }
