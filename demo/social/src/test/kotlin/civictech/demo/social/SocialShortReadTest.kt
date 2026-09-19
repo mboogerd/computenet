@@ -68,6 +68,24 @@ class SocialShortReadTest {
         fun refs(): List<CellRef> = calls.map { it.first }
     }
 
+    /**
+     * Forces every page of a walk down to [limit] entries, so a cell whose
+     * whole state would otherwise fit one page (every cell of the hand-built
+     * example graph, per this suite's cost assertions) is still walked across
+     * several [StatePage.next] hops. Test-only: [ShortReads] itself never sets
+     * [StateRead.limit] (rx8om's "why IS2 walks" note in `ShortReads.kt`), so
+     * this is the substitute for `computenet-18ey0`'s prescribed
+     * `ShortReads.kt:299` mutation — proving the continuation is exercised
+     * without committing a change to a file outside this task's claim.
+     */
+    private class PageClampingReader(
+        private val delegate: BoundedReader,
+        private val limit: Int,
+    ) : BoundedReader {
+        override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> =
+            delegate.read(ref, request.copy(limit = limit))
+    }
+
     private fun exampleGraph(): Fixture {
         val host = ManagedHost(registry = LocationRegistry())
         val pipeline = SnbPipeline.build(host, journalDir = null)
@@ -130,6 +148,65 @@ class SocialShortReadTest {
         awaitUntil("person 3 to settle") { f.graph.personFacts(3).any { it is PersonFact.Profile } }
 
         f.reads.is2(3).answer() shouldBe ReadOutcome.Found(emptyList())
+    }
+
+    /**
+     * The example graph's one reply to message 10 (comment 11, by Bob) is
+     * authored by someone the creator (Ada) *does* know
+     * (`graph.addKnows(1, 2, 5)`), so every other assertion in this suite
+     * exercises only IS7's `true` arm. `computenet-18ey0`: mutating
+     * `Reply(child, child.creatorId in creatorKnows)` to `Reply(child, true)`
+     * (`ShortReads.kt:274`) left every prior test green — this one adds a
+     * second reply, direct to message 10, by a person Ada has no `Knows` edge
+     * to, so that mutation reddens it.
+     */
+    @Test
+    fun `SOC1-SREAD-01 IS7 authorKnowsCreator is false for a reply the creator does not know`() {
+        val f = exampleGraph()
+        val cy = Person(3, "Cy", "Clone")
+        f.graph.addPerson(cy)
+        val comment13 = Message(13, creatorId = 3, creationDate = 6, content = "stranger reply", replyOfId = 10)
+        f.graph.addComment(comment13)
+        awaitUntil("comment 13 to settle") {
+            f.graph.personFacts(3).any { it is PersonFact.Profile } &&
+                f.graph.messageFacts(13).any { it is MessageFact.Body } &&
+                f.graph.messageFacts(10).count { it is MessageFact.Reply } == 2
+        }
+
+        f.reads.is7(10).answer() shouldBe ReadOutcome.Found(
+            listOf(
+                Reply(comment11, authorKnowsCreator = true),
+                Reply(comment13, authorKnowsCreator = false),
+            )
+        )
+    }
+
+    /**
+     * Every cell of the hand-built example graph fits one page (rx8om-D3), so
+     * nothing else in this suite exercises [StatePage.next]. `computenet-18ey0`:
+     * mutating the walk to page at `limit = 1`
+     * (`ShortReads.kt:299`, this test's [PageClampingReader] substitute for
+     * that same mutation without touching a file outside this task's claim)
+     * left `[SOC1-SREAD-01]`'s other IS2 assertions green and reddened only
+     * the read-count ones — nothing pinned the *content* of a multi-page walk.
+     * This adds ten more messages authored by person 1, forcing the
+     * `snb-authored` walk across several pages at `limit = 1`, and pins that
+     * `take(10)` after the `(creationDate desc, id desc)` sort still lands on
+     * the ten newest.
+     */
+    @Test
+    fun `SOC1-SREAD-01 IS2 returns the ten newest across a multi-page authored-cell walk`() {
+        val f = exampleGraph()
+        val extra = (20L..29L).map { id ->
+            Message(id, creatorId = 1, creationDate = id, content = "m$id", replyOfId = 12)
+        }
+        extra.forEach { f.graph.addComment(it) }
+        awaitUntil("person 1's authored messages to settle") { f.graph.authored(1).size == 12 }
+
+        val paged = ShortReads(PageClampingReader(f.reader, limit = 1), GraphLocator(f.graph, f.families))
+        val expected = extra.sortedWith(compareByDescending<Message> { it.creationDate }.thenByDescending { it.id })
+
+        paged.is2(1).answer() shouldBe ReadOutcome.Found(expected)
     }
 
     // --- [SOC1-SREAD-02] ----------------------------------------------------
