@@ -32,13 +32,15 @@
  * and after"). A later successful create for the same id clears the
  * suppression.
  *
- * **The limit of that fix, stated where it is made:** the suppression set is
- * in memory and dies with the process, while the residue it hides — one line
- * in `<journalDir>/<family>/keys` with no journal record to match it — is on
- * disk. A recovering app (F7, `computenet-v10ou`) pre-spawns that key into an
- * empty cell nothing ever replays into, so the id comes BACK into
- * [personIds] across a restart. Filed as `computenet-2v3e4`; the durable half
- * is not fixed here.
+ * **The durable half is closed by [suppressUnwrittenKeys]** (v10ou-D6, closes
+ * `computenet-2v3e4`): a recovering app (F7, `computenet-v10ou`) pre-spawns
+ * every durably-known key ([spawnKnown]) into an empty cell that replay may or
+ * may not ever touch, so once the host has drained, [SocialRecovery.complete]
+ * calls [suppressUnwrittenKeys] to re-derive the same suppression from what
+ * actually replayed. **The remaining limit:** the `keys` line itself stays on
+ * disk forever — [KeyedCells] has no un-mint, and rewriting or compacting that
+ * log is this feature's non-goal — so the suppression is recomputed, not
+ * removed, on every restart.
  *
  * **Writes** go through the routed, journaled inlet
  * (`host.lookup(TypedRef<SetApi<F>>(cell.ref))!!.inlet.call`, jo2jk-D1) —
@@ -208,6 +210,32 @@ class SocialGraph(
         graph.families.forum.keys().forEach { forumCell(it) }
         graph.families.message.keys().forEach { messageCell(it) }
         graph.families.authored.keys().forEach { authoredCell(it) }
+    }
+
+    /**
+     * Re-derives the [unadmittedPersons]/[unadmittedForums]/[unadmittedMessages]
+     * suppression after a restart (v10ou-D6, closes the durable half of
+     * `computenet-2v3e4`): a key in a family's [KeyedCells.keys] whose cell
+     * holds no facts once the host has drained replay is exactly a ghost — its
+     * creating write minted the key and then failed, in some earlier process,
+     * before anything was ever journaled for it — so it is added to the
+     * unadmitted set the same way a live rejected write is ([creating]).
+     *
+     * **Valid only after the host has drained** every staged frame — the
+     * facts in [personFacts]/[forumFacts]/[messageFacts] are meaningless
+     * before then (see [SocialRecovery]'s KDoc). The only caller is
+     * [SocialRecovery.complete].
+     *
+     * The authored family has no unadmitted set and is not enumerated by
+     * `/state` ([SocialGraph]'s own KDoc, "Existence"), so it is left alone
+     * here. A key already admitted (its facts are non-empty) is untouched,
+     * and [creating] still clears a previously-suppressed id on its next
+     * successful write, exactly as before a restart.
+     */
+    fun suppressUnwrittenKeys() {
+        graph.families.person.keys().forEach { if (personFacts(it).isEmpty()) unadmittedPersons.add(it) }
+        graph.families.forum.keys().forEach { if (forumFacts(it).isEmpty()) unadmittedForums.add(it) }
+        graph.families.message.keys().forEach { if (messageFacts(it).isEmpty()) unadmittedMessages.add(it) }
     }
 
     private fun requirePerson(id: Long) {

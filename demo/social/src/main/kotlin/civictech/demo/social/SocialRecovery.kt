@@ -49,12 +49,18 @@ class SocialRecovery(
      * Marks recovery complete. Only valid after [stage] and after the host
      * drained every staged frame (see the class KDoc).
      *
-     * This task adds nothing else here: feature `computenet-v10ou`'s other
-     * tasks fill it — the dead-letter refusal naming a missing `(family, key)`
-     * (v10ou-D5, [SOC1-DUR-04]) and the ghost-key suppression (v10ou-D6).
+     * Runs the dead-letter refusal AFTER (v10ou-D5, [SOC1-DUR-04] — a missing
+     * key is an error, so it must abort before anything below runs), then
+     * [SocialGraph.suppressUnwrittenKeys] AFTER that (v10ou-D6, closes the
+     * durable half of `computenet-2v3e4`): an empty key that survived the
+     * dead-letter check is a ghost, not a missing key, and is suppressed
+     * rather than refused.
      */
     fun complete() {
         check(staged) { "SocialRecovery.complete() before stage()" }
+        // v10ou-D5's dead-letter refusal (SOC1-DUR-04) lands here, ahead of
+        // the suppression below, in a sibling task of this feature.
+        graph.suppressUnwrittenKeys()
         completed = true
     }
 }

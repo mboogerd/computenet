@@ -1,7 +1,11 @@
 package civictech.demo.social
 
+import civictech.cell.CellRef
+import civictech.cell.durability.Journal
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.testkit.HttpProbe
@@ -9,6 +13,7 @@ import civictech.testkit.awaitSseData
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -222,6 +227,63 @@ class SocialCrashRestartTest {
         } finally {
             app2.stop()
         }
+    }
+
+    /**
+     * `computenet-2v3e4`'s durable half (v10ou-D6): a family key minted by a
+     * creating write that then fails stays on disk with no journal record to
+     * match it ([KeyedCells] has no un-mint), and a naive restart pre-spawns
+     * that key into an empty cell nothing ever replays into — resurrecting
+     * the ghost into `/state`. Built from PIECES rather than [SocialApp],
+     * since [SocialApp] has no `journalFor` seam: person 2's cell alone
+     * refuses its journal append (the same injection
+     * [SocialJournalTest]'s "a write that fails after the family key is
+     * minted leaves no entity behind" uses to pin the live half), while
+     * everything else — including person 1 — keeps the real host WAL. Then a
+     * real restart follows: a plain [SocialApp] recovers the same [dir].
+     *
+     * Mutation check: with [SocialGraph.suppressUnwrittenKeys] removed from
+     * [SocialRecovery.complete], `personIds()` reads `{1, 2}` after the
+     * restart — prove the mutation landed (`git diff HEAD --
+     * SocialRecovery.kt` non-empty) before trusting that result, then
+     * restore.
+     */
+    @Test
+    fun `computenet-2v3e4 a ghost key stays hidden across a restart`(@TempDir dir: File) {
+        // --- app 1, from pieces: person 2's cell alone refuses its journal --
+        val refused = CellRef(UUID.nameUUIDFromBytes("snb-person:2".toByteArray()))
+        val wal = KeyedCells.hostJournal(dir)!!
+        val refusing = object : Journal {
+            override fun append(record: ByteArray) = throw IllegalStateException("refused by test")
+            override fun replay(): List<ByteArray> = emptyList()
+            override fun reset(records: List<ByteArray>) = Unit
+        }
+        val host1 = ManagedHost(
+            registry = LocationRegistry(),
+            journalFor = { ref -> if (ref == refused) refusing else wal },
+        )
+        val pipeline1 = SnbPipeline.build(host1, dir)
+        val graph1 = SocialGraph(host1, pipeline1)
+
+        graph1.addPerson(Person(1, "Ada", "Lovelace"))
+        assertFailsWith<Exception>("the refused write must surface to the caller") {
+            graph1.addPerson(Person(2, "Ghost", "Ly"))
+        }
+
+        assertEquals(setOf(1L), graph1.personIds(), "the ghost must not be an entity before the restart")
+        assertTrue(2L in pipeline1.families.person.keys(), "the family key is expected to have been minted")
+
+        // --- app 2: a real restart, through a plain SocialApp on the same dir
+        val c2 = SimulationController(42)
+        val app2 = SocialApp(port = 0, journalDir = dir, scheduler = c2.scheduler())
+        c2.runToIdle()
+        app2.completeRecovery()
+
+        assertEquals(sortedSetOf(1L), app2.graph.personIds(), "the ghost key must stay hidden across a restart")
+        assertTrue(
+            app2.graph.personFacts(1).any { it is PersonFact.Profile },
+            "person 1's own facts must survive the restart",
+        )
     }
 
     /**
