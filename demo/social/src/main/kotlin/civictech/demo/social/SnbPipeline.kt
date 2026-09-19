@@ -35,10 +35,11 @@
  * `<root>/host.journal`, `<root>/person/keys`, `<root>/authored/keys`,
  * `<root>/forum/keys`, `<root>/message/keys`).
  *
- * A later feature (F7, `computenet-v10ou`) recovers by pre-spawning every
- * family's known keys FIRST, then calling
- * `host.recoverFrom(KeyedCells.hostJournal(journalDir))` exactly ONCE against
- * the shared root WAL. **Four `family.recover()` calls would replay nothing
+ * Recovery (F7, `computenet-v10ou`) is [SocialRecovery]: it pre-spawns every
+ * family's known keys FIRST, through [SocialGraph.spawnKnown] so each cell's
+ * observe sink exists, then calls `host.recoverFrom` exactly ONCE against the
+ * shared root WAL ([KeyedCells.hostJournal]`(journalDir)`). It never calls
+ * `family.recover()`: **four `family.recover()` calls would replay nothing
  * at all, silently** — not, as this KDoc claimed until `computenet-5ab6f`,
  * replay the same host journal four times over. [KeyedCells.recover] resolves
  * `hostJournal` against its OWN per-family `journalDir`
@@ -46,9 +47,10 @@
  * here is `<root>/person/host.journal` — a file this pipeline never writes —
  * so the replay half of each call finds an absent journal and does nothing.
  * The other half of [KeyedCells.recover], pre-spawning that family's
- * durably-known keys, is correct and is a perfectly good way to do the
- * pre-spawn step above; it is only the root-WAL `recoverFrom` that must
- * happen exactly once.
+ * durably-known keys, is correct in itself, but it spawns through the family
+ * alone and would leave [SocialGraph] with no observe sink for the key — which
+ * is why the pre-spawn goes through [SocialGraph.spawnKnown] instead — and
+ * the root-WAL `recoverFrom` must happen exactly once.
  *
  * `parse = String::toLong` is required on every family: [KeyedCells]'s
  * default `parse` is an unchecked identity cast from the keys-file `String`

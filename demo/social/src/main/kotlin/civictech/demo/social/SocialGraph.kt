@@ -168,6 +168,22 @@ class SocialGraph(
         return ref
     }
 
+    /**
+     * Spawns every durably-known key of all four families THROUGH this class
+     * (v10ou-D2): [personCell]/[forumCell]/[messageCell]/[authoredCell] for
+     * each id in the family's `keys()`, so each cell's observe sink exists
+     * before [SocialRecovery.stage] replays the host WAL into it. A bare
+     * `families.x.getOrSpawn(id)` would spawn the cell but register no sink,
+     * and every recovered cell would read as empty facts. Spawning a known key
+     * appends nothing to its `keys` log. Writes nothing to any cell.
+     */
+    fun spawnKnown() {
+        graph.families.person.keys().forEach { personCell(it) }
+        graph.families.forum.keys().forEach { forumCell(it) }
+        graph.families.message.keys().forEach { messageCell(it) }
+        graph.families.authored.keys().forEach { authoredCell(it) }
+    }
+
     private fun requirePerson(id: Long) {
         if (id !in personIds()) throw IllegalArgumentException("unknown person $id")
     }

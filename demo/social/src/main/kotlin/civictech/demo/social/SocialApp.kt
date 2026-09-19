@@ -11,9 +11,11 @@
  */
 package civictech.demo.social
 
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Interest
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
@@ -27,6 +29,7 @@ import com.sun.net.httpserver.HttpExchange
 import java.io.File
 import java.net.URLDecoder
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -40,8 +43,27 @@ import java.util.concurrent.TimeoutException
  */
 private class Bad(message: String) : IllegalArgumentException(message)
 
+/**
+ * **Recovery seam** (SOC1 F7, feature `computenet-v10ou`, v10ou-D1..D4).
+ * With a [journalDir], construction stages a [SocialRecovery] — every
+ * durably-known key pre-spawned through [SocialGraph.spawnKnown], then the
+ * shared root WAL replayed exactly once — BEFORE any [source] load. Staging
+ * only submits the journaled frames; [start] first drains the host behind a
+ * quiescence fence and calls [completeRecovery], and only THEN constructs the
+ * [DemoShell] (which binds its socket in its own constructor), so no port is
+ * bound until recovery has completed. A test on a `SimulationController`
+ * scheduler never reaches that fence: it settles with `runToIdle()` and calls
+ * [completeRecovery] itself (the fence would block, since nothing steps that
+ * scheduler while it waits). [boundPort] before [start] throws.
+ *
+ * **Limit (v10ou-D4):** a recovered app — any family already knowing a key —
+ * does not reload [source]'s static slice (the WAL already holds it). The
+ * [UpdateStream] is still built, but its position is per-process: `applied`
+ * restarts at 0, and re-stepping re-applies already-journaled events, which
+ * is idempotent ([SOC1-UPD-04]). A durable stream cursor is out of scope.
+ */
 class SocialApp(
-    port: Int = 8080,
+    private val port: Int = 8080,
     journalDir: File? = null,
     reader: (ManagedHost) -> BoundedReader = ::HostBoundedReader,
     // computenet-suj6a: overridable only so a test can drive the TIMEOUT branch
@@ -53,17 +75,29 @@ class SocialApp(
     // in other test files is unaffected. Null loads nothing (today's
     // behavior); non-null loads once, in `init`, before the shell routes.
     source: SnbSource? = null,
+    // v10ou-D3: appended LAST (every existing construction is named-argument).
+    // Null mints the production VirtualThreadScheduler; the app keeps the
+    // handle because start()'s quiescence fence submits onto it. Tests pass
+    // SimulationController.scheduler().
+    scheduler: HostScheduler? = null,
 ) {
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
+    private val hostScheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("SocialApp")
+    private val journal = KeyedCells.hostJournal(journalDir)
+    private val host = ManagedHost(scheduler = hostScheduler, registry = registry, journal = journal)
 
     val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir, registry)
     val graph: SocialGraph = SocialGraph(host, pipeline)
 
+    // v10ou-D1/D3: staged here, in construction, before any source load below.
+    // The same Journal instance the host appends to is the one replayed.
+    private val recovery: SocialRecovery? = journal?.let { SocialRecovery(host, graph, it).also(SocialRecovery::stage) }
+
     // 99qcg-D2/D10: null source means no dataset and no stream; /op action=step
     // then answers 400 and /state's applied/remaining stay 0/0.
+    // v10ou-D4: a recovery that found any known key skips the static reload.
     private val stream: UpdateStream? = source?.let {
-        SocialLoader.load(it, graph)
+        if (recovery == null || !recoveredAnyKey()) SocialLoader.load(it, graph)
         UpdateStream(it, graph)
     }
 
@@ -91,33 +125,87 @@ class SocialApp(
     private val organisations: ObservationSink<Set<Organisation>> =
         host.observe(pipeline.statics.organisations.ref, View.set<Organisation>())
 
-    private val shell = DemoShell(port)
+    // v10ou-D3: built in start(), never in construction — DemoShell binds its
+    // socket in its constructor, and nothing may be bound before recovery completed.
+    @Volatile
+    private var shell: DemoShell? = null
 
     @Volatile
     private var viewer: Long? = null
 
-    val boundPort: Int get() = shell.boundPort
+    val boundPort: Int get() = shell?.boundPort ?: throw IllegalStateException("not started")
 
-    init {
-        shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
-        shell.route("/state") { it.respond(200, stateJson(), "application/json") }
-        shell.route("/op") { handleOp(it) }
-        shell.route("/person/") { handlePerson(it) }
-        shell.route("/message/") { handleMessage(it) }
-        shell.sse("/events") { stateJson() }
+    private fun recoveredAnyKey(): Boolean = with(pipeline.families) {
+        listOf(person, authored, forum, message).any { it.keys().isNotEmpty() }
+    }
+
+    /**
+     * Completes a staged recovery ([SocialRecovery.complete]). Idempotent; a
+     * no-op without a journal. Valid only once the host has drained the
+     * staged replay — [start] fences for that itself; a test on a
+     * `SimulationController` calls this after `runToIdle()`.
+     */
+    @Synchronized
+    fun completeRecovery() {
+        val r = recovery ?: return
+        if (!r.completed) r.complete()
+    }
+
+    /**
+     * Completes a pending recovery behind a quiescence fence, then — only then
+     * — constructs and binds the [DemoShell], registers the routes and the
+     * change broadcast, and starts serving (v10ou-D3).
+     */
+    @Synchronized
+    fun start(): SocialApp = apply {
+        if (shell != null) return@apply
+        if (recovery?.completed == false) {
+            awaitQuiescence()
+            completeRecovery()
+        }
+        val s = DemoShell(port)
+        s.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        s.route("/state") { it.respond(200, stateJson(), "application/json") }
+        s.route("/op") { handleOp(it) }
+        s.route("/person/") { handlePerson(it) }
+        s.route("/message/") { handleMessage(it) }
+        s.sse("/events") { stateJson() }
+        shell = s
 
         // Wired after the shell exists, per SkillMatchApp's idiom: graph.onChange
         // fires on every settled change of every sink, present and future.
         graph.onChange { broadcast() }
+        s.start()
     }
 
-    fun start(): SocialApp = apply { shell.start() }
-
+    /** Safe on a never-started app. */
     fun stop() {
-        shell.stop()
+        shell?.stop()
     }
 
-    private fun broadcast() = shell.broadcast { stateJson() }
+    /** A no-op until [start] built the shell. */
+    private fun broadcast() {
+        shell?.broadcast { stateJson() }
+    }
+
+    /**
+     * Blocks until the host queue has drained: `DialogueRuntime.afterQuiescence`'s
+     * six lines (re-implemented because `:testkit`'s `awaitDrained` is test-only).
+     * One task at [Int.MAX_VALUE] priority sorts below every band the host uses,
+     * so it runs only once nothing else is queued, however deep the cascade
+     * the replay enqueues. [QUIESCENCE_TIMEOUT_MS] is a hang backstop, not a
+     * convergence budget. Must not be reached on a `SimulationController`,
+     * which nothing steps while this thread waits.
+     *
+     * @throws IllegalStateException if the host never drained in time.
+     */
+    private fun awaitQuiescence() {
+        val drained = CountDownLatch(1)
+        hostScheduler.submit(Int.MAX_VALUE) { drained.countDown() }
+        check(drained.await(QUIESCENCE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            "SocialApp.start: host queue never drained within ${QUIESCENCE_TIMEOUT_MS}ms of staging recovery"
+        }
+    }
 
     // --- /op ------------------------------------------------------------------
 
@@ -373,6 +461,9 @@ class SocialApp(
     private companion object {
         /** Bounds the three /state arrays; counts stay total (jo2jk-D6). */
         const val STATE_LIMIT = 200
+
+        /** Hang backstop for [awaitQuiescence] (v10ou-D3: 30 s, as `DialogueRuntime`). */
+        const val QUIESCENCE_TIMEOUT_MS = 30_000L
 
         /**
          * Bounds a short read's future at the HTTP boundary (rx8om-D8).
