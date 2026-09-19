@@ -25,6 +25,9 @@ import civictech.demo.shell.value
 import com.sun.net.httpserver.HttpExchange
 import java.io.File
 import java.net.URLDecoder
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * A single `/op` validation/action failure, reported as a 400 with [message]
@@ -36,12 +39,20 @@ import java.net.URLDecoder
  */
 private class Bad(message: String) : IllegalArgumentException(message)
 
-class SocialApp(port: Int = 8080, journalDir: File? = null) {
+class SocialApp(
+    port: Int = 8080,
+    journalDir: File? = null,
+    reader: (ManagedHost) -> BoundedReader = ::HostBoundedReader,
+) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
 
     val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir)
     val graph: SocialGraph = SocialGraph(host, pipeline)
+
+    // rx8om-D7/D8: the short-read seam. `reader` is a factory, not a value,
+    // because `host` is built above and private to this constructor.
+    val shortReads: ShortReads = ShortReads(reader(host), GraphLocator(graph, pipeline.families))
 
     // One observe sink per static dimension set (jo2jk-D2), read the same way
     // SocialGraph reads its keyed families: sink.current() only.
@@ -63,6 +74,8 @@ class SocialApp(port: Int = 8080, journalDir: File? = null) {
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         shell.route("/state") { it.respond(200, stateJson(), "application/json") }
         shell.route("/op") { handleOp(it) }
+        shell.route("/person/") { handlePerson(it) }
+        shell.route("/message/") { handleMessage(it) }
         shell.sse("/events") { stateJson() }
 
         // Wired after the shell exists, per SkillMatchApp's idiom: graph.onChange
@@ -180,6 +193,99 @@ class SocialApp(port: Int = 8080, journalDir: File? = null) {
                 k to URLDecoder.decode(v, Charsets.UTF_8)
             }
 
+    // --- /person/<id>[/messages|/friends], /message/<id>[/creator|/forum|/replies] (rx8om-D8) ---
+
+    /**
+     * Bounds every short read at the HTTP boundary (rx8om-D8's KDoc-pinned
+     * contract): a page that never lands within [SHORT_READ_TIMEOUT] answers
+     * 503 `{"refused":"TIMEOUT"}` — a name [StateReadResult.Reason] does not
+     * carry, chosen here because the future itself, not the host, is what
+     * failed to complete. [ShortReads] never blocks on its own; this is the
+     * one place `:demo:social` does, deliberately.
+     */
+    private fun <T> respondOutcome(exchange: HttpExchange, future: CompletableFuture<ReadOutcome<T>>, body: (T) -> String) {
+        val outcome = try {
+            future.get(SHORT_READ_TIMEOUT, TimeUnit.SECONDS)
+        } catch (_: TimeoutException) {
+            exchange.respond(503, """{"refused":"TIMEOUT"}""", "application/json")
+            return
+        }
+        when (outcome) {
+            is ReadOutcome.Found -> exchange.respond(200, body(outcome.value), "application/json")
+            ReadOutcome.Empty -> exchange.respond(200, """{"found":false}""", "application/json")
+            is ReadOutcome.Refused ->
+                exchange.respond(503, """{"refused":${esc(outcome.reason.name)}}""", "application/json")
+        }
+    }
+
+    private fun handlePerson(exchange: HttpExchange) {
+        val parts = exchange.requestURI.path.removePrefix("/person/").split("/").filter { it.isNotEmpty() }
+        val id = parts.getOrNull(0)?.toLongOrNull()
+        if (id == null) {
+            exchange.respond(400, "bad id")
+            return
+        }
+        when {
+            parts.size == 1 ->
+                respondOutcome(exchange, shortReads.is1(id)) { person -> """{"found":true,"person":${person.json()}}""" }
+
+            parts.size == 2 && parts[1] == "messages" ->
+                respondOutcome(exchange, shortReads.is2(id)) { messages ->
+                    """{"found":true,"messages":${messages.joinToString(",", "[", "]") { it.json() }}}"""
+                }
+
+            parts.size == 2 && parts[1] == "friends" ->
+                respondOutcome(exchange, shortReads.is3(id)) { friends ->
+                    """{"found":true,"friends":${
+                        friends.joinToString(",", "[", "]") { """{"id":${it.otherId},"creationDate":${it.creationDate}}""" }
+                    }}"""
+                }
+
+            else -> exchange.respond(404, "not found")
+        }
+    }
+
+    private fun handleMessage(exchange: HttpExchange) {
+        val parts = exchange.requestURI.path.removePrefix("/message/").split("/").filter { it.isNotEmpty() }
+        val id = parts.getOrNull(0)?.toLongOrNull()
+        if (id == null) {
+            exchange.respond(400, "bad id")
+            return
+        }
+        when {
+            parts.size == 1 ->
+                respondOutcome(exchange, shortReads.is4(id)) { message -> """{"found":true,"message":${message.json()}}""" }
+
+            parts.size == 2 && parts[1] == "creator" ->
+                respondOutcome(exchange, shortReads.is5(id)) { creatorId -> """{"found":true,"creatorId":$creatorId}""" }
+
+            parts.size == 2 && parts[1] == "forum" ->
+                respondOutcome(exchange, shortReads.is6(id)) { forumId -> """{"found":true,"forumId":$forumId}""" }
+
+            parts.size == 2 && parts[1] == "replies" ->
+                respondOutcome(exchange, shortReads.is7(id)) { replies ->
+                    """{"found":true,"replies":${
+                        replies.joinToString(",", "[", "]") {
+                            """{"message":${it.message.json()},"authorKnowsCreator":${it.authorKnowsCreator}}"""
+                        }
+                    }}"""
+                }
+
+            else -> exchange.respond(404, "not found")
+        }
+    }
+
+    /** The full [Person], every field (IS1's pinned shape, rx8om-D8). */
+    private fun Person.json(): String =
+        """{"id":$id,"firstName":${esc(firstName)},"lastName":${esc(lastName)},"gender":${esc(gender)},""" +
+            """"birthday":$birthday,"creationDate":$creationDate,"locationIp":${esc(locationIp)},""" +
+            """"browserUsed":${esc(browserUsed)},"placeId":${placeId ?: "null"}}"""
+
+    /** The one [Message] JSON shape every short-read response embeds (rx8om-D8). */
+    private fun Message.json(): String =
+        """{"id":$id,"creatorId":$creatorId,"creationDate":$creationDate,"content":${esc(content)},""" +
+            """"forumId":${forumId ?: "null"},"replyOfId":${replyOfId ?: "null"}}"""
+
     // --- /state (jo2jk-D6: pinned shape, sorted, esc'd, bounded) ---------------
 
     private fun stateJson(): String {
@@ -228,6 +334,9 @@ class SocialApp(port: Int = 8080, journalDir: File? = null) {
     private companion object {
         /** Bounds the three /state arrays; counts stay total (jo2jk-D6). */
         const val STATE_LIMIT = 200
+
+        /** Bounds a short read's future at the HTTP boundary (rx8om-D8). */
+        const val SHORT_READ_TIMEOUT = 10L
     }
 }
 
