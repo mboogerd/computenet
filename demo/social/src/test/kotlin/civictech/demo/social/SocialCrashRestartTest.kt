@@ -29,29 +29,34 @@ import kotlin.test.assertTrue
  */
 class SocialCrashRestartTest {
 
-    @Test
-    fun `B16 an in-process restart equals the pre-drop snapshot and a fresh replay of the same prefix`(@TempDir dir: File) {
-        val source = SnbGenerator(42, 0.05)
+    /** App 1's run over [dir]: load + half the stream + one `removeKnows`, then dropped. */
+    private class Crashed(val n: Int, val a: Long, val b: Long, val date: Long, val snapshot: BatchModel.Relations)
 
-        // --- app 1: load + N events + one removal, then drop ------------------
+    /**
+     * Runs "process 1" on its own [SimulationController]: loads the seed-42
+     * slice, applies N = half the update stream, removes one live `knows`
+     * edge, settles, snapshots, asserts [SOC1-DUR-01]'s on-disk layout, and
+     * then drops the app — no `stop()`, no checkpoint.
+     */
+    private fun crashAfterPrefix(dir: File): Crashed {
         val c1 = SimulationController(42)
         val app1 = SocialApp(port = 0, journalDir = dir, scheduler = c1.scheduler())
-        SocialLoader.load(source, app1.graph)
-        val stream1 = UpdateStream(source, app1.graph)
+        SocialLoader.load(SOURCE, app1.graph)
+        val stream1 = UpdateStream(SOURCE, app1.graph)
         val n = stream1.remaining / 2
         assertTrue(n >= 1, "the seed-42 stream must have at least two events, had ${stream1.remaining}")
         stream1.step(n)
         c1.runToIdle()
 
-        val removed = BatchModel.observe(app1.graph).knows.entries
+        val (a, edge) = BatchModel.observe(app1.graph).knows.entries
             .first { it.value.isNotEmpty() }
-            .let { (a, edges) -> Triple(a, edges.first().otherId, edges.first().creationDate) }
-        val (a, b, date) = removed
-        app1.graph.removeKnows(a, b, date)
+            .let { (a, edges) -> a to edges.first() }
+        app1.graph.removeKnows(a, edge.otherId, edge.creationDate)
         c1.runToIdle()
 
         val snap1 = BatchModel.observe(app1.graph)
-        assertFalse(snap1.knows[a].orEmpty().any { it.otherId == b }, "app 1 applied the removal of $a-$b")
+        assertTrue(snap1.personIds.isNotEmpty(), "the prefix produced persons to recover")
+        assertFalse(snap1.knows[a].orEmpty().any { it.otherId == edge.otherId }, "app 1 applied the removal")
 
         // [SOC1-DUR-01]: one root WAL, one keys log per family, all non-empty.
         val wal = File(dir, KeyedCells.HOST_JOURNAL)
@@ -60,7 +65,25 @@ class SocialCrashRestartTest {
             val keys = File(File(dir, family), KeyedCells.KEYS_FILE)
             assertTrue(keys.isFile && keys.length() > 0, "keys log $keys exists and is non-empty")
         }
-        // Drop app 1: no stop(), no checkpoint — it is simply never referenced again.
+        return Crashed(n, a, edge.otherId, edge.creationDate, snap1)
+    }
+
+    /** Asserts [recovered] equals [expected] relation by relation, so a failure names the relation. */
+    private fun assertRelations(expected: BatchModel.Relations, recovered: BatchModel.Relations, label: String) {
+        expected.byName().zip(recovered.byName()).forEach { (e, r) ->
+            assertEquals(e.second, r.second, "relation=${e.first}: recovered != $label")
+        }
+        assertEquals(expected, recovered)
+    }
+
+    private fun assertNotResurrected(crashed: Crashed, recovered: BatchModel.Relations) {
+        assertFalse(recovered.knows[crashed.a].orEmpty().any { it.otherId == crashed.b }, "removed edge ${crashed.a}->${crashed.b} resurrected")
+        assertFalse(recovered.knows[crashed.b].orEmpty().any { it.otherId == crashed.a }, "removed edge ${crashed.b}->${crashed.a} resurrected")
+    }
+
+    @Test
+    fun `B16 an in-process restart equals the pre-drop snapshot and a fresh replay of the same prefix`(@TempDir dir: File) {
+        val crashed = crashAfterPrefix(dir)
 
         // --- app 2: recover from the same directory -------------------------
         val c2 = SimulationController(42)
@@ -75,25 +98,50 @@ class SocialCrashRestartTest {
         // --- app 3: a fresh, ephemeral app fed the same prefix + removal ----
         val c3 = SimulationController(42)
         val app3 = SocialApp(port = 0, scheduler = c3.scheduler())
-        SocialLoader.load(source, app3.graph)
-        UpdateStream(source, app3.graph).step(n)
-        app3.graph.removeKnows(a, b, date)
+        SocialLoader.load(SOURCE, app3.graph)
+        UpdateStream(SOURCE, app3.graph).step(crashed.n)
+        app3.graph.removeKnows(crashed.a, crashed.b, crashed.date)
         c3.runToIdle()
         val snap3 = BatchModel.observe(app3.graph)
 
-        assertEquals(snap1.personIds, app2.graph.personIds(), "recovered personIds")
-        assertTrue(snap1.personIds.isNotEmpty(), "the prefix produced persons to recover")
-        snap2.byName().zip(snap1.byName()).forEach { (recovered, before) ->
-            assertEquals(before.second, recovered.second, "relation=${before.first}: recovered != pre-drop snapshot")
-        }
-        snap2.byName().zip(snap3.byName()).forEach { (recovered, fresh) ->
-            assertEquals(fresh.second, recovered.second, "relation=${fresh.first}: recovered != fresh replay of the prefix")
-        }
-        assertEquals(snap1, snap2)
-        assertEquals(snap3, snap2)
+        assertEquals(crashed.snapshot.personIds, app2.graph.personIds(), "recovered personIds")
+        assertRelations(crashed.snapshot, snap2, "pre-drop snapshot")
+        assertRelations(snap3, snap2, "fresh replay of the prefix")
+        assertNotResurrected(crashed, snap2)
+    }
 
-        // No resurrection: the removed edge is absent on both endpoints.
-        assertFalse(snap2.knows[a].orEmpty().any { it.otherId == b }, "removed edge $a->$b resurrected")
-        assertFalse(snap2.knows[b].orEmpty().any { it.otherId == a }, "removed edge $b->$a resurrected")
+    /**
+     * The production path: app 2 on the default `VirtualThreadScheduler`,
+     * whose drain thread runs WHILE [SocialRecovery.stage] replays. [SocialApp.start]
+     * must drain the staged replay behind its quiescence fence and complete
+     * recovery before it binds a port, so the graph is settled the moment
+     * `start()` returns — read here with no polling.
+     *
+     * This is also the case that discriminates `stage()`'s order. On a
+     * `SimulationController` both halves only enqueue (spawn at management
+     * priority 0, replayed frames at data priority 20) and nothing runs until
+     * the test steps, so swapping them is invisible there; here the live drain
+     * thread dispatches replayed frames as they are submitted, and a frame that
+     * reaches a not-yet-spawned cell is dead-lettered.
+     */
+    @Test
+    fun `B16 on the production scheduler start drains the replay before it binds and serves the recovered graph`(@TempDir dir: File) {
+        val crashed = crashAfterPrefix(dir)
+
+        val app2 = SocialApp(port = 0, journalDir = dir)
+        assertFailsWith<IllegalStateException> { app2.boundPort }
+        app2.start()
+        try {
+            assertTrue(app2.boundPort > 0, "bound after recovery completed")
+            val snap2 = BatchModel.observe(app2.graph)
+            assertRelations(crashed.snapshot, snap2, "pre-drop snapshot")
+            assertNotResurrected(crashed, snap2)
+        } finally {
+            app2.stop()
+        }
+    }
+
+    private companion object {
+        val SOURCE = SnbGenerator(42, 0.05)
     }
 }
