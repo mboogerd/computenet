@@ -140,13 +140,28 @@ class SocialReadRefusalTest {
      * otherwise — the never-completing-future case [RefusingReader] above
      * cannot produce, since [RefusingReader] always hands back a completed
      * future.
+     *
+     * [onStuckRead] is counted down synchronously, inside [read], the moment
+     * a stuck ref is looked up — which is the dispatcher thread's entry into
+     * the stuck path, since [ShortReads] calls [BoundedReader.read]
+     * synchronously while building its future chain, before
+     * `SocialApp.respondOutcome` ever blocks on `future.get`. A test awaiting
+     * that latch therefore knows the dispatcher thread is inside the stuck
+     * read, with no wall-clock guess.
      */
     private class StuckReader(
         private val delegate: BoundedReader,
         private val stuck: MutableMap<CellRef, CompletableFuture<StateReadResult>>,
+        private val onStuckRead: java.util.concurrent.CountDownLatch = java.util.concurrent.CountDownLatch(0),
     ) : BoundedReader {
-        override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> =
-            stuck[ref] ?: delegate.read(ref, request)
+        override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> {
+            val future = stuck[ref]
+            if (future != null) {
+                onStuckRead.countDown()
+                return future
+            }
+            return delegate.read(ref, request)
+        }
     }
 
     /**
@@ -163,10 +178,11 @@ class SocialReadRefusalTest {
     @Test
     fun `SOC1-SREAD-04 a stuck short read times out with 503 TIMEOUT and stalls the dispatcher`() {
         val stuck = ConcurrentHashMap<CellRef, CompletableFuture<StateReadResult>>()
+        val dispatcherEnteredStuckRead = java.util.concurrent.CountDownLatch(1)
         val timeoutSeconds = 1L
         val app = SocialApp(
             port = 0,
-            reader = { host -> StuckReader(HostBoundedReader(host), stuck) },
+            reader = { host -> StuckReader(HostBoundedReader(host), stuck, dispatcherEnteredStuckRead) },
             shortReadTimeoutSeconds = timeoutSeconds,
         ).start()
         try {
@@ -180,12 +196,17 @@ class SocialReadRefusalTest {
                 // Issue the stuck read on its own thread and a /state read
                 // right behind it: DemoShell's single dispatcher thread means
                 // /state cannot be answered until the stuck read gives up.
-                val stateBefore = System.nanoTime()
                 val readExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
                 try {
                     val stuckResponse = readExecutor.submit<java.net.http.HttpResponse<String>> { probe.get("/person/1") }
-                    // give the stuck request a head start onto the dispatcher thread
-                    Thread.sleep(100)
+                    // Wait for the dispatcher thread to be provably inside the
+                    // stuck read (StuckReader.read counts this down) before
+                    // measuring /state's elapsed time — no wall-clock guess.
+                    assertTrue(
+                        dispatcherEnteredStuckRead.await(10, TimeUnit.SECONDS),
+                        "dispatcher thread never entered the stuck read for person1Ref",
+                    )
+                    val stateBefore = System.nanoTime()
                     val stateResponse = probe.get("/state")
                     val stateElapsedMs = (System.nanoTime() - stateBefore) / 1_000_000
 
@@ -197,9 +218,10 @@ class SocialReadRefusalTest {
                     assertEquals(200, stateResponse.statusCode())
                     assertTrue(
                         stateElapsedMs >= (timeoutSeconds * 1000) - 100,
-                        "/state answered after ${stateElapsedMs}ms, before the stuck read's " +
-                            "${timeoutSeconds}s bound elapsed — expected it to queue behind the stuck read " +
-                            "on DemoShell's single dispatcher thread",
+                        "/state answered after ${stateElapsedMs}ms, measured from after the dispatcher " +
+                            "entered the stuck read, before the stuck read's ${timeoutSeconds}s bound " +
+                            "elapsed — expected it to queue behind the stuck read on DemoShell's single " +
+                            "dispatcher thread",
                     )
                 } finally {
                     readExecutor.shutdownNow()
