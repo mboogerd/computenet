@@ -14,32 +14,13 @@
 # over authored test cases and takes hours. That is a cadence or on-demand
 # tool, never a per-change gate, and this script is not it.
 #
-# THE SECOND TIER OF CRITERIA, added 2026-08-15. quick_validate.py only ever
-# covered frontmatter, so this script did too — and a skills-rubric pass run
-# by hand found three shape failures it could not have caught, because they
-# live in skill-creator's Skill Writing Guide rather than its script:
-# "Keep SKILL.md under 500 lines" and "For large reference files (>300
-# lines), include a table of contents". Both are now checked here.
+# THE CAPS, replacing the 2026-08 line-budget ratchet (2026-09-14). The
+# ratchet priced growth with a justification file, and agents write
+# justifications without friction: /work grew 2,900 lines under it. A cap is a
+# ceiling that no paragraph raises. Over a cap means rewrite, not explain.
 #
-# Their severities differ deliberately. A missing ToC is mechanical, so it
-# FAILS. The 500-line ideal is a design question — .claude/skills/work is a
-# 1200-line operational procedure executed top to bottom, and splitting it
-# changes what is in context at each step — so it WARNS, loudly, rather than
-# blocking every future edit on a restructure nobody has agreed. A file with
-# no `##` sections at all cannot have a meaningful ToC either, so that warns
-# too and names the real problem instead of demanding an index of nothing.
-#
-# THE THIRD TIER, added 2026-08-19. A skill that cites a helper script by a
-# path that does not resolve sends every agent that reads it on the same dead
-# lookup. It was filed three times over for one instance -- computenet-ahd4,
-# computenet-22j2 and computenet-fyhn all describe `scripts/junit-count.py`,
-# which lives at .claude/skills/work/scripts/junit-count.py -- and agents did
-# not conclude "wrong path", they concluded the script was UNLANDED and
-# hand-rolled a weaker substitute. Bare `scripts/...` is the trap: the repo
-# really does have a root scripts/ directory, so the wrong reading is
-# plausible rather than obviously wrong. This tier resolves every cited
-# script path from the repo root and FAILS on any that does not exist, so the
-# next drift is caught here instead of mid-review.
+# Cited script paths must resolve: a wrong path sent agents to conclude a
+# script was unlanded and hand-roll a substitute.
 #
 # Usage: ruby .claude/skills/remediate-friction/scripts/validate-skills.rb [dir]
 # Exit:  0 all pass, 1 any failure.
@@ -60,78 +41,21 @@ repo_root = File.dirname(File.dirname(root))
 files = Dir.glob(File.join(root, '*', 'SKILL.md')).sort
 abort "no SKILL.md found under #{root}" if files.empty?
 
-# A skill directory with no SKILL.md is a broken skill, not an absence — report
-# it rather than skipping silently.
-# `.d` suffix marks a data directory (line-budget.d), not a skill.
-missing = Dir.glob(File.join(root, '*'))
-             .select { |d| File.directory?(d) && !d.end_with?('.d') } -
+# A skill directory with no SKILL.md is a broken skill, not an absence.
+missing = Dir.glob(File.join(root, '*')).select { |d| File.directory?(d) } -
           files.map { |f| File.dirname(f) }
 
-# skill-creator: "Keep SKILL.md under 500 lines; if you're approaching this
-# limit, add an additional layer of hierarchy along with clear pointers about
-# where the model using the skill should go next to follow up."
-BODY_LINE_IDEAL = 500
-# skill-creator: "For large reference files (>300 lines), include a table of
-# contents."
-REFERENCE_TOC_THRESHOLD = 300
-
-# Lines above which a reference file no longer fits in ONE Read call. The
-# result does carry a truncation marker, so this is not a silent cut — but
-# three reviewers reached review-feature.md's verdict-token rule only by paging
-# on unprompted, none of them told to, and that rule is the one SKILL.md 5e
-# refuses to act without (computenet-98cu). So a file over this must SAY SO in
-# its opening lines, where a truncated read still shows it.
-#
-# review-feature.md measured the cap at ~line 1013 of 1217 (25521 tokens against
-# a 25000 cap); 900 leaves margin. A LINE COUNT is a cheap proxy for a TOKEN
-# cap: at ~25 tokens/line it is slightly conservative, and a table-heavy file at
-# ~200 chars/line would cross 25k nearer 440 lines and slip through. Lower the
-# number when that file appears rather than pretending lines are tokens.
-#
-# Prose in the file is the only fix available for the file that has the problem;
-# this check is what makes the next file to cross the line say it too.
-READ_CALL_LINES = 900
-READ_CALL_BANNER = /exceeds?\s+one\s+read\s+call/i.freeze
-READ_CALL_BANNER_LINES = 50
-
-# The ratchet's numbers. Absent file or absent entry is a FAILURE, not a pass:
-# a skill with no budget is exactly the unpriced growth this exists to stop.
-BUDGET_FILE = File.join(root, 'line-budget.txt')
-BASE_BUDGETS = File.exist?(BUDGET_FILE) ? File.readlines(BUDGET_FILE, encoding: 'UTF-8')
-  .reject { |l| l.strip.empty? || l.lstrip.start_with?('#') }
-  .to_h { |l| n, v = l.split; [n, v.to_i] } : {}
-
-# Deltas (line-budget.d/<bead-id>.txt, `<skill> <signed-delta>`). The base
-# ledger is ONE shared line per skill, and every fix in a drain moves the same
-# one; the second PR's number depends on the first's LANDED value, so the two
-# cannot be prepared in parallel (computenet-kzyk: five ready fixes shipped one
-# per CI cycle). Deltas compose where absolutes do not — two PRs adding two
-# NEW files merge cleanly and neither has to be recomputed. Fold them into the
-# base whenever one session holds the ledger alone.
-BUDGET_DIR = File.join(root, 'line-budget.d')
-DELTAS = Dir.glob(File.join(BUDGET_DIR, '*.txt'))
-             .reject { |f| File.basename(f) == 'README.txt' }
-             .each_with_object(Hash.new(0)) do |f, h|
-  File.readlines(f, encoding: 'UTF-8')
-      .reject { |l| l.strip.empty? || l.lstrip.start_with?('#') }
-      .each { |l| n, v = l.split; h[n] += v.to_i }
-end
-BUDGETS = BASE_BUDGETS.to_h { |k, v| [k, v + DELTAS[k]] }
-# A delta naming a skill the base ledger does not is a typo that would silently
-# under-price the real one, so it fails rather than being ignored.
-UNKNOWN_DELTAS = DELTAS.keys - BASE_BUDGETS.keys
+# Whole-file line caps. Deliberately hard: raising one is a reviewed edit to
+# this file, never a side effect of the change that needed the room.
+SKILL_CAP = 600
+SKILL_CAPS = { 'remediate-friction' => 150 }.freeze
+REFERENCE_CAP = 300
+AGENTS_CAP = 700
 
 # Any backtick-free run of path characters ending in a script extension and
 # containing a scripts/ segment. Deliberately broad: a citation is a citation
 # whether or not it is fenced, and the check is only ever "does this resolve".
 CITED_SCRIPT = %r{[A-Za-z0-9_./-]*scripts/[A-Za-z0-9_./-]+\.(?:py|sh|rb)}.freeze
-
-# A ToC is any heading that reads as one. Matching the heading rather than a
-# list shape keeps this from mistaking the first ordered list in the body for
-# an index.
-def toc?(text)
-  text.match?(/^##+\s+(contents|table of contents)\b/i)
-end
 
 failures = 0
 files.each do |f|
@@ -182,58 +106,12 @@ files.each do |f|
     end
   end
 
-  # Shape, not frontmatter. Counted on the body below the frontmatter, since
-  # the guide's budget is about what lands in context when the skill fires.
-  body_lines = body.sub(/\A---\n.*?\n---\n/m, '').lines.length
-  if body_lines > BODY_LINE_IDEAL
-    warns << "SKILL.md body is #{body_lines} lines (ideal <=#{BODY_LINE_IDEAL}); " \
-             'add a layer of hierarchy and point into it'
-  end
-
-  # The RATCHET (line-budget.txt). The ideal above has warned for weeks and
-  # been read past every time; this is the same number with teeth, set at each
-  # skill's current size so nothing has to be restructured today. Growth is
-  # what it prices: over budget, remove as much as you added or add a delta
-  # file (line-budget.d/<bead-id>.txt), in the diff, where it can be
-  # questioned. Never edit the base number — see the DELTAS note above for why
-  # a shared ledger line serialises a whole lane.
-  ref_lines = Dir.glob(File.join(File.dirname(f), 'references', '*.md'))
-                 .sum { |r| File.readlines(r, encoding: 'UTF-8').length }
-  total = body_lines + ref_lines
-  budget = BUDGETS[skill]
-  if budget.nil?
-    errs << "no line budget for '#{skill}' — add one to .claude/skills/line-budget.txt " \
-            "(set it at the current #{total} so the skill starts even)"
-  elsif DELTAS[skill] != 0
-    warns << "budget #{budget} = #{BASE_BUDGETS[skill]} base #{format('%+d', DELTAS[skill])} " \
-             "in line-budget.d (fold them back when you hold the ledger alone)"
-  end
-  if !budget.nil? && total > budget
-    errs << "is #{total} lines (SKILL.md body #{body_lines} + references " \
-            "#{ref_lines}), over its #{budget} budget by #{total - budget}. " \
-            'Remove as much as you added, or add ' \
-            ".claude/skills/line-budget.d/<bead-id>.txt holding `#{skill} " \
-            "+#{total - budget}` and say what it bought."
-  end
-
+  cap = SKILL_CAPS.fetch(skill, SKILL_CAP)
+  n = body.lines.length
+  errs << "SKILL.md is #{n} lines, over its cap of #{cap}" if n > cap
   Dir.glob(File.join(File.dirname(f), 'references', '*.md')).sort.each do |r|
-    text = File.read(r, encoding: 'UTF-8')
-    next unless text.lines.length > REFERENCE_TOC_THRESHOLD
-
-    rel = File.join('references', File.basename(r))
-    if text.lines.length > READ_CALL_LINES &&
-       !text.lines.first(READ_CALL_BANNER_LINES).join.match?(READ_CALL_BANNER)
-      errs << "#{rel} is #{text.lines.length} lines (>#{READ_CALL_LINES}), so one Read " \
-              'call returns it TRUNCATED — a marker says so, and readers page on ' \
-              'anyway only if told to, so say it in the first ' \
-              "#{READ_CALL_BANNER_LINES} lines (the words 'exceeds one Read call'), " \
-              'naming what lives past the cut'
-    end
-    if text.scan(/^## /).length < 2
-      warns << "#{rel} is #{text.lines.length} lines with no sections to index"
-    elsif !toc?(text)
-      errs << "#{rel} is #{text.lines.length} lines (>#{REFERENCE_TOC_THRESHOLD}) with no Contents"
-    end
+    n = File.readlines(r, encoding: 'UTF-8').length
+    errs << "references/#{File.basename(r)} is #{n} lines, over its cap of #{REFERENCE_CAP}" if n > REFERENCE_CAP
   end
 
   # Cited script paths must resolve from the repo root, which is where an
@@ -263,39 +141,18 @@ missing.each do |d|
   puts "#{File.basename(d)}: FAIL directory has no SKILL.md"
 end
 
-# AGENTS.md is priced on the same ratchet although it is not a skill
-# (computenet-vvq5). reachability.py models it as the ORCHESTRATOR'S ENTRY
-# DOCUMENT alongside work/SKILL.md, this lane edits it, and beads under the SDLC
-# epic name it in their acceptance — yet neither gate reached it, so growth in
-# the file every orchestrator reads FIRST and reads IN FULL was free while
-# growth in the skill it feeds was priced. That is backwards. It takes deltas
-# from line-budget.d like any other entry; only its shape differs (one file, no
-# body/references split), which is why it is here and not in the loop.
+# AGENTS.md is not a skill, but it is the orchestrator's entry document, read
+# first and in full, and this lane edits it.
 AGENTS_MD = File.join(repo_root, 'AGENTS.md')
 agents_checked = File.exist?(AGENTS_MD)
 if agents_checked
-  lines = File.readlines(AGENTS_MD, encoding: 'UTF-8').length
-  budget = BUDGETS['AGENTS.md']
-  if budget.nil?
+  n = File.readlines(AGENTS_MD, encoding: 'UTF-8').length
+  if n > AGENTS_CAP
     failures += 1
-    puts 'AGENTS.md: FAIL no line budget — add one to .claude/skills/line-budget.txt ' \
-         "(set it at the current #{lines} so it starts even)"
-  elsif lines > budget
-    failures += 1
-    puts "AGENTS.md: FAIL is #{lines} lines, over its #{budget} budget by " \
-         "#{lines - budget}. Remove as much as you added, or add " \
-         ".claude/skills/line-budget.d/<bead-id>.txt holding `AGENTS.md " \
-         "+#{lines - budget}` and say what it bought."
+    puts "AGENTS.md: FAIL is #{n} lines, over its cap of #{AGENTS_CAP}"
   else
-    note = DELTAS['AGENTS.md'] != 0 ? "  (note: budget #{budget} = #{BASE_BUDGETS['AGENTS.md']} " \
-           "base #{format('%+d', DELTAS['AGENTS.md'])} in line-budget.d)" : ''
-    puts "AGENTS.md: OK#{note}"
+    puts 'AGENTS.md: OK'
   end
-end
-
-UNKNOWN_DELTAS.each do |n|
-  failures += 1
-  puts "line-budget.d: FAIL delta names '#{n}', which has no entry in line-budget.txt"
 end
 
 puts "#{files.length + missing.length} skill(s) checked#{agents_checked ? ' (plus AGENTS.md)' : ''}, #{failures} failing"
