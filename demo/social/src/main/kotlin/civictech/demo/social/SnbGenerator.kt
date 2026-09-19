@@ -11,9 +11,16 @@
  *
  * **Sizing** (99qcg-D7): `persons = (1000 * scaleFactor).toInt().coerceAtLeast(20)`;
  * forums, messages, likes, memberships and knows-edges scale linearly with
- * the person count. The generator builds the whole timeline (persons, then
- * knows, forums, memberships, messages, likes, each dated no earlier than
- * what it depends on) and cuts it at the creation date below which roughly
+ * the person count: `memberships = min(persons * 4, persons * forums / 2)`,
+ * the halved `(person, forum)` pair-space cap that keeps the redraw-to-count
+ * membership loop below from saturating at the smallest scale (`0.02`), where
+ * `persons * forums` is small enough that `persons * 4` alone would exhaust
+ * or exceed it (computenet-oxsej). The cap binds only while `forums < 8`,
+ * i.e. below scale `0.04` (at `0.02` the target is 40 of 80 pairs); at `0.1`
+ * and `1.0` (seeds 42/7, asserted in SocialGeneratorTest) it does not bind, so
+ * distinct memberships equal `persons * 4`. The generator builds the whole
+ * timeline (persons, then knows, forums, memberships, messages, likes, each
+ * dated no earlier than what it depends on) and cuts it at the creation date below which roughly
  * 80% of persons fall: everything before the cut is the [StaticSlice],
  * everything at or after it becomes an [UpdateEvent].
  *
@@ -73,7 +80,7 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
         val postCount = personCount * 4
         val commentCount = personCount * 4
         val likeCount = personCount * 3
-        val membershipCount = personCount * 4
+        val membershipCount = minOf(personCount * 4, personCount * forumCount / 2)
         val knowsTargetCount = personCount * 3
 
         // --- persons: sequential ids, strictly increasing creationDate ---
@@ -200,16 +207,19 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
         val forumIds = (staticForums.map { it.id } + dynamicForums.map { it.forum.id })
 
         // --- memberships: preferentially drawn from the moderator's knows neighbourhood;
-        // (personId, forumId) is unique per SNB's forum_hasMember_person. Exactly
-        // membershipCount pairs are drawn (skip semantics, not redraw-to-count): a drawn
-        // pair that already exists is discarded with no replacement, so the distinct
-        // membership count can fall below membershipCount and varies with the seed. This
-        // keeps the pair space from saturating at small scale, where membershipCount can
-        // equal or exceed personCount * forumCount ---
+        // (personId, forumId) is unique per SNB's forum_hasMember_person, so a drawn pair
+        // that already exists is skipped and redrawn (never silently discarded) until
+        // membershipCount distinct pairs are collected or the attempt bound is spent.
+        // membershipCount itself is capped at personCount * forumCount / 2 (99qcg-D7,
+        // computenet-oxsej) so the (person, forum) pair space is not saturated at the
+        // smallest scale (0.02, SOC1-GEN-07); the attempt bound alone ensures termination ---
         val staticMemberships = ArrayList<Membership>()
         val dynamicMemberships = ArrayList<IU5AddMembership>()
         val membershipPairs = LinkedHashSet<Pair<Long, Long>>()
-        repeat(membershipCount) {
+        var membershipAttempts = 0
+        val maxMembershipAttempts = membershipCount * 30
+        while (membershipPairs.size < membershipCount && membershipAttempts < maxMembershipAttempts) {
+            membershipAttempts++
             val forumId = forumIds[random.nextInt(forumIds.size)]
             val moderatorId = forumById.getValue(forumId).moderatorId
             val neighbours = adjacency[moderatorId]
@@ -219,7 +229,7 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
                 personIds[random.nextInt(personIds.size)]
             }
             val pair = personId to forumId
-            if (pair in membershipPairs) return@repeat
+            if (pair in membershipPairs) continue
             membershipPairs += pair
             val date = after(personById.getValue(personId).creationDate, forumById.getValue(forumId).creationDate)
             if (isDynamic(date)) {

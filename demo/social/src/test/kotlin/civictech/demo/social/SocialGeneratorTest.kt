@@ -6,6 +6,7 @@ import civictech.cell.host.SimulationController
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.File
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -213,6 +214,33 @@ class SocialGeneratorTest {
             saturatedBySeed.isEmpty(),
             "seeds where distinct (personId, forumId) memberships saturate persons x forums: $saturatedBySeed",
         )
+    }
+
+    // --- membership volume restores 99qcg-D7's ~4*persons ratio (computenet-oxsej) ---
+
+    @Test
+    fun `membership volume is 4 times persons at scale 0-1 and 1-0`() {
+        for (scale in listOf(0.1, 1.0)) {
+            for (seed in listOf(42L, 7L)) {
+                val generator = SnbGenerator(seed, scale)
+                val slice = generator.staticSlice()
+                val updates = generator.updates().toList()
+
+                val personIds = HashSet<Long>()
+                slice.persons.forEach { personIds += it.id }
+                updates.filterIsInstance<IU1AddPerson>().forEach { personIds += it.person.id }
+
+                val membershipPairs = HashSet<Pair<Long, Long>>()
+                slice.memberships.forEach { membershipPairs += it.personId to it.forumId }
+                updates.filterIsInstance<IU5AddMembership>().forEach { membershipPairs += it.personId to it.forumId }
+
+                assertEquals(
+                    personIds.size * 4,
+                    membershipPairs.size,
+                    "seed=$seed scale=$scale: distinct (personId, forumId) memberships should equal persons * 4",
+                )
+            }
+        }
     }
 
     // --- SocialLoader (loader half of SOC1-GEN-04) ----------------------
