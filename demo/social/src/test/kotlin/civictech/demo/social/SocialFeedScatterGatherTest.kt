@@ -9,6 +9,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.Interest
+import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
@@ -220,6 +221,37 @@ class SocialFeedScatterGatherTest {
             (elementSet == board) shouldBe false
         }
         (cellsWithMessages >= 9) shouldBe true
+    }
+
+    // --- SocialApp.feedSession: the app's own wiring ---------------------------
+
+    @Test
+    fun `SocialApp feedSession pulls through the app's one injected reader and unions its friends' posts`() {
+        val readers = mutableListOf<RecordingReader>()
+        val app = SocialApp(port = 0, reader = { host -> RecordingReader(HostBoundedReader(host)).also { readers += it } })
+        try {
+            app.graph.addPerson(Person(V, "V", "viewer"))
+            app.graph.addPerson(Person(A, "A", "author"))
+            app.graph.addPerson(Person(B, "B", "author"))
+            app.graph.addForum(Forum(FORUM, "forum", V))
+            app.graph.addPost(Message(10, A, 10, "m10", forumId = FORUM))
+            app.graph.addPost(Message(20, B, 20, "m20", forumId = FORUM))
+            awaitUntil("both posts to settle", timeoutMs = 20_000) {
+                app.graph.authored(A).size == 1 && app.graph.authored(B).size == 1
+            }
+            readers.size shouldBe 1
+            readers.single().reset()
+
+            val session = app.feedSession(V, Interest.Ranges(listOf(A, B).map { Interest.Ranges.Range(it, it + 1) }))
+            val report = session.pull().get(20, TimeUnit.SECONDS)
+
+            val refs = setOf(app.pipeline.families.authored.getOrSpawn(A).ref, app.pipeline.families.authored.getOrSpawn(B).ref)
+            report.legs.keys shouldBe refs
+            readers.single().calls().map { it.ref }.toSet() shouldBe refs
+            session.board().map { it.id }.toSet() shouldBe setOf(10L, 20L)
+        } finally {
+            app.stop()
+        }
     }
 
     // --- AMENDS (task 1 review): never-posted friend --------------------------
