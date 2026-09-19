@@ -200,15 +200,16 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
         val forumIds = (staticForums.map { it.id } + dynamicForums.map { it.forum.id })
 
         // --- memberships: preferentially drawn from the moderator's knows neighbourhood;
-        // (personId, forumId) is unique per SNB's forum_hasMember_person, so a drawn pair
-        // that already exists is skipped (never redrawn into a different pair silently) ---
+        // (personId, forumId) is unique per SNB's forum_hasMember_person. Exactly
+        // membershipCount pairs are drawn (skip semantics, not redraw-to-count): a drawn
+        // pair that already exists is discarded with no replacement, so the distinct
+        // membership count can fall below membershipCount and varies with the seed. This
+        // keeps the pair space from saturating at small scale, where membershipCount can
+        // equal or exceed personCount * forumCount ---
         val staticMemberships = ArrayList<Membership>()
         val dynamicMemberships = ArrayList<IU5AddMembership>()
         val membershipPairs = LinkedHashSet<Pair<Long, Long>>()
-        var membershipAttempts = 0
-        val maxMembershipAttempts = membershipCount * 30
-        while (membershipPairs.size < membershipCount && membershipAttempts < maxMembershipAttempts) {
-            membershipAttempts++
+        repeat(membershipCount) {
             val forumId = forumIds[random.nextInt(forumIds.size)]
             val moderatorId = forumById.getValue(forumId).moderatorId
             val neighbours = adjacency[moderatorId]
@@ -218,7 +219,7 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
                 personIds[random.nextInt(personIds.size)]
             }
             val pair = personId to forumId
-            if (pair in membershipPairs) continue
+            if (pair in membershipPairs) return@repeat
             membershipPairs += pair
             val date = after(personById.getValue(personId).creationDate, forumById.getValue(forumId).creationDate)
             if (isDynamic(date)) {
