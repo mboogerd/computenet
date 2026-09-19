@@ -57,7 +57,13 @@ private class Bad(message: String) : IllegalArgumentException(message)
  * scheduler while it waits). [boundPort] before [start] throws.
  *
  * **Limit (v10ou-D4):** a recovered app — any family already knowing a key —
- * does not reload [source]'s static slice (the WAL already holds it). The
+ * does not reload [source]'s static slice. Every write the first load made
+ * went through a journaled inlet, and every cell it wrote has a
+ * restart-stable ref (keyed cells by namespace+key, the four static sets by
+ * [SnbPipeline]'s fixed identities), so the replay re-delivers all of it onto
+ * the recovered cells; `SocialCrashRestartTest` pins that a correct recovery
+ * dead-letters nothing and restores the static sets. The one gap: a process
+ * killed mid-load leaves a partial slice that no restart completes. The
  * [UpdateStream] is still built, but its position is per-process: `applied`
  * restarts at 0, and re-stepping re-applies already-journaled events, which
  * is idempotent ([SOC1-UPD-04]). A durable stream cursor is out of scope.
@@ -124,6 +130,21 @@ class SocialApp(
     private val places: ObservationSink<Set<Place>> = host.observe(pipeline.statics.places.ref, View.set<Place>())
     private val organisations: ObservationSink<Set<Organisation>> =
         host.observe(pipeline.statics.organisations.ref, View.set<Organisation>())
+
+    /** The four static dimension sets as this app's sinks currently hold them. */
+    internal data class StaticSets(
+        val tags: Set<Tag>,
+        val tagClasses: Set<TagClass>,
+        val places: Set<Place>,
+        val organisations: Set<Organisation>,
+    )
+
+    /** Test read (computenet-v10ou.1): the static sets, which `BatchModel.Relations` does not carry. */
+    internal fun staticSets(): StaticSets =
+        StaticSets(tags.current(), tagClasses.current(), places.current(), organisations.current())
+
+    /** Test read (computenet-v10ou.1): this app's host dead-letter count, so far. */
+    internal fun deadLetterCount(): Long = host.supervisionAccounting().deadLetters
 
     // v10ou-D3: built in start(), never in construction — DemoShell binds its
     // socket in its constructor, and nothing may be bound before recovery completed.
