@@ -109,7 +109,7 @@ class GraphLocator(
         if (id in graph.personIds()) families.person.getOrSpawn(id).ref else null
 
     override fun authored(id: Long): CellRef? =
-        if (id in graph.personIds() && id in families.authored.keys()) {
+        if (id in graph.personIds() && families.authored.contains(id)) {
             families.authored.getOrSpawn(id).ref
         } else {
             null

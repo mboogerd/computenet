@@ -135,6 +135,36 @@ class KeyedCellsRecoveryTest {
     }
 
     @Test
+    fun `contains answers membership without spawning, and matches keys before and after recover`(@TempDir dir: File) {
+        val run1 = SimulationController(1)
+        val reg1 = LocationRegistry()
+        val host1 = ManagedHost(scheduler = run1.scheduler(), registry = reg1, journal = KeyedCells.hostJournal(dir))
+        val keyed1 = KeyedCells<String>(host1, dir, "writer", setFactory())
+
+        keyed1.contains("alice") shouldBe false
+        keyed1.getOrSpawn("alice")
+        run1.runToIdle()
+        keyed1.contains("alice") shouldBe true
+        keyed1.contains("bob") shouldBe false
+        keyed1.keys() shouldBe setOf("alice") // contains() and keys() agree
+
+        // — kill -9: drop host, registry, queues, controller — only [dir] survives —
+        val run2 = SimulationController(1)
+        val reg2 = LocationRegistry()
+        val host2 = ManagedHost(scheduler = run2.scheduler(), registry = reg2, journal = KeyedCells.hostJournal(dir))
+        val keyed2 = KeyedCells<String>(host2, dir, "writer", setFactory())
+
+        // durable membership is complete straight from the key log, before recover() or getOrSpawn
+        keyed2.contains("alice") shouldBe true
+        keyed2.contains("bob") shouldBe false
+
+        keyed2.recover()
+        run2.runToIdle()
+        keyed2.contains("alice") shouldBe true
+        keyed2.keys() shouldBe setOf("alice")
+    }
+
+    @Test
     fun `ephemeral mode works in memory and touches zero files`(@TempDir dir: File) {
         val run = SimulationController()
         val reg = LocationRegistry()
