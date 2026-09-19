@@ -1,0 +1,9 @@
+id|firstName|lastName|gender|birthday|creationDate|locationIP|browserUsed
+1|Ann|One|female|400000001|1000|10.0.0.1|Firefox
+2|Bob|Two|male|400000002|1001|10.0.0.2|Chrome
+3|Cara|Three|female|400000003|1002|10.0.0.3|Safari
+4|Dan|Four|male|400000004|1003|10.0.0.4|Edge
+5|Eve|Five|female|400000005|1004|10.0.0.5|Firefox
+6|Fay|Six|female|400000006|1005|10.0.0.6|Chrome
+7|Gus|Seven|male|400000007|1006|10.0.0.7|Safari
+8|Hal|Eight|male|400000008|1007|10.0.0.8|Edge
