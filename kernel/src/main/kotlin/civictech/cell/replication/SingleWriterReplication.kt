@@ -55,10 +55,70 @@ typealias LeaderMark = civictech.cell.host.LeaderMark
  * therefore unchanged. Pinned, not merely asserted, by
  * `civictech.cell.wire.StampedWireCompatTest` over two fixtures captured
  * before the field existed.
+ *
+ * [writer] is the `CellRef.instanceId` of the leader that stamped this unit,
+ * or `null` when the producer does not identify itself (computenet-7zssw,
+ * MEM1-52). It exists so the apply-time fence can order two units minted at
+ * the SAME [epoch] by the same tiebreak the leadership fold already uses —
+ * see [Fence]. It is additive on the wire by the same argument as
+ * [baseline]: fourth positional parameter, `null` default, `encodeDefaults`
+ * off, so a `writer = null` unit is byte-identical to a pre-field one and
+ * `WireCodec.VERSION` is unchanged. Pinned by the same
+ * `StampedWireCompatTest` fixtures.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("Stamped")
-data class Stamped<D>(val epoch: Long, val delta: D, val baseline: Boolean = false)
+data class Stamped<D>(
+    val epoch: Long,
+    val delta: D,
+    val baseline: Boolean = false,
+    val writer: Long? = null,
+)
+
+/**
+ * The replica's fence high-water: the epoch it holds **and**, when known,
+ * the `CellRef.instanceId` of the writer whose unit set it (computenet-7zssw,
+ * MEM1-52).
+ *
+ * ## Why the counter alone is not enough
+ *
+ * The system already carries a total order over claims — the leadership fold
+ * uses `compareBy<LeaderMark>({ it.epoch }, { it.leaderRef.instanceId })`
+ * ([civictech.cell.host.InstanceIndex], f7h.1-D2) — but the apply-time fence
+ * did not consult it. Two claimants that mint a claim at the SAME counter
+ * therefore produce units that no follower can order: `epoch < currentEpoch`
+ * is false for both, so whichever arrives second wins by scheduling accident.
+ * That is MEM1-52. [compareWith] is deliberately the SAME comparison the fold
+ * uses, so "who is leader at a tie" and "whose delta is admitted at a tie"
+ * are one decision rather than two.
+ *
+ * ## Identity-blind fallback
+ *
+ * [writer] is nullable on both sides, and a comparison where **either** side
+ * is `null` falls back to the counter alone — the pre-MEM1-52 behaviour,
+ * exactly. An unidentified unit is never fenced by a tiebreak it cannot
+ * participate in, which is what keeps a pre-fix payload arriving over the
+ * wire (or any caller still on the `Long` overload of [applyTo]) behaving as
+ * it always did. The order is therefore total only over identified units;
+ * that is intentional, not an oversight.
+ */
+data class Fence(val epoch: Long, val writer: Long? = null) {
+    /**
+     * `< 0`, `0`, `> 0` as `this` sits below, at, or above [other] — with
+     * the identity-blind fallback described on [Fence] when either [writer]
+     * is `null`.
+     */
+    fun compareWith(other: Fence): Int {
+        val byEpoch = epoch.compareTo(other.epoch)
+        if (byEpoch != 0) return byEpoch
+        val mine = writer ?: return 0
+        val theirs = other.writer ?: return 0
+        return mine.compareTo(theirs)
+    }
+}
+
+/** The fence position this unit occupies. */
+fun Stamped<*>.fence(): Fence = Fence(epoch, writer)
 
 /**
  * The **one** fence-and-route rule for an incoming [Stamped] at a replica
@@ -81,10 +141,44 @@ data class Stamped<D>(val epoch: Long, val delta: D, val baseline: Boolean = fal
  * follower's inlet — deltas arrive by [HostedCellProxy] straight at the
  * cell's port.
  */
-fun <D> Stamped<D>.applyTo(currentEpoch: Long, onBaseline: (D) -> Unit, onDelta: (D) -> Unit): Long? {
-    if (epoch < currentEpoch) return null
+fun <D> Stamped<D>.applyTo(currentEpoch: Long, onBaseline: (D) -> Unit, onDelta: (D) -> Unit): Long? =
+    applyTo(Fence(currentEpoch), onBaseline, onDelta)?.epoch
+
+/**
+ * The same one fence-and-route rule, ordered by the PAIR rather than the
+ * counter alone (computenet-7zssw, MEM1-52).
+ *
+ * Fenced when this unit's [fence] sits strictly below [current] under
+ * [Fence.compareWith]; otherwise exactly one of [onBaseline]/[onDelta] runs
+ * and the replica's new high-water is returned. The new high-water is the
+ * GREATER of the two positions, so a unit admitted at an equal counter from
+ * a greater writer moves the writer half of the fence up — which is what
+ * makes the *previous* leader's later units inert rather than merely
+ * out-of-order.
+ *
+ * A unit at the same position as [current] (equal counter, equal or unknown
+ * writer) is still ADMITTED, exactly as before: the fence is `<`, not `<=`,
+ * because a leader ships many deltas under one epoch.
+ *
+ * The `Long`-typed overload above is this function with an unidentified
+ * [Fence.writer] on the replica side, which by [Fence]'s identity-blind
+ * fallback is byte-for-byte the pre-MEM1-52 behaviour.
+ */
+fun <D> Stamped<D>.applyTo(current: Fence, onBaseline: (D) -> Unit, onDelta: (D) -> Unit): Fence? {
+    val incoming = fence()
+    if (incoming.compareWith(current) < 0) return null
     if (baseline) onBaseline(delta) else onDelta(delta)
-    return maxOf(currentEpoch, epoch)
+    // Admitted, so at an equal counter the incoming writer is at or above the
+    // held one (or one of the two is unknown); learning a writer the replica
+    // did not have is what arms the fence against the SUPERSEDED leader's
+    // next unit.
+    val writerNow = when {
+        incoming.epoch > current.epoch -> incoming.writer
+        current.writer == null -> incoming.writer
+        incoming.writer == null -> current.writer
+        else -> maxOf(current.writer, incoming.writer)
+    }
+    return Fence(maxOf(current.epoch, incoming.epoch), writerNow)
 }
 
 /**
@@ -1004,7 +1098,9 @@ class SingleWriterReplication(
         // Replication.maybeLink's `sink`): every delta — the live stream and
         // the onLinked catch-up baked into the link below — is restricted to
         // the *target's* interest before it ships, by slicing the STAMPED
-        // envelope's payload and re-stamping under the same epoch. A delta a
+        // envelope's payload and re-stamping under the same epoch AND writer
+        // (computenet-7zssw: stripping the writer here would make every
+        // partial-interest follower's fence identity-blind again). A delta a
         // partial-interest follower has no interest in never crosses. Total
         // interest short-circuits to the bare routed sink, so the default
         // shipping path is unwrapped and byte-identical.
@@ -1024,7 +1120,7 @@ class SingleWriterReplication(
         val sink: Propagate<Stamped<Any?>> = if (targetInterest is Interest.Total) routed
         else Propagate { stamped ->
             sliceTo(stamped.delta, targetInterest, keyOf)?.let {
-                routed.propagate(Stamped(stamped.epoch, it, stamped.baseline))
+                routed.propagate(Stamped(stamped.epoch, it, stamped.baseline, stamped.writer))
             }
         }
         @Suppress("UNCHECKED_CAST")
