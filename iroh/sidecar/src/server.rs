@@ -712,10 +712,10 @@ mod tests {
 
         // Before: `us` has been told nothing about `peer`, so the dial cannot
         // even be attempted.
-        let before = us.dial(peer.id()).await;
-        let before_err = before
-            .err()
-            .expect("dialling an endpoint with no addressing information must fail");
+        let before_err = match us.dial(peer.id()).await {
+            Err(e) => e,
+            Ok(_) => panic!("dialling an endpoint with no addressing information must fail"),
+        };
 
         // A one-slot writer queue, pre-filled, so the forwarding task PARKS on
         // its `PEER_DISCOVERED` send. That is what makes the ordering
