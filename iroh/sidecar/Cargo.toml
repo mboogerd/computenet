@@ -7,9 +7,11 @@ description = "ComputeNet iroh sidecar: peer links over QUIC, dialled by endpoin
 license = "Apache-2.0"
 publish = false
 
-# Two binaries: the sidecar itself (src/main.rs) and the self-hosted relay
+# Three binaries: the sidecar itself (src/main.rs), the self-hosted relay
 # (src/bin/relay.rs) CI points it at, so neither test run depends on n0's
-# public relay infrastructure (computenet-o0m3).
+# public relay infrastructure (computenet-o0m3), and the self-hosted pkarr
+# relay + DNS server (src/bin/dns.rs) that backs LookupMode::Rendezvous
+# (computenet-vnscs).
 [[bin]]
 name = "computenet-iroh-sidecar"
 path = "src/main.rs"
@@ -17,6 +19,10 @@ path = "src/main.rs"
 [[bin]]
 name = "computenet-iroh-relay"
 path = "src/bin/relay.rs"
+
+[[bin]]
+name = "computenet-iroh-dns"
+path = "src/bin/dns.rs"
 
 # No iroh-gossip / iroh-docs (epic computenet-egl §3 excludes them). tokio became
 # a real dependency with the bin and its local-socket protocol
@@ -29,6 +35,13 @@ iroh = "1.0"
 # feature is what exposes `iroh_relay::server::Server`; the sidecar library
 # itself never touches it, only `src/bin/relay.rs` and `tests/relay_mode.rs`.
 iroh-relay = { version = "1.0", features = ["server"] }
+# The self-hosted pkarr relay + DNS server that backs LookupMode::Rendezvous
+# (computenet-vnscs, F2-D3/F2-D11). Only src/bin/dns.rs and
+# tests/rendezvous_mode.rs use it; the library itself never imports it. Pinned
+# to the exact 1.0.3 patch (not "1.0"/^1.0) because a 1.2.0 release already
+# exists on crates.io and a caret requirement would resolve to it, widening
+# the dependency surface beyond what was measured here.
+iroh-dns-server = "=1.0.3"
 # Opt-in LAN peer enumeration (aas-D3, F1-D1). Must ride on the pinned `iroh`
 # 1.0.3 line without moving it — see ne2oh-B1: this resolves against 1.0.3 and
 # locks 4 new packages (acto, smol_str, swarm-discovery, and itself).
