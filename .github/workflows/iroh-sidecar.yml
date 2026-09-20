@@ -204,6 +204,10 @@ jobs:
       - name: Assert tests/mdns.rs actually exercised multicast delivery
         run: |
           set -euo pipefail
+          if [ ! -f /tmp/iroh-sidecar-cargo-test.log ]; then
+            echo "the cargo test log is absent — the 'cargo test (timed)' step did not tee it" >&2
+            exit 1
+          fi
           if grep -q 'SKIPPED tests/mdns.rs' /tmp/iroh-sidecar-cargo-test.log; then
             echo "tests/mdns.rs skipped on this CI runner:" >&2
             grep 'SKIPPED tests/mdns.rs' /tmp/iroh-sidecar-cargo-test.log >&2
