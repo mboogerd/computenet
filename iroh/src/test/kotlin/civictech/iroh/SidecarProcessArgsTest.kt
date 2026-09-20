@@ -60,4 +60,27 @@ class SidecarProcessArgsTest {
     fun `empty args with property unset stays empty`() {
         assertEquals(emptyList(), SidecarProcess.effectiveArgs(emptyList(), relayUrl = null))
     }
+
+    // F1-D7: --mdns composes with everything except --offline+--relay-url
+    // exclusivity, and effectiveArgs steers only on --offline/--relay-url — it
+    // does not know about --mdns at all, so --mdns never changes the outcome.
+
+    @Test
+    fun `mdns with property set still appends relay-url`() {
+        val args = listOf("--mdns")
+        val expected = args + listOf("--relay-url", "https://relay.example")
+        assertEquals(expected, SidecarProcess.effectiveArgs(args, relayUrl = "https://relay.example"))
+    }
+
+    @Test
+    fun `offline and mdns with property set does not append`() {
+        val args = listOf("--offline", "--mdns")
+        assertEquals(args, SidecarProcess.effectiveArgs(args, relayUrl = "https://relay.example"))
+    }
+
+    @Test
+    fun `mdns with property unset stays unchanged`() {
+        val args = listOf("--mdns")
+        assertEquals(args, SidecarProcess.effectiveArgs(args, relayUrl = null))
+    }
 }
