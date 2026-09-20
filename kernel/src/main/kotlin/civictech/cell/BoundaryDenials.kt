@@ -288,6 +288,30 @@ enum class DenialReason {
      * (epic residual R4).
      */
     STATEMENT_EXPIRED,
+
+    /**
+     * Seam 1 hello: this link's proven key identifier is already attributed,
+     * on a LIVE link, to a different identity than the binding now resolves it
+     * to (DSC2, `[DSC2-ID-05]`; feature `computenet-ktn1l`). The newer link is
+     * refused; the live one stays.
+     *
+     * **Distinct from [ID_MISMATCH]**, which the name deliberately echoes and
+     * which a reader will otherwise collapse into it. [ID_MISMATCH] is a
+     * disagreement *inside one hello*: the id that hello CLAIMED is not the id
+     * its own presented key derives to. This one is a disagreement *across two
+     * links*: nothing inside either hello is inconsistent — both resolutions
+     * succeeded — and what disagrees is the identity this key resolved to now
+     * versus the identity a link that is still up was attributed with.
+     *
+     * **Distinct from [UNVOUCHED]/[STATEMENT_EXPIRED]**, where the presented
+     * statements do not back the key at all (no binding, or one outside its
+     * validity window). Here the binding answered, twice, with two different
+     * identities for one key.
+     *
+     * The denial record names both identities; neither is secret, and no key
+     * material, statement bytes or credential appears in it.
+     */
+    IDENTITY_MISMATCH,
 }
 
 /**

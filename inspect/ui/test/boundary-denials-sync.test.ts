@@ -20,6 +20,12 @@ import { BOUNDARY_SEAMS, DENIAL_REASONS } from '../src/api/types';
 // deliberately routed elsewhere to avoid Gradle-daemon contention with a
 // concurrent unit on this machine).
 //
+// computenet-ktn1l (task .2): the mechanism caught a live drift for the first
+// time rather than a historical one. Appending `IDENTITY_MISMATCH` to the
+// kernel enum failed this suite on the very next run, before the union was
+// touched — the red this test was written for, observed and reported on that
+// task rather than inferred.
+//
 // computenet-nu49: `civictech.cell.BoundarySeam`, declared in the very same
 // kernel file, mirrors the same defect mechanism one type over — measured
 // in sync at the time this case was added, but with nothing pinning it
