@@ -48,12 +48,24 @@ object SidecarProtocol {
         const val CLOSE_LINK: Byte = 0x06
         const val SHUTDOWN: Byte = 0x07
 
+        /** Start delivery of discovery events (link 0, empty), answered by [WATCHING] (DSC2, aas-D8). */
+        const val WATCH_PEERS: Byte = 0x08
+
         const val ID: Byte = 0x81.toByte()
         const val LISTENING: Byte = 0x82.toByte()
         const val PEER_ADDED: Byte = 0x83.toByte()
         const val LINK_UP: Byte = 0x84.toByte()
         const val LINK_DOWN: Byte = 0x85.toByte()
         const val ERROR: Byte = 0x86.toByte()
+
+        /** A newly seen endpoint (link 0; 32-byte id then ADD_PEER-shaped addresses) (DSC2, aas-D8). */
+        const val PEER_DISCOVERED: Byte = 0x87.toByte()
+
+        /** A previously discovered endpoint expired (link 0; 32-byte id) (DSC2, aas-D8). */
+        const val PEER_EXPIRED: Byte = 0x88.toByte()
+
+        /** Answers [WATCH_PEERS] (link 0, empty) (DSC2, aas-D8). */
+        const val WATCHING: Byte = 0x89.toByte()
     }
 
     /** True when [link] is a host-allocated (odd, non-zero) link id. */

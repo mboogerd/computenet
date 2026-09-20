@@ -1,6 +1,7 @@
 //! The sidecar endpoint: binds an iroh endpoint, accepts links, dials by id.
 
 use std::{
+    io::Write,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -9,9 +10,11 @@ use std::{
 };
 
 use iroh::{
-    address_lookup::memory::MemoryLookup, endpoint::presets, Endpoint, EndpointAddr, EndpointId,
-    RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
+    address_lookup::{memory::MemoryLookup, AddressLookupBuilderError},
+    endpoint::presets,
+    Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 use crate::{
     error::{Error, Result},
@@ -71,6 +74,12 @@ pub struct SidecarConfig {
     pub bind_addrs: Vec<SocketAddr>,
     /// ALPN to speak. Empty means [`ALPN`].
     pub alpn: Vec<u8>,
+    /// Opt-in LAN peer enumeration via `iroh-mdns-address-lookup` (aas-D3),
+    /// orthogonal to [`LookupMode`]: it adds a second address lookup service
+    /// beside [`iroh::address_lookup::memory::MemoryLookup`] rather than
+    /// replacing anything [`LookupMode`] configures. Default `false`.
+    /// `Offline + mdns` is the test configuration.
+    pub mdns: bool,
 }
 
 impl SidecarConfig {
@@ -91,6 +100,49 @@ impl SidecarConfig {
     }
 }
 
+/// Degrades a failed mDNS build to a single stderr line rather than an error
+/// (F1-D8): the sidecar's handshake line is still written and links still
+/// serve without LAN enumeration. `Ok` passes the lookup through unchanged.
+///
+/// The fixed prefix `mdns unavailable` is a contract the JVM reads from
+/// stderr (task 4) — do not reword it.
+///
+/// Known limitation: on a host whose OS denies multicast *sends* (observed on
+/// macOS, ne2oh-B6), `build()` itself succeeds — the denial surfaces only
+/// later, asynchronously, inside swarm-discovery's actor — so this function
+/// never sees that failure and this stderr line does not fire for it.
+fn mdns_or_warn(
+    result: std::result::Result<MdnsAddressLookup, AddressLookupBuilderError>,
+    stderr: &mut impl Write,
+) -> Option<MdnsAddressLookup> {
+    match result {
+        Ok(mdns) => Some(mdns),
+        Err(e) => {
+            let _ = writeln!(
+                stderr,
+                "computenet-iroh-sidecar: mdns unavailable, continuing without LAN enumeration: {}",
+                describe_chain(&e)
+            );
+            None
+        }
+    }
+}
+
+/// `AddressLookupBuilderError`'s own `Display` is a fixed, provenance-only
+/// message (`Service 'mdns' error`); the underlying cause — what actually
+/// failed — lives in its `std::error::Error::source()` chain. This renders
+/// the whole chain on one line so the stderr diagnostic is actionable.
+fn describe_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = err.to_string();
+    let mut cause = err.source();
+    while let Some(c) = cause {
+        out.push_str(": ");
+        out.push_str(&c.to_string());
+        cause = c.source();
+    }
+    out
+}
+
 /// A bound iroh endpoint that accepts and dials sidecar links.
 ///
 /// Cheap to clone; clones share the underlying endpoint and its link-id counter.
@@ -98,6 +150,7 @@ impl SidecarConfig {
 pub struct SidecarEndpoint {
     endpoint: Endpoint,
     lookup: MemoryLookup,
+    mdns: Option<MdnsAddressLookup>,
     alpn: Arc<Vec<u8>>,
     next_link_id: Arc<AtomicU64>,
 }
@@ -112,6 +165,26 @@ impl SidecarEndpoint {
         };
         let lookup = MemoryLookup::new();
 
+        // The secret key is resolved eagerly — rather than left to the
+        // builder to generate one internally — because building the mDNS
+        // lookup below needs the public key first (ne2oh-B2). This changes
+        // nothing observable for the `None` case: iroh generated one before,
+        // we do now, and it is always handed to the builder explicitly.
+        let secret_key = config.secret_key.unwrap_or_else(SecretKey::generate);
+
+        // When `config.mdns`, build the mDNS lookup BEFORE binding, so a
+        // failure to bind it is known before the endpoint exists. Binding
+        // proceeds either way (F1-D8): a failure degrades to a single stderr
+        // line, never an error returned from `bind`.
+        let mdns = if config.mdns {
+            mdns_or_warn(
+                MdnsAddressLookup::builder().build(secret_key.public()),
+                &mut std::io::stderr(),
+            )
+        } else {
+            None
+        };
+
         // `Relay` shares `Offline`'s minimal preset — no DNS/pkarr address
         // lookup service — and then replaces its disabled relay with exactly
         // the configured one. Everything after this point is identical across
@@ -125,9 +198,10 @@ impl SidecarEndpoint {
         }
         builder = builder
             .alpns(vec![alpn.clone()])
+            .secret_key(secret_key)
             .address_lookup(lookup.clone());
-        if let Some(secret_key) = config.secret_key {
-            builder = builder.secret_key(secret_key);
+        if let Some(m) = &mdns {
+            builder = builder.address_lookup(m.clone());
         }
         if !config.bind_addrs.is_empty() {
             builder = builder.clear_ip_transports();
@@ -143,9 +217,18 @@ impl SidecarEndpoint {
         Ok(SidecarEndpoint {
             endpoint,
             lookup,
+            mdns,
             alpn: Arc::new(alpn),
             next_link_id: Arc::new(AtomicU64::new(1)),
         })
+    }
+
+    /// The mDNS LAN-enumeration address lookup, when [`SidecarConfig::mdns`]
+    /// was set and it bound successfully. `None` when `mdns` was `false`, or
+    /// when it was `true` but binding failed (see [`mdns_or_warn`] for the
+    /// degrade path and its stated limitation).
+    pub fn mdns(&self) -> Option<&MdnsAddressLookup> {
+        self.mdns.as_ref()
     }
 
     /// This endpoint's id — its ed25519 public key, and the address peers dial.
@@ -354,5 +437,96 @@ mod tests {
         );
 
         endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn offline_loopback_binds_memory_lookup_only() {
+        // Pins [DSC2-MDNS-03]'s "no multicast socket" half at the only seam
+        // this crate has: the address lookup service count and mdns().
+        let endpoint = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("offline binds");
+
+        assert_eq!(
+            endpoint
+                .endpoint
+                .address_lookup()
+                .expect("the endpoint is open")
+                .len(),
+            1,
+            "MemoryLookup only: mdns defaults to false"
+        );
+        assert!(endpoint.mdns().is_none());
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn mdns_adds_a_second_lookup_service() {
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            mdns: true,
+            ..SidecarConfig::offline_loopback()
+        })
+        .await
+        .expect("offline+mdns binds");
+
+        let count = endpoint
+            .endpoint
+            .address_lookup()
+            .expect("the endpoint is open")
+            .len();
+        match endpoint.mdns() {
+            Some(_) => assert_eq!(
+                count, 2,
+                "MemoryLookup plus mdns: both should be registered"
+            ),
+            None => {
+                // [DSC2-NV-01]: this must never fail for lack of multicast on
+                // the host running the test — only assert the fallback shape.
+                eprintln!("mdns build failed on this host; asserting the no-mdns shape instead");
+                assert_eq!(count, 1, "MemoryLookup only, since mdns did not bind");
+            }
+        }
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn an_explicit_secret_key_still_names_the_endpoint() {
+        // Guards the eager-key refactor in `bind`: an explicitly supplied key
+        // still produces the matching endpoint id, exactly as before.
+        let key = SecretKey::generate();
+        let endpoint =
+            SidecarEndpoint::bind(SidecarConfig::offline_loopback().with_secret_key(key.clone()))
+                .await
+                .expect("offline binds");
+
+        assert_eq!(endpoint.id(), key.public());
+
+        endpoint.close().await;
+    }
+
+    #[test]
+    fn a_failed_mdns_build_is_reported_once_and_binding_continues() {
+        let mut buf: Vec<u8> = Vec::new();
+        let err = AddressLookupBuilderError::from_err(
+            "mdns",
+            std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "no multicast"),
+        );
+
+        let result = mdns_or_warn(Err(err), &mut buf);
+
+        assert!(result.is_none());
+        let text = String::from_utf8(buf).expect("stderr line is utf-8");
+        let mut lines = text.lines();
+        let line = lines.next().expect("exactly one line was written");
+        assert!(lines.next().is_none(), "exactly one line, was: {text:?}");
+        assert!(
+            line.starts_with(
+                "computenet-iroh-sidecar: mdns unavailable, continuing without LAN enumeration: "
+            ),
+            "must not reword the fixed prefix task 4's JVM test reads, was: {line}"
+        );
+        assert!(line.contains("no multicast"), "was: {line}");
     }
 }
