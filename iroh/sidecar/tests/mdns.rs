@@ -21,9 +21,22 @@
 //! and this file deliberately does **not** assert `PEER_EXPIRED` (the real
 //! expiry is 30–43 s per run, `ne2oh-B5`).
 //!
-//! Executed evidence comes from CI's `iroh-sidecar` lane (ubuntu-latest): its
-//! `cargo test` step's `test result` line, with no `SKIPPED tests/mdns.rs`
-//! text above it.
+//! # Evidence this test's body actually ran
+//!
+//! A plain `cargo test`'s `test result` line does NOT distinguish an executed
+//! run from a skipped one: libtest captures a PASSING test's stdout/stderr
+//! and discards the capture, and a skip (`eprintln!` below, then `return`) IS
+//! a pass — so the `SKIPPED tests/mdns.rs: ...` line never reaches a captured
+//! log either way, and its absence proves nothing (computenet-2wmp5).
+//!
+//! CI's `iroh-sidecar` lane (ubuntu-latest, `.github/workflows/iroh-sidecar.yml`)
+//! runs `cargo test -- --nocapture` instead, so the `SKIPPED tests/mdns.rs`
+//! line survives into the job log when the gate refuses, and a following
+//! step reddens the job if that line appears at all — every run observed so
+//! far has delivered real multicast in that lane, so a skip there is treated
+//! as a CI regression rather than an accepted downgrade. That assertion step
+//! does not change this test: a developer machine that genuinely lacks
+//! multicast still gets a passing skip, per `[DSC2-NV-01]`.
 
 use std::{
     net::{Ipv4Addr, SocketAddr, UdpSocket},
