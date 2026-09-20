@@ -8,15 +8,27 @@
 //!
 //! ```text
 //! computenet-iroh-sidecar [--offline] [--relay-url <url>] [--mdns]
+//!                         [--pkarr-relay-url <url> --dns-origin <domain>]
+//!                         [--dns-nameserver <ip:port>]
 //!                         [--secret-key <64 hex chars>]
 //!                         [--bind-addr <ip:port>]... [--socket-port <port>]
 //! ```
 //!
 //! * `--offline` — resolve peers only from `ADD_PEER`, never a relay or DNS.
 //!   Bind loopback only. This is what makes a test run network-free.
-//! * `--relay-url` — use exactly this relay and no address lookup service, in
-//!   place of number 0's public relays and DNS/pkarr discovery. Mutually
-//!   exclusive with `--offline`.
+//! * `--relay-url` — use exactly this relay in place of number 0's public
+//!   relays. Alone it also disables address lookup entirely; with the
+//!   rendezvous flags below it is the relay that rendezvous mode publishes.
+//!   Mutually exclusive with `--offline`.
+//! * `--pkarr-relay-url` / `--dns-origin` — a **self-hosted** rendezvous: the
+//!   endpoint publishes its address record to this pkarr relay and resolves
+//!   peers from it and by DNS under this origin, reaching number 0 for
+//!   nothing. The two require each other, and neither can be combined with
+//!   `--offline`.
+//! * `--dns-nameserver` — point the endpoint's DNS resolver at exactly this
+//!   UDP nameserver rather than the host's. Requires the two flags above;
+//!   omitted, the operator is expected to have delegated the origin zone so
+//!   the system resolver reaches it.
 //! * `--mdns` — also enumerate peers on the local network segment via
 //!   `iroh-mdns-address-lookup`. Orthogonal to `--offline`/`--relay-url`: it
 //!   composes with every other flag. If the mDNS service cannot bind, the
@@ -34,6 +46,7 @@ use computenet_iroh_sidecar::{
 };
 use iroh::RelayUrl;
 use tokio::net::TcpListener;
+use url::Url;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -50,13 +63,12 @@ async fn run() -> Result<(), String> {
     let args = Args::parse(std::env::args().skip(1))?;
 
     let mut config = if args.offline {
+        // `offline_loopback` also pins the bind addresses to loopback, which
+        // is why this branch is not simply `lookup: args.lookup_mode()`.
         SidecarConfig::offline_loopback()
     } else {
         SidecarConfig {
-            lookup: match args.relay_url {
-                Some(url) => LookupMode::Relay(url),
-                None => LookupMode::N0,
-            },
+            lookup: args.lookup_mode(),
             ..Default::default()
         }
     };
@@ -108,6 +120,9 @@ async fn run() -> Result<(), String> {
 struct Args {
     offline: bool,
     relay_url: Option<RelayUrl>,
+    pkarr_relay_url: Option<Url>,
+    dns_origin: Option<String>,
+    dns_nameserver: Option<SocketAddr>,
     mdns: bool,
     secret_key: Option<SecretKey>,
     bind_addrs: Vec<SocketAddr>,
@@ -115,10 +130,35 @@ struct Args {
 }
 
 impl Args {
+    /// The lookup mode these flags select (F2-D7: no default changed — no
+    /// flag is still `N0`). `Args::parse` has already refused every
+    /// combination this does not cover, so the rendezvous arm can take the
+    /// pair as present.
+    fn lookup_mode(&self) -> LookupMode {
+        if self.offline {
+            return LookupMode::Offline;
+        }
+        match (&self.pkarr_relay_url, &self.dns_origin) {
+            (Some(pkarr_relay), Some(dns_origin)) => LookupMode::Rendezvous {
+                pkarr_relay: pkarr_relay.clone(),
+                dns_origin: dns_origin.clone(),
+                dns_nameserver: self.dns_nameserver,
+                relay: self.relay_url.clone(),
+            },
+            _ => match &self.relay_url {
+                Some(url) => LookupMode::Relay(url.clone()),
+                None => LookupMode::N0,
+            },
+        }
+    }
+
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut parsed = Args {
             offline: false,
             relay_url: None,
+            pkarr_relay_url: None,
+            dns_origin: None,
+            dns_nameserver: None,
             mdns: false,
             secret_key: None,
             bind_addrs: Vec::new(),
@@ -137,6 +177,28 @@ impl Args {
                         RelayUrl::from_str(&raw)
                             .map_err(|e| format!("--relay-url {raw} is not a URL: {e}"))?,
                     );
+                }
+                "--pkarr-relay-url" => {
+                    let raw = args.next().ok_or("--pkarr-relay-url needs a value")?;
+                    // Parsed here for the same reason --relay-url is: a typo
+                    // fails before any socket is bound.
+                    parsed.pkarr_relay_url = Some(
+                        Url::parse(&raw)
+                            .map_err(|e| format!("--pkarr-relay-url {raw} is not a URL: {e}"))?,
+                    );
+                }
+                "--dns-origin" => {
+                    let raw = args.next().ok_or("--dns-origin needs a value")?;
+                    if raw.is_empty() {
+                        return Err("--dns-origin needs a non-empty domain".to_string());
+                    }
+                    parsed.dns_origin = Some(raw);
+                }
+                "--dns-nameserver" => {
+                    let raw = args.next().ok_or("--dns-nameserver needs a value")?;
+                    parsed.dns_nameserver = Some(raw.parse().map_err(|e| {
+                        format!("--dns-nameserver {raw} is not a socket address: {e}")
+                    })?);
                 }
                 "--secret-key" => {
                     let hex = args.next().ok_or("--secret-key needs a value")?;
@@ -166,6 +228,46 @@ impl Args {
         if parsed.offline && parsed.relay_url.is_some() {
             return Err(
                 "--offline and --relay-url cannot be combined: --offline uses no relay at all"
+                    .to_string(),
+            );
+        }
+        // Every rendezvous rule is checked here, before `run` binds anything.
+        // The `--offline` conflict comes first, so a combination that breaks
+        // two rules at once is reported as the one the operator can act on.
+        let rendezvous_flags: Vec<&str> = [
+            parsed
+                .pkarr_relay_url
+                .is_some()
+                .then_some("--pkarr-relay-url"),
+            parsed.dns_origin.is_some().then_some("--dns-origin"),
+            parsed
+                .dns_nameserver
+                .is_some()
+                .then_some("--dns-nameserver"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if parsed.offline && !rendezvous_flags.is_empty() {
+            return Err(format!(
+                "--offline and {} cannot be combined: --offline resolves peers only from ADD_PEER, \
+                 publishing and resolving nothing",
+                rendezvous_flags.join(" and "),
+            ));
+        }
+        if parsed.dns_nameserver.is_some()
+            && (parsed.pkarr_relay_url.is_none() || parsed.dns_origin.is_none())
+        {
+            return Err(
+                "--dns-nameserver requires both --pkarr-relay-url and --dns-origin: it only \
+                 changes the resolver rendezvous mode uses"
+                    .to_string(),
+            );
+        }
+        if parsed.pkarr_relay_url.is_some() != parsed.dns_origin.is_some() {
+            return Err(
+                "--pkarr-relay-url and --dns-origin require each other: rendezvous mode needs \
+                 both the pkarr relay to publish to and the DNS origin to resolve under"
                     .to_string(),
             );
         }
@@ -243,6 +345,175 @@ mod tests {
         assert!(
             message.contains("--relay-url"),
             "diagnostic must name the flag, was: {message}"
+        );
+    }
+
+    #[test]
+    fn rendezvous_flags_are_accepted_together_and_compose_with_relay_url_and_mdns() {
+        let args = parse(&[
+            "--pkarr-relay-url",
+            "http://127.0.0.1:8080/pkarr",
+            "--dns-origin",
+            "irohdns.example.",
+        ])
+        .expect("the pair alone is accepted");
+        assert_eq!(
+            args.lookup_mode(),
+            LookupMode::Rendezvous {
+                pkarr_relay: Url::parse("http://127.0.0.1:8080/pkarr").expect("literal url"),
+                dns_origin: "irohdns.example.".to_string(),
+                dns_nameserver: None,
+                relay: None,
+            }
+        );
+
+        let args = parse(&[
+            "--pkarr-relay-url",
+            "http://127.0.0.1:8080/pkarr",
+            "--dns-origin",
+            "irohdns.example.",
+            "--dns-nameserver",
+            "127.0.0.1:5300",
+            "--relay-url",
+            "https://relay.example.org",
+            "--mdns",
+        ])
+        .expect("all four compose");
+        assert!(args.mdns);
+        assert_eq!(
+            args.lookup_mode(),
+            LookupMode::Rendezvous {
+                pkarr_relay: Url::parse("http://127.0.0.1:8080/pkarr").expect("literal url"),
+                dns_origin: "irohdns.example.".to_string(),
+                dns_nameserver: Some("127.0.0.1:5300".parse().expect("literal addr")),
+                relay: Some(
+                    RelayUrl::from_str("https://relay.example.org").expect("literal relay url")
+                ),
+            },
+            "--relay-url composes into the rendezvous rather than selecting Relay"
+        );
+    }
+
+    #[test]
+    fn one_rendezvous_flag_without_the_other_is_refused_naming_both() {
+        for argv in [
+            ["--pkarr-relay-url", "http://127.0.0.1:8080/pkarr"].as_slice(),
+            ["--dns-origin", "irohdns.example."].as_slice(),
+        ] {
+            let message = parse(argv).expect_err("refused");
+            assert!(
+                message.contains("--pkarr-relay-url") && message.contains("--dns-origin"),
+                "diagnostic must name both flags, was: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn dns_nameserver_without_the_pair_is_refused_naming_all_three() {
+        for argv in [
+            ["--dns-nameserver", "127.0.0.1:5300"].as_slice(),
+            [
+                "--dns-nameserver",
+                "127.0.0.1:5300",
+                "--pkarr-relay-url",
+                "http://127.0.0.1:8080/pkarr",
+            ]
+            .as_slice(),
+            [
+                "--dns-nameserver",
+                "127.0.0.1:5300",
+                "--dns-origin",
+                "irohdns.example.",
+            ]
+            .as_slice(),
+        ] {
+            let message = parse(argv).expect_err("refused");
+            assert!(
+                message.contains("--dns-nameserver")
+                    && message.contains("--pkarr-relay-url")
+                    && message.contains("--dns-origin"),
+                "diagnostic must name all three flags, was: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn offline_combined_with_a_rendezvous_flag_is_refused_naming_both() {
+        for (flag, value) in [
+            ("--pkarr-relay-url", "http://127.0.0.1:8080/pkarr"),
+            ("--dns-origin", "irohdns.example."),
+            ("--dns-nameserver", "127.0.0.1:5300"),
+        ] {
+            for argv in [
+                vec!["--offline", flag, value],
+                vec![flag, value, "--offline"],
+            ] {
+                let message = parse(&argv).expect_err("refused");
+                assert!(
+                    message.contains("--offline") && message.contains(flag),
+                    "diagnostic must name --offline and {flag}, was: {message}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_malformed_pkarr_relay_url_or_nameserver_is_refused_at_parse_time() {
+        let message = parse(&[
+            "--pkarr-relay-url",
+            "not a url",
+            "--dns-origin",
+            "irohdns.example.",
+        ])
+        .expect_err("refused");
+        assert!(
+            message.contains("--pkarr-relay-url"),
+            "diagnostic must name the flag, was: {message}"
+        );
+
+        let message = parse(&[
+            "--pkarr-relay-url",
+            "http://127.0.0.1:8080/pkarr",
+            "--dns-origin",
+            "irohdns.example.",
+            "--dns-nameserver",
+            "not an address",
+        ])
+        .expect_err("refused");
+        assert!(
+            message.contains("--dns-nameserver"),
+            "diagnostic must name the flag, was: {message}"
+        );
+
+        let message = parse(&[
+            "--pkarr-relay-url",
+            "http://127.0.0.1:8080/pkarr",
+            "--dns-origin",
+            "",
+        ])
+        .expect_err("refused");
+        assert!(
+            message.contains("--dns-origin"),
+            "diagnostic must name the flag, was: {message}"
+        );
+    }
+
+    #[test]
+    fn without_the_flags_the_lookup_choice_is_unchanged() {
+        // F2-D7: the rendezvous flags added no default and moved no existing
+        // mode. This is the [DSC2-RDV-06] half main.rs owns.
+        assert_eq!(parse(&[]).expect("accepted").lookup_mode(), LookupMode::N0);
+        assert_eq!(
+            parse(&["--relay-url", "https://relay.example.org"])
+                .expect("accepted")
+                .lookup_mode(),
+            LookupMode::Relay(
+                RelayUrl::from_str("https://relay.example.org").expect("literal relay url")
+            )
+        );
+        assert_eq!(
+            parse(&["--offline"]).expect("accepted").lookup_mode(),
+            LookupMode::Offline
         );
     }
 }

@@ -54,6 +54,12 @@ iroh-mdns-address-lookup = "0.5"
 # the lock via that crate; `default-features = false` keeps it to the futures
 # core rather than pulling an executor.
 futures-util = { version = "0.3", default-features = false }
+# The pkarr relay URL carried by `LookupMode::Rendezvous` (computenet-vnscs,
+# F2-D1): `PkarrPublisher::builder`/`PkarrResolver::builder` take a
+# `url::Url`, so the type appears in this crate's own public signature. Already
+# in the lock transitively via `iroh`; naming it here adds an edge, not a
+# package.
+url = "2"
 tokio = { version = "1", features = [
     "io-util",
     "macros",
