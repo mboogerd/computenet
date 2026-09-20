@@ -77,6 +77,19 @@ class FakeSidecar : AutoCloseable {
         }
     }
 
+    /**
+     * Write [frame] as-is, length prefix and all — the route for bytes a typed
+     * [SidecarMessage] cannot express, such as a malformed `PEER_DISCOVERED`
+     * payload (BS-10).
+     */
+    fun sendRaw(frame: Frame) {
+        val socket = connection()
+        socket.getOutputStream().apply {
+            write(frame.encode())
+            flush()
+        }
+    }
+
     fun nextHostMessage(seconds: Long = 30): HostMessage =
         received.poll(seconds, TimeUnit.SECONDS) ?: fail("no host message within ${seconds}s")
 

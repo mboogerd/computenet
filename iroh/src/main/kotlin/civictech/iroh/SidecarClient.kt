@@ -2,6 +2,7 @@ package civictech.iroh
 
 import civictech.iroh.SidecarProtocol.CONTROL_LINK
 import civictech.iroh.SidecarProtocol.DIRECTION_INBOUND
+import civictech.iroh.SidecarProtocol.Kind
 import civictech.iroh.SidecarProtocol.MAX_MESSAGE_LEN
 import civictech.iroh.SidecarProtocol.MSG_HEADER_LEN
 import java.io.DataInputStream
@@ -64,6 +65,20 @@ interface LinkListener {
      * onto this one (`computenet-ey4v`).
      */
     fun onError(link: SidecarLink, reason: String) {}
+}
+
+/**
+ * Discovery events for [SidecarClient.watchPeers], delivered on the client's
+ * reader thread (DSC2, aas-D8). Both callbacks must only enqueue, never dial
+ * or block: the consumer that acts on discovered/expired peers is feature
+ * `computenet-ktn1l`, not this client.
+ */
+interface PeerWatchListener {
+    /** A newly seen endpoint: [nodeId] and its `ADD_PEER`-shaped [addresses]. */
+    fun onDiscovered(nodeId: ByteArray, addresses: List<String>)
+
+    /** A previously discovered endpoint expired. */
+    fun onExpired(nodeId: ByteArray)
 }
 
 /**
@@ -204,6 +219,18 @@ class SidecarLink internal constructor(
  * refusal**. [SidecarLink.send] on an inbound link waits for the peer's first
  * frame before sending (§3, `LINK_UP`), and callers that keep their own
  * outstanding `DATA` on a link within the bound never meet the rule above.
+ *
+ * ## Discovery events (DSC2, `aas-D8`)
+ *
+ * [watchPeers] registers a [PeerWatchListener] and sends `WATCH_PEERS`; once
+ * the sidecar answers `WATCHING`, `PEER_DISCOVERED` and `PEER_EXPIRED` frames
+ * are delivered to that listener on the reader thread, in arrival order, like
+ * every other event this client dispatches. A malformed discovery frame is
+ * counted in [malformedDiscoveryEvents] and the reader keeps going — the one
+ * exception to "a bad frame ends the reader," because discovery is
+ * best-effort mDNS input and must not be able to take the whole socket down
+ * (`DSC2-MDNS-06`). A sidecar started without `--mdns` still answers
+ * `WATCHING` and simply never emits.
  */
 class SidecarClient(
     private val socket: Socket,
@@ -224,6 +251,19 @@ class SidecarClient(
 
     @Volatile
     private var inboundHandler: ((SidecarLink) -> LinkListener)? = null
+
+    @Volatile
+    private var peerWatchListener: PeerWatchListener? = null
+
+    private val malformedDiscoveryEventCount = AtomicLong()
+
+    /**
+     * Count of `PEER_DISCOVERED`/`PEER_EXPIRED` frames the reader could not
+     * decode (`DSC2-MDNS-06`). The reader continues dispatching after each one
+     * — see [readLoop] — unlike every other kind's malformed frame, which ends
+     * the reader as before.
+     */
+    val malformedDiscoveryEvents: Long get() = malformedDiscoveryEventCount.get()
 
     private val closed = AtomicBoolean(false)
 
@@ -248,6 +288,18 @@ class SidecarClient(
     /** `ADD_PEER` → `PEER_ADDED`. Teaches this endpoint how to reach [nodeId] offline. */
     fun addPeer(nodeId: ByteArray, addresses: List<String>, timeout: Duration = defaultTimeout): ByteArray =
         control(HostMessage.AddPeer(nodeId, addresses), timeout, "ADD_PEER") { it as? SidecarMessage.PeerAdded }.nodeId
+
+    /**
+     * `WATCH_PEERS` → `WATCHING`. [listener] is registered BEFORE the request
+     * goes out, so no `PEER_DISCOVERED`/`PEER_EXPIRED` can arrive before
+     * registration. Idempotent: a second call replaces the listener and
+     * re-sends `WATCH_PEERS`, which the sidecar answers with `WATCHING` again
+     * without starting anything new (`PROTOCOL.md` §3, DSC2 aas-D8).
+     */
+    fun watchPeers(listener: PeerWatchListener, timeout: Duration = defaultTimeout) {
+        peerWatchListener = listener
+        control(HostMessage.WatchPeers, timeout, "WATCH_PEERS") { it as? SidecarMessage.Watching }
+    }
 
     private fun <T : SidecarMessage> control(
         request: HostMessage,
@@ -342,7 +394,16 @@ class SidecarClient(
                 when (val decoded = SidecarCodec.asSidecarMessage(frame)) {
                     is Decoded.Ok -> dispatch(decoded.message)
                     is Decoded.Malformed ->
-                        throw SidecarException("undecodable message from sidecar: ${decoded.problem} — ${decoded.detail}")
+                        if (frame.kind == Kind.PEER_DISCOVERED || frame.kind == Kind.PEER_EXPIRED) {
+                            // DSC2-MDNS-06 (BS-10): a malformed discovery frame is
+                            // counted and the reader keeps dispatching — discovery
+                            // is best-effort and one bad frame from mDNS must not
+                            // take down the whole socket. Every other kind's
+                            // malformed frame still ends the reader below.
+                            malformedDiscoveryEventCount.incrementAndGet()
+                        } else {
+                            throw SidecarException("undecodable message from sidecar: ${decoded.problem} — ${decoded.detail}")
+                        }
                 }
             }
         } catch (e: EOFException) {
@@ -358,7 +419,12 @@ class SidecarClient(
 
     private fun dispatch(message: SidecarMessage) {
         when (message) {
-            is SidecarMessage.Id, is SidecarMessage.Listening, is SidecarMessage.PeerAdded -> controlReplies.offer(message)
+            is SidecarMessage.Id, is SidecarMessage.Listening, is SidecarMessage.PeerAdded, is SidecarMessage.Watching ->
+                controlReplies.offer(message)
+
+            is SidecarMessage.PeerDiscovered -> peerWatchListener?.onDiscovered(message.nodeId, message.addresses)
+
+            is SidecarMessage.PeerExpired -> peerWatchListener?.onExpired(message.nodeId)
 
             is SidecarMessage.LinkUp -> onLinkUp(message)
 
