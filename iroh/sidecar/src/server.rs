@@ -18,7 +18,9 @@ use std::{
     },
 };
 
+use futures_util::{Stream, StreamExt};
 use iroh::{EndpointAddr, TransportAddr};
+use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -29,8 +31,8 @@ use crate::{
     endpoint::SidecarEndpoint,
     link::{Link, LinkWatcher, PendingLink},
     protocol::{
-        endpoint_id_from_slice, kind, read_message, write_message, Message, CONTROL_LINK,
-        DIRECTION_INBOUND, DIRECTION_OUTBOUND,
+        endpoint_id_from_slice, kind, peer_discovered_payload, read_message, write_message,
+        Message, CONTROL_LINK, DIRECTION_INBOUND, DIRECTION_OUTBOUND,
     },
 };
 
@@ -102,6 +104,11 @@ where
     let links: Links = Arc::new(Mutex::new(HashMap::new()));
     let next_inbound = Arc::new(AtomicU64::new(1));
     let mut accepting: Option<tokio::task::JoinHandle<()>> = None;
+    // The one peer-discovery forwarding task for this host connection, started
+    // by the first WATCH_PEERS and aborted with the connection, exactly as
+    // `accepting` is. `None` also stands for "this endpoint has no mDNS
+    // lookup", which is why WATCH_PEERS cannot be answered from it.
+    let mut watching: Option<tokio::task::JoinHandle<()>> = None;
 
     let outcome = loop {
         let msg = match read_message(&mut reader).await {
@@ -321,6 +328,45 @@ where
                     }
                 }
             }
+            kind::WATCH_PEERS => {
+                if msg.link != CONTROL_LINK {
+                    send(
+                        &out,
+                        Message::new(
+                            kind::ERROR,
+                            msg.link,
+                            format!("WATCH_PEERS is a control message; got link {}", msg.link)
+                                .into_bytes(),
+                        ),
+                    )
+                    .await;
+                } else if !msg.payload.is_empty() {
+                    send(
+                        &out,
+                        Message::control(
+                            kind::ERROR,
+                            format!(
+                                "WATCH_PEERS takes no payload; got {} bytes",
+                                msg.payload.len()
+                            )
+                            .into_bytes(),
+                        ),
+                    )
+                    .await;
+                } else {
+                    // Idempotent, and deliberately silent about whether
+                    // anything is enumerating: a sidecar with no mDNS lookup
+                    // answers WATCHING too and then never emits, so the host
+                    // learns that from the absence of events rather than from
+                    // an error (`PROTOCOL.md` §3, WATCH_PEERS).
+                    if watching.is_none() {
+                        if let Some(mdns) = endpoint.mdns().cloned() {
+                            watching = Some(spawn_peer_watch(mdns, endpoint.clone(), out.clone()));
+                        }
+                    }
+                    send(&out, Message::control(kind::WATCHING, Vec::new())).await;
+                }
+            }
             kind::SHUTDOWN => break ServeOutcome::Shutdown,
             other => {
                 send(
@@ -342,6 +388,11 @@ where
     if let Some(accepting) = accepting {
         accepting.abort();
     }
+    // Discovery events are scoped to this host connection (`PROTOCOL.md` §3):
+    // they stop here, and a reconnecting host subscribes afresh.
+    if let Some(watching) = watching {
+        watching.abort();
+    }
     drop(out);
     let _ = writer_task.await;
     Ok(outcome)
@@ -361,6 +412,73 @@ fn parse_peer(payload: &[u8]) -> Option<EndpointAddr> {
         addrs.push(TransportAddr::Ip(part.trim().parse::<SocketAddr>().ok()?));
     }
     Some(EndpointAddr::from_parts(id, addrs))
+}
+
+/// Subscribes to the mDNS lookup and forwards its events to the host for as
+/// long as this task lives.
+///
+/// Split from [`forward_discovery`] at exactly the `subscribe()` await so the
+/// forwarding rules can be pinned by a unit test over an injected stream,
+/// without any multicast — which is the only way the `Expired` half is
+/// affordable to test at all (the real expiry is 30–43 s, `ne2oh-B5`).
+fn spawn_peer_watch(
+    mdns: MdnsAddressLookup,
+    endpoint: SidecarEndpoint,
+    out: mpsc::Sender<Message>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let self_id = endpoint.id();
+        let events = mdns.subscribe().await;
+        forward_discovery(self_id, events, endpoint, out).await;
+    })
+}
+
+/// Forwards discovery events to the host, one message each, and nothing else.
+///
+/// Doing nothing else is a requirement rather than a simplification: the
+/// subscription is a 20-slot channel filled with `try_send`, so a subscriber
+/// that pauses **loses events** (`ne2oh-B4`). Everything expensive — dial
+/// policy, dedup, backoff — belongs above this, in the host.
+///
+/// Returns when the stream ends.
+async fn forward_discovery(
+    self_id: iroh::EndpointId,
+    mut events: impl Stream<Item = DiscoveryEvent> + Unpin,
+    endpoint: SidecarEndpoint,
+    out: mpsc::Sender<Message>,
+) {
+    while let Some(event) = events.next().await {
+        match event {
+            DiscoveryEvent::Discovered { endpoint_info, .. } => {
+                // The crate already drops our own id before it reaches a
+                // subscriber; this is the second layer F1-D5 asks for, so the
+                // rule holds even against a lookup that does not.
+                if endpoint_info.endpoint_id == self_id {
+                    continue;
+                }
+                let addr = endpoint_info.into_endpoint_addr();
+                let payload = peer_discovered_payload(&addr);
+                // add_peer BEFORE the send, never after: the host is entitled
+                // to DIAL the moment it reads PEER_DISCOVERED, with no
+                // ADD_PEER in between (`PROTOCOL.md` §3), and that only holds
+                // if the address is already in the lookup when the message
+                // leaves.
+                endpoint.add_peer(addr);
+                send(&out, Message::control(kind::PEER_DISCOVERED, payload)).await;
+            }
+            DiscoveryEvent::Expired { endpoint_id } => {
+                send(
+                    &out,
+                    Message::control(kind::PEER_EXPIRED, endpoint_id.as_bytes().to_vec()),
+                )
+                .await;
+            }
+            // `DiscoveryEvent` is `#[non_exhaustive]`: a variant this crate
+            // does not know about is not a protocol event, so it is ignored
+            // rather than guessed at.
+            _ => {}
+        }
+    }
 }
 
 fn spawn_accept_loop(
@@ -509,5 +627,185 @@ async fn pump_frames(
             Ok(None) => return "peer finished the link's stream".to_string(),
             Err(e) => return format!("link read failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use iroh::address_lookup::{EndpointData, EndpointInfo};
+
+    use super::*;
+    use crate::endpoint::SidecarConfig;
+
+    /// The `PEER_DISCOVERED` payload really is an `ADD_PEER` payload — pinned
+    /// by parsing it back with `ADD_PEER`'s own parser rather than by
+    /// re-describing the shape — and its address order is `EndpointAddr`'s
+    /// `BTreeSet` order, which puts the v4 socket before the v6 one.
+    #[test]
+    fn a_peer_discovered_payload_is_an_add_peer_payload() {
+        let id = iroh::SecretKey::generate().public();
+        // Deliberately offered v6-first, to show the payload's order is the
+        // set's and not the caller's.
+        let addr = EndpointAddr::from_parts(
+            id,
+            [
+                TransportAddr::Ip("[::1]:41001".parse().expect("literal v6 socket")),
+                TransportAddr::Ip("127.0.0.1:41001".parse().expect("literal v4 socket")),
+            ],
+        );
+
+        let payload = peer_discovered_payload(&addr);
+
+        assert_eq!(&payload[..32], id.as_bytes(), "32-byte endpoint id first");
+        assert_eq!(
+            &payload[32..],
+            b"127.0.0.1:41001,[::1]:41001",
+            "comma-separated IP sockets, in EndpointAddr's BTreeSet order"
+        );
+        assert_eq!(
+            parse_peer(&payload),
+            Some(addr),
+            "ADD_PEER's parser accepts it and recovers the same address"
+        );
+    }
+
+    /// An endpoint with no addresses yields an empty list, which `PROTOCOL.md`
+    /// says is legal on both sides.
+    #[test]
+    fn a_peer_with_no_ip_addresses_yields_an_empty_list() {
+        let id = iroh::SecretKey::generate().public();
+        let payload = peer_discovered_payload(&EndpointAddr::from_parts(id, []));
+
+        assert_eq!(payload.len(), 32);
+        assert_eq!(parse_peer(&payload).map(|a| a.id), Some(id));
+    }
+
+    /// The whole of `forward_discovery`'s contract, network-free: an injected
+    /// event stream stands in for the mDNS lookup, so the `Expired` mapping is
+    /// pinned without the lookup's real 30–43 s expiry (`ne2oh-B5`) and the
+    /// self-filter without a second host on the LAN.
+    ///
+    /// The strongest form of the add_peer-before-send rule is asserted here:
+    /// the dial of the discovered id **fails before** the events are forwarded
+    /// and **succeeds after**, with no `ADD_PEER` anywhere.
+    #[tokio::test]
+    async fn forwarding_feeds_the_lookup_before_it_announces_the_peer() {
+        let us = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("bind the watching endpoint");
+        let peer = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("bind the discovered endpoint");
+
+        // A live acceptor, so a successful dial is a real connection rather
+        // than a differently-shaped failure. The pending links are held, not
+        // dropped, so the connections they carry stay open.
+        let acceptor = peer.clone();
+        let accept_task = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok(Some(pending)) = acceptor.accept_pending().await {
+                held.push(pending);
+            }
+        });
+
+        // Before: `us` has been told nothing about `peer`, so the dial cannot
+        // even be attempted.
+        let before_err = match us.dial(peer.id()).await {
+            Err(e) => e,
+            Ok(_) => panic!("dialling an endpoint with no addressing information must fail"),
+        };
+
+        // A one-slot writer queue, pre-filled, so the forwarding task PARKS on
+        // its `PEER_DISCOVERED` send. That is what makes the ordering
+        // observable rather than merely coded: while it is parked, the send
+        // has not happened yet, so a dial that succeeds at that moment proves
+        // add_peer ran first. With the two swapped, the dial below never
+        // succeeds and this test fails on its deadline.
+        let (out, mut out_rx) = mpsc::channel::<Message>(1);
+        out.send(Message::control(kind::ERROR, b"filler".to_vec()))
+            .await
+            .expect("the receiver is alive");
+        let peer_addr = peer.bound_addr();
+        let events = futures_util::stream::iter([
+            // Our own id: the crate drops this already, and so do we.
+            DiscoveryEvent::Discovered {
+                endpoint_info: EndpointInfo::from_parts(us.id(), EndpointData::new(Vec::new())),
+                last_updated: None,
+            },
+            DiscoveryEvent::Discovered {
+                endpoint_info: EndpointInfo::from_parts(
+                    peer.id(),
+                    EndpointData::new(peer_addr.addrs.iter().cloned().collect()),
+                ),
+                last_updated: None,
+            },
+            DiscoveryEvent::Expired {
+                endpoint_id: peer.id(),
+            },
+        ]);
+
+        let forwarding = {
+            let us = us.clone();
+            tokio::spawn(async move { forward_discovery(us.id(), events, us, out).await })
+        };
+
+        // While the task is parked on its send: the dial already resolves.
+        let mut link = None;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(established) = us.dial(peer.id()).await {
+                link = Some(established);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            link.is_some(),
+            "a bare dial must resolve from the forwarded addresses before PEER_DISCOVERED is \
+             sent — add_peer precedes the send. Before forwarding, the same dial failed with: \
+             {before_err}"
+        );
+
+        // Draining unparks the task, which then finishes the stream and drops
+        // its sender.
+        let filler = out_rx.recv().await.expect("the filler comes out first");
+        assert_eq!(filler.payload, b"filler".to_vec());
+
+        let discovered = out_rx.recv().await.expect("PEER_DISCOVERED was emitted");
+        assert_eq!(
+            (discovered.kind, discovered.link),
+            (kind::PEER_DISCOVERED, CONTROL_LINK)
+        );
+        assert_eq!(
+            discovered.payload,
+            peer_discovered_payload(&peer_addr),
+            "the peer's own id and bound sockets, in ADD_PEER's shape"
+        );
+
+        let expired = out_rx.recv().await.expect("PEER_EXPIRED was emitted");
+        assert_eq!(
+            (expired.kind, expired.link),
+            (kind::PEER_EXPIRED, CONTROL_LINK)
+        );
+        assert_eq!(expired.payload, peer.id().as_bytes().to_vec());
+
+        // Exactly those two messages: the Discovered naming our own id
+        // produced nothing at all. The sender was moved into
+        // `forward_discovery` and dropped when it returned, so the channel is
+        // closed and this cannot pass by racing a third message.
+        assert!(
+            out_rx.recv().await.is_none(),
+            "a Discovered naming our own id emits nothing"
+        );
+        forwarding
+            .await
+            .expect("the forwarding task ran to the end of the stream");
+
+        drop(link);
+        accept_task.abort();
+        us.close().await;
+        peer.close().await;
     }
 }
