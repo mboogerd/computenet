@@ -37,11 +37,15 @@ iroh = "1.0"
 iroh-relay = { version = "1.0", features = ["server"] }
 # The self-hosted pkarr relay + DNS server that backs LookupMode::Rendezvous
 # (computenet-vnscs, F2-D3/F2-D11). Only src/bin/dns.rs and
-# tests/rendezvous_mode.rs use it; the library itself never imports it. Pinned
-# to the exact 1.0.3 patch (not "1.0"/^1.0) because a 1.2.0 release already
-# exists on crates.io and a caret requirement would resolve to it, widening
-# the dependency surface beyond what was measured here.
-iroh-dns-server = "=1.0.3"
+# tests/rendezvous_mode.rs use it; the library itself never imports it. A
+# 1.2.0 release exists on crates.io alongside 1.0.3, but resolving against
+# this crate's already-locked dependency graph (as `cargo build`/`cargo
+# check` do, never discarding Cargo.lock) picks 1.0.3 for this requirement
+# without moving `iroh` or any other locked package (checked directly:
+# `cargo check --bin computenet-iroh-dns` with this exact "1.0" leaves
+# Cargo.lock's iroh-dns-server and iroh entries at 1.0.3, byte-identical).
+# Stay on the same bare "1.0" line `iroh` itself uses.
+iroh-dns-server = "1.0"
 # Opt-in LAN peer enumeration (aas-D3, F1-D1). Must ride on the pinned `iroh`
 # 1.0.3 line without moving it — see ne2oh-B1: this resolves against 1.0.3 and
 # locks 4 new packages (acto, smol_str, swarm-discovery, and itself).
