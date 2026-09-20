@@ -388,12 +388,16 @@ class PeerTable(
      * entry when the key is unknown — an accepted inbound link from a key this
      * node never discovered.
      *
-     * **This is the one path that may exceed [maxRetained]**, and only when
-     * every existing entry is protected from eviction: a link that is
-     * physically up must be represented, or the tie-break and the one-peering
-     * invariant lose the very fact they arbitrate over. The bound exists to
-     * stop a LAN flood of SIGHTINGS ([DSC2-MDNS-05]); live links are bounded by
-     * the transport that accepted them, not by this table.
+     * **This path may exceed [maxRetained]**, and only when every existing
+     * entry is protected from eviction: a link that is physically up must be
+     * represented, or the tie-break and the one-peering invariant lose the very
+     * fact they arbitrate over. The bound exists to stop a LAN flood of
+     * SIGHTINGS ([DSC2-MDNS-05]); live links are bounded by the transport that
+     * accepted them, not by this table.
+     *
+     * [judge] creates an entry for an unknown key on the same reasoning, and
+     * does not attempt eviction at all — so the two link-backed paths, not this
+     * one alone, are where the table can pass its bound.
      */
     fun linkUp(key: NodeKey, direction: LinkDirection, linkId: Long, source: EntrySource) = lock.withLock {
         val entry = entries[key] ?: run {
@@ -460,8 +464,10 @@ class PeerTable(
     /**
      * Gives up on [key] — the caller hit the refused-dial limit (F3-D4).
      * [reason] is the last denial attributed to it, if one was named; it is
-     * recorded as [PeerView.lastDenial] whether or not the entry existed
-     * before.
+     * recorded as [PeerView.lastDenial].
+     *
+     * @return false, changing nothing, for a key this table does not hold —
+     *   an unknown key has no entry to record a denial on.
      */
     fun abandon(key: NodeKey, reason: DenialReason?): Boolean = lock.withLock {
         val entry = entries[key] ?: return false
