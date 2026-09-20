@@ -1,2 +1,0 @@
-# computenet-5c1f: a green narrow run is not evidence for a concurrency-sensitive test
-work +4
