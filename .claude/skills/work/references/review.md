@@ -41,7 +41,7 @@ Read the whole comments file. `bd show` never returns comment bodies. The implem
 
 ### The diff
 
-Diff against a freshly fetched base, never a bare local `main`. Each role's section gives the commands. Record `git -C <worktree> rev-parse HEAD` before you change anything. That sha is your review base, and authorship is measured from it. If the diff's size or contents surprise you, suspect the base first, then re-fetch and diff again.
+Diff against a freshly fetched base, never a bare local `main`. Each role's section gives the commands. Record `git -C <worktree> rev-parse HEAD` before you change anything. That sha is your review base, and authorship is measured from it. If the diff's size or contents surprise you, suspect the base first, then re-fetch and diff again. Read HEAD again immediately before you write the verdict and name that sha in it: the orchestrator repairs branches while reviewers read, and a verdict written against a superseded commit certifies code nobody read. If it moved, diff the two and decide on what you now see.
 
 An empty diff is not proof that no work was done. Run `git -C <worktree> status --short` first. A finished deliverable that was never committed is a different finding from "produced nothing". Name the files, and do not commit them for the implementer without saying you did.
 
@@ -166,7 +166,7 @@ If `metadata.pr` is empty and `gh pr list --head <branch>` returns nothing, say 
 git -C <feature-worktree> fetch origin main && git -C <feature-worktree> diff origin/main...HEAD
 ```
 
-With `metadata.base_branch` set, diff against `origin/<that branch>` instead.
+With `metadata.base_branch` set, diff against `origin/<that branch>` instead — but validate the field first, the same way 5a does. It is a timestamped snapshot, and a merged branch's ref still exists on origin, so a stale one yields a confusing diff (work reading as unreviewed, or as missing) rather than an error. `verify-ready.sh`'s `STALE-BASE` decides it; on STALE, diff against `origin/main` and say so.
 
 The feature worktree is yours alone until you report. Run the affected module suites, plus the repo-wide gate if the feature touches anything cross-cutting, and only one repo-wide `./gradlew test` may run at a time ([agent.md § Running commands](agent.md#running-commands)). Choose suites by what reads the changed files, not only by what imports them ([evidence.md § What your change reaches](evidence.md#what-your-change-reaches)).
 
