@@ -10,12 +10,14 @@ import civictech.cell.wire.Peering
 import civictech.identity.Ed25519
 import civictech.identity.fingerprint
 import civictech.iroh.FakeSidecar
+import civictech.iroh.Frame
 import civictech.iroh.HostMessage
 import civictech.iroh.IrohNode
 import civictech.iroh.IrohTransport
 import civictech.iroh.SidecarClient
 import civictech.iroh.SidecarMessage
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
+import civictech.iroh.SidecarProtocol.Kind
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
 import civictech.iroh.await
 import civictech.iroh.neverWithin
@@ -492,6 +494,39 @@ class DiscoveredPeeringTest {
             assertEquals(listOf("192.0.2.7:4242"), view.addresses, "the addresses the LAN advertised, unchanged")
             assertEquals("DISCOVERED", view.source)
             assertNull(view.lastDenial, "nothing was refused here")
+        }
+    }
+
+    /**
+     * [DSC2-OBS-01]. `malformedEvents` is the one count this class does not
+     * keep: the frames it counts are rejected inside `SidecarClient` and never
+     * reach the policy at all, so the number is *read* from
+     * `SidecarClient.malformedDiscoveryEvents` rather than copied
+     * (`Counter.derived`). The assertion that matters is the second one — the
+     * counter equals the client's own number — because a copy taken at start
+     * would still read 0 here while the client read 1.
+     *
+     * The malformed frame is the one `SidecarWatchPeersTest` uses for BS-10: a
+     * `PEER_DISCOVERED` whose payload is 5 bytes, short of the 32 a NodeId
+     * needs.
+     */
+    @Test
+    fun `malformedEvents is the client's own live count, and no such frame is a discovery event`() {
+        withPeering { rig ->
+            assertEquals(0L, rig.peering.counters.malformedEvents.count, "nothing malformed has arrived yet")
+
+            rig.fake.sendRaw(Frame(Kind.PEER_DISCOVERED, 0L, ByteArray(5)))
+
+            await("the malformed frame to show in the policy's counters") {
+                rig.peering.counters.malformedEvents.count == 1L
+            }
+            assertEquals(
+                rig.client.malformedDiscoveryEvents,
+                rig.peering.counters.malformedEvents.count,
+                "the counter reports the client's number, not a copy of it",
+            )
+            assertEquals(0L, rig.peering.counters.eventsReceived.count, "a frame the codec refused is no sighting")
+            assertEquals(emptyList(), rig.peering.snapshot(), "and it retains nothing")
         }
     }
 
