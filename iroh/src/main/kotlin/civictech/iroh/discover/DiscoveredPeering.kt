@@ -469,7 +469,7 @@ class DiscoveredPeering private constructor(
      * two-fake rig — `MutualDialTest` (BS-08), `KeyRotationContinuityFakeTest`
      * (BS-06's fake twin) and `IdentityMismatchFakeTest` (BS-05b).
      */
-    private fun toVerdict(judgement: Judgement, key: NodeKey, linkId: Long): Verdict = when (judgement) {
+    private fun toVerdict(judgement: Judgement, key: NodeKey, linkId: Long, resolved: PeerId): Verdict = when (judgement) {
         is Judgement.Admit -> {
             if (judgement.close != null && judgement.closeLinkId != null) {
                 // Counted HERE, on the reader thread, rather than inside the
@@ -504,10 +504,20 @@ class DiscoveredPeering private constructor(
             // accepted link's down may carry the denial, but this is the one
             // point that is certain to run. Idempotent against that down.
             countRefusal(linkId, judgement.reason)
+            // Blamed: the identity THIS hello resolved to, not the live one.
+            // The live peer did nothing — it is holding a link it was admitted
+            // on — and a denial record names who was refused (F3-D7; every
+            // other refusal on this path, `refuseClaimMismatch` included,
+            // attributes the peer that was turned away). The live identity is
+            // the *evidence*, and it belongs in the detail, which names both so
+            // that a reader of the record can see the conflict without holding
+            // the table.
             Verdict.Refuse(
                 judgement.reason,
-                judgement.live,
-                "a live link for ${key.short} is attributed to another identity ([DSC2-ID-05])",
+                resolved,
+                "hello on key ${key.short} resolves ${resolved.name} while a live link for that key is " +
+                    "attributed to ${judgement.live.name}; the newer link is refused and the live one kept " +
+                    "([DSC2-ID-05])",
             )
         }
     }
@@ -588,7 +598,7 @@ class DiscoveredPeering private constructor(
             val links = node.links(remoteNodeId)
             seed(key, links)
             val linkId = linkIdOf(links, direction)
-            toVerdict(table.judge(key, direction, linkId, resolved, clock()), key, linkId)
+            toVerdict(table.judge(key, direction, linkId, resolved, clock()), key, linkId, resolved)
         }
         node.client.watchPeers(object : PeerWatchListener {
             // ENQUEUE ONLY — the sidecar reader thread delivers both of these.
