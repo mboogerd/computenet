@@ -24,7 +24,6 @@ import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.fail
 import kotlin.time.Duration.Companion.seconds
 
@@ -336,6 +335,3 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
         }
     }
 }
-
-/** The next host message from [FakeSidecar], required to be a `DIAL`. */
-internal fun FakeSidecar.strictDial(): HostMessage.Dial = assertIs<HostMessage.Dial>(nextHostMessage())
