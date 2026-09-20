@@ -290,13 +290,17 @@ class IrohNodeTest {
             fake.send(SidecarMessage.LinkDown(dial.link, "closed"))
 
             val outcome = discovered.nextOutcome()
+            // The accounting first, deliberately: it is the assertion the
+            // prescribed mutation (retire() ignoring `quietClose`) is meant to
+            // break, and asserting `outcome.quiet` before it would hide which
+            // half of the property failed.
+            assertEquals(0, discovered.connection.unadmittedOpens, "a quiet close is not an unadmitted open")
+            assertFalse(discovered.connection.abandonedAfterRefusals)
             assertFalse(outcome.peered)
             assertTrue(outcome.quiet, "the gate's quiet close is what ended this link")
             assertFalse(outcome.abandoned)
             assertFalse(outcome.afterRefusal)
             assertNull(outcome.lastDenial)
-            assertEquals(0, discovered.connection.unadmittedOpens, "a quiet close is not an unadmitted open")
-            assertFalse(discovered.connection.abandonedAfterRefusals)
             assertEquals(1L, quiesced { fake.dials.get() }, "reconnect is the caller's: this connection dials nothing")
         }
     }
