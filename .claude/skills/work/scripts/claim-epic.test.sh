@@ -85,6 +85,44 @@ out=$("$SCRIPT" computenet-e 2>&1); st=$?
   && ok "fresh feature ref skips the epic" || bad "hot ref: exit=$st out=$out"
 git -C "$ROOT/git" update-ref -d refs/remotes/origin/feature/computenet-e.1
 
+# 2e. x3f5a: a child THIS MACHINE's sweep just released is not another machine's
+# activity. Step 3 runs sweep-stale-claims.sh immediately before this, and its
+# releases are local-only, so without the discount every resumable epic the
+# sweep cleaned is unclaimable for STALE_MIN minutes — exactly the epics the
+# resume preference exists for.
+fixture
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+echo "$(date +%s) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 0 ] && grep -q -- "--claim" "$BD_LOG" \
+  && ok "a child this run's own sweep released does not make the subtree hot" \
+  || bad "self-swept: exit=$st out=$out"
+
+# ... but only within the window, and only for the ids actually recorded.
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"},{"id":"computenet-e.4","parent":"computenet-e","updated_at":"%s"}]' "$now" "$now" > "$CTRL/list.json"
+echo "$(date +%s) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "computenet-e.4" <<<"$out" && ! grep -q -- "--claim" "$BD_LOG" \
+  && ok "an unrecorded sibling still makes the subtree hot" \
+  || bad "unrecorded sibling: exit=$st out=$out"
+
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+echo "$(( $(date +%s) - 3600 )) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "subtree is hot" <<<"$out" \
+  && ok "a sweep record older than the window does not license the claim" \
+  || bad "stale sweep record: exit=$st out=$out"
+
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+out=$(CLAIM_SWEPT_FILE="$CTRL/no-such-file" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "subtree is hot" <<<"$out" \
+  && ok "no sweep file at all leaves the hot test exactly as it was" \
+  || bad "absent sweep file: exit=$st out=$out"
+
 # 2d. cold subtree (old child, no refs) claims normally; CLAIM_SKIP_HOT bypasses a hot one
 fixture
 printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"2020-01-01T00:00:00Z"}]' > "$CTRL/list.json"

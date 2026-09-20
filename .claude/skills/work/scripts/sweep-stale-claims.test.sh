@@ -53,7 +53,7 @@ EOS
   chmod +x "$D/bin/bd"
   : > "$D/bd.log"
 }
-run() { PATH="$D/bin:$PATH" BEADS_ACTOR=TestBox "$D/sweep.sh" "$@" 2>&1; }
+run() { PATH="$D/bin:$PATH" BEADS_ACTOR=TestBox CLAIM_SWEPT_FILE="$D/swept" "$D/sweep.sh" "$@" 2>&1; }
 
 OLD='2020-01-01T00:00:00Z'          # far past any --hours cutoff
 row() { printf '{"id":"%s","updated_at":"%s","labels":[],"metadata":%s}' "$1" "$OLD" "$2"; }
@@ -98,6 +98,21 @@ fixture "[$(row i-9 '{}')]" DEAD
 out=$(run --dry-run)
 has "$out" "would release: i-9" "--dry-run reports rather than releases"
 [ -s "$D/bd.log" ] && bad "--dry-run wrote to bd" || ok "--dry-run makes no bd update"
+
+# 11b. x3f5a: every release is recorded, with its time, so claim-epic.sh can
+# tell this machine's own writes from the other machine's. Without the record,
+# claim-epic.sh reads each release as remote activity and refuses the epic.
+rm -f "$D/swept"
+fixture "[$(row i-9b '{}')]" DEAD
+run --dry-run >/dev/null
+[ -s "$D/swept" ] && bad "--dry-run recorded a release it did not make" \
+  || ok "--dry-run records nothing"
+run >/dev/null
+grep -q ' i-9b$' "$D/swept" && ok "a real release is recorded for claim-epic.sh" \
+  || bad "release not recorded: $(cat "$D/swept" 2>/dev/null)"
+awk '{print $1}' "$D/swept" | grep -qE '^[0-9]{10}$' \
+  && ok "the record carries an epoch claim-epic.sh can window on" \
+  || bad "no usable timestamp: $(cat "$D/swept")"
 
 # 12. a LIVE claim must not reach `bd update` at all — the report is not enough
 fixture "[$(row i-10 '{"holder":"box/TestBox:11:x"}')]" LIVE

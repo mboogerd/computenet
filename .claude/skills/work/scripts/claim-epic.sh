@@ -104,8 +104,19 @@ fi
 # subtree after a crash is the honest case).
 if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
   cutoff=$(( $(date +%s) - STALE_MIN * 60 ))
+  # x3f5a: the signal is assignee-blind because the other machine's writes are
+  # all we have. But this machine's own writes land in the same field, and step
+  # 3 runs sweep-stale-claims.sh IMMEDIATELY BEFORE this — so every task it
+  # released reads as another machine's activity, for STALE_MIN minutes, under
+  # exactly the epics the resume preference is for. Neither the sweep's writes
+  # nor these are published, so a local release cannot be evidence about a
+  # remote session. Discount the ids the sweep recorded within the window.
+  SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
+  swept=$(awk -v c="$cutoff" '$1 >= c {print $2}' "$SWEPT_FILE" 2>/dev/null \
+    | jq -Rn '[inputs | select(length > 0)]')
+  [ -n "$swept" ] || swept='[]'
   hot=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
-    | jq -r --arg e "$id" --argjson c "$cutoff" '
+    | jq -r --arg e "$id" --argjson c "$cutoff" --argjson swept "$swept" '
         (if type=="array" then . else (.issues // []) end) as $all
         | [$e] as $seed
         | reduce range(0;6) as $_ ($seed;
@@ -113,6 +124,7 @@ if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
                 | ($set | index($p)) != null or (.id | startswith($e + "."))) | .id] | unique)
         | (. - [$e]) as $kids
         | $all[] | select(.id as $i | $kids | index($i))
+        | select(.id as $i | ($swept | index($i)) == null)
         | select(((.updated_at // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) >= $c)
         | "\(.id) updated \(.updated_at)"' 2>/dev/null | head -3)
   if [ -n "$hot" ]; then
