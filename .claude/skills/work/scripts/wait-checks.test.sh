@@ -134,7 +134,7 @@ fixture                                        # no *.rest: REST answers nothing
 printf '%s\n' "$GQL_PENDING" > "$CTRL/gql1.out"; echo 8 > "$CTRL/gql1.exit"
 printf '%s\n' "$GQL_GREEN"   > "$CTRL/gql2.out"
 out=$(run); rc=$?
-[ "$rc" -eq 0 ] && ok "settles once the fallback answers green, exit 0" || bad "exits $rc, wanted 0"
+[ "$rc" -eq 6 ] && ok "the fallback's green is UNBOUND, not settled (exit 6)" || bad "exits $rc, wanted 6"
 hasnt "$out" "QUERY FAILED" "exit 8 with rows never prints QUERY FAILED"
 has "$out" "still pending" "the pending rounds are narrated"
 has "$out" "answering over gh pr checks" "the transport that answered is announced"
@@ -250,12 +250,28 @@ echo "fallback to gh pr checks"
 fixture
 printf '%s\n' "$GQL_GREEN" > "$CTRL/default.out"          # REST mute, GraphQL fine
 out=$(run 10); rc=$?
-[ "$rc" -eq 0 ] && ok "a REST outage no longer blinds the wait (exits 0)" \
-  || bad "exits $rc, wanted 0"
-[ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "the fallback answer settles the wait" \
+[ "$rc" -eq 6 ] && ok "a REST outage answers UNBOUND, not SETTLED (exits 6)" \
+  || bad "exits $rc, wanted 6"
+[ "$(tail -1 <<<"$out")" = "UNBOUND" ] && ok "UNBOUND is the final line, so tail -1 cannot read as a pass" \
   || bad "final line is '$(tail -1 <<<"$out")'"
 has "$out" "answering over gh pr checks" "the transport that answered is announced"
 has "$out" "NOT sha-bound" "the fallback reading is flagged as not bound to a sha"
+has "$out" "kernel-test" "the rows are still printed, so the reading is usable as a diagnosis"
+
+# GIT BROKEN (computenet-9btvp). An unaccepted Xcode licence fails every
+# /usr/bin/git call, so `gh` resolves no head: `.head.sha` answers nothing while
+# `gh pr checks` still prints green rows. Before this, the run's final line was
+# SETTLED and exit 0 — indistinguishable from a head-bound pass, and SKILL.md
+# 5e tells the orchestrator to act on that line alone.
+fixture
+: > "$CTRL/api-sha.out"                                   # `.head.sha` answers nothing
+printf '%s\n' "$GQL_GREEN" > "$CTRL/default.out"
+out=$(run 10); rc=$?
+[ "$rc" -eq 6 ] && ok "no resolvable head never settles (exit 6)" || bad "exits $rc, wanted 6"
+[ "$(tail -1 <<<"$out")" = "UNBOUND" ] && ok "UNBOUND final line when the head cannot be resolved" \
+  || bad "final line is '$(tail -1 <<<"$out")'"
+has "$out" "NOT bound to a head" "it says why the reading is not evidence"
+has "$out" "Xcode" "it names the failure that produces this on macOS"
 
 # The fallback must not fire early: a transient failure or two is not an outage.
 fixture
@@ -277,8 +293,8 @@ out=$(run 5); rc=$?
 fixture
 printf '%s\n' "${GQL_GREEN/concord-full$'\t'pass/concord-full$'\t'fail}" > "$CTRL/default.out"
 out=$(run 10); rc=$?
-[ "$rc" -eq 0 ] && ok "SETTLED includes red over the fallback too" || bad "exits $rc"
-has "$out" "RED — required check(s) FAILED: concord-full" "the red row is named"
+[ "$rc" -eq 6 ] && ok "a red row over the fallback is UNBOUND, never laundered into SETTLED" \
+  || bad "exits $rc, wanted 6"
 
 # --- the required set is the RULESET's, not a literal (computenet-3qdo) -----
 # A literal list can only catch the absence of a check it already knows about.
