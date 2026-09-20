@@ -32,13 +32,15 @@
  * and after"). A later successful create for the same id clears the
  * suppression.
  *
- * **The limit of that fix, stated where it is made:** the suppression set is
- * in memory and dies with the process, while the residue it hides — one line
- * in `<journalDir>/<family>/keys` with no journal record to match it — is on
- * disk. A recovering app (F7, `computenet-v10ou`) pre-spawns that key into an
- * empty cell nothing ever replays into, so the id comes BACK into
- * [personIds] across a restart. Filed as `computenet-2v3e4`; the durable half
- * is not fixed here.
+ * **The durable half is closed by [suppressUnwrittenKeys]** (v10ou-D6, closes
+ * `computenet-2v3e4`): a recovering app (F7, `computenet-v10ou`) pre-spawns
+ * every durably-known key ([spawnKnown]) into an empty cell that replay may or
+ * may not ever touch, so once the host has drained, [SocialRecovery.complete]
+ * calls [suppressUnwrittenKeys] to re-derive the same suppression from what
+ * actually replayed. **The remaining limit:** the `keys` line itself stays on
+ * disk forever — [KeyedCells] has no un-mint, and rewriting or compacting that
+ * log is this feature's non-goal — so the suppression is recomputed, not
+ * removed, on every restart.
  *
  * **Writes** go through the routed, journaled inlet
  * (`host.lookup(TypedRef<SetApi<F>>(cell.ref))!!.inlet.call`, jo2jk-D1) —
@@ -75,6 +77,7 @@ import civictech.cell.observe.observe
 import java.util.SortedSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SocialGraph(
     private val host: ManagedHost,
@@ -118,6 +121,20 @@ class SocialGraph(
     private val changeListeners = CopyOnWriteArrayList<() -> Unit>()
 
     /**
+     * Set by the first [onChange]; until then no sink carries a listener
+     * (computenet-v10ou.1). A listener is not free: each [ObservationSink]
+     * with one owns a dedicated dispatcher thread, minted on its first fire
+     * and never released (`kernel/.../observe/Observe.kt`, "The dispatcher is
+     * minted lazily"). Registering `{ fireChange() }` on every sink
+     * unconditionally cost one idle thread per keyed cell of every graph ever
+     * built — also for graphs nobody listens to (every sim-scheduler test
+     * graph) — and a test JVM building a handful of seed-42 graphs hit the
+     * per-process native-thread ceiling. [SocialApp] registers its broadcast
+     * only in `start()`, so an unstarted app now owns no sink threads.
+     */
+    private val listening = AtomicBoolean(false)
+
+    /**
      * Per family: ids whose creating write threw *after*
      * [civictech.cell.host.KeyedCells.getOrSpawn] had already minted their key,
      * and which have had no successful write since (`computenet-5ab6f`; see
@@ -136,7 +153,18 @@ class SocialGraph(
     /** Registers [listener] to fire on every settled change of every sink, present and future. */
     fun onChange(listener: () -> Unit) {
         changeListeners += listener
+        // Flag BEFORE iterating: a sink inserted concurrently is either seen by
+        // this iteration or sees the flag in [attach] (possibly both — a
+        // doubly-attached sink fires fireChange twice, which is harmless).
+        if (listening.compareAndSet(false, true)) {
+            (personSinks.values + forumSinks.values + messageSinks.values + authoredSinks.values)
+                .forEach { it.onChange { fireChange() } }
+        }
     }
+
+    /** Gives a newly created [sink] the change listener once any [onChange] exists. */
+    private fun <S> attach(sink: ObservationSink<S>): ObservationSink<S> =
+        sink.also { if (listening.get()) it.onChange { fireChange() } }
 
     private fun fireChange() {
         changeListeners.forEach { it() }
@@ -146,26 +174,68 @@ class SocialGraph(
 
     private fun personCell(id: Long): CellRef {
         val ref = graph.families.person.getOrSpawn(id).ref
-        personSinks.getOrPut(id) { host.observe(ref, View.set<PersonFact>()) { fireChange() } }
+        if (!personSinks.containsKey(id)) personSinks.getOrPut(id) { host.observe(ref, View.set<PersonFact>()) }.let(::attach)
         return ref
     }
 
     private fun forumCell(id: Long): CellRef {
         val ref = graph.families.forum.getOrSpawn(id).ref
-        forumSinks.getOrPut(id) { host.observe(ref, View.set<ForumFact>()) { fireChange() } }
+        if (!forumSinks.containsKey(id)) forumSinks.getOrPut(id) { host.observe(ref, View.set<ForumFact>()) }.let(::attach)
         return ref
     }
 
     private fun messageCell(id: Long): CellRef {
         val ref = graph.families.message.getOrSpawn(id).ref
-        messageSinks.getOrPut(id) { host.observe(ref, View.set<MessageFact>()) { fireChange() } }
+        if (!messageSinks.containsKey(id)) messageSinks.getOrPut(id) { host.observe(ref, View.set<MessageFact>()) }.let(::attach)
         return ref
     }
 
     private fun authoredCell(id: Long): CellRef {
         val ref = graph.families.authored.getOrSpawn(id).ref
-        authoredSinks.getOrPut(id) { host.observe(ref, View.set<Message>()) { fireChange() } }
+        if (!authoredSinks.containsKey(id)) authoredSinks.getOrPut(id) { host.observe(ref, View.set<Message>()) }.let(::attach)
         return ref
+    }
+
+    /**
+     * Spawns every durably-known key of all four families THROUGH this class
+     * (v10ou-D2): [personCell]/[forumCell]/[messageCell]/[authoredCell] for
+     * each id in the family's `keys()`, so each cell's observe sink exists
+     * before [SocialRecovery.stage] replays the host WAL into it. A bare
+     * `families.x.getOrSpawn(id)` would spawn the cell but register no sink,
+     * and every recovered cell would read as empty facts. Spawning a known key
+     * appends nothing to its `keys` log. Writes nothing to any cell.
+     */
+    fun spawnKnown() {
+        graph.families.person.keys().forEach { personCell(it) }
+        graph.families.forum.keys().forEach { forumCell(it) }
+        graph.families.message.keys().forEach { messageCell(it) }
+        graph.families.authored.keys().forEach { authoredCell(it) }
+    }
+
+    /**
+     * Re-derives the [unadmittedPersons]/[unadmittedForums]/[unadmittedMessages]
+     * suppression after a restart (v10ou-D6, closes the durable half of
+     * `computenet-2v3e4`): a key in a family's [KeyedCells.keys] whose cell
+     * holds no facts once the host has drained replay is exactly a ghost — its
+     * creating write minted the key and then failed, in some earlier process,
+     * before anything was ever journaled for it — so it is added to the
+     * unadmitted set the same way a live rejected write is ([creating]).
+     *
+     * **Valid only after the host has drained** every staged frame — the
+     * facts in [personFacts]/[forumFacts]/[messageFacts] are meaningless
+     * before then (see [SocialRecovery]'s KDoc). The only caller is
+     * [SocialRecovery.complete].
+     *
+     * The authored family has no unadmitted set and is not enumerated by
+     * `/state` ([SocialGraph]'s own KDoc, "Existence"), so it is left alone
+     * here. A key already admitted (its facts are non-empty) is untouched,
+     * and [creating] still clears a previously-suppressed id on its next
+     * successful write, exactly as before a restart.
+     */
+    fun suppressUnwrittenKeys() {
+        graph.families.person.keys().forEach { if (personFacts(it).isEmpty()) unadmittedPersons.add(it) }
+        graph.families.forum.keys().forEach { if (forumFacts(it).isEmpty()) unadmittedForums.add(it) }
+        graph.families.message.keys().forEach { if (messageFacts(it).isEmpty()) unadmittedMessages.add(it) }
     }
 
     private fun requirePerson(id: Long) {
