@@ -13,16 +13,39 @@ import java.util.concurrent.atomic.AtomicLong
  * address or an identity, so a counter cannot become an observability channel
  * for peer material.
  */
-class Counter internal constructor(val name: String) {
+class Counter internal constructor(val name: String, private val source: (() -> Long)? = null) {
     private val value = AtomicLong()
 
     /** The current count. Never decreases. */
-    val count: Long get() = value.get()
+    val count: Long get() = source?.invoke() ?: value.get()
 
-    /** Adds one. Returns the new value. Safe from any thread. */
-    fun increment(): Long = value.incrementAndGet()
+    /**
+     * Adds one. Returns the new value. Safe from any thread.
+     *
+     * @throws IllegalStateException on a [derived] counter — its value is
+     *   owned elsewhere, so an increment here would be silently lost, which is
+     *   worse than a failure.
+     */
+    fun increment(): Long {
+        check(source == null) { "$name is a derived counter; its value is read from its source, never incremented" }
+        return value.incrementAndGet()
+    }
 
     override fun toString(): String = "$name=$count"
+
+    companion object {
+        /**
+         * A counter that **reads** [source] instead of holding a value of its
+         * own — for a count some other component already keeps, so that the
+         * two can never disagree (`computenet-ktn1l.3`).
+         *
+         * [source] must itself be monotonic; this class cannot enforce that,
+         * and the one use of it — `SidecarClient.malformedDiscoveryEvents`, an
+         * `AtomicLong` that is only ever incremented — is why the caveat is
+         * written here rather than checked.
+         */
+        fun derived(name: String, source: () -> Long): Counter = Counter(name, source)
+    }
 }
 
 /**
@@ -43,8 +66,17 @@ class Counter internal constructor(val name: String) {
  * @param keysRetained the gauge — how many keys the [PeerTable] is holding
  *   right now. A gauge, not a counter: it goes down when an entry is evicted
  *   or expires, so it is supplied by the table rather than counted here.
+ * @param malformedEventSource where [DiscoveryCounters.malformedEvents] reads its
+ *   value from. The frames it counts are rejected inside `SidecarClient`,
+ *   which never reaches this class, so this counter is *derived* from
+ *   `SidecarClient.malformedDiscoveryEvents` rather than copied out of it —
+ *   a copy would be a second number that can lag or disagree
+ *   (`computenet-ktn1l.3`, [DSC2-OBS-01]).
  */
-class DiscoveryCounters(val keysRetained: () -> Int = { 0 }) {
+class DiscoveryCounters(
+    val keysRetained: () -> Int = { 0 },
+    malformedEventSource: () -> Long = { 0 },
+) {
 
     /** Discovery events taken off the sidecar, malformed ones included. */
     val eventsReceived: Counter = Counter("eventsReceived")
@@ -61,8 +93,13 @@ class DiscoveryCounters(val keysRetained: () -> Int = { 0 }) {
     /** Sightings of a key that already has a dial, a peering or a terminal state ([DSC2-DIAL-01], [DSC2-DIAL-07]). */
     val duplicatesSuppressed: Counter = Counter("duplicatesSuppressed")
 
-    /** Discovery events the client could not parse. Counted, never retried. */
-    val malformedEvents: Counter = Counter("malformedEvents")
+    /**
+     * Discovery events the client could not parse. Counted, never retried.
+     *
+     * Derived, not incremented: the count lives in `SidecarClient`, where the
+     * frames are rejected. @see Counter.derived
+     */
+    val malformedEvents: Counter = Counter.derived("malformedEvents", malformedEventSource)
 
     /** Links closed quietly because they lost the mutual-dial tie-break (aas-D7). Not denials: no blame, no reason. */
     val tieBreakClosed: Counter = Counter("tieBreakClosed")
@@ -75,18 +112,32 @@ class DiscoveryCounters(val keysRetained: () -> Int = { 0 }) {
 
     private val refusals = ConcurrentHashMap<DenialReason, AtomicLong>()
 
-    /** Every counter of this instance, in declaration order. Diagnostics, tests and the view. */
+    /**
+     * Every counter this class **accumulates**, in declaration order.
+     * Diagnostics, tests and the view.
+     *
+     * [malformedEvents] is deliberately not here: it is derived, so it has no
+     * increment of its own and a caller that walks this list to move or to
+     * total the counters it owns must not meet one that cannot be moved.
+     * [derived] holds it, and [every] is the two together
+     * (`computenet-ktn1l.3`).
+     */
     val all: List<Counter> = listOf(
         eventsReceived,
         dialsAttempted,
         dialsFailed,
         selfDropped,
         duplicatesSuppressed,
-        malformedEvents,
         tieBreakClosed,
         superseded,
         evicted,
     )
+
+    /** The counters read from elsewhere. @see Counter.derived */
+    val derived: List<Counter> = listOf(malformedEvents)
+
+    /** Every count this class reports, owned and derived — what an observability surface samples. */
+    val every: List<Counter> = all + derived
 
     /**
      * Accounts one refused hello attributed to discovery, by [reason].
@@ -106,5 +157,5 @@ class DiscoveryCounters(val keysRetained: () -> Int = { 0 }) {
     val hellosRefused: Long get() = refusals.values.sumOf { it.get() }
 
     override fun toString(): String =
-        "DiscoveryCounters(${all.joinToString(", ")}, keysRetained=${keysRetained()}, hellosRefused=${refusedBy()})"
+        "DiscoveryCounters(${every.joinToString(", ")}, keysRetained=${keysRetained()}, hellosRefused=${refusedBy()})"
 }
