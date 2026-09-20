@@ -1354,6 +1354,27 @@ object IrohTransport {
         private val gate: HelloGate = HelloGate.ADMIT_ALL,
         /** @see LinkObserver */
         private val observer: LinkObserver? = null,
+        /**
+         * Whether an unadmitted drop of this connection's link is the far side
+         * closing the **mutual-dial tie-break loser** rather than refusing us
+         * (ktn1l-D16, aas-D7, `[DSC2-DIAL-05]`).
+         *
+         * Consulted in [retire], with [peerNodeId], and **only** for a link
+         * that was never admitted. It exists because the losing link is closed
+         * by whichever side reaches the verdict first, and the other side
+         * learns of it as an ordinary `LINK_DOWN`: `PROTOCOL.md` carries no
+         * cause, so a drop that is nobody's fault is indistinguishable here
+         * from a peer that refused us. Charging it to [unadmitted] would
+         * abandon a peer this node is, at that very moment, still linked to —
+         * over the one link the tie-break kept.
+         *
+         * The host supplies the predicate because the fact it turns on — "an
+         * INBOUND link from this key is up" — is a property of the *endpoint's*
+         * link registry, which a single connection cannot see
+         * ([IrohNode.dialDiscovered] passes it). The default answers false, so
+         * every pre-existing caller classifies exactly as it did.
+         */
+        private val tieBreakLoss: (ByteArray) -> Boolean = { false },
     ) : AutoCloseable {
 
         /**
@@ -1567,6 +1588,37 @@ object IrohTransport {
         }
 
         /**
+         * Close this connection's live link **quietly** — the [sever] of a
+         * tie-break loser (aas-D7, ktn1l-D16).
+         *
+         * Same physical close as [sever], and the opposite classification:
+         * [sever] is a partition this side asked for and reports no outcome at
+         * all, while this is the blame-free close [Verdict.CloseQuietly] makes
+         * from inside a [Session] — no unadmitted open, no re-dial here, and a
+         * `LinkOutcome` with `quiet` set, so the host that decided it sees the
+         * link end rather than merely vanish. @see quietClose
+         *
+         * The route from outside exists because a mutual dial is judged on the
+         * link that *survives*: the verdict on this node's INBOUND hello is
+         * what says the OUTBOUND link lost, and the acceptor hello that would
+         * have carried the verdict onto this link is never written. The Session
+         * on this link is therefore never asked anything, and the host closes
+         * it from the outside on the other link's verdict.
+         *
+         * A no-op while this connection holds no link. Nothing about the
+         * Session's happens-before argument moves: this closes a link, it does
+         * not change when a hello or an announcement is written on it.
+         */
+        internal fun closeCurrentLinkQuietly() {
+            val link = currentLink.get() ?: return
+            // Marked BEFORE the close is asked for, exactly as the Session's
+            // own callback does: the `LINK_DOWN` it produces is all `retire`
+            // sees.
+            quietClose.set(true)
+            link.close()
+        }
+
+        /**
          * Re-establish the peering as a NEW link, and therefore a new [Session]
          * with a fresh mirror, a fresh hello and a fresh announcement catch-up.
          * Nothing about the severed instance is resumed — there is nothing to
@@ -1736,6 +1788,30 @@ object IrohTransport {
                     lastDenial = session.lastAdmissionDenial,
                 )
                 System.err.println("[IrohTransport] link ${link.id} closed quietly ($reason); not re-dialled, not charged")
+                observer?.onDown(link.id, outcome)
+                onUnplannedDown?.invoke(outcome)
+                return
+            }
+            // A link that was never admitted and dropped while an INBOUND link
+            // from the same key is up is the FAR side's tie-break close
+            // reaching us (ktn1l-D16): both sides evaluate `loserDirection`
+            // identically, so the peer closing our outbound link is the same
+            // verdict we would have reached ourselves on its acceptor hello —
+            // which never arrives, because a quietly closed link is never
+            // written to. Classified exactly as our own quiet close: no
+            // unadmitted open, no re-dial from here, no blame. @see tieBreakLoss
+            if (!session.peered && runCatching { tieBreakLoss(peerNodeId) }.getOrDefault(false)) {
+                val outcome = LinkOutcome(
+                    peered = false,
+                    quiet = true,
+                    afterRefusal = false,
+                    abandoned = abandoned,
+                    lastDenial = session.lastAdmissionDenial,
+                )
+                System.err.println(
+                    "[IrohTransport] link ${link.id} went down unadmitted ($reason) while an inbound link from the " +
+                        "same key is up; classified as the mutual-dial tie-break loss it is, not as a refusal",
+                )
                 observer?.onDown(link.id, outcome)
                 onUnplannedDown?.invoke(outcome)
                 return

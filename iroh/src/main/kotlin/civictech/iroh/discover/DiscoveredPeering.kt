@@ -137,6 +137,30 @@ class DiscoveredPeering private constructor(
     /** Armed retries, by key. Written and read **only** on the policy thread. */
     private val armed = HashMap<NodeKey, AutoCloseable>()
 
+    /**
+     * Link ids already counted on [DiscoveryCounters.tieBreakClosed], and by
+     * the same token the links this policy has decided to close (ktn1l-D16).
+     *
+     * **One closed link moves the counter once**, and a mutual dial gives this
+     * class up to three independent chances to learn that a link lost: the
+     * gate's own `CloseQuietly`, the gate's `Admit` naming the *other* link,
+     * and the link's `LINK_DOWN`. Which of them fires first depends on when
+     * each side's acceptor hello lands, and that is exactly what BS-08
+     * requires the end state to be independent of — so the count is made
+     * idempotent per link rather than assigned to one privileged learning
+     * point (the assignment earlier attempts made, and the reason a two-node
+     * scenario could count 0, 1 or 2 for the same physical outcome).
+     *
+     * It is also what [seed] skips: a link this policy has closed must not be
+     * re-seeded into the table from the node's registry in the window before
+     * its `LINK_DOWN` lands, or the *other* direction's hello would judge
+     * against a link that is already on its way out and close it a second time.
+     */
+    private val tieBreakCounted: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    /** Link ids whose refusal is already counted under [DiscoveryCounters.refusedBy]. @see tieBreakCounted */
+    private val refusalCounted: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
     private val running = AtomicBoolean(true)
 
     private val dialThreads = AtomicInteger()
@@ -297,22 +321,39 @@ class DiscoveredPeering private constructor(
         val view = command.view
         val key = NodeKey(view.remoteNodeId)
         val outcome = command.outcome
-        if (outcome?.quiet == true) {
-            // A link this side closed blame-free because it lost the
-            // mutual-dial tie-break. Counted here rather than at the gate for
-            // an OUTBOUND link, so each closed link moves the counter once;
-            // see toVerdict for the INBOUND half.
-            counters.tieBreakClosed.increment()
-        }
+        // Was this link a tie-break loser? Two ways to know it here, and a
+        // link can arrive by either (ktn1l-D16):
+        //
+        //  - the dialling connection says so outright (`quiet`) — this side's
+        //    own quiet close, or the far side's, which `IrohConnection`'s
+        //    `tieBreakLoss` predicate classifies for us;
+        //  - or it is an ACCEPTED link, which has no connection to classify it
+        //    at all. Such a link is a tie-break loss exactly when it went down
+        //    never admitted, with no refusal recorded against it, while
+        //    another link for the same key is still up — which within this
+        //    policy IS the mutual-dial case and has no other producer: a link
+        //    that lost its hello is refused (and carries the denial), and a
+        //    key with two live links got them from a mutual dial.
+        //
+        // Both routes fold into one idempotent count. @see tieBreakCounted
+        val otherLinkUp = node.links(view.remoteNodeId).any { it.linkId != view.linkId }
+        val quiet = outcome?.quiet == true ||
+            (outcome == null && !view.peered && otherLinkUp)
+        if (quiet) countTieBreakClose(view.linkId)
         // One refused hello, counted once ([DSC2-ID-01..04], BS-05a). Charged
-        // at the DOWN rather than at the refusal, because an outbound link's
-        // refusal is recorded inside its `Session` and reaches this class only
-        // as the outcome's `lastDenial` — including refusals the allowlist
-        // took, which never reach the gate at all (ktn1l-D12). A quiet close
-        // carries no blame and is never counted here. @see toVerdict for the
-        // inbound half, which has no connection to report an outcome.
-        val reason = if (outcome?.quiet == true) null else outcome?.lastDenial?.reason
-        if (reason != null) counters.refused(reason)
+        // at the DOWN rather than at the refusal, because a refusal is
+        // recorded inside a `Session` and reaches this class only as the
+        // outcome's `lastDenial` — including the ones that never reach the
+        // gate at all: the allowlist's (ktn1l-D12) and, on an accepted link,
+        // every refusal the identity binding takes before the gate is
+        // consulted, which is exactly BS-05b's second reason ([DSC2-ID-05]).
+        // A quiet close carries no blame and is never counted here. The gate
+        // counts its own `Refuse` the moment it makes it, so this is
+        // idempotent per link. @see refusalCounted
+        val reason = if (quiet) null else outcome?.lastDenial?.reason
+        if (reason != null) countRefusal(view.linkId, reason)
+        tieBreakCounted -= view.linkId
+        refusalCounted -= view.linkId
         val outcomeOfDown = table.linkDown(key, view.linkId, clock())
         if (outcome?.abandoned == true) {
             table.abandon(key, reason)
@@ -381,9 +422,40 @@ class DiscoveredPeering private constructor(
         synchronized(armed) { armed.remove(key) }?.let { runCatching { it.close() } }
     }
 
+    /**
+     * Close the link [linkId] of [key], which lost the mutual-dial tie-break
+     * (aas-D7, ktn1l-D16). On the policy thread: closing a link writes a frame.
+     *
+     * A link this node DIALLED is closed through its [IrohTransport.IrohConnection],
+     * not through the raw [SidecarLink], and the difference is the whole point:
+     * the connection marks the close blame-free first, so the `LINK_DOWN` it
+     * produces charges no unadmitted open and provokes no re-dial. Closing the
+     * raw link would be the same physical close read as a peer that dropped us.
+     * An ACCEPTED link has no connection and nothing to charge, so the raw
+     * close is the right one there.
+     */
     private fun closeLink(key: NodeKey, linkId: Long) {
-        val closed = runCatching { node.client.link(linkId)?.close() }
+        countTieBreakClose(linkId)
+        val direction = node.links(key.bytes).firstOrNull { it.linkId == linkId }?.direction
+        val connection = connections[key]
+        val closed = runCatching {
+            if (direction == LinkDirection.OUTBOUND && connection != null) {
+                connection.closeCurrentLinkQuietly()
+            } else {
+                node.client.link(linkId)?.close()
+            }
+        }
         if (closed.isFailure) System.err.println("[DiscoveredPeering] closing ${key.short}'s losing link failed: ${closed.exceptionOrNull()}")
+    }
+
+    /** One tie-break close, counted once however this class learned of it. @see tieBreakCounted */
+    private fun countTieBreakClose(linkId: Long) {
+        if (tieBreakCounted.add(linkId)) counters.tieBreakClosed.increment()
+    }
+
+    /** One refused hello, counted once however this class learned of it. @see refusalCounted */
+    private fun countRefusal(linkId: Long, reason: DenialReason) {
+        if (refusalCounted.add(linkId)) counters.refused(reason)
     }
 
     // ------------------------------------------------------------- the gate
@@ -392,14 +464,20 @@ class DiscoveredPeering private constructor(
      * [PeerTable.judge]'s answer, as a hello verdict — the one synchronous
      * step this class takes on the reader thread.
      *
-     * Only the plain [Judgement.Admit] arm is exercised by task `.3`: the
-     * tie-break and supersession arms need two nodes to reach, and task `.4`
-     * proves them. They are mapped here, and mapped *completely*, because a
-     * `TODO` in a verdict is a link left open.
+     * Every arm is now reached by a test: the plain [Judgement.Admit] by task
+     * `.3`, and the tie-break, supersession and refusal arms by task `.4`'s
+     * two-fake rig — `MutualDialTest` (BS-08), `KeyRotationContinuityFakeTest`
+     * (BS-06's fake twin) and `IdentityMismatchFakeTest` (BS-05b).
      */
-    private fun toVerdict(judgement: Judgement, direction: LinkDirection, key: NodeKey): Verdict = when (judgement) {
+    private fun toVerdict(judgement: Judgement, key: NodeKey, linkId: Long, resolved: PeerId): Verdict = when (judgement) {
         is Judgement.Admit -> {
             if (judgement.close != null && judgement.closeLinkId != null) {
+                // Counted HERE, on the reader thread, rather than inside the
+                // command: the verdict is what says the other link lost, and
+                // the command only carries out the close it implies. Marking
+                // it now is also what keeps `seed` from handing that link to
+                // the next hello as if it were live. @see closeLink
+                countTieBreakClose(judgement.closeLinkId)
                 // Off the reader thread: closing a link writes a frame.
                 post(Command.CloseLoser(judgement.close, judgement.closeLinkId))
             }
@@ -407,11 +485,11 @@ class DiscoveredPeering private constructor(
         }
 
         Judgement.CloseQuietly -> {
-            // An INBOUND link has no dialling connection and therefore reports
-            // no LinkOutcome, so its tie-break loss is counted here; an
-            // OUTBOUND one is counted at its down, where `outcome.quiet` says
-            // the same thing. Exactly one of the two fires per closed link.
-            if (direction == LinkDirection.INBOUND) counters.tieBreakClosed.increment()
+            // This link is the loser and the Session closes it as it returns.
+            // Counted here rather than at its down because the down of an
+            // ACCEPTED link carries no outcome to read it from — and counted
+            // idempotently, because the down of a DIALLED one does.
+            countTieBreakClose(linkId)
             Verdict.CloseQuietly("tie-break loser for ${key.short} (aas-D7)")
         }
 
@@ -422,21 +500,31 @@ class DiscoveredPeering private constructor(
         }
 
         is Judgement.Refuse -> {
-            // Inbound only, for the reason given at onLinkDown: an accepted
-            // link has no dialling connection, so its refusal is reported
-            // nowhere else. An outbound one is counted at its down, where the
-            // outcome carries this very denial.
-            if (direction == LinkDirection.INBOUND) counters.refused(judgement.reason)
+            // Counted at the refusal for the reason CloseQuietly is: an
+            // accepted link's down may carry the denial, but this is the one
+            // point that is certain to run. Idempotent against that down.
+            countRefusal(linkId, judgement.reason)
+            // Blamed: the identity THIS hello resolved to, not the live one.
+            // The live peer did nothing — it is holding a link it was admitted
+            // on — and a denial record names who was refused (F3-D7; every
+            // other refusal on this path, `refuseClaimMismatch` included,
+            // attributes the peer that was turned away). The live identity is
+            // the *evidence*, and it belongs in the detail, which names both so
+            // that a reader of the record can see the conflict without holding
+            // the table.
             Verdict.Refuse(
                 judgement.reason,
-                judgement.live,
-                "a live link for ${key.short} is attributed to another identity ([DSC2-ID-05])",
+                resolved,
+                "hello on key ${key.short} resolves ${resolved.name} while a live link for that key is " +
+                    "attributed to ${judgement.live.name}; the newer link is refused and the live one kept " +
+                    "([DSC2-ID-05])",
             )
         }
     }
 
     /**
-     * The link id of the hello being judged.
+     * The link id of the hello being judged, out of [links] — the node's
+     * current links for this key.
      *
      * [HelloGate] carries no link id — it is handed the key, the direction and
      * the resolved identity — while [PeerTable.judge] arbitrates *between
@@ -451,9 +539,43 @@ class DiscoveredPeering private constructor(
      * A link id on [HelloGate.judge] would make this exact; it is task `.1`'s
      * surface and is reported rather than changed here.
      */
-    private fun linkIdFor(remoteNodeId: ByteArray, direction: LinkDirection): Long {
-        val candidates = node.links(remoteNodeId).filter { it.direction == direction }
+    private fun linkIdOf(links: List<IrohNode.LinkView>, direction: LinkDirection): Long {
+        val candidates = links.filter { it.direction == direction }
         return (candidates.firstOrNull { !it.peered } ?: candidates.firstOrNull())?.linkId ?: NO_LINK
+    }
+
+    /**
+     * Tell the table, synchronously, about every link this node holds for
+     * [key] before its hello is judged — the fact that decides the tie-break
+     * (ktn1l-D16, aas-D7, `[DSC2-DIAL-05]`).
+     *
+     * The table learns of links from [Command.LinkUp] on the policy thread,
+     * and the gate runs on the reader thread, so without this the verdict on a
+     * mutual dial would turn on whether the policy thread had drained its
+     * queue yet — the same two links judged either as a tie-break or as two
+     * unrelated admissions. That is not a rare interleaving: an accepted link
+     * is enqueued and its hello read on the *same* thread, back to back, so
+     * the policy thread is routinely still behind.
+     *
+     * The consequence is not only a miscount. Admitting the loser announces on
+     * it, which `[DSC2-DIAL-05]` forbids: the losing link must be closed
+     * **before** anything is announced on it, and it is only closed if the
+     * verdict that closes it is reached at the hello. Reading the registry
+     * here is what makes that verdict a function of the links that exist
+     * rather than of a queue depth.
+     *
+     * Cheap and safe on the reader thread: a filter over a `ConcurrentHashMap`
+     * and one O(1) locked table call per link. [Command.LinkUp] still runs and
+     * is still where a link with no hello is recorded; this only ensures the
+     * table is never *behind* at the one moment the answer depends on it.
+     *
+     * Links this policy has already decided to close are skipped — see
+     * [tieBreakCounted] for why re-seeding one would close it twice.
+     */
+    private fun seed(key: NodeKey, links: List<IrohNode.LinkView>) {
+        links.forEach { link ->
+            if (link.linkId !in tieBreakCounted) table.linkUp(key, link.direction, link.linkId, sourceOf(link.source))
+        }
     }
 
     // ----------------------------------------------------------- start-up
@@ -473,7 +595,10 @@ class DiscoveredPeering private constructor(
             // one lock-guarded O(1) table call and counter increments. No IO,
             // no dial, no wait — anything else here stops the endpoint.
             val key = NodeKey(remoteNodeId)
-            toVerdict(table.judge(key, direction, linkIdFor(remoteNodeId, direction), resolved, clock()), direction, key)
+            val links = node.links(remoteNodeId)
+            seed(key, links)
+            val linkId = linkIdOf(links, direction)
+            toVerdict(table.judge(key, direction, linkId, resolved, clock()), key, linkId, resolved)
         }
         node.client.watchPeers(object : PeerWatchListener {
             // ENQUEUE ONLY — the sidecar reader thread delivers both of these.

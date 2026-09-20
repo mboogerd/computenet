@@ -129,8 +129,12 @@ class IrohNode internal constructor(
 
         /**
          * The link is gone. [outcome] is the dialling connection's
-         * classification of an **unplanned** down, and null for an accepted
-         * link or a close this side asked for.
+         * classification of an **unplanned** down, and null for a close this
+         * side asked for and for an accepted link — with the one exception an
+         * accepted link's refusal record forces: a down that follows a refused
+         * hello carries an outcome whose [IrohTransport.IrohConnection.LinkOutcome.lastDenial]
+         * is that refusal and whose other fields are a dialler's and therefore
+         * false (see [accept]).
          */
         fun onDown(link: LinkView, outcome: IrohTransport.IrohConnection.LinkOutcome?) {}
     }
@@ -253,8 +257,31 @@ class IrohNode internal constructor(
                     acceptedSessions.remove(link.id)
                     session.onDown()
                     // An accepted link has no dialling connection and therefore
-                    // no re-dial accounting: nothing here classifies its down.
-                    down(link.id, null)
+                    // no re-dial accounting: `quiet`, `afterRefusal` and
+                    // `abandoned` are a DIALLER's classifications and nothing
+                    // here can answer them, which is why this stays null on
+                    // every ordinary down.
+                    //
+                    // What this link does have is its Session's refusal record,
+                    // and this event is the only place it can reach a host: the
+                    // Session is dropped a line above, and a policy that counts
+                    // refusals by reason ([DSC2-ID-05]) reads them here or
+                    // nowhere (computenet-ktn1l.4). So a down that follows a
+                    // refusal — and only such a down — carries an outcome whose
+                    // one meaningful field is that denial.
+                    val denial = session.lastAdmissionDenial
+                    down(
+                        link.id,
+                        denial?.let {
+                            IrohTransport.IrohConnection.LinkOutcome(
+                                peered = session.peered,
+                                quiet = false,
+                                afterRefusal = false,
+                                abandoned = false,
+                                lastDenial = it,
+                            )
+                        },
+                    )
                 }
 
                 override fun onError(link: SidecarLink, reason: String) {
@@ -307,6 +334,12 @@ class IrohNode internal constructor(
             onUnplannedDown = onUnplannedDown,
             gate = delegatingGate,
             observer = observerFor(LinkSource.DISCOVERED),
+            // The endpoint's own registry answers what one connection cannot:
+            // an unadmitted drop of this link while an INBOUND link from the
+            // same key is up is the far side closing the mutual-dial tie-break
+            // loser, not a peer refusing us (ktn1l-D16). Only a NODE can see
+            // both directions, which is why the predicate is supplied here.
+            tieBreakLoss = { key -> links(key).any { it.direction == LinkDirection.INBOUND } },
         ),
     )
 
