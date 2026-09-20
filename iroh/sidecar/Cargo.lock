@@ -556,6 +556,7 @@ dependencies = [
  "iroh-mdns-address-lookup",
  "iroh-relay",
  "tokio",
+ "url",
 ]
 
 [[package]]
