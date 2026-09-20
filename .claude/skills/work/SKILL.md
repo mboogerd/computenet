@@ -525,8 +525,7 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 2. Local HEAD must equal `gh pr view <pr> --json headRefOid`, and `gh pr list
    --head <branch>` must show only your PR.
 3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row must
-   pass. NO-RUN → empty commit, wait again. UNBOUND → the rows name no commit, so
-   they are not evidence for this diff (traps.md); re-run.
+   pass. NO-RUN → empty commit, wait again. UNBOUND → not evidence (traps.md); re-run.
 4. Confirm the checks ran this diff's tests ([evidence.md](references/evidence.md), "CI evidence").
 5. `gh pr ready <pr>`, then `gh pr merge <pr> --auto --squash`. Ready PRs one at a
    time: a burst makes their merges race.

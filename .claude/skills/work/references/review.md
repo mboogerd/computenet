@@ -183,7 +183,7 @@ Its header documents the outputs. The final line is the reading, and the sha it 
 | SETTLED, all green | Quote every row, non-required ones included. Say which checks actually executed the changed modules, because skipped suites and lane filters hide behind green ([evidence.md § CI evidence](evidence.md#ci-evidence)). |
 | SETTLED with a red required check | Attribute it per [recovery.md § A red required check](recovery.md#a-red-required-check), quoting the query and its result. The verdict is DRAFT. If the red is unrelated and is the only blocker, say that in these words: "the substantive review is complete and passes; sole blocker is `<check>`, attributed to `<bead>`; one re-run going green would change the verdict." Re-runs are the orchestrator's. |
 | TIMEOUT-PENDING | Return READY or DRAFT on everything else and stop. Name each pending check in NOT VERIFIED; the orchestrator settles checks before it ships. |
-| QUERY-FAILED, NO-RUN, or the call never returned | Nothing was read. Mark CI NOT VERIFIED and stop. |
+| QUERY-FAILED, NO-RUN, UNBOUND, or the call never returned | Nothing you can use was read — UNBOUND means the rows named no commit, so they are not about your head. Mark CI NOT VERIFIED and stop. |
 
 A repair you push creates a new head, and that is the only thing that earns a second call. A pushed repair costs a full required-check cycle. If the repair and its cycle will not fit in your time bound, return DRAFT instead of starting it.
 

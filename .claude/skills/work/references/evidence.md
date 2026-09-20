@@ -163,14 +163,14 @@ touching sockets, ports, filesystem semantics, paths or process spawning,
 measure the gap: a JDK-21 Linux container when `docker info` shows a running
 daemon, otherwise the branch's own CI run.
 
-Wait for checks with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`; its
-header documents it.
+Wait for checks with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`.
 
 | last line | means |
 |---|---|
 | `SETTLED` | every required check finished; read the rows above for red |
 | `TIMEOUT-PENDING`, or the call never returns | no verdict; a reviewer's one invocation for this head is spent ([review.md](review.md#feature-review)) |
 | `NO-RUN` | GitHub never built this head; never wait it out |
+| `UNBOUND` | the rows settled over a transport that names no commit: not evidence for this diff |
 | `QUERY-FAILED` | nothing was read |
 
 **A green check does not prove the diff's tests ran.** An `assumeTrue`-guarded
