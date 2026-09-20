@@ -81,9 +81,10 @@
 # so no caller's `tail -1` classification breaks.
 # Stdout: one progress line per round, the head sha being judged, then the last
 #   rows, then the verdict as the FINAL line — exactly one of SETTLED /
-#   TIMEOUT-PENDING / QUERY-FAILED — so `tail -1` is the reading. SETTLED means present-and-not-pending, which
+#   UNBOUND / TIMEOUT-PENDING / QUERY-FAILED — so `tail -1` is the reading. SETTLED means present-and-not-pending, which
 #   includes failed checks: read the rows above it for red.
-# Exit: 0 = SETTLED; 4 = TIMEOUT-PENDING (rounds exhausted, checks exist but
+# Exit: 0 = SETTLED; 6 = UNBOUND (rows settled, but over a transport that
+#   names no commit — never evidence for a diff); 4 = TIMEOUT-PENDING (rounds exhausted, checks exist but
 #   have not settled); 5 = NO-RUN (GitHub never started a workflow run for this
 #   head — see below); 3 = QUERY-FAILED (the last round produced no
 #   recognizable rows — nothing was read); 2 = bad usage.
@@ -334,6 +335,13 @@ judged_sha=""
 for i in $(seq 1 "$rounds"); do
   judged_sha=$(head_sha)
   rows=$(rest_rows)                  # sha-bound: computenet-00d8
+  # A round's answer is bound to the head only while it came from REST with a
+  # resolved sha. `head_sha` returning nothing is not hypothetical: when git
+  # itself is broken (an unaccepted Xcode licence fails every /usr/bin/git call,
+  # so `gh` cannot resolve the repo) it returns empty and the fallback below
+  # then answers over `gh pr checks`, which is bound to no commit (computenet-9btvp).
+  sha_bound=1
+  [ -n "$judged_sha" ] || sha_bound=0
   # DISTINCT names, not matching lines: duplicate check-run names on one commit
   # are real (`auto-merge` appears twice on every recent PR), so a line count
   # could reach 6 with a required check absent.
@@ -350,6 +358,7 @@ for i in $(seq 1 "$rounds"); do
         echo "round $i/$rounds: REST produced no rows ${consecutive_failed}x — answering over gh pr checks (NOT sha-bound)"
         rows=$graphql
         judged_sha="${judged_sha:-unknown} (gh pr checks answer is not sha-bound)"
+        sha_bound=0
         n=$(printf '%s\n' "$rows" | grep -oE "^($req)" | sort -u | grep -c .)
       fi
     fi
@@ -404,6 +413,19 @@ for i in $(seq 1 "$rounds"); do
   else
     printf '%s\n' "$rows"
     echo "wait-checks: verdict is for head $judged_sha"
+    # An unbound answer stops here. The whole reason REST is primary is that
+    # `gh pr checks` has returned all-green for a head a push had already
+    # superseded (computenet-00d8, above) — so the one line the caller acts on
+    # must not be the same word a head-bound pass prints (computenet-9btvp).
+    if [ "$sha_bound" != 1 ]; then
+      echo "wait-checks: this reading is NOT bound to a head, so it is not evidence" \
+           "for this diff. Re-run; if REST keeps answering nothing, check that git" \
+           "works at all (an unaccepted Xcode licence breaks every gh call — see" \
+           "traps.md) and then bind by hand:" \
+           "gh api repos/{owner}/{repo}/commits/<sha>/check-runs."
+      echo UNBOUND
+      exit 6
+    fi
     # SETTLED means no row is PENDING. A failed required check settles exactly
     # like a passing one, and the caller's next move is `gh pr ready`, which on
     # this repo merges itself — so name the red rows rather than leaving them

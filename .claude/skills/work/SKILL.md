@@ -92,7 +92,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `acceptance-placement.sh` | `<bead-id>...` — MISPLACED (criteria in the description) vs ABSENT (a guess) |
 | `propagate-correction.py` | `<epic-id> [--exclude <bead-id>]... <needle>...` — open beads still repeating a claim proven wrong |
 | `merge-task.sh` | `[--dry-run] [--keep-open] <task-id> <feature-branch>` — gated merge of a passed task, durability proof, close |
-| `wait-checks.sh` | `<pr-url> [max-rounds]` — waits on the head's checks; SETTLED / TIMEOUT-PENDING / NO-RUN / QUERY-FAILED |
+| `wait-checks.sh` | `<pr-url> [max-rounds]` — waits on the head's checks; SETTLED / UNBOUND / TIMEOUT-PENDING / NO-RUN / QUERY-FAILED |
 | `bead.sh` | `[-C <dir>] <id> [-r] [jq-filter]` — a bead's own fields; exit 3 = spilled to the file named on stderr |
 | `junit-count.py` | `[--expect-classes N] <results-dir \| result-file.xml>...` — JUnit XML counts and freshness |
 | `twin-scan.py` | `<parent-id>` — children filed twice by a double breakdown |
@@ -524,8 +524,9 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
    (step 3) are the evidence.
 2. Local HEAD must equal `gh pr view <pr> --json headRefOid`, and `gh pr list
    --head <branch>` must show only your PR.
-3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row
-   must pass. NO-RUN → push an empty commit and wait again.
+3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row must
+   pass. NO-RUN → empty commit, wait again. UNBOUND → the rows name no commit, so
+   they are not evidence for this diff (traps.md); re-run.
 4. Confirm the checks ran this diff's tests ([evidence.md](references/evidence.md), "CI evidence").
 5. `gh pr ready <pr>`, then `gh pr merge <pr> --auto --squash`. Ready PRs one at a
    time: a burst makes their merges race.

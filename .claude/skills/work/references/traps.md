@@ -88,6 +88,7 @@ EOF
 | `git stash pop` restores someone else's changes | The stash is one stack shared by every worktree of the repository | Get before-and-after without stashing: commit, then compare with `git show <base>:<path> > "<scratch>/before"`. If you must stash: `git stash push -u -m "<unique-tag>"`, note its sha from `git stash list --format='%H %gs'`, and `git stash apply <sha>`, never `pop`. |
 | A commit in the main checkout contains files you did not stage | Sessions working in the main checkout share one index | Commit by pathspec, `git commit -m "<msg>" -- <paths>`; never `--amend` there; check `git show --stat HEAD`. |
 | `git grep` returns zero, or a revision path resolves wrong | Pathspec, regex and zsh-expansion hazards | See AGENTS.md "Implementation conventions". |
+| Every `git` call exits 69 with "You have not agreed to the Xcode license agreements" | A pending Xcode update on macOS | `export DEVELOPER_DIR=/Library/Developer/CommandLineTools` before any `git`, `gh` or script call. Until you do, `gh` resolves no head, `rev-parse HEAD` prints nothing, and `git checkout -- .` silently restores nothing — so comparisons against an empty string, and mutation restores, both fail open. |
 
 ## gh and CI
 
@@ -95,6 +96,7 @@ EOF
 |---|---|---|
 | `gh pr checks` exits non-zero while checks look fine | It exits 8 while anything is pending | Classify on output, never `$?`. Wait with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`; its header documents the tokens. |
 | `wait-checks.sh` ends `SETTLED` | `SETTLED` means none pending, including failed | Read the rows above it for any non-pass required check before acting. |
+| `wait-checks.sh` ends `UNBOUND` | The rows settled, but over `gh pr checks`, which names no commit | Not evidence for your diff, whatever the rows say. Re-run; if REST keeps answering nothing, fix git first (below), then bind by hand with `gh api repos/{owner}/{repo}/commits/<sha>/check-runs`. |
 | `wait-checks.sh` ends `TIMEOUT-PENDING` or `QUERY-FAILED` | Checks outran one call, or nothing was read | The orchestrator re-runs it (two calls is a normal cold start; only a `STUCK` label is a defect). A reviewer gets one call per head (review.md "Read CI once per head"). |
 | A `gh` call returns no output at all | The harness backgrounded it | Not a reading. Run the same command again; if it fails to return twice, report the host as the problem. |
 | `gh` fails with 503 or a socket error | Transient GitHub or local exhaustion | Retry a few times with back-off, then re-read the state the call should have changed. |
