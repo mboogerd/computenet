@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for sweep-stale-claims.sh. Stubs `bd` and `session-holder.sh` on a
 # throwaway PATH/dir, so no real bead is read or written and no network call is
-# made. Expect "13 passed, 0 failed".
+# made. Expect "16 passed, 0 failed".
 #
 # The script had no suite until computenet-yvdl, which is when it acquired the
 # one branch worth testing: a live sibling session's claim must survive the
