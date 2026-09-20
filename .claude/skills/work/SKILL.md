@@ -245,8 +245,8 @@ Agent({
   model: "fable",
   run_in_background: true,
   prompt: `You are breaking down epic <epic-id> into features. It is claimed for you; do not claim it.
-You own no worktree; <main-checkout> is SHARED with live sessions — never write there, never run a tree-mutating git command.
-Read .claude/skills/work/references/agent.md and .../breakdown.md with git show origin/main:<path>.
+You own no worktree: you work in <main-checkout>, SHARED with live sessions — never modify its working tree (no git checkout/restore/stash/clean).
+Read .claude/skills/work/references/agent.md and .../breakdown.md with git show origin/main:<path>; those reads are slow, so give every Bash call a generous timeout.
 The breakdown token is <token>; stamp every feature you create with it.
 Report the feature ids created, and any re-scope of the epic.`
 })
