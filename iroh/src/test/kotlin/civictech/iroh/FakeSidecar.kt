@@ -1,5 +1,6 @@
 package civictech.iroh
 
+import civictech.iroh.SidecarProtocol.DIRECTION_INBOUND
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import civictech.iroh.SidecarProtocol.MSG_HEADER_LEN
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
@@ -160,6 +161,34 @@ class FakeSidecar : AutoCloseable {
             SidecarMessage.Data(
                 link,
                 (IrohTransport.HELLO_PREFIX + UUID.randomUUID()).toByteArray(StandardCharsets.UTF_8),
+            ),
+        )
+    }
+
+    /**
+     * Present an **inbound** link: `LINK_UP` on a link id this fake chooses,
+     * with [DIRECTION_INBOUND]. No `DIAL` precedes it, so
+     * [SidecarClient.onLinkUp] finds no pending dial and routes it to the
+     * inbound handler — which is what an accepting endpoint sees when a peer
+     * dials it (`PROTOCOL.md` §3).
+     *
+     * Nothing is drained afterwards: an accepting side writes nothing until it
+     * has read the dialler's hello ([hello1From]).
+     */
+    fun presentInbound(link: Long, remoteNodeId: ByteArray) {
+        send(SidecarMessage.LinkUp(link, remoteNodeId, DIRECTION_INBOUND))
+    }
+
+    /**
+     * Write an `IROH-HELLO1 <mirrorRef>` line as `DATA` on [link] — the whole
+     * grammar a statement-free peer sends, and the first frame on a link it
+     * dialled.
+     */
+    fun hello1From(link: Long, mirrorRef: UUID = UUID.randomUUID()) {
+        send(
+            SidecarMessage.Data(
+                link,
+                (IrohTransport.HELLO_PREFIX + mirrorRef).toByteArray(StandardCharsets.UTF_8),
             ),
         )
     }
