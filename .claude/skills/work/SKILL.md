@@ -245,8 +245,8 @@ Agent({
   model: "fable",
   run_in_background: true,
   prompt: `You are breaking down epic <epic-id> into features. It is claimed for you; do not claim it.
-You have no worktree: work from <main-checkout>, read .claude/skills/work/references/agent.md and
-.claude/skills/work/references/breakdown.md with git show origin/main:<path>.
+You own no worktree; <main-checkout> is SHARED with live sessions — never write there, never run a tree-mutating git command.
+Read .claude/skills/work/references/agent.md and .../breakdown.md with git show origin/main:<path>.
 The breakdown token is <token>; stamp every feature you create with it.
 Report the feature ids created, and any re-scope of the epic.`
 })
@@ -397,7 +397,7 @@ Agent({
   description: "Implement <task-id>",
   model: "<metadata.model>",
   run_in_background: true,
-  prompt: `Implement beads task <task-id>; it is claimed for you. Dispatched at <date -u +%s>.
+  prompt: `Implement beads task <task-id>; it is claimed for you.
 Worktree <task-worktree>, branch task/<task-id>; base commit (cut from, not a diff baseline): <sha> <subject>.
 Diff your work against git merge-base <feature-branch> HEAD.
 Read <task-worktree>/.claude/skills/work/references/agent.md, then <task-worktree>/.claude/skills/work/references/implement.md.
