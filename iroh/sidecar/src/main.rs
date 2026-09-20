@@ -7,7 +7,7 @@
 //! described in `PROTOCOL.md`; nothing about the protocol is decided here.
 //!
 //! ```text
-//! computenet-iroh-sidecar [--offline] [--relay-url <url>]
+//! computenet-iroh-sidecar [--offline] [--relay-url <url>] [--mdns]
 //!                         [--secret-key <64 hex chars>]
 //!                         [--bind-addr <ip:port>]... [--socket-port <port>]
 //! ```
@@ -17,6 +17,10 @@
 //! * `--relay-url` — use exactly this relay and no address lookup service, in
 //!   place of number 0's public relays and DNS/pkarr discovery. Mutually
 //!   exclusive with `--offline`.
+//! * `--mdns` — also enumerate peers on the local network segment via
+//!   `iroh-mdns-address-lookup`. Orthogonal to `--offline`/`--relay-url`: it
+//!   composes with every other flag. If the mDNS service cannot bind, the
+//!   sidecar reports that once on stderr and continues without it.
 //! * `--secret-key` — the ed25519 secret key as 32 bytes of hex. Omitted, a
 //!   fresh key is generated, so the endpoint id changes every run.
 //! * `--bind-addr` — a UDP socket for the iroh endpoint; repeatable.
@@ -56,6 +60,7 @@ async fn run() -> Result<(), String> {
             ..Default::default()
         }
     };
+    config.mdns = args.mdns;
     if !args.bind_addrs.is_empty() {
         config.bind_addrs = args.bind_addrs;
     }
@@ -103,6 +108,7 @@ async fn run() -> Result<(), String> {
 struct Args {
     offline: bool,
     relay_url: Option<RelayUrl>,
+    mdns: bool,
     secret_key: Option<SecretKey>,
     bind_addrs: Vec<SocketAddr>,
     socket_port: u16,
@@ -113,6 +119,7 @@ impl Args {
         let mut parsed = Args {
             offline: false,
             relay_url: None,
+            mdns: false,
             secret_key: None,
             bind_addrs: Vec::new(),
             socket_port: 0,
@@ -121,6 +128,7 @@ impl Args {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--offline" => parsed.offline = true,
+                "--mdns" => parsed.mdns = true,
                 "--relay-url" => {
                     let raw = args.next().ok_or("--relay-url needs a value")?;
                     // Parsed here rather than at bind time, so a typo fails
@@ -188,6 +196,22 @@ mod tests {
         let args = parse(&[]).expect("accepted");
         assert_eq!(args.relay_url, None);
         assert!(!args.offline);
+        assert!(!args.mdns);
+    }
+
+    #[test]
+    fn mdns_parses_alone_and_composes_with_other_flags() {
+        let args = parse(&["--mdns"]).expect("accepted");
+        assert!(args.mdns);
+
+        let args = parse(&["--offline", "--mdns"]).expect("accepted");
+        assert!(args.mdns);
+        assert!(args.offline);
+
+        let args =
+            parse(&["--mdns", "--relay-url", "https://relay.example.org"]).expect("accepted");
+        assert!(args.mdns);
+        assert!(args.relay_url.is_some());
     }
 
     #[test]
