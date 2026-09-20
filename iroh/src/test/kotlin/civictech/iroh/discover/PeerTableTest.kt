@@ -361,6 +361,67 @@ class PeerTableTest {
     }
 
     @Test
+    fun `an abandoned key does not come back when its link drops`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        table.observe(k, listOf("a"), 1)
+        table.linkUp(k, LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.DISCOVERED)
+        table.admitted(k, linkId = 1, peer = alice)
+        table.abandon(k, DenialReason.NOT_ADMITTED)
+
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 1, now = 30))
+        assertTrue(table.stateOf(k) is PeerState.Abandoned)
+        assertEquals(emptyList(), table.nextDue(now = 9_999, maxInFlight = 8))
+    }
+
+    @Test
+    fun `a configured peering's drop is its owner's to redial, never this policy's`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        // A configured peering never enters through observe: it is linked by
+        // whoever configured it, and its reconnects are theirs ([DSC2-DIAL-07]).
+        table.linkUp(k, LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.CONFIGURED)
+        table.admitted(k, linkId = 1, peer = alice)
+
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 1, now = 30))
+        assertEquals(emptyList(), table.nextDue(now = 9_999, maxInFlight = 8))
+        assertEquals("CONFIGURED", table.snapshot().single().source)
+    }
+
+    @Test
+    fun `the tie-break loser's drop is not a redial, and does not strip the winner's attribution`() {
+        var now = 0L
+        // own (0x01) < peer (0x02): INBOUND is the loser, so the OUTBOUND hello
+        // wins and the inbound link is closed quietly. That close arrives back
+        // here as a linkDown for a key that is STILL linked — the one case the
+        // acceptance's NoRedial list does not enumerate, and the one that would
+        // re-dial a peer this node is already peered with if it answered
+        // Redial ([DSC2-DIAL-01]).
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 1, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Admit(close = k, closeLinkId = 1),
+            table.judge(k, LinkDirection.OUTBOUND, linkId = 2, resolved = alice, now = 5),
+        )
+
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 1, now = 6))
+        assertEquals(PeerState.Peered(LinkDirection.OUTBOUND, 2, alice, since = 5), table.stateOf(k))
+        assertEquals("alice", table.snapshot().single().attributedPeer, "the surviving link keeps its attribution")
+        assertEquals(emptyList(), table.nextDue(now = 6, maxInFlight = 8))
+
+        // Only when the LAST link drops does the key become dialable again.
+        assertEquals(DownOutcome.Redial, table.linkDown(k, linkId = 2, now = 7))
+        assertNull(table.snapshot().single().attributedPeer)
+        assertEquals(listOf(k), table.nextDue(now = 7, maxInFlight = 8))
+    }
+
+    @Test
     fun `dialFailed advances dueAt on the injected schedule and nextDue respects maxInFlight`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
