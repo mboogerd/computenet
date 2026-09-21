@@ -336,6 +336,18 @@ class AlignmentServerTest {
         assertTrue("""id="weights"""" in page.body(), "weights root")
         assertTrue("""id="ranking"""" in page.body(), "ranking root")
         assertTrue("""type="range"""" in page.body(), "range inputs")
+        // the v2 shell (computenet-0dvra.1): landing, Setup root, identity chip, phase indicator,
+        // the Board's gate root, and the colour tokens with their dark override
+        for (id in listOf("topics", "setup", "identity", "phase", "gate")) {
+            assertTrue("""id="$id"""" in page.body(), "$id root")
+        }
+        for (token in listOf("@media (prefers-color-scheme: dark)", "--value-1:", "--cost-1:", "--unrated:")) {
+            assertTrue(token in page.body(), token)
+        }
+        // the URL is the topic selector and the chip the only name control: no free-text name, no select
+        assertTrue("""id="participant"""" !in page.body(), "no free-text participant field")
+        assertTrue("""id="topicSel"""" !in page.body(), "no topic select")
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
         // the per-topic URL serves the same page for any id, known or not (computenet-k1d4g-D8)
         for (path in listOf("/t/t", "/t/does-not-exist")) {
             val t = probe.get(path)
@@ -345,6 +357,12 @@ class AlignmentServerTest {
             assertEquals(page.body(), t.body(), path)
         }
         assertEquals(404, probe.get("/nope").statusCode())
+        // every slice shares one global scope, so a top-level name declared twice silently
+        // replaces the earlier one (a Setup helper once shadowed the landing's paintProgress)
+        val decls = Regex("""(?m)^(?:function|let|const|var)\s+([A-Za-z_]\w*)""")
+            .findAll(page.body()).map { it.groupValues[1] }.toList()
+        assertEquals(emptyList(), decls.groupBy { it }.filterValues { it.size > 1 }.keys.toList(),
+            "top-level script names declared more than once")
     }
 
     @Test
