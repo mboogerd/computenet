@@ -89,7 +89,9 @@ class AlignmentServerTest {
         seed(probe)
         val topics = probe.get("/topics").body()
         assertTrue(
-            """"dimensions":[{"id":"effort","name":"Effort","weight":1.0000},{"id":"impact","name":"Impact","weight":2.0000}]""" in topics,
+            """"ideas":"everyone","boardVisibility":"after-rating","revealed":false,"dimensions":[""" +
+                """{"id":"effort","name":"Effort","weight":1.0000,"direction":"value","lowLabel":"","highLabel":""},""" +
+                """{"id":"impact","name":"Impact","weight":2.0000,"direction":"value","lowLabel":"","highLabel":""}]""" in topics,
             topics,
         )
 
@@ -165,9 +167,12 @@ class AlignmentServerTest {
         seed(probe)
         rate(probe, "ann", "a", "impact", "8")
         probe.awaitRow("a") { near(8.0, it.num("score")) }
+        // set BEFORE the snapshot, so the block below stays pure refusals
+        assertEquals(200, probe.putJson("""{"creator":"cat","ideas":"facilitator"}""", "/topics/t/policy").statusCode())
         val before = probe.state()
+        assertTrue(""""ideas":"facilitator"""" in before, before)
 
-        for (bad in listOf("0", "10", "4.5", "\"x\"", "\"5\"", "true")) {
+        for (bad in listOf("0", "10", "0.99", "9.01", "\"x\"", "\"5\"", "true")) {
             val r = rate(probe, "ann", "a", "impact", bad)
             assertEquals(400, r.statusCode(), "value $bad: ${r.body()}")
             assertTrue(""""error":""" in r.body(), r.body())
@@ -199,7 +204,60 @@ class AlignmentServerTest {
         assertEquals(404, probe.get("/topics/nope/me?participant=ann").statusCode())
         assertEquals(404, probe.delete("/topics/t/ideas/ghost").statusCode())
 
-        assertEquals(409, probe.postJson("""{"participant":"ann","title":"A!"}""", "/topics/t/ideas").statusCode())
+        // facilitator-only settings and idea edits (computenet-k1d4g-D6): 403 for anyone but the creator
+        for (body in listOf(
+            """{"creator":"ann","weight":3.0}""",
+            """{"creator":"ann","direction":"cost"}""",
+            """{"creator":"ann","lowLabel":"tiny"}""",
+            """{"weight":3.0}""",
+        )) {
+            assertEquals(403, probe.putJson(body, "/topics/t/dimensions/impact").statusCode(), body)
+        }
+        assertEquals(403, probe.putJson("""{"creator":"ann","ideas":"everyone"}""", "/topics/t/policy").statusCode())
+        assertEquals(403, probe.putJson("""{"creator":"ann","boardVisibility":"after-reveal"}""", "/topics/t/policy").statusCode())
+        assertEquals(403, probe.postJson("""{"creator":"ann"}""", "/topics/t/reveal").statusCode())
+        assertEquals(403, probe.postJson("""{}""", "/topics/t/reveal").statusCode())
+        assertEquals(403, probe.putJson("""{"creator":"ann","title":"A2"}""", "/topics/t/ideas/a").statusCode())
+        assertEquals(403, probe.delete("/topics/t/ideas/a?creator=ann").statusCode())
+        assertEquals(403, probe.delete("/topics/t/ideas/a").statusCode())
+        // ann proposed `a` but is not the facilitator: under the facilitator policy she may not add
+        assertEquals(403, probe.postJson("""{"participant":"ann","title":"Z"}""", "/topics/t/ideas").statusCode())
+        // malformed facilitator bodies: 400
+        for (body in listOf(
+            """{"creator":"cat","direction":"sideways"}""",
+            """{"creator":"cat","direction":1}""",
+            """{"creator":"cat","weight":0}""",
+            """{"creator":"cat","lowLabel":"${"x".repeat(81)}"}""",
+            """{"creator":"cat","highLabel":7}""",
+            """{"creator":"cat"}""",
+        )) {
+            assertEquals(400, probe.putJson(body, "/topics/t/dimensions/impact").statusCode(), body)
+        }
+        assertEquals(404, probe.putJson("""{"creator":"cat","weight":3.0}""", "/topics/t/dimensions/ghost").statusCode())
+        for (body in listOf(
+            """{"creator":"cat","ideas":"anyone"}""",
+            """{"creator":"cat","boardVisibility":"never"}""",
+            """{"creator":"cat"}""",
+        )) {
+            assertEquals(400, probe.putJson(body, "/topics/t/policy").statusCode(), body)
+        }
+        assertEquals(400, probe.putJson("""{"creator":"cat"}""", "/topics/t/ideas/a").statusCode(), "no field")
+        assertEquals(400, probe.putJson("""{"creator":"cat","title":""}""", "/topics/t/ideas/a").statusCode(), "empty title")
+        assertEquals(404, probe.putJson("""{"creator":"cat","title":"G"}""", "/topics/t/ideas/ghost").statusCode())
+        for (bad in listOf(
+            """"ideas":"anyone","dimensions":[{"name":"d"}]""",
+            """"boardVisibility":"later","dimensions":[{"name":"d"}]""",
+            """"dimensions":[{"name":"d","direction":"sideways"}]""",
+            """"dimensions":[{"name":"d","lowLabel":"${"x".repeat(81)}"}]""",
+        )) {
+            assertEquals(400, probe.postJson("""{"creator":"x","title":"u",$bad}""", "/topics").statusCode(), bad)
+        }
+        assertEquals(
+            400,
+            probe.postJson("""{"creator":"cat","name":"Cost","direction":"down"}""", "/topics/t/dimensions").statusCode(),
+        )
+
+        assertEquals(409, probe.postJson("""{"participant":"cat","title":"A!"}""", "/topics/t/ideas").statusCode())
         assertEquals(409, probe.postJson("""{"creator":"x","title":"t","dimensions":[{"name":"d"}]}""", "/topics").statusCode())
         assertEquals(400, probe.postJson("""{"creator":"x","title":"u","dimensions":[]}""", "/topics").statusCode())
         assertEquals(
@@ -209,6 +267,37 @@ class AlignmentServerTest {
 
         // every request above was refused: the whole public state is unchanged
         assertEquals(before, probe.state())
+    }
+
+    @Test
+    fun `ratings are continuous in 1 to 9 inclusive and anything else is refused`() {
+        val journal = tmpJournal()
+        lateinit var state: String
+        withApp(journal) { _, probe -> state = continuousRatings(probe) }
+        // a non-integer rating round-trips through the journal line it writes
+        assertTrue(Files.readAllLines(journal).any { """"value":6.37}""" in it }, "journal carries 6.37")
+        withApp(journal) { _, probe -> assertEquals(state, probe.await { it == state }) }
+    }
+
+    private fun continuousRatings(probe: HttpProbe): String {
+        // epic computenet-9y79n: a rating is a finite number with 1 <= value <= 9 (held as thousandths)
+        seed(probe)
+        for ((v, who) in listOf("1.0" to "ann", "9.0" to "bob", "6.37" to "cy")) {
+            val r = rate(probe, who, "a", "impact", v)
+            assertEquals(200, r.statusCode(), "value $v: ${r.body()}")
+        }
+        probe.awaitRow("a") { near((1.0 + 9.0 + 6.37) / 3.0, it.num("score")) }
+        // the caller's own view speaks plain numbers: 9.0 -> 9, 6.37 -> 6.37
+        assertTrue(""""impact":6.37""" in probe.get("/topics/t/me?participant=cy").body())
+        assertTrue(""""impact":9""" in probe.get("/topics/t/me?participant=bob").body())
+
+        val before = probe.state()
+        for (bad in listOf("0.99", "9.01", "0.9999", "9.0001", "NaN", "Infinity", "-Infinity", "1e400", "\"6.37\"", "true")) {
+            val r = rate(probe, "ann", "a", "impact", bad)
+            assertEquals(400, r.statusCode(), "value $bad: ${r.body()}")
+        }
+        assertEquals(before, probe.state(), "every refused rating changed nothing")
+        return before
     }
 
     @Test
@@ -247,6 +336,14 @@ class AlignmentServerTest {
         assertTrue("""id="weights"""" in page.body(), "weights root")
         assertTrue("""id="ranking"""" in page.body(), "ranking root")
         assertTrue("""type="range"""" in page.body(), "range inputs")
+        // the per-topic URL serves the same page for any id, known or not (computenet-k1d4g-D8)
+        for (path in listOf("/t/t", "/t/does-not-exist")) {
+            val t = probe.get(path)
+            assertEquals(200, t.statusCode(), path)
+            assertTrue(t.headers().firstValue("Content-Type").orElse("").startsWith("text/html"), path)
+            assertTrue("""id="rate"""" in t.body(), "$path: rate section root")
+            assertEquals(page.body(), t.body(), path)
+        }
         assertEquals(404, probe.get("/nope").statusCode())
     }
 
@@ -315,16 +412,39 @@ class AlignmentServerTest {
             assertEquals(200, probe.postJson("""{"creator":"cat","name":"Cost","weight":0.5}""", "/topics/t/dimensions").statusCode())
             rate(probe, "ann", "b", "cost", "2")
             rate(probe, "bob", "a", "impact", "null")
-            assertEquals(200, probe.delete("/topics/t/ideas/c").statusCode())
+            assertEquals(200, probe.delete("/topics/t/ideas/c?creator=cat").statusCode())
             assertEquals(200, probe.delete("/topics/t/dimensions/cost?creator=cat").statusCode())
+            // the ALN2 ops: direction there and back, labels, idea edit, policy, visibility, reveal
+            for (body in listOf(
+                """{"creator":"cat","direction":"cost"}""",
+                """{"creator":"cat","direction":"value","lowLabel":"none","highLabel":"a lot"}""",
+            )) {
+                assertEquals(200, probe.putJson(body, "/topics/t/dimensions/effort").statusCode(), body)
+            }
+            assertEquals(200, probe.putJson("""{"creator":"cat","title":"B edited","description":"new"}""", "/topics/t/ideas/b").statusCode())
+            assertEquals(
+                200,
+                probe.putJson("""{"creator":"cat","ideas":"facilitator","boardVisibility":"after-reveal"}""", "/topics/t/policy").statusCode(),
+            )
+            assertEquals(200, probe.postJson("""{"creator":"cat"}""", "/topics/t/reveal").statusCode())
             before = probe.await { s ->
                 val agg = parse(s)["aggregates"]!!.jsonObject["t"].toString()
                 near((2.0 * 8 + 4.0 * 3) / 6.0, row(agg, "a")?.num("score")) && near(7.0, row(agg, "b")?.num("score")) &&
-                    row(agg, "c") == null
+                    row(agg, "c") == null && """"revealed":true""" in s
+            }
+            for (want in listOf(
+                """"ideas":"facilitator","boardVisibility":"after-reveal","revealed":true""",
+                """{"id":"effort","name":"Effort","weight":4.0000,"direction":"value","lowLabel":"none","highLabel":"a lot"}""",
+                """"id":"b","title":"B edited","description":"new","proposer":"bob"""",
+            )) {
+                assertTrue(want in before, "$want in $before")
             }
         }
         val lines = Files.readAllLines(journal)
-        for (op in listOf("topic", "dimension", "idea", "rate", "weight", "unrate", "unidea", "undimension")) {
+        for (op in listOf(
+            "topic", "dimension", "idea", "rate", "weight", "unrate", "unidea", "undimension",
+            "direction", "labels", "policy", "visibility", "reveal",
+        )) {
             assertTrue(lines.any { """"op":"$op"""" in it }, "journal records $op: $lines")
         }
         // cascades are journaled as unrate lines before the removal line
@@ -336,4 +456,151 @@ class AlignmentServerTest {
             assertEquals(before, after)
         }
     }
+
+    /** Topic `t` by `cat`: impact (w 2, value), ease (w 1, value), effort (w 1, COST); ideas a, b, c, d. */
+    private fun seedValueCost(probe: HttpProbe) {
+        val created = probe.postJson(
+            """{"creator":"cat","title":"T","dimensions":[{"name":"Impact","weight":2},{"name":"Ease"},""" +
+                """{"name":"Effort","direction":"cost","lowLabel":"an afternoon","highLabel":"a quarter"}]}""",
+            "/topics",
+        )
+        assertEquals(200, created.statusCode(), created.body())
+        for (title in listOf("A", "B", "C", "D")) {
+            assertEquals(200, probe.postJson("""{"participant":"cat","title":"$title"}""", "/topics/t/ideas").statusCode())
+        }
+    }
+
+    private fun contribution(row: JsonObject, dim: String) = row["byDim"]!!.jsonObject[dim]!!.jsonObject["contribution"]
+
+    @Test
+    fun `cost dimensions divide the score and an idea missing a side is listed unranked`() = withApp { _, probe ->
+        seedValueCost(probe)
+        val topics = probe.get("/topics").body()
+        assertTrue(
+            """{"id":"effort","name":"Effort","weight":1.0000,"direction":"cost","lowLabel":"an afternoon","highLabel":"a quarter"}""" in topics,
+            topics,
+        )
+
+        // rule 2: value (2·8 + 1·5)/3 = 7, cost 4 → 1.75; contributions over value dims scaled by 1/cost
+        rate(probe, "zed", "a", "impact", "8")
+        rate(probe, "zed", "a", "ease", "5")
+        rate(probe, "zed", "a", "effort", "4")
+        var a = probe.awaitRow("a") { near(1.75, it.num("score")) }
+        assertTrue(near(7.0, a.num("value")) && near(4.0, a.num("cost")), "$a")
+        assertTrue(near(16.0 / 3.0 / 4.0, contribution(a, "impact")?.jsonPrimitive?.content?.toDouble()), "$a")
+        assertTrue(near(5.0 / 3.0 / 4.0, contribution(a, "ease")?.jsonPrimitive?.content?.toDouble()), "$a")
+        assertEquals(JsonNull, contribution(a, "effort"), "a cost dimension contributes no value share: $a")
+        assertEquals("1", a["byDim"]!!.jsonObject["effort"]!!.jsonObject["n"]!!.jsonPrimitive.content, "$a")
+
+        // raising a cost rating lowers the score: effort 8 → 7/8
+        rate(probe, "zed", "a", "effort", "8")
+        a = probe.awaitRow("a") { near(0.875, it.num("score")) }
+        assertTrue(near(8.0, a.num("cost")), "$a")
+
+        // back to effort 4 (1.75), then redirect effort to VALUE: no cost dim left → v1 mean (2·8+5+4)/4 = 6.25
+        rate(probe, "zed", "a", "effort", "4")
+        probe.awaitRow("a") { near(1.75, it.num("score")) }
+        val redirect = probe.putJson("""{"creator":"cat","direction":"value"}""", "/topics/t/dimensions/effort")
+        assertEquals(200, redirect.statusCode(), redirect.body())
+        a = probe.awaitRow("a") { near(6.25, it.num("score")) }
+        assertEquals(JsonNull, a["cost"], "$a")
+        assertTrue(near(4.0 / 4.0, contribution(a, "effort")?.jsonPrimitive?.content?.toDouble()), "$a")
+        assertTrue(""""id":"effort","name":"Effort","weight":1.0000,"direction":"value"""" in probe.get("/topics").body())
+
+        // rule 3: effort back to cost; b rated on impact only → unranked, value side present, cost side null
+        assertEquals(200, probe.putJson("""{"creator":"cat","direction":"cost"}""", "/topics/t/dimensions/effort").statusCode())
+        rate(probe, "zed", "b", "impact", "6")
+        rate(probe, "quinn", "b", "impact", "6")
+        // d: value (2·9 + 9)/3 = 9, cost 1 → 9, ranked above a
+        rate(probe, "quinn", "d", "impact", "9")
+        rate(probe, "quinn", "d", "ease", "9")
+        rate(probe, "quinn", "d", "effort", "1")
+        val agg = probe.await(path = "/topics/t/aggregate") { body ->
+            near(9.0, row(body, "d")?.num("score")) && near(1.75, row(body, "a")?.num("score")) &&
+                row(body, "b")?.get("byDim")?.jsonObject?.get("impact")?.jsonObject?.get("n")?.jsonPrimitive?.content == "2"
+        }
+        assertEquals(listOf("d", "a", "b", "c"), order(agg), "ranked by score, then unranked by id: $agg")
+        val b = row(agg, "b")!!
+        assertEquals(JsonNull, b["rank"], "$b")
+        assertEquals(JsonNull, b["score"], "$b")
+        assertEquals(JsonNull, b["cost"], "cost not rated yet: $b")
+        assertTrue(near(6.0, b.num("value")), "$b")
+        val impact = b["byDim"]!!.jsonObject["impact"]!!.jsonObject
+        assertTrue(near(6.0, impact.num("mean")) && near(0.0, impact.num("stdev")), "$b")
+        assertEquals(JsonNull, impact["contribution"], "$b")
+        assertEquals(2, row(agg, "a")!!["rank"]!!.jsonPrimitive.content.toInt(), agg)
+
+        // reweighting a cost dimension through the v1 weights route keeps its direction
+        val reweigh = probe.putJson("""{"creator":"cat","dim":"effort","weight":2}""", "/topics/t/weights")
+        assertEquals(200, reweigh.statusCode(), reweigh.body())
+        assertTrue(""""id":"effort","name":"Effort","weight":2.0000,"direction":"cost"""" in probe.get("/topics").body())
+
+        // rule 8: counts, never names — in the aggregate route and the same object under /state
+        val parsed = parse(agg)
+        assertEquals("2", parsed["participants"]!!.jsonPrimitive.content, agg)
+        for ((id, n) in listOf("a" to 1, "b" to 2, "c" to 0, "d" to 1)) {
+            assertEquals(n, row(agg, id)!!["raters"]!!.jsonPrimitive.content.toInt(), "raters of $id: $agg")
+        }
+        val stateAgg = parse(probe.state())["aggregates"]!!.jsonObject["t"].toString()
+        for (name in listOf("zed", "quinn")) {
+            assertTrue(name !in agg, "the aggregate must not name $name: $agg")
+            assertTrue(name !in stateAgg, "the /state aggregate must not name $name: $stateAgg")
+        }
+        // not vacuous: the names ARE in /state's ratings list
+        assertTrue("zed" in probe.state() && "quinn" in probe.state())
+    }
+
+    @Test
+    fun `a literal v1 journal replays with the v1 defaults`() {
+        val journal = tmpJournal()
+        // byte-for-byte what the v1 record() calls emitted at 9b5bb520: no direction, no policy, no labels
+        Files.write(
+            journal,
+            listOf(
+                """{"op":"topic","id":"t","title":"T","creator":"cat"}""",
+                """{"op":"dimension","topic":"t","id":"impact","name":"Impact","weight":2.0}""",
+                """{"op":"dimension","topic":"t","id":"effort","name":"Effort","weight":1.0}""",
+                """{"op":"idea","topic":"t","id":"a","title":"A","description":"","proposer":"ann"}""",
+                """{"op":"rate","topic":"t","idea":"a","dim":"impact","participant":"ann","value":8}""",
+                """{"op":"rate","topic":"t","idea":"a","dim":"effort","participant":"ann","value":3}""",
+            ),
+        )
+        withApp(journal) { _, probe ->
+            val a = probe.awaitRow("a") { near((2.0 * 8 + 1.0 * 3) / 3.0, it.num("score")) }
+            assertEquals(JsonNull, a["cost"], "$a")
+            val topics = probe.get("/topics").body()
+            assertTrue(""""ideas":"everyone","boardVisibility":"after-rating","revealed":false""" in topics, topics)
+            for (dim in listOf("effort", "impact")) {
+                assertTrue(
+                    Regex(""""id":"$dim","name":"[A-Za-z]+","weight":[0-9.]+,"direction":"value","lowLabel":"","highLabel":""""")
+                        .containsMatchIn(topics),
+                    "$dim: $topics",
+                )
+            }
+            // v1 idea policy is everyone: a non-creator may still add
+            assertEquals(200, probe.postJson("""{"participant":"ann","title":"E"}""", "/topics/t/ideas").statusCode())
+        }
+    }
+
+    @Test
+    fun `board visibility and reveal are facilitator topic state and the aggregate is never withheld`() =
+        withApp { _, probe ->
+            seed(probe)
+            rate(probe, "ann", "a", "impact", "8")
+            val put = probe.putJson("""{"creator":"cat","boardVisibility":"after-reveal"}""", "/topics/t/policy")
+            assertEquals(200, put.statusCode(), put.body())
+            // the page gates the Board; the shared frame still carries the aggregate before any reveal
+            var state = probe.await { s ->
+                """"boardVisibility":"after-reveal","revealed":false""" in s &&
+                    near(8.0, row(parse(s)["aggregates"]!!.jsonObject["t"].toString(), "a")?.num("score"))
+            }
+            assertTrue(near(8.0, row(probe.get("/topics/t/aggregate").body(), "a")?.num("score")))
+
+            assertEquals(200, probe.postJson("""{"creator":"cat"}""", "/topics/t/reveal").statusCode())
+            state = probe.await { """"revealed":true""" in it }
+            assertTrue(""""boardVisibility":"after-reveal","revealed":true""" in state, state)
+            // idempotent: a second reveal changes nothing
+            assertEquals(200, probe.postJson("""{"creator":"cat"}""", "/topics/t/reveal").statusCode())
+            assertEquals(state, probe.state())
+        }
 }
