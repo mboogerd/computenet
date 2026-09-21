@@ -16,6 +16,7 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import kotlin.math.abs
@@ -261,6 +262,35 @@ class AlignmentServerTest {
                 ).body().filter { it.startsWith("data: ") }.findFirst().get().removePrefix("data: ")
             }.get(10, TimeUnit.SECONDS)
             assertEquals(state, first)
+        } finally {
+            client.shutdownNow()
+        }
+    }
+
+    /**
+     * A write that touches only the write-side indices (a new topic has no
+     * scored idea, so the fusion hub stays silent) must still push a frame:
+     * otherwise an open tab never sees the topic until some later write.
+     */
+    @Test
+    fun `creating a topic pushes an events frame to a connected client`() = withApp { app, probe ->
+        val client = boundedHttpClient()
+        val frames = LinkedBlockingQueue<String>()
+        try {
+            CompletableFuture.runAsync {
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${app.boundPort}/events")).build(),
+                    HttpResponse.BodyHandlers.ofLines(),
+                ).body().filter { it.startsWith("data: ") }.forEach { frames.put(it.removePrefix("data: ")) }
+            }
+            assertEquals(probe.state(), frames.poll(10, TimeUnit.SECONDS), "initial frame")
+            assertEquals(
+                200,
+                probe.postJson("""{"creator":"cat","title":"T","dimensions":[{"name":"Impact"}]}""", "/topics").statusCode(),
+            )
+            val frame = frames.poll(10, TimeUnit.SECONDS)
+            assertTrue(frame != null && """"id":"t"""" in frame, "no frame carried the new topic: $frame")
+            assertEquals(probe.state(), frame)
         } finally {
             client.shutdownNow()
         }

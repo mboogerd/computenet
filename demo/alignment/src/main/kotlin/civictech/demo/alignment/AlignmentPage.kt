@@ -69,7 +69,11 @@ document.getElementById('topicForm').onsubmit = e => {
   e.preventDefault();
   const dims = topicDims.value.split(',').map(s => s.trim()).filter(s => s).map(n => ({ name: n }));
   send('POST', '/topics', { creator: me(), title: topicTitle.value, dimensions: dims })
-    .then(j => { topicTitle.value = ''; topicDims.value = ''; sel.dataset.want = j.id; });
+    .then(j => {
+      topicTitle.value = ''; topicDims.value = ''; sel.dataset.want = j.id;
+      // the topic's frame may already have arrived: select it now if it is known, else on the next frame
+      renderTopics(); renderRanking(); renderRate();
+    });
 };
 document.getElementById('ideaForm').onsubmit = e => {
   e.preventDefault();

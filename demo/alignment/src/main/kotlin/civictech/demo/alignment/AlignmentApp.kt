@@ -214,7 +214,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val method = ex.requestMethod
         if (seg.isEmpty()) return when (method) {
             "GET" -> synchronized(state) { topics.values.joinToString(",", "[", "]") { topicJson(it) } }
-            "POST" -> postTopic(ex.jsonBody())
+            "POST" -> postTopic(ex.jsonBody()).also { broadcast() } // a new topic reaches no hub either
             else -> fail(405, "method not allowed")
         }
         val topic = synchronized(state) { topics[seg[0]] } ?: fail(404, "no such topic")
