@@ -1,6 +1,7 @@
 package civictech.demo.alignment
 
 import java.io.Serializable
+import java.math.BigDecimal
 import kotlin.math.sqrt
 
 // Domain of the alignment demo (feature computenet-sigl0). Deliberately free of
@@ -31,12 +32,54 @@ data class RatingKey(val topic: TopicId, val idea: String, val dim: String, val 
 }
 
 /**
- * A live rating: [value] in 1..9 under [key]. Unrated is absence of the key,
- * never a sentinel value (computenet-sigl0-D5).
+ * The rating scale (epic computenet-9y79n, "DECIDED ... SUPERSEDES the integer
+ * 1..9 scale"): a rating is a real number in the closed range [1, 9], held as
+ * FIXED-POINT THOUSANDTHS (an `Int` in [MIN_MILLI]..[MAX_MILLI]).
+ *
+ * Why fixed point: every sum and moment sum stays an exact integer under any
+ * insert/retract order, so the incremental stats and [Alignment.rankBatch]
+ * compute bit-identical means and variances from the same integers (as v1 did
+ * with 1..9) and the agreement test needs no float-order tolerance argument.
+ * A thousandth is far below what a continuous, readout-free "feel" slider can
+ * express, so the input rounding loses nothing a participant could mean. A
+ * future effective value derived from a per-participant history (a weighted
+ * average, also real-valued) rounds into the same representation.
+ *
+ * The API and JSON speak plain numbers: [format] renders the thousandths with
+ * trailing zeros stripped, so an integer rating serialises exactly as v1 did
+ * (`8`, not `8.0`) and v1 journals and responses stay byte-identical.
  */
-data class Rating(val key: RatingKey, val value: Int) : Serializable
+object RatingScale {
+    const val MIN_MILLI = 1000
+    const val MAX_MILLI = 9000
 
-/** Ratings on one (idea, dimension): count, mean and SAMPLE standard deviation (0.0 when n < 2). */
+    /** True for a finite [v] with 1 ≤ v ≤ 9 — the API's acceptance rule, checked BEFORE rounding. */
+    fun valid(v: Double): Boolean = v.isFinite() && v >= 1.0 && v <= 9.0
+
+    /** [v] (must be [valid]) rounded half-up to thousandths. */
+    fun toMilli(v: Double): Int {
+        require(valid(v)) { "rating $v is not a finite number in [1, 9]" }
+        return Math.round(v * 1000.0).toInt()
+    }
+
+    /** Thousandths as a JSON number, trailing zeros stripped: 8000 → `8`, 6370 → `6.37`. */
+    fun format(milli: Int): String = BigDecimal.valueOf(milli.toLong(), 3).stripTrailingZeros().toPlainString()
+}
+
+/**
+ * A live rating: [milli] in [RatingScale.MIN_MILLI]..[RatingScale.MAX_MILLI]
+ * (thousandths of the [1, 9] scale) under [key]. Unrated is absence of the
+ * key, never a sentinel value (computenet-sigl0-D5).
+ */
+data class Rating(val key: RatingKey, val milli: Int) : Serializable
+
+/**
+ * Ratings on one (idea, dimension): count, mean and SAMPLE standard deviation
+ * (0.0 when n < 2), on the [1, 9] scale. Both implementations compute them
+ * from exact integer moment sums over thousandths as `sum / (1000·n)` and
+ * `sqrt((n·Σx² − (Σx)²) / (n(n−1))) / 1000`; the `n·Σx²` term stays exact in a
+ * `Long` up to about 3·10⁵ ratings on one (idea, dimension), far past any demo.
+ */
 data class DimStats(val n: Long, val mean: Double, val stdev: Double) : Serializable
 
 /** Which way a dimension pulls an idea's score (computenet-k1d4g-D1): VALUE is higher-is-better, COST higher-is-worse. */
@@ -95,6 +138,7 @@ object Alignment {
      * `AlignmentBatchAgreementTest` comparing the two is a check, not a
      * tautology.
      */
+    /** [ratings] values are thousandths ([Rating.milli]). */
     fun rankBatch(ratings: Map<RatingKey, Int>, dims: Map<DimKey, DimConfig>): Map<IdeaKey, Scored> {
         val costTopics = dims.filterValues { it.direction == Direction.COST }.keys.map { it.topic }.toSet()
         val byIdea = ratings.entries.groupBy { IdeaKey(it.key.topic, it.key.idea) }
@@ -107,9 +151,9 @@ object Alignment {
                 val n = values.size.toLong()
                 val sum = values.sum()
                 val sumSq = values.sumOf { it * it }
-                // n·Σx² − (Σx)² is exact in Long; one rounding at the division
+                // n·Σx² − (Σx)² is exact in Long (thousandths²); one rounding at the division
                 val variance = if (n < 2) 0.0 else (n * sumSq - sum * sum).toDouble() / (n * (n - 1))
-                stats[dim] = DimStats(n, sum.toDouble() / n, sqrt(variance))
+                stats[dim] = DimStats(n, sum.toDouble() / (1000 * n), sqrt(variance) / 1000.0)
             }
             if (stats.isEmpty()) continue
             fun config(dim: String) = dims.getValue(DimKey(idea.topic, dim))

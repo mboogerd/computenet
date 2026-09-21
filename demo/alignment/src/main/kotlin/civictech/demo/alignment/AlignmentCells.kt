@@ -23,34 +23,35 @@ import java.util.*
 import kotlin.math.max
 import kotlin.math.sqrt
 
-/** [RatingStatsAggregator]'s accumulator: count and the first two moment sums of the live ratings. */
-data class StatsAcc(val n: Long, val sum: Double, val sumSq: Double) : Serializable
+/** [RatingStatsAggregator]'s accumulator: count and the first two moment sums of the live ratings, in exact thousandths. */
+data class StatsAcc(val n: Long, val sum: Long, val sumSq: Long) : Serializable
 
 /**
  * Per-(idea, dimension) rating statistics for `GroupByCell`: count, mean and
- * SAMPLE standard deviation (0.0 when n < 2). Ratings are small integers, so
- * both sums stay exact integers in a Double under any insert/retract order and
- * the fold never drifts; the variance is `n·Σx² − (Σx)²` over `n(n−1)` — exact
- * up to the one final division — and clamped at 0 so `sqrt` never sees a
- * negative.
+ * SAMPLE standard deviation (0.0 when n < 2). Ratings are fixed-point
+ * thousandths ([RatingScale]), so both sums are exact `Long`s under any
+ * insert/retract order and the fold never drifts; the variance is
+ * `n·Σx² − (Σx)²` over `n(n−1)` — exact up to the one final division, and the
+ * same arithmetic [Alignment.rankBatch] does on the same integers — and
+ * clamped at 0 so `sqrt` never sees a negative.
  */
 class RatingStatsAggregator : Aggregator<Rating, DimStats, StatsAcc> {
-    override fun empty(): StatsAcc = StatsAcc(0, 0.0, 0.0)
+    override fun empty(): StatsAcc = StatsAcc(0, 0, 0)
 
     override fun insert(acc: StatsAcc, element: Rating): StatsAcc {
-        val x = element.value.toDouble()
+        val x = element.milli.toLong()
         return StatsAcc(acc.n + 1, acc.sum + x, acc.sumSq + x * x)
     }
 
     override fun retract(acc: StatsAcc, element: Rating): StatsAcc {
-        val x = element.value.toDouble()
+        val x = element.milli.toLong()
         return StatsAcc(acc.n - 1, acc.sum - x, acc.sumSq - x * x)
     }
 
     override fun value(acc: StatsAcc): DimStats {
         val n = acc.n
-        val variance = if (n < 2) 0.0 else max(0.0, (n * acc.sumSq - acc.sum * acc.sum) / (n * (n - 1)))
-        return DimStats(n, acc.sum / n, sqrt(variance))
+        val variance = if (n < 2) 0.0 else max(0.0, (n * acc.sumSq - acc.sum * acc.sum).toDouble() / (n * (n - 1)))
+        return DimStats(n, acc.sum.toDouble() / (1000 * n), sqrt(variance) / 1000.0)
     }
 }
 

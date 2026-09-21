@@ -167,7 +167,7 @@ class AlignmentServerTest {
         probe.awaitRow("a") { near(8.0, it.num("score")) }
         val before = probe.state()
 
-        for (bad in listOf("0", "10", "4.5", "\"x\"", "\"5\"", "true")) {
+        for (bad in listOf("0", "10", "0.99", "9.01", "\"x\"", "\"5\"", "true")) {
             val r = rate(probe, "ann", "a", "impact", bad)
             assertEquals(400, r.statusCode(), "value $bad: ${r.body()}")
             assertTrue(""""error":""" in r.body(), r.body())
@@ -209,6 +209,37 @@ class AlignmentServerTest {
 
         // every request above was refused: the whole public state is unchanged
         assertEquals(before, probe.state())
+    }
+
+    @Test
+    fun `ratings are continuous in 1 to 9 inclusive and anything else is refused`() {
+        val journal = tmpJournal()
+        lateinit var state: String
+        withApp(journal) { _, probe -> state = continuousRatings(probe) }
+        // a non-integer rating round-trips through the journal line it writes
+        assertTrue(Files.readAllLines(journal).any { """"value":6.37}""" in it }, "journal carries 6.37")
+        withApp(journal) { _, probe -> assertEquals(state, probe.await { it == state }) }
+    }
+
+    private fun continuousRatings(probe: HttpProbe): String {
+        // epic computenet-9y79n: a rating is a finite number with 1 <= value <= 9 (held as thousandths)
+        seed(probe)
+        for ((v, who) in listOf("1.0" to "ann", "9.0" to "bob", "6.37" to "cy")) {
+            val r = rate(probe, who, "a", "impact", v)
+            assertEquals(200, r.statusCode(), "value $v: ${r.body()}")
+        }
+        probe.awaitRow("a") { near((1.0 + 9.0 + 6.37) / 3.0, it.num("score")) }
+        // the caller's own view speaks plain numbers: 9.0 -> 9, 6.37 -> 6.37
+        assertTrue(""""impact":6.37""" in probe.get("/topics/t/me?participant=cy").body())
+        assertTrue(""""impact":9""" in probe.get("/topics/t/me?participant=bob").body())
+
+        val before = probe.state()
+        for (bad in listOf("0.99", "9.01", "0.9999", "9.0001", "NaN", "Infinity", "-Infinity", "1e400", "\"6.37\"", "true")) {
+            val r = rate(probe, "ann", "a", "impact", bad)
+            assertEquals(400, r.statusCode(), "value $bad: ${r.body()}")
+        }
+        assertEquals(before, probe.state(), "every refused rating changed nothing")
+        return before
     }
 
     @Test

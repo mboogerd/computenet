@@ -79,9 +79,10 @@ class AlignmentBatchAgreementTest {
                             topics[rnd.nextInt(topics.size)], ideas[rnd.nextInt(ideas.size)],
                             dims[rnd.nextInt(dims.size)], participants[rnd.nextInt(participants.size)],
                         )
-                        val v = 1 + rnd.nextInt(9)
+                        // continuous [1, 9] in thousandths, endpoints included
+                        val v = RatingScale.MIN_MILLI + rnd.nextInt(RatingScale.MAX_MILLI - RatingScale.MIN_MILLI + 1)
                         ratingOps.put(k, Rating(k, v)); ratings[k] = v
-                        "rate $k=$v"
+                        "rate $k=$v‰"
                     }
                     roll < 8 -> {
                         // unrate a live rating when there is one; an unknown key is a no-op on both sides
@@ -143,7 +144,7 @@ class AlignmentBatchAgreementTest {
                             topics[rnd.nextInt(topics.size)], ideas[rnd.nextInt(ideas.size)],
                             dims[rnd.nextInt(dims.size)], participants[rnd.nextInt(participants.size)],
                         )
-                        ratings[k] = 1 + rnd.nextInt(9)
+                        ratings[k] = RatingScale.MIN_MILLI + rnd.nextInt(RatingScale.MAX_MILLI - RatingScale.MIN_MILLI + 1)
                     }
                     roll < 8 -> if (ratings.isNotEmpty()) {
                         ratings.remove(ratings.keys.sortedBy { it.toString() }[rnd.nextInt(ratings.size)])
@@ -153,7 +154,7 @@ class AlignmentBatchAgreementTest {
                 }
                 val where = "seed=$seed step=$step"
 
-                // v1, inline: per idea, per rated dim, the plain mean; then the weighted mean over those dims
+                // v1, inline: per idea, per rated dim, the plain mean (thousandths → scale); then the weighted mean
                 val sums = HashMap<IdeaKey, HashMap<String, IntArray>>() // dim → [Σx, n]
                 for ((k, v) in ratings) {
                     val acc = sums.getOrPut(IdeaKey(k.topic, k.idea)) { HashMap() }.getOrPut(k.dim) { IntArray(2) }
@@ -167,7 +168,7 @@ class AlignmentBatchAgreementTest {
                     val weighted = HashMap<String, Double>()
                     for ((dim, acc) in perDim) {
                         val w = weights.getValue(DimKey(idea.topic, dim))
-                        val wm = w * acc[0].toDouble() / acc[1]
+                        val wm = w * (acc[0] / 1000.0) / acc[1]
                         weighted[dim] = wm; num += wm; den += w
                     }
                     val v1 = num / den

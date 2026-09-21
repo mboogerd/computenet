@@ -68,9 +68,9 @@ class AlignmentPipelineTest {
         fun weight(topic: TopicId, dim: String, w: Double, direction: Direction = Direction.VALUE) =
             weights.inlet.call.put(DimKey(topic, dim), DimConfig(w, direction))
         fun unconfigure(topic: TopicId, dim: String) = weights.inlet.call.remove(DimKey(topic, dim))
-        fun rate(idea: IdeaKey, dim: String, who: String, v: Int) {
+        fun rate(idea: IdeaKey, dim: String, who: String, v: Number) {
             val k = RatingKey(idea.topic, idea.idea, dim, who)
-            ratings.inlet.call.put(k, Rating(k, v))
+            ratings.inlet.call.put(k, Rating(k, RatingScale.toMilli(v.toDouble())))
         }
         fun unrate(idea: IdeaKey, dim: String, who: String) =
             ratings.inlet.call.remove(RatingKey(idea.topic, idea.idea, dim, who))
@@ -193,7 +193,7 @@ class AlignmentPipelineTest {
         val statsEmitted = r.statsOut.size
         val fusionEmitted = r.out.size
 
-        r.stats.inlet.call.propagate(SetDelta(adds = mapOf(Rating(k, 8) to setOf(Timestamp(UUID.randomUUID(), 1)))))
+        r.stats.inlet.call.propagate(SetDelta(adds = mapOf(Rating(k, 8000) to setOf(Timestamp(UUID.randomUUID(), 1)))))
 
         assertEquals(statsEmitted, r.statsOut.size, "tag churn: no stats emission")
         assertEquals(fusionEmitted, r.out.size, "tag churn: no fusion emission")
@@ -313,5 +313,39 @@ class AlignmentPipelineTest {
         near(4.0, v.value, "value")
         assertEquals(null, v.cost)
         assertEquals(mapOf("effort" to 4.0), v.contributions)
+    }
+    // ── continuous ratings (epic computenet-9y79n: floating point in [1, 9]) ──
+
+    @Test
+    fun `non-integer ratings fold exactly, rounded to thousandths`() {
+        val r = rig()
+        r.rate(a, "impact", "ann", 6.37)
+        r.rate(a, "impact", "bob", 2.5)
+        r.rate(a, "impact", "cy", 1.0004)    // rounds to 1.000
+        val s = r.scored().getValue(a).byDim.getValue("impact")
+        assertEquals(3L, s.n)
+        near((6.37 + 2.5 + 1.0) / 3.0, s.mean, "mean")
+        near(sqrt(((6370.0 - 3290.0).let { it * it } + (2500.0 - 3290.0).let { it * it } + (1000.0 - 3290.0).let { it * it }) / 2.0) / 1000.0, s.stdev, "sample stdev")
+
+        // insert/retract in another order lands on the identical value
+        r.unrate(a, "impact", "bob")
+        r.rate(a, "impact", "bob", 2.5)
+        assertEquals(s, r.scored().getValue(a).byDim.getValue("impact"), "the fold is exact, not order-dependent")
+    }
+
+    @Test
+    fun `split flips at stdev 2 on a continuous scale`() {
+        // two ratings: stdev = |x - y| / sqrt 2, so the threshold is |x - y| = 2 sqrt 2 = 2.8284...
+        val r = rig()
+        r.rate(a, "impact", "ann", 3.0)
+        r.rate(a, "impact", "bob", 5.828)   // gap 2.828: stdev 1.99970
+        val calm = r.scored().getValue(a)
+        assertTrue(calm.byDim.getValue("impact").stdev < 2.0, "${calm.byDim}")
+        assertFalse(calm.split, "gap 2.828 is not split")
+
+        r.rate(a, "impact", "bob", 5.829)   // gap 2.829: stdev 2.00041
+        val torn = r.scored().getValue(a)
+        assertTrue(torn.byDim.getValue("impact").stdev >= 2.0, "${torn.byDim}")
+        assertTrue(torn.split, "gap 2.829 is split")
     }
 }
