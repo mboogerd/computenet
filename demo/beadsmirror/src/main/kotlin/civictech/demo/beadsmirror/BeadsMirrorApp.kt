@@ -752,14 +752,27 @@ internal fun Array<String>.extractFlagAll(name: String): Pair<List<String>, Arra
  * `internal` so the parsing is testable directly rather than only through the
  * process-exiting [main] — the same reason [extractFlag] is.
  *
+ * @param discover whether `--discover <sidecar-binary>` was given (task
+ *   computenet-63um5.4, DSC2). `false` (the default) leaves every rule above
+ *   byte-for-byte unchanged. `true` changes three things: `--peer` is refused
+ *   (discovery finds the peer, so a URI would be a lie); `--rig` is still
+ *   required, refused the same way as always; and "no endpoint flag" no
+ *   longer means "refuse" — it means the discovering end,
+ *   [MirrorWire.Dial] of [MirrorWire.Dial.DISCOVERED]. `--listen <port>`
+ *   still means the accepting end, unchanged, because the sidecar still needs
+ *   telling which side advertises and which side watches.
  * @throws IllegalArgumentException on any partial or contradictory combination.
  */
-internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<String>> {
+internal fun Array<String>.extractPeering(discover: Boolean = false): Pair<MirrorPeeringSettings?, Array<String>> {
     val (rig, afterRig) = extractFlag("--rig")
     val (listen, afterListen) = afterRig.extractFlag("--listen")
     val (peer, rest) = afterListen.extractFlag("--peer")
 
-    if (rig == null && listen == null && peer == null) return null to rest
+    if (discover) {
+        require(peer == null) { "--discover finds the peer; drop --peer" }
+    }
+
+    if (!discover && rig == null && listen == null && peer == null) return null to rest
     require(listen == null || peer == null) {
         "--listen and --peer name opposite roles; give exactly one (--listen <wsPort> to be the " +
             "listener, --peer <ws-uri> to be the dialer)"
@@ -773,6 +786,7 @@ internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<
             requireNotNull(listen.toIntOrNull()) { "--listen takes a port number (0 = any free port), not '$listen'" },
         )
         peer != null -> MirrorWire.Dial(peer)
+        discover -> MirrorWire.Dial(MirrorWire.Dial.DISCOVERED)
         else -> throw IllegalArgumentException(
             "--rig $rig names a rig but no endpoint; add --listen <wsPort> or --peer <ws-uri>",
         )
@@ -785,21 +799,37 @@ fun main(args: Array<String>) {
     if (workspaceArgs.isEmpty()) {
         System.err.println(
             "usage: beadsmirror --workspace <path> [--workspace <path> ...] [--poll-interval-ms <ms>] " +
-                "[--run-dir <path>] [--write-back] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]\n" +
+                "[--run-dir <path>] [--write-back] [--rig <name> ((--listen <wsPort> | --peer <ws-uri>) | " +
+                "--discover <sidecar-binary> [--listen <ignored-port>])] [port]\n" +
                 "  --workspace may repeat: one mirror per workspace, all on one HTTP port. Two-node " +
                 "mode (--rig) is single-workspace only.\n" +
                 "  --write-back is opt-in per process: every configured workspace imposes its own " +
-                "fold's winner onto its own bd data (bd import --allow-stale, one row at a time).",
+                "fold's winner onto its own bd data (bd import --allow-stale, one row at a time).\n" +
+                "  --discover: form the peering by iroh mDNS discovery on the local segment " +
+                "(--offline --mdns); no NodeId or address is configured; --listen marks the " +
+                "accepting end (its port is ignored), no endpoint flag marks the discovering end.",
         )
         exitProcess(1)
     }
     val (pollIntervalArg, afterPollInterval) = afterWorkspace.extractFlag("--poll-interval-ms")
     val (runDirArg, afterRunDir) = afterPollInterval.extractFlag("--run-dir")
     val (writeBack, afterWriteBack) = afterRunDir.extractBareFlag("--write-back")
+    val (discoverBinary, afterDiscover) = afterWriteBack.extractFlag("--discover")
     val (peering, remaining) = try {
-        afterWriteBack.extractPeering()
+        afterDiscover.extractPeering(discover = discoverBinary != null)
     } catch (e: IllegalArgumentException) {
         System.err.println("beadsmirror: ${e.message}")
+        exitProcess(1)
+    }
+    // Belt and braces: extractPeering(discover = true) already refuses a
+    // missing --rig, so peering is never null here when discoverBinary isn't.
+    require(discoverBinary == null || peering != null) {
+        "--discover needs --rig <name>: the rig name is hashed into the shared logical CellRefs " +
+            "both nodes must derive, so there is no default that could ever match a peer's"
+    }
+    val discoverBinaryPath = discoverBinary?.let { Path.of(it) }
+    if (discoverBinaryPath != null && !Files.isRegularFile(discoverBinaryPath)) {
+        System.err.println("beadsmirror: --discover names '$discoverBinary', which is not a regular file")
         exitProcess(1)
     }
 
@@ -809,6 +839,7 @@ fun main(args: Array<String>) {
         pollInterval = Duration.ofMillis(pollIntervalArg?.toLongOrNull() ?: 1000L),
         runDir = runDirArg?.let { Path.of(it) },
         peering = peering,
+        peeringTransport = discoverBinaryPath?.let { DiscoveredIrohMirrorTransport(it) },
         writeBack = writeBack,
     )
 
@@ -836,7 +867,11 @@ fun main(args: Array<String>) {
             println("  rig '${peering.rigName}' as ${peering.role}; awaiting a peer on ws://localhost:$wsPort")
             announcePort("ws", wsPort)
         }
-        is MirrorWire.Dial -> println("  rig '${peering.rigName}' as ${peering.role}; peered with ${wire.uri}")
+        is MirrorWire.Dial -> if (wire.uri == MirrorWire.Dial.DISCOVERED) {
+            println("  rig '${peering.rigName}' as ${peering.role}; discovering a peer on the local segment")
+        } else {
+            println("  rig '${peering.rigName}' as ${peering.role}; peered with ${wire.uri}")
+        }
         null -> println("  single-node mode; add --rig <name> with --listen <wsPort> or --peer <ws-uri> to span two JVMs")
     }
 }
