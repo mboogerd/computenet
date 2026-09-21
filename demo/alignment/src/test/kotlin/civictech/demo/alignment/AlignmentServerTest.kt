@@ -530,6 +530,11 @@ class AlignmentServerTest {
         assertEquals(JsonNull, impact["contribution"], "$b")
         assertEquals(2, row(agg, "a")!!["rank"]!!.jsonPrimitive.content.toInt(), agg)
 
+        // reweighting a cost dimension through the v1 weights route keeps its direction
+        val reweigh = probe.putJson("""{"creator":"cat","dim":"effort","weight":2}""", "/topics/t/weights")
+        assertEquals(200, reweigh.statusCode(), reweigh.body())
+        assertTrue(""""id":"effort","name":"Effort","weight":2.0000,"direction":"cost"""" in probe.get("/topics").body())
+
         // rule 8: counts, never names — in the aggregate route and the same object under /state
         val parsed = parse(agg)
         assertEquals("2", parsed["participants"]!!.jsonPrimitive.content, agg)
