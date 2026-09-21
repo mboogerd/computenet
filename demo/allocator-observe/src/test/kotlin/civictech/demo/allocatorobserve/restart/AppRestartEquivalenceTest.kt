@@ -285,6 +285,13 @@ class AppRestartEquivalenceTest {
      *   fingerprint), so it reads nothing new and stays at 0 while the
      *   restarted app's first read of the restored file finds all six.
      *
+     * Measured when this test was written (bead comment on computenet-6jbep):
+     * removing the fold emptying fails the deleted phase on the report bytes;
+     * making `forget()` leave `read()` resuming fails the restored phase on the
+     * report bytes; deleting the `forget()` call outright fails earlier, on
+     * `reBaselineCount` 2 instead of 1, because the store never leaves the
+     * seen state and every absent tick then re-counts the deletion.
+     *
      * The per-process account is pinned separately rather than compared: only
      * the uninterrupted app saw the records go, so only it counts the deletion
      * as a re-baseline; both serve `checkpointOffset: null` while the log is
