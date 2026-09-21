@@ -49,7 +49,7 @@ const val PAGE = """<!DOCTYPE html>
 </section>
 <section>
   <h2>Ranking</h2>
-  <ol id="ranking"></ol>
+  <ul id="ranking"></ul>
 </section>
 <script>
 let state = { topics: [], ideas: [], ratings: [], aggregates: {} };
@@ -129,7 +129,7 @@ function renderRate() {
         shown.textContent = v === null ? ' unrated ' : ' ' + v + ' ';
         input.oninput = () => { shown.textContent = ' ' + input.value + ' '; row.className = ''; };
         input.onchange = () => send('POST', '/topics/' + topic() + '/rate',
-          { participant: me(), idea: idea.id, dim: dim, value: Number(input.value) }).then(() => input.blur());
+          { participant: me(), idea: idea.id, dim: dim, value: Number(input.value) }).then(() => { input.blur(); renderRate(); });
         row.querySelector('button').onclick = () => send('POST', '/topics/' + topic() + '/rate',
           { participant: me(), idea: idea.id, dim: dim, value: null });
         div.appendChild(row);
