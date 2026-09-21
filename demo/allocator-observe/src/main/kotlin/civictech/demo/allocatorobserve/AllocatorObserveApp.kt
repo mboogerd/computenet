@@ -82,7 +82,9 @@ data class AllocatorObserveConfig(
  * after the batch reaching it has been handed to the fold. A poll that
  * delivered nothing (an absent log, or no new complete line) writes nothing,
  * so [last] then stays where it was — which is the truth about the checkpoint,
- * not a stale reading of it.
+ * not a stale reading of it. The one exception is a log this process had read
+ * and that is now absent: the app then clears [last] through [forgetLast]
+ * (6jbep-D1), because the fold no longer holds anything that offset describes.
  */
 class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffsetStore {
 
@@ -96,6 +98,16 @@ class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffset
     override fun write(state: CheckpointState) {
         delegate.write(state)
         last = state
+    }
+
+    /**
+     * Clears [last] when the app has converged on a deleted log (6jbep-D1), so
+     * the served `checkpointOffset` reads `null` exactly as it does in a
+     * process restarted while the log is absent. The persisted checkpoint is
+     * not touched: nothing reads it until the next write replaces it.
+     */
+    internal fun forgetLast() {
+        last = null
     }
 }
 
@@ -123,17 +135,34 @@ class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffset
  * content, which is correct, but the event is not counted in `reBaselineCount`,
  * because nothing in this process ever saw the pre-replacement bytes. Only
  * re-baselines observed between two polls of one process are counted.
+ *
+ * **A deleted log puts the store back into its cold state** (design entry
+ * 6jbep-D1): [forget] makes [read] answer `null` again, exactly as it does in a
+ * process that has just started, so the log's reappearance is a whole-file
+ * `FirstStart` read rather than a resume from an offset into bytes this fold no
+ * longer holds. [seenHere] is how the app tells a log that was deleted from one
+ * that has not arrived yet: the reader writes a checkpoint on every poll of a
+ * present log (even an empty one), so a process that has written none has never
+ * seen the log at all.
  */
 private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : SpendOffsetStore {
 
     @Volatile
     private var writtenHere = false
 
+    /** Whether this process has read the log at least once since it started or last [forget]. */
+    val seenHere: Boolean get() = writtenHere
+
     override fun read(): CheckpointState? = if (writtenHere) delegate.read() else null
 
     override fun write(state: CheckpointState) {
         delegate.write(state)
         writtenHere = true
+    }
+
+    /** Back to the cold state: the next [read] answers `null`, as in a freshly started process. */
+    fun forget() {
+        writtenHere = false
     }
 }
 
@@ -197,15 +226,16 @@ private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : Spe
  *   is absorbed uncounted by the cold-start read ([ColdStartOffsetStore]): the
  *   fold converges on the log's current content, but `reBaselineCount` does not
  *   see an event no process observed.
- * - A log that is DELETED while the app is down diverges in the *fold*, not
- *   merely in the account: `TailReason.LogAbsent` leaves the fold alone (a log
- *   that has not arrived yet is not an empty log), so an uninterrupted process
- *   keeps every record it had folded while a restarted one starts empty and
- *   serves an empty report until the log comes back (measured during this
- *   task's review: three records folded, uninterrupted 3, restarted 0). Which
- *   of the two readings is right is not decided here — the spend log's
- *   lifecycle is socaity's and unpinned (fpml.1-D1) — so the divergence is
- *   stated rather than papered over.
+ * - A log that is DELETED — while the app is down or while it runs — no longer
+ *   diverges in the fold (6jbep-D1, [convergeOnDeletedLog]): a log this process
+ *   has read and that then disappears is treated as the log replaced by an
+ *   empty one, so an uninterrupted process empties its fold just as a restarted
+ *   one starts empty, and both serve the same empty report until the log comes
+ *   back and is re-read whole. What differs is again only the account: the
+ *   uninterrupted process counts the deletion in `reBaselineCount` (it saw the
+ *   records go), the restarted one does not (it never saw them). A log that has
+ *   not arrived yet in this process is still left alone, as
+ *   `SpendLogIngester` does for `TailReason.LogAbsent`.
  * - A crash between a declaration's fold and its journal append loses that
  *   line; the next poll re-observes the declaration as a new event with a later
  *   `observedAt`, which moves one sub-interval boundary rather than losing it
@@ -246,7 +276,9 @@ class AllocatorObserveApp(
         journal.replayInto(declarations)
     }
 
-    private val offsets = RecordingOffsetStore(ColdStartOffsetStore(OffsetCheckpoint(config.runDir)))
+    private val coldStart = ColdStartOffsetStore(OffsetCheckpoint(config.runDir))
+
+    private val offsets = RecordingOffsetStore(coldStart)
 
     private val spendIngester =
         SpendLogIngester(config.logPath, config.runDir, records = records, checkpoint = offsets)
@@ -343,6 +375,7 @@ class AllocatorObserveApp(
      */
     fun pollOnce() {
         val spend = spendIngester.poll()
+        if (spend.reason is TailReason.LogAbsent) convergeOnDeletedLog()
         val declaration = declarationIngester.poll()
         // AFTER the poll returned: the event is already in the cell by then, so
         // this persists a fold that has happened — the checkpoint's own
@@ -382,6 +415,56 @@ class AllocatorObserveApp(
         // client, so a tick costs one `toJson()` however many subscribers there
         // are — and every subscriber sees the same document as `GET /state`.
         shell.broadcast { state.toJson() }
+    }
+
+    /**
+     * What an absent spend log means to the served fold (design entry
+     * 6jbep-D1): **a log this process has read and that is now gone is the log
+     * replaced by an empty one**, so the fold converges on that — emptied — the
+     * same way `SpendLogIngester` already converges a log truncated to zero
+     * bytes. A log this process has never read is left alone: it has not
+     * arrived yet, which is not an empty log, and the fold is empty anyway.
+     *
+     * **Why here and not in the ingester.** `SpendLogIngester` cannot tell the
+     * two cases apart — both reach it as `TailReason.LogAbsent` — and its
+     * leave-it-alone rule is right for the case it names. Only the app knows
+     * whether *this process* has seen the log ([ColdStartOffsetStore.seenHere]),
+     * because only the app makes each process start cold. And the reading is
+     * chosen so a restart equals an uninterrupted run (feature
+     * `computenet-fpml.5`'s rule 2): a restarted process cannot keep records
+     * from a log that no longer exists — the log is the durable fold
+     * (fpml.5-D4a), and nothing else holds them — so the only reading both
+     * processes can share is the log's absence. Keeping the old fold instead
+     * would need a second durable copy of the records in the run directory,
+     * which is exactly what fpml.5-D4a declined to add.
+     *
+     * Three steps, all of which a restarted process gets for free by starting:
+     * the fold is emptied; the offset store goes back to its cold state, so the
+     * log's reappearance is a whole-file read rather than a resume at an offset
+     * into bytes the fold no longer holds (without this, a log restored with
+     * its old content would resume at EOF and the fold would stay empty); and
+     * the served `checkpointOffset` goes back to `null`. The deletion is
+     * counted once in `reBaselineCount`, as the truncation it is equivalent to
+     * would be — per-process account, which a restarted process does not share.
+     *
+     * The cost, stated where it is paid: a log that is only transiently absent
+     * (a sync that unlinks and recreates the file) empties the served report
+     * for the ticks that observe the gap and is then re-read whole. That is the
+     * same flicker a sync that truncates and rewrites the file in place already
+     * produces through the re-baseline path, and it is what a process
+     * restarted during the gap would serve anyway.
+     *
+     * This makes the app a second writer of the records cell besides the
+     * ingester, in this one case only; it writes through the same `SetOps`
+     * inlet, on the same poll thread, before `views.publish()`, so the tick
+     * still publishes one consistent fold.
+     */
+    private fun convergeOnDeletedLog() {
+        if (!coldStart.seenHere) return
+        records.membership().forEach { records.inlet.call.remove(it) }
+        coldStart.forget()
+        offsets.forgetLast()
+        reBaselineCount++
     }
 
     /**
