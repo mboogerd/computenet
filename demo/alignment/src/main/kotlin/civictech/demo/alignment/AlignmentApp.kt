@@ -73,7 +73,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     // authoritative write-side indices (journaled)
     private val topics = TreeMap<String, Topic>()
     private val ratings = HashMap<RatingKey, Int>()
-    private val weights = HashMap<DimKey, Double>()
+    private val weights = HashMap<DimKey, DimConfig>() // every direction VALUE until the journal/API carry one
 
     // async read model, folded off the fusion outlet
     private var scored: Map<IdeaKey, Scored> = emptyMap()
@@ -139,11 +139,12 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     /** A dimension's creation line carries its initial weight, so replay restores both from one line. */
     private fun addDimension(topic: TopicId, id: String, name: String, weight: Double) = synchronized(state) {
         topics.getValue(topic.value).dims[id] = Dimension(name)
-        weights[DimKey(topic, id)] = weight
+        val config = DimConfig(weight, Direction.VALUE)
+        weights[DimKey(topic, id)] = config
         record(
             """{"op":"dimension","topic":${esc(topic.value)},"id":${esc(id)},"name":${esc(name)},"weight":$weight}""",
         )
-        weightOps.put(DimKey(topic, id), weight)
+        weightOps.put(DimKey(topic, id), config)
     }
 
     /** Cascades: unrates every rating on the dimension (journaled as `unrate`), then drops its weight row. */
@@ -156,10 +157,12 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     private fun setWeight(topic: TopicId, dim: String, weight: Double) = synchronized(state) {
-        if (weights[DimKey(topic, dim)] == weight) return@synchronized
-        weights[DimKey(topic, dim)] = weight
+        val old = weights[DimKey(topic, dim)]
+        if (old?.weight == weight) return@synchronized
+        val config = DimConfig(weight, old?.direction ?: Direction.VALUE)
+        weights[DimKey(topic, dim)] = config
         record("""{"op":"weight","topic":${esc(topic.value)},"dim":${esc(dim)},"weight":$weight}""")
-        weightOps.put(DimKey(topic, dim), weight)
+        weightOps.put(DimKey(topic, dim), config)
     }
 
     private fun addIdea(topic: TopicId, idea: Idea) = synchronized(state) {
@@ -356,7 +359,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun topicJson(t: Topic): String =
         """{"id":${esc(t.id.value)},"title":${esc(t.title)},"creator":${esc(t.creator)},"dimensions":""" +
             t.dims.entries.joinToString(",", "[", "]") { (id, d) ->
-                """{"id":${esc(id)},"name":${esc(d.name)},"weight":${weights[DimKey(t.id, id)]?.let(::num) ?: "null"}}"""
+                """{"id":${esc(id)},"name":${esc(d.name)},"weight":${weights[DimKey(t.id, id)]?.weight?.let(::num) ?: "null"}}"""
             } + "}"
 
     /**
@@ -374,28 +377,36 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         """{"topic":${esc(topic.id.value)},"participant":${esc(participant)},"ideas":$ideas}"""
     }
 
-    /** Ranked from the fusion read model: score desc, rating count desc, id asc; unscored ideas follow by id. */
+    /**
+     * Ranked from the fusion read model (computenet-k1d4g-D4): ideas with a
+     * non-null score by score desc, rating count desc, id asc; then every other
+     * idea — a [Scored] whose score is null (it still carries its per-dimension
+     * stats), or no [Scored] at all — by id with `"rank":null`.
+     */
     private fun aggregateJson(topic: Topic): String {
         val w = topic.dims.keys.joinToString(",", "{", "}") { d ->
-            "${esc(d)}:${weights[DimKey(topic.id, d)]?.let(::num) ?: "null"}"
+            "${esc(d)}:${weights[DimKey(topic.id, d)]?.weight?.let(::num) ?: "null"}"
         }
-        val withScore = topic.ideas.keys.mapNotNull { id -> scored[IdeaKey(topic.id, id)]?.let { id to it } }
-        val ranked = withScore.sortedWith(
-            compareByDescending<Pair<String, Scored>> { it.second.score }
-                .thenByDescending { count(it.second) }
-                .thenBy { it.first },
-        )
-        val unscored = topic.ideas.keys.filter { id -> withScore.none { it.first == id } }
+        val ranked = topic.ideas.keys
+            .mapNotNull { id -> scored[IdeaKey(topic.id, id)]?.takeIf { it.score != null }?.let { id to it } }
+            .sortedWith(
+                compareByDescending<Pair<String, Scored>> { it.second.score }
+                    .thenByDescending { count(it.second) }
+                    .thenBy { it.first },
+            )
+        val rankedIds = ranked.mapTo(HashSet()) { it.first }
+        fun byDim(s: Scored) = s.byDim.toSortedMap().entries.joinToString(",", "{", "}") { (d, st) ->
+            """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
+                """"contribution":${num(s.contributions[d] ?: 0.0)}}"""
+        }
         val rows = ranked.mapIndexed { i, (id, s) ->
-            val byDim = s.byDim.toSortedMap().entries.joinToString(",", "{", "}") { (d, st) ->
-                """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
-                    """"contribution":${num(s.contributions[d] ?: 0.0)}}"""
-            }
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":${num(s.score)},"split":${s.split},"ratings":${count(s)},"byDim":$byDim}"""
-        } + unscored.map { id ->
+                """"score":${num(s.score!!)},"split":${s.split},"ratings":${count(s)},"byDim":${byDim(s)}}"""
+        } + topic.ideas.keys.filter { it !in rankedIds }.map { id ->
+            val s = scored[IdeaKey(topic.id, id)] // present with a null score, or absent
             """{"rank":null,"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":null,"split":false,"ratings":0,"byDim":{}}"""
+                """"score":null,"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},""" +
+                """"byDim":${s?.let(::byDim) ?: "{}"}}"""
         }
         return """{"weights":$w,"ideas":${rows.joinToString(",", "[", "]")}}"""
     }

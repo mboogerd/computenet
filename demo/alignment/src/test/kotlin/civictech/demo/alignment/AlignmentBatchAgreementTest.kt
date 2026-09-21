@@ -17,10 +17,16 @@ import kotlin.test.fail
 /**
  * Incremental == batch (computenet-sigl0.1, feature rule 4): the exact pipeline
  * the app wires ([AlignmentPipeline.build]) is driven through a seeded churn of
- * rate / unrate / re-weight ops, and after EVERY step the folded
- * `WeightedFusionCell` outlet must equal [Alignment.rankBatch] recomputed from
- * the write-side maps. This is the only place the two implementations meet
- * (computenet-sigl0-D7). A failing seed stays failing — never swap it out.
+ * rate / unrate / re-weight / direction-change ops, and after EVERY step the
+ * folded `WeightedFusionCell` outlet must equal [Alignment.rankBatch]
+ * recomputed from the write-side maps — null-score rows and has-cost flips
+ * included (computenet-k1d4g-D2..D4). This is the only place the two
+ * implementations meet (computenet-sigl0-D7). A failing seed stays failing —
+ * never swap it out.
+ *
+ * A second test pins the all-value case (k1d4g rule 1) against the v1 formula
+ * itself, computed inline from the raw ratings, so a shared mistake in the
+ * cell and [Alignment.rankBatch] cannot pass unseen.
  *
  * Measured cost (darwin/arm64, 2026-09-21): the whole 50-seed × 100-step run
  * takes about 0.4 s of test time (JUnit `time` on the one test case), so there
@@ -35,6 +41,8 @@ class AlignmentBatchAgreementTest {
 
     @Test
     fun `the folded fusion outlet equals the batch reference after every step, seeds 0 until 50`() {
+        var nullScoreRows = 0L
+        var hasCostFlips = 0
         for (seed in 0 until 50) {
             val controller = SimulationController(seed.toLong())
             val host = ManagedHost(scheduler = controller.scheduler())
@@ -53,11 +61,12 @@ class AlignmentBatchAgreementTest {
             val weightOps = host.lookup(refs.weights)!!.inlet.call
 
             val ratings = mutableMapOf<RatingKey, Int>()
-            val weights = mutableMapOf<DimKey, Double>()
-            // every dimension starts at the default weight, as the app creates it
+            val configs = mutableMapOf<DimKey, DimConfig>()
+            // every dimension starts at the default weight and VALUE, as the app creates it
             for (topic in topics) for (dim in dims) {
                 val d = DimKey(topic, dim)
-                weightOps.put(d, 1.0); weights[d] = 1.0
+                val c = DimConfig(1.0, Direction.VALUE)
+                weightOps.put(d, c); configs[d] = c
             }
             controller.runToIdle()
 
@@ -81,15 +90,97 @@ class AlignmentBatchAgreementTest {
                         ratingOps.remove(k); ratings.remove(k)
                         "unrate $k"
                     }
-                    else -> {
+                    roll < 9 -> {
                         val d = DimKey(topics[rnd.nextInt(topics.size)], dims[rnd.nextInt(dims.size)])
-                        val w = 0.5 + rnd.nextDouble() * 3.5
-                        weightOps.put(d, w); weights[d] = w
-                        "weight $d=$w"
+                        val c = DimConfig(0.5 + rnd.nextDouble() * 3.5, configs.getValue(d).direction)
+                        weightOps.put(d, c); configs[d] = c
+                        "weight $d=$c"
+                    }
+                    else -> {
+                        // flip one dimension's direction: VALUE and COST both stay reachable, and
+                        // a topic's first COST / last COST flips its has-cost bit (k1d4g-D4)
+                        val d = DimKey(topics[rnd.nextInt(topics.size)], dims[rnd.nextInt(dims.size)])
+                        val old = configs.getValue(d)
+                        val c = old.copy(direction = if (old.direction == Direction.VALUE) Direction.COST else Direction.VALUE)
+                        fun hasCost() = configs.any { (k, v) -> k.topic == d.topic && v.direction == Direction.COST }
+                        val before = hasCost()
+                        weightOps.put(d, c); configs[d] = c
+                        if (before != hasCost()) hasCostFlips++
+                        "direction $d=$c"
                     }
                 }
                 controller.runToIdle()
-                assertAgrees(Alignment.rankBatch(ratings, weights), folded, "seed=$seed step=$step ($op)")
+                val want = Alignment.rankBatch(ratings, configs)
+                assertAgrees(want, folded, "seed=$seed step=$step ($op)")
+                nullScoreRows += want.values.count { it.score == null }
+            }
+        }
+        // the churn must actually reach the cases it exists to check
+        assertTrue(nullScoreRows > 0, "no step ever produced a null-score row")
+        assertTrue(hasCostFlips > 0, "no step ever flipped a topic's has-cost bit")
+        println("agreement coverage: nullScoreRows=$nullScoreRows hasCostFlips=$hasCostFlips")
+    }
+
+    /**
+     * Rule 1 of computenet-k1d4g: with no COST dimension ever configured,
+     * [Alignment.rankBatch] equals the v1 formula Σ w_d·mean_d / Σ w_d over the
+     * idea's rated dims, computed here inline from the raw ratings map — a third
+     * computation, sharing no code with `rankBatch` or the cell — after every
+     * step of a seeded rate / unrate / reweight run.
+     */
+    @Test
+    fun `with no cost dimension rankBatch equals the v1 weighted mean, seeds 0 until 50`() {
+        for (seed in 0 until 50) {
+            val rnd = Random(seed.toLong())
+            val ratings = mutableMapOf<RatingKey, Int>()
+            val weights = mutableMapOf<DimKey, Double>()
+            for (topic in topics) for (dim in dims) weights[DimKey(topic, dim)] = 1.0
+            repeat(100) { step ->
+                val roll = rnd.nextInt(10)
+                when {
+                    roll < 6 -> {
+                        val k = RatingKey(
+                            topics[rnd.nextInt(topics.size)], ideas[rnd.nextInt(ideas.size)],
+                            dims[rnd.nextInt(dims.size)], participants[rnd.nextInt(participants.size)],
+                        )
+                        ratings[k] = 1 + rnd.nextInt(9)
+                    }
+                    roll < 8 -> if (ratings.isNotEmpty()) {
+                        ratings.remove(ratings.keys.sortedBy { it.toString() }[rnd.nextInt(ratings.size)])
+                    }
+                    else -> weights[DimKey(topics[rnd.nextInt(topics.size)], dims[rnd.nextInt(dims.size)])] =
+                        0.5 + rnd.nextDouble() * 3.5
+                }
+                val where = "seed=$seed step=$step"
+
+                // v1, inline: per idea, per rated dim, the plain mean; then the weighted mean over those dims
+                val sums = HashMap<IdeaKey, HashMap<String, IntArray>>() // dim → [Σx, n]
+                for ((k, v) in ratings) {
+                    val acc = sums.getOrPut(IdeaKey(k.topic, k.idea)) { HashMap() }.getOrPut(k.dim) { IntArray(2) }
+                    acc[0] += v; acc[1] += 1
+                }
+                val batch = Alignment.rankBatch(ratings, weights.mapValues { DimConfig(it.value, Direction.VALUE) })
+                assertEquals(sums.keys, batch.keys, "$where: scored idea set")
+                for ((idea, perDim) in sums) {
+                    var num = 0.0
+                    var den = 0.0
+                    val weighted = HashMap<String, Double>()
+                    for ((dim, acc) in perDim) {
+                        val w = weights.getValue(DimKey(idea.topic, dim))
+                        val wm = w * acc[0].toDouble() / acc[1]
+                        weighted[dim] = wm; num += wm; den += w
+                    }
+                    val v1 = num / den
+                    val got = batch.getValue(idea)
+                    fun near(want: Double, g: Double?, what: String) {
+                        if (g == null || abs(want - g) >= 1e-9) fail("$where $idea $what: v1 $want, rankBatch $g")
+                    }
+                    near(v1, got.score, "score")
+                    near(v1, got.value, "value")
+                    assertEquals(null, got.cost, "$where $idea: no cost dim, cost null")
+                    assertEquals(weighted.keys, got.contributions.keys, "$where $idea contribution dims")
+                    weighted.forEach { (d, wm) -> near(wm / den, got.contributions[d], "contribution[$d]") }
+                }
             }
         }
     }
@@ -98,10 +189,13 @@ class AlignmentBatchAgreementTest {
         assertEquals(want.keys, got.keys, "$where: scored idea set")
         for ((idea, w) in want) {
             val g = got.getValue(idea)
-            fun near(a: Double, b: Double, what: String) {
-                if (abs(a - b) >= 1e-9) fail("$where $idea $what: batch $a, incremental $b")
+            fun near(a: Double?, b: Double?, what: String) {
+                if (a == null && b == null) return
+                if (a == null || b == null || abs(a - b) >= 1e-9) fail("$where $idea $what: batch $a, incremental $b")
             }
             near(w.score, g.score, "score")
+            near(w.value, g.value, "value")
+            near(w.cost, g.cost, "cost")
             assertEquals(w.contributions.keys, g.contributions.keys, "$where $idea contribution dims")
             w.contributions.forEach { (d, c) -> near(c, g.contributions.getValue(d), "contribution[$d]") }
             assertEquals(w.byDim.keys, g.byDim.keys, "$where $idea byDim dims")
@@ -112,7 +206,9 @@ class AlignmentBatchAgreementTest {
                 near(s.stdev, gs.stdev, "stdev[$d]")
             }
             assertEquals(w.split, g.split, "$where $idea split")
-            assertTrue(abs(g.contributions.values.sum() - g.score) < 1e-9, "$where $idea contributions sum to score")
+            g.score?.let { score ->
+                assertTrue(abs(g.contributions.values.sum() - score) < 1e-9, "$where $idea contributions sum to score")
+            }
         }
     }
 }
