@@ -10,7 +10,11 @@ use std::{
 };
 
 use iroh::{
-    address_lookup::{memory::MemoryLookup, AddressLookupBuilderError},
+    address_lookup::{
+        memory::MemoryLookup, AddrFilter, AddressLookupBuilderError, DnsAddressLookup,
+        PkarrPublisher, PkarrResolver,
+    },
+    dns::DnsResolver,
     endpoint::presets,
     Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
@@ -27,7 +31,8 @@ pub const ALPN: &[u8] = b"computenet/sidecar/0";
 
 /// Where a bound endpoint looks up peer addresses it was not handed directly.
 ///
-/// Deliberately not `Copy`: [`LookupMode::Relay`] carries a [`RelayUrl`].
+/// Deliberately not `Copy`: [`LookupMode::Relay`] carries a [`RelayUrl`] and
+/// [`LookupMode::Rendezvous`] carries a [`url::Url`] and a [`String`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LookupMode {
     /// Only addresses supplied locally via [`SidecarEndpoint::add_peer`] are
@@ -44,20 +49,52 @@ pub enum LookupMode {
     /// DNS/pkarr infrastructure. This is the mode CI uses against a
     /// self-hosted relay.
     Relay(RelayUrl),
+    /// A **self-hosted** rendezvous: an operator-run pkarr relay and DNS
+    /// origin take the place of n0's public ones (aas-D4, F2-D1). The endpoint
+    /// publishes its own address record to `pkarr_relay` and resolves peers
+    /// both from that relay and by DNS under `dns_origin`, so a peer known
+    /// only by its id is dialable without any n0 infrastructure being reached.
+    ///
+    /// The n0 constants (`N0_DNS_PKARR_RELAY_PROD`,
+    /// `N0_DNS_ENDPOINT_ORIGIN_PROD`) are referenced only by iroh's `n0_dns()`
+    /// constructors, which this mode never calls, so "reaches n0 for nothing"
+    /// holds by construction.
+    Rendezvous {
+        /// The pkarr relay to publish to and resolve from, e.g.
+        /// `http://127.0.0.1:8080/pkarr`.
+        pkarr_relay: url::Url,
+        /// The DNS origin peer records live under, e.g. `irohdns.example.`.
+        dns_origin: String,
+        /// An explicit UDP nameserver for the endpoint's DNS resolver (F2-D8).
+        /// `None` leaves iroh's system-default resolver in place, which is
+        /// correct when the operator has delegated the origin zone; `Some`
+        /// points the resolver straight at the rendezvous server's DNS half,
+        /// which is what a loopback deployment needs.
+        dns_nameserver: Option<SocketAddr>,
+        /// An optional relay, composing exactly as [`LookupMode::Relay`] does.
+        /// `None` keeps `presets::Minimal`'s disabled relay, in which case
+        /// peers reach each other over the IP addresses this mode publishes.
+        relay: Option<RelayUrl>,
+    },
 }
 
 impl LookupMode {
     /// The relay configuration this mode adds on top of its preset, or `None`
     /// when the preset's own relay behaviour stands.
     ///
-    /// Only [`LookupMode::Relay`] overrides: it pins the endpoint to exactly
-    /// the one configured relay. [`LookupMode::Offline`] keeps
-    /// `presets::Minimal`'s disabled relay and [`LookupMode::N0`] keeps
-    /// `presets::N0`'s public relay map.
+    /// [`LookupMode::Relay`] always overrides and [`LookupMode::Rendezvous`]
+    /// overrides when it carries a relay: each pins the endpoint to exactly
+    /// the one configured relay. [`LookupMode::Offline`] and a
+    /// [`LookupMode::Rendezvous`] with no relay keep `presets::Minimal`'s
+    /// disabled relay; [`LookupMode::N0`] keeps `presets::N0`'s public relay
+    /// map.
     pub fn relay_override(&self) -> Option<RelayMode> {
         match self {
             LookupMode::Offline | LookupMode::N0 => None,
             LookupMode::Relay(url) => Some(RelayMode::Custom(RelayMap::from_iter([url.clone()]))),
+            LookupMode::Rendezvous { relay, .. } => relay
+                .as_ref()
+                .map(|url| RelayMode::Custom(RelayMap::from_iter([url.clone()]))),
         }
     }
 }
@@ -185,12 +222,15 @@ impl SidecarEndpoint {
             None
         };
 
-        // `Relay` shares `Offline`'s minimal preset — no DNS/pkarr address
-        // lookup service — and then replaces its disabled relay with exactly
-        // the configured one. Everything after this point is identical across
-        // the three modes.
+        // `Relay` and `Rendezvous` share `Offline`'s minimal preset — no
+        // n0-configured DNS/pkarr address lookup service — and then replace its
+        // disabled relay with exactly the configured one, if any. Only
+        // `Rendezvous` adds address lookup services of its own, all pointed at
+        // the operator's own server.
         let mut builder = match &config.lookup {
-            LookupMode::Offline | LookupMode::Relay(_) => Endpoint::builder(presets::Minimal),
+            LookupMode::Offline | LookupMode::Relay(_) | LookupMode::Rendezvous { .. } => {
+                Endpoint::builder(presets::Minimal)
+            }
             LookupMode::N0 => Endpoint::builder(presets::N0),
         };
         if let Some(relay_mode) = config.lookup.relay_override() {
@@ -200,6 +240,38 @@ impl SidecarEndpoint {
             .alpns(vec![alpn.clone()])
             .secret_key(secret_key)
             .address_lookup(lookup.clone());
+        if let LookupMode::Rendezvous {
+            pkarr_relay,
+            dns_origin,
+            dns_nameserver,
+            ..
+        } = &config.lookup
+        {
+            // The BUILDERS are handed to `address_lookup`, exactly as
+            // `presets::N0` does: each takes the endpoint's TLS config and DNS
+            // resolver at bind time (iroh 1.0.3 `AddressLookupBuilder`
+            // impls), so nothing here needs to construct either (F2-D10).
+            //
+            // `AddrFilter::unfiltered()` is required, not cosmetic (F2-D9):
+            // `PkarrPublisherBuilder::new` defaults to
+            // `AddrFilter::relay_only()`, whose point is to avoid leaking IPs
+            // to n0's *public* server. Against a self-hosted server with no
+            // relay that default would publish an empty address set, and a
+            // bare-id dial could never succeed.
+            builder = builder
+                .address_lookup(
+                    PkarrPublisher::builder(pkarr_relay.clone())
+                        .addr_filter(AddrFilter::unfiltered()),
+                )
+                .address_lookup(PkarrResolver::builder(pkarr_relay.clone()))
+                .address_lookup(DnsAddressLookup::builder(dns_origin.clone()));
+            if let Some(nameserver) = dns_nameserver {
+                // Set on the endpoint rather than on each service: the
+                // builders above read the endpoint's resolver at bind time
+                // when none was set on them individually.
+                builder = builder.dns_resolver(DnsResolver::with_nameserver(*nameserver));
+            }
+        }
         if let Some(m) = &mdns {
             builder = builder.address_lookup(m.clone());
         }
@@ -487,6 +559,95 @@ mod tests {
                 assert_eq!(count, 1, "MemoryLookup only, since mdns did not bind");
             }
         }
+
+        endpoint.close().await;
+    }
+
+    /// A rendezvous config pointed at dead loopback ports: nothing here
+    /// reaches the network. The pkarr publisher's first PUT fails and is
+    /// logged; it does not block `bind`, exactly as the Relay test's
+    /// `https://127.0.0.1:65535` does not.
+    fn rendezvous(relay: Option<RelayUrl>) -> LookupMode {
+        LookupMode::Rendezvous {
+            pkarr_relay: url::Url::parse("http://127.0.0.1:1/pkarr").expect("literal pkarr url"),
+            dns_origin: "irohdns.example.".to_string(),
+            dns_nameserver: Some("127.0.0.1:1".parse().expect("literal nameserver addr")),
+            relay,
+        }
+    }
+
+    #[test]
+    fn rendezvous_relay_override_follows_its_optional_relay() {
+        let url = relay_url();
+        let mode = rendezvous(Some(url.clone()))
+            .relay_override()
+            .expect("a rendezvous carrying a relay overrides the preset");
+        assert_eq!(mode, RelayMode::Custom(RelayMap::from_iter([url.clone()])));
+        assert_eq!(mode.relay_map().urls::<Vec<_>>(), vec![url]);
+
+        assert_eq!(
+            rendezvous(None).relay_override(),
+            None,
+            "no relay keeps Minimal's disabled relay"
+        );
+    }
+
+    #[tokio::test]
+    async fn rendezvous_binds_memory_lookup_plus_three_custom_services() {
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            lookup: rendezvous(None),
+            bind_addrs: vec!["127.0.0.1:0".parse().expect("literal loopback addr")],
+            ..Default::default()
+        })
+        .await
+        .expect("a rendezvous config binds even with nothing listening");
+
+        // [DSC2-RDV-01] at the only seam this crate has: the service COUNT.
+        // MemoryLookup + PkarrPublisher + PkarrResolver + DnsAddressLookup.
+        assert_eq!(
+            endpoint
+                .endpoint
+                .address_lookup()
+                .expect("the endpoint is open")
+                .len(),
+            4,
+            "MemoryLookup plus the publisher, the resolver and the DNS lookup"
+        );
+        assert!(endpoint.mdns().is_none(), "mdns defaults to false");
+
+        // No relay was configured, so Minimal's disabled relay stands.
+        assert!(
+            endpoint.endpoint.remove_relay(&relay_url()).await.is_none(),
+            "a rendezvous with relay: None configures no relay"
+        );
+        assert!(
+            endpoint.endpoint.remove_relay(&other_url()).await.is_none(),
+            "a rendezvous with relay: None configures no relay"
+        );
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn rendezvous_with_a_relay_pins_exactly_that_relay() {
+        let url = relay_url();
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            lookup: rendezvous(Some(url.clone())),
+            bind_addrs: vec!["127.0.0.1:0".parse().expect("literal loopback addr")],
+            ..Default::default()
+        })
+        .await
+        .expect("a rendezvous config with a relay binds");
+
+        // Destructive, so `other` comes first.
+        assert!(
+            endpoint.endpoint.remove_relay(&other_url()).await.is_none(),
+            "no relay other than the configured one"
+        );
+        assert!(
+            endpoint.endpoint.remove_relay(&url).await.is_some(),
+            "the configured relay is in the bound endpoint's relay map"
+        );
 
         endpoint.close().await;
     }
