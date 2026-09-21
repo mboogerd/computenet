@@ -123,11 +123,17 @@ class DiscoveryStoppedAfterFormationTest {
                 sidecarArgs = listOf("--offline", "--mdns"),
             )
 
-            // Mutate on BOTH nodes after the stop.
+            // Mutate on BOTH nodes after the stop. Neither priority may be 2,
+            // bd's default (computenet-63um5.5): `update --priority 2` on a
+            // fresh issue changes no `issues` row when it lands in the same
+            // second as the create, so its commit touches only `events`. The
+            // poller advances its checkpoint only past commits that carry an
+            // issue or edge record, so `quiesce()` (checkpoint == head) then
+            // waits out its whole window on a head it can never reach.
             val listenerIssue = theRig.createIssue(theRig.listener, "listener issue after discovery stopped")
             val dialerIssue = theRig.createIssue(theRig.dialer, "dialer issue after discovery stopped")
             theRig.mutate(theRig.listener, "update", listenerIssue, "--priority", "1")
-            theRig.mutate(theRig.dialer, "update", dialerIssue, "--priority", "2")
+            theRig.mutate(theRig.dialer, "update", dialerIssue, "--priority", "3")
             theRig.listener.quiesce()
             theRig.dialer.quiesce()
 
