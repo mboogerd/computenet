@@ -274,6 +274,13 @@ class DiscoveredPeering private constructor(
      */
     internal fun connectionFor(key: NodeKey): IrohTransport.IrohConnection? = connections[key]
 
+    /**
+     * Whether every dial-pool thread has finished — true from the moment
+     * [close] or [detach] returns (computenet-iesmw). Internal, as
+     * [connectionFor] is: it is what a test of that guarantee reads.
+     */
+    internal val dialPoolTerminated: Boolean get() = dialPool.isTerminated
+
     // ------------------------------------------------------------- commands
 
     /**
