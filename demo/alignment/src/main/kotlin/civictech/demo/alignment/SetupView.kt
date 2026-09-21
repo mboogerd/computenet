@@ -6,8 +6,7 @@ package civictech.demo.alignment
  *
  * STUB (computenet-0dvra.1): the shell only needs the root and the render hook to exist; the
  * controls are computenet-0dvra.2's. The shell shows this section only on `/t/{id}`, only as
- * the Setup tab, and only while `isCreator(currentTopic())` — the view never gates itself on
- * being visible. Code against the shared helper contract documented at the top of the shell's
+ * the Setup tab, and only while `isCreator(currentTopic())`. Code against the shared helper contract documented at the top of the shell's
  * script in [AlignmentPage.kt] (`state`, `me()`, `currentTopic()`, `dimColour(t, d)`,
  * `editing(root)`, `send(...)`, ...). Rules every view slice follows: no `$` anywhere (this is a
  * plain raw string); no literal colour — use the `:root` tokens (`var(--value-1)`, ...); a
