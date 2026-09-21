@@ -70,6 +70,7 @@ data class IngestDto(
     val polls: Long,
     val lastPollAt: String?,
     val declarationEvents: Int,
+    val declarationReplayFailures: Long,
     val failures: IngestFailureCountsDto,
     val records: List<SpendRecordDto>,
 )
@@ -165,6 +166,7 @@ private fun IngestHealth.toDto(records: Set<SpendRecord>): IngestDto = IngestDto
     polls = polls,
     lastPollAt = lastPollAt?.toString(),
     declarationEvents = declarationEvents,
+    declarationReplayFailures = declarationReplayFailures,
     failures = failures.toDto(),
     records = records.toSortedDtoList(),
 )

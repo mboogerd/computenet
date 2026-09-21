@@ -1,6 +1,9 @@
 package civictech.demo.allocatorobserve
 
+import civictech.demo.allocatorobserve.declaration.AllocationDeclaration
+import civictech.demo.allocatorobserve.declaration.DeclarationEvent
 import civictech.demo.allocatorobserve.http.PollLoopStopped
+import civictech.demo.allocatorobserve.restart.DeclarationHistoryJournal
 import civictech.testkit.HttpProbe
 import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
@@ -394,6 +397,59 @@ class AllocatorObserveAppTest {
     }
 
     // -----------------------------------------------------------------
+    // computenet-utib7 — declaration-history replay failures are served
+    // -----------------------------------------------------------------
+
+    /**
+     * `DeclarationHistoryJournal.replayFailures` (`restart/`) was previously
+     * reachable only in-process, via `AllocatorObserveApp.declarationReplayFailures`
+     * — this proves the count actually reaches `GET /state/ingest`, so an
+     * operator watching that route (not the process) can see a restart dropped
+     * declaration history. Seeds the journal directly with one good line and
+     * one line the journal cannot parse, the same way
+     * `DeclarationHistoryJournalTest`'s own "an unparseable line is counted"
+     * test does, BEFORE the app under test is constructed — replay happens once,
+     * in `AllocatorObserveApp.init`, so the journal must already hold both
+     * lines at that point.
+     */
+    @Test
+    fun `an unparseable declaration-history journal line is reported as declarationReplayFailures over GET slash state slash ingest`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        // Content matches VALID_DECLARATION exactly (including `window`, which
+        // DeclarationIngester.poll compares along with weights and the cap) so
+        // the first poll reads it as Unchanged rather than a second Appended
+        // event — this test is about the journal's own replay count, not about
+        // the ingester noticing a declaration the journal never recorded.
+        val seedJournal = DeclarationHistoryJournal(runDir)
+        seedJournal.append(
+            DeclarationEvent(
+                NOW.minus(Duration.ofDays(1)),
+                AllocationDeclaration(weights = mapOf(CN to 60.0, GF to 40.0), monthlyCapHours = 100.0, window = "rolling-month"),
+            ),
+        )
+        Files.writeString(
+            runDir.resolve(JOURNAL_FILE_NAME),
+            "{not a parseable journal line\n",
+            StandardOpenOption.CREATE,
+            StandardOpenOption.APPEND,
+        )
+
+        val app = app().start()
+        val probe = probe(app)
+
+        val ingest = Json.parseToJsonElement(probe.state(INGEST_PATH))
+        ingest.obj("declarationReplayFailures").jsonPrimitive.long shouldBe 1L
+        // The good line still replayed: this counts loss, it does not amplify it.
+        ingest.obj("declarationEvents").jsonPrimitive.int shouldBe 1
+        // Cross-checked against the in-process accessor this task's KDoc says
+        // always agrees with the served field, so a divergence between the two
+        // readings of the same counter is itself a failure.
+        app.declarationReplayFailures shouldBe 1L
+    }
+
+    // -----------------------------------------------------------------
     // main's argument parsing
     // -----------------------------------------------------------------
 
@@ -435,6 +491,9 @@ class AllocatorObserveAppTest {
         const val LOG_NAME = "spend.jsonl"
 
         const val INGEST_PATH = "/state/ingest"
+
+        /** `DeclarationHistoryJournal`'s file name, mirrored here so the fixture can pre-seed it. */
+        const val JOURNAL_FILE_NAME = "declaration-history"
 
         val NOW: Instant = Instant.parse("2026-09-18T12:00:00Z")
         val WINDOW: Duration = Duration.ofHours(168)

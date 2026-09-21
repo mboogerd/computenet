@@ -336,9 +336,11 @@ class AllocatorObserveApp(
      * Journal lines this process could not parse while replaying the declaration
      * history at construction (see [DeclarationHistoryJournal.replayFailures]).
      *
-     * Exposed so the loss is reachable from the process rather than only from
-     * the file. It is deliberately NOT in the served `ingest` document: that
-     * shape is `http/ServedState.kt`'s, which this task does not own.
+     * Exposed so the loss is reachable from the process without a served
+     * request. Also carried into every [ServedState.ingest] snapshot as
+     * `IngestHealth.declarationReplayFailures` (`computenet-utib7`), so
+     * `GET /state/ingest` reports it too — this accessor and that field always
+     * agree since both read the same [journal] counter.
      */
     val declarationReplayFailures: Long get() = journal.replayFailures
 
@@ -406,6 +408,7 @@ class AllocatorObserveApp(
                     declarationParseFailed = declarationIngester.parseFailures,
                 ),
                 declarationEvents = declarationHistory.size,
+                declarationReplayFailures = journal.replayFailures,
             ),
             records = recordSet,
             declarations = declarationHistory,
