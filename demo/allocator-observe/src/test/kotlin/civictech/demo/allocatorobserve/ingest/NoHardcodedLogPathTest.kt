@@ -71,7 +71,9 @@ class NoHardcodedLogPathTest {
             Files.walk(root.resolve("ingest")).use { stream ->
                 stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
             }
-        return ingest + app
+        // listOf: a Path is itself an Iterable<Path>, so `ingest + app` would
+        // append its name segments, not the file.
+        return ingest + listOf(app)
     }
 
     @Test
