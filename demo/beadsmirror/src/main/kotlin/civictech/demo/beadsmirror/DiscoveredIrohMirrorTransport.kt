@@ -1,8 +1,6 @@
 package civictech.demo.beadsmirror
 
-import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
-import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.iroh.IrohNode
 import civictech.iroh.IrohTransport
 import civictech.iroh.discover.DialPolicy
@@ -35,10 +33,9 @@ import java.nio.file.Path
  *   is an [IrohNode] under a [DiscoveredPeering] policy, which watches, dials
  *   the key it hears about and records it `Peered(OUTBOUND)`. [dial] returns
  *   once exactly one retained entry is `Peered`, bounded by
- *   `formationTimeoutMillis`. Two `Peered` entries fail loudly: the binding
- *   refuses to guess which peer is "the" peer. With the dialling side's
- *   allowlist narrowed (below) that takes two advertisers answering to this
- *   rig's listener name.
+ *   `formationTimeoutMillis`. Two `Peered` entries fail loudly: the rig's
+ *   `Peering.Side` has `allow = null`, so a stranger on the segment would be
+ *   admitted, and the binding refuses to guess which peer is "the" peer.
  * - **Partition = detach + sever** (63um5-D1). A planned
  *   `IrohConnection.sever()` under a RUNNING policy is re-dialled within one
  *   pump (the table answers `Redial` for a discovered key with no other link
@@ -72,30 +69,10 @@ import java.nio.file.Path
  *   segment with its own multicast filtering. On a host that delivers no
  *   multicast at all (macOS without Local Network permission, `ne2oh-B6`) the
  *   tests skip; the executed evidence is Linux CI.
- * - **A stranger of an unknown rig name.** [dial] admits only its own rig's
- *   listener (see "Admission" below) when the rig's side names itself the
- *   usual way; a side that does not ([admittingOnlyTheRigListener] leaves it
- *   open) still admits any `--mdns` sidecar on the segment, where a second
- *   `Peered` fails loudly and a first one races formation.
- *
- * ## Admission: only this rig's listener (computenet-63um5.5)
- *
- * Every `--mdns` sidecar on the segment is discovered, and the rig's side has
- * `allow = null`, so before this the dialling end admitted whichever
- * advertiser completed a hello first. On the `iroh-sidecar` CI lane two
- * discovery rigs run at once — `:demo:beadsmirror` tests run on parallel
- * forks — and run 35629640485's BS-09 rig formed its one `Peered` link to the
- * OTHER class's listener: both of its nodes then sat at `+0` for the whole
- * 30 s convergence window, because the rig name hashed into the shared
- * `CellRef`s differed and nothing either node published matched a ref at the
- * far end. [dial] therefore narrows the dialling side's allowlist to
- * `<rigName>-listener`, the name [MirrorPeering] gives the listening end of
- * the same rig: a foreign rig's advertiser is dialled, refused inside
- * `Session` and abandoned by the policy's refused-dial limit — the BS-05a
- * path `DiscoveredPeeringTest` pins — and only the rig's own listener can
- * become `Peered`. That is a logical name both ends already share (the rig
- * name is their entire coordination mechanism), not a NodeId or an address:
- * [DSC2-NEU-02] still holds.
+ * - **A stranger on the segment**: another `--mdns` sidecar reachable from the
+ *   dialling node is either admitted (two `Peered` → loud failure) or races
+ *   formation. The binding fails rather than picks; it cannot make that
+ *   deployment safe, only visible.
  *
  * @param binary the sidecar executable (in tests, `IrohSidecarGate.orSkip()`).
  * @param reconnectBackoff the policy's dial retry schedule
@@ -162,12 +139,7 @@ class DiscoveredIrohMirrorTransport(
     override fun dial(uri: String, side: Peering.Side): MirrorLink = synchronized(lock) {
         check(dialled == null) { "this transport has already dialled" }
         val stderr = StderrTail()
-        val node = IrohTransport.node(
-            admittingOnlyTheRigListener(side),
-            binary,
-            stderrSink = stderr::add,
-            sidecarArgs = SIDECAR_ARGS,
-        )
+        val node = IrohTransport.node(side, binary, stderrSink = stderr::add, sidecarArgs = SIDECAR_ARGS)
         val peering = try {
             DiscoveredPeering.start(node, DialPolicy(schedule = reconnectBackoff))
         } catch (e: Throwable) {
@@ -185,32 +157,6 @@ class DiscoveredIrohMirrorTransport(
     }
 
     /**
-     * [side] with its allowlist narrowed to this rig's listening end (see the
-     * class doc's "Admission"), or [side] itself when it already carries an
-     * allowlist or does not name itself `<rigName>-dialer` the way
-     * [MirrorPeering] does — then there is no rig name to derive a listener
-     * from, and the binding does not guess one.
-     */
-    private fun admittingOnlyTheRigListener(side: Peering.Side): Peering.Side {
-        if (side.allow != null) return side
-        val dialerSuffix = "-${MirrorCellRefs.DIALER}"
-        val name = side.peer?.name?.takeIf { it.endsWith(dialerSuffix) } ?: return side
-        val listener = PeerId(name.removeSuffix(dialerSuffix) + "-" + MirrorCellRefs.LISTENER)
-        return Peering.Side(
-            registry = side.registry,
-            bridgeHost = side.bridgeHost,
-            peer = side.peer,
-            allow = setOf(listener),
-            onCatchUpWindowOpen = side.onCatchUpWindowOpen,
-            auth = side.auth,
-            credentials = side.credentials,
-            announcementSigning = side.announcementSigning,
-            announcementVerification = side.announcementVerification,
-            identityBinding = side.identityBinding,
-        )
-    }
-
-    /**
      * Poll [peering] until exactly one entry is `Peered`, and return its key.
      * Loud on a second `Peered` entry and on timeout; see the class doc.
      */
@@ -221,7 +167,7 @@ class DiscoveredIrohMirrorTransport(
             val peered = views.filter { it.state.startsWith(PEERED_PREFIX) }
             check(peered.size <= 1) {
                 "discovery peered ${peered.size} keys, expected exactly one: ${describe(peered)}. " +
-                    "Another --mdns sidecar on this segment was admitted by the dialling side's allowlist; " +
+                    "Another --mdns sidecar on this segment was admitted (the rig's side has allow = null); " +
                     "this binding will not guess which one is the mirror's peer"
             }
             if (peered.size == 1) return peered.single().keyHex
