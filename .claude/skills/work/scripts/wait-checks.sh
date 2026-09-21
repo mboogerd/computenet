@@ -446,7 +446,8 @@ for i in $(seq 1 "$rounds"); do
            "$rounds rounds — stopping short of the 600s foreground cap rather than" \
            "being auto-backgrounded. Rounds are slower than 20s here. This is a" \
            "TIMEOUT, not a fault: call again (two calls is the normal cold start)." \
-           "max-rounds alone cannot lengthen a call; raise WAIT_CHECKS_DEADLINE_SECONDS with it."
+           "max-rounds alone cannot lengthen a call; raise WAIT_CHECKS_DEADLINE_SECONDS with it," \
+           "and keep that deadline plus ~100s inside your own Bash timeout (600s in the foreground)."
       break
     fi
     sleep 20
