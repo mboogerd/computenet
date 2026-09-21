@@ -240,22 +240,31 @@ fun AllocatorReport.toReportJson(): String = json.encodeToString(ReportDto.seria
 fun ServedState.reportJson(): String = report.toReportJson()
 
 /**
- * The same frozen-fold envelope `AllocatorRoutes`' `/state*` 503 body carries
- * (fpml.4-D6) — `{"ingest":"frozen","failure":"<class>: <message>","stale_status":200,
- * "stale":<this document>}` — reused by `AllocatorObserveApp`'s `/events` SSE frame
- * so a client can tell a frozen fold from a quiet one by the SSE stream alone
- * (computenet-w20a4). D6's own text ("SSE simply stops receiving frames") covers
- * only an already-connected subscriber; this is the connect-after-death and
- * still-connected-at-death cases D6 did not decide.
- *
- * Not a call to `AllocatorRoutes`' private `respondFold` — that class is not in
- * this task's file claim — but byte-for-byte the same shape over the same
- * [ServedState.toJson] body, built the same way (`esc` on `failure.toString()`).
+ * The frozen-fold envelope shape `{"ingest":"frozen","failure":"<class>: <message>",
+ * "stale_status":200,"stale":<body>}` (fpml.4-D6), parameterised over the inner
+ * document [body] so both surfaces that wrap a frozen [ServedState] — this
+ * file's [frozenJson] for the `/events` SSE frame (computenet-w20a4) and
+ * `AllocatorRoutes`' private `respondFold` for the `/state*` 503 body — build
+ * it by calling this one function instead of duplicating the `buildString`
+ * (computenet-l7vdc). D6's own text ("SSE simply stops receiving frames")
+ * covers only an already-connected subscriber; the SSE use here also covers
+ * the connect-after-death and still-connected-at-death cases D6 did not
+ * decide.
  */
-fun ServedState.frozenJson(frozen: PollLoopStopped): String = buildString {
+fun frozenEnvelope(frozen: PollLoopStopped, body: String): String = buildString {
     append("""{"ingest":"frozen",""")
     append("\"failure\":").append(esc(frozen.failure.toString()))
     append(",\"stale_status\":200")
-    append(",\"stale\":").append(toJson())
+    append(",\"stale\":").append(body)
     append('}')
 }
+
+/**
+ * The same frozen-fold envelope `AllocatorRoutes`' `/state*` 503 body carries
+ * (fpml.4-D6), reused by `AllocatorObserveApp`'s `/events` SSE frame so a
+ * client can tell a frozen fold from a quiet one by the SSE stream alone
+ * (computenet-w20a4). Delegates to [frozenEnvelope] over [ServedState.toJson]
+ * — the same function `AllocatorRoutes`' `respondFold` now delegates to over
+ * its own live body, so the two surfaces cannot drift apart silently.
+ */
+fun ServedState.frozenJson(frozen: PollLoopStopped): String = frozenEnvelope(frozen, toJson())
