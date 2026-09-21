@@ -89,13 +89,8 @@ class AllocatorRoutes(private val holder: ServedStateHolder) {
     }
 
     private companion object {
-        // Built from a Char literal rather than a leading-slash string
-        // literal so this HTTP route path is never mistaken, by this
-        // module's NoHardcodedLogPathTest lexical scan, for a hardcoded
-        // spend-log filesystem path (fpml.1-D1 guards *that* concern; this
-        // constant is an HTTP route, not a path on disk).
-        val STATE_PATH: String = '/' + "state"
-        val INGEST_SUFFIX: String = '/' + "ingest"
-        val REPORT_SUFFIX: String = '/' + "report"
+        val STATE_PATH: String = "/state"
+        val INGEST_SUFFIX: String = "/ingest"
+        val REPORT_SUFFIX: String = "/report"
     }
 }
