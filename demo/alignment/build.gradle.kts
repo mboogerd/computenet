@@ -12,7 +12,5 @@ dependencies {
 }
 
 application {
-    // AlignmentApp.kt (the `main` this names) lands with the sibling app task,
-    // computenet-sigl0.2; the application plugin resolves it only at run time.
     mainClass = "civictech.demo.alignment.AlignmentAppKt"
 }
