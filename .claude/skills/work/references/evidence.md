@@ -249,9 +249,7 @@ is what turns a flake into a false finding against good work (computenet-sbgxs).
 **The test is reachability, not load, and not the shape of the failure.** A red
 suite in a module your diff does not touch: is there a dependency path from a
 module you changed to the module that failed? Answer it before re-running
-anything — the session that had been told this cleared a red `:inspect` suite in
-one isolated run, where the session that had not spent two full repo-wide runs
-plus a git-history investigation on the same shape.
+anything.
 
 **Three changes have no honest reachability answer, and a "no path" reading of
 any of them licenses dismissing a real defect:**
@@ -289,15 +287,7 @@ git log -1 --format='%h %s' -- <path/to/FailingTest.kt>
 bd list --all --json | grep -i -e '<TestName>' -e 'seed <n>'
 ```
 
-The first instance found its own answer this way: the file's last commit named
-seed 132 as a known stranded-reorder-frame artifact (`ce9f7d137`,
-computenet-pa5l). Quote whichever names it in your report.
-
-**If it reproduces under load and passes alone, do not stop there.** That is
-also the signature of a genuine race, and "re-run in isolation until it passes"
-is a procedure that discards the only condition under which such a defect is
-observable. Attribute it to an existing flake bead or file one, naming the load
-at which it reproduced; never dismiss it as cleared.
+Quote whichever names it in your report.
 
 | symptom | do |
 |---|---|
@@ -306,5 +296,5 @@ at which it reproduced; never dismiss it as cleared.
 | an `awaitUntil`-style timeout, at any load | re-run that suite alone before reporting it |
 | a generative/property suite failing an assertion, in a module your diff cannot reach | the same contention shape as a timeout; clear it by reachability, isolated re-run, then `--rerun-tasks` — and if it passed alone after failing under load, also file or attribute it per the row below. The gate being green and the flake being recorded are both required, not alternatives |
 | a red suite in a module your diff did not touch | your change invalidated its cache and exposed a latent flake; attribute it, do not dismiss it |
-| it reproduces under load and passes alone | a genuine race presents exactly this way; attribute or file it, naming the load — do not record it as cleared |
+| it reproduces under load and passes alone | a genuine race presents exactly this way, and isolated re-runs discard the only condition that shows it; attribute or file it, naming the load — never record it as cleared |
 | a wrong value in a suite your diff CAN reach | never contention; it is yours |
