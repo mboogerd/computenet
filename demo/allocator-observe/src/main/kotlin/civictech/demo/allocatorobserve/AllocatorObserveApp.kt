@@ -548,8 +548,11 @@ class AllocatorObserveApp(
     private companion object {
         // Built from a Char literal rather than a leading-slash string literal
         // for the same reason `AllocatorRoutes` does it: this module's
-        // `NoHardcodedLogPathTest` is a lexical scan that cannot tell an HTTP
-        // route from a filesystem path (over-broad, filed as computenet-fpml.6).
+        // `NoHardcodedLogPathTest` scans this file deliberately, because
+        // `AllocatorObserveConfig` and `parseArgs` live here and the guard
+        // exists to catch a pasted-in log path default at that parse site. A
+        // leading-slash literal anywhere in the file trips the same scan, so
+        // this route is built from a Char rather than dropped out of scope.
         val EVENTS_PATH: String = '/' + "events"
 
         const val NOT_YET_POLLED = """{"error":"not yet polled"}"""
