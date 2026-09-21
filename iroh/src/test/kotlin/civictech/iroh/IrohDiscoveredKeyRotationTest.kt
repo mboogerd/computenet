@@ -82,15 +82,51 @@ import kotlin.time.Duration.Companion.seconds
  * B1 is killed first and B2 restarted at the same `--bind-addr` under K2. No
  * supersession fires: `PeerTable.linkDown` nulls the entry's `attributedPeer`,
  * so by the time K2's hello is judged the table has forgotten that K1 was `b`,
- * and K2 is a plain `Admit`. K1 is re-dialled on the injected schedule until
- * the sidecar's own mDNS expiry retires it. Every identity claim still holds —
- * same `PeerId`, same `Principal`, no denial — so what the arm pins is the
- * *retry* behaviour, and it pins it as **landed**, not as desired.
+ * and K2 is a plain `Admit`. K1's own link drop answers `Redial`, so the policy
+ * dials the dead endpoint at once and that dial fails. Every identity claim
+ * still holds — same `PeerId`, same `Principal`, no denial — so what the arm
+ * pins beyond identity is the *retry* behaviour, and it pins it as **landed**,
+ * not as desired.
+ *
+ * ### What follows the failed dial, and why it is not "a retry is armed"
+ *
+ * An earlier version of this arm asserted `timer.pending() == 1` right after
+ * that failure. The first real execution (CI run 35552410099) disproved it:
+ * `dialsFailed` reached 1 and `pending()` stayed 0 for a full 60 s. The landed
+ * path says why. [DiscoveredPeering]'s `onDialDone` increments `dialsFailed`
+ * and then arms a retry **only** if `PeerTable.dialFailed` hands it a `dueAt`,
+ * and `dialFailed` returns null for a key that is no longer `Dialling` when the
+ * dial's result lands (`entry.state as? PeerState.Dialling ?: return null`).
+ * Between `markDialling` and that result exactly two commands can move the
+ * entry, and B1's death produces both: the QUIC `LINK_DOWN` and the sidecar's
+ * `PEER_EXPIRED`.
+ *
+ * Only one of them leaves `pending()` at 0 for good. `PeerTable.expire` takes a
+ * `Dialling` entry to `Expired` and `onExpired` cancels its retry, and nothing
+ * returns an `Expired` entry to the dial schedule but a fresh sighting, which a
+ * dead process cannot produce. A `LINK_DOWN` race cannot do it: it answers
+ * `Redial` with `dueAt = now`, `pump` dials again at once, and the late result
+ * then finds a `Dialling` entry and does arm. So the run that failed is the
+ * ordering where A's sidecar reported K1 expired **while the re-dial was still
+ * in flight** — within the dial's 5 s bound of the process exiting, rather than
+ * at the 30-43 s mDNS TTL that `ne2oh-B5` measured for a peer that merely stops
+ * being seen.
+ *
+ * The opposite ordering is not excluded and this file must not depend on
+ * either: a `PEER_EXPIRED` delivered *before* the `LINK_DOWN` is swallowed
+ * (`PeerTable.expire` refuses a key whose `upLinks` are not empty), and K1 then
+ * stays `Retained` with one armed retry that the frozen clock never releases.
+ * The arm therefore asserts what both orderings share — at most one retry armed
+ * for the single key on the dial path, K1 never `Superseded` and never
+ * re-`Peered`, and ten years of clock releasing at most that one retry rather
+ * than a re-dial loop.
  *
  * That is a real tension with the letter of `[DSC2-ID-06]` ("the old key is
  * retired without re-dial once its link drops"): after a clean restart the old
- * key is retired by *expiry*, tens of seconds later, rather than by
- * supersession at the new hello. It is named here and in the DSC2 findings
+ * key is dialled again the moment its link drops, and is retired — if it is
+ * retired at all — by a `PEER_EXPIRED` whose arrival this policy neither
+ * controls nor orders, rather than by supersession at the new hello. It is
+ * named here and in the DSC2 findings
  * entry (`doc/distribution/findings.md`, task `computenet-qzr7n.2`) so that a
  * reader of a green run knows which half of the requirement this file proves.
  * Nothing is proposed and no mechanism is added; whether to build one is the
@@ -106,11 +142,13 @@ import kotlin.time.Duration.Companion.seconds
  *
  * 1. `the old key names its successor` — K1's view reads `Peered(OUTBOUND)`
  *    instead of `Superseded(by=<K2>)`;
- * 2. and, had that one been removed, the three after B1's death: a `Peered`
- *    entry is not in `linkDown`'s no-redial set, so its drop returns `Redial`,
- *    `dialsAttempted` climbs against a dead endpoint and the failed dial arms
- *    a retry — reddening `nothing is armed for a superseded key`
- *    (`pending() == 0`) and `no dial for a superseded key, ever`.
+ * 2. and, had that one been removed, the ones after B1's death: a `Peered`
+ *    entry is not in `linkDown`'s no-redial set, so its drop returns `Redial`
+ *    and `dialsAttempted` climbs against a dead endpoint — reddening `no dial
+ *    for a superseded key, ever`. `nothing is armed for a superseded key`
+ *    (`pending() == 0`) reddens too whenever that dial's result lands on a
+ *    still-`Dialling` entry, which arm 2's KDoc explains is a race and not a
+ *    certainty; the dial itself is the reliable half.
  *
  * Arm 2 is untouched by that mutation, and that is the point: its `judge`
  * never reaches step 4's `old != null` branch at all, because `linkDown`
@@ -415,7 +453,7 @@ class IrohDiscoveredKeyRotationTest {
     }
 
     @Test
-    fun `a discovered peer restarts under a new key at the same address  the new key is peered as the same identity, the old key is re-dialled until it expires, and no supersession is recorded`() {
+    fun `a discovered peer restarts under a new key at the same address  the new key is peered as the same identity, the old key's drop puts it back on the dial path, and no supersession is recorded`() {
         val binary = SidecarBinary.orSkip()
         MulticastGate.deliveryOrSkip()
 
@@ -480,12 +518,47 @@ class IrohDiscoveredKeyRotationTest {
 
                     // `linkDown` answered Redial — attribution cleared, dueAt =
                     // now — so the policy dials a dead endpoint at once. Each
-                    // attempt is bounded by the 5 s dialTimeout; the failure
-                    // arms a retry which the frozen clock never releases.
+                    // attempt is bounded by the 5 s dialTimeout. This is the
+                    // half of [DSC2-DIAL-06] the clean restart does honour: the
+                    // dropped key goes straight back on the dial schedule.
                     await("the re-dial to a dead endpoint to fail", timeoutMs = 90_000) {
                         peering.counters.dialsFailed.count >= 1L
                     }
-                    await("a retry armed for K1") { timer.pending() == 1 }
+
+                    // What follows the failure is NOT "a retry is armed" — see
+                    // this class's KDoc: `onDialDone` arms one only when
+                    // `PeerTable.dialFailed` returns a dueAt, and that method
+                    // returns null for a key the sidecar's `PEER_EXPIRED` has
+                    // already moved off `Dialling`. The first real execution
+                    // took that branch. Both orderings are landed behaviour, so
+                    // what is asserted here is what they share, read at a
+                    // settled point rather than waited for: the dialling stops
+                    // (a Retained entry's dueAt is now + schedule(0), which a
+                    // clock frozen at 0 never reaches, and `observe` does not
+                    // reset it on a re-sighting; an Expired entry is off the
+                    // schedule entirely), at most one retry is armed for the
+                    // only key on the dial path, and K1 is on that path or
+                    // expired — never peered, superseded or abandoned.
+                    val dialsAfterFailure = quiesced { peering.counters.dialsAttempted.count }
+                    val armedAfterFailure = timer.pending()
+                    assertTrue(
+                        armedAfterFailure <= 1,
+                        "at most one retry is armed for K1, the only key on the dial path; found $armedAfterFailure",
+                    )
+                    val afterFailure = stateOf(peering, id1)
+                    assertTrue(
+                        afterFailure == "Retained" || afterFailure == "Expired" || afterFailure.startsWith("Dialling"),
+                        "a failed dial leaves K1 on the dial path or expired, not '$afterFailure'",
+                    )
+                    assertEquals(
+                        0L,
+                        peering.counters.superseded.count,
+                        "nothing has been superseded: B2 has not started yet",
+                    )
+                    assertTrue(
+                        neverWithin(3_000) { peering.counters.dialsAttempted.count != dialsAfterFailure },
+                        "the frozen clock releases no retry: dialsAttempted moved off $dialsAfterFailure",
+                    )
 
                     // ---- the same address comes back, under a NEW key.
                     val b2Stack = Stack(vouched(k2, b, 2), binding(), allow = setOf(PeerId("a")))
@@ -513,7 +586,7 @@ class IrohDiscoveredKeyRotationTest {
                         )
                         assertEquals(probe.principals[0], probe.principals[1])
 
-                        // And the RETRY claim does not: this is landed
+                        // And the SUPERSESSION claim does not: this is landed
                         // behaviour, recorded, not a wish. `judge` never
                         // reached its supersession branch, because `linkDown`
                         // had already nulled the attribution it searches for.
@@ -530,32 +603,47 @@ class IrohDiscoveredKeyRotationTest {
                         // `PeerTable.describe` renders these three without
                         // arguments except Dialling's attempt — the bead's
                         // "Retained(" / "Expired(" spelling is not what the
-                        // code prints. Expired is admitted here because the
-                        // sidecar's own mDNS expiry (30-43 s, ne2oh-B5) can
-                        // land before the rotation does on a slow runner; the
-                        // load-bearing half is the assertion above it.
+                        // code prints. Expired is admitted here because A's
+                        // sidecar may report K1 expired at any point after B1's
+                        // process exits — promptly, as CI run 35552410099
+                        // showed, or at the 30-43 s mDNS TTL (ne2oh-B5), or on
+                        // a slow runner not before this line; the load-bearing
+                        // half is the assertion above it.
                         assertTrue(
                             afterRotation == "Retained" || afterRotation == "Expired" || afterRotation.startsWith("Dialling"),
                             "the old key should still be on the dial path or expired, not '$afterRotation'",
                         )
 
-                        // ---- the only wall-clock wait in this file, and it is
-                        // a wait on the SIDECAR's mDNS expiry (30-43 s per run,
-                        // ne2oh-B5), not on the policy's schedule: a
-                        // `PEER_EXPIRED` is what finally retires K1 and cancels
-                        // the retry it still held ([DSC2-DIAL-06]).
-                        await("K1 to reach Expired on the sidecar's own mDNS expiry", timeoutMs = 90_000) {
-                            stateOf(peering, id1) == "Expired" && timer.pending() == 0
-                        }
-
-                        val dialsBefore = peering.counters.dialsAttempted.count
+                        // ---- ten years later. There is deliberately no wait on
+                        // the sidecar's mDNS expiry here: whether K1 has already
+                        // been retired by a `PEER_EXPIRED` or is still Retained
+                        // holding one armed retry is the ordering race the KDoc
+                        // names, and waiting for one of the two would be waiting
+                        // for a coin. What both owe is the same bound —
+                        // advancing the clock releases AT MOST the retry that is
+                        // armed right now. `ManualTimer.advanceTo` runs it, it
+                        // posts one `Due`, `pump` dials the one key that is due,
+                        // and that dial's failure re-arms at
+                        // `tenYears + schedule(attempt)`, in the future again
+                        // ([DSC2-DIAL-03]). An expired key is released by
+                        // nothing at all, which is the `armedBefore == 0` case
+                        // of the same inequality.
+                        val armedBefore = timer.pending()
+                        assertTrue(armedBefore <= 1, "at most one retry is armed for K1, found $armedBefore")
+                        val dialsBefore = quiesced { peering.counters.dialsAttempted.count }
                         advanceTo(clock, timer, tenYears)
                         assertTrue(
-                            neverWithin(3_000) { peering.counters.dialsAttempted.count != dialsBefore },
-                            "an expired key is not dialled again: dialsAttempted moved off $dialsBefore",
+                            neverWithin(3_000) {
+                                peering.counters.dialsAttempted.count > dialsBefore + armedBefore
+                            },
+                            "ten years release at most the one armed retry, never a re-dial loop: " +
+                                "dialsAttempted passed ${dialsBefore + armedBefore}",
                         )
-                        assertEquals("Expired", stateOf(peering, id1), "ten years later the old key is still expired")
-                        assertEquals(0, timer.pending(), "and nothing is armed for it")
+                        val tenYearsOn = stateOf(peering, id1)
+                        assertFalse(
+                            tenYearsOn.startsWith("Superseded") || tenYearsOn.startsWith("Peered"),
+                            "ten years later the old key is neither superseded nor re-peered, yet reads '$tenYearsOn'",
+                        )
                         assertTrue(node.links(id2).single().peered, "b is still peered, on her new key")
                         assertEquals(
                             0L,
