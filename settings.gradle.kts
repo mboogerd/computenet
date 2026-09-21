@@ -66,6 +66,7 @@ include(":demo:slotfinder")
 include(":demo:skillmatch")
 include(":demo:tiering")
 include(":demo:backlog-triage")
+include(":demo:alignment")
 include(":demo:social")
 
 rootProject.name = "computenet"
