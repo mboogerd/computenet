@@ -50,8 +50,8 @@ use std::{
 };
 
 use iroh_dns_server::{
-    Server,
     config::{Config, MetricsConfig, RateLimitConfig},
+    Server,
 };
 
 #[tokio::main]
@@ -105,9 +105,9 @@ async fn run() -> Result<(), String> {
         .map_err(|e| format!("the server stopped: {e:#}"))
 }
 
-/// The configuration shared by the binary's `run` and its own unit test: HTTP
-/// + DNS on loopback with no TLS, no metrics, no mainline DHT, and PUT rate
-/// limiting disabled.
+/// The configuration shared by the binary's `run` and its own unit test:
+/// HTTP + DNS on loopback with no TLS, no metrics, no mainline DHT, and PUT
+/// rate limiting disabled.
 fn loopback_config(http_port: u16, dns_port: u16, origin: String, data_dir: PathBuf) -> Config {
     let mut config = Config::default();
 
