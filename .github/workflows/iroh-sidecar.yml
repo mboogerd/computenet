@@ -117,6 +117,14 @@ name: iroh-sidecar
 # pass identically against a dead relay. See doc/iroh-adoption.md's
 # "Documented default for ComputeNet development" section for the same
 # update recorded from the adoption-policy side.
+#
+# UPDATE (2026-09-21, computenet-vnscs): the JVM-driven test steps below now
+# also spawn every sidecar under `LookupMode::Rendezvous`, publishing to and
+# resolving through a job-local, self-hosted `computenet-iroh-dns` (pkarr
+# relay + DNS on loopback, no TLS) rather than n0's public infrastructure,
+# with a liveness check reddening the job if that server died mid-run. The
+# development default outside this CI lane stays `LookupMode::N0` (F2-D7,
+# aas-D9) — this is lane configuration, not a change to that policy.
 on:
   pull_request:
   workflow_dispatch: {}
@@ -265,6 +273,62 @@ jobs:
           echo "RELAY_URL=$relay_url" >> "$GITHUB_ENV"
           echo "RELAY_PID=$relay_pid" >> "$GITHUB_ENV"
 
+      # computenet-vnscs: starts a job-local, self-hosted pkarr relay + DNS
+      # server so the JVM-driven sidecars spawned in the two Gradle steps
+      # below can run under `LookupMode::Rendezvous` without reaching n0's
+      # public rendezvous infrastructure. `cargo build` above already
+      # produced target/debug/computenet-iroh-dns (a plain `cargo build`
+      # builds every binary target in the crate, including src/bin/dns.rs).
+      # The binary writes exactly one JSON line before it starts serving —
+      # `{"port":<n>,"pkarrRelayUrl":"http://127.0.0.1:<n>/pkarr","dnsOrigin":"irohdns.example.","dnsAddr":"127.0.0.1:<m>"}`
+      # — see iroh/sidecar/src/bin/dns.rs's own doc comment, which states the
+      # same shape and field order. This step fails the job, dumping both
+      # logs, if that line never appears within the bounded wait below or if
+      # the process exits first — it does not leave PKARR_URL/DNS_ORIGIN/
+      # DNS_ADDR unset for a later step to trip over.
+      - name: Start job-local iroh dns (pkarr relay + DNS)
+        working-directory: iroh/sidecar
+        run: |
+          set -euo pipefail
+          nohup ./target/debug/computenet-iroh-dns --port 0 \
+            > /tmp/iroh-dns.out 2> /tmp/iroh-dns.err &
+          dns_pid=$!
+
+          pkarr_url=""
+          dns_origin=""
+          dns_addr=""
+          for _ in $(seq 1 50); do
+            if [ -s /tmp/iroh-dns.out ]; then
+              pkarr_url=$(grep -oE '"pkarrRelayUrl":"[^"]+"' /tmp/iroh-dns.out | cut -d'"' -f4 || true)
+              dns_origin=$(grep -oE '"dnsOrigin":"[^"]+"' /tmp/iroh-dns.out | cut -d'"' -f4 || true)
+              dns_addr=$(grep -oE '"dnsAddr":"[^"]+"' /tmp/iroh-dns.out | cut -d'"' -f4 || true)
+              [ -n "$pkarr_url" ] && [ -n "$dns_origin" ] && [ -n "$dns_addr" ] && break
+            fi
+            if ! kill -0 "$dns_pid" 2>/dev/null; then
+              echo "computenet-iroh-dns exited before printing its announcement line:" >&2
+              cat /tmp/iroh-dns.err >&2
+              exit 1
+            fi
+            sleep 0.2
+          done
+
+          if [ -z "$pkarr_url" ] || [ -z "$dns_origin" ] || [ -z "$dns_addr" ]; then
+            echo "timed out waiting for computenet-iroh-dns's announcement line" >&2
+            echo "--- stdout ---" >&2
+            cat /tmp/iroh-dns.out >&2
+            echo "--- stderr ---" >&2
+            cat /tmp/iroh-dns.err >&2
+            exit 1
+          fi
+
+          line="iroh-sidecar-dns pid=$dns_pid pkarr=$pkarr_url origin=$dns_origin dns=$dns_addr"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          echo "PKARR_URL=$pkarr_url" >> "$GITHUB_ENV"
+          echo "DNS_ORIGIN=$dns_origin" >> "$GITHUB_ENV"
+          echo "DNS_ADDR=$dns_addr" >> "$GITHUB_ENV"
+          echo "DNS_PID=$dns_pid" >> "$GITHUB_ENV"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -298,7 +362,8 @@ jobs:
         run: |
           set -euo pipefail
           start=$(date +%s)
-          ./gradlew :iroh:check -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL"
+          ./gradlew :iroh:check -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL" \
+            -Piroh.pkarr.url="$PKARR_URL" -Piroh.dns.origin="$DNS_ORIGIN" -Piroh.dns.nameserver="$DNS_ADDR"
           end=$(date +%s)
           line="iroh-sidecar-timing step=gradle-iroh-check seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
           echo "$line"
@@ -339,7 +404,8 @@ jobs:
       - name: beadsmirror iroh convergence suite (bd+dolt+sidecar together)
         run: |
           set -euo pipefail
-          ./gradlew :demo:beadsmirror:test -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL" --rerun \
+          ./gradlew :demo:beadsmirror:test -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL" \
+            -Piroh.pkarr.url="$PKARR_URL" -Piroh.dns.origin="$DNS_ORIGIN" -Piroh.dns.nameserver="$DNS_ADDR" --rerun \
             --tests 'civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest' \
             --tests 'civictech.demo.beadsmirror.IrohMirrorTransportTest'
 
@@ -385,3 +451,32 @@ jobs:
           fi
           echo "iroh-sidecar-relay-liveness pid=$RELAY_PID alive=true"
           kill "$RELAY_PID" 2>/dev/null || true
+
+      # computenet-vnscs: the same non-vacuity argument as the relay
+      # liveness step above, for the dns half of rendezvous. Every peer in
+      # the Gradle steps above still holds a direct loopback address via
+      # ADD_PEER, so both would pass identically against a dead
+      # computenet-iroh-dns — `kill -0` on $DNS_PID (exported by "Start
+      # job-local iroh dns" via GITHUB_ENV) is what makes the claim that
+      # rendezvous ran against a live, job-local server non-vacuous in THIS
+      # lane. This check only proves the server stayed up; it is not itself
+      # proof that `LookupMode::Rendezvous` resolved correctly through it —
+      # that functional proof is `tests/rendezvous_mode.rs`, exercised in
+      # the "cargo test (timed)" step above.
+      - name: Assert the job-local dns server is still alive
+        run: |
+          set -euo pipefail
+          if [ -z "${DNS_PID:-}" ]; then
+            echo "DNS_PID is unset — the dns-start step did not run or did not export it" >&2
+            exit 1
+          fi
+          if ! kill -0 "$DNS_PID" 2>/dev/null; then
+            echo "computenet-iroh-dns (pid $DNS_PID) is not alive after the Gradle test steps" >&2
+            echo "--- stdout ---" >&2
+            cat /tmp/iroh-dns.out >&2 || true
+            echo "--- stderr ---" >&2
+            cat /tmp/iroh-dns.err >&2 || true
+            exit 1
+          fi
+          echo "iroh-sidecar-dns-liveness pid=$DNS_PID alive=true"
+          kill "$DNS_PID" 2>/dev/null || true
