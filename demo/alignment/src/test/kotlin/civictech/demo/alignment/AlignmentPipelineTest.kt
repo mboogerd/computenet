@@ -317,6 +317,16 @@ class AlignmentPipelineTest {
     // ── continuous ratings (epic computenet-9y79n: floating point in [1, 9]) ──
 
     @Test
+    fun `a rating rounds half-up to the nearest thousandth and renders without trailing zeros`() {
+        assertEquals(1000, RatingScale.toMilli(1.0004))
+        assertEquals(1001, RatingScale.toMilli(1.0006))
+        assertEquals(9000, RatingScale.toMilli(8.9996))
+        assertEquals(6370, RatingScale.toMilli(6.37))
+        assertEquals("6.37", RatingScale.format(6370))
+        assertEquals("8", RatingScale.format(8000))
+    }
+
+    @Test
     fun `non-integer ratings fold exactly, rounded to thousandths`() {
         val r = rig()
         r.rate(a, "impact", "ann", 6.37)
