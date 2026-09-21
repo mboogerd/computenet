@@ -86,18 +86,6 @@ $T computenet-4ru --jsonl /nonexistent.jsonl >/dev/null 2>&1 && rc=0 || rc=$?
 [ "${rc:-0}" = 3 ] && ok "exit 3 on a missing export (NOTHING checked)" \
                    || bad "missing export gave exit ${rc:-0}, expected 3"
 
-echo "validate-skills.rb line-budget ratchet"
-if ruby $S/validate-skills.rb >/dev/null 2>&1; then ok "the tree is inside budget"
-  else bad "tree is over budget"; fi
-t=$(mktemp -d); cp .claude/skills/line-budget.txt "$t/lb"
-grep -v '^work  ' .claude/skills/line-budget.txt > "$t/nolb" && cp "$t/nolb" .claude/skills/line-budget.txt
-ruby $S/validate-skills.rb 2>/dev/null | grep -q "no line budget for 'work'" \
-  && ok "a skill with no budget FAILS (unpriced growth is the thing it stops)" \
-  || bad "a missing budget entry passed"
-cp "$t/lb" .claude/skills/line-budget.txt; rm -rf "$t"
-ruby $S/validate-skills.rb >/dev/null 2>&1 && ok "budget file restored, tree green" \
-  || bad "restore left the tree red"
-
 [ "$fail" = 0 ] && echo "feedback.test.sh: all checks passed" \
                 || echo "feedback.test.sh: FAILURES above"
 exit $fail

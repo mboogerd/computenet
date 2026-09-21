@@ -29,6 +29,14 @@ iroh = "1.0"
 # feature is what exposes `iroh_relay::server::Server`; the sidecar library
 # itself never touches it, only `src/bin/relay.rs` and `tests/relay_mode.rs`.
 iroh-relay = { version = "1.0", features = ["server"] }
+# Opt-in LAN peer enumeration (aas-D3, F1-D1). Must ride on the pinned `iroh`
+# 1.0.3 line without moving it — see ne2oh-B1: this resolves against 1.0.3 and
+# locks 4 new packages (acto, smol_str, swarm-discovery, and itself).
+iroh-mdns-address-lookup = "0.5"
+# `StreamExt::next` over the mDNS subscription stream (ne2oh-B7). Already in
+# the lock via that crate; `default-features = false` keeps it to the futures
+# core rather than pulling an executor.
+futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", features = [
     "io-util",
     "macros",

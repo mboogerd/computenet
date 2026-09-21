@@ -165,16 +165,56 @@ jobs:
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
 
+      # computenet-2wmp5: `-- --nocapture` and the tee into
+      # /tmp/iroh-sidecar-cargo-test.log exist so the next step can tell an
+      # executed tests/mdns.rs from a skipped one. libtest captures and
+      # discards a PASSING test's stdout/stderr, and tests/mdns.rs's
+      # DSC2-NV-01 multicast-delivery gate skips (prints `SKIPPED
+      # tests/mdns.rs: ...` to stderr, then returns Ok) rather than fails when
+      # a host cannot deliver multicast — a skip IS a pass, so a plain
+      # `cargo test`'s log has no textual difference between "the body ran"
+      # and "the gate refused"; only elapsed time did, which the bead this
+      # step closes (computenet-2wmp5) documents as inadequate on its own.
       - name: cargo test (timed)
         working-directory: iroh/sidecar
         run: |
           set -euo pipefail
           start=$(date +%s)
-          cargo test
+          cargo test -- --nocapture 2>&1 | tee /tmp/iroh-sidecar-cargo-test.log
           end=$(date +%s)
           line="iroh-sidecar-timing step=cargo-test seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+      # computenet-2wmp5: reddens the job, rather than only logging, when
+      # tests/mdns.rs's delivery gate skips on this runner. Same "a vacuous
+      # pass is a CI regression, not a silently accepted downgrade" reasoning
+      # this file already applies below via "Assert the iroh convergence
+      # suite actually ran" (computenet-cqde) and ci.yml applies to the
+      # WS-transport suites (computenet-7em.5) — chosen over leaving the skip
+      # merely visible because every observed run of this lane has delivered
+      # real multicast (computenet-ne2oh's feature review, run 35499476852:
+      # the JVM twin `MulticastGate` passed live in the SAME job, and this
+      # test's own elapsed time matched neither skip shape), so a skip here
+      # is evidence the runner regressed, not evidence of an expected
+      # environment limit. This step does NOT touch tests/mdns.rs itself: a
+      # developer machine that genuinely lacks multicast still gets a passing
+      # skip there, per [DSC2-NV-01] — only this CI lane treats that same
+      # skip as a failure.
+      - name: Assert tests/mdns.rs actually exercised multicast delivery
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/iroh-sidecar-cargo-test.log ]; then
+            echo "the cargo test log is absent — the 'cargo test (timed)' step did not tee it" >&2
+            exit 1
+          fi
+          if grep -q 'SKIPPED tests/mdns.rs' /tmp/iroh-sidecar-cargo-test.log; then
+            echo "tests/mdns.rs skipped on this CI runner:" >&2
+            grep 'SKIPPED tests/mdns.rs' /tmp/iroh-sidecar-cargo-test.log >&2
+            echo "ubuntu-latest has delivered multicast on every run observed so far (computenet-2wmp5); treating this as a CI regression rather than a silent pass. See tests/mdns.rs's module doc comment for the discriminator this step relies on." >&2
+            exit 1
+          fi
+          echo "iroh-sidecar-mdns-nonvacuous: tests/mdns.rs executed (no 'SKIPPED tests/mdns.rs' line in the --nocapture log)"
 
       # computenet-o0m3.4: starts a job-local, self-hosted relay so no
       # JVM-driven sidecar in the two Gradle steps below has to reach n0's

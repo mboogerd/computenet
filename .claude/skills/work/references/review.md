@@ -41,7 +41,7 @@ Read the whole comments file. `bd show` never returns comment bodies. The implem
 
 ### The diff
 
-Diff against a freshly fetched base, never a bare local `main`. Each role's section gives the commands. Record `git -C <worktree> rev-parse HEAD` before you change anything. That sha is your review base, and authorship is measured from it. If the diff's size or contents surprise you, suspect the base first, then re-fetch and diff again.
+Diff against a freshly fetched base, never a bare local `main`. Each role's section gives the commands. Record `git -C <worktree> rev-parse HEAD` before you change anything. That sha is your review base, and authorship is measured from it. If the diff's size or contents surprise you, suspect the base first, then re-fetch and diff again. Read HEAD again immediately before you write the verdict and name that sha in it: the orchestrator repairs branches while reviewers read, and a verdict written against a superseded commit certifies code nobody read. If it moved, diff the two and decide on what you now see.
 
 An empty diff is not proof that no work was done. Run `git -C <worktree> status --short` first. A finished deliverable that was never committed is a different finding from "produced nothing". Name the files, and do not commit them for the implementer without saying you did.
 
@@ -166,7 +166,7 @@ If `metadata.pr` is empty and `gh pr list --head <branch>` returns nothing, say 
 git -C <feature-worktree> fetch origin main && git -C <feature-worktree> diff origin/main...HEAD
 ```
 
-With `metadata.base_branch` set, diff against `origin/<that branch>` instead.
+With `metadata.base_branch` set, diff against `origin/<that branch>` instead — but validate the field first, the same way 5a does. It is a timestamped snapshot, and a merged branch's ref still exists on origin, so a stale one yields a confusing diff (work reading as unreviewed, or as missing) rather than an error. `verify-ready.sh`'s `STALE-BASE` decides it; on STALE, diff against `origin/main` and say so.
 
 The feature worktree is yours alone until you report. Run the affected module suites, plus the repo-wide gate if the feature touches anything cross-cutting, and only one repo-wide `./gradlew test` may run at a time ([agent.md § Running commands](agent.md#running-commands)). Choose suites by what reads the changed files, not only by what imports them ([evidence.md § What your change reaches](evidence.md#what-your-change-reaches)).
 
@@ -183,7 +183,7 @@ Its header documents the outputs. The final line is the reading, and the sha it 
 | SETTLED, all green | Quote every row, non-required ones included. Say which checks actually executed the changed modules, because skipped suites and lane filters hide behind green ([evidence.md § CI evidence](evidence.md#ci-evidence)). |
 | SETTLED with a red required check | Attribute it per [recovery.md § A red required check](recovery.md#a-red-required-check), quoting the query and its result. The verdict is DRAFT. If the red is unrelated and is the only blocker, say that in these words: "the substantive review is complete and passes; sole blocker is `<check>`, attributed to `<bead>`; one re-run going green would change the verdict." Re-runs are the orchestrator's. |
 | TIMEOUT-PENDING | Return READY or DRAFT on everything else and stop. Name each pending check in NOT VERIFIED; the orchestrator settles checks before it ships. |
-| QUERY-FAILED, NO-RUN, or the call never returned | Nothing was read. Mark CI NOT VERIFIED and stop. |
+| QUERY-FAILED, NO-RUN, UNBOUND, or the call never returned | Nothing you can use was read — UNBOUND means the rows named no commit, so they are not about your head. Mark CI NOT VERIFIED and stop. |
 
 A repair you push creates a new head, and that is the only thing that earns a second call. A pushed repair costs a full required-check cycle. If the repair and its cycle will not fit in your time bound, return DRAFT instead of starting it.
 

@@ -1,9 +1,0 @@
-# computenet-dpfin: the /work skill distilled after an error-class analysis
-# (422 defect instances in 19 classes). SKILL.md + 21 references (10,943 lines)
-# become SKILL.md + 7 role-owned references (~2,000 lines): incident narrative,
-# duplicated and drifted rules, exception chains and enumerations removed;
-# every load-bearing rule kept (independent coverage audit, 0 of 148 missing).
-# remediate-friction loses one line where a pointer to claim-sync.md became a
-# pointer to SKILL.md's hard constraints.
-work -8933
-remediate-friction -1
