@@ -341,6 +341,35 @@ class AllocatorObserveAppTest {
         frame.obj("stale").recordCount() shouldBe 3
     }
 
+    // computenet-p29ai: the two tests above show every CONNECTING window lands
+    // on the frozen envelope, but that rests on a fact neither one asserts —
+    // `holder.stop` marks the served state stopped strictly BEFORE the
+    // terminal frame is broadcast. Swap those two lines in
+    // `AllocatorObserveApp.start()` and both tests above still pass (every
+    // window still ends on frozen, just via a different path), so they cannot
+    // stand in for this. `stopBroadcastProbe` is a deterministic seam, not a
+    // race: both probe calls happen on the single poll thread as sequential
+    // statements wrapping the two operations themselves, so the recorded
+    // order IS the source order — no sleep, no timing dependency.
+    @Test
+    fun `the poll loop marks the served state stopped before it broadcasts the terminal frozen frame`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }
+        val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+        app.stopBroadcastProbe = { order += it }
+        app.start()
+
+        broken.set(true)
+        awaitUntil("the terminal frame to be broadcast") { order.size >= 2 }
+
+        order shouldBe listOf("stopped", "broadcasting")
+    }
+
     // -----------------------------------------------------------------
     // fpml.4-D7 — re-baseline accounting
     // -----------------------------------------------------------------
