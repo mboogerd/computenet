@@ -103,7 +103,7 @@ class DiscoveredIrohMirrorTransport(
          */
         private const val MDNS_UNAVAILABLE_MARKER = "mdns unavailable"
 
-        /** How many recent stderr lines a formation failure can quote. */
+        /** How many recent stderr lines a formation or heal failure quotes. */
         private const val STDERR_TAIL = 50
 
         private const val PEERED_PREFIX = "Peered("
@@ -153,7 +153,7 @@ class DiscoveredIrohMirrorTransport(
             runCatching { node.close() }
             throw e
         }
-        DialLink(node, peering, peeredKey).also { dialled = it }
+        DialLink(node, peering, peeredKey, stderr).also { dialled = it }
     }
 
     /**
@@ -172,12 +172,12 @@ class DiscoveredIrohMirrorTransport(
             }
             if (peered.size == 1) return peered.single().keyHex
             check(System.currentTimeMillis() < deadline) {
-                val mdns = stderr.firstMatching(MDNS_UNAVAILABLE_MARKER)
+                val mdns = stderr.mdnsUnavailable()
                 if (mdns != null) {
                     "no discovered peer was peered within ${formationTimeoutMillis}ms; the sidecar reported: $mdns"
                 } else {
                     "no discovered peer was peered within ${formationTimeoutMillis}ms and the sidecar reported no " +
-                        "mDNS problem; retained views: ${describe(views)}"
+                        "mDNS problem; retained views: ${describe(views)}; sidecar stderr tail: ${stderr.tail()}"
                 }
             }
             Thread.sleep(50)
@@ -220,6 +220,7 @@ class DiscoveredIrohMirrorTransport(
         val node: IrohNode,
         val peering: DiscoveredPeering,
         private val peeredKeyHex: String,
+        private val stderr: StderrTail,
     ) : MirrorLink {
 
         /** The peered connection, once [detach] took it off the policy; null while the policy holds it. */
@@ -257,7 +258,18 @@ class DiscoveredIrohMirrorTransport(
         fun reopen() {
             check(severed) { "the peering is not partitioned" }
             val live = checkNotNull(connection)
-            live.heal()
+            // First exercise of IrohConnection.heal() after a planned sever on
+            // a dialDiscovered connection (the bead's `unverified:` clause):
+            // a failure here carries the dialling sidecar's stderr with it.
+            try {
+                live.heal()
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "heal() of the discovered connection failed: ${e.message}; dialling sidecar stderr tail: " +
+                        stderr.tail(),
+                    e,
+                )
+            }
             severed = false
             // Same gap IrohMirrorTransport closes: heal() returns once THIS
             // side's hello is out; "carrying" means the peer's hello was
@@ -265,7 +277,8 @@ class DiscoveredIrohMirrorTransport(
             val deadline = System.currentTimeMillis() + healTimeoutMillis
             while (!live.peered) {
                 check(System.currentTimeMillis() < deadline) {
-                    "the discovered iroh peering did not carry again within ${healTimeoutMillis}ms of heal()"
+                    "the discovered iroh peering did not carry again within ${healTimeoutMillis}ms of heal(); " +
+                        "dialling sidecar stderr tail: ${stderr.tail()}"
                 }
                 Thread.sleep(20)
             }
@@ -295,8 +308,13 @@ class DiscoveredIrohMirrorTransport(
             while (lines.size > STDERR_TAIL) lines.removeFirst()
         }
 
+        /** The first `mdns unavailable` line the sidecar wrote, or `null`. */
         @Synchronized
-        fun firstMatching(marker: String): String? = mdnsLine ?: lines.firstOrNull { it.contains(marker) }
+        fun mdnsUnavailable(): String? = mdnsLine
+
+        /** The retained lines, oldest first, for a failure message. */
+        @Synchronized
+        fun tail(): String = if (lines.isEmpty()) "(none)" else lines.joinToString(" | ")
     }
 
     private fun describe(views: List<PeerView>): String =
