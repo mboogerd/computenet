@@ -299,8 +299,7 @@ Typical commands:
 `dist` or `dur` scenario, so it is **not** evidence for any of them. That is the
 whole of `concord/corpus/42-replication/` and `15-durability/`, **and** single
 files inside otherwise-`core` directories — `24-data-cells/`, `33-mobility/`,
-`41-location/` — so a directory is not core just because most of it is. Since
-computenet-j2x.7 the
+`41-location/` — so a directory is not core just because most of it is. The
 run says so itself — each excluded scenario reports as a named `SKIPPED` node and
 one summary node states the active set and the excluded count — so read the
 `skipped` count before citing a green concord run.
@@ -311,9 +310,7 @@ a `--tests 'fully.qualified.TestName'` filter and the plain module gate
 unchanged test task as `UP-TO-DATE` and skips it, and it does not care whether
 you filtered: a rerun of the exact command above that produced real JUnit
 output can complete in under a second with no test output at all —
-indistinguishable from a pass at a glance. This paragraph used to describe only
-the filtered case, and an agent running the whole `:kernel` suite reasonably
-read itself as outside the warning; it is not (computenet-0frx). When you need
+indistinguishable from a pass at a glance. When you need
 proof a test actually executed (reviews, verifying a fix is not a no-op), add
 `--rerun` to the specific test task:
 `./gradlew :kernel:test --tests 'fully.qualified.TestName' --rerun`.
@@ -363,10 +360,6 @@ GH_PAGER=cat gh api repos/mboogerd/computenet/rulesets/20149495 \
   | jq -r '.rules[]|select(.type=="required_status_checks")
            |.parameters.required_status_checks[].context'
 ```
-
-`kernel-test` was missing here until 2026-08-17 while `gh pr checks` reported
-it on every PR, so a session deciding whether a red check blocked had to guess
-(computenet-4prd).
 
 **Auto-merge is enabled, and a workflow arms it on every PR** (`.github/workflows/auto-merge.yml`,
 skipping drafts and forks). The practical consequence:
