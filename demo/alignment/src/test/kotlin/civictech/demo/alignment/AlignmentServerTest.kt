@@ -238,12 +238,15 @@ class AlignmentServerTest {
     }
 
     @Test
-    fun `the page serves sliders and a ranking root`() = withApp { _, probe ->
+    fun `the page serves the two section roots, a weights root and a range input`() = withApp { _, probe ->
         val page = probe.get("/")
         assertEquals(200, page.statusCode())
         assertTrue(page.headers().firstValue("Content-Type").orElse("").startsWith("text/html"), "${page.headers()}")
-        assertTrue("""type="range"""" in page.body(), "range inputs")
+        assertTrue("""id="rate"""" in page.body(), "rate section root")
+        assertTrue("""id="board"""" in page.body(), "board section root")
+        assertTrue("""id="weights"""" in page.body(), "weights root")
         assertTrue("""id="ranking"""" in page.body(), "ranking root")
+        assertTrue("""type="range"""" in page.body(), "range inputs")
         assertEquals(404, probe.get("/nope").statusCode())
     }
 
