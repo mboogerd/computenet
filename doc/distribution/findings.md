@@ -1022,11 +1022,23 @@ dies never re-dials K1, not at the link drop and not ten years later. **Arm
 does NOT produce a supersession: `PeerTable.linkDown` nulls the entry's
 `attributedPeer` on the link drop, so by the time K2's hello is judged the
 table has already forgotten K1 was `b`; K2 is admitted as a plain `Admit`,
-and K1 is re-dialled on the injected schedule against its now-dead endpoint
-until `PEER_EXPIRED` (30–43 s, `ne2oh-B5`) moves it to `Expired` with no
-retry armed. Every identity claim still holds in arm 2 — same `PeerId`, same
-`Principal`, no denial — so what it pins beyond identity is the *retry*
-behaviour, and it pins that as landed, not as desired.
+and K1 is re-dialled on the injected schedule against its now-dead endpoint.
+What happens to that re-dial next is a race the test asserts as a
+disjunction rather than a single outcome, because `LINK_DOWN` and the
+sidecar's `PEER_EXPIRED` can arrive in either order: if `PEER_EXPIRED` lands
+first it is swallowed (`PeerTable.expire` refuses a key whose `upLinks` are
+not empty) and K1 stays `Retained` with one armed retry that the frozen
+clock never releases; if it lands after the re-dial is already in flight, K1
+moves to `Expired` with no retry armed. CI run `35552410099` — the only real
+execution — observed the second ordering, with K1 expiring within the
+dial's 5 s bound of B1's process exiting, not at the 30–43 s mDNS TTL that
+`ne2oh-B5` measured for a peer that merely stops being seen; the opposite
+ordering is not excluded and the test must not depend on either. Every
+identity claim still holds in arm 2 — same `PeerId`, same `Principal`, no
+denial — so what it pins beyond identity is that at most one retry is armed
+and K1 is `Retained`, `Expired`, or still `Dialling` — never `Superseded`
+and never re-`Peered` — pinning that disjunction as landed, not a single
+predicted outcome.
 
 This is a real, deliberately unresolved tension with the LETTER of
 `[DSC2-ID-06]` ("the old key's connection shall be retired without re-dial
