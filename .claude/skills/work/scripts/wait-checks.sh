@@ -445,7 +445,9 @@ for i in $(seq 1 "$rounds"); do
       echo "wait-checks: wall-clock budget ${DEADLINE_SECONDS}s reached after $i of" \
            "$rounds rounds — stopping short of the 600s foreground cap rather than" \
            "being auto-backgrounded. Rounds are slower than 20s here. This is a" \
-           "TIMEOUT, not a fault: call again (two calls is the normal cold start)."
+           "TIMEOUT, not a fault: call again (two calls is the normal cold start)." \
+           "max-rounds alone cannot lengthen a call; raise WAIT_CHECKS_DEADLINE_SECONDS with it," \
+           "and keep that deadline plus ~100s inside your own Bash timeout (600s in the foreground)."
       break
     fi
     sleep 20
@@ -482,7 +484,8 @@ if [ -n "$ages" ]; then
   done
   if [ "$oldest" -lt "$STUCK_AFTER_MIN" ]; then
     echo "wait-checks: ORDINARY — every pending required check is under ${STUCK_AFTER_MIN}m." \
-         "A cold-start settle normally takes TWO invocations; re-run this exact command."
+         "A cold-start settle normally takes TWO invocations; re-run this exact command" \
+         "(a feature reviewer does not: review.md gives it one call per head)."
   else
     echo "wait-checks: STUCK — a required check has run for ${oldest}m (>= ${STUCK_AFTER_MIN}m)." \
          "Investigate rather than re-running."
