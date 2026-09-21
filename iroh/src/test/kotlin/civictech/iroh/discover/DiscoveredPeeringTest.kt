@@ -350,6 +350,86 @@ class DiscoveredPeeringTest {
         }
     }
 
+    /**
+     * `computenet-hlw0e`. The ordering the residual was filed against:
+     * `PEER_EXPIRED` lands while a dial is still open — before `dialFailed`
+     * ever runs — so `PeerTable.dialFailed` finds no `Dialling` entry when the
+     * dial's later failure arrives, and `onDialDone` arms nothing at all
+     * ([DSC2-DIAL-06]). The sibling test above only ever expires a key
+     * *after* its retry is already armed; this one expires it *mid-dial*,
+     * which is the ordering `IrohDiscoveredKeyRotationTest` (CI run
+     * `35552410099`) actually hit.
+     *
+     * Prescribed mutation: replace `dialFailed`'s
+     * `entry.state as? PeerState.Dialling ?: return null` with an
+     * unconditional cast, and the `timer.pending() == 0` assertion below
+     * fails — a retry gets armed for an already-expired key.
+     */
+    @Test
+    fun `a PEER_EXPIRED that lands while the dial is still open arms no retry when the dial later fails`() {
+        withPeering(policy = DialPolicy(schedule = { 1_000L })) { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            val dial = rig.nextDial()
+            // The LAN stops advertising the key WHILE the dial is still
+            // outstanding — no Failure has been sent yet, so the entry is
+            // still Dialling when the expiry is applied.
+            rig.expire(key)
+            await("the key to read as Expired while its dial is still open") {
+                rig.viewOf(key)?.state == "Expired"
+            }
+
+            rig.fake.send(SidecarMessage.Failure(dial.link, "unreachable"))
+            await("the failure to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+
+            assertEquals(0, rig.timer.pending(), "dialFailed found no Dialling entry, so onDialDone armed nothing")
+            assertEquals("Expired", assertNotNull(rig.viewOf(key)).state, "the late failure did not resurrect it")
+
+            rig.advanceTo(Long.MAX_VALUE / 2)
+            assertNull(rig.fake.pollHostMessage(300), "an expired key is not dialled however far the clock moves")
+            assertEquals(1L, rig.fake.dials.get())
+        }
+    }
+
+    /**
+     * `computenet-hlw0e`'s contrasting ordering: a `LINK_DOWN` — not an
+     * expiry — moves the key off `Dialling` first. `PeerTable.linkDown`
+     * answers `Redial` rather than terminating the key, so `pump()` (which
+     * runs after every command) re-dials at once, and the entry is back in
+     * `Dialling` — a fresh attempt — well before this test can observe
+     * otherwise. A retry IS armed here when that fresh dial itself fails,
+     * which is the opposite of the `PEER_EXPIRED` ordering above: the two
+     * orderings are distinguished by these two tests, not by prose.
+     */
+    @Test
+    fun `a LINK_DOWN before admission puts the key straight back in the dialable set, unlike a PEER_EXPIRED`() {
+        withPeering(policy = DialPolicy(schedule = { 1_000L })) { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            val dial = rig.nextDial()
+            // The dial's own link comes up but is torn down before any hello
+            // is exchanged — never admitted, so the entry never reaches
+            // Peered and is still Dialling when the LINK_DOWN is applied.
+            rig.fake.send(SidecarMessage.LinkUp(dial.link, key, DIRECTION_OUTBOUND))
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the dialler's own hello, drained but never answered")
+            rig.fake.send(SidecarMessage.LinkDown(dial.link, "dropped before any hello came back"))
+
+            await("the key to read as Retained again — DownOutcome.Redial, not Expired") {
+                rig.viewOf(key)?.state == "Retained"
+            }
+
+            // pump() ran right after the LINK_DOWN and found the key due at
+            // once, so a fresh dial is already in flight for the same key.
+            val redial = rig.nextDial()
+            assertTrue(redial.link != dial.link, "the pump-driven redial is a new link")
+            rig.fake.send(SidecarMessage.Failure(redial.link, "unreachable"))
+            await("the fresh dial's failure to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+            assertEquals(1, rig.timer.pending(), "unlike PEER_EXPIRED, the failure finds a Dialling entry and arms a retry")
+        }
+    }
+
     // ---------------------------------------- computenet-5e58q: the pump guard
 
     /**

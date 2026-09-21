@@ -482,6 +482,68 @@ class PeerTableTest {
         assertEquals(emptyList(), table.nextDue(now = 700, maxInFlight = 1))
     }
 
+    @Test
+    fun `dialFailed returns null for a key a PEER_EXPIRED moved off Dialling while its dial was still in flight`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+        val schedule = { _: Int -> 100L }
+
+        table.observe(k, listOf("a"), 0)
+        assertTrue(table.markDialling(k, attempt = 0))
+
+        // The PEER_EXPIRED lands before the dial itself has failed — the
+        // entry is moved off Dialling while the dial is still outstanding.
+        now = 5
+        assertTrue(table.expire(k), "the expiry sees a Dialling entry with no live link and takes it")
+        assertTrue(table.stateOf(k) is PeerState.Expired)
+
+        // The dial's later, stale failure finds no Dialling entry to update.
+        assertNull(
+            table.dialFailed(k, now = now, schedule = schedule),
+            "dialFailed must not resurrect an Expired entry or arm anything for it",
+        )
+        assertTrue(table.stateOf(k) is PeerState.Expired, "dialFailed changed nothing when it returned null")
+        assertEquals(emptyList(), table.nextDue(now = 9_999, maxInFlight = 8), "never dialled again")
+    }
+
+    @Test
+    fun `dialFailed still arms a retry when a LINK_DOWN — not an expiry — moved the key off Dialling first`() {
+        // The contrast with the PEER_EXPIRED ordering above: linkDown answers
+        // Redial rather than terminating the key, so the policy's pump()
+        // (DiscoveredPeering, not this pure table) re-dials at once — putting
+        // the entry back in Dialling before a stale failure for the earlier
+        // dial ever arrives. From the table's point of view alone this is
+        // just: a Dialling entry, taken off Dialling by something other than
+        // expire/abandon/supersede, is dialable again rather than terminal.
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+        val schedule = { _: Int -> 100L }
+
+        table.observe(k, listOf("a"), 0)
+        assertTrue(table.markDialling(k, attempt = 0))
+
+        // A link for the same key came up out of band (a concurrent inbound
+        // open) while the outbound dial was still in flight, then dropped
+        // before it was ever admitted.
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 9, source = EntrySource.ACCEPTED)
+        now = 5
+        assertEquals(DownOutcome.Redial, table.linkDown(k, linkId = 9, now = now))
+        assertTrue(table.stateOf(k) is PeerState.Retained, "linkDown put it back to Retained, not Expired")
+
+        // The policy re-dials immediately (dueAt == now); simulated here as
+        // the caller re-marking it Dialling before the earlier dial's failure
+        // is applied.
+        assertTrue(table.markDialling(k, attempt = 0))
+
+        assertEquals(
+            105L,
+            table.dialFailed(k, now = now, schedule = schedule),
+            "unlike the PEER_EXPIRED ordering, the stale failure finds a Dialling entry and arms a retry",
+        )
+    }
+
     // ---- 8. counters and the view ----
 
     @Test
