@@ -75,11 +75,17 @@ class DiscoveryStoppedAfterFormationTest {
         // Formation by discovery: exactly one peered key, one link.
         val discovery = checkNotNull(transport.discovery) { "dial() must have formed a DiscoveredPeering by now" }
         val dialledNode = checkNotNull(transport.dialledNode) { "dial() must have a node by now" }
-        val dialsBefore = discovery.counters.dialsAttempted.count
         dialledNode.links().size shouldBe 1
 
         // Stop discovery — 63um5-D1's detach step. The link must survive.
         transport.stopDiscovery()
+        // Read AFTER the stop (computenet-63um5.5): the dialling side admits
+        // only this rig's listener, so another discovery rig's advertiser on
+        // the segment (a parallel fork on CI) can still be in its
+        // dial-refuse-abandon loop up to the moment of the stop. A dial the
+        // running policy made before the stop is not what this asserts; a
+        // dial after it is.
+        val dialsBefore = discovery.counters.dialsAttempted.count
         val peeredAfterStop = discovery.snapshot().count { it.state.startsWith("Peered(") }
         peeredAfterStop shouldBe 1
         val eventsRightAfterStop = discovery.counters.eventsReceived.count
