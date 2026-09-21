@@ -48,8 +48,16 @@
 //! its addresses. The positive tests therefore *retry the dial* under a
 //! deadline ([`dial_until`]) — the sleep paces the retries, the deadline
 //! bounds them, and the assertion is always the dial's outcome and never the
-//! clock (feature rule 3, F2-D12). Every await in this file is wrapped in a
-//! [`tokio::time::timeout`].
+//! clock (feature rule 3, F2-D12). Every await that can block on a **peer** or
+//! on the **rendezvous** — a dial attempt, an accept, a frame read, or the
+//! negative control's settling window — is wrapped in a
+//! [`tokio::time::timeout`], directly or through [`dial_until`]'s own
+//! per-attempt and deadline bounds. Setup and teardown awaits (binding the
+//! rendezvous server or an endpoint, closing a link, shutting the rendezvous
+//! down) are loopback-local calls this file does not bound; a hang there
+//! would be a bug in the library or the test harness, not the kind of
+//! peer/network stall this suite is built to catch.
+//! Checkable: `git grep -n 'await' iroh/sidecar/tests/rendezvous_mode.rs`.
 //!
 //! The other half of [DSC2-RDV-04] — that the publisher *keeps retrying
 //! publication* on iroh's republish schedule after the server returns — is
@@ -80,7 +88,10 @@ use iroh_dns_server::{
 };
 use url::Url;
 
-/// Bounds every await so a hang fails the test instead of wedging the run.
+/// Bounds every await that can block on a peer — an accept or a frame read —
+/// so a hang there fails the test instead of wedging the run. See the module
+/// doc for the awaits this file does not bound (loopback-local setup and
+/// teardown).
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a single dial attempt is given before it is abandoned and retried.
@@ -479,10 +490,19 @@ async fn a_dial_fails_against_a_rendezvous_that_never_learned_the_peer_and_looks
     // And nothing in either error's chain distinguishes them. This is not a
     // wish about wording — the dialler holds no information that could
     // distinguish them, so any such word would be a fabrication.
+    //
+    // `outcome` can also be `NoLink::TimedOut` (the dial never answered inside
+    // `NO_LINK_WINDOW`, rather than erroring outright): that arm carries no
+    // chain to check, so the substring assertions below are skipped for it.
+    // If they were skipped for *both* cases this loop would report `ok` while
+    // asserting nothing about [DSC2-NV-02]'s error-chain half, so the count is
+    // checked afterwards rather than trusted to the loop alone.
+    let mut chains_checked = 0u32;
     for (case, outcome) in [("withheld", &withheld), ("absent", &absent)] {
         let NoLink::DialRefused(chain) = outcome else {
             continue; // nothing was said at all, which says even less
         };
+        chains_checked += 1;
         let lower = chain.to_lowercase();
         for forbidden in ["withheld", "withhold", "omitted", "censor"] {
             assert!(
@@ -516,6 +536,13 @@ async fn a_dial_fails_against_a_rendezvous_that_never_learned_the_peer_and_looks
             );
         }
     }
+    assert!(
+        chains_checked > 0,
+        "[DSC2-NV-02]: both outcomes were NoLink::TimedOut, so none of the \
+         withheld/withhold/omitted/censor or id/server substring assertions \
+         ran for either case — the error-chain half of this test asserted \
+         nothing: withheld={withheld:?} absent={absent:?}"
+    );
 
     accepting.abort();
     dialler.close().await;
