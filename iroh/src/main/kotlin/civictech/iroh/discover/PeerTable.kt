@@ -201,8 +201,8 @@ data class PeerView(
  * @param ownNodeId this node's own endpoint id. A sighting of it is dropped by
  *   [observe] as [Observation.Self] and never retained.
  * @param maxRetained the bound on retained entries ([DSC2-MDNS-05]). See
- *   [observe] for exactly what it bounds — and [linkUp] for the one documented
- *   way past it.
+ *   [observe] for exactly what it bounds — and [linkUp] for the documented,
+ *   protection-only way the link-backed paths ([linkUp], [judge]) can pass it.
  * @param clock the only source of time in this class; there is no
  *   `System.currentTimeMillis()` here ([DSC2-DIAL-08]).
  */
@@ -396,8 +396,9 @@ class PeerTable(
      * accepted them, not by this table.
      *
      * [judge] creates an entry for an unknown key on the same reasoning, and
-     * does not attempt eviction at all — so the two link-backed paths, not this
-     * one alone, are where the table can pass its bound.
+     * attempts eviction the same way this path does — so the two link-backed
+     * paths agree, and it is that shared, protection-only overshoot (not one
+     * path alone) that can pass the table's bound.
      */
     fun linkUp(key: NodeKey, direction: LinkDirection, linkId: Long, source: EntrySource) = lock.withLock {
         val entry = entries[key] ?: run {
@@ -500,6 +501,10 @@ class PeerTable(
      * [PeerState.Superseded], its dial cancelled). Cases 1 and 2 change
      * nothing at all — the live link stays as it was, and it is the caller
      * that closes a link and records a denial.
+     *
+     * Creating the entry for an unknown [key] attempts eviction exactly like
+     * [linkUp] — see its KDoc for why a link-backed path is allowed past
+     * [maxRetained] at all, and why it still tries to make room first.
      */
     fun judge(
         key: NodeKey,
@@ -509,6 +514,7 @@ class PeerTable(
         now: Long,
     ): Judgement = lock.withLock {
         val entry = entries[key] ?: run {
+            if (entries.size >= maxRetained) evictionVictim()?.let { entries.remove(it) }
             val fresh = Entry(
                 key = key,
                 state = PeerState.Retained(addresses = emptyList(), lastSeen = now, dueAt = null, attempt = 0),
