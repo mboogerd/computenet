@@ -298,7 +298,10 @@ enum NoLink {
 
 /// Asserts `outcome` is not a link, and classifies how it failed.
 fn no_link(
-    outcome: std::result::Result<computenet_iroh_sidecar::Result<Link>, tokio::time::error::Elapsed>,
+    outcome: std::result::Result<
+        computenet_iroh_sidecar::Result<Link>,
+        tokio::time::error::Elapsed,
+    >,
     what: &str,
 ) -> NoLink {
     match outcome {
@@ -348,7 +351,11 @@ async fn a_bare_id_dial_resolves_through_the_self_hosted_rendezvous() {
         .expect("frame sent");
 
     let (mut accepted, frame) = accepting.await.expect("acceptor task finished");
-    assert_eq!(accepted.remote(), dialler_id, "the acceptor sees the dialler");
+    assert_eq!(
+        accepted.remote(),
+        dialler_id,
+        "the acceptor sees the dialler"
+    );
     assert_eq!(
         frame, b"through the rendezvous",
         "the frame crossed the link the rendezvous established"
