@@ -546,8 +546,8 @@ class AllocatorObserveApp(
     }
 
     private companion object {
-        // Built from a Char literal rather than a leading-slash string literal
-        // for the same reason `AllocatorRoutes` does it: this module's
+        // Built from a Char literal rather than a leading-slash string literal:
+        // this module's
         // `NoHardcodedLogPathTest` scans this file deliberately, because
         // `AllocatorObserveConfig` and `parseArgs` live here and the guard
         // exists to catch a pasted-in log path default at that parse site. A
