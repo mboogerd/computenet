@@ -24,13 +24,20 @@ import kotlin.io.path.readLines
  *
  * ## What it can and cannot catch
  *
- * It is a lexical scan of the module's `src/main/kotlin`, so it catches the
- * shape the mistake actually takes — a string literal that is an absolute path,
- * a home-relative path, a Windows path, or a `.jsonl` file name. It does not
- * catch a path assembled from fragments at runtime, and it is not meant to: the
- * structural guarantee is that [SpendLogIngester]'s only sources of a path are
- * its `logPath` and `runDir` constructor parameters, and this test guards the
- * one way that guarantee gets quietly walked back.
+ * It is a lexical scan of this package (`ingest/`) under the module's
+ * `src/main/kotlin`, not the whole module — the structural guarantee it
+ * protects is that [SpendLogIngester]'s only sources of a path are its
+ * `logPath` and `runDir` constructor parameters, and every file that could
+ * quietly walk that back (`SpendLogIngester`, [OffsetCheckpoint],
+ * `SpendLogTailReader`) lives in this same package. A string literal
+ * elsewhere in the module — an HTTP route in `http/AllocatorRoutes.kt`, say —
+ * is not a spend-log path and is none of this guard's business (filed and
+ * narrowed as `computenet-fpml.6`; before that fix this scanned the whole
+ * module and tripped on ordinary route literals). Within its scope it catches
+ * the shape the mistake actually takes — a string literal that is an absolute
+ * path, a home-relative path, a Windows path, or a `.jsonl` file name. It does
+ * not catch a path assembled from fragments at runtime, and it is not meant
+ * to.
  */
 class NoHardcodedLogPathTest {
 
@@ -40,16 +47,17 @@ class NoHardcodedLogPathTest {
 
     private fun mainSources(): List<Path> {
         // Gradle runs tests with the module directory as the working directory;
-        // an IDE or a repo-root invocation may not.
+        // an IDE or a repo-root invocation may not. Scoped to the ingest
+        // package (this test's documented purpose), not the whole module.
         val candidates =
             listOf(
-                Path.of("src/main/kotlin"),
-                Path.of("demo/allocator-observe/src/main/kotlin"),
+                Path.of("src/main/kotlin/civictech/demo/allocatorobserve/ingest"),
+                Path.of("demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/ingest"),
             )
         val root =
             candidates.firstOrNull { Files.isDirectory(it) }
                 ?: error(
-                    "cannot locate this module's main sources from working directory " +
+                    "cannot locate this module's ingest sources from working directory " +
                         "${Path.of("").toAbsolutePath()}; tried $candidates",
                 )
         return Files.walk(root).use { stream ->
