@@ -314,6 +314,20 @@ class AllocatorObserveApp(
     val pollLoopStopped: PollLoopStopped? get() = holder.stopped
 
     /**
+     * Test seam (computenet-p29ai). `null` in production (a no-op). Invoked
+     * once, from INSIDE the frame lambda the death path hands to
+     * [DemoShell.broadcast] — i.e. at the instant the terminal frozen frame is
+     * computed (under `DemoShell`'s `clientsLock`), not merely when
+     * [DemoShell.broadcast] is called — with the value of [pollLoopStopped] at
+     * that instant. A test asserts it is already non-null: the served state is
+     * marked stopped before the terminal frame exists. It reports state, not
+     * its own position, so moving `holder.stop` below the broadcast turns the
+     * reading to `null` whichever line the probe sits next to; no sleep or
+     * thread race is involved, since both steps run on the one poll thread.
+     */
+    internal var stopBroadcastProbe: ((PollLoopStopped?) -> Unit)? = null
+
+    /**
      * One poll tick: both ingesters, then F3's publish boundary, then one
      * [ServedState] swapped in and broadcast.
      *
@@ -414,7 +428,12 @@ class AllocatorObserveApp(
                     // to infer death from silence. `holder.current` is non-null
                     // here: [start] always completes one tick before this
                     // thread starts, so some prior tick swapped a value in.
-                    holder.current?.let { last -> shell.broadcast { last.frozenJson(stopped) } }
+                    holder.current?.let { last ->
+                        shell.broadcast {
+                            stopBroadcastProbe?.invoke(holder.stopped)
+                            last.frozenJson(stopped)
+                        }
+                    }
                     System.err.println(
                         "allocator-observe: the poll loop has stopped for good on $t; its served state is " +
                             "frozen at ${lastPollAt ?: "(never polled)"} and every state route now answers 503.",
