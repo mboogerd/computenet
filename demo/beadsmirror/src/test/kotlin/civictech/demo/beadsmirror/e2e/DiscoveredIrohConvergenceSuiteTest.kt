@@ -3,6 +3,8 @@ package civictech.demo.beadsmirror.e2e
 import civictech.demo.beadsmirror.DiscoveredIrohMirrorTransport
 import civictech.demo.beadsmirror.IrohSidecarGate
 import civictech.demo.beadsmirror.MulticastGate
+import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 
 /**
@@ -41,6 +43,17 @@ class DiscoveredIrohConvergenceSuiteTest : ConvergenceSuite(
         )
     },
 ) {
+
+    companion object {
+        /** One discovery rig on the segment at a time: see [DiscoverySegmentLock] (computenet-63um5.5). */
+        @JvmStatic
+        @BeforeAll
+        fun lockSegment() = DiscoverySegmentLock.acquire()
+
+        @JvmStatic
+        @AfterAll
+        fun unlockSegment() = DiscoverySegmentLock.release()
+    }
 
     @BeforeEach
     fun checkSidecar() {
