@@ -9,10 +9,16 @@ import civictech.demo.beadsmirror.IrohSidecarGate
 import civictech.demo.beadsmirror.MulticastGate
 import civictech.iroh.IrohTransport
 import io.kotest.matchers.shouldBe
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 
 /**
  * BS-09 of feature `computenet-63um5` (DSC2, epic `computenet-aas`; 63um5-D1,
@@ -46,8 +52,22 @@ import org.junit.jupiter.api.Test
  * bead's design.** A `PEER_DISCOVERED` for the stranger that lands after that
  * window is not caught by these assertions; the positive convergence check is
  * what BS-09 actually asserts.
+ *
+ * **One discovery rig on the segment at a time ([DiscoverySegmentLock]).**
+ * The class holds the segment lock from its first test to its last, as every
+ * discovery-rig class must; see the lock's KDoc for the failure it prevents.
  */
 class DiscoveryStoppedAfterFormationTest {
+
+    companion object {
+        @JvmStatic
+        @BeforeAll
+        fun lockSegment() = DiscoverySegmentLock.acquire()
+
+        @JvmStatic
+        @AfterAll
+        fun unlockSegment() = DiscoverySegmentLock.release()
+    }
 
     private var rig: TwoNodeRig? = null
 
@@ -103,11 +123,17 @@ class DiscoveryStoppedAfterFormationTest {
                 sidecarArgs = listOf("--offline", "--mdns"),
             )
 
-            // Mutate on BOTH nodes after the stop.
+            // Mutate on BOTH nodes after the stop. Neither priority may be 2,
+            // bd's default (computenet-63um5.5): `update --priority 2` on a
+            // fresh issue changes no `issues` row when it lands in the same
+            // second as the create, so its commit touches only `events`. The
+            // poller advances its checkpoint only past commits that carry an
+            // issue or edge record, so `quiesce()` (checkpoint == head) then
+            // waits out its whole window on a head it can never reach.
             val listenerIssue = theRig.createIssue(theRig.listener, "listener issue after discovery stopped")
             val dialerIssue = theRig.createIssue(theRig.dialer, "dialer issue after discovery stopped")
             theRig.mutate(theRig.listener, "update", listenerIssue, "--priority", "1")
-            theRig.mutate(theRig.dialer, "update", dialerIssue, "--priority", "2")
+            theRig.mutate(theRig.dialer, "update", dialerIssue, "--priority", "3")
             theRig.listener.quiesce()
             theRig.dialer.quiesce()
 
@@ -138,5 +164,62 @@ class DiscoveryStoppedAfterFormationTest {
             .waitFor() == 0
     } catch (e: Exception) {
         false
+    }
+}
+
+/**
+ * A cross-process lock on "the multicast segment", held class-wide by every
+ * `:demo:beadsmirror` test class that forms a rig by mDNS discovery
+ * ([DiscoveryStoppedAfterFormationTest], [DiscoveredIrohConvergenceSuiteTest]),
+ * so that no two of them run at once (computenet-63um5.5).
+ *
+ * **Why.** This module's tests run on parallel forks (`maxParallelForks` in
+ * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`: 2 on a 4-vCPU CI
+ * runner), and every `--offline --mdns` sidecar on the host is discovered by
+ * every other. [DiscoveredIrohMirrorTransport]'s dialling end admits any
+ * advertiser — the rig's side has `allow = null`, and the one allowlist that
+ * would narrow it names the listener's key, which [DSC2-NEU-02] forbids
+ * handing over — so two rigs running at once cross-peer. The rig names
+ * differ, a cross-rig link carries no matching `CellRef`, and the rig sits at
+ * `+0` for its whole convergence window: iroh-sidecar run 35629640485 (both
+ * attempts) failed BS-09 exactly so, with the suite's partition case running
+ * alongside in the other fork. Reproduced in a Linux container with both
+ * classes and no lock: 5 of 5 runs red, both classes.
+ *
+ * **Scope of the guarantee.** A [FileChannel.lock] serialises holders across
+ * JVMs through the file under `java.io.tmpdir`, which is one directory for
+ * every fork of one test task. It does not serialise against a discovery
+ * sidecar that takes no lock (another module's test, another task with a
+ * different `java.io.tmpdir`); within one JVM a second [acquire] before
+ * [release] fails loudly rather than deadlocking.
+ */
+internal object DiscoverySegmentLock {
+
+    private val path: Path =
+        Path.of(System.getProperty("java.io.tmpdir"), "computenet-beadsmirror-mdns-segment.lock")
+
+    private var held: Pair<FileChannel, FileLock>? = null
+
+    /** Blocks until no other process holds the segment. */
+    @Synchronized
+    fun acquire() {
+        check(held == null) { "the mDNS segment lock is already held in this JVM" }
+        val channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+        held = try {
+            channel to channel.lock()
+        } catch (e: Throwable) {
+            runCatching { channel.close() }
+            throw e
+        }
+    }
+
+    /** Idempotent; closing the channel releases the lock even if [FileLock.release] failed. */
+    @Synchronized
+    fun release() {
+        held?.let { (channel, lock) ->
+            runCatching { lock.release() }
+            runCatching { channel.close() }
+        }
+        held = null
     }
 }
