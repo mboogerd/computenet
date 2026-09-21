@@ -77,13 +77,32 @@ class DiscoveredPeeringDetachTest {
 
         fun viewOf(key: ByteArray): PeerView? = peering.snapshot().firstOrNull { it.keyHex == NodeKey(key).hex }
 
-        /** Discover [key], answer its `DIAL` and admit it, then wait for `Peered`. Returns the link id. */
+        /**
+         * Discover [key], answer its `DIAL` and admit it, then wait until the
+         * table reads `Peered` AND the connection's Session is bound. Returns
+         * the link id.
+         *
+         * Both waits are needed, because they are not the same moment
+         * (computenet-hw2k2). The table turns `Peered` inside the policy's
+         * [HelloGate] — `PeerTable.judge`, on the sidecar reader thread — and
+         * the Session installs its ingress (what
+         * [IrohTransport.IrohConnection.peered] reads) only after the gate
+         * returns, in `bindAndAnnounce` on that same thread. Waiting on the
+         * table alone let a test read `peered` in between and see `false` with
+         * no link ever going down: build-test-fast run 35649053579 failed that
+         * way, and a delay before the ingress install reproduces it every time.
+         * Nothing `detach()` or `close()` does reaches that window — the gate
+         * has already answered, and the bind completes on the reader thread
+         * whatever the policy does next — so this is the rig reading too
+         * early, not a link the policy took down.
+         */
         fun peer(key: ByteArray): Long {
             discover(key)
             val dial = fake.nextDial()
             assertTrue(dial.peerId.contentEquals(key))
             fake.admit(dial.link, key)
             await("$key to read as peered") { viewOf(key)?.state == "Peered(OUTBOUND)" }
+            await("$key's Session to be bound") { peering.connectionFor(NodeKey(key))?.peered == true }
             return dial.link
         }
 
