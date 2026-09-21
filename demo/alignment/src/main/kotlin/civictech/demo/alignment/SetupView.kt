@@ -71,7 +71,7 @@ function renderSetup() {
   paintDimensions(t);
   paintPolicyAndVisibility(t);
   paintIdeas(t);
-  paintProgress(t);
+  setupPaintProgress(t);
 }
 
 function teardownSetup() {
@@ -272,7 +272,7 @@ function paintIdeas(t) {
 
 // R4 (0dvra-D15): the one reader of state.ratings in the page — participant names and counts
 // only, never a value.
-function paintProgress(t) {
+function setupPaintProgress(t) {
   const box = el('setupProgress');
   const total = state.ideas.filter(i => i.topic === t.id).length * t.dimensions.length;
   const counts = new Map();

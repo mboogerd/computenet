@@ -357,6 +357,12 @@ class AlignmentServerTest {
             assertEquals(page.body(), t.body(), path)
         }
         assertEquals(404, probe.get("/nope").statusCode())
+        // every slice shares one global scope, so a top-level name declared twice silently
+        // replaces the earlier one (a Setup helper once shadowed the landing's paintProgress)
+        val decls = Regex("""(?m)^(?:function|let|const|var)\s+([A-Za-z_]\w*)""")
+            .findAll(page.body()).map { it.groupValues[1] }.toList()
+        assertEquals(emptyList(), decls.groupBy { it }.filterValues { it.size > 1 }.keys.toList(),
+            "top-level script names declared more than once")
     }
 
     @Test
