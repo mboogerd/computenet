@@ -57,7 +57,7 @@ name: iroh-sidecar
 # `install-bd-dolt` composite action ci.yml's beadsmirror lanes use, and the
 # same step runs DiscoveredIrohConvergenceSuiteTest's four cases (the same
 # suite over a peering formed by `--offline --mdns` discovery, computenet-63um5
-# — 12 tests in the step, not 8; they SKIP on a macOS host without multicast
+# — 13 tests in the step, not 8; they SKIP on a macOS host without multicast
 # delivery and must EXECUTE here, since ubuntu-latest delivers it), and the
 # following step asserts (via `assert-beadsmirror-e2e`) that no named class
 # reported itself skipped — a Linux run of these cases with the toolchain
@@ -414,6 +414,7 @@ jobs:
             -Piroh.pkarr.url="$PKARR_URL" -Piroh.dns.origin="$DNS_ORIGIN" -Piroh.dns.nameserver="$DNS_ADDR" --rerun \
             --tests 'civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest' \
             --tests 'civictech.demo.beadsmirror.e2e.DiscoveredIrohConvergenceSuiteTest' \
+            --tests 'civictech.demo.beadsmirror.e2e.DiscoveryStoppedAfterFormationTest' \
             --tests 'civictech.demo.beadsmirror.IrohMirrorTransportTest'
 
       # Non-vacuity assertion (computenet-cqde's acceptance clause 3): reddens
@@ -431,6 +432,7 @@ jobs:
           required-classes: >-
             civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest
             civictech.demo.beadsmirror.e2e.DiscoveredIrohConvergenceSuiteTest
+            civictech.demo.beadsmirror.e2e.DiscoveryStoppedAfterFormationTest
             civictech.demo.beadsmirror.IrohMirrorTransportTest
 
       # computenet-o0m3.4: the ONLY thing in this job that makes the
