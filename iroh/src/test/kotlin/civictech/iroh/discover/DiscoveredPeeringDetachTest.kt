@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -147,6 +148,7 @@ class DiscoveredPeeringDetachTest {
             assertEquals(setOf(NodeKey(key)), handed.keys, "exactly the one key this policy dialled")
             val connection = assertNotNull(handed[NodeKey(key)])
             assertTrue(connection.peered, "handed over with its link still up and admitted")
+            assertNull(rig.peering.connectionFor(NodeKey(key)), "the policy's own map is emptied: ownership moved to the caller")
             assertEquals(
                 emptyList(),
                 closeLinks(rig.drain()),
