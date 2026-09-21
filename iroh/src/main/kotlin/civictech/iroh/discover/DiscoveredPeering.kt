@@ -4,6 +4,7 @@ import civictech.cell.DenialReason
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.iroh.HelloGate
+import civictech.iroh.HostMessage
 import civictech.iroh.IrohNode
 import civictech.iroh.IrohTransport
 import civictech.iroh.LinkDirection
@@ -13,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
@@ -114,7 +116,8 @@ data class DialPolicy(
  * formation, and from there the caller holds the peering by hand. Neither
  * closes the [IrohNode], and the node's link listener stays registered (the
  * node's listener list is append-only); it posts into a policy that has
- * stopped, and `post` drops.
+ * stopped, and `post` drops. Its one remaining act is `reapIfOrphan`: a late
+ * answer to a `DIAL` the stop interrupted is closed, on a thread of its own.
  */
 class DiscoveredPeering private constructor(
     private val node: IrohNode,
@@ -174,6 +177,17 @@ class DiscoveredPeering private constructor(
 
     private val running = AtomicBoolean(true)
 
+    /** Keys whose dial a pool thread is running right now. @see stop */
+    private val dialling: MutableSet<NodeKey> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Keys that had a dial running when [stop] interrupted the pool — each a
+     * key whose `DIAL` may still be answered after the stop. Written once, by
+     * [stop]; read by [reapIfOrphan] for as long as this object lives. At
+     * most [DialPolicy.maxInFlightDials] entries.
+     */
+    private val reapLateLinks: MutableSet<NodeKey> = ConcurrentHashMap.newKeySet()
+
     private val dialThreads = AtomicInteger()
 
     private val dialPool: ExecutorService =
@@ -190,8 +204,9 @@ class DiscoveredPeering private constructor(
 
     /**
      * Stop the policy: no further events are acted on, every armed retry is
-     * cancelled, the dial pool is shut down and every connection this policy
-     * opened is closed.
+     * cancelled, the dial pool is shut down and waited for, and every
+     * connection this policy opened is closed. A `DIAL` the stop interrupted
+     * and the sidecar answers later is closed when it lands (see [detach]).
      *
      * The [node] is **not** closed — it is the caller's, and the connections
      * here hold `ownsClient = false` precisely so that closing them leaves the
@@ -236,9 +251,20 @@ class DiscoveredPeering private constructor(
      *   with an empty `onUnplannedDown` delegate (see [pump]), so an unplanned
      *   drop leaves it down until the caller calls `heal()`.
      *
-     * A connection whose dial was still in flight is handed over too, in
-     * whatever state the interrupted dial left it — the map is "every
-     * connection this policy made", not "every one that is up".
+     * A connection whose dial was still in flight is handed over too — the
+     * map is "every connection this policy made", not "every one that is
+     * up" — and it is **quiescent** by the time this returns (computenet-iesmw):
+     * the stop interrupts the dial and then waits for the pool, bounded by
+     * `CLOSE_JOIN_MILLIS`, so no pool thread is still in its `openLink`. The
+     * dial either landed, and the connection holds that link like any other
+     * handed connection, or it did not, and the connection holds none and a
+     * `heal()` opens exactly one. If the interrupted `DIAL` is answered later
+     * anyway, that link is closed (see `reapIfOrphan`) rather than left up as
+     * an ACCEPTED session beside the one `heal()` makes.
+     *
+     * `heal()` is for a connection with no link. On one whose dial landed it
+     * dials a second link, as it would on any connection that is up — a
+     * property of `IrohConnection.heal`, not of this handover.
      *
      * [counters] and [snapshot] stay readable and are frozen from here on.
      * Idempotent: a second call, or a call after [close], returns an empty
@@ -255,6 +281,10 @@ class DiscoveredPeering private constructor(
     /**
      * The one stop sequence [close] and [detach] share. Returns false when the
      * policy was already stopped, in which case it did nothing.
+     *
+     * On return no dial-pool thread is running `openLink`, unless the pool
+     * outlived `CLOSE_JOIN_MILLIS` after its interrupt — which is logged, and
+     * which an interrupted dial with only local work left does not approach.
      */
     private fun stop(): Boolean {
         if (!running.compareAndSet(true, false)) return false
@@ -262,8 +292,65 @@ class DiscoveredPeering private constructor(
         policyThread.join(CLOSE_JOIN_MILLIS)
         synchronized(armed) { armed.values.forEach { runCatching { it.close() } }; armed.clear() }
         runCatching { timer.shutdown() }
+        // Before the interrupt, so no interrupted DIAL can be answered before
+        // its key is here. A dial that starts after this line sees `running`
+        // false and sends nothing (see [pump]). @see reapLateLinks
+        reapLateLinks += dialling
         dialPool.shutdownNow()
+        // The interrupt alone is not enough (computenet-iesmw): one that lands
+        // after `SidecarClient.dial` has returned does not stop `openLink`,
+        // which goes on to install the link and write its hello. Waiting here
+        // is what makes a returned connection quiescent — no pool thread is
+        // still inside its `openLink` when the caller gets it, so a `heal()`
+        // the caller makes is the only `openLink` running on it. Bounded: an
+        // interrupted dial has only local work left, and a pool that outlives
+        // the bound is reported rather than waited on for ever.
+        val terminated = try {
+            dialPool.awaitTermination(CLOSE_JOIN_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!terminated) {
+            System.err.println(
+                "[DiscoveredPeering] dial pool still running ${CLOSE_JOIN_MILLIS}ms after stop; " +
+                    "returning without it (keys dialling: ${dialling.joinToString { it.short }})",
+            )
+        }
         return true
+    }
+
+    /**
+     * A late link to one of [reapLateLinks]' keys, reported after the stop:
+     * close it if it is the orphan of a `DIAL` the stop interrupted
+     * (computenet-iesmw).
+     *
+     * What makes it one: the node holds it as ACCEPTED yet its `LINK_UP` says
+     * OUTBOUND. The sidecar reports the direction of the QUIC connection, so
+     * an OUTBOUND link is one this endpoint dialled — and it reaches the
+     * node's inbound handler only when `SidecarClient` has no dial waiting
+     * for that id any more, which is what an interrupted (or timed-out)
+     * `SidecarClient.dial` leaves behind. Left up, it would be a session the
+     * connection that dialled it knows nothing about, and a later `heal()`
+     * on that connection would make it a second link to the key.
+     *
+     * Closed rather than adopted: the connection has no way to take over a
+     * link it did not open. Closed off the reader thread, which this runs on:
+     * a close writes a frame, and the thread rule above has no exception for
+     * that. The raw `CLOSE_LINK` rather than `SidecarLink.close()`, because
+     * this runs inside the inbound handler, before the client has registered
+     * the link under its id.
+     */
+    private fun reapIfOrphan(link: IrohNode.LinkView) {
+        if (link.source != IrohNode.LinkSource.ACCEPTED || link.direction != LinkDirection.OUTBOUND) return
+        val key = NodeKey(link.remoteNodeId)
+        if (key !in reapLateLinks) return
+        Thread({
+            val closed = runCatching { node.client.sendMessage(HostMessage.CloseLink(link.linkId)) }
+            if (closed.isFailure) {
+                System.err.println("[DiscoveredPeering] closing ${key.short}'s late link ${link.linkId} failed: ${closed.exceptionOrNull()}")
+            }
+        }, "iroh-discover-reap").apply { isDaemon = true }.start()
     }
 
     /**
@@ -484,8 +571,18 @@ class DiscoveredPeering private constructor(
             }
             counters.dialsAttempted.increment()
             dialPool.execute {
-                val result = runCatching { connection.openLink(policy.dialTimeout) }
-                post(Command.DialDone(key, result.isSuccess, result.exceptionOrNull()?.message))
+                // Registered BEFORE `running` is read, and `stop()` clears
+                // `running` BEFORE it reads this set: a dial either is in the
+                // set `stop()` copies into [reapLateLinks], or sees the stop
+                // and sends nothing.
+                dialling += key
+                try {
+                    if (!running.get()) return@execute
+                    val result = runCatching { connection.openLink(policy.dialTimeout) }
+                    post(Command.DialDone(key, result.isSuccess, result.exceptionOrNull()?.message))
+                } finally {
+                    dialling -= key
+                }
             }
         }
     }
@@ -640,8 +737,10 @@ class DiscoveredPeering private constructor(
         policyThread.start()
         node.onLinkEvent(object : IrohNode.NodeLinkListener {
             // ENQUEUE ONLY — every one of these runs on the sidecar reader
-            // thread (onUp, for an outbound link, on the dial thread).
-            override fun onUp(link: IrohNode.LinkView) = post(Command.LinkUp(link))
+            // thread (onUp, for an outbound link, on the dial thread). After
+            // the stop, onUp's reap only starts a thread; it waits on nothing.
+            override fun onUp(link: IrohNode.LinkView) =
+                if (running.get()) post(Command.LinkUp(link)) else reapIfOrphan(link)
             override fun onAdmitted(link: IrohNode.LinkView) = post(Command.Admitted(link))
             override fun onDown(link: IrohNode.LinkView, outcome: IrohTransport.IrohConnection.LinkOutcome?) =
                 post(Command.LinkDown(link, outcome))

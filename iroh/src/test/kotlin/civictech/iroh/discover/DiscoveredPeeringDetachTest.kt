@@ -326,6 +326,9 @@ class DiscoveredPeeringDetachTest {
             val answeredDial = rig.inFlight(answered)
             rig.inFlight(silent)
             rig.fake.send(SidecarMessage.LinkUp(answeredDial.link, answered, DIRECTION_OUTBOUND))
+            // The client registers the link before it releases the dial: from
+            // here `SidecarClient.dial` returns, whatever interrupt comes next.
+            await("the answered dial to land") { rig.client.link(answeredDial.link) != null }
 
             rig.handed += rig.peering.detach().values
 
