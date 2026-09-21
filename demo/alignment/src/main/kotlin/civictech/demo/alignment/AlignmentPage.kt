@@ -396,11 +396,13 @@ function renderShell() {
   }
 }
 
-// ── phase indicator: Setup → Rating → Results (0dvra-D12), indicator only ──
+// ── phase indicator: Setup → Rating → Results (0dvra-D12, amended: results
+// requires at least one idea AND boardGate(t).open), indicator only ──
 function renderPhase() {
   const t = currentTopic();
   if (!t) return;
-  const step = boardGate(t).open ? 'results' : state.ideas.some(i => i.topic === t.id) ? 'rating' : 'setup';
+  const hasIdea = state.ideas.some(i => i.topic === t.id);
+  const step = !hasIdea ? 'setup' : boardGate(t).open ? 'results' : 'rating';
   const order = ['setup', 'rating', 'results'];
   for (const li of el('phase').querySelectorAll('li[data-step]')) {
     const k = order.indexOf(li.dataset.step), cur = order.indexOf(step);
