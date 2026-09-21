@@ -375,6 +375,39 @@ class AllocatorObserveAppTest {
         seen.single() shouldBe app.pollLoopStopped
     }
 
+    // computenet-l7vdc — the `/state` 503 body (`AllocatorRoutes.respondFold`)
+    // and the `/events` frozen SSE frame (`ServedState.frozenJson`) both build
+    // the envelope by calling the same `frozenEnvelope` function now, but a
+    // future regression could reintroduce a second, independent construction
+    // without either of the tests above catching it: each asserts only its own
+    // surface's fields (`ingest`, `failure`, `stale`), never the two surfaces
+    // against each other. This test compares the raw response bytes of both
+    // surfaces for the SAME frozen fold, so a key renamed, a field added or
+    // `stale_status` altered on either surface alone fails it.
+    @Test
+    fun `the frozen state 503 body and the frozen events frame are the same envelope, byte for byte`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }.start()
+
+        broken.set(true)
+        awaitUntil("the poll loop to stop on the broken clock") { app.pollLoopStopped != null }
+
+        val stateBody = probe(app).get("/state").body()
+
+        // A raw-string tap (identity parse), not the `tap()` fixture helper,
+        // whose parse into `JsonElement` would discard the exact bytes this
+        // test exists to compare.
+        SseTap<String>("http://localhost:${app.boundPort}/events") { it }.use { rawTap ->
+            val frame = rawTap.awaitAtLeast(1, "the frozen initial frame").first()
+            frame shouldBe stateBody
+        }
+    }
+
     // -----------------------------------------------------------------
     // fpml.4-D7 — re-baseline accounting
     // -----------------------------------------------------------------
