@@ -6,7 +6,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.UnknownHostException
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The JDK-httpserver + SSE shell duplicated byte-for-byte across the seven
@@ -31,10 +35,12 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     private val server: HttpServer = HttpServer.create(endpoint(port, bindAddress), 0)
-    private val clients = CopyOnWriteArrayList<HttpExchange>()
+    private val clients = CopyOnWriteArrayList<Client>()
+    private val dropped = AtomicLong()
 
     // computenet-tp93v: guards [sse]'s "compute the initial frame, register,
-    // write it" sequence against [broadcast] so the two can never interleave.
+    // enqueue it" sequence against [broadcast]'s "compute, enqueue to every
+    // registered client" so the two can never interleave.
     // The bug this closes: [sse] used to register the exchange into [clients]
     // BEFORE computing and writing its initial frame. A [broadcast] landing in
     // that window would find the exchange already registered and win the race
@@ -46,43 +52,54 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     // stale frame its own connection had already computed — exactly the
     // "frozen fold looks live again" confusion computenet-w20a4 removed for
     // every non-racing case. A single lock shared between registration and
-    // broadcast — rather than only the per-exchange one [send] already takes —
-    // is what the fix needs: it is the only thing that can serialize "a client
-    // is joining" against "a broadcast is going out to whoever has joined so
-    // far", which a per-exchange lock cannot do (a broadcast touches every
-    // client's exchange, not just the one that is connecting). With it, [sse]
-    // either finishes registering-and-writing before a racing [broadcast] can
-    // even see the new client (so that client gets only its own initial
-    // frame, computed fresh — and if the loop had already died by then, that
-    // computation itself observes the frozen state and labels it correctly),
-    // or the racing [broadcast] blocks until [sse] releases the lock and then
-    // is guaranteed to write after it. Either way the newest frame a client
-    // has been sent is never followed by an older one.
+    // broadcast — rather than only a per-client one — is what the fix needs:
+    // it is the only thing that can serialize "a client is joining" against
+    // "a broadcast is going out to whoever has joined so far" (a broadcast
+    // touches every client, not just the one that is connecting). With it,
+    // [sse] either finishes computing-registering-and-enqueueing before a
+    // racing [broadcast] can even see the new client (so that client's queue
+    // holds its own initial frame first — and if the loop had already died by
+    // then, that computation itself observes the frozen state and labels it
+    // correctly), or the racing [broadcast] blocks until [sse] releases the
+    // lock and its frame is enqueued after it.
     //
-    // **What it costs, stated where the lock is.** This lock is held across the
-    // frame COMPUTATION and across the write to EVERY client, and an SSE write
-    // is an unbounded blocking write into a socket. One client that is still
-    // connected but has stopped reading therefore stalls, for as long as its
-    // socket buffer stays full, BOTH the broadcasting thread — for every demo
-    // here that is the host's single scheduler virtual thread, so the demo's
-    // whole dataflow — and every new connection and every other route, because
-    // `server.executor = null` runs all handlers on one dispatcher thread,
-    // which then blocks in [sse] waiting for this lock. Only the first of those
-    // two stalled before this lock existed; the second is new, and is the price
-    // of the ordering guarantee above. Nothing here bounds the write. The
-    // inspector's `SseBroadcaster` (bounded, drop-oldest per-client queues) is
-    // the shape that does, and is what to reach for if a demo ever serves
-    // clients it does not control.
+    // **Why the order survives the write leaving the lock (computenet-t9kpr).**
+    // The lock covers only frame COMPUTATION and a NON-BLOCKING hand-off to
+    // each client's own queue ([Client.offer]); the socket write happens on
+    // that client's own pump thread, outside the lock. Ordering still holds
+    // because (a) every enqueue to every client happens under this lock, so
+    // each queue receives frames in the order they were computed; (b) the
+    // queue is FIFO and drop-oldest evicts only from its head, so what the
+    // pump takes is a subsequence of that order; and (c) one pump per client
+    // is the only writer to its exchange. So the newest frame a client has
+    // been sent is never followed by an older one — the same guarantee, now
+    // without holding a lock across a socket write.
+    //
+    // **What that buys.** Before, this lock was held across an unbounded
+    // blocking write to EVERY client, so one client that was still connected
+    // but had stopped reading (a throttled tab, a paused debugger) stalled
+    // both the broadcasting thread — for every demo here the host's single
+    // scheduler thread, so the whole dataflow — and, because
+    // `server.executor = null` runs all handlers on one dispatcher thread
+    // that then blocked in [sse] waiting for this lock, every new connection
+    // and every other route. Now a stalled client stalls only its own pump;
+    // its queue fills and drops its oldest frames ([dropped]). That loss is
+    // benign for every caller here: each demo's frame is a whole-state
+    // snapshot, so the newest frame alone is the current state. A caller that
+    // ever broadcasts DELTAS must not rely on every frame arriving — that is
+    // the inspector's `SseBroadcaster` shape (gap-detecting `seq` per frame),
+    // which this mirrors but cannot import (`:inspect` depends on this module).
     //
     // **No lock-order inversion exists today, and it is not free.** The only
-    // locks taken *under* this one are each demo's own `state` monitor (inside
-    // the `frame()`/`initialFrame()` lambda) and the per-exchange monitor
-    // (inside [send]). No path takes either of those and *then* takes this one:
-    // every hub/observe callback releases `state` before it calls broadcast,
-    // and an `inlet.call` mutation made while holding `state` only enqueues
-    // onto the host scheduler rather than running the callback inline. A demo
-    // that calls [broadcast] while holding a lock its own frame computation
-    // takes would deadlock against a concurrently connecting client.
+    // lock taken *under* this one is each demo's own `state` monitor (inside
+    // the `frame()`/`initialFrame()` lambda); the per-exchange write monitor
+    // is now taken only on pump threads, never under this lock. No path takes
+    // `state` and *then* takes this one: every hub/observe callback releases
+    // `state` before it calls broadcast, and an `inlet.call` mutation made
+    // while holding `state` only enqueues onto the host scheduler rather than
+    // running the callback inline. A demo that calls [broadcast] while
+    // holding a lock its own frame computation takes would deadlock against a
+    // concurrently connecting client.
     private val clientsLock = Any()
 
     // Set by sse() for its one registration (no demo registers more than one
@@ -91,9 +108,15 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     // connection is actually closed — so its failed sends must close the
     // exchange, not just drop it from the broadcast list. Every other demo
     // is content to drop silently, matching their original `send`.
-    private var closeOnSendFailure = false
+    @Volatile private var closeOnSendFailure = false
 
     val boundPort: Int get() = server.address.port
+
+    /** Registered SSE clients — tests and diagnostics. */
+    internal val clientCount: Int get() = clients.size
+
+    /** Frames discarded by a full client queue's drop-oldest policy — tests and diagnostics. */
+    internal val droppedFrames: Long get() = dropped.get()
 
     init {
         server.executor = null
@@ -106,7 +129,7 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
 
     /**
      * Register an SSE endpoint at [path]. Each connecting client is
-     * immediately sent [initialFrame] (computed at connect time, under
+     * immediately queued [initialFrame] (computed at connect time, under
      * [clientsLock]) and only then added to the broadcast list, so a fresh
      * tab catches up without waiting for the next change, and — the
      * computenet-tp93v guarantee — never receives that catch-up frame AFTER
@@ -121,39 +144,110 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
             exchange.beginSse()
             synchronized(clientsLock) {
                 val frame = initialFrame()
-                clients += exchange
-                send(exchange, frame)
+                val client = Client(exchange)
+                client.offer(frame)
+                clients += client
+                client.start()
             }
         }
     }
 
     /**
-     * Compute [frame] once and push it to every connected SSE client, under
-     * [clientsLock] so a client that is mid-registration in [sse] either
+     * Compute [frame] once and hand it to every connected SSE client's queue,
+     * under [clientsLock] so a client that is mid-registration in [sse] either
      * completes first (and receives this broadcast afterward, correctly) or
      * is not registered yet (and simply misses this one broadcast, having
      * computed its own initial frame fresh) — never both registered and
-     * still short of its own initial write when this runs.
+     * still short of its own initial frame when this runs. Never blocks on a
+     * client: the writes happen on each client's own pump thread.
      */
     fun broadcast(frame: () -> String) {
         synchronized(clientsLock) {
             val json = frame()
-            clients.forEach { send(it, json) }
+            clients.forEach { it.offer(json) }
         }
     }
 
-    private fun send(exchange: HttpExchange, json: String) {
-        try {
-            exchange.sseFrame(json)
-        } catch (_: Exception) {
-            clients -= exchange
-            if (closeOnSendFailure) try { exchange.close() } catch (_: Exception) {}
+    /**
+     * One SSE subscriber: a bounded, drop-oldest frame queue and the one
+     * virtual thread that writes it to [exchange]. A blocked write blocks only
+     * this pump. Same shape as `:inspect`'s `SseBroadcaster.Client`.
+     */
+    private inner class Client(private val exchange: HttpExchange) {
+        private val queue = ArrayBlockingQueue<String>(QUEUE_CAPACITY)
+
+        // Frames enqueued and not yet written (or dropped). Decremented only
+        // after a write RETURNS, so zero means the socket has everything this
+        // client was ever handed — what [awaitDrained] waits for.
+        private val pending = AtomicInteger()
+
+        private val pump: Thread = Thread.ofVirtual().name("demo-shell-sse-client").unstarted {
+            try {
+                while (true) {
+                    val frame = queue.take()
+                    try {
+                        exchange.sseFrame(frame)
+                    } finally {
+                        pending.decrementAndGet()
+                    }
+                }
+            } catch (_: InterruptedException) {
+                // stop() — an orderly shutdown
+            } catch (_: Exception) {
+                // the client is gone
+                if (closeOnSendFailure) try { exchange.close() } catch (_: Exception) {}
+            } finally {
+                clients.remove(this)
+                pending.set(0) // nothing more will be written; do not make stop() wait on it
+            }
+        }
+
+        fun start() = pump.start()
+
+        fun stop() = pump.interrupt()
+
+        /** Wait, until [deadlineNanos] at most, for every frame handed to this client to be written. */
+        fun awaitDrained(deadlineNanos: Long) {
+            while (pending.get() > 0 && pump.isAlive && System.nanoTime() < deadlineNanos) Thread.sleep(1)
+        }
+
+        /**
+         * Enqueue [frame], evicting the oldest pending frames until it fits.
+         * Callers hold [clientsLock], so there is one producer at a time and
+         * only the pump removes concurrently: an eviction cannot be undone
+         * faster than it is made, and the loop cannot spin.
+         */
+        fun offer(frame: String) {
+            repeat(QUEUE_CAPACITY + 1) {
+                pending.incrementAndGet()
+                if (queue.offer(frame)) return
+                pending.decrementAndGet()
+                if (queue.poll() != null) {
+                    pending.decrementAndGet()
+                    dropped.incrementAndGet()
+                }
+            }
+            dropped.incrementAndGet() // unreachable with a single producer; counted rather than hidden
         }
     }
 
     fun start(): DemoShell = apply { server.start() }
 
-    fun stop() = server.stop(0)
+    /**
+     * Stop serving. Frames already handed to a client by [broadcast] are
+     * flushed first — writes used to happen inside [broadcast] itself, so a
+     * caller that broadcasts and then stops (a demo shutting down, a test) is
+     * owed its last frame — but only for [STOP_DRAIN_MS] in total: a client
+     * that stopped reading must not hold shutdown hostage any more than it
+     * may hold [broadcast]. Then the server stops (joining the dispatcher, so
+     * an in-flight handler still completes) and every pump is interrupted.
+     */
+    fun stop() {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(STOP_DRAIN_MS)
+        clients.toList().forEach { it.awaitDrained(deadline) }
+        server.stop(0)
+        clients.toList().forEach { it.stop() }
+    }
 
     // `internal`, not private, so `DemoShellBindTest` can pin the *named*-port
     // branch of [endpoint] without picking a port number to bind: choosing an
@@ -162,6 +256,22 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     // worth reintroducing in a test of the thing that fixed it. The ephemeral
     // branch is asserted behaviorally there, over a real socket.
     internal companion object {
+
+        /**
+         * Frames one SSE client may fall behind by before its oldest pending
+         * ones are dropped. Every demo frame is a whole-state snapshot, so a
+         * client this far behind loses nothing but superseded states; the
+         * bound exists to cap the memory a client that stopped reading can
+         * pin (at most this many frames), not to tune throughput.
+         */
+        const val QUEUE_CAPACITY = 64
+
+        /**
+         * The most [stop] waits, across all clients together, for queued
+         * frames to reach their sockets. A healthy loopback client drains in
+         * well under a millisecond; this bounds only the stalled-client case.
+         */
+        const val STOP_DRAIN_MS = 2_000L
 
         /**
          * The endpoint this shell binds.

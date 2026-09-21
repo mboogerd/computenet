@@ -24,13 +24,23 @@ import kotlin.io.path.readLines
  *
  * ## What it can and cannot catch
  *
- * It is a lexical scan of the module's `src/main/kotlin`, so it catches the
- * shape the mistake actually takes — a string literal that is an absolute path,
- * a home-relative path, a Windows path, or a `.jsonl` file name. It does not
- * catch a path assembled from fragments at runtime, and it is not meant to: the
- * structural guarantee is that [SpendLogIngester]'s only sources of a path are
- * its `logPath` and `runDir` constructor parameters, and this test guards the
- * one way that guarantee gets quietly walked back.
+ * It is a lexical scan of the files the spend-log and run-dir paths travel
+ * through, not the whole module: this package (`ingest/` — `SpendLogIngester`,
+ * [OffsetCheckpoint], `SpendLogTailReader`), whose only sources of a path are
+ * its constructor parameters, and `AllocatorObserveApp.kt`, where
+ * `parseArgs` builds `AllocatorObserveConfig` — the one place a "quick local
+ * run" default for `logPath` or `runDir` would be pasted. A string literal
+ * elsewhere in the module — an HTTP route in `http/AllocatorRoutes.kt`, say —
+ * is not a spend-log path and is none of this guard's business (filed and
+ * narrowed as `computenet-fpml.6`; before that fix this scanned the whole
+ * module and tripped on ordinary route literals). `AllocatorObserveApp.kt`
+ * also carries the `/events` route, so a route literal there still trips the
+ * scan; that file is kept in scope because dropping it would let the config
+ * default this test exists to prevent pass unseen. Within its scope it catches
+ * the shape the mistake actually takes — a string literal that is an absolute
+ * path, a home-relative path, a Windows path, or a `.jsonl` file name. It does
+ * not catch a path assembled from fragments at runtime, and it is not meant
+ * to.
  */
 class NoHardcodedLogPathTest {
 
@@ -40,30 +50,39 @@ class NoHardcodedLogPathTest {
 
     private fun mainSources(): List<Path> {
         // Gradle runs tests with the module directory as the working directory;
-        // an IDE or a repo-root invocation may not.
+        // an IDE or a repo-root invocation may not. Scoped to the files the
+        // log and run-dir paths travel through (see the KDoc), not the module.
         val candidates =
             listOf(
-                Path.of("src/main/kotlin"),
-                Path.of("demo/allocator-observe/src/main/kotlin"),
+                Path.of("src/main/kotlin/civictech/demo/allocatorobserve"),
+                Path.of("demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve"),
             )
         val root =
-            candidates.firstOrNull { Files.isDirectory(it) }
+            candidates.firstOrNull { Files.isDirectory(it.resolve("ingest")) }
                 ?: error(
-                    "cannot locate this module's main sources from working directory " +
+                    "cannot locate this module's ingest sources from working directory " +
                         "${Path.of("").toAbsolutePath()}; tried $candidates",
                 )
-        return Files.walk(root).use { stream ->
-            stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
-        }
+        // Named explicitly so a rename fails the scan instead of silently
+        // dropping the config's parse site out of it.
+        val app = root.resolve("AllocatorObserveApp.kt")
+        check(app.isRegularFile()) { "expected the config's parse site at $app" }
+        val ingest =
+            Files.walk(root.resolve("ingest")).use { stream ->
+                stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
+            }
+        // listOf: a Path is itself an Iterable<Path>, so `ingest + app` would
+        // append its name segments, not the file.
+        return ingest + listOf(app)
     }
 
     @Test
-    fun `no production source under this module names a concrete log path`() {
+    fun `no source on the log path's route names a concrete log path`() {
         val sources = mainSources()
         // Guard against the scan silently passing because it found nothing to
-        // scan — the module has main sources, and if it ever does not, that is
-        // the bug rather than a pass.
-        (sources.size >= 3) shouldBe true
+        // scan — the three ingest files plus the app, and if it ever finds
+        // fewer, that is the bug rather than a pass.
+        (sources.size >= 4) shouldBe true
 
         val offenders =
             sources.flatMap { file ->

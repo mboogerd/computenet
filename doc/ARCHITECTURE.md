@@ -424,11 +424,17 @@ else `$PORT`, else 8080. See the README for run commands.
   (`polls`, `reBaselineCount`, `lastPollAt`, the failure counters,
   `checkpointOffset`) is per-process by construction, and a log truncation or
   replacement that happened while the app was down is absorbed uncounted by the
-  cold-start whole read. The one case where the *fold* still diverges is a log
-  **deleted** while the app is down: `TailReason.LogAbsent` leaves an
-  uninterrupted process's fold alone, while a restarted process has nothing to
-  re-read and serves an empty report until the log returns (measured; which
-  reading is right is undecided because the log's lifecycle is socaity's).
+  cold-start whole read. A log **deleted** — while the app is down or while it
+  runs — converges both processes on its absence (`computenet-6jbep`, design
+  entry 6jbep-D1): a log the process has read and that is now gone is treated
+  as the log replaced by an empty one, the same convergence a truncation to
+  zero bytes already gets, so an uninterrupted process empties its fold as a
+  restarted one starts empty, both serve the same empty report, and both
+  re-read the log whole when it returns. A log the process has never read is
+  still left alone, since one that has not arrived yet is not an empty log.
+  The alternative — a restarted process keeping the old records — would need a
+  second durable copy of the fold beside the log, which the cold-start design
+  declined.
   Feature `computenet-fpml.5` lands both halves of the differential oracle
   against socaity's replay script in `oracle/`: an in-repo differential suite
   that runs in CI, comparing the served report against `ReferenceReport` — a
