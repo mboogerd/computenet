@@ -24,14 +24,40 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.*
 
-/** A topic's creator-defined dimension (presentation-only; its weight lives in the `weights` MapCell). */
-internal data class Dimension(val name: String)
+/**
+ * A topic's creator-defined dimension (presentation-only; its weight and direction live in the
+ * `weights` MapCell as a [DimConfig]). [lowLabel]/[highLabel] are the facilitator's anchors — what a
+ * rating of 1 and of 9 mean on it (epic computenet-9y79n R3); empty when unset.
+ */
+internal data class Dimension(val name: String, val lowLabel: String = "", val highLabel: String = "")
 
-/** A topic: write-side index, journaled, never in the dataflow. Dims and ideas are keyed by their slug ids. */
-internal class Topic(val id: TopicId, val title: String, val creator: String) {
+/** Who may add ideas to a topic (computenet-k1d4g-D5): everyone, or only its facilitator (the creator). */
+internal enum class IdeaPolicy(val wire: String) { EVERYONE("everyone"), FACILITATOR("facilitator") }
+
+/**
+ * When the Board is shown (epic computenet-9y79n decision 1): after the participant rated
+ * everything (the default), or only after the facilitator reveals it. The PAGE enforces it — the
+ * server never withholds the aggregate, which is one shared frame for everyone.
+ */
+internal enum class BoardVisibility(val wire: String) { AFTER_RATING("after-rating"), AFTER_REVEAL("after-reveal") }
+
+/**
+ * A topic: write-side index, journaled, never in the dataflow. Dims and ideas are keyed by their slug
+ * ids. The facilitator settings are mutable; a v1 topic line (none of them) replays to the defaults.
+ */
+internal class Topic(
+    val id: TopicId,
+    val title: String,
+    val creator: String,
+    var ideaPolicy: IdeaPolicy = IdeaPolicy.EVERYONE,
+    var boardVisibility: BoardVisibility = BoardVisibility.AFTER_RATING,
+) {
     val dims = TreeMap<String, Dimension>()
     val ideas = TreeMap<String, Idea>()
+    var revealed: Boolean = false
 }
+
+private val Direction.wire: String get() = name.lowercase()
 
 /** An idea's presentation fields (write-side index, never in the dataflow). */
 internal data class Idea(val id: String, val title: String, val description: String, val proposer: String)
@@ -99,7 +125,9 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         }
 
         shell.route("/") { ex ->
-            if (ex.requestURI.path == "/") ex.respond(200, PAGE, "text/html; charset=utf-8")
+            // `/t/{id}` is the per-topic page URL (computenet-k1d4g-D8): same page, any id
+            val path = ex.requestURI.path
+            if (path == "/" || path.startsWith("/t/")) ex.respond(200, PAGE, "text/html; charset=utf-8")
             else ex.respond(404, """{"error":"not found"}""", "application/json")
         }
         shell.route("/topics") { ex -> serve(ex) { handleTopics(ex) } }
@@ -118,11 +146,26 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         fun s(k: String) = (j[k] as? JsonPrimitive)?.content ?: ""
         fun t() = TopicId(s("topic"))
         fun rk() = RatingKey(t(), s("idea"), s("dim"), s("participant"))
+        // every field added after v1 is optional on replay: absent → the v1 meaning (k1d4g-D5)
+        fun direction() = if (s("direction").isEmpty()) Direction.VALUE else parseDirection(s("direction"))
         when (s("op")) {
-            "topic" -> createTopic(TopicId(s("id")), s("title"), s("creator"))
-            "dimension" -> addDimension(t(), s("id"), s("name"), s("weight").toDouble())
+            "topic" -> createTopic(
+                TopicId(s("id")), s("title"), s("creator"),
+                if (s("ideas").isEmpty()) IdeaPolicy.EVERYONE else parseWire(s("ideas"), IdeaPolicy.entries) { it.wire },
+                if (s("boardVisibility").isEmpty()) BoardVisibility.AFTER_RATING
+                else parseWire(s("boardVisibility"), BoardVisibility.entries) { it.wire },
+            )
+            "dimension" -> addDimension(
+                t(), s("id"), Dimension(s("name"), s("lowLabel"), s("highLabel")),
+                DimConfig(s("weight").toDouble(), direction()),
+            )
             "undimension" -> removeDimension(t(), s("id"))
             "weight" -> setWeight(t(), s("dim"), s("weight").toDouble())
+            "direction" -> setDirection(t(), s("dim"), direction())
+            "labels" -> setLabels(t(), s("dim"), s("lowLabel"), s("highLabel"))
+            "policy" -> setPolicy(t(), parseWire(s("ideas"), IdeaPolicy.entries) { it.wire })
+            "visibility" -> setVisibility(t(), parseWire(s("boardVisibility"), BoardVisibility.entries) { it.wire })
+            "reveal" -> reveal(t())
             "idea" -> addIdea(t(), Idea(s("id"), s("title"), s("description"), s("proposer")))
             "unidea" -> removeIdea(t(), s("id"))
             "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
@@ -131,18 +174,32 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         }
     }
 
-    private fun createTopic(id: TopicId, title: String, creator: String) = synchronized(state) {
-        topics[id.value] = Topic(id, title, creator)
-        record("""{"op":"topic","id":${esc(id.value)},"title":${esc(title)},"creator":${esc(creator)}}""")
+    /** The topic line carries its initial facilitator settings (additive keys; a v1 line has none). */
+    private fun createTopic(
+        id: TopicId,
+        title: String,
+        creator: String,
+        policy: IdeaPolicy,
+        visibility: BoardVisibility,
+    ) = synchronized(state) {
+        topics[id.value] = Topic(id, title, creator, policy, visibility)
+        record(
+            """{"op":"topic","id":${esc(id.value)},"title":${esc(title)},"creator":${esc(creator)},""" +
+                """"ideas":${esc(policy.wire)},"boardVisibility":${esc(visibility.wire)}}""",
+        )
     }
 
-    /** A dimension's creation line carries its initial weight, so replay restores both from one line. */
-    private fun addDimension(topic: TopicId, id: String, name: String, weight: Double) = synchronized(state) {
-        topics.getValue(topic.value).dims[id] = Dimension(name)
-        val config = DimConfig(weight, Direction.VALUE)
+    /**
+     * A dimension's creation line carries its initial weight, direction and anchor labels, so replay
+     * restores all of them from one line (a v1 line has neither direction nor labels → value, empty).
+     */
+    private fun addDimension(topic: TopicId, id: String, dim: Dimension, config: DimConfig) = synchronized(state) {
+        topics.getValue(topic.value).dims[id] = dim
         weights[DimKey(topic, id)] = config
         record(
-            """{"op":"dimension","topic":${esc(topic.value)},"id":${esc(id)},"name":${esc(name)},"weight":$weight}""",
+            """{"op":"dimension","topic":${esc(topic.value)},"id":${esc(id)},"name":${esc(dim.name)},""" +
+                """"weight":${config.weight},"direction":${esc(config.direction.wire)},""" +
+                """"lowLabel":${esc(dim.lowLabel)},"highLabel":${esc(dim.highLabel)}}""",
         )
         weightOps.put(DimKey(topic, id), config)
     }
@@ -165,6 +222,52 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         weightOps.put(DimKey(topic, dim), config)
     }
 
+    private fun setDirection(topic: TopicId, dim: String, direction: Direction) = synchronized(state) {
+        val old = weights.getValue(DimKey(topic, dim))
+        if (old.direction == direction) return@synchronized
+        val config = old.copy(direction = direction)
+        weights[DimKey(topic, dim)] = config
+        record(
+            """{"op":"direction","topic":${esc(topic.value)},"dim":${esc(dim)},"direction":${esc(direction.wire)}}""",
+        )
+        weightOps.put(DimKey(topic, dim), config)
+    }
+
+    /** Anchor labels are presentation-only: the write-side index changes, the dataflow does not. */
+    private fun setLabels(topic: TopicId, dim: String, low: String, high: String) = synchronized(state) {
+        val dims = topics.getValue(topic.value).dims
+        val old = dims.getValue(dim)
+        if (old.lowLabel == low && old.highLabel == high) return@synchronized
+        dims[dim] = old.copy(lowLabel = low, highLabel = high)
+        record(
+            """{"op":"labels","topic":${esc(topic.value)},"dim":${esc(dim)},""" +
+                """"lowLabel":${esc(low)},"highLabel":${esc(high)}}""",
+        )
+    }
+
+    private fun setPolicy(topic: TopicId, policy: IdeaPolicy) = synchronized(state) {
+        val t = topics.getValue(topic.value)
+        if (t.ideaPolicy == policy) return@synchronized
+        t.ideaPolicy = policy
+        record("""{"op":"policy","topic":${esc(topic.value)},"ideas":${esc(policy.wire)}}""")
+    }
+
+    private fun setVisibility(topic: TopicId, visibility: BoardVisibility) = synchronized(state) {
+        val t = topics.getValue(topic.value)
+        if (t.boardVisibility == visibility) return@synchronized
+        t.boardVisibility = visibility
+        record("""{"op":"visibility","topic":${esc(topic.value)},"boardVisibility":${esc(visibility.wire)}}""")
+    }
+
+    /** The facilitator's reveal: one-way topic state in the shared frame; the page decides what it unlocks. */
+    private fun reveal(topic: TopicId) = synchronized(state) {
+        val t = topics.getValue(topic.value)
+        if (t.revealed) return@synchronized
+        t.revealed = true
+        record("""{"op":"reveal","topic":${esc(topic.value)}}""")
+    }
+
+    /** Also the edit: re-recording an `idea` line under the same id replaces its title/description (D5). */
     private fun addIdea(topic: TopicId, idea: Idea) = synchronized(state) {
         topics.getValue(topic.value).ideas[idea.id] = idea
         record(
@@ -212,7 +315,10 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         ex.respond(200, body, "application/json")
     }
 
-    /** `/topics[/{t}[/ideas[/{i}]|/dimensions[/{d}]|/weights|/rate|/me|/aggregate]]`, dispatched here. */
+    /**
+     * `/topics[/{t}[/ideas[/{i}]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/me|/aggregate]]`,
+     * dispatched here.
+     */
     private fun handleTopics(ex: HttpExchange): String {
         val seg = ex.requestURI.path.removePrefix("/topics").split('/').filter { it.isNotEmpty() }
         val method = ex.requestMethod
@@ -224,11 +330,15 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val topic = synchronized(state) { topics[seg[0]] } ?: fail(404, "no such topic")
         val result = when {
             seg.size == 2 && seg[1] == "ideas" && method == "POST" -> postIdea(topic, ex.jsonBody())
-            seg.size == 3 && seg[1] == "ideas" && method == "DELETE" -> deleteIdea(topic, seg[2])
+            seg.size == 3 && seg[1] == "ideas" && method == "PUT" -> putIdea(topic, seg[2], ex.jsonBody())
+            seg.size == 3 && seg[1] == "ideas" && method == "DELETE" -> deleteIdea(topic, seg[2], ex.query("creator"))
             seg.size == 2 && seg[1] == "dimensions" && method == "POST" -> postDimension(topic, ex.jsonBody())
+            seg.size == 3 && seg[1] == "dimensions" && method == "PUT" -> putDimension(topic, seg[2], ex.jsonBody())
             seg.size == 3 && seg[1] == "dimensions" && method == "DELETE" ->
                 deleteDimension(topic, seg[2], ex.query("creator"))
             seg.size == 2 && seg[1] == "weights" && method == "PUT" -> putWeight(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "policy" && method == "PUT" -> putPolicy(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "reveal" && method == "POST" -> postReveal(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "rate" && method == "POST" -> postRate(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "me" && method == "GET" ->
                 return meJson(topic, name(ex.query("participant"), "participant"))
@@ -244,20 +354,31 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val creator = name(json.str("creator"), "creator")
         val title = json.str("title")?.takeIf { it.length <= 200 } ?: fail(400, "missing title")
         val id = slug(title).ifEmpty { fail(400, "title slug is empty") }
+        val policy = wireField(json, "ideas", IdeaPolicy.entries) { it.wire } ?: IdeaPolicy.EVERYONE
+        val visibility = wireField(json, "boardVisibility", BoardVisibility.entries) { it.wire }
+            ?: BoardVisibility.AFTER_RATING
         val dims = (json["dimensions"] as? JsonArray)?.map { d ->
-            val o = d as? JsonObject ?: fail(400, "a dimension must be an object {name, weight?}")
-            val name = o.str("name")?.takeIf { it.length <= 80 } ?: fail(400, "a dimension needs a name")
-            Triple(slug(name).ifEmpty { fail(400, "dimension slug is empty") }, name, weight(o))
+            val o = d as? JsonObject
+                ?: fail(400, "a dimension must be an object {name, weight?, direction?, lowLabel?, highLabel?}")
+            newDimension(o)
         } ?: fail(400, "missing dimensions")
         if (dims.isEmpty()) fail(400, "a topic needs at least one dimension")
         if (dims.map { it.first }.toSet().size != dims.size) fail(409, "exists")
         synchronized(state) {
             if (id in topics) fail(409, "exists")
             val t = TopicId(id)
-            createTopic(t, title, creator)
-            dims.forEach { (dimId, name, w) -> addDimension(t, dimId, name, w) }
+            createTopic(t, title, creator, policy, visibility)
+            dims.forEach { (dimId, dim, config) -> addDimension(t, dimId, dim, config) }
         }
         return """{"id":${esc(id)}}"""
+    }
+
+    /** A dimension object `{name, weight?, direction?, lowLabel?, highLabel?}` → (slug id, presentation, config). */
+    private fun newDimension(o: JsonObject): Triple<String, Dimension, DimConfig> {
+        val name = o.str("name")?.takeIf { it.length <= 80 } ?: fail(400, "a dimension needs a name")
+        val id = slug(name).ifEmpty { fail(400, "dimension slug is empty") }
+        val direction = wireField(o, "direction", Direction.entries) { it.wire } ?: Direction.VALUE
+        return Triple(id, Dimension(name, label(o, "lowLabel") ?: "", label(o, "highLabel") ?: ""), DimConfig(weight(o), direction))
     }
 
     private fun postIdea(topic: Topic, json: JsonObject): String {
@@ -266,28 +387,74 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val description = json.str("description")?.takeIf { it.length <= 4000 } ?: ""
         val id = slug(title).ifEmpty { fail(400, "title slug is empty") }
         synchronized(state) {
+            // under the facilitator policy only the creator proposes (k1d4g-D6); checked with the add, atomically
+            if (topic.ideaPolicy == IdeaPolicy.FACILITATOR && proposer != topic.creator) {
+                fail(403, "only the topic creator may add ideas to this topic")
+            }
             if (id in topic.ideas) fail(409, "exists")
             addIdea(topic.id, Idea(id, title, description, proposer))
         }
         return """{"id":${esc(id)}}"""
     }
 
-    private fun deleteIdea(topic: Topic, id: String): String = synchronized(state) {
+    /** `{creator, title?, description?}`: edits in place — the id (a slug of the ORIGINAL title) never changes. */
+    private fun putIdea(topic: Topic, id: String, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        val title = if ("title" in json) {
+            json.str("title")?.takeIf { it.length <= 200 } ?: fail(400, "title must be 1..200 characters")
+        } else null
+        val description = if ("description" in json) {
+            (json["description"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+                ?.takeIf { it.length <= 4000 } ?: fail(400, "description must be a string of at most 4000 characters")
+        } else null
+        if (title == null && description == null) fail(400, "nothing to change: give title and/or description")
+        synchronized(state) {
+            val old = topic.ideas[id] ?: fail(404, "no such idea")
+            val new = old.copy(title = title ?: old.title, description = description ?: old.description)
+            if (new != old) addIdea(topic.id, new)
+        }
+        return """{"id":${esc(id)}}"""
+    }
+
+    /** Creator-only (k1d4g-D6, a deliberate change from v1's open delete); an unknown idea is 404 first. */
+    private fun deleteIdea(topic: Topic, id: String, creator: String?): String = synchronized(state) {
         if (id !in topic.ideas) fail(404, "no such idea")
+        requireCreator(topic, creator)
         removeIdea(topic.id, id)
         """{"removed":${esc(id)}}"""
     }
 
     private fun postDimension(topic: Topic, json: JsonObject): String {
         requireCreator(topic, json.str("creator"))
-        val name = json.str("name")?.takeIf { it.length <= 80 } ?: fail(400, "missing name")
-        val w = weight(json)
-        val id = slug(name).ifEmpty { fail(400, "name slug is empty") }
+        if (json.str("name") == null) fail(400, "missing name")
+        val (id, dim, config) = newDimension(json)
         synchronized(state) {
             if (id in topic.dims) fail(409, "exists")
-            addDimension(topic.id, id, name, w)
+            addDimension(topic.id, id, dim, config)
         }
         return """{"id":${esc(id)}}"""
+    }
+
+    /**
+     * `{creator, weight?, direction?, lowLabel?, highLabel?}`: 403 non-creator, 400 on a bad value or
+     * when no field is given, 404 unknown dimension — all before any write. A label left out keeps its value.
+     */
+    private fun putDimension(topic: Topic, dim: String, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        val w = if ("weight" in json) weight(json) else null
+        val direction = wireField(json, "direction", Direction.entries) { it.wire }
+        val low = label(json, "lowLabel")
+        val high = label(json, "highLabel")
+        if (w == null && direction == null && low == null && high == null) {
+            fail(400, "nothing to change: give weight, direction, lowLabel and/or highLabel")
+        }
+        synchronized(state) {
+            val old = topic.dims[dim] ?: fail(404, "no such dimension")
+            w?.let { setWeight(topic.id, dim, it) }
+            direction?.let { setDirection(topic.id, dim, it) }
+            if (low != null || high != null) setLabels(topic.id, dim, low ?: old.lowLabel, high ?: old.highLabel)
+        }
+        return """{"id":${esc(dim)}}"""
     }
 
     private fun deleteDimension(topic: Topic, id: String, creator: String?): String {
@@ -297,6 +464,26 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             removeDimension(topic.id, id)
         }
         return """{"removed":${esc(id)}}"""
+    }
+
+    /** `{creator, ideas?, boardVisibility?}`: the topic's facilitator settings; 400 when neither is given. */
+    private fun putPolicy(topic: Topic, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        val policy = wireField(json, "ideas", IdeaPolicy.entries) { it.wire }
+        val visibility = wireField(json, "boardVisibility", BoardVisibility.entries) { it.wire }
+        if (policy == null && visibility == null) fail(400, "nothing to change: give ideas and/or boardVisibility")
+        synchronized(state) {
+            policy?.let { setPolicy(topic.id, it) }
+            visibility?.let { setVisibility(topic.id, it) }
+        }
+        return """{"ideas":${esc(topic.ideaPolicy.wire)},"boardVisibility":${esc(topic.boardVisibility.wire)}}"""
+    }
+
+    /** `{creator}`: the facilitator reveals the Board (idempotent; allowed in either visibility mode). */
+    private fun postReveal(topic: Topic, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        reveal(topic.id)
+        return """{"revealed":true}"""
     }
 
     private fun putWeight(topic: Topic, json: JsonObject): String {
@@ -346,6 +533,21 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun name(raw: String?, what: String): String =
         raw?.takeIf { it.isNotEmpty() && it.length <= 40 } ?: fail(400, "$what must be 1..40 characters")
 
+    /** An enum-valued field by its wire string: absent → null; any other string or non-string → 400. */
+    private fun <E> wireField(json: JsonObject, key: String, values: List<E>, wire: (E) -> String): E? {
+        val raw = json[key] ?: return null
+        val v = (raw as? JsonPrimitive)?.takeIf { it.isString }?.content
+        return values.firstOrNull { v != null && wire(it) == v }
+            ?: fail(400, "$key must be one of ${values.joinToString(", ") { "\"${wire(it)}\"" }}")
+    }
+
+    /** An anchor label: absent → null; otherwise a JSON string, trimmed, ≤ 80 chars ("" clears it). */
+    private fun label(json: JsonObject, key: String): String? {
+        val raw = json[key] ?: return null
+        return (raw as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.length <= 80 }
+            ?: fail(400, "$key must be a string of at most 80 characters")
+    }
+
     /** A weight: absent → 1.0; otherwise a JSON number, finite and > 0 (D3). */
     private fun weight(json: JsonObject): Double {
         val raw = json["weight"] ?: return 1.0
@@ -360,9 +562,14 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
 
     private fun topicJson(t: Topic): String =
-        """{"id":${esc(t.id.value)},"title":${esc(t.title)},"creator":${esc(t.creator)},"dimensions":""" +
+        """{"id":${esc(t.id.value)},"title":${esc(t.title)},"creator":${esc(t.creator)},""" +
+            """"ideas":${esc(t.ideaPolicy.wire)},"boardVisibility":${esc(t.boardVisibility.wire)},""" +
+            """"revealed":${t.revealed},"dimensions":""" +
             t.dims.entries.joinToString(",", "[", "]") { (id, d) ->
-                """{"id":${esc(id)},"name":${esc(d.name)},"weight":${weights[DimKey(t.id, id)]?.weight?.let(::num) ?: "null"}}"""
+                val config = weights[DimKey(t.id, id)]
+                """{"id":${esc(id)},"name":${esc(d.name)},"weight":${config?.weight?.let(::num) ?: "null"},""" +
+                    """"direction":${config?.direction?.let { esc(it.wire) } ?: "null"},""" +
+                    """"lowLabel":${esc(d.lowLabel)},"highLabel":${esc(d.highLabel)}}"""
             } + "}"
 
     /**
@@ -385,6 +592,11 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
      * non-null score by score desc, rating count desc, id asc; then every other
      * idea — a [Scored] whose score is null (it still carries its per-dimension
      * stats), or no [Scored] at all — by id with `"rank":null`.
+     *
+     * `participants` (top level) and each row's `raters` are COUNTS of distinct participants with a
+     * live rating, read from the synchronous write-side [ratings] index (k1d4g-D7): no participant
+     * name ever enters the aggregate. `value`/`cost` are the idea's weighted means per side, null when
+     * that side is unrated; a byDim `contribution` is null on a cost dimension and whenever the score is.
      */
     private fun aggregateJson(topic: Topic): String {
         val w = topic.dims.keys.joinToString(",", "{", "}") { d ->
@@ -398,20 +610,27 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
                     .thenBy { it.first },
             )
         val rankedIds = ranked.mapTo(HashSet()) { it.first }
+        val live = ratings.keys.filter { it.topic == topic.id }
+        val ratersOf = live.groupBy({ it.idea }, { it.participant }).mapValues { (_, who) -> who.toSet().size }
         fun byDim(s: Scored) = s.byDim.toSortedMap().entries.joinToString(",", "{", "}") { (d, st) ->
             """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
-                """"contribution":${num(s.contributions[d] ?: 0.0)}}"""
+                """"contribution":${s.contributions[d]?.let(::num) ?: "null"}}"""
         }
+        fun tail(id: String, s: Scored?) =
+            """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
+                """"raters":${ratersOf[id] ?: 0}}"""
         val rows = ranked.mapIndexed { i, (id, s) ->
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":${num(s.score!!)},"split":${s.split},"ratings":${count(s)},"byDim":${byDim(s)}}"""
+                """"score":${num(s.score!!)},"split":${s.split},"ratings":${count(s)},"byDim":${byDim(s)},""" +
+                tail(id, s)
         } + topic.ideas.keys.filter { it !in rankedIds }.map { id ->
             val s = scored[IdeaKey(topic.id, id)] // present with a null score, or absent
             """{"rank":null,"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
                 """"score":null,"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},""" +
-                """"byDim":${s?.let(::byDim) ?: "{}"}}"""
+                """"byDim":${s?.let(::byDim) ?: "{}"},""" + tail(id, s)
         }
-        return """{"weights":$w,"ideas":${rows.joinToString(",", "[", "]")}}"""
+        val participants = live.mapTo(HashSet()) { it.participant }.size
+        return """{"weights":$w,"participants":$participants,"ideas":${rows.joinToString(",", "[", "]")}}"""
     }
 
     private fun count(s: Scored): Long = s.byDim.values.sumOf { it.n }
@@ -452,7 +671,13 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         journal?.close()
     }
 
+    private fun parseDirection(v: String): Direction = parseWire(v, Direction.entries) { it.wire }
+
     private companion object {
+        /** A journal line's enum value; an unknown one is a corrupt journal, not a request error. */
+        fun <E> parseWire(v: String, values: List<E>, wire: (E) -> String): E =
+            values.firstOrNull { wire(it) == v } ?: error("unknown value in journal: $v")
+
         val RATING_ORDER: Comparator<RatingKey> =
             compareBy({ it.topic.value }, { it.idea }, { it.dim }, { it.participant })
     }
