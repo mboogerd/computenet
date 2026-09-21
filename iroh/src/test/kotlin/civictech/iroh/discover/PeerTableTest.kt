@@ -320,6 +320,41 @@ class PeerTableTest {
         )
     }
 
+    @Test
+    fun `judge on an unknown key attempts eviction like linkUp — a table at capacity with an evictable entry stays bounded`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+        val oldest = key(0x02)
+
+        table.observe(oldest, listOf("a"), 1)
+        table.observe(key(0x03), listOf("a"), 2)
+        table.observe(key(0x04), listOf("a"), 3)
+
+        table.judge(key(0x05), LinkDirection.INBOUND, linkId = 1, resolved = alice, now = 5)
+
+        assertEquals(3, table.keysRetained, "judge made room the way linkUp does, instead of growing past maxRetained")
+        assertNull(table.stateOf(oldest), "the oldest evictable entry — not a random one — is the one judge gave up")
+    }
+
+    @Test
+    fun `judge on an unknown key still exceeds maxRetained by one when every entry is eviction-protected, matching linkUp`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+
+        listOf(key(0x02), key(0x03), key(0x04)).forEachIndexed { i, k ->
+            table.observe(k, listOf("a"), i.toLong())
+            table.linkUp(k, LinkDirection.OUTBOUND, linkId = i.toLong(), source = EntrySource.DISCOVERED)
+            table.admitted(k, linkId = i.toLong(), peer = PeerId("peer$i"))
+        }
+
+        table.judge(key(0x05), LinkDirection.INBOUND, linkId = 9, resolved = alice, now = 5)
+
+        // No entry was evictable, so — like linkUp — the table is allowed to
+        // exceed maxRetained by exactly one: an inbound hello for an unknown
+        // key must still be judgeable.
+        assertEquals(4, table.keysRetained)
+    }
+
     // ---- 7. expiry, backoff and the in-flight bound ----
 
     @Test
