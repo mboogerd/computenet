@@ -76,6 +76,7 @@ const val PAGE = """<!DOCTYPE html>
   .rankrow .pill { justify-self: start; font-size: .7rem; padding: .1rem .5rem; border-radius: 8px; background: #faeeda; color: #854f0b; }
   .rankrow .pill[hidden] { display: none; }
   .rankrow.unranked { opacity: .5; }
+  .rankrow.unranked .stack { visibility: hidden; } /* an unscored idea has no bar, not an empty one */
   .rankrow.unranked.enter, .rankrow.unranked.leave { opacity: 0; }
   #board .note { color: var(--dim); font-size: .75rem; margin-top: .6rem; }
 </style>
@@ -367,13 +368,15 @@ function renderRanking(t, ideas) {
       row.className = 'rankrow enter';
       row.innerHTML = '<div class="pos"></div><div class="ttl"></div><div class="stack"></div>' +
                       '<div class="score"></div><span class="pill" hidden>split</span>';
-      // place without transition, then fade in
+      // place without transition, flush that style, then fade in. A forced
+      // style flush rather than backlog-triage's double requestAnimationFrame:
+      // rAF is paused in a background tab, which would leave a fresh row
+      // invisible there until the tab is shown.
       row.style.transition = 'none';
       row.style.transform = 'translateY(' + (i * ROW) + 'px)';
       boardRows.set(key, row); box.appendChild(row);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        row.style.transition = ''; row.classList.remove('enter');
-      }));
+      void getComputedStyle(row).opacity;
+      row.style.transition = ''; row.classList.remove('enter');
     }
     row.style.transform = 'translateY(' + (i * ROW) + 'px)';
     const was = boardIndex.get(key);
