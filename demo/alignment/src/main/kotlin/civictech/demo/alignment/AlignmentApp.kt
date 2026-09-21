@@ -43,7 +43,7 @@ private fun fail(status: Int, error: String): Nothing = throw Fail(status, error
 
 /**
  * alignment: participants rate ideas on a topic's creator-defined dimensions
- * (1..9 sliders); the dataflow of [AlignmentPipeline] folds the ratings into
+ * (continuous [1, 9] sliders, held as thousandths — [RatingScale]); the dataflow of [AlignmentPipeline] folds the ratings into
  * per-dimension statistics and a weighted per-idea score, and this app serves
  * the result as JSON + `/events` SSE (feature computenet-sigl0).
  *
@@ -72,8 +72,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
 
     // authoritative write-side indices (journaled)
     private val topics = TreeMap<String, Topic>()
-    private val ratings = HashMap<RatingKey, Int>()
-    private val weights = HashMap<DimKey, Double>()
+    private val ratings = HashMap<RatingKey, Int>() // thousandths (RatingScale)
+    private val weights = HashMap<DimKey, DimConfig>() // every direction VALUE until the journal/API carry one
 
     // async read model, folded off the fusion outlet
     private var scored: Map<IdeaKey, Scored> = emptyMap()
@@ -125,7 +125,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             "weight" -> setWeight(t(), s("dim"), s("weight").toDouble())
             "idea" -> addIdea(t(), Idea(s("id"), s("title"), s("description"), s("proposer")))
             "unidea" -> removeIdea(t(), s("id"))
-            "rate" -> rate(rk(), s("value").toInt())
+            "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
             "unrate" -> unrate(rk())
             else -> error("unknown journal op in line: $line")
         }
@@ -139,11 +139,12 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     /** A dimension's creation line carries its initial weight, so replay restores both from one line. */
     private fun addDimension(topic: TopicId, id: String, name: String, weight: Double) = synchronized(state) {
         topics.getValue(topic.value).dims[id] = Dimension(name)
-        weights[DimKey(topic, id)] = weight
+        val config = DimConfig(weight, Direction.VALUE)
+        weights[DimKey(topic, id)] = config
         record(
             """{"op":"dimension","topic":${esc(topic.value)},"id":${esc(id)},"name":${esc(name)},"weight":$weight}""",
         )
-        weightOps.put(DimKey(topic, id), weight)
+        weightOps.put(DimKey(topic, id), config)
     }
 
     /** Cascades: unrates every rating on the dimension (journaled as `unrate`), then drops its weight row. */
@@ -156,10 +157,12 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     private fun setWeight(topic: TopicId, dim: String, weight: Double) = synchronized(state) {
-        if (weights[DimKey(topic, dim)] == weight) return@synchronized
-        weights[DimKey(topic, dim)] = weight
+        val old = weights[DimKey(topic, dim)]
+        if (old?.weight == weight) return@synchronized
+        val config = DimConfig(weight, old?.direction ?: Direction.VALUE)
+        weights[DimKey(topic, dim)] = config
         record("""{"op":"weight","topic":${esc(topic.value)},"dim":${esc(dim)},"weight":$weight}""")
-        weightOps.put(DimKey(topic, dim), weight)
+        weightOps.put(DimKey(topic, dim), config)
     }
 
     private fun addIdea(topic: TopicId, idea: Idea) = synchronized(state) {
@@ -177,14 +180,15 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         record("""{"op":"unidea","topic":${esc(topic.value)},"id":${esc(id)}}""")
     }
 
-    private fun rate(key: RatingKey, value: Int) = synchronized(state) {
-        if (ratings[key] == value) return@synchronized // idempotent: no journal line, no delta
-        ratings[key] = value
+    /** [milli] is thousandths; journaled via [RatingScale.format], so an integer rating writes the v1 line. */
+    private fun rate(key: RatingKey, milli: Int) = synchronized(state) {
+        if (ratings[key] == milli) return@synchronized // idempotent: no journal line, no delta
+        ratings[key] = milli
         record(
             """{"op":"rate","topic":${esc(key.topic.value)},"idea":${esc(key.idea)},"dim":${esc(key.dim)},""" +
-                """"participant":${esc(key.participant)},"value":$value}""",
+                """"participant":${esc(key.participant)},"value":${RatingScale.format(milli)}}""",
         )
-        ratingOps.put(key, Rating(key, value))
+        ratingOps.put(key, Rating(key, milli))
     }
 
     /** Unrated is absence (computenet-sigl0-D5): the key leaves the KeyedSetCell. */
@@ -307,9 +311,10 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * `value` 1..9 (a JSON integer) rates; `value: null` or `"retract": true`
-     * removes the rating (D5: unrated is absence); anything else is a 400 and
-     * changes nothing.
+     * `value` a finite JSON number with 1 ≤ value ≤ 9 rates (rounded to
+     * thousandths, [RatingScale]); `value: null` or `"retract": true` removes
+     * the rating (D5: unrated is absence); anything else is a 400 and changes
+     * nothing.
      */
     private fun postRate(topic: Topic, json: JsonObject): String {
         val participant = name(json.str("participant"), "participant")
@@ -319,9 +324,10 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val raw = json["value"]
         val value: Int? = when {
             retract || raw is JsonNull -> null
-            raw is JsonPrimitive && !raw.isString -> raw.content.toIntOrNull()?.takeIf { it in 1..9 }
-                ?: fail(400, "value must be an integer 1..9 or null")
-            else -> fail(400, "value must be an integer 1..9 or null")
+            raw is JsonPrimitive && !raw.isString ->
+                raw.content.toDoubleOrNull()?.takeIf(RatingScale::valid)?.let(RatingScale::toMilli)
+                    ?: fail(400, "value must be a number 1..9 or null")
+            else -> fail(400, "value must be a number 1..9 or null")
         }
         synchronized(state) {
             if (idea !in topic.ideas) fail(400, "no such idea")
@@ -356,7 +362,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun topicJson(t: Topic): String =
         """{"id":${esc(t.id.value)},"title":${esc(t.title)},"creator":${esc(t.creator)},"dimensions":""" +
             t.dims.entries.joinToString(",", "[", "]") { (id, d) ->
-                """{"id":${esc(id)},"name":${esc(d.name)},"weight":${weights[DimKey(t.id, id)]?.let(::num) ?: "null"}}"""
+                """{"id":${esc(id)},"name":${esc(d.name)},"weight":${weights[DimKey(t.id, id)]?.weight?.let(::num) ?: "null"}}"""
             } + "}"
 
     /**
@@ -368,34 +374,42 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val ideas = topic.ideas.values.joinToString(",", "[", "]") { idea ->
             val mine = topic.dims.keys.associateWith { ratings[RatingKey(topic.id, idea.id, it, participant)] }
             """{"id":${esc(idea.id)},"title":${esc(idea.title)},"description":${esc(idea.description)},""" +
-                """"ratings":""" + mine.entries.joinToString(",", "{", "}") { (d, v) -> "${esc(d)}:${v ?: "null"}" } +
+                """"ratings":""" + mine.entries.joinToString(",", "{", "}") { (d, v) -> "${esc(d)}:${v?.let(RatingScale::format) ?: "null"}" } +
                 ""","rated":${mine.values.count { it != null }},"total":${mine.size}}"""
         }
         """{"topic":${esc(topic.id.value)},"participant":${esc(participant)},"ideas":$ideas}"""
     }
 
-    /** Ranked from the fusion read model: score desc, rating count desc, id asc; unscored ideas follow by id. */
+    /**
+     * Ranked from the fusion read model (computenet-k1d4g-D4): ideas with a
+     * non-null score by score desc, rating count desc, id asc; then every other
+     * idea — a [Scored] whose score is null (it still carries its per-dimension
+     * stats), or no [Scored] at all — by id with `"rank":null`.
+     */
     private fun aggregateJson(topic: Topic): String {
         val w = topic.dims.keys.joinToString(",", "{", "}") { d ->
-            "${esc(d)}:${weights[DimKey(topic.id, d)]?.let(::num) ?: "null"}"
+            "${esc(d)}:${weights[DimKey(topic.id, d)]?.weight?.let(::num) ?: "null"}"
         }
-        val withScore = topic.ideas.keys.mapNotNull { id -> scored[IdeaKey(topic.id, id)]?.let { id to it } }
-        val ranked = withScore.sortedWith(
-            compareByDescending<Pair<String, Scored>> { it.second.score }
-                .thenByDescending { count(it.second) }
-                .thenBy { it.first },
-        )
-        val unscored = topic.ideas.keys.filter { id -> withScore.none { it.first == id } }
+        val ranked = topic.ideas.keys
+            .mapNotNull { id -> scored[IdeaKey(topic.id, id)]?.takeIf { it.score != null }?.let { id to it } }
+            .sortedWith(
+                compareByDescending<Pair<String, Scored>> { it.second.score }
+                    .thenByDescending { count(it.second) }
+                    .thenBy { it.first },
+            )
+        val rankedIds = ranked.mapTo(HashSet()) { it.first }
+        fun byDim(s: Scored) = s.byDim.toSortedMap().entries.joinToString(",", "{", "}") { (d, st) ->
+            """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
+                """"contribution":${num(s.contributions[d] ?: 0.0)}}"""
+        }
         val rows = ranked.mapIndexed { i, (id, s) ->
-            val byDim = s.byDim.toSortedMap().entries.joinToString(",", "{", "}") { (d, st) ->
-                """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
-                    """"contribution":${num(s.contributions[d] ?: 0.0)}}"""
-            }
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":${num(s.score)},"split":${s.split},"ratings":${count(s)},"byDim":$byDim}"""
-        } + unscored.map { id ->
+                """"score":${num(s.score!!)},"split":${s.split},"ratings":${count(s)},"byDim":${byDim(s)}}"""
+        } + topic.ideas.keys.filter { it !in rankedIds }.map { id ->
+            val s = scored[IdeaKey(topic.id, id)] // present with a null score, or absent
             """{"rank":null,"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":null,"split":false,"ratings":0,"byDim":{}}"""
+                """"score":null,"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},""" +
+                """"byDim":${s?.let(::byDim) ?: "{}"}}"""
         }
         return """{"weights":$w,"ideas":${rows.joinToString(",", "[", "]")}}"""
     }
@@ -412,7 +426,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val ratingList = ratings.entries.sortedWith(compareBy(RATING_ORDER) { it.key })
             .joinToString(",", "[", "]") { (k, v) ->
                 """{"topic":${esc(k.topic.value)},"idea":${esc(k.idea)},"dim":${esc(k.dim)},""" +
-                    """"participant":${esc(k.participant)},"value":$v}"""
+                    """"participant":${esc(k.participant)},"value":${RatingScale.format(v)}}"""
             }
         val aggregates = topics.values.joinToString(",", "{", "}") { "${esc(it.id.value)}:${aggregateJson(it)}" }
         """{"topics":$topicList,"ideas":$ideaList,"ratings":$ratingList,"aggregates":$aggregates}"""
