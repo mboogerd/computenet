@@ -821,3 +821,236 @@ R4), the same correction this entry makes to 43-security.md and
 95-research-plan.md. Left to whoever next has that row in their claim.
 
 `concord/corpus/DISPUTES.md` is unchanged by this feature.
+
+## 2026-09-21 — DSC2 landed: peer discovery over iroh (epic `computenet-aas`)
+
+**Names, does not edit, the entries above**: `2026-08-21 — DSC1 ...`,
+`2026-09-12 — Key rotation decided (option 4) ...`, `2026-09-12 —
+[DSC1-NV-01] revisited`, and `2026-09-14 — DSC4 landed`. This entry records
+DSC2 as the epic's own re-scope (2026-09-19) left it: iroh delivered most of
+what the former body designed by hand, and DSC2's residual is a LAN mDNS
+flag, an opt-in self-hosted rendezvous mode, and a discovery-driven dial
+policy that keeps identity resolution at the hello, never at discovery.
+
+### What iroh delivered, and what DSC2 built
+
+iroh already supplies the four things the former `:discover` design would
+have had to build itself: a connection cryptographically bound to the key
+that advertised it (`Endpoint::connect(EndpointId)` cannot be steered to a
+different key by a lying advertisement); self-authenticating signed address
+records via pkarr (preset `N0`'s `PkarrPublisher`/`PkarrResolver` publish and
+resolve a `SignedPacket` under the endpoint's own key — the former
+`[DSC2-REC-01..08]` record design is this, verbatim, and DSC2 defines no
+record type, encoding, or signature of its own); reachability and relay
+fallback, owned by DSC3, untouched here; and re-dial of a once-known key
+(`IrohConnection.scheduleReconnect`, already landed). Identity itself —
+which name a key speaks for — is DSC1 + DSC4's, not DSC2's: a `KeyId`
+fingerprint identifies which key backs a connection, a durable `PeerId`
+identifies who the peer is, and the single seam `PeerIdentityBinding.resolve`
+joins them at the hello (`IrohTransport.Session.onHello2`). Discovery
+consumes this and defines none of it.
+
+What DSC2 itself delivered, across the three merged features under this
+epic: (1) LAN enumeration — `computenet-ne2oh`, an opt-in `--mdns` sidecar
+flag adding `iroh-mdns-address-lookup` as an address-lookup service, and a
+host-protocol `WATCH_PEERS`/`PEER_DISCOVERED`/`PEER_EXPIRED` subscription, off
+by default (no multicast socket when the flag is absent) — PR #943, sha
+`8ff7b1e5`; (2) a discovery-driven dial policy in `:iroh`'s
+`civictech.iroh.discover` — `computenet-ktn1l`: one live peering per key
+identifier, self excluded, bounded concurrency and retained state, capped
+backoff on an injected schedule, the mutual-dial tie-break (aas-D7), and key
+rotation kept at the identity resolved by the hello, not minted by discovery
+— PR #946, sha `b65f96a2`; (3) self-hosted rendezvous — `computenet-vnscs`, a
+new `LookupMode::Rendezvous` behind `--pkarr-relay-url`/`--dns-origin` and a
+loopback `computenet-iroh-dns` binary, with the development default left at
+`N0` — PR #952, sha `1923610f`. Two features remain open under the epic at
+the time of this entry and are not counted above: `computenet-63um5`
+(beadsmirror forms its two-node peering by discovery; BS-03/BS-09) and
+`computenet-md1dt` (BS-08 mutual-dial tie-break over real sidecars — no
+mutual dial is exercised by anything merged so far). This feature,
+`computenet-qzr7n` (key rotation over real sidecars, BS-06, and this entry),
+is PR #953.
+
+The former body's own mechanisms — a new `:discover` Gradle module, a
+hand-designed signed `PeerRecord` with its own canonical encoding, a jmdns or
+hand-rolled DNS-SD responder, and a `PeerDirectoryCell` rendezvous dialling
+`WsTransport::connect` — were **not built**, and are not a gap: they were
+RE-SCOPED on 2026-09-19 (epic comment `SUPERSEDED WORDING`) because they
+were designed before DSC0 adopted iroh (which delivers the record and the
+LAN/rendezvous mechanism) and before DSC4 changed what a peer identity is
+(which the former `[DSC2-ID-01..06]` assumed was the derived key, not an
+anchor-vouched name). The former text is preserved verbatim on the epic for
+audit; nothing here edits or restates it beyond the identity table below.
+
+### Decisions `aas-D1`..`aas-D9`
+
+- **aas-D1 — Home.** No `:discover` module. LAN/rendezvous lookup lives in
+  the Rust sidecar behind `SidecarConfig`; the dial policy lives in `:iroh`
+  under `civictech.iroh.discover`. `:kernel`, `:wire`, `:identity` gain
+  nothing.
+- **aas-D2 — Records.** iroh's pkarr signed packet IS the peer record; no
+  ComputeNet record type, canonical encoding, signature, or epoch is defined.
+- **aas-D3 — LAN mechanism.** `iroh-mdns-address-lookup` 0.5.0, not jmdns, not
+  a hand-rolled responder, not the older `swarm-discovery` crate directly,
+  behind `--mdns`, orthogonal to `LookupMode` (composes with `Offline` for
+  tests, with `Rendezvous` and `N0` for deployments). The premise this
+  decision carried unverified — that the crate compiles against iroh exactly
+  1.0.3 — resolved without a version bump: `computenet-ne2oh` landed against
+  1.0.3 unchanged (PR #943), so the park this decision reserved was never
+  triggered.
+- **aas-D4 — Rendezvous default.** A new `LookupMode::Rendezvous` variant is
+  additive (`Offline`, `N0`, `Relay` unchanged); the mode exists and is
+  proven in CI (`computenet-vnscs`, PR #952), but the DEVELOPMENT DEFAULT
+  stays `N0` — this is a DOCUMENTED default, not a decision this epic makes
+  for a deployer, in the same pattern `doc/iroh-adoption.md`'s "Relay hosting
+  policy" section uses for the relay default: that section documents what
+  n0's public infrastructure observes and states plainly that self-hosting is
+  needed only for a deployment that must not disclose that metadata, while
+  leaving n0's relay as the default anyone gets without choosing otherwise.
+  DSC2's rendezvous default reads the same way: `--pkarr-relay-url` and
+  `--dns-origin` self-host the directory for a deployment that must not
+  publish peer addresses to n0's infrastructure; absent those flags, `N0`
+  remains what a fresh `computenet-iroh-sidecar` invocation gets, not because
+  self-hosting was rejected but because nothing here forces the choice.
+- **aas-D5 — Not enumeration beyond the LAN.** pkarr/DNS resolve a KNOWN key;
+  `iroh-dns-server` enumerates nothing; a directory or peer exchange is
+  GOS1's (`computenet-yk6`) or SOC3's bootstrap to build. **The sentence
+  SOC3 can act on**: DSC2 enumerates peers on one LAN segment only (via
+  `--mdns`); beyond that segment, a node needs one bootstrap key supplied out
+  of band, or GOS1.
+- **aas-D6 — Identity under clause 2'.** A discovery event yields a KEY
+  IDENTIFIER only; deduplication, self-exclusion and dial bookkeeping are per
+  key. The identity is resolved solely at the hello through
+  `Side.identityBinding`; `Side.allow` (names) is never evaluated earlier. A
+  second key whose hello resolves to a name that already has a LIVE peering
+  is the rotation this epic proves (`computenet-qzr7n.1`'s arm 1, below); a
+  second key whose hello resolves to that name AFTER the old link has
+  already dropped is a different, merely-observed ordering (arm 2, below) —
+  the landed `PeerTable.judge` recognises only the former as a supersession.
+- **aas-D7 — Mutual dial.** When both sides discover and dial each other, the
+  side whose own NodeId is lexicographically smaller (unsigned byte order)
+  keeps its outbound link and closes its inbound; the other keeps its inbound
+  and closes its outbound, decided before the losing link's `Session` reaches
+  `bindAndAnnounce` so no mirror is announced twice and the closing link does
+  not count toward `unadmitted`. Built in `computenet-ktn1l` (`MutualDialTest`
+  over `FakeSidecar`); the real-sidecar exercise of this tie-break is
+  `computenet-md1dt`, still open — no figure is given for it here.
+- **aas-D8 — Protocol.** `WATCH_PEERS` (`0x08`)/`WATCHING` (`0x89`) and
+  `PEER_DISCOVERED` (`0x87`)/`PEER_EXPIRED` (`0x88`) are additive host↔sidecar
+  kinds on link 0, emitted only after `WATCH_PEERS`; a discovered peer's
+  addresses also feed the endpoint's `MemoryLookup` so `DIAL <id>` needs no
+  `ADD_PEER`.
+- **aas-D9 — Defaults.** `--mdns` off; `LookupMode` default `N0` unchanged;
+  `WATCH_PEERS` never sent by any existing call site. Every existing
+  sidecar-backed test and `IrohConvergenceSuiteTest` runs byte-for-byte as
+  before with no flag (`[DSC2-NEU-03]`, `[DSC2-MDNS-03]`).
+
+### Evidence
+
+Every figure below is `MEASURED` with its run id or command, or `ESTIMATED`;
+a row for a suite still unmerged names its bead instead.
+
+| Suite | Scenario(s) | Platform | Outcome | Label |
+|---|---|---|---|---|
+| `iroh/sidecar/tests/protocol.rs`, `mdns.rs`, `relay_mode.rs`, `rendezvous_mode.rs`, `two_endpoints.rs` | BS-01, BS-02, BS-11 | ubuntu, `iroh-sidecar` lane | pass (part of the lane's `cargo test` step) | MEASURED (merged features' own PRs #943, #946, #952 — the lane runs `cargo test` on every push) |
+| `:iroh` FakeSidecar suites (default lanes, every PR) | BS-04, BS-05a, BS-05b, BS-07, BS-08 (fake half), BS-12 | any (no `-Piroh.enabled`) | pass | MEASURED (required checks on #943/#946/#952/#953) |
+| `SidecarMdnsDiscoveryTest` | BS-01 (JVM half) | ubuntu, `iroh-sidecar` lane | pass | MEASURED (PR #943's lane run) |
+| `KeyRotationContinuityFakeTest` | BS-06 (fake twin) | any | pass | MEASURED (PR #946's default-lane run) |
+| `MutualDialTest` | BS-08 (fake half) | any | pass | MEASURED (PR #946's default-lane run) |
+| `IdentityMismatchFakeTest` | BS-05b(a) — both `[DSC2-ID-05]` mismatches (qzr7n-D8: this is where BS-05b(a) lives; no real-sidecar variant is built) | any | pass | MEASURED (default-lane runs) |
+| `DiscoveryFloodTest` | BS-07 | any | pass | MEASURED (default-lane runs) |
+| `IrohDiscoveredKeyRotationTest` | BS-06 (real, arm 1 rotation + arm 2 restart ordering) | macOS arm64 (this machine) | SKIPPED — `MulticastGate.deliveryOrSkip`, host does not deliver multicast (ne2oh-B6) | not executed here; see next row |
+| `IrohDiscoveredKeyRotationTest` | BS-06 (real, arm 1 + arm 2) | ubuntu, `iroh-sidecar` lane, branch `feature/computenet-qzr7n`, head `0dcd0c05` | **2 PASSED, 0 FAILED, 0 SKIPPED** — both arms EXECUTED | MEASURED (CI run `35554798313`, job "iroh Gradle check, flag-enabled (timed)", `BUILD SUCCESSFUL in 4m 19s`) — the first execution of BS-06 over real sidecars anywhere, and the first real-sidecar exercise of `IrohNode` + `DiscoveredPeering` at all |
+| `IrohDiscoveredKeyRotationTest` (earlier revision) | BS-06 (real), arm 2 as first drafted | ubuntu, `iroh-sidecar` lane, head `88e74883` | arm 1 PASSED; arm 2 FAILED at `await("a retry armed for K1")` | MEASURED (CI run `35552410099`) — this failure DISPROVED the drafted restart mechanism and produced `computenet-qzr7n.3`, which rewrote arm 2 to assert landed behaviour instead; the restart ordering above is therefore a RECORDED observation from a real run, not a prediction |
+| beadsmirror discovery-formed rig (BS-03, BS-09) | — | — | not yet built | pending `computenet-63um5` (open) |
+| BS-08 mutual dial over real sidecars | — | — | not yet built | pending `computenet-md1dt` (open) |
+
+### `[DSC2-NV-01..06]` — EXPLICITLY UNVERIFIED
+
+Restated verbatim from the epic's §4.8, as clause 2' and F5-D4 require, with
+one sentence each on why no test closes it:
+
+- **[DSC2-NV-01]** A loopback mDNS test proves the flag wiring, the event
+  path and the dial; it proves nothing about switches, IGMP snooping,
+  wireless client isolation or firewalls. Real-LAN behaviour is untested. —
+  Every test in this epic, including `IrohDiscoveredKeyRotationTest`, runs on
+  loopback; no test here or planned drives a real LAN segment.
+- **[DSC2-NV-02]** Eclipse: a rendezvous or a LAN attacker can WITHHOLD;
+  signed records defeat forgery, not omission. No quorum, gossip cross-check
+  or liveness evidence is built. — BS-13 asserts the documented LIMITATION
+  (a peer cannot detect an omission), never a detection; withholding is a
+  property no test can positively falsify.
+- **[DSC2-NV-03]** Sybil: minting a key is free; the anchor decision changes
+  who issues NAMES and supplies no Sybil bound. — `[DSC2-MDNS-05]` bounds
+  memory and dials, not identities; a Sybil cost bound is ECO1's, not built
+  here.
+- **[DSC2-NV-04]** Reachability is iroh's and DSC3's; a discovered address
+  may be unroutable. — DSC2 dials whatever address discovery hands it and
+  reports only success or failure; making an unreachable address reachable
+  is outside this epic.
+- **[DSC2-NV-05]** Advertising is metadata disclosure under a stable key;
+  mitigated only by the off-by-default flag. Rotating or blinded
+  advertisement is not built. — No test proves non-disclosure; the mitigation
+  is that `--mdns` and the rendezvous flags are opt-in, not a property a test
+  demonstrates.
+- **[DSC2-NV-06]** (new, aas-D5) Enumeration beyond one LAN segment is not
+  delivered. — aas-D5's own sentence above states the boundary; no test can
+  prove a capability that was deliberately not built.
+
+### Former `[DSC2-ID-*]` reconciled against the current `§4.2`
+
+| Former id | Current id | What changed | Why |
+|---|---|---|---|
+| ID-01, ID-02 | ID-01 | A discovered peer is identified by its KEY IDENTIFIER for dialing/dedup; its IDENTITY comes solely from `Side.identityBinding.resolve` at the hello. | The former pair made a key-derived id the identity itself; DSC4 made identity an anchor-vouched NAME, so a derived id can no longer BE the identity — only the key it is dialled under. |
+| ID-01's "sole naming scheme" clause | ID-02 | The one naming scheme for identity is DSC4's stable name, not a derived fingerprint; no `iroh/` site mints or derives a `PeerId` from key material. | Same cause: clause 2'(b) forbids a second naming scheme and forbids deriving identity from key material at any site. |
+| ID-04 ("no second allowlist or trust store") | ID-03 | Restated to say an anchor-issuer trust store is PERMITTED; a second PEER allowlist or trust store is still forbidden. | Clause 2'(c): under the anchor model a trust store for ANCHOR public keys is expected, not a violation of the former prohibition, which targeted a second peer-level allowlist. |
+| ID-05 | ID-04 | Unchanged: a discovery event raises no `AuthLevel`, satisfies no `BoundaryPolicy`, admits no traffic. | Clause 2'(d) retains this verbatim; the decision does not touch it. |
+| ID-06 | ID-05 (split) | Split per clause 2'(e) into two distinct, named refusals: `IDENTITY_MISMATCH` (hello's resolved identity differs from one already attributed to the key) and the existing key-backing refusal (hello's presented key does not back the connection). | The former single mismatch clause conflated "wrong identity" and "wrong key"; under DSC4 these are different failures on different axes and needed different reasons (`IdentityMismatchFakeTest` exercises both). |
+| ID-03 ("record names a peer other than its key") | dropped | No replacement; this case cannot occur. | iroh binds the dial itself to the key — a record cannot make a dial land on a different key than the one advertised, so the scenario the former clause guarded against is structurally impossible under iroh. |
+| — | ID-06 (new) | A peer that rotates its key keeps its identity: a discovery event for the new key leads to a peering resolving to the SAME identity, and every attribution surface sees the same `PeerId` before and after. | New under clause 2'(f) — "the single clearest behavioural difference the decision makes to this epic" — and is this feature's own subject (BS-06, below). |
+
+### Rotation across a restart — an observed gap, not a defect filed here
+
+`computenet-qzr7n.1`'s `IrohDiscoveredKeyRotationTest` (CI run `35554798313`,
+both arms executed) records that the landed `PeerTable.judge`/`linkDown`
+recognise only ONE of two orderings as the rotation `[DSC2-ID-06]` describes.
+**Arm 1** — the new key's hello arrives while the old key's link is still
+live — is the rotation aas-D6 defines: A peers K2 as the same `b`, marks K1
+`Superseded(by=K2)` without touching its link, refuses nobody, and once B1
+dies never re-dials K1, not at the link drop and not ten years later. **Arm
+2** — B1 is killed first and restarted at the same `--bind-addr` under K2 —
+does NOT produce a supersession: `PeerTable.linkDown` nulls the entry's
+`attributedPeer` on the link drop, so by the time K2's hello is judged the
+table has already forgotten K1 was `b`; K2 is admitted as a plain `Admit`,
+and K1 is re-dialled on the injected schedule against its now-dead endpoint
+until `PEER_EXPIRED` (30–43 s, `ne2oh-B5`) moves it to `Expired` with no
+retry armed. Every identity claim still holds in arm 2 — same `PeerId`, same
+`Principal`, no denial — so what it pins beyond identity is the *retry*
+behaviour, and it pins that as landed, not as desired.
+
+This is a real, deliberately unresolved tension with the LETTER of
+`[DSC2-ID-06]` ("the old key's connection shall be retired without re-dial
+once its link drops"): under a clean restart the old key IS re-dialled the
+moment its link drops, and is retired — if at all — by mDNS expiry racing
+the re-dial's own result, not by supersession at the new hello. No mechanism
+that would cancel K1's retry on recognizing K2's hello as the same identity
+was built; this feature's scope was proving BS-06 over real sidecars, not
+building a new mechanism. The earlier draft of arm 2 asserted the stronger,
+undelivered claim (a retry armed immediately after the failed dial) and CI
+run `35552410099` disproved it — arm 1 passed, arm 2 failed at
+`await("a retry armed for K1")` — which is why the restart ordering above is
+recorded as an observation from that real run, not a prediction; the
+substitution is `computenet-qzr7n.3`. Whether a clean-restart rotation
+should cancel the old key's retry once the new key's hello names the same
+identity is left for the orchestrator to decide and, if wanted, file as a
+new item; nothing here proposes a design for it.
+
+### No `concord/corpus/DISPUTES.md` entry
+
+None is triggered. A `DISPUTES.md` entry is filed only when a concord corpus
+requirement is written against a claim this epic leaves unverified, and none
+exists: `grep -rn 'DSC2' concord/corpus/` returns zero hits, and the epic's
+own §5 states "Concord corpus impact: NONE" — no `[44-*]` requirement id and
+no schema vocabulary for peers or discovery exists for a scenario to cover. A
+later reader of this entry need not go looking in `concord/corpus/` for a
+DSC2 dispute; there is nothing there to find.
