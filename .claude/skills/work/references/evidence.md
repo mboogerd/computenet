@@ -59,8 +59,8 @@ Whether the run you asked for is the run you got:
   `--tests` filter. Run a narrow and a broad suite as two calls.
 - **`--tests` filters mislead the count.** A filtered run deletes the XML of
   every class it did not match, so count the broad run first. A nonexistent
-  class is ignored when a sibling filter matches, so pass
-  `--expect-classes <distinct classes named>` on any multi-filter run.
+  class is ignored when a sibling filter matches, so after any multi-filter run
+  pass `junit-count.py` (never `./gradlew`) `--expect-classes <count of classes named>`.
 
 Test stdout never reaches the console on this build. Read it from the XML:
 `sed -n '/<system-out>/,/<\/system-out>/p' <module>/build/test-results/test/*.xml`.
