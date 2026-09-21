@@ -259,7 +259,11 @@ class ReadyDifferentialHarness private constructor(
 
     private val feed = DoltCommitFeed(workspace.doltRoot)
 
-    /** The feed position, exactly as [civictech.demo.beadsmirror.feed.DoltFeedPoller] maintains it. */
+    /**
+     * The feed position: the last applied record's commit. Unlike
+     * [civictech.demo.beadsmirror.feed.DoltFeedPoller] since computenet-btt30,
+     * [drainToHead] does not advance it past record-less commits (see the type KDoc).
+     */
     private var checkpoint: String? = null
 
     /**
