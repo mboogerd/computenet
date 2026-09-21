@@ -277,6 +277,7 @@ class DiscoveredPeeringTest {
             // schedule(1) is 2000ms, from the clock's 1000 — so 3000, not 2000.
             rig.fake.send(SidecarMessage.Failure(second.link, "unreachable"))
             await("the second failure to be counted") { rig.peering.counters.dialsFailed.count == 2L }
+            await("the second retry to be armed") { rig.timer.pending() == 1 }
             rig.advanceTo(2_999)
             assertNull(rig.fake.pollHostMessage(200), "the second backoff runs to 3000")
             rig.advanceTo(3_000)
@@ -641,6 +642,7 @@ class DiscoveredPeeringTest {
             step("a failed dial and its retry") {
                 rig.fake.send(SidecarMessage.Failure(1, "unreachable"))
                 await("the failure") { rig.peering.counters.dialsFailed.count == 1L }
+                await("a retry to be armed") { rig.timer.pending() == 1 }
                 rig.advanceTo(500)
                 rig.nextDial()
             }
