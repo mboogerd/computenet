@@ -48,15 +48,27 @@
 //! its addresses. The positive tests therefore *retry the dial* under a
 //! deadline ([`dial_until`]) — the sleep paces the retries, the deadline
 //! bounds them, and the assertion is always the dial's outcome and never the
-//! clock (feature rule 3, F2-D12). Every await that can block on a **peer** or
-//! on the **rendezvous** — a dial attempt, an accept, a frame read, or the
-//! negative control's settling window — is wrapped in a
-//! [`tokio::time::timeout`], directly or through [`dial_until`]'s own
-//! per-attempt and deadline bounds. Setup and teardown awaits (binding the
-//! rendezvous server or an endpoint, closing a link, shutting the rendezvous
-//! down) are loopback-local calls this file does not bound; a hang there
-//! would be a bug in the library or the test harness, not the kind of
-//! peer/network stall this suite is built to catch.
+//! clock (feature rule 3, F2-D12). Every await **the test itself waits on**
+//! that can block on a **peer** or on the **rendezvous** — a dial attempt,
+//! [`accept_one_frame`]'s accept, a frame read, or the negative control's
+//! settling window — is wrapped in a [`tokio::time::timeout`], directly or
+//! through [`dial_until`]'s own per-attempt and deadline bounds; awaiting
+//! [`accept_one_frame`]'s `JoinHandle` is bounded by the timeouts inside it,
+//! and [`dial_until`]'s pacing `sleep` is a bound in itself. An await on one
+//! of this file's own helpers (`spawn_dns`, `bind_rendezvous`, `dial_until`,
+//! `crosses`) is bounded exactly as far as the helper's awaits are. Every
+//! other await is deliberately left unbounded, and is one of three kinds:
+//!
+//! - setup and teardown (binding the rendezvous server or an endpoint,
+//!   closing a link, shutting the rendezvous down): loopback-local calls where
+//!   a hang would be a bug in the library or the test harness, not the kind of
+//!   peer/network stall this suite is built to catch;
+//! - `send_frame`: a few bytes written into an open stream's send buffer,
+//!   well inside QUIC's initial flow-control credit, so it waits on no reply
+//!   from the peer;
+//! - the negative control's `listening.accept()`: it runs on a task the test
+//!   never awaits and aborts at the end, so it cannot hold the test.
+//!
 //! Checkable: `git grep -n 'await' iroh/sidecar/tests/rendezvous_mode.rs`.
 //!
 //! The other half of [DSC2-RDV-04] — that the publisher *keeps retrying
@@ -88,10 +100,10 @@ use iroh_dns_server::{
 };
 use url::Url;
 
-/// Bounds every await that can block on a peer — an accept or a frame read —
-/// so a hang there fails the test instead of wedging the run. See the module
-/// doc for the awaits this file does not bound (loopback-local setup and
-/// teardown).
+/// Bounds [`accept_one_frame`]'s accept and every frame read, so a hang there
+/// fails the test instead of wedging the run. Dials are bounded separately
+/// ([`PER_ATTEMPT`], [`DIAL_DEADLINE`], [`NO_LINK_WINDOW`]); the module doc
+/// lists the awaits this file does not bound.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a single dial attempt is given before it is abandoned and retried.
