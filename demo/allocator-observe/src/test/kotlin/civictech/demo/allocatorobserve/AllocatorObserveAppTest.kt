@@ -1,5 +1,6 @@
 package civictech.demo.allocatorobserve
 
+import civictech.demo.allocatorobserve.http.PollLoopStopped
 import civictech.testkit.HttpProbe
 import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
@@ -339,6 +340,36 @@ class AllocatorObserveAppTest {
         val frame = frozenFrames.first()
         frame.obj("failure").jsonPrimitive.content shouldContain "clock broke"
         frame.obj("stale").recordCount() shouldBe 3
+    }
+
+    // computenet-p29ai: the two tests above show every CONNECTING window lands
+    // on the frozen envelope, but that rests on a fact neither one asserts —
+    // `holder.stop` marks the served state stopped strictly BEFORE the
+    // terminal frame is broadcast. Swap those two lines in
+    // `AllocatorObserveApp.start()` and both tests above still pass (every
+    // window still ends on frozen, just via a different path), so they cannot
+    // stand in for this. `stopBroadcastProbe` fires inside the terminal
+    // frame's lambda with the app's stopped marker AT THAT INSTANT, so the
+    // verdict is a state reading on the poll thread — no sleep, no race.
+    @Test
+    fun `the poll loop marks the served state stopped before it broadcasts the terminal frozen frame`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }
+        val seen = java.util.concurrent.CopyOnWriteArrayList<PollLoopStopped?>()
+        app.stopBroadcastProbe = { seen += it }
+        app.start()
+
+        broken.set(true)
+        awaitUntil("the terminal frame to be computed") { seen.isNotEmpty() }
+
+        seen.size shouldBe 1
+        seen.single() shouldNotBe null
+        seen.single() shouldBe app.pollLoopStopped
     }
 
     // -----------------------------------------------------------------
