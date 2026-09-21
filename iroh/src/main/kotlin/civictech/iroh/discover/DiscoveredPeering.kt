@@ -104,6 +104,17 @@ data class DialPolicy(
  * arrive here only as accounting — an abandoned connection and a
  * [DenialReason] to record. The only `PeerId` this class ever touches is one a
  * `Session` already stamped and handed to it.
+ *
+ * ## Lifecycle
+ *
+ * [start] installs the policy; it then runs until one of two ends. [close]
+ * stops it and closes every connection it made. [detach] stops it the same
+ * way but hands those connections, links still up, to the caller and puts
+ * [IrohNode.gate] back to [HelloGate.ADMIT_ALL] — discovery's job was
+ * formation, and from there the caller holds the peering by hand. Neither
+ * closes the [IrohNode], and the node's link listener stays registered (the
+ * node's listener list is append-only); it posts into a policy that has
+ * stopped, and `post` drops.
  */
 class DiscoveredPeering private constructor(
     private val node: IrohNode,
@@ -185,16 +196,74 @@ class DiscoveredPeering private constructor(
      * The [node] is **not** closed — it is the caller's, and the connections
      * here hold `ownsClient = false` precisely so that closing them leaves the
      * endpoint usable.
+     *
+     * After [detach] this closes nothing further — the connections are the
+     * caller's by then — and returns. Idempotent either way.
      */
     override fun close() {
-        if (!running.compareAndSet(true, false)) return
+        if (!stop()) return
+        connections.values.forEach { runCatching { it.close() } }
+        connections.clear()
+    }
+
+    /**
+     * Stop the policy and hand its live connections to the caller instead of
+     * closing them (63um5-D1).
+     *
+     * The stop is [close]'s, step for step (one private `stop()`, so the two
+     * cannot drift): no further event is acted on, every armed retry is
+     * cancelled, the timer and the dial pool are shut. What differs is only
+     * the ending — no connection is closed, so a `Peered` link stays up, and
+     * the returned map (a copy; this policy's own is emptied) is the caller's
+     * to `sever()`, `heal()` and `close()` from here on.
+     *
+     * Why it exists: a planned [IrohTransport.IrohConnection.sever] under a
+     * RUNNING policy is re-dialled within one pump (`retire` reports the down,
+     * [PeerTable.linkDown] answers `Redial` for a discovered key with no other
+     * link up), so a caller cannot hold a partition without first taking the
+     * policy away. This is also the JVM-side meaning of "discovery stopped
+     * after formation": the protocol has no `UNWATCH`, so the sidecar keeps
+     * emitting `PEER_DISCOVERED`, and the `post` that drops on `!running` is
+     * what silences it here.
+     *
+     * Two more things the caller inherits, both deliberate:
+     *
+     * - [IrohNode.gate] is restored to [HelloGate.ADMIT_ALL]. The gate this
+     *   policy installed judges against its table, and a table that no longer
+     *   moves would judge a re-dialled key's hello against its own stale
+     *   `Peered` entry.
+     * - A returned connection **does not re-dial on its own**: it was made
+     *   with an empty `onUnplannedDown` delegate (see [pump]), so an unplanned
+     *   drop leaves it down until the caller calls `heal()`.
+     *
+     * A connection whose dial was still in flight is handed over too, in
+     * whatever state the interrupted dial left it — the map is "every
+     * connection this policy made", not "every one that is up".
+     *
+     * [counters] and [snapshot] stay readable and are frozen from here on.
+     * Idempotent: a second call, or a call after [close], returns an empty
+     * map and changes nothing.
+     */
+    fun detach(): Map<NodeKey, IrohTransport.IrohConnection> {
+        if (!stop()) return emptyMap()
+        node.gate = HelloGate.ADMIT_ALL
+        val handed = HashMap(connections)
+        connections.clear()
+        return handed
+    }
+
+    /**
+     * The one stop sequence [close] and [detach] share. Returns false when the
+     * policy was already stopped, in which case it did nothing.
+     */
+    private fun stop(): Boolean {
+        if (!running.compareAndSet(true, false)) return false
         queue.offer(Command.Stop)
         policyThread.join(CLOSE_JOIN_MILLIS)
         synchronized(armed) { armed.values.forEach { runCatching { it.close() } }; armed.clear() }
         runCatching { timer.shutdown() }
         dialPool.shutdownNow()
-        connections.values.forEach { runCatching { it.close() } }
-        connections.clear()
+        return true
     }
 
     /**
@@ -231,7 +300,7 @@ class DiscoveredPeering private constructor(
         /** A timer fired, or something else wants the dial schedule re-examined. */
         data object Due : Command
 
-        /** [close] was called. */
+        /** [close] or [detach] was called. */
         data object Stop : Command
     }
 
@@ -598,7 +667,9 @@ class DiscoveredPeering private constructor(
          * be lost in between (`SidecarClient.watchPeers`).
          *
          * The [node] stays the caller's to close. [DiscoveredPeering.close]
-         * ends this policy and nothing else.
+         * ends this policy and the connections it made, and nothing else;
+         * [DiscoveredPeering.detach] ends the policy and hands those
+         * connections, still up, to the caller.
          *
          * @param clock the only source of time. Injected, not defaulted away:
          *   a test drives it by hand and nothing here reads a wall clock.

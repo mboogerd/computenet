@@ -107,6 +107,40 @@ class MirrorPeeringTest {
             }
             failure.message!! shouldContain "nine"
         }
+
+        /** Task computenet-63um5.4 (DSC2): `--discover`'s effect on the parser. */
+        @Test
+        fun `discover with a rig and no endpoint is the discovering end`() {
+            val (peering, rest) = arrayOf("--rig", "bds2").extractPeering(discover = true)
+            peering shouldBe MirrorPeeringSettings("bds2", MirrorWire.Dial(MirrorWire.Dial.DISCOVERED))
+            peering!!.role shouldBe MirrorCellRefs.DIALER
+            rest shouldBe arrayOf<String>()
+        }
+
+        @Test
+        fun `discover with a rig and --listen is still the accepting end`() {
+            val (peering, rest) = arrayOf("--rig", "bds2", "--listen", "0").extractPeering(discover = true)
+            peering shouldBe MirrorPeeringSettings("bds2", MirrorWire.Listen(0))
+            peering!!.role shouldBe MirrorCellRefs.LISTENER
+            rest shouldBe arrayOf<String>()
+        }
+
+        @Test
+        fun `discover with --peer is refused - discovery finds the peer`() {
+            val failure = shouldThrow<IllegalArgumentException> {
+                arrayOf("--rig", "bds2", "--peer", "ws://localhost:9001").extractPeering(discover = true)
+            }
+            failure.message!! shouldContain "--discover"
+            failure.message!! shouldContain "--peer"
+        }
+
+        @Test
+        fun `discover with no rig is refused the same way as without discover`() {
+            val failure = shouldThrow<IllegalArgumentException> {
+                arrayOf<String>().extractPeering(discover = true)
+            }
+            failure.message!! shouldContain "--rig"
+        }
     }
 
     @Nested

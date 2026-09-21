@@ -25,7 +25,21 @@ sealed interface MirrorWire {
     data class Listen(val wsPort: Int) : MirrorWire
 
     /** This node dials [uri] (a `ws://host:port` endpoint a listener announced). */
-    data class Dial(val uri: String) : MirrorWire
+    data class Dial(val uri: String) : MirrorWire {
+
+        companion object {
+
+            /**
+             * The opaque token a discovering end's [Dial] carries instead of a real
+             * `ws://` URI (task `computenet-63um5.4`, DSC2). [MirrorTransport]'s
+             * vocabulary is WebSocket-shaped by design — every [Dial] names a URI —
+             * and a binding whose peering forms by discovery has no address to put
+             * there, so it receives this token and ignores it. That is the same wart
+             * [DiscoveredIrohMirrorTransport.dial] already lives with for [uri].
+             */
+            const val DISCOVERED: String = "iroh-discover://"
+        }
+    }
 }
 
 /**
