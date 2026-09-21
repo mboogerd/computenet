@@ -7,6 +7,7 @@ import civictech.cell.wire.Peering
 import civictech.demo.beadsmirror.DiscoveredIrohMirrorTransport
 import civictech.demo.beadsmirror.IrohSidecarGate
 import civictech.demo.beadsmirror.MulticastGate
+import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.iroh.IrohTransport
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterEach
@@ -34,6 +35,9 @@ import org.junit.jupiter.api.Test
  * bead produces); a `dialsAttempted`/link-count assertion failing without a
  * convergence failure means the detached policy re-dialled the stranger it
  * was handed after the stop, i.e. the detach did not truly stop the policy.
+ * The admitted-link check right after formation failing with another rig's
+ * `-listener` name means the binding peered across rigs — computenet-63um5.5's
+ * defect, the cause of run 35629640485's timeout.
  *
  * **Loopback only, [DSC2-NV-01].** Both sidecars — the rig's two and the
  * stranger — run on one host, so a pass shows discovery over the host's
@@ -72,10 +76,16 @@ class DiscoveryStoppedAfterFormationTest {
         theRig.startListener()
         theRig.startDialer()
 
-        // Formation by discovery: exactly one peered key, one link.
+        // Formation by discovery: exactly one peered key, one admitted link,
+        // and it is THIS rig's listener. Admitted links only: another
+        // discovery rig on the segment (a parallel fork on CI) dials this
+        // node too, and its refused, never-admitted link is briefly in
+        // links() — run 35629640485 formed to that other rig's listener,
+        // which the attribution check below names directly.
         val discovery = checkNotNull(transport.discovery) { "dial() must have formed a DiscoveredPeering by now" }
         val dialledNode = checkNotNull(transport.dialledNode) { "dial() must have a node by now" }
-        dialledNode.links().size shouldBe 1
+        val ownListener = PeerId("${theRig.rigName}-${MirrorCellRefs.LISTENER}")
+        dialledNode.links().filter { it.peered }.map { it.attributedPeer } shouldBe listOf(ownListener)
 
         // Stop discovery — 63um5-D1's detach step. The link must survive.
         transport.stopDiscovery()
@@ -132,7 +142,7 @@ class DiscoveryStoppedAfterFormationTest {
         // discovery event was ever acted on after the stop.
         discovery.counters.dialsAttempted.count shouldBe dialsBefore
         discovery.counters.eventsReceived.count shouldBe eventsRightAfterStop
-        dialledNode.links().size shouldBe 1
+        dialledNode.links().filter { it.peered }.map { it.attributedPeer } shouldBe listOf(ownListener)
     }
 
     /** Copied from [ConvergenceSuite.checkPrerequisites]; private there. */
