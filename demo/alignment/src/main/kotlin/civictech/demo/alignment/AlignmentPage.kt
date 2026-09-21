@@ -7,7 +7,7 @@ package civictech.demo.alignment
  * [PAGE] is concatenated from slices (computenet-0dvra-D1/D17), in this order:
  * - [SHELL_HEAD] (this file): doctype, `<head>` with the colour tokens (light + a
  *   `prefers-color-scheme: dark` override) and the shared CSS, the header (`#identity` chip,
- *   landing link, `#phase`), the tab bar, the `#topics` landing, the "no such topic" card and
+ *   landing link, tab bar, `#phase`), the `#topics` landing, the "no such topic" card and
  *   the SHARED SCRIPT — helper functions only, no boot. Its opening comment block is the
  *   contract the view slices code against.
  * - [SETUP_VIEW] (SetupView.kt), [RATE_VIEW] (RateView.kt), [BOARD_VIEW] (BoardView.kt): each
@@ -108,6 +108,8 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
   #crumb a:hover { color: var(--accent); }
   #crumbTitle { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16rem; }
   .spacer { flex: 1 1 auto; }
+  .subbar { flex: 1 0 100%; display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; }
+  .subbar:not(:has(> :not([hidden]))) { display: none; }
   #phase { display: flex; align-items: center; gap: .3rem; list-style: none; margin: 0; padding: 0; font-size: var(--fs-1); }
   #phase li { color: var(--muted); padding: .15rem .55rem; border-radius: 999px; }
   #phase li.arr { padding: 0; }
@@ -120,7 +122,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
   #idInput { width: 10rem; padding: .15rem .45rem; font-size: var(--fs-2); }
 
   /* ── tabs ── */
-  .tabs { display: inline-flex; gap: .2rem; padding: .25rem; margin: 0 0 .9rem; background: var(--surface-2);
+  .tabs { display: inline-flex; gap: .2rem; padding: .25rem; margin: 0; background: var(--surface-2);
           border: 1px solid var(--line); border-radius: 999px; }
   .tabs button { border: none; border-radius: 999px; padding: .35rem 1rem; background: none; color: var(--muted); font-weight: 600; }
   .tabs button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
@@ -153,9 +155,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
   #newTopic .hint { font-size: var(--fs-1); color: var(--muted); margin: 0 0 .9rem; }
 
   @media (max-width: 640px) {
-    header.top { gap: .5rem; }
-    .spacer { display: none; }
-    #phase { order: 5; width: 100%; }
+    #crumbTitle { max-width: 9rem; }
   }
   @media (prefers-reduced-motion: reduce) {
     .tcard, .tc-bar span { transition: none; }
@@ -165,25 +165,27 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
 <body>
 <header class="top">
   <a href="/" class="brand" data-nav><span class="logo" aria-hidden="true"></span>Alignment</a>
-  <nav id="crumb" hidden><a href="/" data-nav>topics</a><span class="muted" aria-hidden="true">/</span><span id="crumbTitle"></span></nav>
+  <nav id="crumb" hidden><a href="/" data-nav>topics</a><span id="crumbSep" class="muted" aria-hidden="true">/</span><span id="crumbTitle"></span></nav>
   <span class="spacer"></span>
-  <ol id="phase" hidden aria-label="phase">
-    <li data-step="setup">Setup</li><li class="arr" aria-hidden="true">→</li>
-    <li data-step="rating">Rating</li><li class="arr" aria-hidden="true">→</li>
-    <li data-step="results">Results</li>
-  </ol>
   <div id="identity">
     <span class="dot" aria-hidden="true"></span>
     <span id="idText">joined as <b id="idName"></b></span>
     <input id="idInput" maxlength="40" aria-label="your name" hidden>
     <button type="button" id="idChange" class="link">change</button>
   </div>
+  <div class="subbar">
+    <nav id="tabs" class="tabs" role="tablist" hidden>
+      <button type="button" id="tabRate" role="tab">Rate</button>
+      <button type="button" id="tabBoard" role="tab">Board</button>
+      <button type="button" id="tabSetup" role="tab" hidden>Setup</button>
+    </nav>
+    <ol id="phase" hidden aria-label="phase">
+      <li data-step="setup">Setup</li><li class="arr" aria-hidden="true">→</li>
+      <li data-step="rating">Rating</li><li class="arr" aria-hidden="true">→</li>
+      <li data-step="results">Results</li>
+    </ol>
+  </div>
 </header>
-<nav id="tabs" class="tabs" role="tablist" hidden>
-  <button type="button" id="tabRate" role="tab">Rate</button>
-  <button type="button" id="tabBoard" role="tab">Board</button>
-  <button type="button" id="tabSetup" role="tab" hidden>Setup</button>
-</nav>
 <section id="topics" hidden>
   <div class="landing-head">
     <h1>Topics</h1>
@@ -255,11 +257,11 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  Board lays itself out while hidden), renderPhase(); then fetchMe()
  *                  for the topic and, when it lands, renderBoard() and renderPhase()
  *                  again. Each render is isolated: one throwing does not stop the rest.
- * DOM              header #identity (chip), #crumb, #phase; tab bar #tabs with
- *                  #tabRate, #tabBoard, #tabSetup (shown only when
- *                  isCreator(currentTopic())); landing #topics; #missing; view roots
- *                  #setup, #rate, #board (its first child #gate, empty and hidden,
- *                  is the Board's gate card root). The shell toggles the view roots'
+ * DOM              header: #identity (chip), #crumb, then a second row holding the
+ *                  tab bar #tabs (#tabRate, #tabBoard, #tabSetup — the last shown only
+ *                  when isCreator(currentTopic())) and #phase; landing #topics;
+ *                  #missing; view roots #setup, #rate, #board (the Board's first
+ *                  child #gate, empty and hidden, is its gate card root). The shell toggles the view roots'
  *                  `hidden`; views never do.
  * CSS              tokens --accent, --accent-soft, --accent-ink, --bg, --surface,
  *                  --surface-2, --ink, --muted, --line, --ok, --warn, --warn-soft,
@@ -379,6 +381,7 @@ function renderShell() {
   el('loading').hidden = !(tid !== null && !known && el('missing').hidden);
   el('crumb').hidden = tid === null;
   el('crumbTitle').textContent = t ? t.title : '';
+  el('crumbSep').hidden = !t;
   document.title = t ? t.title + ' · alignment' : 'alignment';
   el('tabs').hidden = !known;
   el('phase').hidden = !known;
