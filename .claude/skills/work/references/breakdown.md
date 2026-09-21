@@ -176,10 +176,11 @@ and dotted ids would then collide on `child_counters`). Under any parent the
 session does not hold, use `create-ticket.sh` either way.
 
 Backticks inside a double-quoted argument execute, so bodies go in files
-written with a quoted heredoc ([traps.md](traps.md#bd)):
+written with a quoted heredoc, and acceptance, which has no file flag, as
+`"$(cat <file>)"` ([traps.md](traps.md#bd)):
 
 ```bash
-bd create --type=task --parent=<feature-id> --validate --title="<outcome>" --body-file <scratch>/<feature-id>-t1-desc.md --acceptance="<EARS rules, no backticks>" --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
+bd create --type=task --parent=<feature-id> --validate --title="<outcome>" --body-file <scratch>/<feature-id>-t1-desc.md --acceptance="$(cat <scratch>/<feature-id>-t1-accept.md)" --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
 ```
 
 ## Epic breakdown
