@@ -119,6 +119,20 @@ class DiscoveredPeeringTest {
         /** The next `DIAL`, strictly: anything else in front of it — an `ADD_PEER`, say — fails here. */
         fun nextDial(): HostMessage.Dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
 
+        /**
+         * Returns once the policy thread has finished every command it had
+         * taken before this call: a sighting of this node's own key is queued
+         * behind them and counted only when its turn comes. Call it after
+         * awaiting a counter that `onDialDone` bumps, because that counter is
+         * incremented BEFORE the retry is armed — reading `timer.pending()`
+         * straight after it races the arm.
+         */
+        fun drained() {
+            val before = peering.counters.selfDropped.count
+            discover(own)
+            await("the policy thread to drain") { peering.counters.selfDropped.count == before + 1 }
+        }
+
         override fun close() {
             runCatching { if (::peering.isInitialized) peering.close() }
             runCatching { client.close() }
@@ -382,6 +396,7 @@ class DiscoveredPeeringTest {
 
             rig.fake.send(SidecarMessage.Failure(dial.link, "unreachable"))
             await("the failure to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+            rig.drained()
 
             assertEquals(0, rig.timer.pending(), "dialFailed found no Dialling entry, so onDialDone armed nothing")
             assertEquals("Expired", assertNotNull(rig.viewOf(key)).state, "the late failure did not resurrect it")
@@ -435,12 +450,14 @@ class DiscoveredPeeringTest {
             // Dialling entry, and a retry is armed.
             rig.fake.send(SidecarMessage.Failure(dial.link, "unreachable"))
             await("the first dial's failure to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+            rig.drained()
             assertEquals(1, rig.timer.pending(), "unlike PEER_EXPIRED, the late failure finds a Dialling entry and arms a retry")
             assertEquals("Retained", assertNotNull(rig.viewOf(key)).state)
 
             // The second dial's own failure now finds Retained: nothing more.
             rig.fake.send(SidecarMessage.Failure(redial.link, "unreachable"))
             await("the second dial's failure to be counted") { rig.peering.counters.dialsFailed.count == 2L }
+            rig.drained()
             assertEquals(1, rig.timer.pending(), "the one retry already armed is the only one")
         }
     }
