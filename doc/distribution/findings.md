@@ -1029,8 +1029,8 @@ sidecar's `PEER_EXPIRED` can arrive in either order: if `PEER_EXPIRED` lands
 first it is swallowed (`PeerTable.expire` refuses a key whose `upLinks` are
 not empty) and K1 stays `Retained` with one armed retry that the frozen
 clock never releases; if it lands after the re-dial is already in flight, K1
-moves to `Expired` with no retry armed. CI run `35552410099` — the only real
-execution — observed the second ordering, with K1 expiring within the
+moves to `Expired` with no retry armed. CI run `35552410099`
+observed the second ordering, with K1 expiring within the
 dial's 5 s bound of B1's process exiting, not at the 30–43 s mDNS TTL that
 `ne2oh-B5` measured for a peer that merely stops being seen; the opposite
 ordering is not excluded and the test must not depend on either. Every
