@@ -165,7 +165,7 @@ class IrohNodeTest {
         withNode { fake, _, node ->
             val events = Events()
             node.onLinkEvent(events)
-            node.gate = HelloGate { _, _, _, _ -> Verdict.CloseQuietly("a test's verdict") }
+            node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("a test's verdict") }
             val remote = nodeId()
 
             fake.presentInbound(9, remote)
@@ -189,11 +189,54 @@ class IrohNodeTest {
         }
     }
 
+    /**
+     * The surface this task adds: [HelloGate.judge] carries the id of the
+     * link whose hello is being judged, on both an accepted link and a
+     * dialled one — not a fixed value, not the other direction's link, and
+     * not the previous hello's id (`computenet-2utc8`).
+     *
+     * `IrohNode.LinkView.linkId` is this same node's own account of each
+     * link's id, read once each is admitted, and is the independent source of
+     * truth the gate's argument is checked against.
+     */
+    @Test
+    fun `HelloGate judge carries the link id of the hello actually being judged`() {
+        withNode { fake, _, node ->
+            val seen = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+            node.gate = HelloGate { _, _, _, linkId, _ ->
+                seen += linkId
+                Verdict.Admit
+            }
+
+            // An accepted link: the fake assigns the id (41), and it is the
+            // only fact this test needs to check the argument against.
+            val acceptedRemote = nodeId()
+            fake.presentInbound(41, acceptedRemote)
+            fake.hello1From(41)
+            await("the accepted link to be admitted") { node.links(acceptedRemote).firstOrNull()?.peered == true }
+            assertEquals(41L, node.links(acceptedRemote).single().linkId)
+
+            // A dialled link: its id is not known until `openAndAdmit` returns
+            // it, which is exactly the case `linkId` is read lazily for.
+            val dialledRemote = nodeId()
+            val discovered = Discovered(node, dialledRemote)
+            val dialledLinkId = fake.openAndAdmit(discovered.connection, dialledRemote)
+            await("the dialled link to be admitted") { node.links(dialledRemote).firstOrNull()?.peered == true }
+            assertEquals(dialledLinkId, node.links(dialledRemote).single().linkId)
+
+            assertEquals(
+                listOf(41L, dialledLinkId),
+                seen.toList(),
+                "the gate saw each hello's own link id, not a constant and not the other link's",
+            )
+        }
+    }
+
     @Test
     fun `a Refuse verdict is a real denial, recorded with the gate's own reason`() {
         withNode { fake, _, node ->
             val remote = nodeId()
-            node.gate = HelloGate { _, _, _, resolved ->
+            node.gate = HelloGate { _, _, _, _, resolved ->
                 Verdict.Refuse(DenialReason.NOT_ADMITTED, resolved, "a test's refusal")
             }
 
@@ -226,7 +269,7 @@ class IrohNodeTest {
         val friendly = side(allow = setOf(resolved(side(), friend)))
         withNode(friendly) { fake, _, node ->
             val consults = AtomicInteger()
-            node.gate = HelloGate { _, _, _, _ ->
+            node.gate = HelloGate { _, _, _, _, _ ->
                 consults.incrementAndGet()
                 Verdict.Admit
             }
@@ -270,7 +313,7 @@ class IrohNodeTest {
     @Test
     fun `an outbound link the gate closes quietly costs the peer nothing and is not re-dialled`() {
         withNode { fake, _, node ->
-            node.gate = HelloGate { _, _, _, _ -> Verdict.CloseQuietly("a test's tie-break") }
+            node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("a test's tie-break") }
             val peer = nodeId()
             val discovered = Discovered(node, peer)
 

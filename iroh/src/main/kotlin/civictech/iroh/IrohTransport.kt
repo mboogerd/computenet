@@ -623,6 +623,17 @@ object IrohTransport {
          * default makes every existing site unchanged.
          */
         private val onAdmitted: (PeerId) -> Unit = {},
+        /**
+         * This link's id, read lazily at [gate] consult time rather than taken
+         * as a plain value: an outbound [IrohConnection] does not know its
+         * link's id until the dial that opens it returns, while this `Session`
+         * is constructed and handed to that dial as its listener beforehand
+         * (see [IrohConnection.openLink]). An inbound [IrohListener]/[IrohNode]
+         * session already knows its id at construction and can close over it
+         * directly. The default is a sentinel used only by call sites that pass
+         * no [gate] of their own — [HelloGate.ADMIT_ALL] never inspects it.
+         */
+        private val linkId: () -> Long = { -1L },
     ) {
         /**
          * This side's announcement signer is borrowed from the `Peering.Side`,
@@ -1036,7 +1047,7 @@ object IrohTransport {
          */
         private fun admitAndBind(bound: IdentityResolution.Bound, key: KeyId, peerMirrorRef: UUID) {
             if (!admitted(bound.peer)) return
-            when (val verdict = gate.judge(key, remoteNodeId, direction, bound.peer)) {
+            when (val verdict = gate.judge(key, remoteNodeId, direction, linkId(), bound.peer)) {
                 is Verdict.Admit -> Unit
 
                 is Verdict.CloseQuietly -> {
@@ -1716,6 +1727,11 @@ object IrohTransport {
                     linkHolder.get()?.close()
                 },
                 onAdmitted = { peer -> linkHolder.get()?.let { observer?.onAdmitted(it.id, peer) } },
+                // Read lazily (see the parameter's own KDoc): `client.dial`
+                // below has not returned yet, so no link id exists when this
+                // Session is built, but `linkHolder` is set before any frame —
+                // and so any hello — can be delivered on it.
+                linkId = { linkHolder.get()!!.id },
             )
             val link = client.dial(
                 peerNodeId,
@@ -1991,15 +2007,19 @@ sealed interface Verdict {
  * the same value the allowlist judged and the same one the mirror will be
  * stamped with. [key] and [remoteNodeId] are two views of the *same* proven
  * key: the fingerprint and the 32 raw NodeId bytes, the latter being what a
- * peer table keyed by key identifier compares (F3-D3).
+ * peer table keyed by key identifier compares (F3-D3). [linkId] is the id of
+ * the link the hello being judged arrived on — the same id [IrohNode.LinkView]
+ * and every `NodeLinkListener` event carry — so a consumer that arbitrates
+ * *between* links of one key (a peer table tie-break) can name the one this
+ * hello is for without recovering it by inference (task `.1`).
  */
 fun interface HelloGate {
 
-    fun judge(key: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, resolved: PeerId): Verdict
+    fun judge(key: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, linkId: Long, resolved: PeerId): Verdict
 
     companion object {
         /** The default: every admitted hello proceeds. Existing callers get exactly today's path. */
-        val ADMIT_ALL: HelloGate = HelloGate { _, _, _, _ -> Verdict.Admit }
+        val ADMIT_ALL: HelloGate = HelloGate { _, _, _, _, _ -> Verdict.Admit }
     }
 }
 

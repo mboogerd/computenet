@@ -525,28 +525,6 @@ class DiscoveredPeering private constructor(
     }
 
     /**
-     * The link id of the hello being judged, out of [links] — the node's
-     * current links for this key.
-     *
-     * [HelloGate] carries no link id — it is handed the key, the direction and
-     * the resolved identity — while [PeerTable.judge] arbitrates *between
-     * links* and cannot work without one. The node's registry has it: the link
-     * exists before its hello is read (`IrohNode.up` runs first on both
-     * directions), so this lookup always finds it. The not-yet-peered link is
-     * preferred because the one being judged is by definition not admitted
-     * yet, which is what distinguishes it from a live link of the same key and
-     * direction. [NO_LINK] is the honest answer when the registry has nothing,
-     * and [PeerTable] treats it as an id that matches no link.
-     *
-     * A link id on [HelloGate.judge] would make this exact; it is task `.1`'s
-     * surface and is reported rather than changed here.
-     */
-    private fun linkIdOf(links: List<IrohNode.LinkView>, direction: LinkDirection): Long {
-        val candidates = links.filter { it.direction == direction }
-        return (candidates.firstOrNull { !it.peered } ?: candidates.firstOrNull())?.linkId ?: NO_LINK
-    }
-
-    /**
      * Tell the table, synchronously, about every link this node holds for
      * [key] before its hello is judged — the fact that decides the tie-break
      * (ktn1l-D16, aas-D7, `[DSC2-DIAL-05]`).
@@ -592,14 +570,12 @@ class DiscoveredPeering private constructor(
             override fun onDown(link: IrohNode.LinkView, outcome: IrohTransport.IrohConnection.LinkOutcome?) =
                 post(Command.LinkDown(link, outcome))
         })
-        node.gate = HelloGate { _: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, resolved: PeerId ->
+        node.gate = HelloGate { _: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, linkId: Long, resolved: PeerId ->
             // The ONE synchronous consult on the reader thread (ktn1l-D17):
             // one lock-guarded O(1) table call and counter increments. No IO,
             // no dial, no wait — anything else here stops the endpoint.
             val key = NodeKey(remoteNodeId)
-            val links = node.links(remoteNodeId)
-            seed(key, links)
-            val linkId = linkIdOf(links, direction)
+            seed(key, node.links(remoteNodeId))
             toVerdict(table.judge(key, direction, linkId, resolved, clock()), key, linkId, resolved)
         }
         node.client.watchPeers(object : PeerWatchListener {
@@ -612,9 +588,6 @@ class DiscoveredPeering private constructor(
     }
 
     companion object {
-        /** No link of this key. [PeerTable.linkDown] matches no entry on it, by construction. */
-        internal const val NO_LINK: Long = -1L
-
         private const val CLOSE_JOIN_MILLIS: Long = 5_000
 
         /**
