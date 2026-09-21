@@ -350,6 +350,56 @@ class DiscoveredPeeringTest {
         }
     }
 
+    // ---------------------------------------- computenet-5e58q: the pump guard
+
+    /**
+     * [computenet-5e58q]. `drain()` guards the command step (`apply`) with a
+     * `runCatching`, but `pump()` used to run bare right after it — an
+     * exception out of `pump()` (`node.dialDiscovered`, or `dialPool.execute`
+     * once the pool is shut down: [DiscoveredPeering.close]'s race) escaped
+     * `drain()`'s loop and silently ended the one `iroh-discover-policy`
+     * thread. After that, nothing ever applies another command again — no
+     * crash, no log line beyond the JVM's default uncaught-exception dump.
+     *
+     * The test shuts the dial pool down out of band — the same
+     * `RejectedExecutionException` [DiscoveredPeering.pump] documents as
+     * reachable from the real close() race, forced here so the failure is
+     * deterministic rather than a timing window. The first discovery's
+     * `apply` step (`onDiscovered`, which only touches `table`/`counters`)
+     * still succeeds and increments `eventsReceived`; it is `pump()`'s
+     * subsequent `dialPool.execute` that throws. A second discovery only
+     * increments `eventsReceived` again if the policy thread survived that
+     * throw to keep draining the queue.
+     *
+     * Prescribed mutation: replace `runCatching { pump() }.onFailure { ... }`
+     * with the bare `pump()` call it replaced, and the second `await` below
+     * times out and fails — the policy thread died on the first throw and
+     * never reads the second command off the queue.
+     */
+    @Test
+    fun `a pump step that throws is caught and logged, and the policy keeps draining later commands`() {
+        withPeering { rig ->
+            val poolField = DiscoveredPeering::class.java.getDeclaredField("dialPool")
+            poolField.isAccessible = true
+            (poolField.get(rig.peering) as java.util.concurrent.ExecutorService).shutdown()
+
+            rig.discover(nodeId())
+            await("the first discovery's apply step to land despite the pump step about to throw") {
+                rig.peering.counters.eventsReceived.count == 1L
+            }
+
+            // If the pump step's throw killed iroh-discover-policy, this
+            // second command sits in the queue forever and this never reaches 2.
+            rig.discover(nodeId())
+            await(
+                "a later command to still be applied after an earlier pump step threw",
+                timeoutMs = 5_000,
+            ) {
+                rig.peering.counters.eventsReceived.count == 2L
+            }
+        }
+    }
+
     // ------------------------- DIAL-01 / DIAL-07: one peering across the sources
 
     @Test

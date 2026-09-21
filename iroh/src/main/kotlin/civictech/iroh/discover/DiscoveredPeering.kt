@@ -254,7 +254,9 @@ class DiscoveredPeering private constructor(
             runCatching { apply(command) }.onFailure { failure ->
                 System.err.println("[DiscoveredPeering] policy step failed: $failure")
             }
-            pump()
+            runCatching { pump() }.onFailure { failure ->
+                System.err.println("[DiscoveredPeering] pump step failed: $failure")
+            }
         }
     }
 
