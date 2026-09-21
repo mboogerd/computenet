@@ -153,8 +153,8 @@ class IrohNode internal constructor(
     var gate: HelloGate = HelloGate.ADMIT_ALL
 
     /** @see gate — what each Session actually holds. */
-    private val delegatingGate = HelloGate { key, remoteNodeId, direction, resolved ->
-        gate.judge(key, remoteNodeId, direction, resolved)
+    private val delegatingGate = HelloGate { key, remoteNodeId, direction, linkId, resolved ->
+        gate.judge(key, remoteNodeId, direction, linkId, resolved)
     }
 
     /** This side's iroh endpoint id: the key it advertises, accepts on and dials from. */
@@ -247,6 +247,7 @@ class IrohNode internal constructor(
                 direction = link.direction,
                 closeQuietly = { link.close() },
                 onAdmitted = { peer -> admitted(link.id, peer) },
+                linkId = { link.id },
             )
             acceptedSessions[link.id] = session
             up(link, LinkSource.ACCEPTED)
