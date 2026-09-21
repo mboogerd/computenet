@@ -1,5 +1,6 @@
 package civictech.demo.allocatorobserve
 
+import civictech.demo.allocatorobserve.http.PollLoopStopped
 import civictech.testkit.HttpProbe
 import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
@@ -347,10 +348,9 @@ class AllocatorObserveAppTest {
     // terminal frame is broadcast. Swap those two lines in
     // `AllocatorObserveApp.start()` and both tests above still pass (every
     // window still ends on frozen, just via a different path), so they cannot
-    // stand in for this. `stopBroadcastProbe` is a deterministic seam, not a
-    // race: both probe calls happen on the single poll thread as sequential
-    // statements wrapping the two operations themselves, so the recorded
-    // order IS the source order — no sleep, no timing dependency.
+    // stand in for this. `stopBroadcastProbe` fires inside the terminal
+    // frame's lambda with the app's stopped marker AT THAT INSTANT, so the
+    // verdict is a state reading on the poll thread — no sleep, no race.
     @Test
     fun `the poll loop marks the served state stopped before it broadcasts the terminal frozen frame`() {
         append(*lines(3).toTypedArray())
@@ -360,14 +360,16 @@ class AllocatorObserveAppTest {
         val app = app(pollInterval = Duration.ofMillis(20)) {
             if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
         }
-        val order = java.util.concurrent.CopyOnWriteArrayList<String>()
-        app.stopBroadcastProbe = { order += it }
+        val seen = java.util.concurrent.CopyOnWriteArrayList<PollLoopStopped?>()
+        app.stopBroadcastProbe = { seen += it }
         app.start()
 
         broken.set(true)
-        awaitUntil("the terminal frame to be broadcast") { order.size >= 2 }
+        awaitUntil("the terminal frame to be computed") { seen.isNotEmpty() }
 
-        order shouldBe listOf("stopped", "broadcasting")
+        seen.size shouldBe 1
+        seen.single() shouldNotBe null
+        seen.single() shouldBe app.pollLoopStopped
     }
 
     // -----------------------------------------------------------------

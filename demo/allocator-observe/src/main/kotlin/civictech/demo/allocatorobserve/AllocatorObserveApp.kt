@@ -314,19 +314,18 @@ class AllocatorObserveApp(
     val pollLoopStopped: PollLoopStopped? get() = holder.stopped
 
     /**
-     * Test seam (computenet-p29ai). `null` in production (a no-op). The death
-     * path below invokes it twice, in program order: once right after
-     * [ServedStateHolder.stop] marks the served state stopped, and once from
-     * INSIDE the frame lambda handed to [DemoShell.broadcast] — i.e. exactly
-     * when that terminal frame is computed, under `DemoShell`'s `clientsLock`,
-     * not merely when [DemoShell.broadcast] is called. A test installs a
-     * recorder here to assert "marked stopped" precedes "terminal frame
-     * broadcast" deterministically, with no sleep or thread race: the two
-     * calls are sequential statements on the single poll thread, so the
-     * recorded order is exactly the source order of the two lines it wraps,
-     * and reordering (or interposing) those lines flips it.
+     * Test seam (computenet-p29ai). `null` in production (a no-op). Invoked
+     * once, from INSIDE the frame lambda the death path hands to
+     * [DemoShell.broadcast] — i.e. at the instant the terminal frozen frame is
+     * computed (under `DemoShell`'s `clientsLock`), not merely when
+     * [DemoShell.broadcast] is called — with the value of [pollLoopStopped] at
+     * that instant. A test asserts it is already non-null: the served state is
+     * marked stopped before the terminal frame exists. It reports state, not
+     * its own position, so moving `holder.stop` below the broadcast turns the
+     * reading to `null` whichever line the probe sits next to; no sleep or
+     * thread race is involved, since both steps run on the one poll thread.
      */
-    internal var stopBroadcastProbe: ((String) -> Unit)? = null
+    internal var stopBroadcastProbe: ((PollLoopStopped?) -> Unit)? = null
 
     /**
      * One poll tick: both ingesters, then F3's publish boundary, then one
@@ -421,7 +420,6 @@ class AllocatorObserveApp(
                     // leave the loop dead and the routes still answering 200.
                     val stopped = PollLoopStopped(t, lastPollAt)
                     holder.stop(stopped)
-                    stopBroadcastProbe?.invoke("stopped")
                     // computenet-w20a4: an ALREADY-CONNECTED /events subscriber
                     // would otherwise only see frames stop arriving — the exact
                     // confusion fpml.4-D6 forbids on the HTTP side. Send the
@@ -432,7 +430,7 @@ class AllocatorObserveApp(
                     // thread starts, so some prior tick swapped a value in.
                     holder.current?.let { last ->
                         shell.broadcast {
-                            stopBroadcastProbe?.invoke("broadcasting")
+                            stopBroadcastProbe?.invoke(holder.stopped)
                             last.frozenJson(stopped)
                         }
                     }
