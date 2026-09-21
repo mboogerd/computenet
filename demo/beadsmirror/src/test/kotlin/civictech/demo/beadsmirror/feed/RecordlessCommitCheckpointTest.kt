@@ -65,10 +65,9 @@ class RecordlessCommitCheckpointTest {
 
     /**
      * The soundness rule: only a head observed BEFORE the feed read may be
-     * persisted. Here c3 — which carries a record — lands after the tick's
-     * feed read. A tick that re-read the head afterwards would persist c3 and
-     * the record would never be delivered; this one stops at c2 and hands c3's
-     * record over on the next tick.
+     * persisted. Here c3 — which carries a record — lands after both of the
+     * tick's `dolt_log` reads. The tick stops at c2 and hands c3's record over
+     * on the next tick.
      */
     @Test
     fun `a commit landing after the tick's reads is delivered next tick, never skipped`(@TempDir runDir: Path) {
@@ -87,6 +86,33 @@ class RecordlessCommitCheckpointTest {
 
         poller.pollOnce()
         batches.map { it.issueId } shouldContainExactly listOf("late")
+        checkpoint.read() shouldBe "c3"
+    }
+
+    /**
+     * The read-ordering half of the soundness rule, which the test above does
+     * not reach (its first two `dolt_log` reads agree, so either order passes
+     * it). Here c3 — which carries a record — becomes visible between the
+     * tick's first and second `dolt_log` reads. Head-then-feed sees c3 in the
+     * feed read and delivers it. Feed-then-head would read the feed without
+     * c3, then persist c3 as the head, and c3's record would never be
+     * delivered.
+     */
+    @Test
+    fun `a commit landing between the head read and the feed read is delivered, never skipped`(@TempDir runDir: Path) {
+        val logReads = AtomicInteger(0)
+        val feed = feed(
+            log = { if (logReads.incrementAndGet() <= 1) listOf("c2", "c1") else listOf("c3", "c2", "c1") },
+            issueRows = listOf(row("diff_type" to "added", "to_commit" to "c3", "to_id" to "between")),
+        )
+        val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
+        val batches = mutableListOf<ChangeRecord>()
+        val poller = DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it })
+
+        poller.pollOnce()
+        poller.pollOnce()
+
+        batches.map { it.issueId } shouldContainExactly listOf("between")
         checkpoint.read() shouldBe "c3"
     }
 
