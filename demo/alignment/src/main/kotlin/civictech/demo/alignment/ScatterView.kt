@@ -122,13 +122,21 @@ function renderScatter(t, ideas) {
   yLabel.textContent = '↑ value';
   svg.appendChild(xLabel); svg.appendChild(yLabel);
 
-  // quadrant labels: Quick wins (top-left), Big bets (top-right), Fill-ins (bottom-left), Money pits (bottom-right)
-  const quadInset = 6;
+  // quadrant labels: Quick wins (top-left), Big bets (top-right), Fill-ins (bottom-left), Money pits (bottom-right).
+  // A label is nudged deeper into its quadrant when a plotted circle already occupies that
+  // corner (thresholds mirror the frontier label's own nearTop/nearRight flip below), so
+  // neither the circle nor a frontier label collides with the fixed quadrant label text
+  // (computenet-obpl4).
+  const quadInset = 6, cornerX = 40, cornerY = 16, cornerShift = 22;
+  const nearLeftTop = plottable.some(f => px(f.cost) < SCATTER_PAD.left + cornerX && py(f.value) < SCATTER_PAD.top + cornerY);
+  const nearRightTop = plottable.some(f => px(f.cost) > w - SCATTER_PAD.right - cornerX && py(f.value) < SCATTER_PAD.top + cornerY);
+  const nearLeftBottom = plottable.some(f => px(f.cost) < SCATTER_PAD.left + cornerX && py(f.value) > h - SCATTER_PAD.bottom - cornerY);
+  const nearRightBottom = plottable.some(f => px(f.cost) > w - SCATTER_PAD.right - cornerX && py(f.value) > h - SCATTER_PAD.bottom - cornerY);
   const quads = [
-    { text: 'Quick wins', x: SCATTER_PAD.left + quadInset, y: SCATTER_PAD.top + 12, anchor: 'start' },
-    { text: 'Big bets', x: w - SCATTER_PAD.right - quadInset, y: SCATTER_PAD.top + 12, anchor: 'end' },
-    { text: 'Fill-ins', x: SCATTER_PAD.left + quadInset, y: h - SCATTER_PAD.bottom - 6, anchor: 'start' },
-    { text: 'Money pits', x: w - SCATTER_PAD.right - quadInset, y: h - SCATTER_PAD.bottom - 6, anchor: 'end' }
+    { text: 'Quick wins', x: SCATTER_PAD.left + quadInset, y: SCATTER_PAD.top + 12 + (nearLeftTop ? cornerShift : 0), anchor: 'start' },
+    { text: 'Big bets', x: w - SCATTER_PAD.right - quadInset, y: SCATTER_PAD.top + 12 + (nearRightTop ? cornerShift : 0), anchor: 'end' },
+    { text: 'Fill-ins', x: SCATTER_PAD.left + quadInset, y: h - SCATTER_PAD.bottom - 6 - (nearLeftBottom ? cornerShift : 0), anchor: 'start' },
+    { text: 'Money pits', x: w - SCATTER_PAD.right - quadInset, y: h - SCATTER_PAD.bottom - 6 - (nearRightBottom ? cornerShift : 0), anchor: 'end' }
   ];
   quads.forEach(q => {
     const t2 = scatterEl('text', { class: 'sc-quadlabel', x: q.x, y: q.y, 'text-anchor': q.anchor });
