@@ -10,9 +10,9 @@ package civictech.demo.alignment
  *   landing link, tab bar, `#phase`), the `#topics` landing, the "no such topic" card and
  *   the SHARED SCRIPT — helper functions only, no boot. Its opening comment block is the
  *   contract the view slices code against.
- * - [SETUP_VIEW] (SetupView.kt), [RATE_VIEW] (RateView.kt), [BOARD_VIEW] (BoardView.kt): each
- *   a view's `<style>`, `<section>` and `<script>`, which declares functions and wires its own
- *   static markup only.
+ * - [SETUP_VIEW] (SetupView.kt), [RATE_VIEW] (RateView.kt), [BOARD_VIEW] (BoardView.kt),
+ *   [COMPARE_VIEW] (CompareView.kt): each a view's `<style>`, `<section>` and `<script>`, which
+ *   declares functions and wires its own static markup only.
  * - [SHELL_TAIL] (this file): the boot — `popstate`, the `/events` EventSource, the first route.
  *
  * Rules for every slice: no `$` anywhere (each is a plain raw string, no template literals in
@@ -23,7 +23,7 @@ package civictech.demo.alignment
  * constant-pool entry, capped at 65535 bytes, and the joined page is headed past that as the
  * views grow; a `val` is concatenated once at class init.
  */
-val PAGE: String = SHELL_HEAD + SETUP_VIEW + RATE_VIEW + BOARD_VIEW + SHELL_TAIL
+val PAGE: String = SHELL_HEAD + SETUP_VIEW + RATE_VIEW + BOARD_VIEW + COMPARE_VIEW + SHELL_TAIL
 
 private const val SHELL_HEAD = """<!DOCTYPE html>
 <html lang="en">
@@ -126,6 +126,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
           border: 1px solid var(--line); border-radius: 999px; }
   .tabs button { border: none; border-radius: 999px; padding: .35rem 1rem; background: none; color: var(--muted); font-weight: 600; }
   .tabs button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .tabs .beta { font-size: .62rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-left: .3rem; }
 
   /* ── landing ── */
   .landing-head { margin: .4rem 0 1rem; }
@@ -177,6 +178,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
     <nav id="tabs" class="tabs" role="tablist" hidden>
       <button type="button" id="tabRate" role="tab">Rate</button>
       <button type="button" id="tabBoard" role="tab">Board</button>
+      <button type="button" id="tabCompare" role="tab">Compare <span class="beta">experimental</span></button>
       <button type="button" id="tabSetup" role="tab" hidden>Setup</button>
     </nav>
     <ol id="phase" hidden aria-label="phase">
@@ -248,21 +250,22 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  in dimension order) mod 4 (0dvra-D13). Unrated uses var(--unrated).
  * editing(root)    true when document.activeElement is an INPUT/TEXTAREA/SELECT inside
  *                  root — the focus guard: never rebuild a row being edited.
- * showTab(name)    'rate' | 'board' | 'setup'; persists sessionStorage.tab. 'setup'
- *                  shows as 'rate' for a non-creator.
+ * showTab(name)    'rate' | 'board' | 'setup' | 'compare'; persists sessionStorage.tab.
+ *                  'setup' shows as 'rate' for a non-creator.
  * scheduleRender() coalesces to one render per 60 ms tick. A tick renders the header
  *                  (chip, crumb, tabs), then on / the landing, else — once the topic
- *                  is known — renderSetup(), renderRate(), renderBoard() (each called
- *                  whether or not its tab is showing; Rate returns early when hidden,
- *                  Board lays itself out while hidden), renderPhase(); then fetchMe()
- *                  for the topic and, when it lands, renderBoard() and renderPhase()
- *                  again. Each render is isolated: one throwing does not stop the rest.
+ *                  is known — renderSetup(), renderRate(), renderBoard(), renderCompare()
+ *                  (each called whether or not its tab is showing; Rate and Compare
+ *                  return early when hidden, Board lays itself out while hidden),
+ *                  renderPhase(); then fetchMe() for the topic and, when it lands,
+ *                  renderBoard() and renderPhase() again. Each render is isolated: one
+ *                  throwing does not stop the rest.
  * DOM              header: #identity (chip), #crumb, then a second row holding the
- *                  tab bar #tabs (#tabRate, #tabBoard, #tabSetup — the last shown only
- *                  when isCreator(currentTopic())) and #phase; landing #topics;
- *                  #missing; view roots #setup, #rate, #board (the Board's first
- *                  child #gate, empty and hidden, is its gate card root). The shell toggles the view roots'
- *                  `hidden`; views never do.
+ *                  tab bar #tabs (#tabRate, #tabBoard, #tabCompare, #tabSetup — the
+ *                  last shown only when isCreator(currentTopic())) and #phase; landing
+ *                  #topics; #missing; view roots #setup, #rate, #board, #compare (the
+ *                  Board's first child #gate, empty and hidden, is its gate card root).
+ *                  The shell toggles the view roots' `hidden`; views never do.
  * CSS              tokens --accent, --accent-soft, --accent-ink, --bg, --surface,
  *                  --surface-2, --ink, --muted, --line, --ok, --warn, --warn-soft,
  *                  --value-1..4, --cost-1..4, --unrated, --track, --shadow; scale
@@ -271,9 +274,12 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  No literal colour outside the token blocks.
  * Scope            every slice's top-level let/const/function shares one global scope:
  *                  a view keeps its private globals prefixed with its name (rate…,
- *                  board…, setup…) or inside functions. Shell-internal names not
+ *                  board…, setup…, cmp…) or inside functions. Shell-internal names not
  *                  listed here (el, guard, go, route, renderShell, renderPhase, …)
  *                  may change; do not call them from a view.
+ * Data access      state.ratings is read by exactly one view, Compare, and only for
+ *                  OTHER participants while boardGate(t).open and the viewer opted in
+ *                  (computenet-5eefp-D8); every other view never reads it.
  * ════════════════════════════════════════════════════════════════════════════ */
 let state = { topics: [], ideas: [], ratings: [], aggregates: {} };
 let loaded = false;
@@ -353,10 +359,11 @@ document.addEventListener('click', e => {
 });
 
 // ── tabs ────────────────────────────────────────────────────────────────────
-const TABS = [['rate', 'tabRate'], ['board', 'tabBoard'], ['setup', 'tabSetup']];
+const TABS = [['rate', 'tabRate'], ['board', 'tabBoard'], ['compare', 'tabCompare'], ['setup', 'tabSetup']];
 function activeTab() {
   const want = sessionStorage.tab;
   if (want === 'board') return 'board';
+  if (want === 'compare') return 'compare';
   if (want === 'setup' && isCreator(currentTopic())) return 'setup';
   return 'rate';
 }
@@ -364,7 +371,7 @@ function showTab(name) {
   sessionStorage.tab = name;
   renderShell();
   const n = activeTab();
-  guard(n === 'rate' ? renderRate : n === 'board' ? renderBoard : renderSetup);
+  guard(n === 'rate' ? renderRate : n === 'board' ? renderBoard : n === 'compare' ? renderCompare : renderSetup);
 }
 for (const [name, id] of TABS) el(id).onclick = () => showTab(name);
 
@@ -552,7 +559,7 @@ function renderTick() {
   const tid = topicId();
   if (tid === null) { guard(renderLanding); return; }
   if (!loaded || !currentTopic()) return;
-  guard(renderSetup); guard(renderRate); guard(renderBoard); guard(renderPhase);
+  guard(renderSetup); guard(renderRate); guard(renderBoard); guard(renderCompare); guard(renderPhase);
   fetchMe(tid).then(() => { if (topicId() === tid) { guard(renderBoard); guard(renderPhase); } }, () => {});
 }
 </script>
