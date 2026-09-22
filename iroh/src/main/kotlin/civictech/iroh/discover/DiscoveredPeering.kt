@@ -435,6 +435,28 @@ class DiscoveredPeering private constructor(
         // [DSC2-DIAL-01]/[DSC2-DIAL-07]: an ACCEPTED or CONFIGURED link makes
         // the key peered exactly as a discovered one does, which is what makes
         // a later PEER_DISCOVERED for it Suppressed rather than a second dial.
+        //
+        // `evicted` is structurally always null here, so the increment below
+        // never actually fires (computenet-ik0q1, unverified reachability
+        // raised by computenet-u5ok6). `IrohNode.admitted()` only notifies
+        // this listener for a link whose `up()` already ran — `admitted()`
+        // returns early when `records[linkId]` is absent — and `up()` posts
+        // `Command.LinkUp` for that same link before `admitted()` can post
+        // `Command.Admitted`. Both go through this class's one FIFO `queue`
+        // (`post`), so `Command.LinkUp` is always drained and `apply`'d
+        // before `Command.Admitted` for the same link id is even reached —
+        // not a race, an ordering the queue guarantees. By the time this
+        // line runs, `key`'s entry already exists: either `onLinkUp`'s
+        // `table.linkUp` created it, or the gate's own `seed` beat it there
+        // first, judging the hello synchronously on the reader thread before
+        // the policy thread got to `Command.LinkUp` at all (@see seed, whose
+        // own eviction IS reachable — DiscoveredPeeringTest pins it directly
+        // because reaching it through this queue would mean racing that same
+        // ordering). Either way `table.linkUp` on an already-known key always
+        // returns null (`PeerTableTest` pins that directly). Left in rather
+        // than simplified away: it is what makes the invariant explicit
+        // rather than merely assumed, and it is cheap insurance against a
+        // future `onAdmitted` reachable without a prior `onUp` for the link.
         val evicted = table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
         if (evicted != null) counters.evicted.increment()
         table.admitted(key, view.linkId, peer)

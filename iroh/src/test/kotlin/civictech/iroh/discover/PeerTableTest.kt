@@ -318,6 +318,39 @@ class PeerTableTest {
     }
 
     @Test
+    fun `judge supersedes on a full table with one evictable entry and reports the evicted victim`() {
+        // computenet-ik0q1: `Judgement.Supersede.evicted` is set by judge's
+        // case 4 (computenet-u5ok6) but was asserted by no PeerTableTest —
+        // only `Judgement.Admit.evicted` was, by the sibling test above.
+        // Prescribed mutation: drop `evicted = evictedOnCreate` from the
+        // `Judgement.Supersede` this branch returns and the `evicted`
+        // assertion below reddens (Supersede(old) with evicted == null).
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 2) { now }
+        val old = key(0x02)
+        val evictable = key(0x03)
+        val fresh = key(0x04)
+
+        table.observe(old, listOf("a"), 1)
+        table.linkUp(old, LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.DISCOVERED)
+        table.admitted(old, linkId = 1, peer = alice)
+        table.observe(evictable, listOf("a"), 2)
+        assertEquals(2, table.keysRetained, "the table is at capacity: old (peered, protected) and evictable")
+
+        val judgement = table.judge(fresh, LinkDirection.INBOUND, linkId = 2, resolved = alice, now = 7)
+
+        assertEquals(
+            Judgement.Supersede(old, evicted = evictable),
+            judgement,
+            "fresh's hello resolves the identity old already carries, and creating fresh's entry evicted the " +
+                "oldest evictable one to make room",
+        )
+        assertEquals(PeerState.Superseded(byKey = fresh, since = 7), table.stateOf(old))
+        assertNull(table.stateOf(evictable), "the evictable entry, not the protected peered one, was dropped")
+        assertEquals(2, table.keysRetained, "eviction made room; the table stayed bounded")
+    }
+
+    @Test
     fun `a hello resolving this key to another identity than its live link is refused as IDENTITY_MISMATCH`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
