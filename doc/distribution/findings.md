@@ -938,44 +938,79 @@ pins the landed values for that single count, `{0, 1}` in `HI_FIRST` and
 both to `{1}`. Filed as bug
 `computenet-i74gh`; nothing is changed in `DiscoveredPeering`.
 
-### A second divergence, pinned narrowly: `computenet-yfg48`
+### A second divergence, pinned, then fixed in the sidecar: `computenet-yfg48`
 
-The larger node can record a link-error pair on **its own dialled link**, which
-is the one aas-D7 discards at that node:
+The larger node could record link errors on **its own dialled link**, which is
+the one aas-D7 discards at that node:
 
 1. `send failed: sending a frame failed: connection lost`
 2. `link N is no longer sending`, where N is that link's id
 
-This happens when the losing link was already PEERED at the larger node and
-carrying its Session's frames as it was torn down. The sidecar's host→peer pump
-fails on the lost QUIC connection, and a later SEND finds the pump gone
-(`iroh/sidecar/src/server.rs`). `IrohConnection`'s `onError` records both
-entries and prints "will be re-dialled", but no re-dial follows: the one-`DIAL`
-count holds. Nothing else is wrong: the end state, the counts and the absence
-of blame all hold.
+Where it was seen: once unforced in the container (the hold-disabled sample
+above), then on CI run 35682294768 in `HI_FIRST` trial 3, where it failed the
+required check, then once in a container `TOGETHER` trial. md1dt shipped with a
+narrow pin for the pair, and filed the bug. In every occurrence the end state,
+the counts and the absence of blame all held, and no re-dial followed, although
+`IrohConnection.onError` printed "will be re-dialled".
 
-Where it has been seen:
+**Cause: the sidecar reported one link-down twice.** Both strings come from
+`iroh/sidecar/src/server.rs`. When the tie-break closed the link's QUIC
+connection while the host still had frames queued for it, the host→peer pump's
+send failed with `WriteError::ConnectionLost`. The pump answered with an
+`ERROR` and stopped, and a `DATA` written before the host learned of the close
+then found the pump's queue shut. The link's own `LINK_DOWN` already reported
+the same event. `PROTOCOL.md` §2 makes an `ERROR` on an established link
+terminal and a refusal, so the host recorded it as one.
 
-- An earlier version of this entry recorded it as "seen once, unforced, not
-  reproduced by any forced order". That is no longer true.
-- CI run 35682294768 reproduced it in a forced order, `HI_FIRST` trial 3, and it
-  failed the required check.
-- After the pin, a container run saw it once more, in a `TOGETHER` trial.
+**Why the sidecar and not the JVM.** The host cannot tell, in every
+interleaving, that the link was a tie-break loser when the `ERROR` arrives. It
+cannot always tell even at the `LINK_DOWN`:
 
-The feature review filed it as bug `computenet-yfg48`.
+- CI's `HI_FIRST` trial 3 ordered the two `ERROR`s before the connection's
+  quiet-close classification (`link 1 closed quietly`).
+- The container `TOGETHER` occurrence was on a link that was never admitted, and
+  was classified as a tie-break loss only at its `LINK_DOWN`.
+- A PEERED losing link is closed from the policy thread (`CloseLoser`), after
+  the verdict. The far side can close it first, because the acceptor hello is
+  written straight after the verdict. So the `LINK_DOWN` can reach `retire`
+  before anything on the host marks the link as discarded. This is reasoned
+  from the code. It was not observed.
 
-**Decision (computenet-md1dt): pin it, narrowly, rather than leave the PR red
-until `computenet-yfg48` is fixed.** BS-08's acceptance is about the peering the
-tie-break leaves, which is "exactly one live peering, and both sides agree". It
-does not cover how the transport reports the teardown of the link it discards,
-and that teardown is all this pair describes.
+The sidecar does know the cause exactly: the send failed because the connection
+is gone.
 
-The pin tolerates exactly those two strings, only on the larger node, only with
-the id of that node's recorded `DIAL` link, and only after every end-state
-assertion has held. Any other link error on either node fails the trial, as does
-any link error on the smaller node, whose OUTBOUND link survives. The pin's KDoc
-names `computenet-yfg48`. That bug's acceptance requires the pin to be removed,
-restoring the strict assertion, when the fix lands.
+**The fix.** A send that fails with `ConnectionLost` is left to the link's
+`LINK_DOWN`. The pump sends no `ERROR` and keeps draining its queue until the
+link is deregistered. A `DATA` racing the `LINK_DOWN` is then accepted and
+dropped, as any frame queued when a link goes down is. It is no longer refused.
+A send failure that leaves the connection up, such as the peer stopping the
+stream, still answers `ERROR` as before. What `PROTOCOL.md` says each `ERROR`
+means is unchanged.
+
+Two tests in `server.rs` force the interleaving: the far side closes, this side
+observes the close, and only then are frames queued and the pumps started. They
+go red without the fix, with the CI string itself:
+`frames_queued_for_a_link_that_went_down_draw_its_link_down_and_no_error` and
+`a_link_whose_send_met_its_close_keeps_accepting_until_it_is_deregistered`.
+
+**The pin is gone.** `MutualDialSidecarTest` asserts empty `linkErrors` on both
+nodes in all three orders again. It has no exception for this case.
+
+Linux container, aarch64 (`computenet-codex-worker:local`, container-local
+copy, no host mounts), with the pin removed, at `ab7dfccb`:
+
+- 24 runs, each JUnit XML `skipped="0"`. 214 trials ran: `HI_FIRST` 72 of 72
+  green, `LO_FIRST` 72 of 72, `TOGETHER` 69 of 70.
+- `linkErrors` was empty on both nodes in all 214 trials: by assertion in the
+  213 that passed, and in the failure dump of the one that did not.
+- The one red trial failed earlier in the test, on `nothing was dropped on hi`
+  (3, expected 0). That is a different defect, on the receive side: frames that
+  arrive on a dialled link which the node's own gate closed quietly are charged
+  to `preHelloDrops`. It is filed as `computenet-3mcum`.
+- `HI_FIRST`'s smaller-node count read 0 in 65 trials and 1 in 7
+  (`computenet-i74gh`, unchanged by this fix).
+
+Evidence: `~/computenet-runs/computenet-yfg48/container-iter/`.
 
 ### Not verified
 
