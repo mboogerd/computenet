@@ -298,8 +298,13 @@ class MutualDialTest {
      * being up. Unfixed, A's count stayed at 0 — B's later hello on the
      * winner finds nothing left to close.
      *
-     * Mutation: drop the not-yet-registered links from `onLinkDown`'s
-     * `oppositeLinkUp` — A counts 0.
+     * The same window also decides the re-dial: `PeerTable.linkDown` must see
+     * the settled winner, or the loser's down reads as "no link left" and A
+     * dials B a second time.
+     *
+     * Mutations: drop the not-yet-registered links from `onLinkDown`'s
+     * `oppositeLinkUp` — A counts 0; drop the `seed` before `table.linkDown`
+     * — A re-dials (2 dials, not 1).
      */
     @Test
     fun `a peered loser whose down lands before this node's own settled dial is registered is counted once`() {
