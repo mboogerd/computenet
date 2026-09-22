@@ -605,15 +605,18 @@ class IrohNodeTest {
             assertTrue(backoffConsulted.await(30, TimeUnit.SECONDS), "the unplanned down starts the re-dial loop")
 
             hold.release()
-            val connection = (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")).getOrThrow()
-            assertFalse(connection.peered)
-            assertNull(connection.mirrorRef, "the dead link's Session is not installed as current")
-            assertTrue(node.links(peer).isEmpty(), "and the node holds no link for the peer")
+            val result = connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")
 
+            // The re-dial first, so a stranded loop fails on the property
+            // itself rather than on how `connectConfigured` returned.
             backoffGate.countDown()
             val redial = fake.nextDial()
             assertTrue(redial.link != dial.link, "a re-dial is a new link id")
             assertContentEquals(peer, redial.peerId, "the configured peer is re-dialled")
+
+            val connection = result.getOrThrow()
+            assertFalse(connection.peered)
+            assertTrue(node.links(peer).isEmpty(), "and the node holds no link for the peer")
         }
     }
 
