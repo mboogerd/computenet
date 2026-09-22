@@ -880,6 +880,9 @@ copy, no host mounts):
 - the single-order version: 33 of 33 trials green;
 - the committed three-order version: 10 of 10 runs green, 90 of 90 trials,
   0 skipped (`tests="3" skipped="0" failures="0"` in each run's JUnit XML);
+- after merging main `de4beef1` and adding the pins (head `2cdd3da7`): 12 of 12
+  runs green, 108 of 108 trials, 0 skipped. The run before `TOGETHER`'s count
+  was pinned went red in 2 of 11 completed runs, on that count alone;
 - earlier three-order runs: `TOGETHER` and `LO_FIRST` green in every trial.
   Those runs were red only on `HI_FIRST`'s tie-break count, which led to the
   divergence below.
