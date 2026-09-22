@@ -33,8 +33,14 @@ package civictech.demo.alignment
  * indicator are layout/selection over the API's `n`/`mean`/`stdev`/`split` values, never a
  * recomputed statistic. Shared helper contract: the comment block at the top of the shell's
  * script in [AlignmentPage.kt]. No `$` anywhere.
+ *
+ * `#scatter` (computenet-10mvq.3, 10mvq-D12/D13) is the value-vs-cost scatter with the Pareto
+ * frontier, defined in [SCATTER_VIEW] (ScatterView.kt) and concatenated onto [BOARD_MAIN] below
+ * to form [BOARD_VIEW]; its root lives here, after `#discuss`, and is hidden together with the
+ * board's other roots while the gate is closed. `renderBoard()` calls `renderScatter(t, ideas)`
+ * when the gate is open.
  */
-internal const val BOARD_VIEW = """
+internal const val BOARD_MAIN = """
 <style>
   #weights { display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; align-items: center; font-size: var(--fs-2);
              padding-bottom: .7rem; margin-bottom: .4rem; border-bottom: 1px solid var(--line);
@@ -114,6 +120,7 @@ internal const val BOARD_VIEW = """
   </div>
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
+  <div id="scatter" hidden></div>
   <p class="note">Bar segments show each dimension's weighted contribution to the score; a ÷ badge shows the cost divisor. The indicator marks how split the team is on an idea; Discuss lists the split ideas. Switch to spread to see each dimension's rated range.</p>
 </section>
 <script>
@@ -154,6 +161,7 @@ function renderBoard() {
   const modeBox = document.getElementById('boardMode');
   const rankingBox = document.getElementById('ranking');
   const discussBox = document.getElementById('discuss');
+  const scatterBox = document.getElementById('scatter');
   const noteEl = document.querySelector('#board .note');
   const t = loaded ? currentTopic() : undefined;
   if (!t) {
@@ -162,6 +170,7 @@ function renderBoard() {
     modeBox.hidden = true;
     rankingBox.hidden = true;
     discussBox.hidden = true;
+    if (scatterBox) scatterBox.hidden = true;
     if (noteEl) noteEl.hidden = true;
     return;
   }
@@ -175,6 +184,7 @@ function renderBoard() {
     modeBox.hidden = true;
     rankingBox.hidden = true;
     discussBox.hidden = true;
+    if (scatterBox) scatterBox.hidden = true;
     if (noteEl) noteEl.hidden = true;
     return;
   }
@@ -187,6 +197,7 @@ function renderBoard() {
     modeBox.hidden = true;
     rankingBox.hidden = true;
     discussBox.hidden = true;
+    if (scatterBox) scatterBox.hidden = true;
     if (noteEl) noteEl.hidden = true;
     renderGate(gateBox, g);
     return;
@@ -217,6 +228,7 @@ function renderBoard() {
   const participants = agg ? agg.participants : 0;
   renderRanking(t, ideas, participants, justOpened && !reduceMotion);
   renderDiscuss(t, ideas);
+  renderScatter(t, ideas);
 }
 
 function renderGate(box, g) {
@@ -520,3 +532,10 @@ function renderDiscuss(t, ideas) {
 }
 </script>
 """
+
+/**
+ * [BOARD_MAIN] plus [SCATTER_VIEW] (ScatterView.kt), the Board view's full slice served as part
+ * of [PAGE]. A plain `val` (like [PAGE] itself), not `const val`: the two concatenated raw
+ * strings would otherwise risk the 65535-byte constant-pool cap as the Board grows.
+ */
+internal val BOARD_VIEW: String = BOARD_MAIN + SCATTER_VIEW
