@@ -367,6 +367,230 @@ class DiscoveredPeeringTest {
         }
     }
 
+    // ------------------------------- ik0q1: the gate's own eviction sites
+
+    /**
+     * Reflective access to the private `DiscoveredPeering.seed(key, links)` —
+     * the gate's synchronous seeding of the table from [IrohNode]'s own link
+     * registry, before `judge`. computenet-u5ok6's implementer found that
+     * driving this through a real hello races `seed` against the queued
+     * `Command.LinkUp` for the very same link, and that in practice
+     * `onLinkUp` wins that race (its own comment on that bead). Calling
+     * `seed` directly sidesteps the race rather than fighting it: it proves
+     * `seed`'s own `evicted`-counting line on its own terms, with a
+     * [IrohNode.LinkView] this class's queue has never seen and therefore
+     * cannot have already turned into a table entry.
+     */
+    private fun DiscoveredPeering.seedDirectly(key: NodeKey, links: List<IrohNode.LinkView>) {
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("seed", NodeKey::class.java, List::class.java)
+        method.isAccessible = true
+        method.invoke(this, key, links)
+    }
+
+    /**
+     * `seed`'s own eviction, isolated from the `onLinkUp` race
+     * computenet-u5ok6 documented. The table is filled to `maxRetained`
+     * exactly as the `onLinkUp` eviction test above does — a protected
+     * `Dialling` entry and an evictable `Retained` one — and then `seed` is
+     * invoked directly with a [IrohNode.LinkView] for a brand-new key that
+     * has never passed through this policy's queue at all, so nothing but
+     * `seed`'s own `table.linkUp` call can have created its entry.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.seed`, drop
+     * `if (evicted != null) counters.evicted.increment()` and this reddens —
+     * `evicted` stays 0 even though the table plainly made room.
+     */
+    @Test
+    fun `seed evicts to make room for a link the queue has not yet turned into an entry, and it alone is counted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // never answered: stays Dialling, protected from eviction
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing has been evicted yet")
+
+            val fresh = nodeId()
+            val link = IrohNode.LinkView(
+                linkId = 4242L,
+                remoteNodeId = fresh,
+                direction = LinkDirection.INBOUND,
+                source = IrohNode.LinkSource.ACCEPTED,
+                peered = false,
+                attributedPeer = null,
+            )
+            rig.peering.seedDirectly(NodeKey(fresh), listOf(link))
+
+            assertEquals(1L, rig.peering.counters.evicted.count, "seed's own linkUp call evicted to make room")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(fresh), "seed created the new key's entry directly, off the queue")
+        }
+    }
+
+    /**
+     * `toVerdict`'s plain [Judgement.Admit] arm's `evicted` branch — reached
+     * only when `judge` creates a fresh entry for an unknown key at capacity
+     * (case 5). Driven with the gate called directly, the same technique
+     * `the gate forwards the hello's own link id...` above uses, because
+     * routing a real hello through a [FakeSidecar] link would first run
+     * `onLinkUp`/`seed` for that same key and create the entry before `judge`
+     * ever saw it — exactly the ordering the `onAdmitted` KDoc now documents.
+     * Calling the gate with a key this policy's table and node registry have
+     * never seen means `seed` iterates zero links and does nothing, so
+     * `judge` alone creates the entry.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.toVerdict`'s `Admit` arm,
+     * drop `if (judgement.evicted != null) counters.evicted.increment()` and
+     * the `evicted` assertion below reddens.
+     */
+    @Test
+    fun `the gate's Admit arm counts the eviction judge made to create a brand-new key's entry`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial()
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+
+            val fresh = nodeId()
+            val verdict = rig.node.gate.judge(keyOf(fresh), fresh, LinkDirection.INBOUND, 9001L, PeerId("fresh-identity"))
+
+            assertEquals(Verdict.Admit, verdict, "nothing else holds this key or this identity")
+            assertEquals(1L, rig.peering.counters.evicted.count, "toVerdict's Admit arm counted judge's eviction-on-create")
+            assertNull(rig.viewOf(evictable), "the evictable entry was dropped to make room for the fresh key")
+            assertEquals("Peered(INBOUND)", assertNotNull(rig.viewOf(fresh)).state)
+        }
+    }
+
+    /**
+     * `toVerdict`'s [Judgement.Supersede] arm's `evicted` branch — reached
+     * only when creating the SUPERSEDING key's entry both evicts (case 4, at
+     * capacity) and finds an existing key already peered under the same
+     * identity. Built the same way as the Admit-arm test above: the gate
+     * called directly so no real link ever reaches `onLinkUp`/`seed` for
+     * these keys first. `old` is peered by a first direct gate call (room to
+     * spare, no eviction); a second, unrelated `evictable` key fills the
+     * table; then `fresh`'s hello resolves to `old`'s identity while the
+     * table is full, so creating `fresh`'s entry both evicts `evictable` and
+     * supersedes `old`.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.toVerdict`'s `Supersede`
+     * arm, drop `if (judgement.evicted != null) counters.evicted.increment()`
+     * and the `evicted` assertion below reddens.
+     */
+    @Test
+    fun `the gate's Supersede arm counts the eviction judge made alongside the supersession`() {
+        withPeering(policy = DialPolicy(maxRetained = 3, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial()
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+
+            val rotatedIdentity = PeerId("rotated-identity")
+            val old = nodeId()
+            val firstVerdict = rig.node.gate.judge(keyOf(old), old, LinkDirection.INBOUND, 1L, rotatedIdentity)
+            assertEquals(Verdict.Admit, firstVerdict, "old is peered with room to spare — no eviction yet")
+            assertEquals(3, rig.peering.snapshot().size, "dialling, evictable and old now fill the table")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing evicted so far")
+
+            val fresh = nodeId()
+            val secondVerdict = rig.node.gate.judge(keyOf(fresh), fresh, LinkDirection.INBOUND, 2L, rotatedIdentity)
+
+            assertEquals(Verdict.Admit, secondVerdict, "a Supersede is still admitted on the new link")
+            assertEquals(1L, rig.peering.counters.superseded.count, "old is superseded by fresh")
+            assertEquals(1L, rig.peering.counters.evicted.count, "toVerdict's Supersede arm counted judge's eviction-on-create")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling or peered ones, was dropped")
+            assertEquals("Superseded(by=${NodeKey(fresh).short})", assertNotNull(rig.viewOf(old)).state)
+            assertEquals("Peered(INBOUND)", assertNotNull(rig.viewOf(fresh)).state)
+        }
+    }
+
+    /**
+     * Reflective access to the private `DiscoveredPeering.onAdmitted(Command.Admitted)`,
+     * the same technique [seedDirectly] uses for `seed`. `onAdmitted`'s own
+     * KDoc argues its `evicted` increment is ordinarily unreachable because
+     * the queue always drains `Command.LinkUp` for a link before
+     * `Command.Admitted` for the same link, so the key's entry already exists
+     * by the time this line runs and `table.linkUp` returns null. Calling
+     * `onAdmitted` directly, with a [IrohNode.LinkView] for a key this
+     * policy's queue has never seen at all, sidesteps that ordering the same
+     * way `seedDirectly` sidesteps `seed`'s race with `onLinkUp` — it proves
+     * the increment on its own terms rather than by forcing the two-link
+     * interleaving the KDoc's last paragraph describes.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.onAdmitted`, drop
+     * `if (evicted != null) counters.evicted.increment()` and the `evicted`
+     * assertion below reddens.
+     */
+    private fun DiscoveredPeering.onAdmittedDirectly(view: IrohNode.LinkView) {
+        val admittedClass = Class.forName("civictech.iroh.discover.DiscoveredPeering\$Command\$Admitted")
+        val ctor = admittedClass.getDeclaredConstructor(IrohNode.LinkView::class.java)
+        ctor.isAccessible = true
+        val command = ctor.newInstance(view)
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("onAdmitted", admittedClass)
+        method.isAccessible = true
+        method.invoke(this, command)
+    }
+
+    @Test
+    fun `onAdmitted evicts to make room for a link the queue has not yet turned into an entry, and it alone is counted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // never answered: stays Dialling, protected from eviction
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing has been evicted yet")
+
+            val fresh = nodeId()
+            val link = IrohNode.LinkView(
+                linkId = 4343L,
+                remoteNodeId = fresh,
+                direction = LinkDirection.INBOUND,
+                source = IrohNode.LinkSource.ACCEPTED,
+                peered = true,
+                attributedPeer = PeerId("fresh-identity"),
+            )
+            rig.peering.onAdmittedDirectly(link)
+
+            assertEquals(1L, rig.peering.counters.evicted.count, "onAdmitted's own linkUp call evicted to make room")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(fresh), "onAdmitted created the new key's entry directly, off the queue")
+        }
+    }
+
     // --------------------------------------- DIAL-06: re-dial, and expiry cancels
 
     @Test

@@ -435,6 +435,37 @@ class DiscoveredPeering private constructor(
         // [DSC2-DIAL-01]/[DSC2-DIAL-07]: an ACCEPTED or CONFIGURED link makes
         // the key peered exactly as a discovered one does, which is what makes
         // a later PEER_DISCOVERED for it Suppressed rather than a second dial.
+        //
+        // `evicted` is null on every ordinary path. The queue orders
+        // `Command.LinkUp` before `Command.Admitted` for one link:
+        // `IrohNode.admitted()` returns early unless `up()` already
+        // registered the link, `up()` posts `LinkUp` before it returns, and
+        // an accepted link's hello is read on the reader thread after `up()`,
+        // a dialled one's only after `openLink` has run `up()` and sent our
+        // hello. So the key's entry was created — by `onLinkUp`, or earlier
+        // by the gate's `seed`/`judge` — before this line, and `table.linkUp`
+        // on a known key returns null on that ordinary path.
+        //
+        // The increment is pinned directly, by calling `onAdmitted` itself
+        // through the queue-bypassing `onAdmittedDirectly` reflection helper
+        // in `DiscoveredPeeringTest` — the same technique `seedDirectly` uses
+        // for `seed` — with a link the queue has never turned into an entry,
+        // so `table.linkUp` here creates it rather than finding it already
+        // present (computenet-ik0q1).
+        //
+        // The ordinary path's own eviction is also reachable, not only
+        // pinned artificially: the entry can be removed again before this
+        // line runs. `PeerTable.Entry.upLinks` holds one link id per
+        // direction, so a second same-direction link for the key, up after
+        // this one and down before this `Admitted` is drained, leaves
+        // `upLinks` empty; the entry turns `Retained` and evictable, another
+        // key's arrival at capacity evicts it, and this `linkUp` re-creates
+        // it — evicting in turn. That needs two same-direction links for one
+        // key and the policy thread lagging the reader thread's gate; no rig
+        // here drives that interleaving end to end, and it is unverified
+        // whether a real sidecar or remote peer ever produces the two
+        // same-direction links this needs. The one-id-per-direction hazard
+        // itself is computenet-ru6n4.
         val evicted = table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
         if (evicted != null) counters.evicted.increment()
         table.admitted(key, view.linkId, peer)
