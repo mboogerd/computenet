@@ -10,9 +10,9 @@ package civictech.demo.alignment
  *   landing link, tab bar, `#phase`), the `#topics` landing, the "no such topic" card and
  *   the SHARED SCRIPT — helper functions only, no boot. Its opening comment block is the
  *   contract the view slices code against.
- * - [SETUP_VIEW] (SetupView.kt), [RATE_VIEW] (RateView.kt), [BOARD_VIEW] (BoardView.kt),
- *   [COMPARE_VIEW] (CompareView.kt): each a view's `<style>`, `<section>` and `<script>`, which
- *   declares functions and wires its own static markup only.
+ * - [SETUP_VIEW] (SetupView.kt), [DOTS_VIEW] (DotsView.kt), [RATE_VIEW] (RateView.kt),
+ *   [BOARD_VIEW] (BoardView.kt), [COMPARE_VIEW] (CompareView.kt): each a view's `<style>`,
+ *   `<section>` and `<script>`, which declares functions and wires its own static markup only.
  * - [SHELL_TAIL] (this file): the boot — `popstate`, the `/events` EventSource, the first route.
  *
  * Rules for every slice: no `$` anywhere (each is a plain raw string, no template literals in
@@ -23,7 +23,7 @@ package civictech.demo.alignment
  * constant-pool entry, capped at 65535 bytes, and the joined page is headed past that as the
  * views grow; a `val` is concatenated once at class init.
  */
-val PAGE: String = SHELL_HEAD + SETUP_VIEW + RATE_VIEW + BOARD_VIEW + COMPARE_VIEW + SHELL_TAIL
+val PAGE: String = SHELL_HEAD + SETUP_VIEW + DOTS_VIEW + RATE_VIEW + BOARD_VIEW + COMPARE_VIEW + SHELL_TAIL
 
 private const val SHELL_HEAD = """<!DOCTYPE html>
 <html lang="en">
@@ -176,6 +176,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
   </div>
   <div class="subbar">
     <nav id="tabs" class="tabs" role="tablist" hidden>
+      <button type="button" id="tabDots" role="tab" hidden>Gut check <span class="beta">experimental</span></button>
       <button type="button" id="tabRate" role="tab">Rate</button>
       <button type="button" id="tabBoard" role="tab">Board</button>
       <button type="button" id="tabCompare" role="tab">Compare <span class="beta">experimental</span></button>
@@ -218,13 +219,15 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  * names and nothing else of the shell. Keep them stable; widen by adding.
  *
  * state            the last /events frame: {topics:[{id,title,creator,ideas,
- *                  boardVisibility,revealed,dimensions:[{id,name,weight,direction,
- *                  lowLabel,highLabel}]}], ideas:[{topic,id,title,description,
+ *                  boardVisibility,revealed,gutCheck,dotBudget,dimensions:[{id,name,weight,
+ *                  direction,lowLabel,highLabel}]}], ideas:[{topic,id,title,description,
  *                  proposer,note,noteBy}], ratings:[…], aggregates:{tid:{weights,
- *                  participants,ideas:[{id,rank,score,override,…}]}}}. `override`
+ *                  participants,ideas:[{id,rank,score,override,dots,…}]}}}. `override`
  *                  is the facilitator's consensus override (w61az-D6/D13), null
- *                  unless set; `score` keeps its unchanged computed meaning.
- *                  Replaced wholesale on every frame.
+ *                  unless set; `score` keeps its unchanged computed meaning. `gutCheck`/
+ *                  `dotBudget` are the experimental dot-voting round's settings
+ *                  (teu97-D2); a row's `dots` is the cross-participant total (teu97-D5),
+ *                  never folded into `score`. Replaced wholesale on every frame.
  * Data access      state.ratings is every participant's raw ratings (and so their
  *                  names). Values and names together are read only by Compare's
  *                  overlay (5eefp-D8) and by the Board's drill-down (renderDrill() in
@@ -243,8 +246,8 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  on a non-2xx.
  * fetchMe(tid)     Promise of the /topics/{tid}/me view ({topic, participant,
  *                  ideas:[{id,title,description,ratings:{dim:number|null},rated,
- *                  total}],judgements:[{dim,a,b,outcome}]}); the newest response for
- *                  the current name is stored in meCache[tid]. Use it instead of
+ *                  total,dots}],judgements:[{dim,a,b,outcome}]}); the newest response
+ *                  for the current name is stored in meCache[tid]. Use it instead of
  *                  fetching /me yourself.
  * meCache          {tid: last /me view}.
  * myProgress(tid)  {rated, total} summed over meCache[tid].ideas, or null if uncached.
@@ -260,8 +263,9 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  in dimension order) mod 4 (0dvra-D13). Unrated uses var(--unrated).
  * editing(root)    true when document.activeElement is an INPUT/TEXTAREA/SELECT inside
  *                  root — the focus guard: never rebuild a row being edited.
- * showTab(name)    'rate' | 'board' | 'setup' | 'compare'; persists sessionStorage.tab.
- *                  'setup' shows as 'rate' for a non-creator.
+ * showTab(name)    'dots' | 'rate' | 'board' | 'setup' | 'compare'; persists sessionStorage.tab.
+ *                  'setup' shows as 'rate' for a non-creator; 'dots' shows as 'rate' unless the
+ *                  topic's gutCheck is true.
  * scheduleRender() coalesces to one render per 60 ms tick. A tick renders the header
  *                  (chip, crumb, tabs), then on / the landing, else — once the topic
  *                  is known — renderSetup(), renderRate(), renderBoard(), renderCompare()
@@ -271,9 +275,10 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  renderBoard() and renderPhase() again. Each render is isolated: one
  *                  throwing does not stop the rest.
  * DOM              header: #identity (chip), #crumb, then a second row holding the
- *                  tab bar #tabs (#tabRate, #tabBoard, #tabCompare, #tabSetup — the
- *                  last shown only when isCreator(currentTopic())) and #phase; landing
- *                  #topics; #missing; view roots #setup, #rate, #board, #compare (the
+ *                  tab bar #tabs (#tabDots, #tabRate, #tabBoard, #tabCompare, #tabSetup —
+ *                  #tabSetup shown only when isCreator(currentTopic()), #tabDots only when
+ *                  known && currentTopic().gutCheck === true) and #phase; landing
+ *                  #topics; #missing; view roots #setup, #dots, #rate, #board, #compare (the
  *                  Board's first child #gate, empty and hidden, is its gate card root).
  *                  The shell toggles the view roots' `hidden`; views never do.
  * CSS              tokens --accent, --accent-soft, --accent-ink, --bg, --surface,
@@ -284,7 +289,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  No literal colour outside the token blocks.
  * Scope            every slice's top-level let/const/function shares one global scope:
  *                  a view keeps its private globals prefixed with its name (rate…,
- *                  board…, setup…, cmp…) or inside functions. Shell-internal names not
+ *                  board…, setup…, cmp…, dots…) or inside functions. Shell-internal names not
  *                  listed here (el, guard, go, route, renderShell, renderPhase, …)
  *                  may change; do not call them from a view.
  * ════════════════════════════════════════════════════════════════════════════ */
@@ -366,19 +371,21 @@ document.addEventListener('click', e => {
 });
 
 // ── tabs ────────────────────────────────────────────────────────────────────
-const TABS = [['rate', 'tabRate'], ['board', 'tabBoard'], ['compare', 'tabCompare'], ['setup', 'tabSetup']];
+const TABS = [['dots', 'tabDots'], ['rate', 'tabRate'], ['board', 'tabBoard'], ['compare', 'tabCompare'], ['setup', 'tabSetup']];
 function activeTab() {
   const want = sessionStorage.tab;
+  const t = currentTopic();
+  if (want === 'dots' && !!t && t.gutCheck === true) return 'dots';
   if (want === 'board') return 'board';
   if (want === 'compare') return 'compare';
-  if (want === 'setup' && isCreator(currentTopic())) return 'setup';
+  if (want === 'setup' && isCreator(t)) return 'setup';
   return 'rate';
 }
 function showTab(name) {
   sessionStorage.tab = name;
   renderShell();
   const n = activeTab();
-  guard(n === 'rate' ? renderRate : n === 'board' ? renderBoard : n === 'compare' ? renderCompare : renderSetup);
+  guard(n === 'rate' ? renderRate : n === 'board' ? renderBoard : n === 'compare' ? renderCompare : n === 'dots' ? renderDots : renderSetup);
 }
 for (const [name, id] of TABS) el(id).onclick = () => showTab(name);
 
@@ -400,6 +407,7 @@ function renderShell() {
   el('tabs').hidden = !known;
   el('phase').hidden = !known;
   el('tabSetup').hidden = !(known && isCreator(t));
+  el('tabDots').hidden = !(known && !!t && t.gutCheck === true);
   const name = activeTab();
   for (const [n, id] of TABS) {
     const on = n === name;
@@ -566,7 +574,7 @@ function renderTick() {
   const tid = topicId();
   if (tid === null) { guard(renderLanding); return; }
   if (!loaded || !currentTopic()) return;
-  guard(renderSetup); guard(renderRate); guard(renderBoard); guard(renderCompare); guard(renderPhase);
+  guard(renderDots); guard(renderSetup); guard(renderRate); guard(renderBoard); guard(renderCompare); guard(renderPhase);
   fetchMe(tid).then(() => { if (topicId() === tid) { guard(renderBoard); guard(renderPhase); } }, () => {});
 }
 </script>

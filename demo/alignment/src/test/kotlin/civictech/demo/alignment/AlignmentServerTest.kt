@@ -103,7 +103,7 @@ class AlignmentServerTest {
         seed(probe)
         val topics = probe.get("/topics").body()
         assertTrue(
-            """"ideas":"everyone","boardVisibility":"after-rating","revealed":false,"dimensions":[""" +
+            """"ideas":"everyone","boardVisibility":"after-rating","revealed":false,"gutCheck":false,"dotBudget":3,"dimensions":[""" +
                 """{"id":"effort","name":"Effort","weight":1.0000,"direction":"value","lowLabel":"","highLabel":""},""" +
                 """{"id":"impact","name":"Impact","weight":2.0000,"direction":"value","lowLabel":"","highLabel":""}]""" in topics,
             topics,
@@ -329,8 +329,8 @@ class AlignmentServerTest {
         val ann = probe.get("/topics/t/me?participant=ann").body()
         assertEquals(
             """{"topic":"t","participant":"ann","ideas":[""" +
-                """{"id":"a","title":"A","description":"","ratings":{"effort":null,"impact":8},"rated":1,"total":2},""" +
-                """{"id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2}],"judgements":[]}""",
+                """{"id":"a","title":"A","description":"","ratings":{"effort":null,"impact":8},"rated":1,"total":2,"dots":0},""" +
+                """{"id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":0}],"judgements":[]}""",
             ann,
         )
         for (leak in listOf(""""score"""", """"mean"""", """"stdev"""", """"n":""", """"contribution"""", """"split"""", "bob", "cat")) {
@@ -557,6 +557,36 @@ class AlignmentServerTest {
         val tabButton = body.substring(tabStart, body.indexOf("</button>", tabStart))
         assertTrue("experimental" in tabButton, "compare tab reads experimental: $tabButton")
         assertTrue('$' !in COMPARE_VIEW, "COMPARE_VIEW is a plain raw string")
+        // Rate stays the default tab: the served activeTab() still falls through to 'rate'
+        val fnStart = body.indexOf("function activeTab()")
+        assertTrue(fnStart >= 0, "activeTab() is served")
+        val fnEnd = body.indexOf("\n}", fnStart)
+        assertTrue(body.substring(fnStart, fnEnd).trimEnd().endsWith("return 'rate';"), body.substring(fnStart, fnEnd))
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
+    fun `the page serves the Gut check roots and an experimental tab, and DOTS_VIEW has no dollar sign`() = withApp { _, probe ->
+        // teu97-D7/D12: the experimental Gut check dot-voting round's tab, view roots, Setup
+        // controls and the Board row's dot-total class are all in the served bytes; the slice
+        // stays template-literal-free and activeTab() still falls through to 'rate'.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        assertTrue("""id="dots"""" in body, "dots section root")
+        assertTrue("""id="tabDots"""" in body, "gut check tab button")
+        for (root in listOf("dotsBudget", "dotsList")) {
+            assertTrue("""id="$root"""" in body, "$root root")
+        }
+        // the experimental badge sits inside the Gut check tab button, not merely somewhere on the page
+        val tabStart = body.indexOf("""id="tabDots"""")
+        assertTrue(tabStart >= 0, "gut check tab button")
+        val tabButton = body.substring(tabStart, body.indexOf("</button>", tabStart))
+        assertTrue("experimental" in tabButton, "gut check tab reads experimental: $tabButton")
+        assertTrue("""id="setupGutCheck"""" in body, "setup gut check checkbox")
+        assertTrue("""id="setupDotBudget"""" in body, "setup dot budget input")
+        assertTrue("""class="dots"""" in body, "board row dots class")
+        assertTrue('$' !in DOTS_VIEW, "DOTS_VIEW is a plain raw string")
         // Rate stays the default tab: the served activeTab() still falls through to 'rate'
         val fnStart = body.indexOf("function activeTab()")
         assertTrue(fnStart >= 0, "activeTab() is served")
@@ -895,6 +925,13 @@ class AlignmentServerTest {
                 200,
                 probe.putJson("""{"creator":"cat","ideas":"facilitator","boardVisibility":"after-reveal"}""", "/topics/t/policy").statusCode(),
             )
+            // the gut check: enable with a budget, place dots, then remove one (dots line + a
+            // count-0 removal are both journaled ops; the removal is exercised so the journal carries
+            // a dots line whose count is 0, same as unrate's shape)
+            assertEquals(200, probe.putJson("""{"creator":"cat","gutCheck":true,"dotBudget":2}""", "/topics/t/policy").statusCode())
+            assertEquals(200, probe.postJson("""{"participant":"ann","idea":"a","count":2}""", "/topics/t/dots").statusCode())
+            assertEquals(200, probe.postJson("""{"participant":"ann","idea":"a","count":0}""", "/topics/t/dots").statusCode())
+            assertEquals(200, probe.postJson("""{"participant":"bob","idea":"b","count":1}""", "/topics/t/dots").statusCode())
             assertEquals(200, probe.postJson("""{"creator":"cat"}""", "/topics/t/reveal").statusCode())
             before = probe.await { s ->
                 val agg = parse(s)["aggregates"]!!.jsonObject["t"].toString()
@@ -905,13 +942,18 @@ class AlignmentServerTest {
                     row(agg, "c") == null && """"revealed":true""" in s
             }
             for (want in listOf(
-                """"ideas":"facilitator","boardVisibility":"after-reveal","revealed":true""",
+                """"ideas":"facilitator","boardVisibility":"after-reveal","revealed":true,"gutCheck":true,"dotBudget":2""",
                 """{"id":"effort","name":"Effort","weight":4.0000,"direction":"value","lowLabel":"none","highLabel":"a lot"}""",
                 """"id":"b","title":"B edited","description":"new","proposer":"bob","note":"decided: ship it","noteBy":"bob"""",
                 """"override":6.5000""",
             )) {
                 assertTrue(want in before, "$want in $before")
             }
+            // ann's a-dots (2 then removed) and bob's b-dot (1) are both journaled and replay: only
+            // bob's placement survives, so the aggregate carries "dots":1 on b and 0 on a
+            val agg0 = parse(before)["aggregates"]!!.jsonObject["t"].toString()
+            assertEquals(1, row(agg0, "b")!!["dots"]!!.jsonPrimitive.content.toInt(), agg0)
+            assertEquals(0, row(agg0, "a")!!["dots"]!!.jsonPrimitive.content.toInt(), agg0)
             deeBefore = probe.get("/topics/t/me?participant=dee").body()
             assertTrue(""""judgements":[{"dim":"impact","a":"a","b":"b","outcome":"equal"}]}""" in deeBefore, deeBefore)
             annBefore = probe.get("/topics/t/me?participant=ann").body()
@@ -920,7 +962,8 @@ class AlignmentServerTest {
         val lines = Files.readAllLines(journal)
         for (op in listOf(
             "topic", "dimension", "idea", "note", "rate", "weight", "unrate", "unidea", "undimension",
-            "direction", "labels", "policy", "visibility", "reveal", "judge", "unjudge", "override", "unoverride",
+            "direction", "labels", "policy", "visibility", "reveal", "judge", "unjudge",
+            "override", "unoverride", "gutcheck", "dots",
         )) {
             assertTrue(lines.any { """"op":"$op"""" in it }, "journal records $op: $lines")
         }
@@ -1082,4 +1125,122 @@ class AlignmentServerTest {
             assertEquals(200, probe.postJson("""{"creator":"cat"}""", "/topics/t/reveal").statusCode())
             assertEquals(state, probe.state())
         }
+
+    private fun dot(probe: HttpProbe, who: String, idea: String, count: Int) =
+        probe.postJson("""{"participant":"$who","idea":"$idea","count":$count}""", "/topics/t/dots")
+
+    @Test
+    fun `a facilitator-enabled gut check round is a separate dot signal that never moves the score`() = withApp { _, probe ->
+        seed(probe)
+
+        // the round is off by default: placing dots is refused (409), and unrelated to the 404s/403s
+        // and validation already covered by "facilitator-only settings and idea edits ..."
+        assertEquals(409, dot(probe, "ann", "a", 1).statusCode())
+
+        // only the creator may switch it on or set the budget; malformed bodies are 400 and change nothing
+        assertEquals(403, probe.putJson("""{"creator":"bob","gutCheck":true}""", "/topics/t/policy").statusCode())
+        val beforeEnable = probe.state()
+        for (body in listOf(
+            """{"creator":"cat","dotBudget":0}""",
+            """{"creator":"cat","dotBudget":21}""",
+            """{"creator":"cat","dotBudget":"3"}""",
+            """{"creator":"cat","dotBudget":2.5}""",
+        )) {
+            assertEquals(400, probe.putJson(body, "/topics/t/policy").statusCode(), body)
+        }
+        assertEquals(beforeEnable, probe.state(), "every refused policy PUT changed nothing")
+
+        // gutCheck:true alone leaves the budget at its default (3)
+        val enabled = probe.putJson("""{"creator":"cat","gutCheck":true}""", "/topics/t/policy")
+        assertEquals(200, enabled.statusCode(), enabled.body())
+        assertEquals(
+            """{"ideas":"everyone","boardVisibility":"after-rating","gutCheck":true,"dotBudget":3}""",
+            enabled.body(),
+        )
+
+        // placing within budget: response carries idea, count, used and budget
+        val placed = dot(probe, "ann", "a", 2)
+        assertEquals(200, placed.statusCode(), placed.body())
+        assertEquals("""{"idea":"a","count":2,"used":2,"budget":3}""", placed.body())
+        // /me carries the caller's own dots after "total" and nothing else changes
+        assertTrue(""""id":"a","title":"A","description":"","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":2""" in
+            probe.get("/topics/t/me?participant=ann").body())
+
+        // over budget: 1 more on b would total 3 (still within 3) — push past it with a second idea
+        assertEquals(200, probe.postJson("""{"participant":"ann","title":"C"}""", "/topics/t/ideas").statusCode())
+        val overBudget = dot(probe, "ann", "b", 2) // 2 (a) + 2 (b) = 4 > 3
+        assertEquals(400, overBudget.statusCode(), overBudget.body())
+        val meUnchanged = probe.get("/topics/t/me?participant=ann").body()
+        assertTrue(""""id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":0""" in meUnchanged, meUnchanged)
+
+        // exactly at budget is accepted (2 + 1 = 3)
+        assertEquals(200, dot(probe, "ann", "b", 1).statusCode())
+
+        // shrink the budget below what ann has placed (3): while she is over the shrunk budget (2), a
+        // further increase is refused, but a decrease is still accepted (it climbs her back under it)
+        val shrunk = probe.putJson("""{"creator":"cat","dotBudget":2}""", "/topics/t/policy")
+        assertEquals(200, shrunk.statusCode(), shrunk.body())
+        assertEquals(400, dot(probe, "ann", "a", 3).statusCode(), "an increase while over a shrunk budget is refused")
+        val climbBack = dot(probe, "ann", "a", 1) // 1 (a) + 1 (b) = 2, at the shrunk budget
+        assertEquals(200, climbBack.statusCode(), climbBack.body())
+        assertEquals("""{"idea":"a","count":1,"used":2,"budget":2}""", climbBack.body())
+
+        // count:0 removes the entry
+        val removed = dot(probe, "ann", "b", 0)
+        assertEquals(200, removed.statusCode(), removed.body())
+        assertEquals("""{"idea":"b","count":0,"used":1,"budget":2}""", removed.body())
+        assertTrue(""""id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":0""" in
+            probe.get("/topics/t/me?participant=ann").body())
+
+        // removing an idea drops its dots (teu97-D4): ann's dot on c stops counting against her budget
+        assertEquals(200, dot(probe, "ann", "c", 1).statusCode()) // 1 (a) + 1 (c) = 2, at budget
+        assertEquals(200, probe.delete("/topics/t/ideas/c?creator=cat").statusCode())
+        val afterRemoval = dot(probe, "ann", "a", 2) // 2 (a) = 2: accepted only if c's dot went with c
+        assertEquals(200, afterRemoval.statusCode(), afterRemoval.body())
+        assertEquals("""{"idea":"a","count":2,"used":2,"budget":2}""", afterRemoval.body())
+        assertEquals(200, dot(probe, "ann", "a", 1).statusCode())
+
+        // an unknown idea and a bad count are both 400, before any write
+        assertEquals(400, dot(probe, "ann", "ghost", 1).statusCode())
+        assertEquals(400, probe.postJson("""{"participant":"ann","idea":"a","count":-1}""", "/topics/t/dots").statusCode())
+        assertEquals(400, probe.postJson("""{"participant":"ann","idea":"a","count":1.5}""", "/topics/t/dots").statusCode())
+        assertEquals(400, probe.postJson("""{"participant":"ann","idea":"a","count":"1"}""", "/topics/t/dots").statusCode())
+        assertEquals(405, probe.get("/topics/t/dots").statusCode())
+
+        // bob places his own dots on a: the aggregate's "dots" is a count over ALL participants
+        assertEquals(200, dot(probe, "bob", "a", 1).statusCode())
+        val agg = probe.get("/topics/t/aggregate").body()
+        assertEquals(2, row(agg, "a")!!["dots"]!!.jsonPrimitive.content.toInt(), agg) // ann 1 + bob 1
+        assertEquals(0, row(agg, "b")!!["dots"]!!.jsonPrimitive.content.toInt(), agg)
+        for (name in listOf("ann", "bob")) assertTrue(name !in agg, "the aggregate must not name $name: $agg")
+
+        // disabling keeps the stored dots (teu97-D4)
+        assertEquals(200, probe.putJson("""{"creator":"cat","gutCheck":false}""", "/topics/t/policy").statusCode())
+        assertEquals(409, dot(probe, "ann", "a", 3).statusCode())
+        val aggDisabled = probe.get("/topics/t/aggregate").body()
+        assertEquals(2, row(aggDisabled, "a")!!["dots"]!!.jsonPrimitive.content.toInt(), aggDisabled)
+        assertEquals(200, probe.putJson("""{"creator":"cat","gutCheck":true}""", "/topics/t/policy").statusCode())
+        val aggReenabled = probe.get("/topics/t/aggregate").body()
+        assertEquals(2, row(aggReenabled, "a")!!["dots"]!!.jsonPrimitive.content.toInt(), aggReenabled)
+
+        // REGRESSION (the feature's hard rule): rate every idea, read the scores and row order, place
+        // and remove dots, then assert both are byte-identical — dots never enter the score
+        rate(probe, "cy", "a", "impact", "8")
+        rate(probe, "cy", "a", "effort", "3")
+        rate(probe, "cy", "b", "impact", "4")
+        rate(probe, "cy", "b", "effort", "9")
+        probe.awaitRow("a") { it["score"] != JsonNull }
+        probe.awaitRow("b") { it["score"] != JsonNull }
+        val beforeScores = probe.get("/topics/t/aggregate").body()
+        val beforeOrder = order(beforeScores)
+        val beforeRows = parse(beforeScores)["ideas"]!!.jsonArray.map { it.jsonObject.filterKeys { k -> k != "dots" } }
+        // dotBudget is 2 here (shrunk earlier in this test): stay within it
+        assertEquals(200, dot(probe, "cy", "a", 1).statusCode())
+        assertEquals(200, dot(probe, "cy", "b", 1).statusCode())
+        assertEquals(200, dot(probe, "ann", "a", 0).statusCode())
+        val afterScores = probe.get("/topics/t/aggregate").body()
+        assertEquals(beforeOrder, order(afterScores), "placing dots must not reorder the ranking")
+        val afterRows = parse(afterScores)["ideas"]!!.jsonArray.map { it.jsonObject.filterKeys { k -> k != "dots" } }
+        assertEquals(beforeRows, afterRows, "every scoring field (except dots itself) is byte-identical before and after dots")
+    }
 }

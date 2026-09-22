@@ -57,6 +57,14 @@ internal class Topic(
     val notes = TreeMap<String, Note>()
     val overrides = TreeMap<String, Double>()
     var revealed: Boolean = false
+
+    /**
+     * The gut-check round (teu97-D2, experimental, epic computenet-9y79n R14): off and a 3-dot
+     * budget until the facilitator switches it on through `PUT /policy`; a topic line never carries
+     * these, so a v1/ALN2.1 journal always replays to these defaults.
+     */
+    var gutCheck: Boolean = false
+    var dotBudget: Int = 3
 }
 
 private val Direction.wire: String get() = name.lowercase()
@@ -71,6 +79,13 @@ internal data class Idea(val id: String, val title: String, val description: Str
  * dropped by replaying an edit recorded after the note.
  */
 internal data class Note(val text: String, val author: String)
+
+/**
+ * A participant's ABSOLUTE dot count on an idea within a topic's gut-check round (teu97-D1/D3).
+ * Kept on [AlignmentApp.dots], a write-side index beside `ratings`, journaled and replayed the same
+ * way; never put on the dataflow — the score is computed with no knowledge dots exist.
+ */
+internal data class DotKey(val topic: TopicId, val idea: String, val participant: String)
 
 /**
  * Whose pairwise judgements on which dimension (k6rrk-D2): one participant's set on one dimension of
@@ -119,6 +134,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private val topics = TreeMap<String, Topic>()
     private val ratings = HashMap<RatingKey, Int>() // thousandths (RatingScale)
     private val weights = HashMap<DimKey, DimConfig>() // every direction VALUE until the journal/API carry one
+    private val dots = HashMap<DotKey, Int>() // absolute per-participant counts (teu97-D1), never in the dataflow
     // pairwise judgements (k6rrk-D2): per (topic, dim, participant), keyed by the unordered pair id "min|max"
     private val judgements = TreeMap<JudgeKey, TreeMap<String, Judgement>>(JUDGE_ORDER)
 
@@ -194,6 +210,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             "unoverride" -> clearOverride(t(), s("idea"))
             "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
             "unrate" -> unrate(rk())
+            "gutcheck" -> setGutCheck(t(), s("enabled") == "true", s("budget").toInt())
+            "dots" -> setDots(DotKey(t(), s("idea"), s("participant")), s("count").toInt())
             "judge" -> judge(
                 JudgeKey(t(), s("dim"), s("participant")),
                 Judgement(s("a"), s("b"), parseWire(s("outcome"), Outcome.entries) { it.wire }),
@@ -289,6 +307,18 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         record("""{"op":"visibility","topic":${esc(topic.value)},"boardVisibility":${esc(visibility.wire)}}""")
     }
 
+    /**
+     * The gut-check round's settings (teu97-D2): idempotent — the same (enabled, budget) pair writes
+     * no line, so a `PUT /policy` that only changes `ideas`/`boardVisibility` never touches this op.
+     */
+    private fun setGutCheck(topic: TopicId, enabled: Boolean, budget: Int) = synchronized(state) {
+        val t = topics.getValue(topic.value)
+        if (t.gutCheck == enabled && t.dotBudget == budget) return@synchronized
+        t.gutCheck = enabled
+        t.dotBudget = budget
+        record("""{"op":"gutcheck","topic":${esc(topic.value)},"enabled":$enabled,"budget":$budget}""")
+    }
+
     /** The facilitator's reveal: one-way topic state in the shared frame; the page decides what it unlocks. */
     private fun reveal(topic: TopicId) = synchronized(state) {
         val t = topics.getValue(topic.value)
@@ -306,9 +336,14 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         )
     }
 
-    /** Cascades: unrates every rating on the idea (journaled as `unrate`), then drops it, its note, its override and its judgements (no extra line: replaying `unidea` drops them the same way, w0i5h-D2/w61az-D1/k6rrk-D3). */
+    /**
+     * Cascades: unrates every rating on the idea (journaled as `unrate`), drops its dots (no extra
+     * line: replaying `unidea` drops them the same way, teu97-D4), then drops it, its note, its
+     * override and its judgements (no extra line either, w0i5h-D2/w61az-D1/k6rrk-D3).
+     */
     private fun removeIdea(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.idea == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
+        dots.keys.filter { it.topic == topic && it.idea == id }.toList().forEach { dots.remove(it) }
         topics.getValue(topic.value).ideas.remove(id)
         topics.getValue(topic.value).notes.remove(id)
         topics.getValue(topic.value).overrides.remove(id)
@@ -378,6 +413,24 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
+     * [count] is the participant's ABSOLUTE dot count on the idea (teu97-D3); `count == 0` removes
+     * the entry. Idempotent: the same count writes no line. Replay bypasses the enabled/budget checks
+     * in [postDots] — the journal is the truth.
+     */
+    private fun setDots(key: DotKey, count: Int) = synchronized(state) {
+        if (count == 0) {
+            if (dots.remove(key) == null) return@synchronized
+        } else {
+            if (dots[key] == count) return@synchronized
+            dots[key] = count
+        }
+        record(
+            """{"op":"dots","topic":${esc(key.topic.value)},"idea":${esc(key.idea)},""" +
+                """"participant":${esc(key.participant)},"count":$count}""",
+        )
+    }
+
+    /**
      * Stores one pairwise judgement (k6rrk-D2/D3), normalized so `a < b` by id with the outcome
      * re-expressed, replacing any earlier judgement of the same unordered pair; an identical judgement
      * is a no-op (no line, no refit). Otherwise it journals a `judge` line, re-fits the participant's
@@ -437,7 +490,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/judge|/me|/aggregate]]`,
+     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/dots|/judge|/me|/aggregate]]`,
      * dispatched here.
      */
     private fun handleTopics(ex: HttpExchange): String {
@@ -467,6 +520,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             seg.size == 2 && seg[1] == "policy" && method == "PUT" -> putPolicy(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "reveal" && method == "POST" -> postReveal(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "rate" && method == "POST" -> postRate(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "dots" && method == "POST" -> postDots(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "judge" && method == "POST" -> postJudge(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "judge" && method == "DELETE" ->
                 deleteJudge(topic, ex.query("participant"), ex.query("dim"))
@@ -641,17 +695,28 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         return """{"removed":${esc(id)}}"""
     }
 
-    /** `{creator, ideas?, boardVisibility?}`: the topic's facilitator settings; 400 when neither is given. */
+    /**
+     * `{creator, ideas?, boardVisibility?, gutCheck?, dotBudget?}`: the topic's facilitator settings
+     * (teu97-D2 adds the gut-check round's on/off switch and dot budget); 400 when none is given.
+     */
     private fun putPolicy(topic: Topic, json: JsonObject): String {
         requireCreator(topic, json.str("creator"))
         val policy = wireField(json, "ideas", IdeaPolicy.entries) { it.wire }
         val visibility = wireField(json, "boardVisibility", BoardVisibility.entries) { it.wire }
-        if (policy == null && visibility == null) fail(400, "nothing to change: give ideas and/or boardVisibility")
+        val gutCheck = booleanField(json, "gutCheck")
+        val dotBudget = intField(json, "dotBudget", 1..20, "dotBudget must be an integer 1..20")
+        if (policy == null && visibility == null && gutCheck == null && dotBudget == null) {
+            fail(400, "nothing to change: give ideas, boardVisibility, gutCheck and/or dotBudget")
+        }
         synchronized(state) {
             policy?.let { setPolicy(topic.id, it) }
             visibility?.let { setVisibility(topic.id, it) }
+            if (gutCheck != null || dotBudget != null) {
+                setGutCheck(topic.id, gutCheck ?: topic.gutCheck, dotBudget ?: topic.dotBudget)
+            }
         }
-        return """{"ideas":${esc(topic.ideaPolicy.wire)},"boardVisibility":${esc(topic.boardVisibility.wire)}}"""
+        return """{"ideas":${esc(topic.ideaPolicy.wire)},"boardVisibility":${esc(topic.boardVisibility.wire)},""" +
+            """"gutCheck":${topic.gutCheck},"dotBudget":${topic.dotBudget}}"""
     }
 
     /** `{creator}`: the facilitator reveals the Board (idempotent; allowed in either visibility mode). */
@@ -698,6 +763,36 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             if (value == null) unrate(key) else rate(key, value)
         }
         return """{"ok":true}"""
+    }
+
+    /**
+     * `{participant, idea, count}` (teu97-D3): checked in order — `participant`; `idea` present in
+     * `topic.ideas` else 400 "no such idea" (as [postRate]); `count` a non-negative JSON integer else
+     * 400; the round enabled (`topic.gutCheck`) else 409; then budget — refused with 400 only when
+     * `count` exceeds the participant's CURRENT count on this idea AND the new total across the
+     * topic's other ideas would exceed `topic.dotBudget` (a decrease is always allowed, even over a
+     * shrunk budget). `count == 0` removes the entry. Response carries `used`, the participant's total
+     * across every idea after the write.
+     */
+    private fun postDots(topic: Topic, json: JsonObject): String {
+        val participant = name(json.str("participant"), "participant")
+        val idea = json.str("idea") ?: fail(400, "missing idea")
+        val count = intField(json, "count", 0..Int.MAX_VALUE, "count must be an integer 0 or more")
+            ?: fail(400, "count must be an integer 0 or more")
+        return synchronized(state) {
+            if (idea !in topic.ideas) fail(400, "no such idea")
+            if (!topic.gutCheck) fail(409, "the gut check is not enabled on this topic")
+            val key = DotKey(topic.id, idea, participant)
+            val current = dots[key] ?: 0
+            val usedElsewhere = dots.entries
+                .filter { (k, _) -> k.topic == topic.id && k.participant == participant && k.idea != idea }
+                .sumOf { it.value }
+            if (count > current && usedElsewhere + count > topic.dotBudget) {
+                fail(400, "over budget: ${usedElsewhere + count} of ${topic.dotBudget} dots")
+            }
+            setDots(key, count)
+            """{"idea":${esc(idea)},"count":$count,"used":${usedElsewhere + count},"budget":${topic.dotBudget}}"""
+        }
     }
 
     /**
@@ -765,6 +860,29 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         return w?.takeIf { it.isFinite() && it > 0.0 } ?: fail(400, "weight must be a number > 0")
     }
 
+    /**
+     * A JSON integer within [range]: absent → null; a string, a non-integer number, or one outside
+     * [range] → 400 [message] (teu97-D2/D3: `dotBudget` and `count`).
+     */
+    private fun intField(json: JsonObject, key: String, range: IntRange, message: String): Int? {
+        val raw = json[key] ?: return null
+        val p = (raw as? JsonPrimitive)?.takeIf { it !is JsonNull && !it.isString } ?: fail(400, message)
+        val d = p.content.toDoubleOrNull() ?: fail(400, message)
+        val i = d.toInt()
+        return i.takeIf { d == i.toDouble() && it in range } ?: fail(400, message)
+    }
+
+    /** A JSON boolean: absent → null; anything else → 400 (teu97-D2: `gutCheck`). */
+    private fun booleanField(json: JsonObject, key: String): Boolean? {
+        val raw = json[key] ?: return null
+        val p = (raw as? JsonPrimitive)?.takeIf { it !is JsonNull && !it.isString } ?: fail(400, "$key must be a boolean")
+        return when (p.content) {
+            "true" -> true
+            "false" -> false
+            else -> fail(400, "$key must be a boolean")
+        }
+    }
+
     private fun broadcast() = shell.broadcast { stateJson() }
 
     // ── json ─────────────────────────────────────────────────────────────
@@ -774,7 +892,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun topicJson(t: Topic): String =
         """{"id":${esc(t.id.value)},"title":${esc(t.title)},"creator":${esc(t.creator)},""" +
             """"ideas":${esc(t.ideaPolicy.wire)},"boardVisibility":${esc(t.boardVisibility.wire)},""" +
-            """"revealed":${t.revealed},"dimensions":""" +
+            """"revealed":${t.revealed},"gutCheck":${t.gutCheck},"dotBudget":${t.dotBudget},"dimensions":""" +
             t.dims.entries.joinToString(",", "[", "]") { (id, d) ->
                 val config = weights[DimKey(t.id, id)]
                 """{"id":${esc(id)},"name":${esc(d.name)},"weight":${config?.weight?.let(::num) ?: "null"},""" +
@@ -792,7 +910,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             val mine = topic.dims.keys.associateWith { ratings[RatingKey(topic.id, idea.id, it, participant)] }
             """{"id":${esc(idea.id)},"title":${esc(idea.title)},"description":${esc(idea.description)},""" +
                 """"ratings":""" + mine.entries.joinToString(",", "{", "}") { (d, v) -> "${esc(d)}:${v?.let(RatingScale::format) ?: "null"}" } +
-                ""","rated":${mine.values.count { it != null }},"total":${mine.size}}"""
+                ""","rated":${mine.values.count { it != null }},"total":${mine.size},""" +
+                """"dots":${dots[DotKey(topic.id, idea.id, participant)] ?: 0}}"""
         }
         // the caller's own pairwise judgements only (k6rrk-D5), sorted by (dim, pair id)
         val judged = judgements.entries.filter { (k, _) -> k.topic == topic.id && k.participant == participant }
@@ -833,13 +952,16 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val rankedIds = ranked.mapTo(HashSet()) { it.first }
         val live = ratings.keys.filter { it.topic == topic.id }
         val ratersOf = live.groupBy({ it.idea }, { it.participant }).mapValues { (_, who) -> who.toSet().size }
+        // dots total per idea (teu97-D5): a COUNT summed over every participant, never a name
+        val dotsOf = dots.entries.filter { (k, _) -> k.topic == topic.id }
+            .groupBy({ (k, _) -> k.idea }, { (_, v) -> v }).mapValues { (_, vs) -> vs.sum() }
         fun byDim(s: Scored) = s.byDim.toSortedMap().entries.joinToString(",", "{", "}") { (d, st) ->
             """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
                 """"contribution":${s.contributions[d]?.let(::num) ?: "null"}}"""
         }
         fun tail(id: String, s: Scored?) =
             """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
-                """"raters":${ratersOf[id] ?: 0}}"""
+                """"raters":${ratersOf[id] ?: 0},"dots":${dotsOf[id] ?: 0}}"""
         val rows = ranked.mapIndexed { i, (id, _) ->
             val s = scored[IdeaKey(topic.id, id)] // present with a score (possibly null), or absent
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
