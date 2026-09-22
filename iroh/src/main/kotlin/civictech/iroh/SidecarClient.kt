@@ -341,6 +341,7 @@ class SidecarClient(
         pendingDials[id] = pending
         try {
             sendMessage(HostMessage.Dial(id, peerId))
+            beforeDialAwait?.invoke(id)
             val settled = pending.latch.await(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
             if (!settled) throw SidecarException("DIAL on link $id got no LINK_UP within $timeout${readerFailureSuffix()}")
             pending.failure?.let { throw SidecarException("DIAL on link $id refused: $it") }
@@ -352,6 +353,19 @@ class SidecarClient(
 
     /** The link with this id, while it is up. */
     fun link(id: Long): SidecarLink? = links[id]
+
+    /** Every link this client currently has registered — what a test of "no link nobody holds" reads. */
+    internal val openLinks: List<SidecarLink> get() = links.values.toList()
+
+    /**
+     * Test seam (computenet-r2zhu): runs on the dialling thread with the link
+     * id, after the `DIAL` is written and before the wait for its answer.
+     * It is how a test puts an interrupt in the window between the reader's
+     * settlement and the dial's return, which is otherwise microseconds wide.
+     * Null, and never set, outside tests.
+     */
+    @Volatile
+    internal var beforeDialAwait: ((Long) -> Unit)? = null
 
     // ------------------------------------------------------------------- send
 
