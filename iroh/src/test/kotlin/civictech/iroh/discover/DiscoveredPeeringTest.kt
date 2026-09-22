@@ -14,11 +14,13 @@ import civictech.iroh.Frame
 import civictech.iroh.HostMessage
 import civictech.iroh.IrohNode
 import civictech.iroh.IrohTransport
+import civictech.iroh.LinkDirection
 import civictech.iroh.SidecarClient
 import civictech.iroh.SidecarMessage
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import civictech.iroh.SidecarProtocol.Kind
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
+import civictech.iroh.Verdict
 import civictech.iroh.await
 import civictech.iroh.neverWithin
 import civictech.iroh.quiesced
@@ -604,6 +606,62 @@ class DiscoveredPeeringTest {
                 rig.peering.counters.duplicatesSuppressed.count == 1L
             }
             assertEquals(2L, quiesced { rig.fake.dials.get() }, "an abandoned key is not dialled again")
+        }
+    }
+
+    // --------------------- computenet-n0hew: the gate forwards the judged link id
+
+    /**
+     * Pins the installed gate (`DiscoveredPeering.begin()`'s `node.gate =
+     * HelloGate { ... }`) forwarding the hello's OWN link id to
+     * `PeerTable.judge` — unpinned until now (`computenet-n0hew`, found by
+     * the feature review of computenet-2utc8, PR #958). The Session -> gate
+     * half (what `linkId` a hello's judged with) is pinned by
+     * `IrohNodeTest`'s "HelloGate judge carries the link id of the hello
+     * actually being judged"; this is the other half, the gate's own forward
+     * of that id into `table.judge(...)`.
+     *
+     * The gate is invoked directly here — `rig.node.gate.judge(...)` twice,
+     * with no wire frame and no wait between the two calls — because a wrong
+     * forwarded id has exactly one observable effect anywhere in
+     * `PeerTable`: the IDENTITY_MISMATCH comparison `peered.linkId != linkId`
+     * inside `judge`. Every other read of a `Peered` entry's `linkId` is
+     * gone the moment `DiscoveredPeering.onAdmitted` re-runs `table.admitted`
+     * with the real id from `IrohNode`'s own registry — which is also why a
+     * mutation run over the *wired* path (a `FakeSidecar` hello, `await`ed
+     * to admitted) stayed green: the async correction almost always wins the
+     * race before a second hello can observe the corrupted id. Calling the
+     * gate synchronously past that window is what makes the corruption
+     * observable without racing the policy thread.
+     *
+     * Prescribed mutation: replace the `linkId` argument to
+     * `table.judge(...)` in the gate lambda with `-1L`. Every hello then
+     * forwards that same constant regardless of its real, distinct link id,
+     * so the second hello's argument to `PeerTable.judge` reads equal to the
+     * first hello's stored `Peered.linkId` (`-1L == -1L`) instead of
+     * different — the IDENTITY_MISMATCH check never fires, and a hello that
+     * resolves to a different identity than the live link's is wrongly
+     * `Admit`ted instead of `Refuse`d.
+     */
+    @Test
+    fun `the gate forwards the hello's own link id, so a later different identity on the same live link is refused`() {
+        withPeering { rig ->
+            val remoteNodeId = nodeId()
+            val key = keyOf(remoteNodeId)
+            val firstIdentity = PeerId("first-hello")
+            val secondIdentity = PeerId("second-hello-different-identity")
+
+            val firstVerdict = rig.node.gate.judge(key, remoteNodeId, LinkDirection.OUTBOUND, 111L, firstIdentity)
+            assertEquals(Verdict.Admit, firstVerdict, "the first hello on a fresh key is admitted and its link kept live")
+
+            val secondVerdict = rig.node.gate.judge(key, remoteNodeId, LinkDirection.OUTBOUND, 222L, secondIdentity)
+            val refusal = assertIs<Verdict.Refuse>(
+                secondVerdict,
+                "a different identity on the same key, while the first hello's link is still live, must be refused " +
+                    "([DSC2-ID-05]) rather than admitted — admitting it is what a wrong forwarded link id produces",
+            )
+            assertEquals(DenialReason.IDENTITY_MISMATCH, refusal.reason)
+            assertEquals(secondIdentity, refusal.principal, "the denial blames the identity this hello resolved to, not the live one (F3-D7)")
         }
     }
 
