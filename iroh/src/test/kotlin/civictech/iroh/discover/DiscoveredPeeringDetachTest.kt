@@ -12,6 +12,7 @@ import civictech.iroh.IrohNode
 import civictech.iroh.IrohTransport
 import civictech.iroh.SidecarClient
 import civictech.iroh.SidecarMessage
+import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import civictech.iroh.await
 import civictech.iroh.neverWithin
 import org.junit.jupiter.api.Test
@@ -104,6 +105,33 @@ class DiscoveredPeeringDetachTest {
             await("$key to read as peered") { viewOf(key)?.state == "Peered(OUTBOUND)" }
             await("$key's Session to be bound") { peering.connectionFor(NodeKey(key))?.peered == true }
             return dial.link
+        }
+
+        /** Discover [key] and return its `DIAL`, left unanswered: a dial in flight. */
+        fun inFlight(key: ByteArray): HostMessage.Dial {
+            val before = peering.counters.dialsAttempted.count
+            discover(key)
+            val dial = fake.nextDial()
+            assertTrue(dial.peerId.contentEquals(key))
+            await("the dial for $key to be counted") { peering.counters.dialsAttempted.count > before }
+            return dial
+        }
+
+        /** The ids of the links the node holds for [key] that a connection dialled. */
+        fun discoveredLinks(key: ByteArray): List<Long> =
+            node.links(key).filter { it.source == IrohNode.LinkSource.DISCOVERED }.map { it.linkId }.sorted()
+
+        /**
+         * Answer the stopped policy's interrupted `DIAL` on [link] late, and
+         * require that the link it produces is closed rather than left up as
+         * an ACCEPTED link: a `CLOSE_LINK` for it, and, once the sidecar's
+         * `LINK_DOWN` lands, no link for [key] at all.
+         */
+        fun assertOrphanClosed(key: ByteArray, link: Long) {
+            fake.send(SidecarMessage.LinkUp(link, key, DIRECTION_OUTBOUND))
+            await("the late link $link to be closed") { fake.pollHostMessage(200) == HostMessage.CloseLink(link) }
+            fake.send(SidecarMessage.LinkDown(link, "closed"))
+            await("no link left for the key") { node.links(key).isEmpty() }
         }
 
         /**
@@ -272,6 +300,108 @@ class DiscoveredPeeringDetachTest {
 
             assertTrue(neverWithin(1_000) { rig.fake.dials.get() > onWire }, "a detached policy does not re-dial a sever (1s window)")
             assertTrue(rig.drain().none { it is HostMessage.Dial }, "no DIAL reached the wire")
+        }
+    }
+
+    // ------------------------------------- a dial in flight at the stop (iesmw)
+
+    /**
+     * `stop()` interrupts the dial pool; it must also wait for it
+     * (computenet-iesmw). Otherwise a pool thread can still be inside
+     * `IrohConnection.openLink` when `detach()` returns — installing a link on
+     * a connection that is already the caller's, concurrently with a `heal()`
+     * the caller is entitled to make on it.
+     *
+     * Two dials are in flight at the stop: one whose `LINK_UP` has been sent
+     * (the interrupt may land after `SidecarClient.dial` has returned, where
+     * it does not stop `openLink`) and one never answered. After the call
+     * returns, the pool is terminated and what the node holds for the
+     * answered key does not change again (bounded window: 600ms of quiet
+     * wire).
+     */
+    @Test
+    fun `detach returns only after the dial pool has stopped`() {
+        withPeering { rig ->
+            val (answered, silent) = nodeId() to nodeId()
+            val answeredDial = rig.inFlight(answered)
+            rig.inFlight(silent)
+            rig.fake.send(SidecarMessage.LinkUp(answeredDial.link, answered, DIRECTION_OUTBOUND))
+            // The client registers the link before it releases the dial: from
+            // here `SidecarClient.dial` returns, whatever interrupt comes next.
+            await("the answered dial to land") { rig.client.link(answeredDial.link) != null }
+
+            rig.handed += rig.peering.detach().values
+
+            assertTrue(rig.peering.dialPoolTerminated, "no dial-pool thread is still in openLink when detach() returns")
+            val atReturn = rig.discoveredLinks(answered)
+            rig.drain()
+            assertEquals(atReturn, rig.discoveredLinks(answered), "no link was installed after detach() returned")
+        }
+    }
+
+    @Test
+    fun `close returns only after the dial pool has stopped`() {
+        withPeering { rig ->
+            rig.inFlight(nodeId())
+            rig.peering.close()
+            assertTrue(rig.peering.dialPoolTerminated, "no dial-pool thread is still in openLink when close() returns")
+        }
+    }
+
+    /**
+     * The `DIAL` of an interrupted dial has already gone out, and its
+     * `SidecarClient` wait no longer exists, so a late `LINK_UP` for it reaches
+     * the node's inbound handler as an ACCEPTED link the dialling connection
+     * knows nothing about (computenet-iesmw). Decided: the policy closes it —
+     * adopting it would need a seam `IrohConnection` does not have.
+     */
+    @Test
+    fun `a late LINK_UP for a dial interrupted by detach is closed`() {
+        withPeering { rig ->
+            val key = nodeId()
+            val dial = rig.inFlight(key)
+            rig.handed += rig.peering.detach().values
+            rig.assertOrphanClosed(key, dial.link)
+        }
+    }
+
+    @Test
+    fun `a late LINK_UP for a dial interrupted by close is closed`() {
+        withPeering { rig ->
+            val key = nodeId()
+            val dial = rig.inFlight(key)
+            rig.peering.close()
+            rig.assertOrphanClosed(key, dial.link)
+        }
+    }
+
+    /**
+     * A connection handed over with its dial interrupted is down and
+     * quiescent: `heal()` opens exactly one link, and the late answer to the
+     * interrupted `DIAL` does not become a second one.
+     */
+    @Test
+    fun `a connection whose dial detach interrupted heals to exactly one link`() {
+        withPeering { rig ->
+            val key = nodeId()
+            val interrupted = rig.inFlight(key)
+            val connection = assertNotNull(rig.peering.detach()[NodeKey(key)], "the in-flight connection is handed over")
+            rig.handed += connection
+            assertTrue(!connection.peered, "its dial never completed")
+
+            rig.assertOrphanClosed(key, interrupted.link)
+
+            val healed = settle("heal") { connection.heal(30.seconds) }
+            val healDial = rig.fake.nextDial()
+            rig.fake.admit(healDial.link, key)
+            healed()
+            await("the healed Session to be bound") { connection.peered }
+
+            assertEquals(
+                listOf(healDial.link),
+                rig.node.links(key).map { it.linkId },
+                "one link for the key after heal(): the heal's own",
+            )
         }
     }
 

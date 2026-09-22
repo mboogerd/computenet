@@ -13,6 +13,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -140,6 +141,57 @@ class MirrorPeeringTest {
                 arrayOf<String>().extractPeering(discover = true)
             }
             failure.message!! shouldContain "--rig"
+        }
+    }
+
+    /**
+     * computenet-emn9z: the accepting end's ([MirrorWire.Listen]) startup
+     * banner under `--discover` must not claim a `ws://` endpoint built from
+     * the synthetic port, and must not announce a `ws` port for `main` to
+     * report to a caller. The non-discover branches are unchanged, proven by
+     * asserting they still return the same line and the same announced port.
+     */
+    @Nested
+    inner class PeeringBanner {
+
+        @Test
+        fun `discover accepting end advertises for discovery, announces no ws port`() {
+            val settings = MirrorPeeringSettings("bds2", MirrorWire.Listen(0))
+            val (line, announced) = peeringBanner(settings, discover = true, boundWsPort = 54321)
+            line shouldContain "advertising for discovery on the local segment"
+            line shouldNotContain "ws://"
+            announced shouldBe null
+        }
+
+        @Test
+        fun `non-discover accepting end still announces the bound ws port`() {
+            val settings = MirrorPeeringSettings("bds2", MirrorWire.Listen(0))
+            val (line, announced) = peeringBanner(settings, discover = false, boundWsPort = 54321)
+            line shouldContain "ws://localhost:54321"
+            announced shouldBe 54321
+        }
+
+        @Test
+        fun `discovering end is unchanged by the discover flag`() {
+            val settings = MirrorPeeringSettings("bds2", MirrorWire.Dial(MirrorWire.Dial.DISCOVERED))
+            val (line, announced) = peeringBanner(settings, discover = true, boundWsPort = null)
+            line shouldContain "discovering a peer on the local segment"
+            announced shouldBe null
+        }
+
+        @Test
+        fun `dialer with an explicit peer uri is unchanged`() {
+            val settings = MirrorPeeringSettings("bds2", MirrorWire.Dial("ws://localhost:9001"))
+            val (line, announced) = peeringBanner(settings, discover = false, boundWsPort = null)
+            line shouldContain "peered with ws://localhost:9001"
+            announced shouldBe null
+        }
+
+        @Test
+        fun `solo mode is unchanged`() {
+            val (line, announced) = peeringBanner(null, discover = false, boundWsPort = null)
+            line shouldContain "single-node mode"
+            announced shouldBe null
         }
     }
 

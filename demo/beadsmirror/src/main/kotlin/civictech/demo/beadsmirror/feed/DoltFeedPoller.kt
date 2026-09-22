@@ -38,10 +38,37 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  *    are separate conditions because the checkpoint survives a pull, so a
  *    merge never presents as truncation.
  * 3. Otherwise, if the read produced records, hands the whole batch to
- *    [onBatch] and ONLY THEN persists the last record's commit hash as the
- *    new checkpoint — so a crash between steps 3's two halves re-delivers the
- *    batch next tick (acceptable, replay is idempotent downstream) rather
- *    than ever skipping it (not acceptable).
+ *    [onBatch] and ONLY THEN persists the new checkpoint — so a crash between
+ *    steps 3's two halves re-delivers the batch next tick (acceptable, replay
+ *    is idempotent downstream) rather than ever skipping it (not acceptable).
+ * 4. The new checkpoint is the LATER of the last record's commit and the head
+ *    the tick observed before its read — so a commit that carries no
+ *    `issues`/`dependencies` row (an `events`-only no-op `bd update`, a
+ *    `comments`- or `labels`-only commit: none of those tables feed the fold)
+ *    is passed over rather than pinning the checkpoint below head until some
+ *    later commit happens to carry a record (bug computenet-btt30). An empty
+ *    read therefore still advances the checkpoint, to that head.
+ *
+ * ## Why step 4 is sound, and why the head is read BEFORE the feed
+ *
+ * The checkpoint means "every record at or below this commit has been
+ * handed to [onBatch]", not "the commit of the last record" — and nothing
+ * reads it as the latter: [Rebaseline][civictech.demo.beadsmirror.baseline.Rebaseline]
+ * already persists the captured head, whatever that commit touched, and a
+ * record's [FeedPosition] comes from its height in the whole `dolt_log`, never
+ * from the checkpoint, so where the checkpoint sits cannot move a dot. Resume
+ * from a record-less commit is an ordinary [DoltCommitFeed.readFrom] of the
+ * commits after it.
+ *
+ * The head must be the one read BEFORE [DoltCommitFeed.readFrom]: that read's
+ * own `dolt_log` is then a superset of the observed one (bd history is linear
+ * and append-only; a merge is refused by the read itself), so "the read found
+ * no record after the checkpoint" covers every commit up to the observed head.
+ * A head read AFTER the feed could name a commit that landed between the two
+ * reads, carrying records the tick never saw, and persisting it would skip
+ * them. The cost is one `dolt_log` read per tick; a tick whose observed head
+ * already equals the checkpoint stops there, so an idle tick still costs one
+ * read, as it did before.
  *
  * Threading: [start] runs the loop on one daemon background thread; [stop]
  * (also reachable via [close]) requests it to stop and joins that thread
@@ -128,8 +155,9 @@ class DoltFeedPoller(
 
     /**
      * Runs one poll tick synchronously on the calling thread: read the
-     * checkpoint, read the feed, hand any records to [onBatch], persist the
-     * new checkpoint. Raises via [onCondition] (default: throws
+     * checkpoint, observe the head, read the feed, hand any records to
+     * [onBatch], persist the new checkpoint — the observed head when no record
+     * lies beyond it (class KDoc, step 4). Raises via [onCondition] (default: throws
      * [FeedConditionException]) on history truncation, emitting nothing. Any
      * other exception a tick's read raises — including a plain
      * [IllegalArgumentException] that is not [CheckpointNotInHistoryException]
@@ -137,6 +165,11 @@ class DoltFeedPoller(
      */
     fun pollOnce() {
         val after = checkpoint.read()
+        // Observed BEFORE the feed read — see the class KDoc, "Why step 4 is
+        // sound": only a head no newer than the read's own may be persisted.
+        val observed = feed.history()
+        val head = observed.lastOrNull()
+        if (head != null && head == after) return
         val records = try {
             feed.readFrom(after)
         } catch (e: CheckpointNotInHistoryException) {
@@ -146,9 +179,15 @@ class DoltFeedPoller(
             onCondition(FeedCondition.HistoryMerged(e.mergeCommit))
             return
         }
-        if (records.isEmpty()) return
-        onBatch(records)
-        checkpoint.write(records.last().commitHash)
+        val last = records.lastOrNull()
+        if (last != null) onBatch(records)
+        val advanceTo = when {
+            last == null -> head
+            // Record-less commits trail the batch up to the observed head.
+            last.position.commitHeight < observed.lastIndex -> head
+            else -> last.commitHash
+        }
+        if (advanceTo != null && advanceTo != after) checkpoint.write(advanceTo)
     }
 
     /**
