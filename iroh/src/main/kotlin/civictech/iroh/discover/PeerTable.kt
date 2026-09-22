@@ -129,15 +129,24 @@ sealed interface Judgement {
     /**
      * Admit this link. [close]/[closeLinkId] name a link that must be closed
      * quietly because this link won the tie-break against it; both are null
-     * when nothing has to be closed.
+     * when nothing has to be closed. [evicted] names an entry [judge] dropped
+     * to make room for a brand-new key ([DSC2-MDNS-05]); the caller counts
+     * `evicted`. Non-null only when this [Judgement] was reached by creating
+     * a fresh entry — cases 4 and 5 of [judge]'s precedence, never 2 or 3,
+     * which require an entry that already existed.
      */
-    data class Admit(val close: NodeKey?, val closeLinkId: Long?) : Judgement
+    data class Admit(val close: NodeKey?, val closeLinkId: Long?, val evicted: NodeKey? = null) : Judgement
 
     /** This link's direction is the tie-break loser and the other direction is up. Close it with no denial and no blame (aas-D7). The caller counts `tieBreakClosed`. */
     data object CloseQuietly : Judgement
 
-    /** Admit this link and treat [oldKey] as [PeerState.Superseded] by this one (F3-D6, [DSC2-ID-06]). The caller counts `superseded`. */
-    data class Supersede(val oldKey: NodeKey) : Judgement
+    /**
+     * Admit this link and treat [oldKey] as [PeerState.Superseded] by this
+     * one (F3-D6, [DSC2-ID-06]). The caller counts `superseded`. [evicted]
+     * is the same eviction-on-create as [Admit.evicted] — the caller counts
+     * `evicted` too, in addition to `superseded`, when it is non-null.
+     */
+    data class Supersede(val oldKey: NodeKey, val evicted: NodeKey? = null) : Judgement
 
     /**
      * Refuse this link: a LIVE link for the same key is attributed to [live],
@@ -399,10 +408,21 @@ class PeerTable(
      * attempts eviction the same way this path does — so the two link-backed
      * paths agree, and it is that shared, protection-only overshoot (not one
      * path alone) that can pass the table's bound.
+     *
+     * @return the key of the entry this call evicted to make room for [key],
+     *   or null when nothing was evicted — the key was already known, there
+     *   was room, or every existing entry was protected. The caller counts
+     *   `evicted` on a non-null result ([DSC2-OBS-01..03]).
      */
-    fun linkUp(key: NodeKey, direction: LinkDirection, linkId: Long, source: EntrySource) = lock.withLock {
+    fun linkUp(key: NodeKey, direction: LinkDirection, linkId: Long, source: EntrySource): NodeKey? = lock.withLock {
+        var evicted: NodeKey? = null
         val entry = entries[key] ?: run {
-            if (entries.size >= maxRetained) evictionVictim()?.let { entries.remove(it) }
+            if (entries.size >= maxRetained) {
+                evictionVictim()?.let {
+                    entries.remove(it)
+                    evicted = it
+                }
+            }
             val fresh = Entry(
                 key = key,
                 state = PeerState.Retained(addresses = emptyList(), lastSeen = clock(), dueAt = null, attempt = 0),
@@ -414,6 +434,7 @@ class PeerTable(
             fresh
         }
         entry.upLinks[direction] = linkId
+        evicted
     }
 
     /**
@@ -513,8 +534,14 @@ class PeerTable(
         resolved: PeerId,
         now: Long,
     ): Judgement = lock.withLock {
+        var evictedOnCreate: NodeKey? = null
         val entry = entries[key] ?: run {
-            if (entries.size >= maxRetained) evictionVictim()?.let { entries.remove(it) }
+            if (entries.size >= maxRetained) {
+                evictionVictim()?.let {
+                    entries.remove(it)
+                    evictedOnCreate = it
+                }
+            }
             val fresh = Entry(
                 key = key,
                 state = PeerState.Retained(addresses = emptyList(), lastSeen = now, dueAt = null, attempt = 0),
@@ -554,11 +581,11 @@ class PeerTable(
         entry.state = PeerState.Peered(direction, linkId, resolved, since = now)
         if (old != null) {
             old.state = PeerState.Superseded(byKey = key, since = now)
-            return Judgement.Supersede(old.key)
+            return Judgement.Supersede(old.key, evicted = evictedOnCreate)
         }
 
         // 5. Nothing else holds this key or this identity.
-        return Judgement.Admit(close = null, closeLinkId = null)
+        return Judgement.Admit(close = null, closeLinkId = null, evicted = evictedOnCreate)
     }
 
     /** Every retained key, as an observability surface sees it. A copy; the caller may hold it. */
