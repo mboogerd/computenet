@@ -529,6 +529,68 @@ class DiscoveredPeeringTest {
         }
     }
 
+    /**
+     * Reflective access to the private `DiscoveredPeering.onAdmitted(Command.Admitted)`,
+     * the same technique [seedDirectly] uses for `seed`. `onAdmitted`'s own
+     * KDoc argues its `evicted` increment is ordinarily unreachable because
+     * the queue always drains `Command.LinkUp` for a link before
+     * `Command.Admitted` for the same link, so the key's entry already exists
+     * by the time this line runs and `table.linkUp` returns null. Calling
+     * `onAdmitted` directly, with a [IrohNode.LinkView] for a key this
+     * policy's queue has never seen at all, sidesteps that ordering the same
+     * way `seedDirectly` sidesteps `seed`'s race with `onLinkUp` — it proves
+     * the increment on its own terms rather than by forcing the two-link
+     * interleaving the KDoc's second paragraph describes.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.onAdmitted`, drop
+     * `if (evicted != null) counters.evicted.increment()` and the `evicted`
+     * assertion below reddens.
+     */
+    private fun DiscoveredPeering.onAdmittedDirectly(view: IrohNode.LinkView) {
+        val admittedClass = Class.forName("civictech.iroh.discover.DiscoveredPeering\$Command\$Admitted")
+        val ctor = admittedClass.getDeclaredConstructor(IrohNode.LinkView::class.java)
+        ctor.isAccessible = true
+        val command = ctor.newInstance(view)
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("onAdmitted", admittedClass)
+        method.isAccessible = true
+        method.invoke(this, command)
+    }
+
+    @Test
+    fun `onAdmitted evicts to make room for a link the queue has not yet turned into an entry, and it alone is counted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // never answered: stays Dialling, protected from eviction
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing has been evicted yet")
+
+            val fresh = nodeId()
+            val link = IrohNode.LinkView(
+                linkId = 4343L,
+                remoteNodeId = fresh,
+                direction = LinkDirection.INBOUND,
+                source = IrohNode.LinkSource.ACCEPTED,
+                peered = true,
+                attributedPeer = PeerId("fresh-identity"),
+            )
+            rig.peering.onAdmittedDirectly(link)
+
+            assertEquals(1L, rig.peering.counters.evicted.count, "onAdmitted's own linkUp call evicted to make room")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(fresh), "onAdmitted created the new key's entry directly, off the queue")
+        }
+    }
+
     // --------------------------------------- DIAL-06: re-dial, and expiry cancels
 
     @Test
