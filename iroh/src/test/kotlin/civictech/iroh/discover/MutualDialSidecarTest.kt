@@ -278,6 +278,13 @@ class MutualDialSidecarTest {
 
         fun viewOf(key: ByteArray): PeerView? = peering.snapshot().firstOrNull { it.keyHex == NodeKey(key).hex }
 
+        /**
+         * Frames dropped on this node's dialled link to [other] after its gate
+         * closed it quietly (computenet-3mcum) — printed, not asserted: how
+         * many of the peer's frames were in flight is the race, not a property.
+         */
+        fun quietCloseDrops(other: Endpoint): Long? = peering.connectionFor(NodeKey(other.own))?.quietCloseDrops
+
         override fun close() {
             runCatching { peering.close() }
             runCatching { node.close() }
@@ -402,6 +409,10 @@ class MutualDialSidecarTest {
             assertEquals(1L, hi.peering.counters.tieBreakClosed.count, "$t: hi counted one tie-break close")
             assertEquals(0L, lo.node.admissionDenialCount, "$t: lo refused nothing")
             assertEquals(0L, hi.node.admissionDenialCount, "$t: hi refused nothing")
+            // No pre-hello drop in any order. In TOGETHER, lo can admit hi's
+            // dialler hello and announce on it before hi's gate closes that link
+            // quietly; those frames reach hi with no ingress and are counted as
+            // quiet-close drops, never as pre-hello drops (computenet-3mcum).
             assertEquals(0L, lo.node.preHelloDrops, "$t: nothing was dropped on lo")
             assertEquals(0L, hi.node.preHelloDrops, "$t: nothing was dropped on hi")
             assertTrue(lo.peering.counters.refusedBy().isEmpty(), "$t: no refusal attributed on lo: ${lo.peering.counters.refusedBy()}")
@@ -426,7 +437,8 @@ class MutualDialSidecarTest {
 
             println(
                 "[md1dt] $t PASSED: both dialled (barrier arrivals ${barrier.arrivals}), " +
-                    "lo tie-break closes=$loCount, stray dials lo=${lo.proxy.otherDials.get()} hi=${hi.proxy.otherDials.get()}",
+                    "lo tie-break closes=$loCount, stray dials lo=${lo.proxy.otherDials.get()} hi=${hi.proxy.otherDials.get()}, " +
+                    "quiet-close drops lo=${lo.quietCloseDrops(hi)} hi=${hi.quietCloseDrops(lo)}",
             )
         } catch (failure: Throwable) {
             // What each node held when the trial failed: the one thing a CI log
@@ -436,7 +448,8 @@ class MutualDialSidecarTest {
                 println(
                     "[md1dt] $t FAILED state ${e.label}: links=${e.node.links(peer).map { "${it.linkId}/${it.direction}/${it.source}/peered=${it.peered}" }} " +
                         "view=${e.viewOf(peer)?.state} dialsToPeer=${e.proxy.dialsToPeer.get()} ${e.peering.counters} " +
-                        "denials=${e.node.admissionDenialCount} linkErrors=${e.node.linkErrors}",
+                        "denials=${e.node.admissionDenialCount} preHelloDrops=${e.node.preHelloDrops} " +
+                        "quietCloseDrops=${e.quietCloseDrops(endpoints.first { it !== e })} linkErrors=${e.node.linkErrors}",
                 )
             }
             throw failure
