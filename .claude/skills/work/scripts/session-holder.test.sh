@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for session-holder.sh. Uses REAL processes rather than a ps stub: the
 # whole point of the token is that it tracks a live OS process, and a stubbed
-# ps would test the parser instead of the property. Expect "12 passed, 0 failed".
+# ps would test the parser instead of the property. Expect "15 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-holder.sh"}

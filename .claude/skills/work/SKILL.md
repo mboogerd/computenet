@@ -520,8 +520,8 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 1. Merge `origin/main` only when a commit landed since the fork touches this
    PR's files and is not independent of it (a shared hunk, or a change to a rule,
    name or path the other relies on) — then push and send it back to a reviewer.
-   Disjoint commits need no merge (the ruleset sets `strict: false`, and chasing
-   a busy `main` never terminates): ship the green head you have.
+   Disjoint commits need no merge (read the ruleset — no required check wants an
+   up-to-date branch — and chasing a busy `main` never ends): ship the green head.
 2. Local HEAD must equal `gh pr view <pr> --json headRefOid`, and `gh pr list
    --head <branch>` must show only your PR.
 3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row must
@@ -546,7 +546,7 @@ routes 2b, 3 and 4 may still dispatch a breakdown.
 | 0 | a capacity lane frees while a unit runs | start a second unit if capacity allows, its claim is disjoint from running units, build contention is handled (scoped gate or no Gradle), and it gets its own branch and PR; candidate from route 3 or 4. Else leave the lane idle and note it on the epic |
 | 2b | your feature is blocked by a sibling feature (check before 1) | park it naming the blocker; work the blocker if it fits the budget (5a), else break it down unclaimed |
 | 1 | another feature under the epic is ready or in progress | 5a (sub-epic → step 4) |
-| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY`/`BEHIND` → resolve; merged → fetch, start; else park |
+| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY` → resolve; merged → fetch, start; else park |
 | 3 | remaining work is blocked only by an item in another epic | acquire the item: pull; `epic-of.sh` — skip if its epic is held by someone or touched within 15 minutes (an `(unparented)` item skips this test); `claim-item.sh`; push |
 | 4 | the epic is dry, budget remains | continuation work, below |
 | 5 | nothing can progress | step 6 |
