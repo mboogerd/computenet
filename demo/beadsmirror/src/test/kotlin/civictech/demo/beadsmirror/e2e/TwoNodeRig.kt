@@ -298,6 +298,12 @@ class TwoNodeRig private constructor(
      * - `EchoSuppressionTwoNodeTest`, `WriteBackCloseTwoNodeTest` (already, by
      *   computenet-rl2qx and computenet-khqek).
      * - `WriteBackTwoNodeTest`, `HeadlineLivenessTest` (by this bug).
+     * - `PullRebaselineTest` (by computenet-r5gah): its post-start
+     *   `pair.pusher.run("update", a1, "--title", …)`, on the listener's own
+     *   workspace and followed by a `rig.await` on the dialer's fold, now
+     *   goes through `rig.mutate(listener, "update", a1, "--title", …)`. Its
+     *   pre-start `createIssue` and `dep add` calls stay direct — pre-start
+     *   and immune by the rule above.
      *
      * Immune, and why:
      * - **Pre-start seeding** — `seedOnBoth` in `WriteBackTwoNodeTest`,
@@ -324,15 +330,10 @@ class TwoNodeRig private constructor(
      * then awaits equal folds. The creates want [createIssue]; the schedule
      * driver additionally needs `ScheduleStep.apply` to take a [Node] rather
      * than a bare workspace, which is why it is a separate item and not a
-     * two-line edit. `PullRebaselineTest` belongs here too, and NOT in the
-     * immune list above: it *is* a rig test — it passes
-     * [civictech.demo.beadsmirror.BdScratchWorkspace.createSyncedPair]'s two
-     * workspaces straight into [create], so the listener node owns
-     * `pair.pusher` — and its `pair.pusher.run("update", a1, "--title", …)`
-     * runs after [startListener]/[startDialer] and is followed immediately by
-     * a `rig.await` on the dialer's fold, which is exactly the non-immune
-     * shape. (Its `createIssue` calls there are pre-start and immune by the
-     * rule above.) Corrected by this bug's feature review, 2026-09-18.
+     * two-line edit. `PullRebaselineTest` is NOT in this set — it *was*
+     * miscategorized as immune above, corrected by this bug's feature
+     * review 2026-09-18, and converted by computenet-r5gah; see the
+     * "Routed through" list above.
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
