@@ -55,6 +55,7 @@ internal class Topic(
     val dims = TreeMap<String, Dimension>()
     val ideas = TreeMap<String, Idea>()
     val notes = TreeMap<String, Note>()
+    val overrides = TreeMap<String, Double>()
     var revealed: Boolean = false
 }
 
@@ -178,6 +179,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             "idea" -> addIdea(t(), Idea(s("id"), s("title"), s("description"), s("proposer")))
             "unidea" -> removeIdea(t(), s("id"))
             "note" -> setNote(t(), s("idea"), s("text"), s("author"))
+            "override" -> setOverride(t(), s("idea"), s("score").toDouble())
+            "unoverride" -> clearOverride(t(), s("idea"))
             "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
             "unrate" -> unrate(rk())
             else -> error("unknown journal op in line: $line")
@@ -286,11 +289,12 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         )
     }
 
-    /** Cascades: unrates every rating on the idea (journaled as `unrate`), then drops it and its note (no extra line: replaying `unidea` drops it the same way, w0i5h-D2). */
+    /** Cascades: unrates every rating on the idea (journaled as `unrate`), then drops it, its note and its override (no extra line: replaying `unidea` drops them the same way, w0i5h-D2/w61az-D1). */
     private fun removeIdea(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.idea == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
         topics.getValue(topic.value).ideas.remove(id)
         topics.getValue(topic.value).notes.remove(id)
+        topics.getValue(topic.value).overrides.remove(id)
         record("""{"op":"unidea","topic":${esc(topic.value)},"id":${esc(id)}}""")
     }
 
@@ -311,6 +315,27 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             """{"op":"note","topic":${esc(topic.value)},"idea":${esc(idea)},"text":${esc(text)},""" +
                 """"author":${esc(author)}}""",
         )
+    }
+
+    /**
+     * The facilitator's explicit consensus score per idea (epic computenet-9y79n R16, w61az-D1/D3):
+     * kept on [Topic.overrides] keyed by idea id, like [Topic.notes], never as an [Idea] field — an
+     * idea edit ([addIdea]) replaces `topic.ideas[id]` wholesale and would otherwise drop it. Never
+     * enters the dataflow: it is a write-side ranking key read only by [aggregateJson]. Idempotent
+     * (like [rate]): setting the same score twice journals no line.
+     */
+    private fun setOverride(topic: TopicId, idea: String, score: Double) = synchronized(state) {
+        val overrides = topics.getValue(topic.value).overrides
+        if (overrides[idea] == score) return@synchronized
+        overrides[idea] = score
+        record("""{"op":"override","topic":${esc(topic.value)},"idea":${esc(idea)},"score":$score}""")
+    }
+
+    /** Clearing an absent override journals no line (idempotent, like [unrate]). */
+    private fun clearOverride(topic: TopicId, idea: String) = synchronized(state) {
+        val overrides = topics.getValue(topic.value).overrides
+        if (overrides.remove(idea) == null) return@synchronized
+        record("""{"op":"unoverride","topic":${esc(topic.value)},"idea":${esc(idea)}}""")
     }
 
     /** [milli] is thousandths; journaled via [RatingScale.format], so an integer rating writes the v1 line. */
@@ -346,7 +371,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * `/topics[/{t}[/ideas[/{i}[/note]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/me|/aggregate]]`,
+     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/me|/aggregate]]`,
      * dispatched here.
      */
     private fun handleTopics(ex: HttpExchange): String {
@@ -365,6 +390,9 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             seg.size == 4 && seg[1] == "ideas" && seg[3] == "note" && method == "PUT" ->
                 putNote(topic, seg[2], ex.jsonBody())
             seg.size == 4 && seg[1] == "ideas" && seg[3] == "note" -> fail(405, "method not allowed")
+            seg.size == 4 && seg[1] == "ideas" && seg[3] == "override" && method == "PUT" ->
+                putOverride(topic, seg[2], ex.jsonBody())
+            seg.size == 4 && seg[1] == "ideas" && seg[3] == "override" -> fail(405, "method not allowed")
             seg.size == 2 && seg[1] == "dimensions" && method == "POST" -> postDimension(topic, ex.jsonBody())
             seg.size == 3 && seg[1] == "dimensions" && method == "PUT" -> putDimension(topic, seg[2], ex.jsonBody())
             seg.size == 3 && seg[1] == "dimensions" && method == "DELETE" ->
@@ -468,6 +496,30 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             val note = topic.notes[id]
             """{"id":${esc(id)},"note":${esc(note?.text ?: "")},"noteBy":${esc(note?.author ?: "")}}"""
         }
+    }
+
+    /**
+     * `PUT /topics/{t}/ideas/{i}/override` `{creator, score}` (w61az-D5): 404 unknown idea first;
+     * then [requireCreator]; then `score`: JSON `null` clears; a non-string finite number in (0, 9] —
+     * the computed score's own range (w61az-D4) — sets; anything else (absent, a string, ≤0, >9) is a
+     * 400 and changes nothing. The response carries only the resulting override — no participant name.
+     */
+    private fun putOverride(topic: Topic, id: String, json: JsonObject): String {
+        if (id !in topic.ideas) fail(404, "no such idea")
+        requireCreator(topic, json.str("creator"))
+        val raw = json["score"]
+        val score: Double? = when {
+            raw is JsonNull ->
+                null
+            raw is JsonPrimitive && !raw.isString ->
+                raw.content.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 && it <= 9.0 }
+                    ?: fail(400, "score must be a number in (0, 9] or null")
+            else -> fail(400, "score must be a number in (0, 9] or null")
+        }
+        synchronized(state) {
+            if (score == null) clearOverride(topic.id, id) else setOverride(topic.id, id, score)
+        }
+        return """{"id":${esc(id)},"override":${score?.let(::num) ?: "null"}}"""
     }
 
     /** Creator-only (k1d4g-D6, a deliberate change from v1's open delete); an unknown idea is 404 first. */
@@ -642,25 +694,30 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * Ranked from the fusion read model (computenet-k1d4g-D4): ideas with a
-     * non-null score by score desc, rating count desc, id asc; then every other
-     * idea — a [Scored] whose score is null (it still carries its per-dimension
-     * stats), or no [Scored] at all — by id with `"rank":null`.
+     * Ranked by "effective" score (w61az-D6): `topic.overrides[id] ?: scored[id]?.score` — the
+     * facilitator's consensus override when set, else the unchanged computed score. Ideas with a
+     * non-null effective are ranked, by effective desc, rating count desc (0 with no [Scored]), id
+     * asc; every other idea — no override and a null or absent computed score — is unranked, by id
+     * with `"rank":null`. `score` keeps its computed meaning unchanged in every row; `override` is the
+     * facilitator's raw value, null unless set. An override on an idea with no [Scored] entry (or a
+     * null computed score) still ranks it, carrying `"score":null` and its otherwise-empty byDim/tail.
      *
      * `participants` (top level) and each row's `raters` are COUNTS of distinct participants with a
      * live rating, read from the synchronous write-side [ratings] index (k1d4g-D7): no participant
-     * name ever enters the aggregate. `value`/`cost` are the idea's weighted means per side, null when
-     * that side is unrated; a byDim `contribution` is null on a cost dimension and whenever the score is.
+     * name ever enters the aggregate — the override carries none either (w61az-D2). `value`/`cost` are
+     * the idea's weighted means per side, null when that side is unrated; a byDim `contribution` is
+     * null on a cost dimension and whenever the score is.
      */
     private fun aggregateJson(topic: Topic): String {
         val w = topic.dims.keys.joinToString(",", "{", "}") { d ->
             "${esc(d)}:${weights[DimKey(topic.id, d)]?.weight?.let(::num) ?: "null"}"
         }
+        fun effective(id: String) = topic.overrides[id] ?: scored[IdeaKey(topic.id, id)]?.score
         val ranked = topic.ideas.keys
-            .mapNotNull { id -> scored[IdeaKey(topic.id, id)]?.takeIf { it.score != null }?.let { id to it } }
+            .mapNotNull { id -> effective(id)?.let { id to it } }
             .sortedWith(
-                compareByDescending<Pair<String, Scored>> { it.second.score }
-                    .thenByDescending { count(it.second) }
+                compareByDescending<Pair<String, Double>> { it.second }
+                    .thenByDescending { (id, _) -> scored[IdeaKey(topic.id, id)]?.let(::count) ?: 0L }
                     .thenBy { it.first },
             )
         val rankedIds = ranked.mapTo(HashSet()) { it.first }
@@ -673,14 +730,16 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         fun tail(id: String, s: Scored?) =
             """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
                 """"raters":${ratersOf[id] ?: 0}}"""
-        val rows = ranked.mapIndexed { i, (id, s) ->
+        val rows = ranked.mapIndexed { i, (id, _) ->
+            val s = scored[IdeaKey(topic.id, id)] // present with a score (possibly null), or absent
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":${num(s.score!!)},"split":${s.split},"ratings":${count(s)},"byDim":${byDim(s)},""" +
+                """"score":${s?.score?.let(::num) ?: "null"},"override":${topic.overrides[id]?.let(::num) ?: "null"},""" +
+                """"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},"byDim":${s?.let(::byDim) ?: "{}"},""" +
                 tail(id, s)
         } + topic.ideas.keys.filter { it !in rankedIds }.map { id ->
             val s = scored[IdeaKey(topic.id, id)] // present with a null score, or absent
             """{"rank":null,"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
-                """"score":null,"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},""" +
+                """"score":null,"override":null,"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},""" +
                 """"byDim":${s?.let(::byDim) ?: "{}"},""" + tail(id, s)
         }
         val participants = live.mapTo(HashSet()) { it.participant }.size
