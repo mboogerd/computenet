@@ -71,6 +71,15 @@ internal data class Idea(val id: String, val title: String, val description: Str
  */
 internal data class Note(val text: String, val author: String)
 
+/**
+ * Whose pairwise judgements on which dimension (k6rrk-D2): one participant's set on one dimension of
+ * one topic, the unit [PairwiseFit] re-fits. Ordered by [AlignmentApp]'s `JUDGE_ORDER`.
+ */
+internal data class JudgeKey(val topic: TopicId, val dim: String, val participant: String)
+
+/** A judgement outcome's wire string, on the API and in the journal: "a", "b", "equal". */
+private val Outcome.wire: String get() = name.lowercase()
+
 /** An HTTP failure: answered as `{"error": error}` with [status]. */
 private class Fail(val status: Int, val error: String) : RuntimeException(error, null, false, false)
 
@@ -109,6 +118,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private val topics = TreeMap<String, Topic>()
     private val ratings = HashMap<RatingKey, Int>() // thousandths (RatingScale)
     private val weights = HashMap<DimKey, DimConfig>() // every direction VALUE until the journal/API carry one
+    // pairwise judgements (k6rrk-D2): per (topic, dim, participant), keyed by the unordered pair id "min|max"
+    private val judgements = TreeMap<JudgeKey, TreeMap<String, Judgement>>(JUDGE_ORDER)
 
     // async read model, folded off the fusion outlet
     private var scored: Map<IdeaKey, Scored> = emptyMap()
@@ -180,6 +191,11 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             "note" -> setNote(t(), s("idea"), s("text"), s("author"))
             "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
             "unrate" -> unrate(rk())
+            "judge" -> judge(
+                JudgeKey(t(), s("dim"), s("participant")),
+                Judgement(s("a"), s("b"), parseWire(s("outcome"), Outcome.entries) { it.wire }),
+            )
+            "unjudge" -> unjudge(JudgeKey(t(), s("dim"), s("participant")))
             else -> error("unknown journal op in line: $line")
         }
     }
@@ -218,6 +234,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun removeDimension(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.dim == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
         topics.getValue(topic.value).dims.remove(id)
+        judgements.keys.removeIf { it.topic == topic && it.dim == id } // no line, no refit (k6rrk-D3)
         weights.remove(DimKey(topic, id))
         record("""{"op":"undimension","topic":${esc(topic.value)},"id":${esc(id)}}""")
         weightOps.remove(DimKey(topic, id))
@@ -291,6 +308,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         ratings.keys.filter { it.topic == topic && it.idea == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
         topics.getValue(topic.value).ideas.remove(id)
         topics.getValue(topic.value).notes.remove(id)
+        dropJudgementsOn(topic, id) // no line, no refit of the survivors (k6rrk-D3)
         record("""{"op":"unidea","topic":${esc(topic.value)},"id":${esc(id)}}""")
     }
 
@@ -334,6 +352,54 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         ratingOps.remove(key)
     }
 
+    /**
+     * Stores one pairwise judgement (k6rrk-D2/D3), normalized so `a < b` by id with the outcome
+     * re-expressed, replacing any earlier judgement of the same unordered pair; an identical judgement
+     * is a no-op (no line, no refit). Otherwise it journals a `judge` line, re-fits the participant's
+     * whole set on the dimension with [PairwiseFit] and writes every derived rating through [rate] — the
+     * slider's own op — so the ratings follow as ordinary `rate` lines, which replay as no-ops after the
+     * `judge` line has re-derived the same values (the fit is deterministic over the set).
+     */
+    private fun judge(key: JudgeKey, judgement: Judgement) = synchronized(state) {
+        val j = if (judgement.a <= judgement.b) judgement else Judgement(
+            judgement.b, judgement.a,
+            when (judgement.outcome) { Outcome.A -> Outcome.B; Outcome.B -> Outcome.A; Outcome.EQUAL -> Outcome.EQUAL },
+        )
+        val set = judgements.getOrPut(key) { TreeMap() }
+        val pair = j.a + "|" + j.b
+        if (set[pair] == j) return@synchronized
+        set[pair] = j
+        record(
+            """{"op":"judge","topic":${esc(key.topic.value)},"dim":${esc(key.dim)},""" +
+                """"participant":${esc(key.participant)},"a":${esc(j.a)},"b":${esc(j.b)},"outcome":${esc(j.outcome.wire)}}""",
+        )
+        PairwiseFit.ratings(set.values).forEach { (idea, milli) ->
+            rate(RatingKey(key.topic, idea, key.dim, key.participant), milli)
+        }
+    }
+
+    /** Clears the participant's judgements on the dimension (no line when none); the derived ratings stay (k6rrk-D3). */
+    private fun unjudge(key: JudgeKey): Int = synchronized(state) {
+        val cleared = judgements.remove(key)?.size ?: 0
+        if (cleared == 0) return@synchronized 0
+        record(
+            """{"op":"unjudge","topic":${esc(key.topic.value)},"dim":${esc(key.dim)},""" +
+                """"participant":${esc(key.participant)}}""",
+        )
+        cleared
+    }
+
+    /** The idea-removal cascade: every participant's judgements mentioning [idea], on every dimension. */
+    private fun dropJudgementsOn(topic: TopicId, idea: String) {
+        val it = judgements.entries.iterator()
+        while (it.hasNext()) {
+            val (key, set) = it.next()
+            if (key.topic != topic) continue
+            set.values.removeIf { j -> j.a == idea || j.b == idea }
+            if (set.isEmpty()) it.remove()
+        }
+    }
+
     // ── HTTP ─────────────────────────────────────────────────────────────
 
     private fun serve(ex: HttpExchange, handler: () -> String) {
@@ -346,7 +412,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * `/topics[/{t}[/ideas[/{i}[/note]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/me|/aggregate]]`,
+     * `/topics[/{t}[/ideas[/{i}[/note]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/judge|/me|/aggregate]]`,
      * dispatched here.
      */
     private fun handleTopics(ex: HttpExchange): String {
@@ -373,6 +439,9 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             seg.size == 2 && seg[1] == "policy" && method == "PUT" -> putPolicy(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "reveal" && method == "POST" -> postReveal(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "rate" && method == "POST" -> postRate(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "judge" && method == "POST" -> postJudge(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "judge" && method == "DELETE" ->
+                deleteJudge(topic, ex.query("participant"), ex.query("dim"))
             seg.size == 2 && seg[1] == "me" && method == "GET" ->
                 return meJson(topic, name(ex.query("participant"), "participant"))
             seg.size == 2 && seg[1] == "aggregate" && method == "GET" ->
@@ -579,6 +648,41 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         return """{"ok":true}"""
     }
 
+    /**
+     * `{participant, dim, a, b, outcome}` (k6rrk-D4): checks in order before any write — participant,
+     * a known dim, two known ideas, `a != b`, outcome "a" | "b" | "equal" — then [judge]. Answers
+     * `{"judged":N,"ratings":{idea:value}}`: the participant's judged pairs on the dim and the values
+     * [PairwiseFit] derives from them, ideas in id order.
+     */
+    private fun postJudge(topic: Topic, json: JsonObject): String {
+        val participant = name(json.str("participant"), "participant")
+        val dim = json.str("dim")
+        val a = json.str("a")
+        val b = json.str("b")
+        return synchronized(state) {
+            if (dim == null || dim !in topic.dims) fail(400, "no such dimension")
+            if (a == null || b == null || a !in topic.ideas || b !in topic.ideas) fail(400, "no such idea")
+            if (a == b) fail(400, "a and b must differ")
+            val outcome = wireField(json, "outcome", Outcome.entries) { it.wire }
+                ?: fail(400, "outcome must be one of \"a\", \"b\", \"equal\"")
+            val key = JudgeKey(topic.id, dim, participant)
+            judge(key, Judgement(a, b, outcome))
+            val set = judgements[key].orEmpty()
+            val derived = PairwiseFit.ratings(set.values).entries
+                .joinToString(",", "{", "}") { (idea, milli) -> "${esc(idea)}:${RatingScale.format(milli)}" }
+            """{"judged":${set.size},"ratings":$derived}"""
+        }
+    }
+
+    /** `?participant=&dim=`: clears that participant's judgements on the dim (k6rrk-D4); 400 when dim is missing or unknown. */
+    private fun deleteJudge(topic: Topic, participant: String?, dim: String?): String {
+        val who = name(participant, "participant")
+        return synchronized(state) {
+            if (dim.isNullOrEmpty() || dim !in topic.dims) fail(400, "no such dimension")
+            """{"cleared":${unjudge(JudgeKey(topic.id, dim, who))}}"""
+        }
+    }
+
     private fun requireCreator(topic: Topic, creator: String?) {
         if (creator == null || creator.trim() != topic.creator) fail(403, "only the topic creator may do this")
     }
@@ -638,7 +742,13 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
                 """"ratings":""" + mine.entries.joinToString(",", "{", "}") { (d, v) -> "${esc(d)}:${v?.let(RatingScale::format) ?: "null"}" } +
                 ""","rated":${mine.values.count { it != null }},"total":${mine.size}}"""
         }
-        """{"topic":${esc(topic.id.value)},"participant":${esc(participant)},"ideas":$ideas}"""
+        // the caller's own pairwise judgements only (k6rrk-D5), sorted by (dim, pair id)
+        val judged = judgements.entries.filter { (k, _) -> k.topic == topic.id && k.participant == participant }
+            .flatMap { (k, set) -> set.values.map { k.dim to it } }
+            .joinToString(",", "[", "]") { (d, j) ->
+                """{"dim":${esc(d)},"a":${esc(j.a)},"b":${esc(j.b)},"outcome":${esc(j.outcome.wire)}}"""
+            }
+        """{"topic":${esc(topic.id.value)},"participant":${esc(participant)},"ideas":$ideas,"judgements":$judged}"""
     }
 
     /**
@@ -736,6 +846,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
 
         val RATING_ORDER: Comparator<RatingKey> =
             compareBy({ it.topic.value }, { it.idea }, { it.dim }, { it.participant })
+
+        val JUDGE_ORDER: Comparator<JudgeKey> = compareBy({ it.topic.value }, { it.dim }, { it.participant })
     }
 }
 
