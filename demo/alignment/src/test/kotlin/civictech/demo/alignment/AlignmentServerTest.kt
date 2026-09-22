@@ -371,6 +371,52 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the drill-down dialog roots and its slice has no dollar sign`() = withApp { _, probe ->
+        // computenet-w0i5h.2 (w0i5h-D14): the Board's split drill-down is a native dialog in the
+        // Board slice; its roots are served, the slice stays template-literal-free, and the
+        // per-topic URL still serves the same bytes.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        assertTrue("""<dialog id="drill"""" in body, "drill dialog root")
+        for (id in listOf(
+            "drillClose", "drillTitle", "drillDims", "drillPlot", "drillStats",
+            "drillOutlier", "drillNote", "drillNoteSave", "drillNoteBy",
+        )) {
+            assertTrue("""id="$id"""" in body, "$id root")
+        }
+        assertTrue(Regex("""<textarea id="drillNote"[^>]*maxlength="4000"""").containsMatchIn(body), "note textarea capped at 4000")
+        assertTrue('$' !in DRILLDOWN_VIEW, "no dollar sign in DRILLDOWN_VIEW")
+        assertTrue(DRILLDOWN_VIEW in BOARD_VIEW, "the drill-down is part of the Board slice")
+        assertEquals(body, probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
+    fun `the page serves the Compare roots and an experimental tab that is not the default`() = withApp { _, probe ->
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        assertTrue(page.headers().firstValue("Content-Type").orElse("").startsWith("text/html"), "${page.headers()}")
+        val body = page.body()
+        assertTrue("""id="compare"""" in body, "compare section root")
+        assertTrue("""id="tabCompare"""" in body, "compare tab button")
+        for (root in listOf("cmpPicker", "cmpAxis", "cmpTray", "cmpLow", "cmpHigh", "cmpDirection", "cmpOthersWrap", "cmpOthers", "cmpDesc")) {
+            assertTrue("""id="$root"""" in body, "$root root")
+        }
+        // the experimental badge sits inside the compare tab button, not merely somewhere on the page
+        val tabStart = body.indexOf("""id="tabCompare"""")
+        assertTrue(tabStart >= 0, "compare tab button")
+        val tabButton = body.substring(tabStart, body.indexOf("</button>", tabStart))
+        assertTrue("experimental" in tabButton, "compare tab reads experimental: $tabButton")
+        assertTrue('$' !in COMPARE_VIEW, "COMPARE_VIEW is a plain raw string")
+        // Rate stays the default tab: the served activeTab() still falls through to 'rate'
+        val fnStart = body.indexOf("function activeTab()")
+        assertTrue(fnStart >= 0, "activeTab() is served")
+        val fnEnd = body.indexOf("\n}", fnStart)
+        assertTrue(body.substring(fnStart, fnEnd).trimEnd().endsWith("return 'rate';"), body.substring(fnStart, fnEnd))
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
     fun `the events stream opens on the same frame as state`() = withApp { app, probe ->
         seed(probe)
         rate(probe, "ann", "a", "impact", "8")
@@ -420,6 +466,92 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `a discussion note is created, updated, cleared and gated by the idea policy`() = withApp { app, probe ->
+        seed(probe)
+
+        val client = boundedHttpClient()
+        val frames = LinkedBlockingQueue<String>()
+        try {
+            CompletableFuture.runAsync {
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${app.boundPort}/events")).build(),
+                    HttpResponse.BodyHandlers.ofLines(),
+                ).body().filter { it.startsWith("data: ") }.forEach { frames.put(it.removePrefix("data: ")) }
+            }
+            assertEquals(probe.state(), frames.poll(10, TimeUnit.SECONDS), "initial frame")
+
+            val put1 = probe.putJson("""{"participant":"bob","text":"ship A first"}""", "/topics/t/ideas/a/note")
+            assertEquals(200, put1.statusCode(), put1.body())
+            assertEquals("""{"id":"a","note":"ship A first","noteBy":"bob"}""", put1.body())
+            probe.await { """"id":"a"""" in it && """"note":"ship A first","noteBy":"bob"}""" in it }
+            val frame1 = frames.poll(10, TimeUnit.SECONDS)
+            assertTrue(frame1 != null && """"note":"ship A first","noteBy":"bob"}""" in frame1, "note frame: $frame1")
+        } finally {
+            client.shutdownNow()
+        }
+
+        // a second author overwrites: last write wins, noteBy tracks the last author
+        val put2 = probe.putJson("""{"participant":"ann","text":"actually B"}""", "/topics/t/ideas/a/note")
+        assertEquals(200, put2.statusCode(), put2.body())
+        assertEquals("""{"id":"a","note":"actually B","noteBy":"ann"}""", put2.body())
+        probe.await { """"note":"actually B","noteBy":"ann"}""" in it }
+
+        // the facilitator policy gates the note the same way it gates idea authoring
+        assertEquals(200, probe.putJson("""{"creator":"cat","ideas":"facilitator"}""", "/topics/t/policy").statusCode())
+        val denied = probe.putJson("""{"participant":"bob","text":"nope"}""", "/topics/t/ideas/a/note")
+        assertEquals(403, denied.statusCode(), denied.body())
+        assertTrue(""""note":"actually B","noteBy":"ann"}""" in probe.state(), "unchanged after the 403: ${probe.state()}")
+        // the creator may still write under the facilitator policy
+        val byCreator = probe.putJson("""{"participant":"cat","text":"final call"}""", "/topics/t/ideas/a/note")
+        assertEquals(200, byCreator.statusCode(), byCreator.body())
+        probe.await { """"note":"final call","noteBy":"cat"}""" in it }
+
+        // text: "" clears the note
+        val clear = probe.putJson("""{"participant":"cat","text":""}""", "/topics/t/ideas/a/note")
+        assertEquals(200, clear.statusCode(), clear.body())
+        assertEquals("""{"id":"a","note":"","noteBy":""}""", clear.body())
+        probe.await { """"note":"","noteBy":""}""" in it }
+
+        assertEquals(404, probe.putJson("""{"participant":"cat","text":"x"}""", "/topics/t/ideas/zzz/note").statusCode())
+        assertEquals(400, probe.putJson("""{"participant":"cat"}""", "/topics/t/ideas/a/note").statusCode(), "missing text")
+        assertEquals(
+            400,
+            probe.putJson("""{"participant":"cat","text":5}""", "/topics/t/ideas/a/note").statusCode(),
+            "text not a string",
+        )
+        assertEquals(
+            400,
+            probe.putJson("""{"participant":"cat","text":"${"x".repeat(4001)}"}""", "/topics/t/ideas/a/note").statusCode(),
+            "text over 4000 chars",
+        )
+        assertEquals(405, probe.get("/topics/t/ideas/a/note").statusCode())
+        assertEquals(
+            400,
+            probe.putJson("""{"participant":"${"x".repeat(41)}","text":"y"}""", "/topics/t/ideas/a/note").statusCode(),
+            "participant over 40 chars",
+        )
+    }
+
+    @Test
+    fun `an identical note PUT is idempotent and journals no line`() {
+        val journal = tmpJournal()
+        withApp(journal) { _, probe ->
+            seed(probe)
+            val put = probe.putJson("""{"participant":"bob","text":"ship A first"}""", "/topics/t/ideas/a/note")
+            assertEquals(200, put.statusCode(), put.body())
+            probe.await { """"note":"ship A first","noteBy":"bob"}""" in it }
+            val linesAfterFirst = Files.readAllLines(journal).count { """"op":"note"""" in it }
+            assertEquals(1, linesAfterFirst, "one note line after the first write")
+
+            val again = probe.putJson("""{"participant":"bob","text":"ship A first"}""", "/topics/t/ideas/a/note")
+            assertEquals(200, again.statusCode(), again.body())
+            assertEquals("""{"id":"a","note":"ship A first","noteBy":"bob"}""", again.body())
+        }
+        val linesAfterRepeat = Files.readAllLines(journal).count { """"op":"note"""" in it }
+        assertEquals(1, linesAfterRepeat, "an identical PUT journals no additional line")
+    }
+
+    @Test
     fun `a restarted app replays its journal to a byte-equal state`() {
         val journal = tmpJournal()
         lateinit var before: String
@@ -444,6 +576,12 @@ class AlignmentServerTest {
             )) {
                 assertEquals(200, probe.putJson(body, "/topics/t/dimensions/effort").statusCode(), body)
             }
+            // the note is written BEFORE the idea edit so replay exercises the D2 hazard: an `idea`
+            // line replaces topic.ideas[id] wholesale, and must not touch the separately-keyed note
+            assertEquals(
+                200,
+                probe.putJson("""{"participant":"bob","text":"decided: ship it"}""", "/topics/t/ideas/b/note").statusCode(),
+            )
             assertEquals(200, probe.putJson("""{"creator":"cat","title":"B edited","description":"new"}""", "/topics/t/ideas/b").statusCode())
             assertEquals(
                 200,
@@ -458,14 +596,14 @@ class AlignmentServerTest {
             for (want in listOf(
                 """"ideas":"facilitator","boardVisibility":"after-reveal","revealed":true""",
                 """{"id":"effort","name":"Effort","weight":4.0000,"direction":"value","lowLabel":"none","highLabel":"a lot"}""",
-                """"id":"b","title":"B edited","description":"new","proposer":"bob"""",
+                """"id":"b","title":"B edited","description":"new","proposer":"bob","note":"decided: ship it","noteBy":"bob"""",
             )) {
                 assertTrue(want in before, "$want in $before")
             }
         }
         val lines = Files.readAllLines(journal)
         for (op in listOf(
-            "topic", "dimension", "idea", "rate", "weight", "unrate", "unidea", "undimension",
+            "topic", "dimension", "idea", "note", "rate", "weight", "unrate", "unidea", "undimension",
             "direction", "labels", "policy", "visibility", "reveal",
         )) {
             assertTrue(lines.any { """"op":"$op"""" in it }, "journal records $op: $lines")

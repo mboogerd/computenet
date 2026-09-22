@@ -54,6 +54,7 @@ internal class Topic(
 ) {
     val dims = TreeMap<String, Dimension>()
     val ideas = TreeMap<String, Idea>()
+    val notes = TreeMap<String, Note>()
     var revealed: Boolean = false
 }
 
@@ -61,6 +62,14 @@ private val Direction.wire: String get() = name.lowercase()
 
 /** An idea's presentation fields (write-side index, never in the dataflow). */
 internal data class Idea(val id: String, val title: String, val description: String, val proposer: String)
+
+/**
+ * A per-idea discussion note ("what the team decided", computenet-w0i5h-D2). Kept on [Topic.notes]
+ * keyed by idea id rather than as an [Idea] field: the `idea` journal op replaces `topic.ideas[id]`
+ * wholesale (it is also the edit path, [AlignmentApp]'s `putIdea`), so a note on [Idea] would be
+ * dropped by replaying an edit recorded after the note.
+ */
+internal data class Note(val text: String, val author: String)
 
 /** An HTTP failure: answered as `{"error": error}` with [status]. */
 private class Fail(val status: Int, val error: String) : RuntimeException(error, null, false, false)
@@ -168,6 +177,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             "reveal" -> reveal(t())
             "idea" -> addIdea(t(), Idea(s("id"), s("title"), s("description"), s("proposer")))
             "unidea" -> removeIdea(t(), s("id"))
+            "note" -> setNote(t(), s("idea"), s("text"), s("author"))
             "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
             "unrate" -> unrate(rk())
             else -> error("unknown journal op in line: $line")
@@ -276,11 +286,31 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         )
     }
 
-    /** Cascades: unrates every rating on the idea (journaled as `unrate`), then drops it. */
+    /** Cascades: unrates every rating on the idea (journaled as `unrate`), then drops it and its note (no extra line: replaying `unidea` drops it the same way, w0i5h-D2). */
     private fun removeIdea(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.idea == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
         topics.getValue(topic.value).ideas.remove(id)
+        topics.getValue(topic.value).notes.remove(id)
         record("""{"op":"unidea","topic":${esc(topic.value)},"id":${esc(id)}}""")
+    }
+
+    /**
+     * A per-idea discussion note (w0i5h-D2/D3): empty [text] removes the entry (no line when already
+     * absent); the same [text] and [author] as today's is a no-op (idempotent, like [rate]); otherwise
+     * the note is stored/replaced and journaled.
+     */
+    private fun setNote(topic: TopicId, idea: String, text: String, author: String) = synchronized(state) {
+        val notes = topics.getValue(topic.value).notes
+        if (text.isEmpty()) {
+            if (notes.remove(idea) == null) return@synchronized
+        } else {
+            if (notes[idea] == Note(text, author)) return@synchronized
+            notes[idea] = Note(text, author)
+        }
+        record(
+            """{"op":"note","topic":${esc(topic.value)},"idea":${esc(idea)},"text":${esc(text)},""" +
+                """"author":${esc(author)}}""",
+        )
     }
 
     /** [milli] is thousandths; journaled via [RatingScale.format], so an integer rating writes the v1 line. */
@@ -316,7 +346,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * `/topics[/{t}[/ideas[/{i}]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/me|/aggregate]]`,
+     * `/topics[/{t}[/ideas[/{i}[/note]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/me|/aggregate]]`,
      * dispatched here.
      */
     private fun handleTopics(ex: HttpExchange): String {
@@ -332,6 +362,9 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             seg.size == 2 && seg[1] == "ideas" && method == "POST" -> postIdea(topic, ex.jsonBody())
             seg.size == 3 && seg[1] == "ideas" && method == "PUT" -> putIdea(topic, seg[2], ex.jsonBody())
             seg.size == 3 && seg[1] == "ideas" && method == "DELETE" -> deleteIdea(topic, seg[2], ex.query("creator"))
+            seg.size == 4 && seg[1] == "ideas" && seg[3] == "note" && method == "PUT" ->
+                putNote(topic, seg[2], ex.jsonBody())
+            seg.size == 4 && seg[1] == "ideas" && seg[3] == "note" -> fail(405, "method not allowed")
             seg.size == 2 && seg[1] == "dimensions" && method == "POST" -> postDimension(topic, ex.jsonBody())
             seg.size == 3 && seg[1] == "dimensions" && method == "PUT" -> putDimension(topic, seg[2], ex.jsonBody())
             seg.size == 3 && seg[1] == "dimensions" && method == "DELETE" ->
@@ -414,6 +447,27 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             if (new != old) addIdea(topic.id, new)
         }
         return """{"id":${esc(id)}}"""
+    }
+
+    /**
+     * `{participant, text}`: writes/clears the idea's discussion note (w0i5h-D1/D4). 404 unknown idea
+     * first; then `participant` (1..40 chars) and `text` (a JSON string, trimmed, ≤ 4000 chars) are
+     * validated; then, while the topic's idea policy is [IdeaPolicy.FACILITATOR], only the creator may
+     * write — a deliberate reuse of the idea-authoring policy, not a second field. `text: ""` clears it.
+     */
+    private fun putNote(topic: Topic, id: String, json: JsonObject): String {
+        if (id !in topic.ideas) fail(404, "no such idea")
+        val participant = name(json.str("participant"), "participant")
+        val text = (json["text"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+            ?.takeIf { it.length <= 4000 } ?: fail(400, "text must be a string of at most 4000 characters")
+        if (topic.ideaPolicy == IdeaPolicy.FACILITATOR && participant != topic.creator) {
+            fail(403, "only the topic creator may edit notes on this topic")
+        }
+        return synchronized(state) {
+            setNote(topic.id, id, text, participant)
+            val note = topic.notes[id]
+            """{"id":${esc(id)},"note":${esc(note?.text ?: "")},"noteBy":${esc(note?.author ?: "")}}"""
+        }
     }
 
     /** Creator-only (k1d4g-D6, a deliberate change from v1's open delete); an unknown idea is 404 first. */
@@ -639,8 +693,10 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         val topicList = topics.values.joinToString(",", "[", "]") { topicJson(it) }
         val ideaList = topics.values.flatMap { t -> t.ideas.values.map { t to it } }
             .joinToString(",", "[", "]") { (t, i) ->
+                val note = t.notes[i.id]
                 """{"topic":${esc(t.id.value)},"id":${esc(i.id)},"title":${esc(i.title)},""" +
-                    """"description":${esc(i.description)},"proposer":${esc(i.proposer)}}"""
+                    """"description":${esc(i.description)},"proposer":${esc(i.proposer)},""" +
+                    """"note":${esc(note?.text ?: "")},"noteBy":${esc(note?.author ?: "")}}"""
             }
         val ratingList = ratings.entries.sortedWith(compareBy(RATING_ORDER) { it.key })
             .joinToString(",", "[", "]") { (k, v) ->
