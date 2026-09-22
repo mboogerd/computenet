@@ -574,6 +574,80 @@ class PeerTableTest {
         assertTrue(table.stateOf(k) is PeerState.Retained)
     }
 
+    /**
+     * computenet-oqpqf, criterion 1: B (10) then C (11), both INBOUND, both
+     * admitted for one key; the entry is Peered on C. C drops while B is live,
+     * and the Peered state must name B — not the dead C — and keep its
+     * identity and `since`.
+     *
+     * The second half is why it matters: the `IDENTITY_MISMATCH` guard now
+     * treats a Peered link that is no longer up as not live ([DSC2-ID-05]),
+     * so a state left naming dead C would let a hello resolving a DIFFERENT
+     * identity through while B, attributed to alice, is still live.
+     *
+     * Mutation: drop the re-point in `linkDown` — the state names 11 and the
+     * later bob hello is admitted rather than refused.
+     */
+    @Test
+    fun `a same-direction sibling's drop re-points Peered at the surviving admitted link, which still guards identity`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 10, source = EntrySource.ACCEPTED)
+        table.judge(k, LinkDirection.INBOUND, linkId = 10, resolved = alice, now = 1)
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 11, source = EntrySource.ACCEPTED)
+        table.judge(k, LinkDirection.INBOUND, linkId = 11, resolved = alice, now = 2)
+        assertEquals(PeerState.Peered(LinkDirection.INBOUND, 11, alice, since = 2), table.stateOf(k), "Peered on the newer link")
+
+        now = 3
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 11, now = 3))
+        assertEquals(
+            PeerState.Peered(LinkDirection.INBOUND, 10, alice, since = 2),
+            table.stateOf(k),
+            "Peered names the surviving admitted link B (10), not the dropped C (11)",
+        )
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 12, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Refuse(DenialReason.IDENTITY_MISMATCH, live = alice),
+            table.judge(k, LinkDirection.INBOUND, linkId = 12, resolved = bob, now = 4),
+            "[DSC2-ID-05]: B is live and attributed to alice, so bob on this key is refused",
+        )
+    }
+
+    /**
+     * computenet-oqpqf, criterion 2, and [DSC2-ID-05]'s own wording: a hello
+     * is refused `IDENTITY_MISMATCH` when its identity differs from one
+     * "already attributed to the same key identifier on a LIVE link". A
+     * CONFIGURED key whose only link dropped keeps its Peered state (its
+     * reconnects are its owner's, so `linkDown` resets nothing), but no link
+     * of it is live — so a new link's hello is judged afresh, not refused.
+     *
+     * Mutation: drop `peered.linkId in entry.upLinks` from `judge`'s guard —
+     * the new hello is refused against a link that no longer exists.
+     */
+    @Test
+    fun `a configured key whose only link dropped refuses no new hello with IDENTITY_MISMATCH`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.OUTBOUND, linkId = 20, source = EntrySource.CONFIGURED)
+        table.judge(k, LinkDirection.OUTBOUND, linkId = 20, resolved = alice, now = 1)
+        now = 2
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 20, now = 2), "a configured key is never re-dialled here")
+        assertTrue(table.stateOf(k) is PeerState.Peered, "and stays Peered, naming the dead link")
+
+        table.linkUp(k, LinkDirection.OUTBOUND, linkId = 21, source = EntrySource.CONFIGURED)
+        assertEquals(
+            Judgement.Admit(close = null, closeLinkId = null),
+            table.judge(k, LinkDirection.OUTBOUND, linkId = 21, resolved = bob, now = 3),
+            "no live link carries alice, so bob's hello is not an identity mismatch",
+        )
+        assertEquals(PeerState.Peered(LinkDirection.OUTBOUND, 21, bob, since = 3), table.stateOf(k))
+    }
+
     @Test
     fun `dialFailed advances dueAt on the injected schedule and nextDue respects maxInFlight`() {
         var now = 0L

@@ -479,17 +479,38 @@ class DiscoveredPeering private constructor(
         //    own quiet close, or the far side's, which `IrohConnection`'s
         //    `tieBreakLoss` predicate classifies for us;
         //  - or it is an ACCEPTED link, which has no connection to classify it
-        //    at all. Such a link is a tie-break loss exactly when it went down
-        //    never admitted, with no refusal recorded against it, while
-        //    another link for the same key is still up — which within this
-        //    policy IS the mutual-dial case and has no other producer: a link
-        //    that lost its hello is refused (and carries the denial), and a
-        //    key with two live links got them from a mutual dial.
+        //    at all. Such a link is a tie-break loss when it went down with no
+        //    refusal recorded against it, in THIS node's losing direction
+        //    (`PeerTable.loserDirection`), while a link of the OPPOSITE
+        //    direction for the same key is still up. Both directions up is
+        //    what a mutual dial is, and the tie-break closes the losing one
+        //    whichever node reaches the verdict first.
+        //
+        // Admitted or not does not matter (computenet-i74gh). When the larger
+        // id's link is admitted here first and this node's own OUTBOUND link
+        // arrives second, the larger id closes the peered inbound link as ITS
+        // loser, and that `LINK_DOWN` can reach this node before the far
+        // hello that would have let this gate count it — so the down is the
+        // only place left to learn of it.
+        //
+        // A SAME-direction sibling is not a partner (computenet-oqpqf): two
+        // inbound links from one key are producible without any mutual dial —
+        // a restarted remote re-dialling before the old link's down — and one
+        // that drops before its hello is not a tie-break close. Nor is the
+        // WINNING direction's accepted link: at the larger id an inbound link
+        // is the one the tie-break keeps, so its drop is a drop.
+        //
+        // Residual, accepted: a losing-direction accepted link that drops for
+        // some other reason while the opposite link is up is counted here too.
+        // Unless the opposite link's hello is then refused, the tie-break
+        // would have closed this link the moment that hello was judged, so it
+        // is the same one closed link either way.
         //
         // Both routes fold into one idempotent count. @see tieBreakCounted
-        val otherLinkUp = node.links(view.remoteNodeId).any { it.linkId != view.linkId }
+        val oppositeLinkUp = node.links(view.remoteNodeId).any { it.linkId != view.linkId && it.direction != view.direction }
+        val losingDirection = view.direction == PeerTable.loserDirection(table.ownKey.bytes, view.remoteNodeId)
         val quiet = outcome?.quiet == true ||
-            (outcome == null && !view.peered && otherLinkUp)
+            (outcome == null && losingDirection && oppositeLinkUp)
         if (quiet) countTieBreakClose(view.linkId)
         // One refused hello, counted once ([DSC2-ID-01..04], BS-05a). Charged
         // at the DOWN rather than at the refusal, because a refusal is
@@ -585,9 +606,16 @@ class DiscoveredPeering private constructor(
      * raw link would be the same physical close read as a peer that dropped us.
      * An ACCEPTED link has no connection and nothing to charge, so the raw
      * close is the right one there.
+     *
+     * It counts nothing. The gate counted [linkId] when it posted this close,
+     * and counting it again here was not idempotent: when the loser's
+     * `LINK_DOWN` is read just before the hello that condemns it, and the
+     * policy thread has not yet taken that down off the queue, the gate still
+     * finds the loser in the table and counts it, the down then runs first and
+     * clears its mark from [tieBreakCounted], and a count here would move the
+     * counter a second time for the same link (ktn1l-D16, computenet-i74gh).
      */
     private fun closeLink(key: NodeKey, linkId: Long) {
-        countTieBreakClose(linkId)
         val direction = node.links(key.bytes).firstOrNull { it.linkId == linkId }?.direction
         val connection = connections[key]
         val closed = runCatching {

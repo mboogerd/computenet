@@ -86,9 +86,9 @@ import kotlin.time.Duration.Companion.seconds
  * the larger id counted exactly one tie-break close on
  * [DiscoveryCounters.tieBreakClosed] — which moves only when that node held
  * BOTH directions of the key, i.e. only when both dials really produced a
- * connection. The smaller id's count is asserted too, but the landed policy
- * does not always move it (see [Release.loTieBreaksLanded]), so it is not part
- * of this proof. A run in which one side never dialled fails the first of those; one
+ * connection. The smaller id's count is asserted to be exactly 1 as well
+ * (ktn1l-D16), but it is not part of this proof: the smaller id can learn of
+ * its closed link from that link's `LINK_DOWN` alone. A run in which one side never dialled fails the first of those; one
  * where iroh folded the two dials into one connection fails the last.
  *
  * Nothing sleeps on the policy: both nodes run a [ManualTimer] over a frozen
@@ -144,36 +144,24 @@ class MutualDialSidecarTest {
     /**
      * Which `DIAL` reaches its sidecar first, once both have been issued.
      *
-     * @param loTieBreaksLanded the values the smaller id's
-     *   [DiscoveryCounters.tieBreakClosed] may read at rest. ktn1l-D16 wants
-     *   exactly 1 in every order, and 1 is what LO_FIRST always gives.
-     *   **HI_FIRST gives 0 or 1, and that is pinned here as landed behaviour,
-     *   not as desired** (bug `computenet-i74gh`). In that order lo holds hi's
-     *   link PEERED when lo's own OUTBOUND link comes up, and two events race
-     *   at lo: hi's hello on lo's outbound link (lo's gate answers
-     *   `Admit(close = the inbound link)` and counts it — 1), or the
-     *   `LINK_DOWN` of the inbound link hi has already closed as its loser
-     *   (`DiscoveredPeering.onLinkDown` classifies an accepted link as a
-     *   tie-break loss only when it was never peered, so nothing is counted,
-     *   and the later hello finds no second link — 0). Container runs saw 0
-     *   in 53 trials and 1 in 9. The end state BS-08 requires holds either
-     *   way, and every other assertion is shared by all three orders.
-     *   **TOGETHER is pinned `{0, 1}` too**: it samples the post-release
-     *   race rather than choosing it, and that race sometimes admits hi's
-     *   link at lo first — HI_FIRST's shape, unforced. Container runs after
-     *   the 2026-09-22 main merge saw it in 2 of 35 TOGETHER trials (0 of 55
-     *   before), with the same failure state as HI_FIRST's 0. A fix for
-     *   `computenet-i74gh` narrows both to `setOf(1L)`.
+     * Every order ends with exactly one tie-break close counted on EACH node
+     * (ktn1l-D16). HI_FIRST is the order where the smaller id learns of its
+     * closed link only from that link's `LINK_DOWN` whenever the down
+     * overtakes the larger id's hello on its outbound link — the link was
+     * PEERED, and `DiscoveredPeering.onLinkDown` counts an accepted link in
+     * this node's losing direction whether or not it was admitted
+     * (computenet-i74gh, pinned deterministically by [MutualDialTest]).
+     * TOGETHER can take the same shape unforced.
      */
-    private enum class Release(val heldBack: String?, val loTieBreaksLanded: Set<Long>) {
+    private enum class Release(val heldBack: String?) {
         /** Both released together; the QUIC handshakes race freely. */
-        TOGETHER(null, setOf(0L, 1L)),
+        TOGETHER(null),
 
         /** The smaller id's link is up and admitted at the larger before the larger's `DIAL` leaves its proxy. */
-        LO_FIRST("hi", setOf(1L)),
+        LO_FIRST("hi"),
 
         /** The mirror: the larger id's link is admitted first, and the smaller id's later OUTBOUND link must replace it. */
-        HI_FIRST("lo", setOf(0L, 1L)),
+        HI_FIRST("lo"),
     }
 
     /**
@@ -383,8 +371,7 @@ class MutualDialSidecarTest {
             await("$t: lo to hold exactly one link, peered") { lo.node.links(hi.own).let { it.size == 1 && it.single().peered } }
             await("$t: hi to hold exactly one link, peered") { hi.node.links(lo.own).let { it.size == 1 && it.single().peered } }
             await("$t: hi to count its tie-break close") { hi.peering.counters.tieBreakClosed.count >= 1L }
-            val loTieBreaks = release.loTieBreaksLanded
-            if (0L !in loTieBreaks) await("$t: lo to count its tie-break close") { lo.peering.counters.tieBreakClosed.count >= 1L }
+            await("$t: lo to count its tie-break close") { lo.peering.counters.tieBreakClosed.count >= 1L }
 
             // Settle, then read everything at rest.
             assertEquals(1L, quiesced { lo.proxy.dialsToPeer.get().toLong() }, "$t: lo dialled hi once and never re-dialled the loser")
@@ -401,11 +388,9 @@ class MutualDialSidecarTest {
             assertEquals(LinkDirection.INBOUND, hiLinks.single().direction, "$t: the larger id kept its INBOUND link")
             assertTrue(loLinks.single().peered && hiLinks.single().peered, "$t: the survivor is peered on both sides")
 
-            // Exactly one closed link per node (ktn1l-D16), and no blame
-            // anywhere — except lo's count in HI_FIRST, pinned as LANDED; see
-            // [Release.loTieBreaksLanded].
+            // Exactly one closed link per node (ktn1l-D16), and no blame anywhere.
             val loCount = quiesced { lo.peering.counters.tieBreakClosed.count }
-            assertTrue(loCount in loTieBreaks, "$t: lo's tie-break closes read $loCount, landed values are $loTieBreaks")
+            assertEquals(1L, loCount, "$t: lo counted one tie-break close")
             assertEquals(1L, hi.peering.counters.tieBreakClosed.count, "$t: hi counted one tie-break close")
             assertEquals(0L, lo.node.admissionDenialCount, "$t: lo refused nothing")
             assertEquals(0L, hi.node.admissionDenialCount, "$t: hi refused nothing")
