@@ -203,10 +203,14 @@ class SidecarExchangeTest {
         override fun onError(link: SidecarLink, reason: String) { events.incrementAndGet() }
     }
 
-    private fun dialOnThread(client: SidecarClient, timeoutMs: Long = 30_000): ArrayBlockingQueue<Result<SidecarLink>> {
+    private fun dialOnThread(
+        client: SidecarClient,
+        timeoutMs: Long = 30_000,
+        listener: LinkListener = CountingListener(),
+    ): ArrayBlockingQueue<Result<SidecarLink>> {
         val outcome = ArrayBlockingQueue<Result<SidecarLink>>(1)
         Thread({
-            outcome.put(runCatching { client.dial(ByteArray(NODE_ID_LEN) { 7 }, CountingListener(), timeoutMs.milliseconds) })
+            outcome.put(runCatching { client.dial(ByteArray(NODE_ID_LEN) { 7 }, listener, timeoutMs.milliseconds) })
         }, "dial").apply { isDaemon = true }.start()
         return outcome
     }
@@ -255,6 +259,66 @@ class SidecarExchangeTest {
                     "the abandoned dial's settled link is closed (CLOSE_LINK) — nobody else can close it",
                 )
                 assertNull(client.link(dial.link), "and no longer registered: no caller holds it")
+                assertEquals(emptyList(), client.openLinks, "no link left registered at all")
+            }
+        }
+    }
+
+    /**
+     * computenet-c45fr. The window the test above leaves open: the reader has
+     * settled the dial, and before the dialling thread gets to abandon it the
+     * reader dispatches a `LINK_DOWN` for the link. That frame must not reach
+     * the abandoned dial's listener — in `IrohConnection.openLink` it would
+     * `retire` a Session the connection never installed.
+     *
+     * The dialling thread is held in [SidecarClient.beforeDialAwait] until the
+     * reader has settled the dial (first marker), the fake then sends the
+     * `LINK_DOWN` and a second marker behind it. Without the gate the reader
+     * delivers the `LINK_DOWN` and the second marker arrives at once; with
+     * it the reader holds the frame until the dial decides, so the second
+     * marker only arrives after the interrupt — the hook's bounded wait for
+     * it is what lets both codes reach the assertion.
+     */
+    @Test
+    fun `a LINK_DOWN dispatched between a dial's settlement and its abandonment reaches no listener`() {
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                val markers = LinkedBlockingQueue<Byte>()
+                val watching = Thread {
+                    client.watchPeers(object : PeerWatchListener {
+                        override fun onDiscovered(nodeId: ByteArray, addresses: List<String>) = markers.put(nodeId[0])
+                        override fun onExpired(nodeId: ByteArray) = Unit
+                    })
+                }.apply { start() }
+                assertEquals(HostMessage.WatchPeers, fake.nextHostMessage())
+                fake.send(SidecarMessage.Watching)
+                watching.join(30_000)
+
+                val downSent = CountDownLatch(1)
+                client.beforeDialAwait = { _ ->
+                    check(markers.poll(30, TimeUnit.SECONDS) == 1.toByte()) { "the reader never finished onLinkUp" }
+                    check(downSent.await(30, TimeUnit.SECONDS)) { "the test never sent the LINK_DOWN" }
+                    // Gated, the reader is holding the LINK_DOWN and this marker behind it.
+                    markers.poll(1, TimeUnit.SECONDS)
+                    Thread.currentThread().interrupt()
+                }
+                val listener = CountingListener()
+                val outcome = dialOnThread(client, listener = listener)
+                val dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
+                fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND))
+                fake.send(SidecarMessage.PeerDiscovered(ByteArray(NODE_ID_LEN) { 1 }, listOf("127.0.0.1:1")))
+                fake.send(SidecarMessage.LinkDown(dial.link, "peer went away"))
+                fake.send(SidecarMessage.PeerDiscovered(ByteArray(NODE_ID_LEN) { 2 }, listOf("127.0.0.1:1")))
+                downSent.countDown()
+
+                val result = outcome.poll(30, TimeUnit.SECONDS) ?: fail("dial did not return within 30s")
+                assertIs<InterruptedException>(result.exceptionOrNull(), "the interrupted dial throws, as before: $result")
+                // The reader has dispatched the LINK_DOWN once the marker behind it is in (or was taken by the hook).
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (client.link(dial.link) != null && System.nanoTime() < deadline) Thread.sleep(1)
+                markers.poll(1, TimeUnit.SECONDS)
+                assertEquals(0, listener.events.get(), "the abandoned dial's listener saw the LINK_DOWN")
+                assertEquals(HostMessage.CloseLink(dial.link), fake.pollHostMessage(5_000))
                 assertEquals(emptyList(), client.openLinks, "no link left registered at all")
             }
         }
