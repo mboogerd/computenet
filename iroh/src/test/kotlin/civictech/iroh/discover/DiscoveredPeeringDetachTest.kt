@@ -326,8 +326,11 @@ class DiscoveredPeeringDetachTest {
             val answeredDial = rig.inFlight(answered)
             rig.inFlight(silent)
             rig.fake.send(SidecarMessage.LinkUp(answeredDial.link, answered, DIRECTION_OUTBOUND))
-            // The client registers the link before it releases the dial: from
-            // here `SidecarClient.dial` returns, whatever interrupt comes next.
+            // The client has registered the link. That does NOT mean
+            // `SidecarClient.dial` returns it: an interrupt that reaches the
+            // dial thread before it leaves its wait still makes the dial throw,
+            // and the client then closes the link itself (computenet-r2zhu,
+            // pinned by the heal test below). Either way the assertion holds.
             await("the answered dial to land") { rig.client.link(answeredDial.link) != null }
 
             rig.handed += rig.peering.detach().values
@@ -350,10 +353,12 @@ class DiscoveredPeeringDetachTest {
 
     /**
      * The `DIAL` of an interrupted dial has already gone out, and its
-     * `SidecarClient` wait no longer exists, so a late `LINK_UP` for it reaches
-     * the node's inbound handler as an ACCEPTED link the dialling connection
-     * knows nothing about (computenet-iesmw). Decided: the policy closes it —
-     * adopting it would need a seam `IrohConnection` does not have.
+     * `SidecarClient` wait no longer exists, so a late `LINK_UP` for it is a
+     * link the dialling connection knows nothing about (computenet-iesmw).
+     * Decided: it is closed — adopting it would need a seam `IrohConnection`
+     * does not have. Since computenet-r2zhu/r3301 the closer is
+     * `SidecarClient` (an OUTBOUND `LINK_UP` with no pending dial), not this
+     * policy, so these tests now pin the client's rule end to end.
      */
     @Test
     fun `a late LINK_UP for a dial interrupted by detach is closed`() {
@@ -401,6 +406,55 @@ class DiscoveredPeeringDetachTest {
                 listOf(healDial.link),
                 rig.node.links(key).map { it.linkId },
                 "one link for the key after heal(): the heal's own",
+            )
+        }
+    }
+
+    /**
+     * computenet-r2zhu. The dial's `LINK_UP` has settled — the client has
+     * registered the link — and `detach()`'s interrupt reaches the dial
+     * thread before it leaves `SidecarClient.dial`'s wait. The dial throws
+     * anyway, so neither the connection nor the node ever records that link.
+     * The client must close it itself, or `heal()` leaves two sidecar links to
+     * the key: the heal's, and one no caller holds.
+     *
+     * [SidecarClient.beforeDialAwait] holds the dial thread in that window
+     * until the interrupt arrives, keeping the flag set for the wait to see.
+     * The assertion reads the CLIENT's links, not only [IrohNode.links],
+     * because the leaked link is one the node never saw.
+     */
+    @Test
+    fun `a connection whose settled dial detach interrupted heals to exactly one client link`() {
+        withPeering { rig ->
+            val key = nodeId()
+            rig.client.beforeDialAwait = { _ ->
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                while (!Thread.currentThread().isInterrupted && System.nanoTime() < deadline) Thread.onSpinWait()
+            }
+            val settledDial = rig.inFlight(key)
+            rig.fake.send(SidecarMessage.LinkUp(settledDial.link, key, DIRECTION_OUTBOUND))
+            await("the client to register the answered link") { rig.client.link(settledDial.link) != null }
+
+            val connection = assertNotNull(rig.peering.detach()[NodeKey(key)], "the in-flight connection is handed over")
+            rig.handed += connection
+            rig.client.beforeDialAwait = null
+            assertTrue(!connection.peered, "its dial threw, so it holds no link")
+            val afterDetach = rig.drain()
+
+            val healed = settle("heal") { connection.heal(30.seconds) }
+            val healDial = rig.fake.nextDial()
+            rig.fake.admit(healDial.link, key)
+            healed()
+            await("the healed Session to be bound") { connection.peered }
+
+            assertEquals(
+                listOf(healDial.link),
+                rig.client.openLinks.filter { it.remoteNodeId.contentEquals(key) }.map { it.id },
+                "exactly one link to the key registered in SidecarClient after heal(): the heal's own",
+            )
+            assertTrue(
+                HostMessage.CloseLink(settledDial.link) in afterDetach,
+                "the abandoned dial's link was closed at the sidecar (wire after detach: $afterDetach)",
             )
         }
     }
