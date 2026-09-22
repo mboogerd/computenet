@@ -18,7 +18,8 @@ package civictech.demo.alignment
  * this task's base): `POST /topics/{t}/dimensions {creator, name, weight?, direction?, lowLabel?,
  * highLabel?}`; `PUT /topics/{t}/dimensions/{d} {creator, weight?, direction?, lowLabel?,
  * highLabel?}`; `DELETE /topics/{t}/dimensions/{d}?creator=`; `PUT /topics/{t}/policy {creator,
- * ideas?, boardVisibility?}`; `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ideas
+ * ideas?, boardVisibility?, gutCheck?, dotBudget?}` (the last two are the experimental Gut check
+ * round's settings, teu97-D2/D10); `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ideas
  * {participant, title, description?}`; `PUT /topics/{t}/ideas/{i} {creator, title?,
  * description?}`; `DELETE /topics/{t}/ideas/{i}?creator=`.
  *
@@ -46,6 +47,9 @@ internal const val SETUP_VIEW = """
   #setup .setup-progress-row { display: flex; justify-content: space-between; gap: .6rem; font-size: var(--fs-2); }
   #setup [role=radiogroup] { display: flex; flex-direction: column; gap: .3rem; font-size: var(--fs-2); margin-bottom: .7rem; }
   #setup [role=radiogroup] label { display: flex; align-items: center; gap: .4rem; }
+  #setupGutCheckRoot { display: flex; flex-direction: column; gap: .4rem; font-size: var(--fs-2); }
+  #setupGutCheckRoot label { display: flex; align-items: center; gap: .4rem; }
+  #setupDotBudget { width: 4.5rem; }
   #setupLinkFallback { width: 100%; margin-top: .5rem; }
   #setupCopied { margin-left: .5rem; }
 </style>
@@ -105,6 +109,10 @@ function ensureSetupSkeleton() {
       '<label><input type="radio" name="setupVisibility" value="after-rating">after rating</label>' +
       '<label><input type="radio" name="setupVisibility" value="after-reveal">after facilitator reveal</label>' +
     '</div><button type="button" id="setupReveal">Reveal</button></div>' +
+    '<div class="card"><h3>Gut check</h3><div id="setupGutCheckRoot">' +
+      '<label><input type="checkbox" id="setupGutCheck"> run a dot-voting gut check before rating</label>' +
+      '<label>dots per participant <input type="number" id="setupDotBudget" min="1" max="20" step="1"></label>' +
+    '</div></div>' +
     '<div class="card"><h3>Ideas</h3><div id="setupIdeas"></div>' +
       '<form class="inline" id="setupIdeaAdd">' +
         '<input id="setupIdeaTitle" maxlength="200" placeholder="title" aria-label="new idea title">' +
@@ -141,6 +149,17 @@ function ensureSetupSkeleton() {
     const t = currentTopic();
     if (!t) return;
     send('POST', '/topics/' + t.id + '/reveal', { creator: me() }).then(renderSetup, () => {});
+  };
+
+  el('setupGutCheck').onchange = () => {
+    const t = currentTopic();
+    if (!t) return;
+    send('PUT', '/topics/' + t.id + '/policy', { creator: me(), gutCheck: el('setupGutCheck').checked }).then(renderSetup, () => {});
+  };
+  el('setupDotBudget').onchange = () => {
+    const t = currentTopic();
+    if (!t) return;
+    send('PUT', '/topics/' + t.id + '/policy', { creator: me(), dotBudget: Number(el('setupDotBudget').value) }).then(renderSetup, () => {});
   };
 
   el('setupIdeaAdd').onsubmit = e => {
@@ -235,6 +254,12 @@ function paintPolicyAndVisibility(t) {
   const revealBtn = el('setupReveal');
   revealBtn.disabled = !(t.boardVisibility === 'after-reveal' && t.revealed !== true);
   revealBtn.textContent = t.revealed === true ? 'revealed' : 'Reveal';
+  const gcRoot = el('setupGutCheckRoot');
+  if (!editing(gcRoot)) {
+    el('setupGutCheck').checked = t.gutCheck === true;
+    el('setupDotBudget').value = String(t.dotBudget);
+    el('setupDotBudget').disabled = t.gutCheck !== true;
+  }
 }
 
 function paintIdeas(t) {

@@ -437,6 +437,36 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the Gut check roots and an experimental tab, and DOTS_VIEW has no dollar sign`() = withApp { _, probe ->
+        // teu97-D7/D12: the experimental Gut check dot-voting round's tab, view roots, Setup
+        // controls and the Board row's dot-total class are all in the served bytes; the slice
+        // stays template-literal-free and activeTab() still falls through to 'rate'.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        assertTrue("""id="dots"""" in body, "dots section root")
+        assertTrue("""id="tabDots"""" in body, "gut check tab button")
+        for (root in listOf("dotsBudget", "dotsList")) {
+            assertTrue("""id="$root"""" in body, "$root root")
+        }
+        // the experimental badge sits inside the Gut check tab button, not merely somewhere on the page
+        val tabStart = body.indexOf("""id="tabDots"""")
+        assertTrue(tabStart >= 0, "gut check tab button")
+        val tabButton = body.substring(tabStart, body.indexOf("</button>", tabStart))
+        assertTrue("experimental" in tabButton, "gut check tab reads experimental: $tabButton")
+        assertTrue("""id="setupGutCheck"""" in body, "setup gut check checkbox")
+        assertTrue("""id="setupDotBudget"""" in body, "setup dot budget input")
+        assertTrue("""class="dots"""" in body, "board row dots class")
+        assertTrue('$' !in DOTS_VIEW, "DOTS_VIEW is a plain raw string")
+        // Rate stays the default tab: the served activeTab() still falls through to 'rate'
+        val fnStart = body.indexOf("function activeTab()")
+        assertTrue(fnStart >= 0, "activeTab() is served")
+        val fnEnd = body.indexOf("\n}", fnStart)
+        assertTrue(body.substring(fnStart, fnEnd).trimEnd().endsWith("return 'rate';"), body.substring(fnStart, fnEnd))
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
     fun `the events stream opens on the same frame as state`() = withApp { app, probe ->
         seed(probe)
         rate(probe, "ann", "a", "impact", "8")
