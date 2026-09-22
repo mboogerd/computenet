@@ -22,10 +22,10 @@ package civictech.demo.alignment
  * {participant, title, description?}`; `PUT /topics/{t}/ideas/{i} {creator, title?,
  * description?}`; `DELETE /topics/{t}/ideas/{i}?creator=`.
  *
- * The progress block (D15) is the one reader of `state.ratings` in the whole page (amends
- * 0dvra-D8): rows are `{topic, idea, dim, participant, value}` and only participant names and
- * counts are used, never a value. Shared helper contract: the comment block at the top of the
- * shell's script in [AlignmentPage.kt]. No `$` anywhere (a plain raw string, no template
+ * The progress block (D15) reads `state.ratings` (amends 0dvra-D8): rows are `{topic, idea, dim,
+ * participant, value}` and only participant names and counts are used, never a value. It is one
+ * of several readers on the page; see the "Data access" entry in the shell contract at the top of
+ * [AlignmentPage.kt]'s script for the full list. No `$` anywhere (a plain raw string, no template
  * literals); no literal colour — only `:root` tokens and `dimColour(t, d)`.
  */
 internal const val SETUP_VIEW = """
@@ -270,8 +270,9 @@ function paintIdeas(t) {
   for (const [id, row] of setupIdeaRows) if (!seen.has(id)) { setupIdeaRows.delete(id); row.remove(); }
 }
 
-// R4 (0dvra-D15): the one reader of state.ratings in the page — participant names and counts
-// only, never a value.
+// R4 (0dvra-D15): reads state.ratings for participant names and counts only, never a value.
+// See the "Data access" entry in AlignmentPage.kt's shell contract for the page's full list
+// of readers.
 function setupPaintProgress(t) {
   const box = el('setupProgress');
   const total = state.ideas.filter(i => i.topic === t.id).length * t.dimensions.length;
