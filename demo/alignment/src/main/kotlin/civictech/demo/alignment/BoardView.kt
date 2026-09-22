@@ -94,6 +94,11 @@ internal const val BOARD_MAIN = """
   .rankrow.enter, .rankrow.leave { opacity: 0; }
   .rankrow .main { display: grid; grid-template-columns: 1.6rem minmax(0,1fr) minmax(6rem,38%) 4.6rem 3.4rem;
                     gap: .6rem; align-items: center; }
+  /* computenet-uuy2c: an overridden row's score cell carries the effective score, the "override"
+     badge and a clear "×" — wider than the plain-score column fits. Widen the score column only on
+     rows that carry the class (set in renderScoreCell from f.override), so a row without an
+     override never sees its grid change: its .main keeps the base template above untouched. */
+  .rankrow .main.has-override { grid-template-columns: 1.6rem minmax(0,1fr) minmax(5rem,32%) 7.6rem 3.4rem; }
   .rankrow .pos { text-align: right; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
   .rankrow .ttl { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .rankrow .barcell { position: relative; min-width: 0; }
@@ -443,6 +448,8 @@ function boardScoreOpener(cell, ideaId) {
 function renderScoreCell(cell, t, f, canOverride) {
   cell.innerHTML = '';
   const hasOverride = f.override !== null && f.override !== undefined;
+  const main = cell.closest('.main');
+  if (main) main.classList.toggle('has-override', hasOverride); // computenet-uuy2c: widen only this row's score column
   const eff = effective(f);
   const txt = document.createElement('span');
   txt.className = 'scoretxt';
