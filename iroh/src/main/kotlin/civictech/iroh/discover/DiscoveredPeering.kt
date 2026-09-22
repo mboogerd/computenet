@@ -507,7 +507,13 @@ class DiscoveredPeering private constructor(
         // is the same one closed link either way.
         //
         // Both routes fold into one idempotent count. @see tieBreakCounted
-        val oppositeLinkUp = node.links(view.remoteNodeId).any { it.linkId != view.linkId && it.direction != view.direction }
+        //
+        // "Up" includes this node's own OUTBOUND link when the reader has
+        // settled its dial but the dialling thread has not yet registered it
+        // (computenet-311xs): the far side can close the loser in that window,
+        // and this down is then the only place this node learns of it.
+        val oppositeLinkUp = node.linksWithSettledDials(view.remoteNodeId)
+            .any { it.linkId != view.linkId && it.direction != view.direction }
         val losingDirection = view.direction == PeerTable.loserDirection(table.ownKey.bytes, view.remoteNodeId)
         val quiet = outcome?.quiet == true ||
             (outcome == null && losingDirection && oppositeLinkUp)
@@ -526,6 +532,13 @@ class DiscoveredPeering private constructor(
         if (reason != null) countRefusal(view.linkId, reason)
         tieBreakCounted -= view.linkId
         refusalCounted -= view.linkId
+        // The table must know of a surviving link before it decides whether
+        // this key is re-dialled, and the one it can miss is this node's own
+        // settled-but-unregistered outbound link — whose `LinkUp` is not even
+        // posted yet (computenet-311xs). Without it the down of a tie-break
+        // loser reads as "no link left" and re-dials a key that is about to
+        // be peered. Seeded by the gate's rule, for the gate's reason.
+        seed(key, linksToSeed(view.remoteNodeId))
         val outcomeOfDown = table.linkDown(key, view.linkId, clock())
         if (outcome?.abandoned == true) {
             table.abandon(key, reason)
@@ -724,7 +737,9 @@ class DiscoveredPeering private constructor(
      * **before** anything is announced on it, and it is only closed if the
      * verdict that closes it is reached at the hello. Reading the registry
      * here is what makes that verdict a function of the links that exist
-     * rather than of a queue depth.
+     * rather than of a queue depth. The node's registry alone lags the reader
+     * for this node's own dialled links, so the gate reads it through
+     * [linksToSeed] (computenet-311xs).
      *
      * Cheap and safe on the reader thread: a filter over a `ConcurrentHashMap`
      * and one O(1) locked table call per link. [Command.LinkUp] still runs and
@@ -743,6 +758,35 @@ class DiscoveredPeering private constructor(
         }
     }
 
+    /**
+     * The links [seed] tells the table about before a hello from
+     * [remoteNodeId] is judged.
+     *
+     * [IrohNode.links] alone is NOT "the links that exist" for this node's own
+     * OUTBOUND link (computenet-311xs): the node registers a dialled link on
+     * the dialling thread, after the reader has settled the dial and moved on,
+     * so the reader can judge the peer's hello on the INBOUND link while the
+     * outbound one is up and unregistered. At the smaller id that is exactly
+     * the mutual dial `[DSC2-DIAL-05]` is about — INBOUND is the loser — and
+     * judging without the outbound link admits the loser and announces on it.
+     * So at the smaller id the settled-but-unregistered outbound links are
+     * seeded too, and the verdict is `CloseQuietly` before anything is written.
+     *
+     * At the larger id they are deliberately NOT seeded. There OUTBOUND is the
+     * loser, and seeding one would let [PeerTable.judge] name a link for
+     * [closeLink] that its connection has not yet installed, so the quiet
+     * close would find no current link to close. Nothing is lost by waiting:
+     * this node announces on an outbound link only once it is admitted, and
+     * that hello is judged after registration, against a table that holds both
+     * directions.
+     */
+    private fun linksToSeed(remoteNodeId: ByteArray): List<IrohNode.LinkView> =
+        if (PeerTable.loserDirection(table.ownKey.bytes, remoteNodeId) == LinkDirection.INBOUND) {
+            node.linksWithSettledDials(remoteNodeId)
+        } else {
+            node.links(remoteNodeId)
+        }
+
     // ----------------------------------------------------------- start-up
 
     private fun begin() {
@@ -760,7 +804,7 @@ class DiscoveredPeering private constructor(
             // one lock-guarded O(1) table call and counter increments. No IO,
             // no dial, no wait — anything else here stops the endpoint.
             val key = NodeKey(remoteNodeId)
-            seed(key, node.links(remoteNodeId))
+            seed(key, linksToSeed(remoteNodeId))
             toVerdict(table.judge(key, direction, linkId, resolved, clock()), key, linkId, resolved)
         }
         node.client.watchPeers(object : PeerWatchListener {

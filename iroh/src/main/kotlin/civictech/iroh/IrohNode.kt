@@ -170,6 +170,9 @@ class IrohNode internal constructor(
     private val listeners = CopyOnWriteArrayList<NodeLinkListener>()
     private val connections = CopyOnWriteArrayList<IrohTransport.IrohConnection>()
 
+    /** The peer and source of every connection this node opened. @see linksWithSettledDials */
+    private val dialSources = CopyOnWriteArrayList<Pair<ByteArray, LinkSource>>()
+
     /** Accepted-link Sessions, by link id — this node's half of [IrohTransport.IrohListener.sessionFor]. */
     private val acceptedSessions = ConcurrentHashMap<Long, IrohTransport.Session>()
 
@@ -201,6 +204,52 @@ class IrohNode internal constructor(
 
     /** Every link this node currently holds, whatever its peer. */
     fun links(): List<LinkView> = records.values.map { it.view() }
+
+    /**
+     * [links] for [remoteNodeId], plus every OUTBOUND link to it that the
+     * shared client has already settled and this node has not yet been told
+     * about (computenet-311xs).
+     *
+     * A dialled link reaches [links] only when `openLink` calls this node's
+     * observer, and that runs on the DIALLING thread after
+     * [SidecarClient.dial] returns. The reader thread settled that dial
+     * earlier — it registered the link with the client and released the
+     * dialler — and then went straight on to the next frame. So on the reader
+     * there is a window, as long as the dialling thread takes to be scheduled,
+     * in which this node's own outbound link is up but absent from [links].
+     * A hello judged in that window, or a down classified in it, reads a
+     * registry that lacks the link the verdict turns on. This view is what
+     * the reader has actually seen: the client registers a dialled link on
+     * the reader thread before it releases the dial, and removes it there
+     * before any `LINK_DOWN` listener runs.
+     *
+     * A not-yet-registered link reads as never admitted, which it cannot yet
+     * be: the dialler's hello is written only after registration, and the
+     * peer answers only that. Its [LinkView.source] is inferred from the
+     * connections this node opened to [remoteNodeId] — [LinkSource.CONFIGURED]
+     * when any of them is configured, else [LinkSource.DISCOVERED] — since
+     * the client does not know which connection a link belongs to.
+     *
+     * Internal: it is the discovery gate's and link-down classifier's read,
+     * not a new public notion of what a node holds.
+     */
+    internal fun linksWithSettledDials(remoteNodeId: ByteArray): List<LinkView> {
+        // The client first, then the registry: a link registered in between
+        // then appears once, from the registry.
+        val settled = client.openLinks.filter {
+            it.direction == LinkDirection.OUTBOUND && it.remoteNodeId.contentEquals(remoteNodeId)
+        }
+        val registered = links(remoteNodeId)
+        val registeredIds = registered.mapTo(HashSet()) { it.linkId }
+        val pending = settled.filter { it.id !in registeredIds }
+        if (pending.isEmpty()) return registered
+        val source = if (dialSources.any { (key, source) -> source == LinkSource.CONFIGURED && key.contentEquals(remoteNodeId) }) {
+            LinkSource.CONFIGURED
+        } else {
+            LinkSource.DISCOVERED
+        }
+        return registered + pending.map { LinkView(it.id, it.remoteNodeId, it.direction, source, peered = false, attributedPeer = null) }
+    }
 
     /**
      * The Session of one accepted link, while that link is up — the node's
@@ -321,6 +370,8 @@ class IrohNode internal constructor(
         refusedDialLimit: Int = IrohTransport.REFUSED_DIAL_LIMIT,
         onUnplannedDown: (IrohTransport.IrohConnection.LinkOutcome) -> Unit,
     ): IrohTransport.IrohConnection = register(
+        peerNodeId,
+        LinkSource.DISCOVERED,
         IrohTransport.IrohConnection(
             sidecar,
             client,
@@ -362,6 +413,8 @@ class IrohNode internal constructor(
     ): IrohTransport.IrohConnection {
         client.addPeer(peerNodeId, addresses, timeout)
         val connection = register(
+            peerNodeId,
+            LinkSource.CONFIGURED,
             IrohTransport.IrohConnection(
                 sidecar,
                 client,
@@ -399,7 +452,12 @@ class IrohNode internal constructor(
 
     // ------------------------------------------------------------- internals
 
-    private fun register(connection: IrohTransport.IrohConnection): IrohTransport.IrohConnection {
+    private fun register(
+        peerNodeId: ByteArray,
+        source: LinkSource,
+        connection: IrohTransport.IrohConnection,
+    ): IrohTransport.IrohConnection {
+        dialSources += peerNodeId.copyOf() to source
         connections += connection
         return connection
     }
