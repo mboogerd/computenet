@@ -353,10 +353,12 @@ class DiscoveredPeeringDetachTest {
 
     /**
      * The `DIAL` of an interrupted dial has already gone out, and its
-     * `SidecarClient` wait no longer exists, so a late `LINK_UP` for it reaches
-     * the node's inbound handler as an ACCEPTED link the dialling connection
-     * knows nothing about (computenet-iesmw). Decided: the policy closes it —
-     * adopting it would need a seam `IrohConnection` does not have.
+     * `SidecarClient` wait no longer exists, so a late `LINK_UP` for it is a
+     * link the dialling connection knows nothing about (computenet-iesmw).
+     * Decided: it is closed — adopting it would need a seam `IrohConnection`
+     * does not have. Since computenet-r2zhu/r3301 the closer is
+     * `SidecarClient` (an OUTBOUND `LINK_UP` with no pending dial), not this
+     * policy, so these tests now pin the client's rule end to end.
      */
     @Test
     fun `a late LINK_UP for a dial interrupted by detach is closed`() {
