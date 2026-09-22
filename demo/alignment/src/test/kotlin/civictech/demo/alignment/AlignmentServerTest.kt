@@ -1192,6 +1192,14 @@ class AlignmentServerTest {
         assertTrue(""""id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":0""" in
             probe.get("/topics/t/me?participant=ann").body())
 
+        // removing an idea drops its dots (teu97-D4): ann's dot on c stops counting against her budget
+        assertEquals(200, dot(probe, "ann", "c", 1).statusCode()) // 1 (a) + 1 (c) = 2, at budget
+        assertEquals(200, probe.delete("/topics/t/ideas/c?creator=cat").statusCode())
+        val afterRemoval = dot(probe, "ann", "a", 2) // 2 (a) = 2: accepted only if c's dot went with c
+        assertEquals(200, afterRemoval.statusCode(), afterRemoval.body())
+        assertEquals("""{"idea":"a","count":2,"used":2,"budget":2}""", afterRemoval.body())
+        assertEquals(200, dot(probe, "ann", "a", 1).statusCode())
+
         // an unknown idea and a bad count are both 400, before any write
         assertEquals(400, dot(probe, "ann", "ghost", 1).statusCode())
         assertEquals(400, probe.postJson("""{"participant":"ann","idea":"a","count":-1}""", "/topics/t/dots").statusCode())
