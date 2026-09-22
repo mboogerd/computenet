@@ -278,6 +278,11 @@ class SidecarExchangeTest {
      * it the reader holds the frame until the dial decides, so the second
      * marker only arrives after the interrupt — the hook's bounded wait for
      * it is what lets both codes reach the assertion.
+     *
+     * Limit: the discrimination rests on that 1 s bound. If the ungated reader
+     * took longer than 1 s to dispatch two already-buffered frames, the dial
+     * would abandon first and this test would pass without the gate. It never
+     * fails spuriously in the other direction; it costs the gated run 1 s.
      */
     @Test
     fun `a LINK_DOWN dispatched between a dial's settlement and its abandonment reaches no listener`() {
