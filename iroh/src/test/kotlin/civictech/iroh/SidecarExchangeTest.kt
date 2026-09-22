@@ -289,4 +289,67 @@ class SidecarExchangeTest {
             }
         }
     }
+
+    /**
+     * computenet-r2zhu, every ordering. The two tests above each place one
+     * moment; this one races the `LINK_UP` against the dial's abandonment
+     * (a 3 ms timeout on even iterations, an interrupt on odd ones) at
+     * seeded-random offsets, so the reader also meets a dial that has
+     * already marked itself abandoned but not yet dropped its pending entry
+     * — the arm where the reader loses the compare-and-set and must close
+     * the link itself, which no single-moment test can place.
+     *
+     * Whatever the ordering, the invariant is one: the dial's link is closed
+     * exactly once (by the caller if the dial returned it, by the client if
+     * not) and nothing stays registered. The assertion holds for every
+     * interleaving, so the randomness can make it catch a defect, never fail
+     * a correct client.
+     */
+    @Test
+    fun `an abandoned DIAL racing its LINK_UP never leaves a registered link, in any ordering`() {
+        val random = Random(42)
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                repeat(1000) { i ->
+                    val interrupt = i % 2 == 1
+                    val outcome = ArrayBlockingQueue<Result<SidecarLink>>(1)
+                    val dialling = Thread({
+                        // offer, not put: an interrupt that lands after dial returned would make put throw.
+                        outcome.offer(
+                            runCatching {
+                                client.dial(ByteArray(NODE_ID_LEN) { 7 }, CountingListener(), (if (interrupt) 30_000L else 3L).milliseconds)
+                            },
+                        )
+                    }, "dial").apply { isDaemon = true; start() }
+                    val dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
+                    if (interrupt) {
+                        val answering = Thread { fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND)) }
+                        answering.start()
+                        spin(random.nextLong(0, 400_000))
+                        dialling.interrupt()
+                        answering.join()
+                    } else {
+                        spin(random.nextLong(1_500_000, 4_500_000))
+                        fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND))
+                    }
+                    val result = outcome.poll(30, TimeUnit.SECONDS) ?: fail("iteration $i: dial did not return within 30s")
+                    result.getOrNull()?.close()
+                    assertEquals(
+                        HostMessage.CloseLink(dial.link),
+                        fake.pollHostMessage(5_000),
+                        "iteration $i ($result): the link is closed, by the caller or by the client",
+                    )
+                    fake.send(SidecarMessage.LinkDown(dial.link, "closed"))
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (client.link(dial.link) != null && System.nanoTime() < deadline) Thread.sleep(1)
+                    assertNull(client.link(dial.link), "iteration $i ($result): nothing left registered")
+                }
+            }
+        }
+    }
+
+    private fun spin(nanos: Long) {
+        val end = System.nanoTime() + nanos
+        while (System.nanoTime() < end) Thread.onSpinWait()
+    }
 }
