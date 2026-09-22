@@ -63,6 +63,22 @@ import kotlin.time.Duration.Companion.seconds
  * after the release — the two QUIC handshakes, which `LINK_UP` and which
  * hello lands first on each side — is the real, unordered race.
  *
+ * Three release orders, one test each, the same end state asserted from all
+ * three (the real-sidecar counterparts of [MutualDialTest]'s three relay
+ * orders): [Release.TOGETHER], both `DIAL`s released at once; and
+ * [Release.LO_FIRST] / [Release.HI_FIRST], where one `DIAL` is released,
+ * its link is admitted at the far node, and only then is the other — already
+ * issued, still held — let through. HI_FIRST is the hardest: the larger id's
+ * link is already PEERED at the smaller id when the smaller id's outbound
+ * link arrives and must displace it.
+ *
+ * Why the staggered orders are forced too: releasing both at once and letting
+ * the network order them was observed to produce the staggered shapes only
+ * sometimes, and it also produced — in one unforced sample in a Linux
+ * container — a `send failed: connection lost` link error on the larger id's
+ * losing link. See `doc/distribution/findings.md`, the 2026-09-22 DSC2 BS-08
+ * entry.
+ *
  * ## And both sides are PROVEN to have dialled, in every trial
  *
  * The construction is not taken on trust. Each trial asserts, from the proxy
@@ -95,20 +111,44 @@ class MutualDialSidecarTest {
      * Two parties, one release. [arrive] blocks until both have arrived (or
      * [HOLD_SECONDS] pass) and says which. [open] releases a party still
      * waiting when a trial is torn down, so no relay thread outlives it.
+     *
+     * [heldBack], when set, names a party that — after both have arrived —
+     * waits a second time, on [releaseHeldBack], so the test can let the
+     * other party's link come up and be admitted first. Both `DIAL`s have
+     * still been ISSUED before any link exists; only the order in which they
+     * reach their sidecars is chosen.
      */
-    private class DialBarrier {
+    private class DialBarrier(val heldBack: String? = null) {
         private val latch = CountDownLatch(2)
+        private val second = CountDownLatch(1)
         val arrivals = CopyOnWriteArrayList<String>()
 
         fun arrive(label: String): Boolean {
             arrivals += label
             latch.countDown()
-            return latch.await(HOLD_SECONDS, TimeUnit.SECONDS)
+            val paired = latch.await(HOLD_SECONDS, TimeUnit.SECONDS)
+            if (paired && label == heldBack) second.await(HOLD_SECONDS, TimeUnit.SECONDS)
+            return paired
         }
+
+        fun releaseHeldBack() = second.countDown()
 
         fun open() {
             while (latch.count > 0) latch.countDown()
+            second.countDown()
         }
+    }
+
+    /** Which `DIAL` reaches its sidecar first, once both have been issued. */
+    private enum class Release(val heldBack: String?) {
+        /** Both released together; the QUIC handshakes race freely. */
+        TOGETHER(null),
+
+        /** The smaller id's link is up and admitted at the larger before the larger's `DIAL` leaves its proxy. */
+        LO_FIRST("hi"),
+
+        /** The mirror: the larger id's link is admitted first, and the smaller id's later OUTBOUND link must replace it. */
+        HI_FIRST("lo"),
     }
 
     /**
@@ -250,10 +290,10 @@ class MutualDialSidecarTest {
         return Endpoint(label, process, proxy, node, peering, timer, side)
     }
 
-    /** Wait for [proxy] to have forwarded a `DIAL` to its peer; a timeout is a SKIP only on the sidecar's own mDNS report. */
-    private fun awaitDialOrSkip(proxy: DialHoldingProxy, what: String) {
+    /** Wait for [label]'s policy to have issued its `DIAL` to the peer; a timeout is a SKIP only on the sidecar's own mDNS report. */
+    private fun awaitDialOrSkip(barrier: DialBarrier, label: String, what: String) {
         val deadline = System.currentTimeMillis() + (HOLD_SECONDS + 15) * 1_000
-        while (proxy.dialsToPeer.get() == 0) {
+        while (label !in barrier.arrivals) {
             if (System.currentTimeMillis() >= deadline) {
                 MulticastGate.reasonFromStderr(stderr)?.let { reason -> assumeTrue(false) { reason } }
                 fail("$what within ${HOLD_SECONDS + 15}s and no sidecar reported an mDNS problem")
@@ -262,8 +302,8 @@ class MutualDialSidecarTest {
         }
     }
 
-    private fun trial(binary: java.nio.file.Path, n: Int) {
-        val t = "trial $n"
+    private fun trial(binary: java.nio.file.Path, release: Release, n: Int) {
+        val t = "$release trial $n"
         val args = listOf("--offline", "--mdns")
         val p1 = SidecarProcess.spawn(binary, stderrSink = sink("$n-1"), args = args)
         val p2 = try {
@@ -276,15 +316,33 @@ class MutualDialSidecarTest {
         // gives it the OUTBOUND link and `hi` the INBOUND one — stated as facts
         // below rather than as a case analysis.
         val (loP, hiP) = if (Arrays.compareUnsigned(p1.nodeId, p2.nodeId) < 0) p1 to p2 else p2 to p1
-        val barrier = DialBarrier()
+        val barrier = DialBarrier(heldBack = release.heldBack)
         val opened = mutableListOf<AutoCloseable>(loP, hiP)
         try {
             val lo = endpoint("lo", loP, hiP.nodeId, barrier).also { opened.add(0, it) }
             val hi = endpoint("hi", hiP, loP.nodeId, barrier).also { opened.add(0, it) }
 
             // ---- both sides dialled: the forced race, and its proof.
-            awaitDialOrSkip(lo.proxy, "$t: lo never dialled hi")
-            awaitDialOrSkip(hi.proxy, "$t: hi never dialled lo")
+            awaitDialOrSkip(barrier, "lo", "$t: lo never dialled hi")
+            awaitDialOrSkip(barrier, "hi", "$t: hi never dialled lo")
+            when (release) {
+                Release.TOGETHER -> Unit
+                Release.LO_FIRST -> {
+                    await("$t: lo's link to be admitted at hi before hi's DIAL is released") {
+                        hi.node.links(lo.own).any { it.peered && it.direction == LinkDirection.INBOUND }
+                    }
+                    barrier.releaseHeldBack()
+                }
+                Release.HI_FIRST -> {
+                    await("$t: hi's link to be admitted at lo before lo's DIAL is released") {
+                        lo.node.links(hi.own).any { it.peered && it.direction == LinkDirection.INBOUND }
+                    }
+                    barrier.releaseHeldBack()
+                }
+            }
+            await("$t: both DIALs to have crossed their proxies") {
+                lo.proxy.dialsToPeer.get() >= 1 && hi.proxy.dialsToPeer.get() >= 1
+            }
             assertEquals(true, lo.proxy.releasedPaired, "$t: lo's DIAL was released as one of a pair (arrivals ${barrier.arrivals})")
             assertEquals(true, hi.proxy.releasedPaired, "$t: hi's DIAL was released as one of a pair (arrivals ${barrier.arrivals})")
 
@@ -340,12 +398,23 @@ class MutualDialSidecarTest {
         }
     }
 
-    @Test
-    fun `two real mdns sidecars that both dial end with one peering, the smaller id's outbound link, on both sides`() {
+    private fun trials(release: Release) {
         val binary = SidecarBinary.orSkip()
         MulticastGate.deliveryOrSkip()
-        for (n in 1..TRIALS) trial(binary, n)
+        for (n in 1..TRIALS) trial(binary, release, n)
     }
+
+    @Test
+    fun `two real mdns sidecars that both dial end with one peering, the smaller id's outbound link, on both sides`() =
+        trials(Release.TOGETHER)
+
+    @Test
+    fun `the same mutual dial with the smaller id's link admitted first ends with the same one peering`() =
+        trials(Release.LO_FIRST)
+
+    @Test
+    fun `the same mutual dial with the larger id's link admitted first ends with the smaller id's outbound link replacing it`() =
+        trials(Release.HI_FIRST)
 
     private companion object {
         /** Independent trials per run, each with fresh keys and fresh processes. */
