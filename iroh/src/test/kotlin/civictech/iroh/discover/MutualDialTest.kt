@@ -1,11 +1,14 @@
 package civictech.iroh.discover
 
 import civictech.iroh.HostMessage
+import civictech.iroh.IrohNode
+import civictech.iroh.IrohTransport
 import civictech.iroh.LinkDirection
 import civictech.iroh.SidecarMessage
 import civictech.iroh.await
 import civictech.iroh.quiesced
 import org.junit.jupiter.api.Test
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -367,6 +370,101 @@ class MutualDialTest {
             } finally {
                 release()
             }
+        }
+    }
+
+    /**
+     * computenet-07hpc, the mirror of the first computenet-311xs test at the
+     * LARGER id: B's dial thread is held after B's reader has settled B's own
+     * dial, so B's OUTBOUND link — B's tie-break loser — is up but not yet
+     * registered when A's hello on B's INBOUND winner is judged.
+     *
+     * `DiscoveredPeering.linksToSeed` does not seed that link at the larger
+     * id, so the gate judges A's hello as the only link and admits it without
+     * naming a loser. The loser is left to the normal path: once released, B
+     * registers its outbound link and says hello on it, A closes it quietly as
+     * ITS inbound loser, and B's connection classifies the resulting down as
+     * the far side's tie-break close. That down is the one tie-break close B
+     * counts, and it is quiet.
+     *
+     * Mutation (computenet-07hpc): replace `linksToSeed`'s larger-id guard
+     * with `if (true)`, seeding settled dials at both ids. B's gate then sees
+     * both directions and names the unregistered outbound link as the loser;
+     * `closeLink` finds no direction for it in the node's registry and closes
+     * it RAW rather than through the connection's quiet close, from inside the
+     * window. The in-window assertion below fails first: B wrote a
+     * `CLOSE_LINK` for its own outbound link. With the in-window assertions
+     * disabled, the mutant fails only "A closed the loser" and passes the
+     * quiet-outcome checks and [assertOnePeeringEachWay] (Darwin arm64): the
+     * raw close's down is still classified quiet — by the connection's `tieBreakLoss`
+     * predicate, because B's inbound winner is registered by then — and the
+     * verdict's count is deduplicated against it. So what the guard buys in
+     * this interleaving is WHICH node closes the loser and WHEN, not a
+     * difference in any counter; see the bead for that finding.
+     */
+    @Test
+    fun `the larger id's gate does not name its own settled but unregistered outbound loser`() {
+        val order = "A-first, B's dial thread held"
+        // Not runScenario: the hold and the listener must be installed BEFORE
+        // the sightings, or B's dial can pass `beforeDialAwait` unheld.
+        TwoNodeFakeRig.startSorted().use { rig ->
+            val a = rig.a
+            val b = rig.b
+            val release = b.holdDialThreads()
+            // Every down B reports for a link to A, with the connection's classification of it.
+            val bDowns = ConcurrentLinkedQueue<Pair<Long, IrohTransport.IrohConnection.LinkOutcome?>>()
+            b.node.onLinkEvent(object : IrohNode.NodeLinkListener {
+                override fun onDown(link: IrohNode.LinkView, outcome: IrohTransport.IrohConnection.LinkOutcome?) {
+                    bDowns += link.linkId to outcome
+                }
+            })
+            a.discover(b.own)
+            b.discover(a.own)
+            val dialFromB: HostMessage.Dial
+            val aInbound: Long
+            try {
+                val dialFromA = rig.dialFrom(a)
+                dialFromB = rig.dialFrom(b) // Written; B's dial thread is now held.
+                rig.connect(dialFromA, from = a, to = b)
+                rig.connect(dialFromB, from = b, to = a)
+                await("B's link from A to be up at B") { b.links(a.own).any { it.direction == LinkDirection.INBOUND } }
+                val bInbound = b.links(a.own).single { it.direction == LinkDirection.INBOUND }.linkId
+                await("B's link to be up at A") { a.links(b.own).any { it.direction == LinkDirection.INBOUND } }
+                aInbound = a.links(b.own).single { it.direction == LinkDirection.INBOUND }.linkId
+                await("B to judge A's hello on its winning inbound link and answer it") {
+                    rig.pump()
+                    rig.written.any { (who, m) -> who == "B" && m.linkOf() == bInbound }
+                }
+                // Let a close the gate might have posted reach the wire.
+                rig.quiesce(still = 2)
+                assertTrue(
+                    rig.written.none { (who, m) -> who == "B" && m is HostMessage.CloseLink },
+                    "B's gate named no loser it has not registered: B wrote ${rig.written.filter { it.first == "B" }.map { it.second }}",
+                )
+                assertTrue(
+                    b.links(a.own).none { it.direction == LinkDirection.OUTBOUND },
+                    "the window was held: B's dial thread has not registered its outbound link",
+                )
+                assertEquals(0L, b.peering.counters.tieBreakClosed.count, "B has closed nothing from inside the window")
+            } finally {
+                release()
+            }
+
+            // Released: the loser is closed by A, the node whose gate judged
+            // it with both links registered, and B learns of it at its down.
+            rig.quiesce()
+            await("B's outbound loser to go down") { bDowns.any { it.first == dialFromB.link } }
+            assertTrue(
+                rig.written.any { (who, m) -> who == "A" && m is HostMessage.CloseLink && m.link == aInbound },
+                "A closed the loser as its own inbound tie-break loser",
+            )
+            val outcome = bDowns.single { it.first == dialFromB.link }.second
+            assertEquals(true, outcome?.quiet, "B's outbound loser went down as a quiet tie-break close: $outcome")
+            assertEquals(false, outcome?.abandoned, "the tie-break close did not abandon the peer: $outcome")
+            assertEquals(null, outcome?.lastDenial, "no refusal is recorded against the loser: $outcome")
+            // And the rest: one count per node, no re-dial, no refusal
+            // attributed, no unadmitted open charged.
+            assertOnePeeringEachWay(rig, order)
         }
     }
 }
