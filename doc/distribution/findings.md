@@ -891,12 +891,26 @@ Evidence of record is CI's `iroh-sidecar` lane, which runs
 `:iroh:check -Piroh.enabled=true` unfiltered. On macOS the class reports
 SKIPPED by name, because the host has no multicast delivery (`ne2oh-B6`).
 
+**CI's first run of the class**, run 35682294768 (ubuntu-latest x86_64, PR #992
+head `00a5961c` merged with main `de4beef1`), executed it with 0 skipped:
+
+- `TOGETHER` passed 3 of 3 trials.
+- `LO_FIRST` passed 3 of 3 trials.
+- `HI_FIRST` passed trials 1 and 2 (the smaller node counted 0, then 1: both
+  values of the divergence below, on x86_64). Trial 3 failed on
+  `hi logged no link error`. Every end-state assertion before that one had held.
+  See the link-error section below.
+
 ### One divergence, pinned as landed, not fixed: `computenet-i74gh`
 
 In `HI_FIRST`, the smaller node's `DiscoveryCounters.tieBreakClosed` reads
-**0 in most trials and 1 in the rest** (container, across 62 `HI_FIRST` trials: 0 in 53, 1 in 9). The
-larger node's count is always 1. ktn1l-D16 says each node counts exactly one
-tie-break close, however it learned of the loss.
+**0 in most trials and 1 in the rest** (container, across 62 `HI_FIRST` trials:
+0 in 53, 1 in 9). The larger node's count is always 1. ktn1l-D16 says each node
+counts exactly one tie-break close, however it learned of the loss. `TOGETHER`
+can produce the same shape without forcing, when the race after the release
+happens to admit the larger node's link at the smaller node first. That was seen
+in 2 of 35 container `TOGETHER` trials after the 2026-09-22 main merge, and in 0
+of 55 before it; whether the merge made it likelier is not established.
 
 When the smaller node's OUTBOUND link comes up, it is already holding the larger
 node's link PEERED, and two events race at the smaller node:
@@ -916,20 +930,49 @@ all 9 trials were green with the smaller node counting 1. That was a diagnostic,
 not a proposed fix.
 
 The count is observability only: the end state above holds either way. The test
-pins the landed values for that single count, `{0, 1}` in `HI_FIRST` only, with
-the reason in its KDoc. A fix narrows that to `{1}`. Filed as bug
+pins the landed values for that single count, `{0, 1}` in `HI_FIRST` and
+`TOGETHER` (`LO_FIRST` stays `{1}`), with the reason in its KDoc. A fix narrows
+both to `{1}`. Filed as bug
 `computenet-i74gh`; nothing is changed in `DiscoveredPeering`.
 
-### Seen once, unforced, and not reproduced by any forced order
+### A second divergence, pinned narrowly: `computenet-yfg48`
 
-In one of the unforced samples, the larger node logged
-`send failed: sending a frame failed: connection lost` on its losing link. It
-had written to the link after the peer closed it, and `IrohConnection` reported
-the link "closed and will be re-dialled". No re-dial followed; the one-`DIAL`
-count held. The end state and the tie-break counts were otherwise correct. None
-of the 3 forced orders produced it in any trial, so the interleaving that does
-is not pinned by this test. It is recorded here as seen, NOT VERIFIED as
-reproducible, and not filed.
+The larger node can record a link-error pair on **its own dialled link**, which
+is the one aas-D7 discards at that node:
+
+1. `send failed: sending a frame failed: connection lost`
+2. `link N is no longer sending`, where N is that link's id
+
+This happens when the losing link was already PEERED at the larger node and
+carrying its Session's frames as it was torn down. The sidecar's host→peer pump
+fails on the lost QUIC connection, and a later SEND finds the pump gone
+(`iroh/sidecar/src/server.rs`). `IrohConnection`'s `onError` records both
+entries and prints "will be re-dialled", but no re-dial follows: the one-`DIAL`
+count holds. Nothing else is wrong: the end state, the counts and the absence
+of blame all hold.
+
+Where it has been seen:
+
+- An earlier version of this entry recorded it as "seen once, unforced, not
+  reproduced by any forced order". That is no longer true.
+- CI run 35682294768 reproduced it in a forced order, `HI_FIRST` trial 3, and it
+  failed the required check.
+- After the pin, a container run saw it once more, in a `TOGETHER` trial.
+
+The feature review filed it as bug `computenet-yfg48`.
+
+**Decision (computenet-md1dt): pin it, narrowly, rather than leave the PR red
+until `computenet-yfg48` is fixed.** BS-08's acceptance is about the peering the
+tie-break leaves, which is "exactly one live peering, and both sides agree". It
+does not cover how the transport reports the teardown of the link it discards,
+and that teardown is all this pair describes.
+
+The pin tolerates exactly those two strings, only on the larger node, only with
+the id of that node's recorded `DIAL` link, and only after every end-state
+assertion has held. Any other link error on either node fails the trial, as does
+any link error on the smaller node, whose OUTBOUND link survives. The pin's KDoc
+names `computenet-yfg48`. That bug's acceptance requires the pin to be removed,
+restoring the strict assertion, when the fix lands.
 
 ### Not verified
 
@@ -937,4 +980,6 @@ reproducible, and not filed.
   (`[DSC2-NV-01]`).
 - Only `DIAL` issue order is forced. The order of the QUIC handshakes and hellos
   after the release is sampled, not enumerated.
-- CI's `iroh-sidecar` lane had not run this class when this entry was written.
+- CI's `iroh-sidecar` lane has run this class only on `00a5961c` (run
+  35682294768, red on the `computenet-yfg48` link error, before the pin). This
+  entry's final head has not been run in CI.
