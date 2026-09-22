@@ -63,9 +63,11 @@ object ImposedFields {
      * an issue row exists, so a difference in one of them, ALONE, is never a
      * reason to import and never a reason to fail a post-import read-back.
      * They are still written into an [Imposition.row] when the winner
-     * carries them — `bd import` silently keeps its own stored value rather
-     * than rejecting the row — but [WriteBackPlanner.preflight] excludes them
-     * from every comparison it makes, which is the ONE place both the
+     * carries them — `bd import` keeps its own stored `created_at`, and stores
+     * its own rounding of the winner's `updated_at`, rather than rejecting the
+     * row — but [WriteBackPlanner.preflight] excludes them from its default
+     * field set ([COMPARABLE]; only the recorded losses of an already-decided
+     * Impose re-add `updated_at`, via [LOSS_FIELDS]), which is the ONE place both the
      * planner's Impose/NoOp decision ([WriteBackPlanner.plan]) and the
      * applier's post-import re-read ([WriteBackApplier]'s `readBackFailure`)
      * draw the set from (computenet-6wc.1.6 clause 3: defined once, used by
