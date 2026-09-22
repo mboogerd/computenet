@@ -875,6 +875,44 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `deleting an idea drops its facilitator override, even for a same-id idea recreated after it, and survives replay`() {
+        val journal = tmpJournal()
+        lateinit var before: String
+        withApp(journal) { _, probe ->
+            seed(probe)
+            val put = probe.putJson("""{"creator":"cat","score":8.5}""", "/topics/t/ideas/b/override")
+            assertEquals(200, put.statusCode(), put.body())
+            probe.awaitRow("b") { near(8.5, it.num("override")) }
+
+            assertEquals(200, probe.delete("/topics/t/ideas/b?creator=cat").statusCode())
+            // the deleted idea is gone from the aggregate entirely: no row survives to carry a stale override
+            val aggAfterDelete = probe.await(path = "/topics/t/aggregate") { row(it, "b") == null }
+            assertTrue(row(aggAfterDelete, "b") == null, aggAfterDelete)
+
+            // ids are slugs of the title (D5), so re-proposing "B" reclaims the same id "b"
+            val recreated = probe.postJson("""{"participant":"bob","title":"B"}""", "/topics/t/ideas")
+            assertEquals(200, recreated.statusCode(), recreated.body())
+            assertEquals("""{"id":"b"}""", recreated.body())
+
+            before = probe.await { s ->
+                val agg = parse(s)["aggregates"]!!.jsonObject["t"].toString()
+                row(agg, "b")?.get("override") == JsonNull
+            }
+            val aggBefore = parse(before)["aggregates"]!!.jsonObject["t"].toString()
+            assertEquals(JsonNull, row(aggBefore, "b")!!["override"], aggBefore)
+        }
+        val lines = Files.readAllLines(journal)
+        assertTrue(lines.any { """"op":"unidea"""" in it }, "$lines")
+
+        withApp(journal) { _, probe ->
+            val after = probe.await { it == before }
+            assertEquals(before, after)
+            val aggAfter = parse(after)["aggregates"]!!.jsonObject["t"].toString()
+            assertEquals(JsonNull, row(aggAfter, "b")!!["override"], aggAfter)
+        }
+    }
+
+    @Test
     fun `a restarted app replays its journal to a byte-equal state`() {
         val journal = tmpJournal()
         lateinit var before: String
