@@ -546,6 +546,34 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the Compare pairs mode roots and the duplicate-name check stays green`() = withApp { _, probe ->
+        // k6rrk-D7…D11 (ALN2.7): the pairwise-judgement panel inside the Compare view's #cmpMode
+        // toggle, served alongside place mode's roots and kept out of COMPARE_VIEW's dollar-sign ban.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        for (root in listOf(
+            "cmpMode", "cmpPairs", "cmpPairPrompt", "cmpPairA", "cmpPairB",
+            "cmpPickA", "cmpPickEqual", "cmpPickB", "cmpPairProgress", "cmpPairReset",
+        )) {
+            assertTrue("""id="$root"""" in body, "$root root")
+        }
+        // the "pairs · experimental" label sits on the #cmpMode pairs button, not merely somewhere on the page
+        val modeStart = body.indexOf("""id="cmpMode"""")
+        assertTrue(modeStart >= 0, "cmpMode root")
+        val modeBox = body.substring(modeStart, body.indexOf("</div>", modeStart))
+        assertTrue("experimental" in modeBox, "pairs button reads experimental: $modeBox")
+        assertTrue('$' !in COMPARE_VIEW, "COMPARE_VIEW is a plain raw string")
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+        // duplicate-top-level-name check (the same regex the earlier test runs), re-run here so a
+        // pairs-mode name that shadows an existing shell/view global fails this test directly
+        val decls = Regex("""(?m)^(?:function|let|const|var)\s+([A-Za-z_]\w*)""")
+            .findAll(body).map { it.groupValues[1] }.toList()
+        assertEquals(emptyList(), decls.groupBy { it }.filterValues { it.size > 1 }.keys.toList(),
+            "top-level script names declared more than once")
+    }
+
+    @Test
     fun `the events stream opens on the same frame as state`() = withApp { app, probe ->
         seed(probe)
         rate(probe, "ann", "a", "impact", "8")
