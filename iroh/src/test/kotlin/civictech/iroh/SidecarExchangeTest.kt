@@ -1,14 +1,21 @@
 package civictech.iroh
 
+import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
+import civictech.iroh.SidecarProtocol.NODE_ID_LEN
 import org.junit.jupiter.api.Test
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlin.time.Duration.Companion.milliseconds
@@ -18,7 +25,10 @@ import kotlin.time.Duration.Companion.milliseconds
  * [SidecarClient] against two real sidecar processes: A accepts, B dials.
  *
  * Skip-gated: without `-Piroh.enabled=true` this reports SKIPPED, never failed —
- * see [SidecarBinary].
+ * see [SidecarBinary]. The exception is the last section, an abandoned `DIAL`
+ * (computenet-r2zhu, computenet-r3301): its answers have to arrive at moments
+ * a real sidecar cannot be made to pick, so those tests drive a [FakeSidecar]
+ * and always run.
  */
 class SidecarExchangeTest {
 
@@ -181,5 +191,165 @@ class SidecarExchangeTest {
                 }
             }
         }
+    }
+
+    // ------------------------------------ an abandoned DIAL (r2zhu, r3301)
+
+    /** A listener that only counts: an abandoned dial's link must reach no listener at all. */
+    private class CountingListener : LinkListener {
+        val events = AtomicInteger()
+        override fun onData(link: SidecarLink, payload: ByteArray) { events.incrementAndGet() }
+        override fun onDown(link: SidecarLink, reason: String) { events.incrementAndGet() }
+        override fun onError(link: SidecarLink, reason: String) { events.incrementAndGet() }
+    }
+
+    private fun dialOnThread(client: SidecarClient, timeoutMs: Long = 30_000): ArrayBlockingQueue<Result<SidecarLink>> {
+        val outcome = ArrayBlockingQueue<Result<SidecarLink>>(1)
+        Thread({
+            outcome.put(runCatching { client.dial(ByteArray(NODE_ID_LEN) { 7 }, CountingListener(), timeoutMs.milliseconds) })
+        }, "dial").apply { isDaemon = true }.start()
+        return outcome
+    }
+
+    /**
+     * computenet-r2zhu. `onLinkUp` registers the link and counts the latch
+     * down; an interrupt that reaches the dialling thread before it leaves
+     * `CountDownLatch.await` still makes `await` throw, because it checks the
+     * interrupt flag before the count. The link is then up at the sidecar and
+     * registered here, and no caller holds it. The client must close it.
+     *
+     * The interrupt is placed by [SidecarClient.beforeDialAwait], and only
+     * after the reader has finished `onLinkUp`: the fake sends a
+     * `PEER_DISCOVERED` right behind the `LINK_UP`, the reader dispatches in
+     * order, so its arrival at the watch listener says the settlement is done.
+     */
+    @Test
+    fun `a dial interrupted after its LINK_UP settled closes the link before it throws`() {
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                val settled = CountDownLatch(1)
+                val watching = Thread {
+                    client.watchPeers(object : PeerWatchListener {
+                        override fun onDiscovered(nodeId: ByteArray, addresses: List<String>) = settled.countDown()
+                        override fun onExpired(nodeId: ByteArray) = Unit
+                    })
+                }.apply { start() }
+                assertEquals(HostMessage.WatchPeers, fake.nextHostMessage())
+                fake.send(SidecarMessage.Watching)
+                watching.join(30_000)
+
+                client.beforeDialAwait = { _ ->
+                    check(settled.await(30, TimeUnit.SECONDS)) { "the reader never finished onLinkUp" }
+                    Thread.currentThread().interrupt()
+                }
+                val outcome = dialOnThread(client)
+                val dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
+                fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND))
+                fake.send(SidecarMessage.PeerDiscovered(ByteArray(NODE_ID_LEN) { 1 }, listOf("127.0.0.1:1")))
+
+                val result = outcome.poll(30, TimeUnit.SECONDS) ?: fail("dial did not return within 30s")
+                assertIs<InterruptedException>(result.exceptionOrNull(), "the interrupted dial throws, as before: $result")
+                assertEquals(
+                    HostMessage.CloseLink(dial.link),
+                    fake.pollHostMessage(5_000),
+                    "the abandoned dial's settled link is closed (CLOSE_LINK) — nobody else can close it",
+                )
+                assertNull(client.link(dial.link), "and no longer registered: no caller holds it")
+                assertEquals(emptyList(), client.openLinks, "no link left registered at all")
+            }
+        }
+    }
+
+    /**
+     * computenet-r3301. A `DIAL` that timed out has already gone out; a
+     * `LINK_UP` for it that arrives later finds no pending dial. It is the
+     * host's own abandoned dial (direction OUTBOUND), not an accepted link,
+     * so the client closes it and the inbound handler never sees it.
+     */
+    @Test
+    fun `a LINK_UP answering a timed-out DIAL is closed, not handed to the inbound handler`() {
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                val accepted = LinkedBlockingQueue<SidecarLink>()
+                client.onInboundLink { link -> accepted.put(link); CountingListener() }
+
+                val outcome = dialOnThread(client, timeoutMs = 200)
+                val dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
+                val result = outcome.poll(30, TimeUnit.SECONDS) ?: fail("dial did not time out within 30s")
+                assertIs<SidecarException>(result.exceptionOrNull(), "the unanswered dial times out: $result")
+
+                fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND))
+                assertEquals(
+                    HostMessage.CloseLink(dial.link),
+                    fake.pollHostMessage(5_000),
+                    "the late answer to the abandoned DIAL is closed",
+                )
+                assertNull(accepted.poll(300, TimeUnit.MILLISECONDS), "the inbound handler never saw it")
+                assertEquals(emptyList(), client.openLinks, "and nothing is left registered")
+            }
+        }
+    }
+
+    /**
+     * computenet-r2zhu, every ordering. The two tests above each place one
+     * moment; this one races the `LINK_UP` against the dial's abandonment
+     * (a 3 ms timeout on even iterations, an interrupt on odd ones) at
+     * seeded-random offsets, so the reader also meets a dial that has
+     * already marked itself abandoned but not yet dropped its pending entry
+     * — the arm where the reader loses the compare-and-set and must close
+     * the link itself, which no single-moment test can place.
+     *
+     * Whatever the ordering, the invariant is one: the dial's link is closed
+     * exactly once (by the caller if the dial returned it, by the client if
+     * not) and nothing stays registered. The assertion holds for every
+     * interleaving, so the randomness can make it catch a defect, never fail
+     * a correct client.
+     */
+    @Test
+    fun `an abandoned DIAL racing its LINK_UP never leaves a registered link, in any ordering`() {
+        val random = Random(42)
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                repeat(1000) { i ->
+                    val interrupt = i % 2 == 1
+                    val outcome = ArrayBlockingQueue<Result<SidecarLink>>(1)
+                    val dialling = Thread({
+                        // offer, not put: an interrupt that lands after dial returned would make put throw.
+                        outcome.offer(
+                            runCatching {
+                                client.dial(ByteArray(NODE_ID_LEN) { 7 }, CountingListener(), (if (interrupt) 30_000L else 3L).milliseconds)
+                            },
+                        )
+                    }, "dial").apply { isDaemon = true; start() }
+                    val dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
+                    if (interrupt) {
+                        val answering = Thread { fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND)) }
+                        answering.start()
+                        spin(random.nextLong(0, 400_000))
+                        dialling.interrupt()
+                        answering.join()
+                    } else {
+                        spin(random.nextLong(1_500_000, 4_500_000))
+                        fake.send(SidecarMessage.LinkUp(dial.link, dial.peerId, DIRECTION_OUTBOUND))
+                    }
+                    val result = outcome.poll(30, TimeUnit.SECONDS) ?: fail("iteration $i: dial did not return within 30s")
+                    result.getOrNull()?.close()
+                    assertEquals(
+                        HostMessage.CloseLink(dial.link),
+                        fake.pollHostMessage(5_000),
+                        "iteration $i ($result): the link is closed, by the caller or by the client",
+                    )
+                    fake.send(SidecarMessage.LinkDown(dial.link, "closed"))
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (client.link(dial.link) != null && System.nanoTime() < deadline) Thread.sleep(1)
+                    assertNull(client.link(dial.link), "iteration $i ($result): nothing left registered")
+                }
+            }
+        }
+    }
+
+    private fun spin(nanos: Long) {
+        val end = System.nanoTime() + nanos
+        while (System.nanoTime() < end) Thread.onSpinWait()
     }
 }
