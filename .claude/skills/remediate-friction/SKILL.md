@@ -29,7 +29,8 @@ The lane works in two modes, and the nightly scheduled run does both:
 ## 1. Start
 
 ```bash
-echo "${BEADS_ACTOR:?}"; git fetch origin main; bd dolt pull
+echo "${BEADS_ACTOR:?}"; bd where | head -1   # the MAIN checkout's .beads: a harness
+git fetch origin main; bd dolt pull          # worktree's own has no remote — rerun bd there
 .claude/skills/remediate-friction/scripts/recurrence-audit.py   # landed fixes that did not take
 bd list --parent=computenet-wpvy --all --json | sed -n '/^[[{]/,/^[]}]/p' \
   | jq '[(if type=="array" then . else (.issues // []) end)[] | select(.status != "closed")]'
