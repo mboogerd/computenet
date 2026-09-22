@@ -560,6 +560,14 @@ class TwoNodeRig private constructor(
          * handing the batch to the projector, so "checkpoint at head" means
          * "every record of my own workspace applied". Says nothing about
          * gossip from the peer; that is what [TwoNodeRig.await] is for.
+         *
+         * A head commit that carries no record — an `events`-only no-op
+         * `bd update`, a `bd comments add` — still satisfies this: the poller
+         * advances the checkpoint past record-less commits to the head it
+         * observed (bug computenet-btt30, pinned by
+         * [IssueLessCommitQuiesceTest]). Before that fix a test whose LAST
+         * mutation was record-less waited out the whole budget here, reading
+         * "checkpoint is 1 commit(s) behind head" with `poll=DID NOT ADVANCE`.
          */
         fun quiesce(timeoutMs: Long = AWAIT_CONVERGENCE_MS) {
             val feed = DoltCommitFeed(workspace.doltRoot)
@@ -591,7 +599,9 @@ class TwoNodeRig private constructor(
          *
          * - [checkpoint] is the poll loop's own record of the last commit of
          *   **this** workspace it has applied: it is written after the batch
-         *   reaches the projector, so it moving means records were folded.
+         *   reaches the projector, so it moving means the loop read new
+         *   commits — records folded, or record-less commits passed over
+         *   (computenet-btt30), which is progress too.
          * - [echoCount] + [localCount] is every record this node's [EchoGate]
          *   has classified since start — the poll loop's throughput counter,
          *   and the one that still moves when the checkpoint is already at
