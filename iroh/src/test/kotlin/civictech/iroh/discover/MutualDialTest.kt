@@ -369,6 +369,64 @@ class MutualDialTest {
             }
         }
     }
+
+    /**
+     * computenet-07hpc, the mirror of the first computenet-311xs test at the
+     * LARGER id: B's dial thread is held after B's reader has settled B's own
+     * dial, so B's OUTBOUND link — B's tie-break loser — is up but not yet
+     * registered when A's hello on B's INBOUND winner is judged.
+     *
+     * `DiscoveredPeering.linksToSeed` does not seed that link here, so the
+     * gate judges A's hello as the only link and admits it without naming a
+     * loser. The loser is left to the normal path: once released, B registers
+     * its outbound link and says hello on it, and A closes it quietly as ITS
+     * inbound loser. That close is the one tie-break close each node counts.
+     *
+     * Mutation (computenet-07hpc): replace `linksToSeed`'s larger-id guard
+     * with `if (true)`, seeding settled dials at both ids. B's gate then sees
+     * both directions and names the unregistered outbound link as the loser,
+     * and `closeLink` — which reads the link's direction from the node's
+     * registry and finds nothing — closes it RAW rather than through the
+     * connection's quiet close. The first assertion below fails: B wrote a
+     * `CLOSE_LINK` for its own outbound link from inside the window.
+     */
+    @Test
+    fun `the larger id's gate does not name its own settled but unregistered outbound loser`() {
+        runScenario("A-first, B's dial thread held") { rig ->
+            val a = rig.a
+            val b = rig.b
+            val release = b.holdDialThreads()
+            try {
+                val dialFromA = rig.dialFrom(a)
+                val dialFromB = rig.dialFrom(b) // Written; B's dial thread is now held.
+                rig.connect(dialFromA, from = a, to = b)
+                rig.connect(dialFromB, from = b, to = a)
+                await("B's link from A to be up at B") { b.links(a.own).any { it.direction == LinkDirection.INBOUND } }
+                val bInbound = b.links(a.own).single { it.direction == LinkDirection.INBOUND }.linkId
+                await("B to judge A's hello on its winning inbound link and answer it") {
+                    rig.pump()
+                    rig.written.any { (who, m) -> who == "B" && m.linkOf() == bInbound }
+                }
+                // Give a close the gate might have posted time to reach the wire.
+                rig.quiesce(still = 2)
+                assertTrue(
+                    rig.written.none { (who, m) -> who == "B" && m is HostMessage.CloseLink && m.link == dialFromB.link },
+                    "B's gate named no loser it has not registered: B wrote ${rig.written.filter { it.first == "B" }.map { it.second }}",
+                )
+                assertTrue(
+                    b.links(a.own).none { it.direction == LinkDirection.OUTBOUND },
+                    "the window was held: B's dial thread has not registered its outbound link",
+                )
+                assertEquals(0L, b.peering.counters.tieBreakClosed.count, "B has not closed anything yet")
+            } finally {
+                release()
+            }
+            // Released: B registers its loser and says hello on it, and A
+            // closes it as its own inbound loser. runScenario then asserts the
+            // close was quiet everywhere — counted once on each node, no
+            // re-dial, no refusal, no unadmitted open charged.
+        }
+    }
 }
 
 /** The link a host message is about, or null for a control message. */
