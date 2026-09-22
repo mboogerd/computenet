@@ -760,18 +760,20 @@ def running_elsewhere(actor, feature, candidate_ids):
         if files:
             token = (task.get("metadata") or {}).get("holder")
             out.append({"id": tid, "files": sorted(files),
-                        "holder": holder_state(token) if token else "NONE"})
+                        "holder": holder_state(token, task.get("updated_at")) if token else "NONE"})
     return out
 
 
 RELEASABLE = ("DEAD", "STALE")
 
 
-def holder_state(token):
-    """session-holder.sh --check's answer for `token`; UNKNOWN if it cannot run."""
+def holder_state(token, updated_at=None):
+    """session-holder.sh --check's answer for `token`; UNKNOWN if it cannot run.
+    `updated_at` keeps a long-running session off the STALE path (computenet-jqxqk)."""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session-holder.sh")
+    cmd = [script, "--check", token] + ([updated_at] if updated_at else [])
     try:
-        out = subprocess.run([script, "--check", token], capture_output=True, text=True, timeout=30)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return "UNKNOWN"
     words = out.stdout.split()
