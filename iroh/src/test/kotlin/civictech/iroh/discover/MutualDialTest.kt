@@ -257,11 +257,16 @@ class MutualDialTest {
      */
     @Test
     fun `A's hello-judging reader sees its own settled dial before the dial thread registers it`() {
-        runScenario("A-first, A's dial thread held") { rig ->
+        val order = "A-first, A's dial thread held"
+        // Not runScenario: the hold must be installed BEFORE the sightings,
+        // or A's dial can pass `beforeDialAwait` unheld (computenet-zd4nb).
+        TwoNodeFakeRig.startSorted().use { rig ->
             val a = rig.a
             val b = rig.b
             val release = a.holdDialThreads()
             try {
+                a.discover(b.own)
+                b.discover(a.own)
                 val dialFromA = rig.dialFrom(a)
                 val dialFromB = rig.dialFrom(b)
                 rig.connect(dialFromA, from = a, to = b)
@@ -287,6 +292,8 @@ class MutualDialTest {
             } finally {
                 release()
             }
+            rig.quiesce()
+            assertOnePeeringEachWay(rig, order)
         }
     }
 
@@ -311,11 +318,16 @@ class MutualDialTest {
      */
     @Test
     fun `a peered loser whose down lands before this node's own settled dial is registered is counted once`() {
-        runScenario("B's hello first, A's dial thread held") { rig ->
+        val order = "B's hello first, A's dial thread held"
+        // Not runScenario: the hold must be installed BEFORE the sightings,
+        // or A's dial can pass `beforeDialAwait` unheld (computenet-zd4nb).
+        TwoNodeFakeRig.startSorted().use { rig ->
             val a = rig.a
             val b = rig.b
             val release = a.holdDialThreads()
             try {
+                a.discover(b.own)
+                b.discover(a.own)
                 val dialFromB = rig.dialFrom(b)
                 val dialFromA = rig.dialFrom(a) // Written; A's dial thread is now held.
 
@@ -370,6 +382,8 @@ class MutualDialTest {
             } finally {
                 release()
             }
+            rig.quiesce()
+            assertOnePeeringEachWay(rig, order)
         }
     }
 
