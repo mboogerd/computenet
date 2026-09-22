@@ -606,9 +606,16 @@ class DiscoveredPeering private constructor(
      * raw link would be the same physical close read as a peer that dropped us.
      * An ACCEPTED link has no connection and nothing to charge, so the raw
      * close is the right one there.
+     *
+     * It counts nothing. The gate counted [linkId] when it posted this close,
+     * and counting it again here was not idempotent: when the loser's
+     * `LINK_DOWN` is read just before the hello that condemns it, and the
+     * policy thread has not yet taken that down off the queue, the gate still
+     * finds the loser in the table and counts it, the down then runs first and
+     * clears its mark from [tieBreakCounted], and a count here would move the
+     * counter a second time for the same link (ktn1l-D16, computenet-i74gh).
      */
     private fun closeLink(key: NodeKey, linkId: Long) {
-        countTieBreakClose(linkId)
         val direction = node.links(key.bytes).firstOrNull { it.linkId == linkId }?.direction
         val connection = connections[key]
         val closed = runCatching {

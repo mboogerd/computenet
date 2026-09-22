@@ -925,6 +925,66 @@ class DiscoveredPeeringTest {
         }
     }
 
+    /** `onLinkDown`, called past the queue — the technique [onAdmittedDirectly] uses. */
+    private fun DiscoveredPeering.onLinkDownDirectly(view: IrohNode.LinkView) {
+        val downClass = Class.forName("civictech.iroh.discover.DiscoveredPeering\$Command\$LinkDown")
+        val ctor = downClass.getDeclaredConstructor(
+            IrohNode.LinkView::class.java,
+            IrohTransport.IrohConnection.LinkOutcome::class.java,
+        )
+        ctor.isAccessible = true
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("onLinkDown", downClass)
+        method.isAccessible = true
+        method.invoke(this, ctor.newInstance(view, null))
+    }
+
+    /** `closeLink`, the body of a queued `CloseLoser`, called past the queue. */
+    private fun DiscoveredPeering.closeLinkDirectly(key: NodeKey, linkId: Long) {
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("closeLink", NodeKey::class.java, java.lang.Long.TYPE)
+        method.isAccessible = true
+        method.invoke(this, key, linkId)
+    }
+
+    /**
+     * ktn1l-D16's "counted once", in the interleaving where the loser's
+     * `LINK_DOWN` is read just BEFORE the hello that condemns it and the
+     * policy thread is still behind (computenet-i74gh). The gate then finds
+     * the loser in the table and counts it; the down, handled next, clears the
+     * loser's mark; and the `CloseLoser` the gate posted runs last.
+     *
+     * The race is forced at the seam: the two hellos are judged by calling the
+     * gate directly (as the computenet-n0hew test does), then the down and the
+     * close are run in that order past the queue. Link ids that no node
+     * registry holds keep the down from counting on its own, so only a close
+     * that counts can move the counter past 1.
+     *
+     * Mutation: restore `countTieBreakClose(linkId)` at the top of
+     * `closeLink` — the one closed link is counted twice.
+     */
+    @Test
+    fun `a losing link whose down is handled between its verdict and its close is counted once`() {
+        withPeering { rig ->
+            val remote = nodeIdRelativeToOwn(smallerThanOwn = false) // this node is the smaller id: INBOUND loses
+            val keyId = keyOf(remote)
+            val peer = PeerId("remote")
+
+            assertEquals(Verdict.Admit, rig.node.gate.judge(keyId, remote, LinkDirection.INBOUND, 9L, peer))
+            assertEquals(
+                Verdict.Admit,
+                rig.node.gate.judge(keyId, remote, LinkDirection.OUTBOUND, 10L, peer),
+                "the smaller id's OUTBOUND link wins and names inbound link 9 for closing",
+            )
+            assertEquals(1L, rig.peering.counters.tieBreakClosed.count, "the gate counts the loser at its verdict")
+
+            val loser = IrohNode.LinkView(9L, remote, LinkDirection.INBOUND, IrohNode.LinkSource.ACCEPTED, peered = true, attributedPeer = peer)
+            rig.peering.onLinkDownDirectly(loser)
+            rig.peering.closeLinkDirectly(NodeKey(remote), 9L)
+            rig.drained() // and the queued CloseLoser has run too
+
+            assertEquals(1L, rig.peering.counters.tieBreakClosed.count, "one closed link, counted once")
+        }
+    }
+
     // ------------------------------- BS-05a: a stranger is dialled, then refused
 
     /**
