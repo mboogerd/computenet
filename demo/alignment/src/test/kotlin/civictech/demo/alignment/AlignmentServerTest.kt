@@ -336,6 +336,11 @@ class AlignmentServerTest {
         assertTrue("""id="weights"""" in page.body(), "weights root")
         assertTrue("""id="ranking"""" in page.body(), "ranking root")
         assertTrue("""type="range"""" in page.body(), "range inputs")
+        // 10mvq: Rate's pager, Board's Discuss/mode-switch/scatter roots, continuous sliders
+        for (id in listOf("pager", "discuss", "boardMode", "scatter")) {
+            assertTrue("""id="$id"""" in page.body(), "$id root")
+        }
+        assertTrue("""step="any"""" in page.body(), "continuous slider step")
         // the v2 shell (computenet-0dvra.1): landing, Setup root, identity chip, phase indicator,
         // the Board's gate root, and the colour tokens with their dark override
         for (id in listOf("topics", "setup", "identity", "phase", "gate")) {
