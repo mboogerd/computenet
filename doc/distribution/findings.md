@@ -904,39 +904,65 @@ head `00a5961c` merged with main `de4beef1`), executed it with 0 skipped:
   `hi logged no link error`. Every end-state assertion before that one had held.
   See the link-error section below.
 
-### One divergence, pinned as landed, not fixed: `computenet-i74gh`
+### One divergence, fixed: `computenet-i74gh`
 
-In `HI_FIRST`, the smaller node's `DiscoveryCounters.tieBreakClosed` reads
-**0 in most trials and 1 in the rest** (container, across 62 `HI_FIRST` trials:
-0 in 53, 1 in 9). The larger node's count is always 1. ktn1l-D16 says each node
-counts exactly one tie-break close, however it learned of the loss. `TOGETHER`
-can produce the same shape without forcing, when the race after the release
-happens to admit the larger node's link at the smaller node first. That was seen
-in 2 of 35 container `TOGETHER` trials after the 2026-09-22 main merge, and in 0
-of 55 before it; whether the merge made it likelier is not established.
+In `HI_FIRST`, the smaller node's `DiscoveryCounters.tieBreakClosed` was
+observed to read **0 in most trials and 1 in the rest** (container, across 62
+`HI_FIRST` trials: 0 in 53, 1 in 9). The larger node's count was always 1.
+ktn1l-D16 says each node counts exactly one tie-break close, however it
+learned of the loss. `TOGETHER` could produce the same shape without forcing,
+when the race after the release happened to admit the larger node's link at
+the smaller node first. That was seen in 2 of 35 container `TOGETHER` trials
+after the 2026-09-22 main merge, and in 0 of 55 before it; whether the merge
+made it likelier was never established.
 
-When the smaller node's OUTBOUND link comes up, it is already holding the larger
-node's link PEERED, and two events race at the smaller node:
+When the smaller node's OUTBOUND link comes up, it is already holding the
+larger node's link PEERED, and two events raced at the smaller node:
 
-- **The count is 1** when the larger node's hello on the new outbound link is
-  judged first. The gate answers `Admit(close = the inbound link)` and counts
-  that link.
-- **The count is 0** when the `LINK_DOWN` of the inbound link, which the larger
-  node has already closed as its loser, lands first.
-  `DiscoveredPeering.onLinkDown` classifies an accepted link as a tie-break loss
-  only when it was never peered (`outcome == null && !view.peered &&
-  otherLinkUp`), so nothing is counted. The later hello then finds no second
-  link, so the gate counts nothing either.
+- **The count was 1** when the larger node's hello on the new outbound link
+  was judged first. The gate answers `Admit(close = the inbound link)` and
+  counts that link.
+- **The count was 0** when the `LINK_DOWN` of the inbound link, which the
+  larger node had already closed as its loser, landed first.
+  `DiscoveredPeering.onLinkDown` classified an accepted link as a tie-break
+  loss only when it was never peered (`outcome == null && !view.peered &&
+  otherLinkUp`), so nothing was counted there. The later hello then found no
+  second link, so the gate counted nothing either.
 
-A container-only mutation confirmed the 0 route: with `!view.peered` removed,
-all 9 trials were green with the smaller node counting 1. That was a diagnostic,
-not a proposed fix.
+A container-only mutation confirmed the 0 route at the time: with
+`!view.peered` removed, all 9 trials were green with the smaller node
+counting 1. That was a diagnostic, not the shipped fix.
 
-The count is observability only: the end state above holds either way. The test
-pins the landed values for that single count, `{0, 1}` in `HI_FIRST` and
-`TOGETHER` (`LO_FIRST` stays `{1}`), with the reason in its KDoc. A fix narrows
-both to `{1}`. Filed as bug
-`computenet-i74gh`; nothing is changed in `DiscoveredPeering`.
+**Fixed by `computenet-i74gh`** (PR #1008, merged to main as `ca9b11c0`,
+worked together with `computenet-oqpqf` because both change
+`DiscoveredPeering.onLinkDown`'s tie-break-loss classification). The fix
+replaces the `!view.peered` predicate: `onLinkDown` now counts an ACCEPTED
+link in this node's *losing direction* as a tie-break loss whenever a link of
+the *opposite* direction is up, whether or not the losing link was ever
+admitted — so the smaller node's inbound link is counted on its `LINK_DOWN`
+even though it had already been peered. `closeLink` no longer recounts
+separately (removing its count was checked safe: the only `CloseLoser` post
+happens from `toVerdict Admit`, which counts before it posts).
+
+`MutualDialSidecarTest` dropped its `{0, 1}` allowance (`Release.loTieBreaksLanded`)
+and now asserts the smaller node's `tieBreakClosed` is exactly 1 in all three
+orders; the KDoc caveats naming `computenet-i74gh` were removed. Evidence
+recorded on `computenet-i74gh`'s feature-review comment (2026-09-22):
+
+- CI `iroh-sidecar` lane, run `35738300041`, job `106781118880` (Linux,
+  head `0c0f44ac`): `MutualDialSidecarTest` executed `TOGETHER`, `LO_FIRST`
+  and `HI_FIRST`, 3 trials each, asserting the smaller node's
+  `tieBreakClosed == 1` in every order. All passed.
+- A local mutation (Darwin arm64, `--rerun`): restoring the old
+  `!view.peered` predicate reddens `MutualDialTest`'s new HI_FIRST-shaped
+  case ("the larger id's link admitted first, with its close overtaking its
+  hello…"), which times out awaiting the smaller node's tie-break count.
+
+No container (Linux aarch64) run of the fix itself is recorded on
+`computenet-i74gh` or `computenet-oqpqf`; the fix's own evidence is the
+Darwin-local mutation above and the CI Linux x86_64 run cited above
+(unverified: whether the fix has also been exercised under the aarch64
+container harness used for the pre-fix measurements in this entry).
 
 ### A second divergence, pinned, then fixed in the sidecar: `computenet-yfg48`
 
@@ -1007,8 +1033,9 @@ copy, no host mounts), with the pin removed, at `ab7dfccb`:
   (3, expected 0). That is a different defect, on the receive side: frames that
   arrive on a dialled link which the node's own gate closed quietly are charged
   to `preHelloDrops`. It is filed as `computenet-3mcum`.
-- `HI_FIRST`'s smaller-node count read 0 in 65 trials and 1 in 7
-  (`computenet-i74gh`, unchanged by this fix).
+- `HI_FIRST`'s smaller-node count read 0 in 65 trials and 1 in 7, unchanged by
+  the `computenet-yfg48` fix (it does not touch `DiscoveredPeering`); this was
+  the divergence separately fixed by `computenet-i74gh` above.
 
 Evidence: `~/computenet-runs/computenet-yfg48/container-iter/`.
 
