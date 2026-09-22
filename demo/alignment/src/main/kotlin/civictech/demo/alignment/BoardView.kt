@@ -27,9 +27,12 @@ package civictech.demo.alignment
  * re-enters with a staggered fade/slide and the legend fades in; `prefers-reduced-motion:
  * reduce` disables the stagger and the slide.
  *
- * `renderBoard()` reads only `currentTopic()`, `state.aggregates[t]` and `boardGate(t)` — never
- * `state.ratings`, never a participant name. Bar segments are the API's `contribution`s, never
- * recomputed; the bar scale is the topic's max ranked score. Spread bands and the agreement
+ * `renderBoard()` reads `currentTopic()`, `state.aggregates[t]`, `boardGate(t)` and, for the
+ * Discuss rows' "decided: …" line (w0i5h-D12), the idea's `note` in `state.ideas`. `state.ratings`
+ * — every participant's raw ratings, and so their names — is read in exactly one place in the
+ * Board slice: `renderDrill()` in [DRILLDOWN_VIEW] (DrilldownView.kt), inside its
+ * `boardGate(t).open` check (w0i5h-D8); nothing else here reads it or renders a participant name.
+ * Bar segments are the API's `contribution`s, never recomputed; the bar scale is the topic's max ranked score. Spread bands and the agreement
  * indicator are layout/selection over the API's `n`/`mean`/`stdev`/`split` values, never a
  * recomputed statistic. Shared helper contract: the comment block at the top of the shell's
  * script in [AlignmentPage.kt]. No `$` anywhere.
@@ -39,6 +42,14 @@ package civictech.demo.alignment
  * to form [BOARD_VIEW]; its root lives here, after `#discuss`, and is hidden together with the
  * board's other roots while the gate is closed. `renderBoard()` calls `renderScatter(t, ideas)`
  * when the gate is open.
+ *
+ * The split drill-down (computenet-w0i5h.2, w0i5h-D6/D7) is [DRILLDOWN_VIEW], concatenated after
+ * [SCATTER_VIEW]: a row's split pill and each `#discuss` row are button-like (focusable, click or
+ * Enter/Space) and call `openDrill(t, f.id, firstSplitDim(t, f))`. `renderBoard()` calls
+ * `renderDrill()` after `renderScatter` while the gate is open and `closeDrill()` on each early
+ * return (no topic, pending, closed), so the dialog is closed and unopenable while the Board is
+ * gated for the viewer — the gate itself (`boardGate`, computenet-aa6gl's parked rule) is
+ * consumed as-is.
  */
 internal const val BOARD_MAIN = """
 <style>
@@ -105,6 +116,14 @@ internal const val BOARD_MAIN = """
   #discuss .drow:last-child { border-bottom: none; }
   #discuss .drow .dttl { font-weight: 600; }
   #discuss .drow .dsplit { color: var(--muted); font-size: var(--fs-1); margin-top: .15rem; }
+  #discuss .drow { cursor: pointer; border-radius: 4px; }
+  #discuss .drow:hover .dttl { color: var(--accent); }
+  #discuss .drow:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #discuss .drow .dnote { font-size: var(--fs-1); margin-top: .15rem; color: var(--ink);
+                          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #discuss .drow .dnote[hidden] { display: none; }
+  .rankrow .pill.split { cursor: pointer; }
+  .rankrow .pill.split:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   #board .note { color: var(--muted); font-size: var(--fs-1); margin-top: .6rem; }
   @media (prefers-reduced-motion: reduce) {
     #weights { transition: none; }
@@ -121,12 +140,14 @@ internal const val BOARD_MAIN = """
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
   <div id="scatter" hidden></div>
-  <p class="note">Bar segments show each dimension's weighted contribution to the score; a ÷ badge shows the cost divisor. The indicator marks how split the team is on an idea; Discuss lists the split ideas. Switch to spread to see each dimension's rated range.</p>
+  <p class="note">Bar segments show each dimension's weighted contribution to the score; a ÷ badge shows the cost divisor. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
 </section>
 <script>
 // ── Board: the aggregate view ──────────────────────────────────────────────
-// Reads currentTopic(), state.aggregates[t] and boardGate(t) only — never
-// state.ratings — so no participant name is ever rendered here. Ranked rows
+// Reads currentTopic(), state.aggregates[t], boardGate(t) and the ideas'
+// notes in state.ideas. state.ratings (and so any participant name) is read
+// only by renderDrill() in the drill-down slice, inside its boardGate(t).open
+// check — never by the code in this script. Ranked rows
 // arrive server-sorted (score desc, rating count desc, id asc) followed by
 // the unscored ones; the page never re-sorts and never recomputes a score, a
 // contribution, a mean or a stdev.
@@ -172,6 +193,7 @@ function renderBoard() {
     discussBox.hidden = true;
     if (scatterBox) scatterBox.hidden = true;
     if (noteEl) noteEl.hidden = true;
+    closeDrill();
     return;
   }
   const g = boardGate(t);
@@ -186,6 +208,7 @@ function renderBoard() {
     discussBox.hidden = true;
     if (scatterBox) scatterBox.hidden = true;
     if (noteEl) noteEl.hidden = true;
+    closeDrill();
     return;
   }
   const was = lastOpen[t.id];
@@ -200,6 +223,7 @@ function renderBoard() {
     if (scatterBox) scatterBox.hidden = true;
     if (noteEl) noteEl.hidden = true;
     renderGate(gateBox, g);
+    closeDrill();
     return;
   }
   gateBox.hidden = true;
@@ -229,6 +253,7 @@ function renderBoard() {
   renderRanking(t, ideas, participants, justOpened && !reduceMotion);
   renderDiscuss(t, ideas);
   renderScatter(t, ideas);
+  renderDrill();
 }
 
 function renderGate(box, g) {
@@ -291,6 +316,33 @@ function splitTitle(t, idea) {
   return 'split on ' + names.join(', ') + ' (stdev ' + max.toFixed(2) + ')';
 }
 
+/** The first dimension, in dimension order, at the row's widest stdev — the set splitTitle names (w0i5h-D7). */
+function firstSplitDim(t, idea) {
+  const max = agreement(t, idea);
+  const d = t.dimensions.find(x => idea.byDim[x.id] && Math.abs(idea.byDim[x.id].stdev - max) < 1e-9);
+  return d ? d.id : (t.dimensions[0] ? t.dimensions[0].id : null);
+}
+
+/** Opens the drill-down for an idea from the current frame's aggregate row (split pill, Discuss row). */
+function boardOpenDrill(ideaId) {
+  const t = currentTopic();
+  const agg = t ? state.aggregates[t.id] : undefined;
+  const f = agg ? agg.ideas.find(x => x.id === ideaId) : undefined;
+  if (f) openDrill(t, f.id, firstSplitDim(t, f));
+}
+
+/** Makes node a button-like drill-down opener: click, Enter or Space (w0i5h-D7). */
+function boardDrillOpener(node, ideaId, gated) {
+  node.dataset.drillIdea = ideaId;
+  node.addEventListener('click', () => { if (!gated || gated()) boardOpenDrill(ideaId); });
+  node.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (gated && !gated()) return;
+    e.preventDefault();
+    boardOpenDrill(ideaId);
+  });
+}
+
 /** Appends "split on <coloured dim names> (stdev s.ss)" as text + coloured spans (D5). */
 function appendSplitTitle(container, t, idea) {
   const max = agreement(t, idea);
@@ -345,6 +397,8 @@ function renderRanking(t, ideas, participants, stagger) {
         row.style.transitionDelay = (i * 40) + 'ms';
         row.addEventListener('transitionend', () => { row.style.transitionDelay = ''; }, { once: true });
       }
+      const pillNode = row.querySelector('.pill');
+      boardDrillOpener(pillNode, f.id, () => pillNode.classList.contains('split'));
       boardRows.set(key, row); box.appendChild(row);
       void getComputedStyle(row).opacity;
       row.style.transition = ''; row.classList.remove('enter');
@@ -478,6 +532,14 @@ function renderRanking(t, ideas, participants, stagger) {
 
     // agreement indicator (D9): every row with rated data, ranked or not.
     const indicator = row.querySelector('.pill');
+    const opens = hasData && f.split === true;
+    if (opens) {
+      indicator.setAttribute('role', 'button');
+      indicator.tabIndex = 0;
+    } else {
+      indicator.removeAttribute('role');
+      indicator.removeAttribute('tabindex');
+    }
     if (!hasData) {
       indicator.hidden = true;
       indicator.className = 'pill';
@@ -487,7 +549,7 @@ function renderRanking(t, ideas, participants, stagger) {
       if (f.split === true) {
         indicator.className = 'pill split';
         indicator.textContent = 'split';
-        indicator.title = splitTitle(t, f);
+        indicator.title = splitTitle(t, f) + ' — open to see every rating';
       } else {
         const a = agreement(t, f);
         if (a <= 1.0) {
@@ -509,33 +571,53 @@ function renderRanking(t, ideas, participants, stagger) {
   boardIndex = t ? new Map(ideas.map((f, i) => [t.id + '/' + f.id, i])) : new Map();
 }
 
-/** #discuss (D5): every split idea, in ranking order, with its title and coloured splitTitle. */
+/**
+ * #discuss (D5): every split idea, in ranking order, with its title, coloured splitTitle and —
+ * when the idea has a note in state.ideas — a "decided: …" line (w0i5h-D12). Each row opens the
+ * drill-down (w0i5h-D7); a row focused before the rebuild is focused again after it.
+ */
 function renderDiscuss(t, ideas) {
   const box = document.getElementById('discuss');
   if (!box) return;
   const splitIdeas = ideas.filter(f => f.split === true);
+  const a = document.activeElement;
+  const focusedIdea = a && a.classList && a.classList.contains('drow') && box.contains(a) ? a.dataset.drillIdea : null;
   box.querySelectorAll('.drow').forEach(n => n.remove());
   if (splitIdeas.length === 0) { box.hidden = true; return; }
   box.hidden = false;
   splitIdeas.forEach(f => {
     const row = document.createElement('div');
     row.className = 'drow';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
     const ttl = document.createElement('div');
     ttl.className = 'dttl';
     ttl.textContent = f.title;
     const sp = document.createElement('div');
     sp.className = 'dsplit';
     appendSplitTitle(sp, t, f);
-    row.appendChild(ttl); row.appendChild(sp);
+    const nt = document.createElement('div');
+    nt.className = 'dnote';
+    const idea = state.ideas.find(i => i.topic === t.id && i.id === f.id);
+    const text = idea && idea.note ? idea.note : '';
+    if (text) {
+      nt.textContent = 'decided: ' + (text.length > 120 ? text.slice(0, 120) + '…' : text);
+      nt.title = text;
+    } else {
+      nt.hidden = true;
+    }
+    row.appendChild(ttl); row.appendChild(sp); row.appendChild(nt);
+    boardDrillOpener(row, f.id, null);
     box.appendChild(row);
+    if (focusedIdea === f.id) row.focus();
   });
 }
 </script>
 """
 
 /**
- * [BOARD_MAIN] plus [SCATTER_VIEW] (ScatterView.kt), the Board view's full slice served as part
- * of [PAGE]. A plain `val` (like [PAGE] itself), not `const val`: the two concatenated raw
+ * [BOARD_MAIN] plus [SCATTER_VIEW] (ScatterView.kt) plus [DRILLDOWN_VIEW] (DrilldownView.kt), the
+ * Board view's full slice served as part of [PAGE]. A plain `val` (like [PAGE] itself), not `const val`: the two concatenated raw
  * strings would otherwise risk the 65535-byte constant-pool cap as the Board grows.
  */
-internal val BOARD_VIEW: String = BOARD_MAIN + SCATTER_VIEW
+internal val BOARD_VIEW: String = BOARD_MAIN + SCATTER_VIEW + DRILLDOWN_VIEW

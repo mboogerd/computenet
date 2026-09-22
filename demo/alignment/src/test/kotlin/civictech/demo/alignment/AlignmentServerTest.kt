@@ -371,6 +371,27 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the drill-down dialog roots and its slice has no dollar sign`() = withApp { _, probe ->
+        // computenet-w0i5h.2 (w0i5h-D14): the Board's split drill-down is a native dialog in the
+        // Board slice; its roots are served, the slice stays template-literal-free, and the
+        // per-topic URL still serves the same bytes.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        assertTrue("""<dialog id="drill"""" in body, "drill dialog root")
+        for (id in listOf(
+            "drillClose", "drillTitle", "drillDims", "drillPlot", "drillStats",
+            "drillOutlier", "drillNote", "drillNoteSave", "drillNoteBy",
+        )) {
+            assertTrue("""id="$id"""" in body, "$id root")
+        }
+        assertTrue(Regex("""<textarea id="drillNote"[^>]*maxlength="4000"""").containsMatchIn(body), "note textarea capped at 4000")
+        assertTrue('$' !in DRILLDOWN_VIEW, "no dollar sign in DRILLDOWN_VIEW")
+        assertTrue(DRILLDOWN_VIEW in BOARD_VIEW, "the drill-down is part of the Board slice")
+        assertEquals(body, probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
     fun `the events stream opens on the same frame as state`() = withApp { app, probe ->
         seed(probe)
         rate(probe, "ann", "a", "impact", "8")
