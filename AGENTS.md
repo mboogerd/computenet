@@ -187,19 +187,20 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   the command before it is evidence about the repository. Write
   `"${R}:testkit/x"`. A literal `origin/main:concord/x` is safe — modifiers
   follow only an expansion (computenet-frgu1, computenet-wk53).
-- Same zsh family, different operator: **an unquoted glob in a `--flag=*.ext`
-  argument is expanded by the shell before the command sees it**, so
-  `grep -rln 'Foo' --include=*.kt .` dies with
-  `(eval):1: no matches found: --include=*.kt` and **the grep never runs**.
-  Quote it: `--include='*.kt'`. The danger is not the error text — it is that
-  an agent scanning for a symbol reads a grep that never ran as "this symbol
-  does not exist anywhere". That produced a `metadata.files` claim omitting a
-  file the task had to edit, and separately let the false premise ":oracle is
-  a leaf that nothing depends on" survive two reports and a review
-  (computenet-l5rc, recurred as computenet-u0b0 and computenet-rf0a). It is
-  recorded HERE, not only in `.claude/skills/work/references/agent.md`,
-  because that file is handed to dispatched agents and the orchestrator never
-  reads it — which is why the first fix did not stop the recurrence.
+- Same zsh family, different operator: **an unquoted glob that matches nothing
+  aborts the command before it runs** — in a `--flag=*.ext` argument, and
+  among BARE OPERANDS, where it also suppresses the operands that WOULD have
+  matched (`ls -d a/ b/ nosuch-*` prints nothing at all; computenet-aagi9). So
+  `grep -rln 'Foo' --include=*.kt .` dies with `(eval):1: no matches found:
+  --include=*.kt` and **never runs**. Quote it: `--include='*.kt'`. The danger
+  is not the error text — it is that an agent scanning for a symbol reads a
+  grep that never ran as "this symbol does not exist anywhere". That produced
+  a `metadata.files` claim omitting a file the task had to edit, and
+  separately let the false premise ":oracle is a leaf that nothing depends on"
+  survive two reports and a review (computenet-l5rc, recurred as
+  computenet-u0b0 and computenet-rf0a). It is recorded HERE, not only in
+  `.claude/skills/work/references/agent.md`, because the orchestrator never
+  reads that file; de-duplicating this is what let it recur.
 - Third member of the same family, in git itself: a pathspec ending at a
   directory name matches a FILE by that name, not the tree under it —
   `git grep -ln 'X' -- '*/src/main'` is 0 hits where `-- '*/src/main/*'`
