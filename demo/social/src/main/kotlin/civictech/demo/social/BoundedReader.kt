@@ -62,9 +62,10 @@ fun interface BoundedReader {
  * `ManagedHost.kt:1806-1851`). This class is the only place in `:demo:social`'s
  * read path that names [ManagedHost].
  */
+// probe-0ehza: benign comment-only demo edit (CI demonstration, not for merge)
 class HostBoundedReader(private val host: ManagedHost) : BoundedReader {
     override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> =
-        // KRD-PROBE-0ehza: single-read delegation, not a walk loop (BoundedReadConsumerFenceTest's
+        // KRD-27: single-read delegation, not a walk loop (BoundedReadConsumerFenceTest's
         // fenced pattern), and safe to bypass civictech.cell.observe's readRouted
         // registry lookup — `:demo:social` is single-JVM/single-`ManagedHost`
         // (SocialApp constructs exactly one `host` and binds this reader to it,
