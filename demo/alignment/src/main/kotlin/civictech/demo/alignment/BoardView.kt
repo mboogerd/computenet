@@ -20,7 +20,16 @@ package civictech.demo.alignment
  * zero width and no title instead of throwing on `.toFixed`. Each row (10mvq-D3/D9/D11) also
  * carries a one-decimal score, a muted "N of M rated" line, a "value · cost" line when the topic
  * has a cost dimension, a "÷ cost" badge on the bar, and an agreement indicator (the split pill,
- * "agreed" or "mixed") for every row with rated data. `#discuss` (10mvq-D5) lists the split ideas
+ * "agreed" or "mixed") for every row with rated data. A row ranks and displays on its
+ * "effective" score (computenet-w61az.2, w61az-D8/D9): `f.override` when set, else `f.score`,
+ * never re-derived on the page. An overridden row shows the effective score with a marked
+ * "override" badge while the computed score stays visible (the raters line gains
+ * "· computed …", the score cell's title spells out both); an override-only row (a null computed
+ * score) still renders ranked with a not-rated-yet reason, never a throw. For the topic's
+ * creator, while the board is open, the score cell is a focusable control (w61az-D10): click or
+ * Enter opens a number input that PUTs `/topics/{t}/ideas/{i}/override` on commit (empty clears),
+ * Escape cancels, and a "×" next to a set override clears it in one click — absent from the DOM
+ * entirely for anyone else. `#discuss` (10mvq-D5) lists the split ideas
  * below the ranking. `#boardMode` (10mvq-D10) switches the bar cell between the score bars and a
  * spread view: a 1–9 axis with a mean±stdev band per dimension. On a false→true flip of
  * `boardGate(t).open` within a session (0dvra-D16), cached rows are dropped so every row
@@ -28,7 +37,9 @@ package civictech.demo.alignment
  * reduce` disables the stagger and the slide.
  *
  * `renderBoard()` reads `currentTopic()`, `state.aggregates[t]`, `boardGate(t)` and, for the
- * Discuss rows' "decided: …" line (w0i5h-D12), the idea's `note` in `state.ideas`. `state.ratings`
+ * Discuss rows' "decided: …" line (w0i5h-D12), the idea's `note` in `state.ideas`. The creator's
+ * override control (w61az-D10) writes `PUT /topics/{t}/ideas/{i}/override`; nothing else here
+ * writes. `state.ratings`
  * — every participant's raw ratings, and so their names — is read in exactly one place in the
  * Board slice: `renderDrill()` in [DRILLDOWN_VIEW] (DrilldownView.kt), inside its
  * `boardGate(t).open` check (w0i5h-D8); nothing else here reads it or renders a participant name.
@@ -78,7 +89,7 @@ internal const val BOARD_MAIN = """
              transition: transform .55s cubic-bezier(.22,1,.36,1), opacity .3s; }
   .rankrow.moving { z-index: 2; }
   .rankrow.enter, .rankrow.leave { opacity: 0; }
-  .rankrow .main { display: grid; grid-template-columns: 1.6rem minmax(0,1fr) minmax(6rem,38%) 3rem 3.4rem;
+  .rankrow .main { display: grid; grid-template-columns: 1.6rem minmax(0,1fr) minmax(6rem,38%) 4.6rem 3.4rem;
                     gap: .6rem; align-items: center; }
   .rankrow .pos { text-align: right; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
   .rankrow .ttl { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -97,7 +108,17 @@ internal const val BOARD_MAIN = """
   .rankrow .axisband.lo { opacity: .45; }
   .rankrow .axisband.hi { opacity: 1; }
   .rankrow .axistick { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--ink); }
-  .rankrow .score { text-align: right; font-variant-numeric: tabular-nums; }
+  .rankrow .score { display: flex; align-items: center; justify-content: flex-end; gap: .25rem;
+                    text-align: right; font-variant-numeric: tabular-nums; }
+  .rankrow .score[role="button"] { cursor: pointer; border-radius: 4px; }
+  .rankrow .score[role="button"]:hover { background: var(--accent-soft); }
+  .rankrow .score[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .rankrow .ovbadge { font-size: .6rem; padding: .05rem .3rem; border-radius: 6px;
+                       background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .rankrow .ovclear { border: none; background: none; color: var(--muted); cursor: pointer;
+                       padding: 0; font-size: .85rem; line-height: 1; }
+  .rankrow .ovclear:hover { color: var(--accent); }
+  .rankrow .ovinput { width: 100%; padding: .1rem .2rem; font-size: var(--fs-2); text-align: right; }
   .rankrow .pill { justify-self: start; font-size: .7rem; padding: .1rem .5rem; border-radius: 8px; white-space: nowrap; }
   .rankrow .pill.split { background: var(--warn-soft); color: var(--warn); }
   .rankrow .pill.agreed { color: var(--ok); border: 1px solid var(--ok); background: transparent; }
@@ -140,7 +161,7 @@ internal const val BOARD_MAIN = """
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
   <div id="scatter" hidden></div>
-  <p class="note">Bar segments show each dimension's weighted contribution to the score; a ÷ badge shows the cost divisor. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
+  <p class="note">Bar segments show each dimension's weighted contribution to the score; a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
 </section>
 <script>
 // ── Board: the aggregate view ──────────────────────────────────────────────
@@ -148,9 +169,12 @@ internal const val BOARD_MAIN = """
 // notes in state.ideas. state.ratings (and so any participant name) is read
 // only by renderDrill() in the drill-down slice, inside its boardGate(t).open
 // check — never by the code in this script. Ranked rows
-// arrive server-sorted (score desc, rating count desc, id asc) followed by
-// the unscored ones; the page never re-sorts and never recomputes a score, a
-// contribution, a mean or a stdev.
+// arrive server-sorted on their effective score (override ?? score desc,
+// rating count desc, id asc) followed by the unscored ones; the page never
+// re-sorts and never recomputes a score, a contribution, a mean or a stdev.
+// The creator's override control (w61az-D10) is the one write in this slice:
+// PUT /topics/{t}/ideas/{i}/override, no optimistic update — the next /events
+// frame renders the result.
 const ROW = 58; // px, keep in sync with .rankrow height
 const boardRows = new Map(); // topicId + '/' + ideaId -> reused row node
 let boardIndex = new Map();
@@ -343,6 +367,113 @@ function boardDrillOpener(node, ideaId, gated) {
   });
 }
 
+/** This row's effective score (w61az-D8): the facilitator's override when set, else the computed score. */
+function effective(f) {
+  return (f.override !== null && f.override !== undefined) ? f.override : f.score;
+}
+
+/**
+ * The current topic and its live aggregate row for ideaId, but only when the viewer is the
+ * topic's creator (w61az-D10) — the override control's single permission gate, checked at every
+ * open/commit/clear rather than trusted from a stale closure. null when not permitted or the row
+ * is gone.
+ */
+function boardOverrideContext(ideaId) {
+  const t = currentTopic();
+  if (!t || !isCreator(t)) return null;
+  const agg = state.aggregates[t.id];
+  const f = agg ? agg.ideas.find(x => x.id === ideaId) : undefined;
+  return f ? { t: t, f: f } : null;
+}
+
+/** PUTs the override (or clears it on a null score); no optimistic update — the next frame renders the result. */
+function boardSendOverride(t, ideaId, score) {
+  send('PUT', '/topics/' + encodeURIComponent(t.id) + '/ideas/' + encodeURIComponent(ideaId) + '/override',
+    { creator: me(), score: score }).then(() => scheduleRender(), () => scheduleRender());
+}
+
+function boardClearOverride(ideaId) {
+  const ctx = boardOverrideContext(ideaId);
+  if (!ctx) return;
+  boardSendOverride(ctx.t, ideaId, null);
+}
+
+/** Swaps the score cell to an editable number input prefilled with the current override (w61az-D10). */
+function boardBeginOverrideEdit(cell, t, f) {
+  cell.innerHTML = '';
+  const input = document.createElement('input');
+  input.type = 'number'; input.min = '0.1'; input.max = '9'; input.step = '0.1';
+  input.className = 'ovinput';
+  input.value = (f.override !== null && f.override !== undefined) ? f.override : '';
+  cell.appendChild(input);
+  let settled = false;
+  const commit = () => {
+    if (settled) return; settled = true;
+    const raw = input.value.trim();
+    boardSendOverride(t, f.id, raw === '' ? null : Number(raw));
+  };
+  const cancel = () => { settled = true; scheduleRender(); };
+  input.addEventListener('blur', () => { if (!settled) commit(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); input.blur(); }
+  });
+  input.focus(); input.select();
+}
+
+/** Makes the score cell button-like: click or Enter opens the override editor (w61az-D10). */
+function boardScoreOpener(cell, ideaId) {
+  const open = () => {
+    if (cell.querySelector('input.ovinput')) return;
+    const ctx = boardOverrideContext(ideaId);
+    if (ctx) boardBeginOverrideEdit(cell, ctx.t, ctx.f);
+  };
+  cell.addEventListener('click', open);
+  cell.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); open(); } });
+}
+
+/**
+ * Rebuilds the score cell's view (effective score, override badge/title, computed value, the
+ * creator's × clear) — never while it is being edited (w61az-D11, checked by the caller).
+ */
+function renderScoreCell(cell, t, f, canOverride) {
+  cell.innerHTML = '';
+  const hasOverride = f.override !== null && f.override !== undefined;
+  const eff = effective(f);
+  const txt = document.createElement('span');
+  txt.className = 'scoretxt';
+  txt.textContent = (eff !== null && eff !== undefined) ? eff.toFixed(1) : '—';
+  cell.appendChild(txt);
+  if (hasOverride) {
+    const badge = document.createElement('span');
+    badge.className = 'ovbadge';
+    badge.textContent = 'override';
+    cell.appendChild(badge);
+  }
+  if (canOverride) {
+    cell.setAttribute('role', 'button');
+    cell.tabIndex = 0;
+    if (hasOverride) {
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'ovclear';
+      clear.setAttribute('aria-label', 'clear override');
+      clear.textContent = '×';
+      clear.addEventListener('click', e => { e.stopPropagation(); boardClearOverride(f.id); });
+      cell.appendChild(clear);
+    }
+  } else {
+    cell.removeAttribute('role');
+    cell.removeAttribute('tabindex');
+  }
+  if (hasOverride) {
+    cell.title = 'facilitator override ' + eff.toFixed(1) + '; ' +
+      (f.score !== null && f.score !== undefined ? 'computed ' + f.score.toFixed(1) : 'computed —');
+  } else {
+    cell.removeAttribute('title');
+  }
+}
+
 /** Appends "split on <coloured dim names> (stdev s.ss)" as text + coloured spans (D5). */
 function appendSplitTitle(container, t, idea) {
   const max = agreement(t, idea);
@@ -362,8 +493,11 @@ function renderRanking(t, ideas, participants, stagger) {
   const box = document.getElementById('ranking');
   const dims = t ? t.dimensions : [];
   const costy = t ? hasCostDim(t) : false;
-  const scores = ideas.filter(f => f.score !== null).map(f => f.score);
-  const max = scores.length ? Math.max(...scores) : 0; // D10 (v48mn): the top ranked score fills the bar
+  // D10 (v48mn), amended w61az-D8: the max EFFECTIVE score over ranked rows fills the bar; bar
+  // segments themselves stay the API's computed contributions, never rescaled to an override.
+  const effs = ideas.filter(f => f.rank !== null).map(effective).filter(v => v !== null && v !== undefined);
+  const max = effs.length ? Math.max(...effs) : 0;
+  const canOverride = t ? isCreator(t) : false; // gate is already open whenever renderRanking runs (w61az-D10)
   const pct = v => ((v - 1) / 8) * 100; // 1..9 axis to 0..100%
   box.style.height = (ideas.length * ROW) + 'px';
   const seen = new Set();
@@ -399,6 +533,7 @@ function renderRanking(t, ideas, participants, stagger) {
       }
       const pillNode = row.querySelector('.pill');
       boardDrillOpener(pillNode, f.id, () => pillNode.classList.contains('split'));
+      boardScoreOpener(row.querySelector('.score'), f.id);
       boardRows.set(key, row); box.appendChild(row);
       void getComputedStyle(row).opacity;
       row.style.transition = ''; row.classList.remove('enter');
@@ -494,21 +629,33 @@ function renderRanking(t, ideas, participants, stagger) {
       const costTxt = f.cost === null ? '—' : f.cost.toFixed(1);
       badge.textContent = '÷ ' + costTxt;
       const valueTxt = f.value === null ? '—' : f.value.toFixed(1);
-      badge.title = 'value ' + valueTxt + ' ÷ cost ' + costTxt + ' = ' + f.score.toFixed(1);
+      // null-safe (w61az-D9 carry-over hazard): f.score is null on an override-only or
+      // partially-rated ranked row; the badge still shows the computed math, not the override.
+      const scoreTxt = (f.score !== null && f.score !== undefined) ? f.score.toFixed(1) : '—';
+      badge.title = 'value ' + valueTxt + ' ÷ cost ' + costTxt + ' = ' + scoreTxt;
     } else {
       badge.hidden = true;
       badge.removeAttribute('title');
     }
-    row.querySelector('.score').textContent = ranked ? f.score.toFixed(1) : '—';
+    const scoreCell = row.querySelector('.score');
+    if (!editing(scoreCell)) renderScoreCell(scoreCell, t, f, canOverride); // w61az-D11 focus guard
 
-    // sub-lines (D3): "N of M rated" + "value · cost" for a ranked row; the not-rated-yet
-    // reason for an unranked row that still carries data; nothing for a truly empty row.
+    // sub-lines (D3, amended w61az-D9): "N of M rated" + "value · cost" for a ranked row, the
+    // raters line gaining "· computed …" on an overridden row so the computed value stays
+    // visible beside the effective one; the not-rated-yet reason for a row (ranked via override,
+    // or not ranked at all) that has no computed score, worded by how much data it carries;
+    // nothing for a truly empty unranked row.
     const ratersEl = row.querySelector('.raters');
     const vcEl = row.querySelector('.vc');
     const reasonEl = row.querySelector('.reason');
+    const hasOverride = f.override !== null && f.override !== undefined;
+    const computedNull = f.score === null || f.score === undefined;
     if (ranked) {
       ratersEl.hidden = false;
-      ratersEl.textContent = f.raters + ' of ' + participants + ' rated';
+      const ratersTxt = f.raters + ' of ' + participants + ' rated';
+      ratersEl.textContent = hasOverride
+        ? ratersTxt + ' · computed ' + (computedNull ? '—' : f.score.toFixed(1))
+        : ratersTxt;
       if (costy) {
         vcEl.hidden = false;
         const valueTxt = f.value === null ? '—' : f.value.toFixed(1);
@@ -517,7 +664,15 @@ function renderRanking(t, ideas, participants, stagger) {
       } else {
         vcEl.hidden = true;
       }
-      reasonEl.hidden = true;
+      if (!computedNull) {
+        reasonEl.hidden = true;
+      } else if (hasData) {
+        reasonEl.hidden = false;
+        reasonEl.textContent = f.value === null ? 'value not rated yet' : (f.cost === null ? 'cost not rated yet' : '');
+      } else {
+        reasonEl.hidden = false;
+        reasonEl.textContent = 'not rated yet';
+      }
     } else {
       ratersEl.hidden = true;
       vcEl.hidden = true;
