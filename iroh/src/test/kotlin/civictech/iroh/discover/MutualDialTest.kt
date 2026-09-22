@@ -7,6 +7,7 @@ import civictech.iroh.await
 import civictech.iroh.quiesced
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -232,4 +233,147 @@ class MutualDialTest {
             heldForA.forEach { a.fake.send(SidecarMessage.Data(dialFromA.link, it)) }
         }
     }
+
+    /**
+     * computenet-311xs, the interleaving CI hit in the A-first order: A's
+     * reader has settled A's own dial — its OUTBOUND link is up — but the dial
+     * thread has not yet returned to register it with the node when B's hello
+     * on the losing INBOUND link is judged.
+     *
+     * The dial thread is held in that window ([FakeNode.holdDialThreads]), so
+     * the order is forced rather than sampled. The gate must still see the
+     * outbound link and close the inbound one quietly, BEFORE A writes a
+     * single frame on it (`[DSC2-DIAL-05]`), and the one closed link must be
+     * counted once. Unfixed, A judged against a registry that lacked its own
+     * link, admitted the loser and announced on it; the far side then closed
+     * it, and A's count ended at 0 (or, with the close queued behind the down
+     * before #1008, at 2).
+     *
+     * Mutation: drop the not-yet-registered links from `DiscoveredPeering.seed`
+     * — A answers on the loser and this fails on the first assertion.
+     */
+    @Test
+    fun `A's hello-judging reader sees its own settled dial before the dial thread registers it`() {
+        runScenario("A-first, A's dial thread held") { rig ->
+            val a = rig.a
+            val b = rig.b
+            val release = a.holdDialThreads()
+            try {
+                val dialFromA = rig.dialFrom(a)
+                val dialFromB = rig.dialFrom(b)
+                rig.connect(dialFromA, from = a, to = b)
+                rig.connect(dialFromB, from = b, to = a)
+                await("B's link to be up at A") { a.links(b.own).any { it.direction == LinkDirection.INBOUND } }
+                val aInbound = a.links(b.own).single { it.direction == LinkDirection.INBOUND }.linkId
+                await("A to answer B's hello on its losing inbound link") {
+                    rig.pump()
+                    rig.written.any { (who, m) -> who == "A" && m.linkOf() == aInbound }
+                }
+                assertTrue(
+                    a.links(b.own).none { it.direction == LinkDirection.OUTBOUND },
+                    "the window was held: A's dial thread has not registered its outbound link",
+                )
+                val onLoser = rig.written.filter { (who, m) -> who == "A" && m.linkOf() == aInbound }.map { it.second }
+                assertIs<HostMessage.CloseLink>(
+                    onLoser.first(),
+                    "A closes the losing inbound link before writing anything on it: $onLoser",
+                )
+                assertTrue(onLoser.none { it is HostMessage.Data }, "A announced nothing on the loser: $onLoser")
+                rig.quiesce(still = 2)
+                assertEquals(1L, a.peering.counters.tieBreakClosed.count, "A counted the loser at its verdict, once")
+            } finally {
+                release()
+            }
+        }
+    }
+
+    /**
+     * computenet-311xs, the count-0 variant: B's hello reaches A BEFORE A's
+     * own dial is settled, so A admits the inbound link — legitimately, it was
+     * the only link — and answers on it. A's dial then settles, the dial
+     * thread is held before it registers the link, and B closes its outbound
+     * link as ITS loser on A's answer. That `LINK_DOWN` is the only place A
+     * learns of the close, and it lands while A's winning link is up but not
+     * yet registered: `onLinkDown` must count it as the opposite direction
+     * being up. Unfixed, A's count stayed at 0 — B's later hello on the
+     * winner finds nothing left to close.
+     *
+     * The same window also decides the re-dial: `PeerTable.linkDown` must see
+     * the settled winner, or the loser's down reads as "no link left" and A
+     * dials B a second time.
+     *
+     * Mutations: drop the not-yet-registered links from `onLinkDown`'s
+     * `oppositeLinkUp` — A counts 0; drop the `seed` before `table.linkDown`
+     * — A re-dials (2 dials, not 1).
+     */
+    @Test
+    fun `a peered loser whose down lands before this node's own settled dial is registered is counted once`() {
+        runScenario("B's hello first, A's dial thread held") { rig ->
+            val a = rig.a
+            val b = rig.b
+            val release = a.holdDialThreads()
+            try {
+                val dialFromB = rig.dialFrom(b)
+                val dialFromA = rig.dialFrom(a) // Written; A's dial thread is now held.
+
+                rig.connect(dialFromB, from = b, to = a)
+                await("B's link to be up at A") { a.links(b.own).isNotEmpty() }
+                val aInbound = a.links(b.own).single().linkId
+                val bOutbound = dialFromB.link
+
+                // Relay B's hello to A; hold A's answer.
+                var aAnswer: ByteArray? = null
+                val deadline = System.currentTimeMillis() + 30_000
+                while (aAnswer == null) {
+                    if (System.currentTimeMillis() > deadline) fail("A never answered B's hello")
+                    when (val m = b.fake.pollHostMessage(20)) {
+                        null -> Unit
+                        is HostMessage.Data -> a.fake.send(SidecarMessage.Data(aInbound, m.payload))
+                        else -> fail("B wrote $m before A answered")
+                    }
+                    when (val m = a.fake.pollHostMessage(20)) {
+                        null -> Unit
+                        is HostMessage.Data -> if (m.link == aInbound) aAnswer = m.payload
+                        else -> fail("A wrote $m before answering")
+                    }
+                }
+                await("A to admit B's link") { a.links(b.own).single().peered }
+
+                // A's own dial settles now, and its thread stays held. B's
+                // LINK_UP for it is written before A's answer is relayed, so B
+                // judges that answer with both directions up.
+                rig.connect(dialFromA, from = a, to = b)
+                b.fake.send(SidecarMessage.Data(bOutbound, aAnswer!!))
+                var bClosed = false
+                while (!bClosed) {
+                    if (System.currentTimeMillis() > deadline) fail("B never closed its losing outbound link")
+                    when (val m = b.fake.pollHostMessage(20)) {
+                        null -> Unit
+                        is HostMessage.CloseLink -> {
+                            assertEquals(bOutbound, m.link, "B closes its OUTBOUND link, the tie-break loser at the larger id")
+                            rig.deliverDown(b, bOutbound, "closed by B")
+                            rig.deliverDown(a, aInbound, "peer closed the link")
+                            bClosed = true
+                        }
+                        else -> fail("B wrote $m before closing its loser")
+                    }
+                }
+                await("A's peered inbound link to be gone") { a.links(b.own).none { it.linkId == aInbound } }
+                // Barrier: a sighting of A's own key is queued behind the down.
+                a.discover(a.own)
+                await("A's policy to have processed the down") { a.peering.counters.selfDropped.count == 1L }
+                assertTrue(a.links(b.own).isEmpty(), "the window was held: A's dial thread has not registered its outbound link")
+                assertEquals(1L, a.peering.counters.tieBreakClosed.count, "A counted the loser at its down, while its winner was settled but unregistered")
+            } finally {
+                release()
+            }
+        }
+    }
+}
+
+/** The link a host message is about, or null for a control message. */
+private fun HostMessage.linkOf(): Long? = when (this) {
+    is HostMessage.Data -> link
+    is HostMessage.CloseLink -> link
+    else -> null
 }
