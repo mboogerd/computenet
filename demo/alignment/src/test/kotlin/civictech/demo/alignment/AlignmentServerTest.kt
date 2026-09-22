@@ -392,6 +392,31 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the Compare roots and an experimental tab that is not the default`() = withApp { _, probe ->
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        assertTrue(page.headers().firstValue("Content-Type").orElse("").startsWith("text/html"), "${page.headers()}")
+        val body = page.body()
+        assertTrue("""id="compare"""" in body, "compare section root")
+        assertTrue("""id="tabCompare"""" in body, "compare tab button")
+        for (root in listOf("cmpPicker", "cmpAxis", "cmpTray", "cmpLow", "cmpHigh", "cmpDirection", "cmpOthersWrap", "cmpOthers", "cmpDesc")) {
+            assertTrue("""id="$root"""" in body, "$root root")
+        }
+        // the experimental badge sits inside the compare tab button, not merely somewhere on the page
+        val tabStart = body.indexOf("""id="tabCompare"""")
+        assertTrue(tabStart >= 0, "compare tab button")
+        val tabButton = body.substring(tabStart, body.indexOf("</button>", tabStart))
+        assertTrue("experimental" in tabButton, "compare tab reads experimental: $tabButton")
+        assertTrue('$' !in COMPARE_VIEW, "COMPARE_VIEW is a plain raw string")
+        // Rate stays the default tab: the served activeTab() still falls through to 'rate'
+        val fnStart = body.indexOf("function activeTab()")
+        assertTrue(fnStart >= 0, "activeTab() is served")
+        val fnEnd = body.indexOf("\n}", fnStart)
+        assertTrue(body.substring(fnStart, fnEnd).trimEnd().endsWith("return 'rate';"), body.substring(fnStart, fnEnd))
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
     fun `the events stream opens on the same frame as state`() = withApp { app, probe ->
         seed(probe)
         rate(probe, "ann", "a", "impact", "8")
