@@ -565,58 +565,48 @@ class IrohNodeTest {
     }
 
     /**
-     * The same overtaking, on a CONFIGURED connection, which re-dials on its
-     * own loop. That loop runs while the connection has no current Session;
-     * before the fix `openLink` installed the dead link's Session after
-     * `retire` had cleared it, so the loop found a Session, stopped, and the
-     * configured peer was never re-dialled (computenet-wad38).
-     *
-     * The loop's backoff is held until `openLink` has returned, which is the
-     * ordering that stranded it; a real schedule's delay does the same.
+     * The same overtaking, on a CONFIGURED connection's own re-dial loop. The
+     * loop dials while the connection has no current Session, and `retire`
+     * of a link the loop dialled finds the loop's single-flight guard held and
+     * leaves the retry to it. Before the fix `openLink` then installed the
+     * dead link's Session after `retire` had cleared it, the hello on it
+     * threw, and the loop — seeing a current Session — stopped: the configured
+     * peer was never re-dialled again (computenet-wad38).
      */
     @Test
-    fun `a configured peer whose LINK_DOWN overtakes registration is still re-dialled`() {
+    fun `a configured re-dial whose LINK_DOWN overtakes registration does not strand the re-dial loop`() {
         withNode { fake, _, node ->
             val peer = nodeId()
-            val hold = civictech.iroh.discover.RegistrationHold(node)
-            val backoffConsulted = java.util.concurrent.CountDownLatch(1)
-            val backoffGate = java.util.concurrent.CountDownLatch(1)
             val connected = ArrayBlockingQueue<Result<IrohTransport.IrohConnection>>(1)
             Thread({
-                connected.put(
-                    runCatching {
-                        node.connectConfigured(peer, listOf("127.0.0.1:4242"), backoff = {
-                            backoffConsulted.countDown()
-                            backoffGate.await(30, TimeUnit.SECONDS)
-                            0L
-                        })
-                    },
-                )
+                connected.put(runCatching { node.connectConfigured(peer, listOf("127.0.0.1:4242"), backoff = { 0L }) })
             }, "connect-configured").apply { isDaemon = true }.start()
-
             assertIs<HostMessage.AddPeer>(fake.nextHostMessage())
             fake.send(SidecarMessage.PeerAdded(peer))
-            val dial = fake.nextDial()
-            fake.send(SidecarMessage.LinkUp(dial.link, peer, DIRECTION_OUTBOUND))
-            assertEquals(dial.link, hold.awaitHeld())
+            val first = fake.nextDial()
+            fake.send(SidecarMessage.LinkUp(first.link, peer, DIRECTION_OUTBOUND))
+            (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")).getOrThrow()
+            assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello")
 
-            fake.send(SidecarMessage.LinkDown(dial.link, "closed within microseconds of LINK_UP"))
-            // `retire` ran and started the re-dial loop, which is now in its backoff.
-            assertTrue(backoffConsulted.await(30, TimeUnit.SECONDS), "the unplanned down starts the re-dial loop")
+            // An ordinary unplanned drop starts the loop; the loop's dial is
+            // the one whose down overtakes its registration.
+            val hold = civictech.iroh.discover.RegistrationHold(node)
+            fake.send(SidecarMessage.LinkDown(first.link, "transport drop"))
+            val second = fake.nextDial()
+            fake.send(SidecarMessage.LinkUp(second.link, peer, DIRECTION_OUTBOUND))
+            assertEquals(second.link, hold.awaitHeld(), "the loop's dialling thread is held with the link in hand")
+            fake.send(SidecarMessage.LinkDown(second.link, "closed within microseconds of LINK_UP"))
+            // A marker behind the LINK_DOWN on the one reader thread: once the
+            // node holds it, the reader has dispatched the down, `retire` included.
+            val marker = nodeId()
+            fake.presentInbound(90, marker)
+            await("the reader to dispatch past the LINK_DOWN") { node.links(marker).isNotEmpty() }
 
             hold.release()
-            val result = connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")
-
-            // The re-dial first, so a stranded loop fails on the property
-            // itself rather than on how `connectConfigured` returned.
-            backoffGate.countDown()
-            val redial = fake.nextDial()
-            assertTrue(redial.link != dial.link, "a re-dial is a new link id")
-            assertContentEquals(peer, redial.peerId, "the configured peer is re-dialled")
-
-            val connection = result.getOrThrow()
-            assertFalse(connection.peered)
-            assertTrue(node.links(peer).isEmpty(), "and the node holds no link for the peer")
+            val third = fake.nextDial()
+            assertContentEquals(peer, third.peerId, "the loop re-dials the configured peer")
+            assertTrue(third.link != second.link, "as a new link")
+            assertTrue(node.links(peer).none { it.linkId == second.link }, "and the node holds no dead link for it")
         }
     }
 
