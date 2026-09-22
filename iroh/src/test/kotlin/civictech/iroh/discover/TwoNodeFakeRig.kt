@@ -20,6 +20,8 @@ import civictech.iroh.SidecarProtocol.DIRECTION_INBOUND
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -114,6 +116,28 @@ internal class FakeNode(
     /** Every link this node holds for [key] right now. */
     fun links(key: ByteArray): List<IrohNode.LinkView> = node.links(key)
 
+    /**
+     * Hold every dial thread of this node in the window between the reader
+     * settling its `DIAL` and `openLink` registering the link with the node
+     * (computenet-311xs), until the returned function is called.
+     *
+     * The hold sits in [SidecarClient.beforeDialAwait]: after the `DIAL` is
+     * written and before the wait for its answer. The reader still settles
+     * the dial when its `LINK_UP` arrives — the client registers the link and
+     * counts the latch down — but the dialling thread does not return from
+     * `SidecarClient.dial`, so the node has not yet been told the link is up.
+     * That is the window a slow dial thread opens on a real machine, held
+     * open for as long as the test needs it rather than sampled.
+     */
+    fun holdDialThreads(): () -> Unit {
+        val release = CountDownLatch(1)
+        client.beforeDialAwait = { _ -> release.await(30, TimeUnit.SECONDS) }
+        return {
+            client.beforeDialAwait = null
+            release.countDown()
+        }
+    }
+
     override fun close() {
         runCatching { if (::peering.isInitialized) peering.close() }
         runCatching { client.close() }
@@ -194,6 +218,9 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
     /** Frames this rig has moved. A stalled count is what "quiescent" means here. */
     val relayed = AtomicLong()
 
+    /** Every host message [pump] took off a fake, by the label of the node that wrote it, in order. */
+    val written = ConcurrentLinkedQueue<Pair<String, HostMessage>>()
+
     private var nextInboundLink = 10_000L
 
     /** Every node, so a loop does not have to name them. */
@@ -251,6 +278,7 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
                 val message = holder.fake.pollHostMessage(pollMillis) ?: break
                 moved++
                 relayed.incrementAndGet()
+                written += holder.label to message
                 when (message) {
                     is HostMessage.Dial -> pendingDials.getValue(holder.label).add(message)
 
