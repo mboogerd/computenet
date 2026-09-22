@@ -28,6 +28,17 @@ package civictech.demo.alignment
  * exact position is then only the stem's (a thin line from the track to the chip), not the
  * chip's centre. On a very narrow viewport with many lanes the vertical axis scrolls sideways.
  *
+ * Pairs mode (k6rrk-D7…D10, ALN2.7): `#cmpMode` (place / pairs · experimental) toggles between
+ * today's placement UI and `#cmpPairs`, a pairwise-judgement panel over the SAME dimension picker.
+ * The next pair is deterministic — the unjudged pair (from the viewer's /me `judgements`) whose two
+ * ideas have the fewest judgements between them, ties by id order (`cmpNextPair`) — so a re-render
+ * never reshuffles the prompt. A pick POSTs `/judge`, "start over" DELETEs it; both then `fetchMe`
+ * and re-render, so the derived ratings show as place-mode chips and Rate sliders on the next
+ * render, through the SAME /me view place mode reads. Pairs mode reads only `currentTopic()` and
+ * the /me view: the file's one `state.ratings` read stays inside place mode's overlay gate
+ * (`cmpOthersWrap` is forced hidden in pairs mode, which already unchecks and gates that read); no
+ * `state.aggregates` reference exists anywhere in this file.
+ *
  * Shared helper contract: the comment block at the top of the shell's script in [AlignmentPage.kt].
  * No `$` anywhere (a plain raw string, no template literals); no literal colour — only `:root`
  * tokens and `dimColour(t, d)`. Private globals get the `cmp` prefix; nothing shell-dependent runs
@@ -40,6 +51,10 @@ internal const val COMPARE_VIEW = """
   #cmpPicker button { border: 1.5px solid var(--cmp-c, var(--line)); border-radius: 999px; background: var(--surface);
                       color: var(--ink); font-weight: 600; }
   #cmpPicker button[aria-selected="true"] { background: var(--cmp-c); color: var(--surface); }
+  #cmpMode { display: flex; gap: .35rem; margin: 0 0 .8rem; }
+  #cmpMode button { font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; border: 1px solid var(--line);
+                    background: var(--surface); color: var(--ink); }
+  #cmpMode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
   #cmpDirection { margin: 0 0 .5rem; font-size: var(--fs-2); font-weight: 600; }
   .cmpArrow { display: inline-block; }
   #cmpAxis { --cmp-vertical: 0; position: relative; min-height: 7rem; margin: 0 0 .7rem; border-radius: var(--radius);
@@ -81,6 +96,20 @@ internal const val COMPARE_VIEW = """
              border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); font-size: var(--fs-2); }
   #cmpDesc h4 { margin: 0 0 .35rem; font-size: var(--fs-2); }
   #cmpDesc p { margin: 0; white-space: pre-wrap; word-break: break-word; }
+  #cmpPairs[hidden] { display: none; }
+  .cmpPairCards { display: flex; flex-wrap: wrap; gap: .7rem; margin: 0 0 .8rem; }
+  .cmpPairCard { flex: 1 1 12rem; min-width: 10rem; display: flex; align-items: center; justify-content: space-between;
+                 gap: .4rem; padding: .8rem .9rem; background: var(--surface); color: var(--ink);
+                 border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+                 font-size: var(--fs-2); font-weight: 600; }
+  .cmpPairCard[hidden] { display: none; }
+  .cmpPairTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmpPairButtons { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 .5rem; }
+  .cmpPairButtons button { border: 1.5px solid var(--line); border-radius: var(--radius); background: var(--surface);
+                           color: var(--ink); font-weight: 600; padding: .4rem .9rem; }
+  .cmpPairButtons button:disabled { opacity: .5; }
+  #cmpPairProgress { margin: 0 0 .4rem; font-size: var(--fs-2); }
+  #cmpPairNote { margin: 0 0 .8rem; font-size: var(--fs-1); }
   @media (max-width: 640px) {
     #cmpAxis { --cmp-vertical: 1; height: 30rem; min-height: 0; overflow-x: auto; overflow-y: hidden; }
     #cmpAxis .cmpTrack { left: .5rem; right: auto; top: 2.4rem; bottom: 2.4rem; width: 6px; height: auto; }
@@ -98,11 +127,30 @@ internal const val COMPARE_VIEW = """
 </style>
 <section id="compare" class="pane view" hidden>
   <div id="cmpPicker" role="tablist" aria-label="dimension"></div>
-  <p class="muted cmpHint">Drag each title to where it sits on this dimension, or click a title and then a point on the axis. Drop it on "unplaced" to clear it.</p>
+  <div id="cmpMode">
+    <button type="button" data-mode="place" aria-pressed="true">place</button>
+    <button type="button" data-mode="pairs" aria-pressed="false">pairs · experimental</button>
+  </div>
+  <p id="cmpHint" class="muted cmpHint">Drag each title to where it sits on this dimension, or click a title and then a point on the axis. Drop it on "unplaced" to clear it.</p>
   <p id="cmpDirection" class="muted"></p>
   <div id="cmpAxis"><span id="cmpLow"></span><span id="cmpHigh"></span><div class="cmpTrack" aria-hidden="true"></div></div>
   <label id="cmpOthersWrap" hidden><input type="checkbox" id="cmpOthers"> show everyone's placements</label>
   <div id="cmpTray"><h3>unplaced</h3><p class="cmpEmpty muted" hidden></p></div>
+  <div id="cmpPairs" hidden>
+    <p id="cmpPairPrompt"></p>
+    <div class="cmpPairCards">
+      <div id="cmpPairA" class="cmpPairCard" hidden><span class="cmpPairTitle"></span><button type="button" class="cmpInfo" aria-label="description">i</button></div>
+      <div id="cmpPairB" class="cmpPairCard" hidden><span class="cmpPairTitle"></span><button type="button" class="cmpInfo" aria-label="description">i</button></div>
+    </div>
+    <div class="cmpPairButtons">
+      <button type="button" id="cmpPickA" hidden>A is higher</button>
+      <button type="button" id="cmpPickEqual" hidden>about equal</button>
+      <button type="button" id="cmpPickB" hidden>B is higher</button>
+    </div>
+    <p id="cmpPairProgress" class="muted"></p>
+    <p id="cmpPairNote" class="muted">your comparisons set your ratings for the ideas you compare</p>
+    <button type="button" id="cmpPairReset">start over</button>
+  </div>
   <div id="cmpDesc" role="dialog" hidden></div>
 </section>
 <script>
@@ -119,6 +167,8 @@ let cmpView = null;        // last /me view painted
 let cmpTid = null;         // topic the chip maps belong to
 let cmpActive = null;      // active dimension id
 let cmpDescFor = null;     // idea id whose description is open
+let cmpMode = 'place';     // 'place' | 'pairs', persisted per topic (k6rrk-D7)
+let cmpPair = null;        // [a, b] the pairs panel currently shows, or null
 const cmpChips = new Map();  // idea id -> own chip node, reused across renders
 const cmpGhosts = new Map(); // participant + newline + idea id -> ghost chip node
 const CMP_GAP = 6;           // px between chips in a lane and between lanes
@@ -188,6 +238,17 @@ function cmpPaint(t, view, override) {
   cmpRenderPicker(t, d);
   cmpRenderCaption(t, d);
   cmpActive = d ? d.id : null;
+
+  // mode toggle (k6rrk-D7): pairs mode hides the placement UI and shows #cmpPairs
+  cmpMode = sessionStorage['cmpMode:' + t.id] === 'pairs' ? 'pairs' : 'place';
+  cmpUpdateModeButtons();
+  const pairsOn = cmpMode === 'pairs';
+  cmpEl('cmpHint').hidden = pairsOn;
+  axis.hidden = pairsOn;
+  tray.hidden = pairsOn;
+  cmpEl('cmpPairs').hidden = !pairsOn;
+  if (pairsOn) cmpPaintPairs(t, d, view);
+
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // FLIP, first: where every chip is drawn now
@@ -219,9 +280,10 @@ function cmpPaint(t, view, override) {
   for (const [id, n] of cmpChips) if (!seen.has(id)) { cmpChips.delete(id); n.remove(); }
   if (cmpSelected !== null && !seen.has(cmpSelected)) cmpSelected = null;
 
-  // the overlay: hidden and unchecked until the viewer's Board is open
+  // the overlay: hidden and unchecked until the viewer's Board is open, and always hidden in
+  // pairs mode (k6rrk-D10) — the checkbox then unchecks below, which gates the state.ratings read
   const wrap = cmpEl('cmpOthersWrap');
-  wrap.hidden = !(d && boardGate(t).open);
+  wrap.hidden = pairsOn || !(d && boardGate(t).open);
   if (wrap.hidden) cmpEl('cmpOthers').checked = false;
   const ghostSeen = new Set();
   if (d && boardGate(t).open && cmpEl('cmpOthers').checked) {
@@ -309,6 +371,117 @@ function cmpRenderCaption(t, d) {
     ? ' higher ' + d.name + ' is more cost and lowers the score'
     : ' higher ' + d.name + ' raises the score'));
   cap.style.color = dimColour(t, d);
+}
+
+function cmpUpdateModeButtons() {
+  document.querySelectorAll('#cmpMode button').forEach(b => {
+    b.setAttribute('aria-pressed', b.dataset.mode === cmpMode ? 'true' : 'false');
+  });
+}
+
+// the deterministic next pair (k6rrk-D8): the unjudged pair over `ideas` (already in id order,
+// from /me) minimizing the two ideas' judgement counts on this dimension, ties by id order —
+// a re-render of the same judged set always proposes the same pair
+function cmpNextPair(ideas, judged) {
+  const count = new Map(ideas.map(i => [i.id, 0]));
+  for (const key of judged) {
+    const [a, b] = key.split('|');
+    if (count.has(a)) count.set(a, count.get(a) + 1);
+    if (count.has(b)) count.set(b, count.get(b) + 1);
+  }
+  let best = null, bestScore = Infinity;
+  for (let i = 0; i < ideas.length; i++) {
+    for (let j = i + 1; j < ideas.length; j++) {
+      const a = ideas[i].id, b = ideas[j].id;
+      if (judged.has(a + '|' + b)) continue;
+      const score = count.get(a) + count.get(b);
+      if (score < bestScore) { bestScore = score; best = [a, b]; }
+    }
+  }
+  return best;
+}
+
+function cmpFillPairCard(card, idea) {
+  card.hidden = false;
+  card.dataset.idea = idea.id;
+  card.title = idea.title;
+  card.querySelector('.cmpPairTitle').textContent = idea.title;
+  card.querySelector('.cmpInfo').hidden = !idea.description;
+}
+
+function cmpSetPairButtonsHidden(hidden) {
+  for (const id of ['cmpPickA', 'cmpPickEqual', 'cmpPickB']) {
+    const b = cmpEl(id);
+    b.hidden = hidden;
+    b.disabled = hidden;
+  }
+}
+
+function cmpSetPairButtonsDisabled(v) {
+  for (const id of ['cmpPickA', 'cmpPickEqual', 'cmpPickB']) cmpEl(id).disabled = v;
+}
+
+// pairs mode (k6rrk-D8, D10): reads only `view` (the /me view) and `d` (the active dimension);
+// never state.ratings or state.aggregates
+function cmpPaintPairs(t, d, view) {
+  const prompt = cmpEl('cmpPairPrompt'), progress = cmpEl('cmpPairProgress');
+  const cardA = cmpEl('cmpPairA'), cardB = cmpEl('cmpPairB');
+  cmpPair = null;
+  const hideCards = () => { cardA.hidden = true; cardB.hidden = true; cmpSetPairButtonsHidden(true); };
+  if (!d) {
+    prompt.textContent = 'this topic has no dimensions yet';
+    prompt.style.color = '';
+    progress.textContent = '';
+    hideCards();
+    return;
+  }
+  prompt.textContent = 'Which is higher on ' + d.name + '?' +
+    (d.direction === 'cost' ? ' — higher means more cost' : '');
+  prompt.style.color = dimColour(t, d);
+  const ideas = view.ideas;
+  if (ideas.length < 2) {
+    progress.textContent = 'add at least two ideas to compare';
+    hideCards();
+    return;
+  }
+  const judged = new Set((view.judgements || []).filter(j => j.dim === d.id).map(j => j.a + '|' + j.b));
+  const total = ideas.length * (ideas.length - 1) / 2;
+  const pair = cmpNextPair(ideas, judged);
+  if (!pair) {
+    progress.textContent = 'you have compared every pair';
+    hideCards();
+    return;
+  }
+  progress.textContent = judged.size + ' of ' + total + ' pairs judged';
+  cmpPair = pair;
+  cmpFillPairCard(cardA, ideas.find(i => i.id === pair[0]));
+  cmpFillPairCard(cardB, ideas.find(i => i.id === pair[1]));
+  cmpSetPairButtonsHidden(false);
+}
+
+// one write path for a pick: Rate's/place mode's send-then-fetchMe-then-render shape (k6rrk-D9)
+function cmpPick(outcome) {
+  if (!cmpPair || cmpPosting > 0) return;
+  const t = currentTopic(), tid = topicId(), dim = cmpActive;
+  if (!t || !tid || dim === null) return;
+  const a = cmpPair[0], b = cmpPair[1];
+  cmpPosting++;
+  cmpSetPairButtonsDisabled(true);
+  const done = () => { cmpPosting--; renderCompare(); };
+  send('POST', '/topics/' + encodeURIComponent(tid) + '/judge',
+    { participant: me(), dim: dim, a: a, b: b, outcome: outcome }).then(done, done);
+}
+
+function cmpResetPairs() {
+  if (cmpPosting > 0) return;
+  const t = currentTopic(), tid = topicId(), dim = cmpActive;
+  if (!t || !tid || dim === null) return;
+  if (!confirm('Clear your comparisons for this dimension? Your ratings stay as they are.')) return;
+  cmpPosting++;
+  cmpSetPairButtonsDisabled(true);
+  const done = () => { cmpPosting--; renderCompare(); };
+  send('DELETE', '/topics/' + encodeURIComponent(tid) + '/judge?participant=' + encodeURIComponent(me()) +
+    '&dim=' + encodeURIComponent(dim)).then(done, done);
 }
 
 // lanes: sort by position; each chip takes the first lane whose last chip ends
@@ -498,6 +671,30 @@ cmpEl('cmpTray').addEventListener('click', e => {
   cmpCommit(cmpSelected, null);
 });
 cmpEl('cmpOthers').addEventListener('change', () => cmpRepaint());
+document.querySelectorAll('#cmpMode button').forEach(b => {
+  b.addEventListener('click', () => {
+    const t = currentTopic();
+    if (!t || b.dataset.mode === cmpMode) return;
+    cmpMode = b.dataset.mode;
+    try { sessionStorage['cmpMode:' + t.id] = cmpMode; } catch (e) { /* ignore */ }
+    cmpRepaint();
+    renderCompare();
+  });
+});
+cmpEl('cmpPickA').addEventListener('click', () => cmpPick('a'));
+cmpEl('cmpPickEqual').addEventListener('click', () => cmpPick('equal'));
+cmpEl('cmpPickB').addEventListener('click', () => cmpPick('b'));
+cmpEl('cmpPairReset').addEventListener('click', cmpResetPairs);
+cmpEl('cmpPairA').querySelector('.cmpInfo').addEventListener('click', e => {
+  e.stopPropagation();
+  const card = cmpEl('cmpPairA');
+  if (card.dataset.idea) cmpToggleDesc(card.dataset.idea, card);
+});
+cmpEl('cmpPairB').querySelector('.cmpInfo').addEventListener('click', e => {
+  e.stopPropagation();
+  const card = cmpEl('cmpPairB');
+  if (card.dataset.idea) cmpToggleDesc(card.dataset.idea, card);
+});
 document.addEventListener('click', e => {
   const box = cmpEl('cmpDesc');
   if (!box.hidden && !box.contains(e.target)) cmpCloseDesc();

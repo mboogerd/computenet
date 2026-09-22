@@ -58,6 +58,20 @@ class AlignmentServerTest {
             "/topics/t/rate",
         )
 
+    private fun judge(probe: HttpProbe, who: String, dim: String, a: String, b: String, outcome: String): String {
+        val r = probe.postJson(
+            """{"participant":"$who","dim":"$dim","a":"$a","b":"$b","outcome":"$outcome"}""",
+            "/topics/t/judge",
+        )
+        assertEquals(200, r.statusCode(), r.body())
+        return r.body()
+    }
+
+    /** [who]'s own rating of [idea] on [dim] in their `/me` view, null when unrated. */
+    private fun myRating(me: String, idea: String, dim: String): Double? =
+        parse(me)["ideas"]!!.jsonArray.map { it.jsonObject }.first { it["id"]!!.jsonPrimitive.content == idea }
+            .let { it["ratings"]!!.jsonObject.num(dim) }
+
     /** Topic `t` by `cat`: impact (w 2.0), effort (w 1.0); ideas `a` and `b`. */
     private fun seed(probe: HttpProbe) {
         val created = probe.postJson(
@@ -316,7 +330,7 @@ class AlignmentServerTest {
         assertEquals(
             """{"topic":"t","participant":"ann","ideas":[""" +
                 """{"id":"a","title":"A","description":"","ratings":{"effort":null,"impact":8},"rated":1,"total":2,"dots":0},""" +
-                """{"id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":0}]}""",
+                """{"id":"b","title":"B","description":"the b idea","ratings":{"effort":null,"impact":null},"rated":0,"total":2,"dots":0}],"judgements":[]}""",
             ann,
         )
         for (leak in listOf(""""score"""", """"mean"""", """"stdev"""", """"n":""", """"contribution"""", """"split"""", "bob", "cat")) {
@@ -327,6 +341,121 @@ class AlignmentServerTest {
         assertTrue(""""ratings":{"effort":null,"impact":2}""" in bob && """"ratings":{"effort":6,"impact":null}""" in bob, bob)
         assertTrue("ann" !in bob, bob)
         assertEquals(400, probe.get("/topics/t/me").statusCode(), "participant is required")
+    }
+
+    @Test
+    fun `pairwise judgements derive the judge's own ratings through the rate op and stay private`() {
+        val journal = tmpJournal()
+        withApp(journal) { _, probe ->
+            seed(probe)
+            assertEquals(200, probe.postJson("""{"participant":"ann","title":"C"}""", "/topics/t/ideas").statusCode())
+            rate(probe, "bob", "a", "impact", "2") // bob's slider rating: must be untouched by ann's judgements
+            fun lines(op: String) = Files.readAllLines(journal).count { """"op":"$op"""" in it }
+
+            // a > b, b > c (sent reversed: normalized to a=b, b=c, outcome "a"), a > c
+            judge(probe, "ann", "impact", "a", "b", "a")
+            judge(probe, "ann", "impact", "c", "b", "b")
+            val third = judge(probe, "ann", "impact", "a", "c", "a")
+            val me = probe.get("/topics/t/me?participant=ann").body()
+            val (va, vb, vc) = listOf("a", "b", "c").map { myRating(me, it, "impact")!! }
+            assertTrue(va > vb && vb > vc, "a > b > c: $me")
+            assertEquals(5.0, vb, "the chain's middle idea sits at exactly 5: $me")
+            assertEquals(
+                """{"judged":3,"ratings":{"a":${RatingScale.format(RatingScale.toMilli(va))},"b":5,""" +
+                    """"c":${RatingScale.format(RatingScale.toMilli(vc))}}}""",
+                third,
+                "the response's ratings are the ones written",
+            )
+            assertTrue(
+                """"judgements":[{"dim":"impact","a":"a","b":"b","outcome":"a"},""" +
+                    """{"dim":"impact","a":"a","b":"c","outcome":"a"},{"dim":"impact","a":"b","b":"c","outcome":"a"}]}""" in me,
+                me,
+            )
+            assertEquals(null, myRating(me, "a", "effort"), "only the judged dimension is rated")
+            // journaled: one judge line per judgement, each followed by the derived ratings as ordinary rate lines
+            val journalLines = Files.readAllLines(journal)
+            assertEquals(3, lines("judge"))
+            val lastJudge = journalLines.indexOfLast { """"op":"judge"""" in it }
+            assertTrue(
+                journalLines.drop(lastJudge + 1).any { """"op":"rate"""" in it && """"participant":"ann"""" in it },
+                "$journalLines",
+            )
+
+            // bob: ratings untouched, no judgements, no trace of ann
+            val bob = probe.get("/topics/t/me?participant=bob").body()
+            assertEquals(2.0, myRating(bob, "a", "impact"), bob)
+            assertTrue(""""judgements":[]}""" in bob && "ann" !in bob, bob)
+
+            // the aggregate sees ann's derived rating like any slider rating (the dataflow got the delta)
+            probe.awaitRow("a") { r ->
+                near((va + 2.0) / 2, r["byDim"]!!.jsonObject["impact"]?.jsonObject?.num("mean"))
+            }
+
+            // an identical judgement is a no-op: no journal line
+            judge(probe, "ann", "impact", "b", "a", "b")
+            assertEquals(3, lines("judge"), "an identical judgement journals nothing")
+
+            // re-judging a pair replaces its judgement and moves the ratings
+            val rejudged = judge(probe, "ann", "impact", "b", "a", "equal")
+            assertTrue(rejudged.startsWith("""{"judged":3,"""), rejudged)
+            val me2 = probe.get("/topics/t/me?participant=ann").body()
+            assertTrue("""{"dim":"impact","a":"a","b":"b","outcome":"equal"}""" in me2, me2)
+            assertTrue(myRating(me2, "a", "impact")!! < va, "a no longer beats b: $me2")
+
+            // refusals change nothing
+            val judgesBefore = lines("judge")
+            val meBefore = probe.get("/topics/t/me?participant=ann").body() // the write-side view: synchronous
+            for ((body, error) in listOf(
+                """{"participant":"ann","dim":"nope","a":"a","b":"b","outcome":"a"}""" to "no such dimension",
+                """{"participant":"ann","a":"a","b":"b","outcome":"a"}""" to "no such dimension",
+                """{"participant":"ann","dim":"impact","a":"a","b":"zz","outcome":"a"}""" to "no such idea",
+                """{"participant":"ann","dim":"impact","b":"b","outcome":"a"}""" to "no such idea",
+                """{"participant":"ann","dim":"impact","a":"a","b":"a","outcome":"a"}""" to "a and b must differ",
+                """{"participant":"ann","dim":"impact","a":"a","b":"b","outcome":"maybe"}""" to "outcome must be one of",
+                """{"participant":"ann","dim":"impact","a":"a","b":"b","outcome":1}""" to "outcome must be one of",
+                """{"participant":"ann","dim":"impact","a":"a","b":"b"}""" to "outcome must be one of",
+                """{"dim":"impact","a":"a","b":"b","outcome":"a"}""" to "participant must be",
+            )) {
+                val r = probe.postJson(body, "/topics/t/judge")
+                assertEquals(400, r.statusCode(), body)
+                assertTrue(error in r.body(), "$body -> ${r.body()}")
+            }
+            assertEquals(405, probe.putJson("""{"participant":"ann"}""", "/topics/t/judge").statusCode())
+            assertEquals(405, probe.get("/topics/t/judge").statusCode())
+            assertEquals(400, probe.delete("/topics/t/judge?participant=ann").statusCode(), "dim is required")
+            assertEquals(400, probe.delete("/topics/t/judge?participant=ann&dim=nope").statusCode())
+            assertEquals(judgesBefore, lines("judge"))
+            assertEquals(meBefore, probe.get("/topics/t/me?participant=ann").body())
+
+            // clearing keeps the derived ratings as ordinary ratings
+            val me3 = probe.get("/topics/t/me?participant=ann").body()
+            assertEquals("""{"cleared":3}""", probe.delete("/topics/t/judge?participant=ann&dim=impact").body())
+            val cleared = probe.get("/topics/t/me?participant=ann").body()
+            assertTrue(""""judgements":[]}""" in cleared, cleared)
+            assertEquals(me3.substringBefore(""","judgements""""), cleared.substringBefore(""","judgements""""))
+            assertEquals(1, lines("unjudge"))
+            assertEquals("""{"cleared":0}""", probe.delete("/topics/t/judge?participant=ann&dim=impact").body())
+            assertEquals(1, lines("unjudge"), "clearing an empty set journals nothing")
+
+            // cascades drop the involved judgements without a line and without re-fitting the others
+            judge(probe, "ann", "impact", "a", "c", "a")
+            judge(probe, "ann", "impact", "a", "b", "equal")
+            judge(probe, "ann", "effort", "a", "b", "a")
+            val beforeCascade = probe.get("/topics/t/me?participant=ann").body()
+            val (judges, unjudges) = lines("judge") to lines("unjudge")
+            assertEquals(200, probe.delete("/topics/t/ideas/c?creator=cat").statusCode())
+            val afterIdea = probe.get("/topics/t/me?participant=ann").body()
+            assertTrue(
+                """"judgements":[{"dim":"effort","a":"a","b":"b","outcome":"a"},{"dim":"impact","a":"a","b":"b","outcome":"equal"}]}""" in afterIdea,
+                afterIdea,
+            )
+            assertEquals(myRating(beforeCascade, "a", "impact"), myRating(afterIdea, "a", "impact"), "no refit")
+            assertEquals(myRating(beforeCascade, "b", "impact"), myRating(afterIdea, "b", "impact"), "no refit")
+            assertEquals(200, probe.delete("/topics/t/dimensions/effort?creator=cat").statusCode())
+            val afterDim = probe.get("/topics/t/me?participant=ann").body()
+            assertTrue(""""judgements":[{"dim":"impact","a":"a","b":"b","outcome":"equal"}]}""" in afterDim, afterDim)
+            assertEquals(judges to unjudges, lines("judge") to lines("unjudge"), "cascades journal no judge/unjudge line")
+        }
     }
 
     @Test
@@ -464,6 +593,34 @@ class AlignmentServerTest {
         val fnEnd = body.indexOf("\n}", fnStart)
         assertTrue(body.substring(fnStart, fnEnd).trimEnd().endsWith("return 'rate';"), body.substring(fnStart, fnEnd))
         assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
+    fun `the page serves the Compare pairs mode roots and the duplicate-name check stays green`() = withApp { _, probe ->
+        // k6rrk-D7…D11 (ALN2.7): the pairwise-judgement panel inside the Compare view's #cmpMode
+        // toggle, served alongside place mode's roots and kept out of COMPARE_VIEW's dollar-sign ban.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        for (root in listOf(
+            "cmpMode", "cmpPairs", "cmpPairPrompt", "cmpPairA", "cmpPairB",
+            "cmpPickA", "cmpPickEqual", "cmpPickB", "cmpPairProgress", "cmpPairReset",
+        )) {
+            assertTrue("""id="$root"""" in body, "$root root")
+        }
+        // the "pairs · experimental" label sits on the #cmpMode pairs button, not merely somewhere on the page
+        val modeStart = body.indexOf("""id="cmpMode"""")
+        assertTrue(modeStart >= 0, "cmpMode root")
+        val modeBox = body.substring(modeStart, body.indexOf("</div>", modeStart))
+        assertTrue("experimental" in modeBox, "pairs button reads experimental: $modeBox")
+        assertTrue('$' !in COMPARE_VIEW, "COMPARE_VIEW is a plain raw string")
+        assertEquals(page.body(), probe.get("/t/anything").body(), "/t/anything serves the same page")
+        // duplicate-top-level-name check (the same regex the earlier test runs), re-run here so a
+        // pairs-mode name that shadows an existing shell/view global fails this test directly
+        val decls = Regex("""(?m)^(?:function|let|const|var)\s+([A-Za-z_]\w*)""")
+            .findAll(body).map { it.groupValues[1] }.toList()
+        assertEquals(emptyList(), decls.groupBy { it }.filterValues { it.size > 1 }.keys.toList(),
+            "top-level script names declared more than once")
     }
 
     @Test
@@ -721,6 +878,8 @@ class AlignmentServerTest {
     fun `a restarted app replays its journal to a byte-equal state`() {
         val journal = tmpJournal()
         lateinit var before: String
+        lateinit var deeBefore: String
+        lateinit var annBefore: String
         withApp(journal) { _, probe ->
             seed(probe)
             probe.postJson("""{"participant":"ann","title":"C"}""", "/topics/t/ideas")
@@ -729,9 +888,17 @@ class AlignmentServerTest {
             rate(probe, "ann", "a", "effort", "3")
             rate(probe, "bob", "b", "effort", "7")
             rate(probe, "bob", "c", "impact", "9")
+            // k6rrk-D6: dee judges on impact, all "equal" → dee rates a, b, c at exactly 5 (k6rrk.1 property 3);
+            // the a|c judgement is later dropped by the unidea cascade, without a line and without a refit
+            judge(probe, "dee", "impact", "a", "b", "equal")
+            judge(probe, "dee", "impact", "c", "a", "equal")
             probe.putJson("""{"creator":"cat","dim":"effort","weight":4.0}""", "/topics/t/weights")
             assertEquals(200, probe.postJson("""{"creator":"cat","name":"Cost","weight":0.5}""", "/topics/t/dimensions").statusCode())
             rate(probe, "ann", "b", "cost", "2")
+            // an unjudge on another dimension, and a judgement the undimension cascade drops
+            judge(probe, "dee", "cost", "a", "b", "a")
+            assertEquals("""{"cleared":1}""", probe.delete("/topics/t/judge?participant=dee&dim=cost").body())
+            judge(probe, "ann", "cost", "b", "a", "b")
             rate(probe, "bob", "a", "impact", "null")
             assertEquals(200, probe.delete("/topics/t/ideas/c?creator=cat").statusCode())
             assertEquals(200, probe.delete("/topics/t/dimensions/cost?creator=cat").statusCode())
@@ -768,7 +935,9 @@ class AlignmentServerTest {
             assertEquals(200, probe.postJson("""{"creator":"cat"}""", "/topics/t/reveal").statusCode())
             before = probe.await { s ->
                 val agg = parse(s)["aggregates"]!!.jsonObject["t"].toString()
-                near((2.0 * 8 + 4.0 * 3) / 6.0, row(agg, "a")?.num("score")) && near(7.0, row(agg, "b")?.num("score")) &&
+                // impact: a = mean(ann 8, dee 5), b = dee 5; effort: a = ann 3, b = bob 7
+                near((2.0 * 6.5 + 4.0 * 3) / 6.0, row(agg, "a")?.num("score")) &&
+                    near((2.0 * 5 + 4.0 * 7) / 6.0, row(agg, "b")?.num("score")) &&
                     near(6.5, row(agg, "b")?.num("override")) && row(agg, "a")?.get("override") == JsonNull &&
                     row(agg, "c") == null && """"revealed":true""" in s
             }
@@ -785,11 +954,16 @@ class AlignmentServerTest {
             val agg0 = parse(before)["aggregates"]!!.jsonObject["t"].toString()
             assertEquals(1, row(agg0, "b")!!["dots"]!!.jsonPrimitive.content.toInt(), agg0)
             assertEquals(0, row(agg0, "a")!!["dots"]!!.jsonPrimitive.content.toInt(), agg0)
+            deeBefore = probe.get("/topics/t/me?participant=dee").body()
+            assertTrue(""""judgements":[{"dim":"impact","a":"a","b":"b","outcome":"equal"}]}""" in deeBefore, deeBefore)
+            annBefore = probe.get("/topics/t/me?participant=ann").body()
+            assertTrue(""""judgements":[]}""" in annBefore, "the undimension cascade dropped ann's cost judgement: $annBefore")
         }
         val lines = Files.readAllLines(journal)
         for (op in listOf(
             "topic", "dimension", "idea", "note", "rate", "weight", "unrate", "unidea", "undimension",
-            "direction", "labels", "policy", "visibility", "reveal", "override", "unoverride", "gutcheck", "dots",
+            "direction", "labels", "policy", "visibility", "reveal", "judge", "unjudge",
+            "override", "unoverride", "gutcheck", "dots",
         )) {
             assertTrue(lines.any { """"op":"$op"""" in it }, "journal records $op: $lines")
         }
@@ -800,6 +974,8 @@ class AlignmentServerTest {
         withApp(journal) { _, probe ->
             val after = probe.await { it == before }
             assertEquals(before, after)
+            assertEquals(deeBefore, probe.get("/topics/t/me?participant=dee").body())
+            assertEquals(annBefore, probe.get("/topics/t/me?participant=ann").body())
         }
     }
 

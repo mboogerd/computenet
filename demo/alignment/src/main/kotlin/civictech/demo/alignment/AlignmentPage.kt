@@ -246,8 +246,9 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  on a non-2xx.
  * fetchMe(tid)     Promise of the /topics/{tid}/me view ({topic, participant,
  *                  ideas:[{id,title,description,ratings:{dim:number|null},rated,
- *                  total,dots}]}); the newest response for the current name is stored in
- *                  meCache[tid]. Use it instead of fetching /me yourself.
+ *                  total,dots}],judgements:[{dim,a,b,outcome}]}); the newest response
+ *                  for the current name is stored in meCache[tid]. Use it instead of
+ *                  fetching /me yourself.
  * meCache          {tid: last /me view}.
  * myProgress(tid)  {rated, total} summed over meCache[tid].ideas, or null if uncached.
  * boardGate(t)     {open, reason, rated, total, pending} (0dvra-D10): done = every
