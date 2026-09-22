@@ -228,11 +228,18 @@ class TwoNodeRig private constructor(
      * commit's own `dolt_log.date` against `bd`'s exit instant, and counted
      * how many *completed* reads after that exit still saw the old head:
      *
-     * - **145 / 145 mutations produced a visible commit. Zero losses.** Across
-     *   an idle run (15), three in-workspace contention shapes (24: a 200 ms
-     *   `dolt sql` reader loop, a second `bd` writer into the same workspace,
-     *   both), a run under the real `:demo:beadsmirror:test` suite (48, load
-     *   ~8-20) and a deliberately overloaded run (58 at load ~300).
+     * - **71 / 71 attributable mutations produced a visible commit. Zero
+     *   losses in the unconfounded population.** Attributable means the
+     *   visibility check (`head != before`) cannot be satisfied by anyone
+     *   else's commit: an idle run (15: 10 `idle.csv` + 5
+     *   `idle-timestamped.csv`), the `s-reader` shape (8 of `shapes.csv`'s 24
+     *   — a 200 ms `dolt sql` reader loop with no concurrent writer into the
+     *   workspace), and a run under the real `:demo:beadsmirror:test` suite
+     *   (48, load ~8-20). 145 mutations were probed in total; the other 74 —
+     *   `shapes.csv`'s `s-writer`/`s-both` rows (16) and the load ~300 run
+     *   (58) — ran a second `bd` writer into the SAME workspace the check
+     *   reads, so a noise commit satisfying the check cannot be excluded.
+     *   They are reported separately below, not folded into this count.
      * - **The commit predates `bd`'s own exit, always**: `commit date - bd
      *   exit` was **-28 ms to -139 ms** on every one of the 53 timestamped
      *   samples (5 idle + 48 under the suite). `bd` commits synchronously and
@@ -246,14 +253,25 @@ class TwoNodeRig private constructor(
      *   module's own suite** — i.e. a SINGLE `dolt sql` process start on a
      *   contended host can outlast [AWAIT_CONVERGENCE_MS] on its own. (`bd`
      *   itself stretched the same way: 0.5-5.4 s under the suite.)
-     * - **The load ~300 run is coarser evidence, stated as such.** It reports
-     *   23-130 s to a changed head (and `bd` up to 216 s), but it came from
-     *   the earlier probe, which recorded neither commit timestamps nor a
-     *   poll count and ran with a second `bd` writer in the same workspace.
-     *   There the figure is "time until some read returned a changed head",
-     *   and its zero-loss count cannot exclude that the noise writer's commit
-     *   is what satisfied the check. The commit-before-exit and one-read
-     *   findings above rest on the reader-only samples (idle, under-suite).
+     * - **The load ~300 run, and `shapes.csv`'s `s-writer`/`s-both` rows, are
+     *   confounded evidence, stated as such — not coarser evidence of the
+     *   same thing.** All three share the shape excluded from the 71/71
+     *   count above: a second `bd update` writer runs into the SAME
+     *   workspace roughly every 300 ms while the visibility check is only
+     *   `head != before`, so a noise commit landing in that window satisfies
+     *   the check exactly as well as the probed mutation's own commit would.
+     *   The load ~300 run (58, from the earlier probe, which recorded
+     *   neither commit timestamps nor a poll count) reports 23-130 s to a
+     *   changed head (and `bd` up to 216 s). `s-writer` and `s-both` (16,
+     *   7-field `shapes.csv` rows with no `commit_ms`/`polls` column) report
+     *   455-5073 ms `bd_ms` and 177-504 ms observed windows — comparable to
+     *   the noise writer's own ~300 ms period, so the confound is not merely
+     *   theoretical there either. Neither population's zero-loss count can
+     *   exclude that the noise writer's commit, not the probed mutation's
+     *   own, is what satisfied the check. The commit-before-exit and
+     *   one-read findings above rest on the timestamped, reader-only samples
+     *   (idle-timestamped, under-suite) — the 53 that are both attributable
+     *   and carry `commit_ms`/`polls`.
      *
      * So the vacuous-`quiesce` failure is a reader that has not caught up, not
      * a writer that has not written — and in the poller's case an in-flight
