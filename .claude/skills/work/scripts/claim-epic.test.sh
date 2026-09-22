@@ -229,9 +229,9 @@ out=$("$SCRIPT" computenet-e 2>&1); st=$?
 # crash leftover are the same row. The holder is what tells them apart.
 HOLDER_SH="$(dirname "$SCRIPT")/session-holder.sh"
 
-holder_show() { # status assignee holder
-  printf '[{"id":"computenet-e","status":"%s","assignee":"%s","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}}]' \
-    "$1" "$2" "$3" > "$CTRL/show.json"
+holder_show() { # status assignee holder [updated_at]
+  printf '[{"id":"computenet-e","status":"%s","assignee":"%s","updated_at":"%s","metadata":{"holder":"%s"}}]' \
+    "$1" "$2" "${4:-2020-01-01T00:00:00Z}" "$3" > "$CTRL/show.json"
 }
 
 # A fresh claim stamps a holder, so the NEXT session has something exact to test.
@@ -240,6 +240,30 @@ out=$("$SCRIPT" computenet-e 2>&1)
 grep -q -- "--set-metadata holder=" "$BD_LOG" \
   && ok "a fresh claim stamps metadata.holder" \
   || bad "no holder stamped — log: $(grep set-metadata "$BD_LOG" | tr '\n' '|')"
+
+# jqxqk: a STALE-aged holder whose EPIC was written moments ago is a
+# long-running session, not host residue. The hot-subtree guard cannot catch it
+# — it tests descendants, not the epic's own updated_at — so the takeover below
+# is the last thing between a live session and a second claimant. End-to-end
+# through the REAL session-holder.sh, with HOLDER_MAX_AGE_S forcing the age.
+fixture
+jq_pid=$$; jq_start=$(ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')
+holder_show in_progress "testbox" "$(hostname -s)/other:$jq_pid:$jq_start" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "LIVE session" <<<"$out" \
+  && ! grep -qE -- "--claim|--set-metadata holder=" "$BD_LOG"; } \
+  && ok "an old token whose epic was just written is refused, not taken over" \
+  || bad "jqxqk takeover: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# The converse must still work, or the guard above has disabled STALE takeover.
+fixture
+holder_show in_progress "testbox" "$(hostname -s)/other:$jq_pid:$jq_start" \
+            "2020-01-01T00:00:00Z"
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "residue, taking over" <<<"$out"; } \
+  && ok "an old token with an old write is still taken over" \
+  || bad "STALE takeover regressed: rc=$rc out=$out"
 
 # A LIVE holder is refused even though the recency test would have allowed the
 # takeover: this is the four-concurrent-sessions case, decided exactly.
