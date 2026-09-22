@@ -524,8 +524,15 @@ object IrohTransport {
      *   reason. What does not follow is any announcement: [bindAndAnnounce] is
      *   never reached, so no `announceTo` sweep starts and no `Remote` location
      *   is published for this link. The peer may therefore hold our mirror ref
-     *   and address it; frames it sends arrive with [ingress] still null and
-     *   take the counted drop path above.
+     *   and address it; frames it sends arrive with [ingress] still null.
+     *   They are dropped — there is nothing to route them to — and counted on
+     *   [quietCloseDrops], **not** [preHelloDrops] (computenet-3mcum): the
+     *   hello they follow was *admitted*, and the close is blame-free by
+     *   F3-D5 ("without touching `unadmitted`/`preHelloDrops`"), which
+     *   ktn1l-D12 refines and does not re-decide. Over real sidecars this is
+     *   the mutual dial in which the peer admitted our dialler hello on its
+     *   inbound link and announced on it before our gate, holding the other
+     *   direction already, judged the peer's acceptor hello here.
      * - The mirror [hello] minted on that dialling side is detached by [onDown]
      *   when the close lands, exactly as on any other drop — a quiet close is a
      *   different *reason* for a link to end, never a different lifecycle.
@@ -697,9 +704,34 @@ object IrohTransport {
          * asynchronous — the peer may already have written more — and those
          * frames have nowhere to route. They are dropped, exactly as before, and
          * now counted rather than silent.
+         *
+         * NOT counted here: frames after a hello the allowlist *admitted* and
+         * the [gate] then closed quietly. Those are [quietCloseDrops] — see the
+         * class KDoc's ktn1l-D12 section. A non-zero value here therefore
+         * always means a hello this side did not admit.
          */
         private val preHelloDropCount = AtomicLong()
         val preHelloDrops: Long get() = preHelloDropCount.get()
+
+        /**
+         * Set, on the reader thread, the instant [admitAndBind] takes a
+         * [Verdict.CloseQuietly] — before the close is asked for, so every
+         * frame dispatched after it on this link sees it.
+         */
+        @Volatile
+        private var closedQuietly = false
+
+        /**
+         * Frames that arrived on this link after the [gate] closed it quietly
+         * (ktn1l-D12, computenet-3mcum): dropped, since no ingress exists, and
+         * counted so the drop is not silent — but kept apart from
+         * [preHelloDrops] because nothing about them is a refusal. On a dialled
+         * link the peer may have read our hello and announced to our mirror
+         * before our close reached it; that is the expected shape of a mutual
+         * dial's losing link, not a fault on either side.
+         */
+        private val quietCloseDropCount = AtomicLong()
+        val quietCloseDrops: Long get() = quietCloseDropCount.get()
 
         /** @see admissionSink */
         val admissionDenialCount: Long get() = admissionSink.denialCount
@@ -842,7 +874,7 @@ object IrohTransport {
                 onHello(payload)
                 return
             }
-            preHelloDropCount.incrementAndGet()
+            if (closedQuietly) quietCloseDropCount.incrementAndGet() else preHelloDropCount.incrementAndGet()
         }
 
         /**
@@ -1056,6 +1088,7 @@ object IrohTransport {
                     // class KDoc's re-derivation of the happens-before argument
                     // for why leaving at this exact point is safe.
                     System.err.println("[IrohTransport] closing link quietly: ${verdict.detail}")
+                    closedQuietly = true
                     closeQuietly()
                     return
                 }
@@ -1437,6 +1470,9 @@ object IrohTransport {
         /** Drops charged to links that are already gone; see [preHelloDrops]. */
         private val retiredPreHelloDrops = AtomicLong()
 
+        /** @see retiredPreHelloDrops — the same, for [quietCloseDrops]. */
+        private val retiredQuietCloseDrops = AtomicLong()
+
         /**
          * Set immediately before this side asks for a close, and consumed by the
          * `LINK_DOWN` that close produces. A one-shot rather than a level: it
@@ -1541,6 +1577,13 @@ object IrohTransport {
          * the case it exists for.
          */
         val preHelloDrops: Long get() = retiredPreHelloDrops.get() + (currentSession.get()?.preHelloDrops ?: 0L)
+
+        /**
+         * Frames dropped after this connection's gate closed a link quietly
+         * (`Session.quietCloseDrops`), summed over every link instance like
+         * [preHelloDrops] — and, unlike it, no sign of a refused peer.
+         */
+        val quietCloseDrops: Long get() = retiredQuietCloseDrops.get() + (currentSession.get()?.quietCloseDrops ?: 0L)
 
         /** True while a link is up whose peer hello was admitted. */
         val peered: Boolean get() = currentSession.get()?.peered ?: false
@@ -1775,6 +1818,7 @@ object IrohTransport {
          */
         private fun retire(session: Session, link: SidecarLink, reason: String) {
             retiredPreHelloDrops.addAndGet(session.preHelloDrops)
+            retiredQuietCloseDrops.addAndGet(session.quietCloseDrops)
             session.onDown()
             currentSession.compareAndSet(session, null)
             currentLink.compareAndSet(link, null)

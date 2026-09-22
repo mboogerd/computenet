@@ -349,6 +349,50 @@ class IrohNodeTest {
     }
 
     /**
+     * computenet-3mcum: the peer ADMITTED our dialler hello, so it holds our
+     * mirror ref and announces to it — and only then does its acceptor hello
+     * reach our gate, which closes the link quietly (a mutual dial's losing
+     * link over real sidecars). The peer's frames that were already in flight
+     * arrive with no ingress. They are dropped, and counted as quiet-close
+     * drops: the hello they follow was admitted, so none of them is a
+     * pre-hello drop (F3-D5, refined by ktn1l-D12).
+     */
+    @Test
+    fun `frames after an outbound link's quiet close are quiet-close drops, never pre-hello drops`() {
+        withNode { fake, _, node ->
+            node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("a test's tie-break") }
+            val peer = nodeId()
+            val discovered = Discovered(node, peer)
+
+            val opened = ArrayBlockingQueue<Result<Unit>>(1)
+            Thread({ opened.put(runCatching { discovered.connection.openLink(30.seconds) }) }, "open-link")
+                .apply { isDaemon = true }
+                .start()
+            val dial = fake.nextDial()
+            // Our hello goes out, the peer's acceptor hello comes back and is judged.
+            fake.admit(dial.link, peer)
+            (opened.poll(30, TimeUnit.SECONDS) ?: fail("openLink did not settle within 30s")).getOrThrow()
+            assertEquals(HostMessage.CloseLink(dial.link), fake.nextHostMessage(), "the gate closed the link quietly")
+
+            // The peer's announcements, written before our close reached it.
+            repeat(3) { fake.send(SidecarMessage.Data(dial.link, byteArrayOf(0x42, it.toByte()))) }
+            // Wait on the TOTAL, so the assertions below say which counter the
+            // frames went to rather than timing out when it is the wrong one.
+            await("the three in-flight frames to be accounted") {
+                discovered.connection.quietCloseDrops + discovered.connection.preHelloDrops == 3L
+            }
+
+            fake.send(SidecarMessage.LinkDown(dial.link, "closed"))
+            assertTrue(discovered.nextOutcome().quiet, "the gate's quiet close is what ended this link")
+
+            assertEquals(0L, discovered.connection.preHelloDrops, "frames after an admitted hello are not pre-hello drops")
+            assertEquals(0L, node.preHelloDrops, "and the node charges none either")
+            assertEquals(3L, discovered.connection.quietCloseDrops, "the drops survive the link's retirement, counted once")
+            assertEquals(0L, node.admissionDenialCount, "a quiet close is not a denial")
+        }
+    }
+
+    /**
      * The contrast that gives the test above its meaning: the same connection,
      * the same absence of a re-dial — but an ordinary unadmitted drop IS
      * charged, and the outcome says so. Delegation, not a suppressed loop.
