@@ -72,6 +72,7 @@ import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import java.util.SortedSet
@@ -417,4 +418,23 @@ class SocialGraph(
     fun authored(id: Long): Set<Message> = authoredSinks[id]?.current() ?: emptySet()
     fun forumFacts(id: Long): Set<ForumFact> = forumSinks[id]?.current() ?: emptySet()
     fun messageFacts(id: Long): Set<MessageFact> = messageSinks[id]?.current() ?: emptySet()
+
+    /**
+     * Releases every sink's dispatcher thread, if it ever minted one
+     * (`kernel/.../observe/Observe.kt`, [ObserveCell.close]: "a caller that
+     * never despawns the sink ... may call this directly at shutdown").
+     * [ObservationSink] itself does not expose `close` — only [ObserveCell],
+     * the sole implementation [personCell]/[forumCell]/[messageCell]/
+     * [authoredCell] ever construct via `host.observe`, does — so this casts
+     * rather than despawning through the host: despawn tears the cell down
+     * through the full management lifecycle, which is more than a stopping
+     * app that will never read these sinks again needs. Idempotent, like
+     * [ObserveCell.close] itself. The only caller is `SocialApp.stop`
+     * (computenet-a77tu): a running app never despawns these cells itself, so
+     * nothing else releases the thread each one may have minted.
+     */
+    fun close() {
+        listOf(personSinks.values, forumSinks.values, messageSinks.values, authoredSinks.values)
+            .forEach { sinks -> sinks.forEach { (it as ObserveCell<*, *>).close() } }
+    }
 }
