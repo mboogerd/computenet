@@ -277,9 +277,10 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  board…, setup…, cmp…) or inside functions. Shell-internal names not
  *                  listed here (el, guard, go, route, renderShell, renderPhase, …)
  *                  may change; do not call them from a view.
- * Data access      state.ratings is read by exactly one view, Compare, and only for
- *                  OTHER participants while boardGate(t).open and the viewer opted in
- *                  (computenet-5eefp-D8); every other view never reads it.
+ * Data access      state.ratings is read by Setup's progress block (names and counts
+ *                  only, 0dvra-D15) and by Compare, only for OTHER participants while
+ *                  boardGate(t).open and the viewer opted in (computenet-5eefp-D8);
+ *                  every other view never reads it.
  * ════════════════════════════════════════════════════════════════════════════ */
 let state = { topics: [], ideas: [], ratings: [], aggregates: {} };
 let loaded = false;
