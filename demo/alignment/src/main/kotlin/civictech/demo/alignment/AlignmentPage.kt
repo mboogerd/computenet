@@ -220,8 +220,14 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  * state            the last /events frame: {topics:[{id,title,creator,ideas,
  *                  boardVisibility,revealed,dimensions:[{id,name,weight,direction,
  *                  lowLabel,highLabel}]}], ideas:[{topic,id,title,description,
- *                  proposer}], ratings:[…], aggregates:{tid:{weights,participants,
- *                  ideas:[…]}}}. Replaced wholesale on every frame.
+ *                  proposer,note,noteBy}], ratings:[…], aggregates:{tid:{weights,
+ *                  participants,ideas:[…]}}}. Replaced wholesale on every frame.
+ * Data access      state.ratings is every participant's raw ratings (and so their
+ *                  names). Values and names together are read only by Compare's
+ *                  overlay (5eefp-D8) and by the Board's drill-down (renderDrill() in
+ *                  DrilldownView.kt, w0i5h-D8), both only while boardGate(t).open;
+ *                  Setup's progress block (0dvra-D15) reads names and counts only,
+ *                  never a value. No other code reads state.ratings.
  * loaded           false until the first frame; render nothing topic-specific before.
  * me()             the viewer's name (sessionStorage.participant). Only the
  *                  #identity chip changes it; a change clears meCache and re-renders.
@@ -277,10 +283,6 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  board…, setup…, cmp…) or inside functions. Shell-internal names not
  *                  listed here (el, guard, go, route, renderShell, renderPhase, …)
  *                  may change; do not call them from a view.
- * Data access      state.ratings is read by Setup's progress block (names and counts
- *                  only, 0dvra-D15) and by Compare, only for OTHER participants while
- *                  boardGate(t).open and the viewer opted in (computenet-5eefp-D8);
- *                  every other view never reads it.
  * ════════════════════════════════════════════════════════════════════════════ */
 let state = { topics: [], ideas: [], ratings: [], aggregates: {} };
 let loaded = false;
