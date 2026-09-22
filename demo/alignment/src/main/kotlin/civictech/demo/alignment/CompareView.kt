@@ -68,7 +68,7 @@ internal const val COMPARE_VIEW = """
   .cmpChip.dragging { cursor: grabbing; z-index: 1000 !important; }
   #cmpAxis .cmpChip.dragging::before { display: none; }
   .cmpChip.cmpEnter { opacity: 0; }
-  .cmpChip.other { opacity: .6; border-style: dashed; background: none; box-shadow: none; color: var(--muted);
+  .cmpChip.other { opacity: .6; border-style: dashed; background: var(--surface); box-shadow: none; color: var(--muted);
                    cursor: default; }
   #cmpOthersWrap { display: flex; align-items: center; gap: .4rem; margin: 0 0 .7rem; font-size: var(--fs-2); }
   #cmpTray { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; min-height: 3.4rem; padding: .6rem .7rem;
@@ -146,7 +146,22 @@ function renderCompare() {
     if (!t || cmpEl('compare').hidden) return;
     cmpView = view;
     cmpPaint(t, view, null);
+    // boardGate(t) reads meCache, which keeps only the NEWEST /me response: in a
+    // render tick the shell's own fetchMe is issued after this one, so this view
+    // is not cached and the gate lags it. Wait for the shell's response (never
+    // race it with another fetch — that would stale the Board's and the phase's
+    // gate instead) and repaint, so the overlay control follows the progress.
+    if (meCache[tid] !== view) cmpAwaitCache(tid, meCache[tid]);
   }, () => {});
+}
+function cmpAwaitCache(tid, old) {
+  let n = 0;
+  const check = () => {
+    if (topicId() !== tid) return;
+    if (meCache[tid] !== old) { cmpRepaint(); return; }
+    if (++n < 40) setTimeout(check, 50); // give up after ~2 s; the next frame renders anyway
+  };
+  setTimeout(check, 50);
 }
 
 // repaint from the cached /me view, no fetch (resize, overlay toggle, spring-back)
