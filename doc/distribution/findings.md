@@ -821,3 +821,120 @@ R4), the same correction this entry makes to 43-security.md and
 95-research-plan.md. Left to whoever next has that row in their claim.
 
 `concord/corpus/DISPUTES.md` is unchanged by this feature.
+
+## 2026-09-22 — DSC2 BS-08: the mutual-dial tie-break over REAL sidecars (`computenet-md1dt`)
+
+**Names, does not edit, the entries above.** BS-08 (`[DSC2-DIAL-05]`,
+aas-D7) was covered only by `MutualDialTest`, which plays the POLICY over two
+hand-relayed `FakeSidecar`s in three chosen orders. No merged test had put two
+real iroh endpoints into a mutual dial. This entry records the first real-sidecar
+run: `iroh/src/test/kotlin/civictech/iroh/discover/MutualDialSidecarTest.kt`.
+
+### How the race is forced, and why it has to be
+
+Left alone, the race nearly always goes one way. The first node to see a
+`PEER_DISCOVERED` dials. Its link is usually up at the other node before that
+node discovers anything, and the late sighting is then `Suppressed` because the
+key already holds a link. So only one side dials, and a tie-break test would pass
+without a tie-break ever happening. Measured with the hold disabled (container
+copy only): of 5 trials, 2 were one-sided (`hi never dialled lo`), 2 were real
+mutual dials that passed, and 1 was a mutual dial that logged the link error
+described below.
+
+The test therefore routes each node's `SidecarClient` through a loopback relay.
+The relay parses only the host→sidecar framing and **holds the first `DIAL`
+naming the other node** until both nodes have issued one. No link exists anywhere
+until a `DIAL` reaches a sidecar, so neither node's sighting can be suppressed,
+and every trial is a genuine mutual dial by construction. Each trial also PROVES
+that both sides dialled rather than assuming it:
+
+- the barrier paired;
+- exactly one `DIAL` to the peer crossed each relay, then and after quiescence;
+- the larger id's `tieBreakClosed` reached 1, which happens only when that node
+  held both directions of the key.
+
+Three release orders are forced, each in its own test method and each run as 3
+trials with fresh keys:
+
+- `TOGETHER` — both `DIAL`s are released at once, and the handshakes race freely.
+- `LO_FIRST` — the smaller id's link is admitted at the larger id before the
+  larger id's already-issued `DIAL` is let through.
+- `HI_FIRST` — the mirror order: the larger id's link is admitted at the smaller
+  id first, and the smaller id's later OUTBOUND link has to displace it.
+  `MutualDialTest`'s fake orders do not include this one.
+
+### Result
+
+In all three orders, both nodes end with the end state BS-08 requires:
+
+- exactly ONE live link each, peered: the smaller id's OUTBOUND link, which is
+  the larger id's INBOUND link;
+- both snapshots agree (`Peered(OUTBOUND)` / `Peered(INBOUND)`);
+- no admission denial, no refusal attributed, no pre-hello drop, no unadmitted
+  open charged, no link error, no retry armed;
+- no re-dial of the loser.
+
+Linux container runs (aarch64, `computenet-codex-worker:local`, container-local
+copy, no host mounts):
+
+- the single-order version: 33 of 33 trials green;
+- the committed three-order version: 10 of 10 runs green, 90 of 90 trials,
+  0 skipped (`tests="3" skipped="0" failures="0"` in each run's JUnit XML);
+- earlier three-order runs: `TOGETHER` and `LO_FIRST` green in every trial.
+  Those runs were red only on `HI_FIRST`'s tie-break count, which led to the
+  divergence below.
+
+Discrimination: flipping `PeerTable.loserDirection` (container copy only) turns
+the test red on `the smaller id kept its OUTBOUND link`, in 2 of 2 runs.
+
+Evidence of record is CI's `iroh-sidecar` lane, which runs
+`:iroh:check -Piroh.enabled=true` unfiltered. On macOS the class reports
+SKIPPED by name, because the host has no multicast delivery (`ne2oh-B6`).
+
+### One divergence, pinned as landed, not fixed: `computenet-i74gh`
+
+In `HI_FIRST`, the smaller node's `DiscoveryCounters.tieBreakClosed` reads
+**0 in most trials and 1 in the rest** (container, across 62 `HI_FIRST` trials: 0 in 53, 1 in 9). The
+larger node's count is always 1. ktn1l-D16 says each node counts exactly one
+tie-break close, however it learned of the loss.
+
+When the smaller node's OUTBOUND link comes up, it is already holding the larger
+node's link PEERED, and two events race at the smaller node:
+
+- **The count is 1** when the larger node's hello on the new outbound link is
+  judged first. The gate answers `Admit(close = the inbound link)` and counts
+  that link.
+- **The count is 0** when the `LINK_DOWN` of the inbound link, which the larger
+  node has already closed as its loser, lands first.
+  `DiscoveredPeering.onLinkDown` classifies an accepted link as a tie-break loss
+  only when it was never peered (`outcome == null && !view.peered &&
+  otherLinkUp`), so nothing is counted. The later hello then finds no second
+  link, so the gate counts nothing either.
+
+A container-only mutation confirmed the 0 route: with `!view.peered` removed,
+all 9 trials were green with the smaller node counting 1. That was a diagnostic,
+not a proposed fix.
+
+The count is observability only: the end state above holds either way. The test
+pins the landed values for that single count, `{0, 1}` in `HI_FIRST` only, with
+the reason in its KDoc. A fix narrows that to `{1}`. Filed as bug
+`computenet-i74gh`; nothing is changed in `DiscoveredPeering`.
+
+### Seen once, unforced, and not reproduced by any forced order
+
+In one of the unforced samples, the larger node logged
+`send failed: sending a frame failed: connection lost` on its losing link. It
+had written to the link after the peer closed it, and `IrohConnection` reported
+the link "closed and will be re-dialled". No re-dial followed; the one-`DIAL`
+count held. The end state and the tie-break counts were otherwise correct. None
+of the 3 forced orders produced it in any trial, so the interleaving that does
+is not pinned by this test. It is recorded here as seen, NOT VERIFIED as
+reproducible, and not filed.
+
+### Not verified
+
+- Loopback and `--offline` only. This says nothing about two hosts on a real LAN
+  (`[DSC2-NV-01]`).
+- Only `DIAL` issue order is forced. The order of the QUIC handshakes and hellos
+  after the release is sampled, not enumerated.
+- CI's `iroh-sidecar` lane had not run this class when this entry was written.

@@ -156,7 +156,7 @@ class MutualDialSidecarTest {
      *   (`DiscoveredPeering.onLinkDown` classifies an accepted link as a
      *   tie-break loss only when it was never peered, so nothing is counted,
      *   and the later hello finds no second link — 0). Container runs saw 0
-     *   in 27 trials and 1 in 5. The end state BS-08 requires holds either
+     *   in 53 trials and 1 in 9. The end state BS-08 requires holds either
      *   way, and every other assertion is shared by all three orders. A fix
      *   for `computenet-i74gh` narrows HI_FIRST to `setOf(1L)`.
      */
