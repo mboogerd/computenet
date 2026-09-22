@@ -373,7 +373,7 @@ class AlignmentServerTest {
         val body = page.body()
         assertTrue("""id="compare"""" in body, "compare section root")
         assertTrue("""id="tabCompare"""" in body, "compare tab button")
-        for (root in listOf("cmpPicker", "cmpAxis", "cmpTray", "cmpLow", "cmpHigh", "cmpDirection", "cmpOthers", "cmpDesc")) {
+        for (root in listOf("cmpPicker", "cmpAxis", "cmpTray", "cmpLow", "cmpHigh", "cmpDirection", "cmpOthersWrap", "cmpOthers", "cmpDesc")) {
             assertTrue("""id="$root"""" in body, "$root root")
         }
         // the experimental badge sits inside the compare tab button, not merely somewhere on the page
