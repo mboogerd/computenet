@@ -254,11 +254,18 @@ function paintPolicyAndVisibility(t) {
   const revealBtn = el('setupReveal');
   revealBtn.disabled = !(t.boardVisibility === 'after-reveal' && t.revealed !== true);
   revealBtn.textContent = t.revealed === true ? 'revealed' : 'Reveal';
-  const gcRoot = el('setupGutCheckRoot');
-  if (!editing(gcRoot)) {
-    el('setupGutCheck').checked = t.gutCheck === true;
-    el('setupDotBudget').value = String(t.dotBudget);
-    el('setupDotBudget').disabled = t.gutCheck !== true;
+  // teu97-D10 repair: guard each Gut check control by its OWN focus, not by a shared root.
+  // A single shared-root guard left #setupDotBudget stuck disabled after checking
+  // #setupGutCheck: the checkbox keeps DOM focus through and past its own PUT's resolution,
+  // so editing(sharedRoot) stayed true and no repaint ever cleared the stale `disabled`
+  // attribute — reproduced headless (Playwright): check the box, then no further click or
+  // wait ever re-enables the budget input without an unrelated SSE frame arriving first.
+  const gcCheckbox = el('setupGutCheck');
+  if (!editing(gcCheckbox)) gcCheckbox.checked = t.gutCheck === true;
+  const gcBudget = el('setupDotBudget');
+  if (!editing(gcBudget)) {
+    gcBudget.value = String(t.dotBudget);
+    gcBudget.disabled = t.gutCheck !== true;
   }
 }
 
