@@ -314,6 +314,59 @@ class DiscoveredPeeringTest {
         }
     }
 
+    // ----------------------------------------------- MDNS-05: evicted counts linkUp too
+
+    /**
+     * [DSC2-MDNS-05], computenet-u5ok6. `evicted` used to count only
+     * `observe`'s own eviction; `linkUp`'s was silent. Here the table is
+     * filled to `maxRetained` with a `Dialling` entry (protected) and a
+     * `Retained`-but-undialled one (evictable — `maxInFlightDials = 1` leaves
+     * it waiting), and then a link comes up ([FakeSidecar.presentInbound])
+     * for a brand-new key with **no hello following it**, so only
+     * `DiscoveredPeering.onLinkUp` — the plain `Command.LinkUp` apply, not
+     * the gate's `seed`/`judge` — ever runs. That keeps this test off the
+     * race the accepted-hello path would otherwise have: a hello's `seed()`
+     * calls `PeerTable.linkUp` synchronously on the reader thread, which can
+     * beat the queued `Command.LinkUp` to the actual eviction and mask a
+     * mutation in whichever call site loses that race. `judge`'s own
+     * eviction path is pinned separately, at the table level, in
+     * `PeerTableTest`.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.onLinkUp`, drop
+     * `if (evicted != null) counters.evicted.increment()` and this reddens
+     * on the `evicted` await below (it never reaches 1).
+     */
+    @Test
+    fun `a link coming up and evicting to make room for a new key is counted on evicted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // dialling's DIAL — never answered, so it stays in flight (protected)
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            // maxInFlightDials = 1 is already spent on `dialling`, so this one
+            // waits Retained — no dial, no upLinks: exactly what `evictionVictim`
+            // requires.
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+
+            val accepted = nodeId()
+            rig.fake.presentInbound(9, accepted) // LINK_UP only — no hello, so the gate never runs.
+
+            await("the new key to reach the table via linkUp") { rig.viewOf(accepted) != null }
+            await("the eviction to be counted") { rig.peering.counters.evicted.count == 1L }
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(dialling), "the in-flight dial is never evicted")
+            assertEquals(2, rig.peering.snapshot().size, "eviction made room; the table stayed bounded")
+        }
+    }
+
     // --------------------------------------- DIAL-06: re-dial, and expiry cancels
 
     @Test

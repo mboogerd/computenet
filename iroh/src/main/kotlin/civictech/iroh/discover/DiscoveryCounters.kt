@@ -107,7 +107,15 @@ class DiscoveryCounters(
     /** Keys marked superseded because their identity re-appeared under a new key ([DSC2-ID-06]). */
     val superseded: Counter = Counter("superseded")
 
-    /** Entries dropped to keep the table within `maxRetained` ([DSC2-MDNS-05]). */
+    /**
+     * Entries dropped to keep the table within `maxRetained` ([DSC2-MDNS-05]),
+     * across every path that can drop one: `PeerTable.observe`'s own eviction
+     * (via `Observation.Evicted`) and the two link-backed paths, `linkUp` and
+     * `judge`, which report their victim through their return value
+     * (`linkUp`'s `NodeKey?`, `judge`'s `Judgement.Admit`/`Judgement.Supersede`
+     * `evicted` field) precisely so this counter does not undercount them
+     * (computenet-u5ok6).
+     */
     val evicted: Counter = Counter("evicted")
 
     private val refusals = ConcurrentHashMap<DenialReason, AtomicLong>()
