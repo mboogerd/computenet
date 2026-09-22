@@ -304,6 +304,22 @@ class TwoNodeRig private constructor(
      *   goes through `rig.mutate(listener, "update", a1, "--title", …)`. Its
      *   pre-start `createIssue` and `dep add` calls stay direct — pre-start
      *   and immune by the rule above.
+     * - `TwoNodeRigTest` (by computenet-mivve): its two POST-start
+     *   `listenerWorkspace.createIssue` calls (`idAfterIdle`,
+     *   `idDuringPartition`) now go through `rig.createIssue(listener, …)`.
+     *   Its other two creates are pre-start and stay direct — immune by the
+     *   rule above.
+     * - `ConvergenceSuite.runConcurrently` and
+     *   `ConvergenceDivergenceControlTest.runSchedule` (by computenet-mivve):
+     *   each applies every `ScheduleStep` to an already-started node's
+     *   workspace on a driver thread, then awaits equal folds — exactly the
+     *   non-immune shape. Each `it.apply(rig.listenerWorkspace)` /
+     *   `it.apply(rig.dialerWorkspace)` now goes through the lambda overload
+     *   of [mutate]: `rig.mutate(rig.listener) { step.apply(rig.listener.workspace) }`
+     *   (and the dialer counterpart), so both `ConvergenceSuite` and
+     *   `ConvergenceDivergenceControlTest` route through it. `ScheduleStep`
+     *   itself is unchanged — `SeededSchedule.kt`, where it lives, is outside
+     *   this bug's file claim; see [mutate]'s lambda-overload KDoc.
      *
      * Immune, and why:
      * - **Pre-start seeding** — `seedOnBoth` in `WriteBackTwoNodeTest`,
@@ -320,20 +336,12 @@ class TwoNodeRig private constructor(
      *   up as an ordinary slow convergence rather than as a vacuous `quiesce`.
      *   They are **not** proof against the lag — only outside this API.
      *
-     * **Not immune and not yet converted** (outside this bug's file claim,
-     * filed as its own item): `TwoNodeRigTest`'s two POST-start
-     * `listenerWorkspace.createIssue` calls (`idAfterIdle`,
-     * `idDuringPartition`; its other two creates are pre-start and immune by
-     * the rule above), and `ConvergenceSuite`'s `runConcurrently` — used by
-     * it and by `ConvergenceDivergenceControlTest` — which applies seeded
-     * schedule steps to both already-started workspaces on driver threads and
-     * then awaits equal folds. The creates want [createIssue]; the schedule
-     * driver additionally needs `ScheduleStep.apply` to take a [Node] rather
-     * than a bare workspace, which is why it is a separate item and not a
-     * two-line edit. `PullRebaselineTest` is NOT in this set — it *was*
-     * miscategorized as immune above, corrected by this bug's feature
-     * review 2026-09-18, and converted by computenet-r5gah; see the
-     * "Routed through" list above.
+     * **Everything named above as immune or routed is now converted or was
+     * always immune** — inventory closed by computenet-bbb04 (KDoc precision),
+     * computenet-r5gah (`PullRebaselineTest`) and computenet-mivve
+     * (`TwoNodeRigTest`, `ConvergenceSuite`, `ConvergenceDivergenceControlTest`),
+     * 2026-09-23. `PullRebaselineTest` was miscategorized as immune above
+     * before its feature review corrected it, 2026-09-18.
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
@@ -349,18 +357,43 @@ class TwoNodeRig private constructor(
     fun mutate(node: Node, vararg bdArgs: String, timeoutMs: Long = COMMIT_VISIBLE_MS): String {
         val before = node.logHead().firstOrNull()
         val output = node.workspace.run(*bdArgs)
+        awaitCommitVisible(node, before, timeoutMs) {
+            "`bd ${bdArgs.joinToString(" ")}` exited 0 on the ${node.role}'s workspace but never " +
+                "appeared in its dolt_log within ${timeoutMs}ms (head still $before) — " +
+                "nothing downstream of it can converge\n${node.progressReport(null, timeoutMs)}"
+        }
+        return output
+    }
+
+    /**
+     * [mutate]'s wait, for a caller whose mutation is not a single `bd`
+     * invocation — [ConvergenceSuite.runConcurrently] and
+     * [ConvergenceDivergenceControlTest]'s schedule driver apply a
+     * `ScheduleStep`, whose own verb varies (`create`, `update`, `close`,
+     * `dep add`, …), so there is no fixed `bdArgs` to accept. Runs [action]
+     * against [node]'s own workspace and returns only once ITS result is a
+     * commit in the workspace's `dolt_log` — same guarantee as the vararg
+     * overload, same confound noted there (a concurrent import on a
+     * write-back node can satisfy the wait).
+     */
+    fun mutate(node: Node, timeoutMs: Long = COMMIT_VISIBLE_MS, action: () -> Unit) {
+        val before = node.logHead().firstOrNull()
+        action()
+        awaitCommitVisible(node, before, timeoutMs) {
+            "a mutation on the ${node.role}'s workspace never appeared in its dolt_log within " +
+                "${timeoutMs}ms (head still $before) — nothing downstream of it can converge\n" +
+                node.progressReport(null, timeoutMs)
+        }
+    }
+
+    private fun awaitCommitVisible(node: Node, before: String?, timeoutMs: Long, message: () -> String) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (node.logHead().firstOrNull() == before) {
             if (System.currentTimeMillis() > deadline) {
-                throw AssertionFailedError(
-                    "`bd ${bdArgs.joinToString(" ")}` exited 0 on the ${node.role}'s workspace but never " +
-                        "appeared in its dolt_log within ${timeoutMs}ms (head still $before) — " +
-                        "nothing downstream of it can converge\n${node.progressReport(null, timeoutMs)}",
-                )
+                throw AssertionFailedError(message())
             }
             Thread.sleep(pollInterval.toMillis())
         }
-        return output
     }
 
     /**
