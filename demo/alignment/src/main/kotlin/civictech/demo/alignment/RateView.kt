@@ -62,8 +62,13 @@ internal const val RATE_VIEW = """
   #pager #pageProg { margin-left: auto; font-size: var(--fs-1); color: var(--muted); font-variant-numeric: tabular-nums; }
 
   @media (max-width: 640px) {
-    #rate { --rate-cols: minmax(0,1fr) 5rem 3.8rem; }
-    #rate .row label { grid-column: 1 / -1; }
+    /* phone: name and "not rated" on one line, a full-width track and clear below */
+    #rate { --rate-cols: minmax(0,1fr) 3.8rem; }
+    #rate .row { grid-template-areas: "l v" "s b"; row-gap: .2rem; }
+    #rate .row label { grid-area: l; }
+    #rate .row .v { grid-area: v; justify-self: end; }
+    #rate .row input { grid-area: s; }
+    #rate .row button { grid-area: b; }
     #rate .anchors span { grid-column: 1; }
     #pager #pageProg { flex-basis: 100%; margin-left: 0; }
   }
