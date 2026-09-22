@@ -97,6 +97,16 @@ class SidecarLink internal constructor(
     internal val peerSpoke = CountDownLatch(1)
 
     /**
+     * For a link that answers this host's `DIAL`: open once the dialling thread
+     * has decided the link's fate — returned it to its caller, or abandoned it
+     * (computenet-c45fr). The reader passes it before reading [listenerRef], so
+     * no event reaches the dial's listener while that decision is pending.
+     * Null for an accepted link, which has no dial to wait for.
+     */
+    @Volatile
+    internal var dialDecided: CountDownLatch? = null
+
+    /**
      * Set the moment the sidecar reports an `ERROR` on this link, before the
      * `CLOSE_LINK` that answers it and well before the `LINK_DOWN` that answers
      * *that*. Nothing may be sent in the window between the two.
@@ -360,6 +370,18 @@ class SidecarClient(
      * the exception the dial throws is the one it threw before this rule:
      * [InterruptedException] for an interrupt, [SidecarException] for a
      * timeout.
+     *
+     * "Sees nothing" holds for the first case too, although the reader goes on
+     * dispatching after it settles the dial and may meet a `LINK_DOWN`,
+     * `ERROR` or `DATA` for the link before the dial gets to abandon it
+     * (computenet-c45fr). Every event for a dialled link waits, on the reader
+     * thread, until the dial has decided: [listener] gets the event if the dial
+     * returned the link, and nobody does if it abandoned it. The wait is only
+     * on the dialling thread's remaining steps between its `DIAL` write and
+     * that decision, and none of them blocks — the `CLOSE_LINK` an
+     * abandonment writes comes after it — so outside tests (which hold that
+     * thread in [beforeDialAwait]) it lasts as long as the thread takes to be
+     * scheduled. Events are still delivered on the reader thread, in order.
      */
     fun dial(peerId: ByteArray, listener: LinkListener, timeout: Duration = defaultTimeout): SidecarLink {
         val id = nextLinkId.getAndAdd(2)
@@ -385,6 +407,9 @@ class SidecarClient(
             }
         } finally {
             pendingDials.remove(id)
+            // Whatever the outcome, the reader may deliver to (or past) this
+            // dial's link from here on. Idempotent after [abandon].
+            pending.decided.countDown()
         }
     }
 
@@ -399,6 +424,9 @@ class SidecarClient(
         val up = pending.outcome.get() as? DialOutcome.Up ?: return
         up.link.listenerRef.set(null)
         links.remove(id, up.link)
+        // Before the write below, which can block: the reader may be waiting
+        // on this decision, and must not wait on the socket too.
+        pending.decided.countDown()
         closeAbandoned(id)
     }
 
@@ -506,14 +534,14 @@ class SidecarClient(
             is SidecarMessage.Data -> {
                 val link = links[message.link] ?: return
                 link.peerSpoke.countDown()
-                link.listenerRef.get()?.onData(link, message.payload)
+                listenerOf(link)?.onData(link, message.payload)
             }
 
             is SidecarMessage.LinkDown -> {
                 val link = links.remove(message.link) ?: return
                 link.peerSpoke.countDown()
                 if (link.downDelivered.compareAndSet(false, true)) {
-                    link.listenerRef.get()?.onDown(link, message.reason)
+                    listenerOf(link)?.onDown(link, message.reason)
                 }
             }
 
@@ -539,7 +567,7 @@ class SidecarClient(
                 if (link.refused.compareAndSet(false, true)) {
                     runCatching { sendMessage(HostMessage.CloseLink(link.id)) }
                 }
-                link.listenerRef.get()?.onError(link, message.reason)
+                listenerOf(link)?.onError(link, message.reason)
             }
         }
     }
@@ -552,6 +580,7 @@ class SidecarClient(
             // Registered BEFORE the CAS: once the CAS says Up, an interrupted
             // dial may be in `abandon` at once, and must find the link to remove.
             link.listenerRef.set(pending.listener)
+            link.dialDecided = pending.decided
             links[message.link] = link
             // One CAS against the dial's abandonment (computenet-r2zhu): if the
             // dial gave up first, this link is nobody's and is closed here.
@@ -585,6 +614,19 @@ class SidecarClient(
         links[message.link] = link
     }
 
+    /**
+     * The listener an event on [link] goes to, once it may go anywhere. For a
+     * dialled link that is after the dial has decided (see [dial]); an
+     * abandoned dial has cleared [SidecarLink.listenerRef] by then.
+     */
+    private fun listenerOf(link: SidecarLink): LinkListener? {
+        link.dialDecided?.let { decided ->
+            decided.await()
+            link.dialDecided = null
+        }
+        return link.listenerRef.get()
+    }
+
     private fun failEverythingOutstanding() {
         val reason = readerFailure?.let { "reader stopped: $it" } ?: "connection closed"
         pendingDials.values.forEach {
@@ -594,7 +636,7 @@ class SidecarClient(
         links.values.toList().forEach { link ->
             links.remove(link.id)
             link.peerSpoke.countDown()
-            if (link.downDelivered.compareAndSet(false, true)) link.listenerRef.get()?.onDown(link, reason)
+            if (link.downDelivered.compareAndSet(false, true)) listenerOf(link)?.onDown(link, reason)
         }
     }
 
@@ -607,6 +649,9 @@ class SidecarClient(
      */
     private class PendingDial(val listener: LinkListener) {
         val latch = CountDownLatch(1)
+
+        /** Counted down once the dialling thread has decided; see [SidecarLink.dialDecided]. */
+        val decided = CountDownLatch(1)
         val outcome = AtomicReference<DialOutcome?>(null)
     }
 

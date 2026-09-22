@@ -173,7 +173,10 @@ class AlignmentServerTest {
         rate(probe, "ann", "a", "impact", "null")
         agg = probe.await(path = "/topics/t/aggregate") { row(it, "a")?.get("score") == JsonNull }
         assertEquals(listOf("b", "a"), order(agg), agg)
-        assertTrue(""""rank":null,"id":"a","title":"A","score":null,"split":false,"ratings":0,"byDim":{}""" in agg, agg)
+        assertTrue(
+            """"rank":null,"id":"a","title":"A","score":null,"override":null,"split":false,"ratings":0,"byDim":{}""" in agg,
+            agg,
+        )
     }
 
     @Test
@@ -521,6 +524,23 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the override control's route and class strings, and BOARD_MAIN has no dollar sign`() = withApp { _, probe ->
+        // computenet-w61az.2 (w61az-D14): the Board row's facilitator-override control (set,
+        // clear, badge) is part of BOARD_MAIN — its PUT route and CSS classes are in the served
+        // bytes, the slice stays template-literal-free, and the per-topic URL still serves the
+        // same bytes.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        assertTrue("/override'" in body, "override PUT route literal")
+        assertTrue(".ovinput" in body, "override input class")
+        assertTrue(".ovclear" in body, "override clear class")
+        assertTrue(".ovbadge" in body, "override badge class")
+        assertTrue('$' !in BOARD_MAIN, "no dollar sign in BOARD_MAIN")
+        assertEquals(body, probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
     fun `the page serves the Compare roots and an experimental tab that is not the default`() = withApp { _, probe ->
         val page = probe.get("/")
         assertEquals(200, page.statusCode())
@@ -709,6 +729,122 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `a facilitator override sets, re-ranks, reaches the events frame, and clears`() = withApp { app, probe ->
+        // ann rates a/impact 8 (score 8, rank 1); carl rates b/impact 4 (score 4, rank 2)
+        seed(probe)
+        rate(probe, "ann", "a", "impact", "8")
+        rate(probe, "carl", "b", "impact", "4")
+        var agg = probe.await(path = "/topics/t/aggregate") {
+            near(8.0, row(it, "a")?.num("score")) && near(4.0, row(it, "b")?.num("score"))
+        }
+        assertEquals(listOf("a", "b"), order(agg), agg)
+
+        val client = boundedHttpClient()
+        val frames = LinkedBlockingQueue<String>()
+        try {
+            CompletableFuture.runAsync {
+                client.send(
+                    HttpRequest.newBuilder(URI("http://localhost:${app.boundPort}/events")).build(),
+                    HttpResponse.BodyHandlers.ofLines(),
+                ).body().filter { it.startsWith("data: ") }.forEach { frames.put(it.removePrefix("data: ")) }
+            }
+            assertEquals(probe.state(), frames.poll(10, TimeUnit.SECONDS), "initial frame")
+
+            val put = probe.putJson("""{"creator":"cat","score":8.5}""", "/topics/t/ideas/b/override")
+            assertEquals(200, put.statusCode(), put.body())
+            assertEquals("""{"id":"b","override":8.5000}""", put.body())
+
+            val b = probe.awaitRow("b") { near(8.5, it.num("override")) }
+            assertEquals(1, b["rank"]!!.jsonPrimitive.content.toInt(), "$b")
+            assertTrue(near(4.0, b.num("score")), "score keeps its computed meaning: $b")
+            val aggAfter = probe.get("/topics/t/aggregate").body()
+            val a = row(aggAfter, "a")!!
+            assertEquals(2, a["rank"]!!.jsonPrimitive.content.toInt(), aggAfter)
+            assertEquals(JsonNull, a["override"], aggAfter)
+
+            val frame = frames.poll(10, TimeUnit.SECONDS)
+            assertTrue(frame != null && """"score":4.0000,"override":8.5000""" in frame, "override reaches /events: $frame")
+        } finally {
+            client.shutdownNow()
+        }
+
+        // clearing restores computed ranking with both overrides null
+        val clear = probe.putJson("""{"creator":"cat","score":null}""", "/topics/t/ideas/b/override")
+        assertEquals(200, clear.statusCode(), clear.body())
+        assertEquals("""{"id":"b","override":null}""", clear.body())
+        agg = probe.await(path = "/topics/t/aggregate") { row(it, "b")?.get("override") == JsonNull }
+        assertEquals(listOf("a", "b"), order(agg), agg)
+        assertEquals(JsonNull, row(agg, "a")!!["override"], agg)
+        assertEquals(JsonNull, row(agg, "b")!!["override"], agg)
+    }
+
+    @Test
+    fun `an identical override PUT is idempotent and journals no line`() {
+        val journal = tmpJournal()
+        withApp(journal) { _, probe ->
+            seed(probe)
+            val put = probe.putJson("""{"creator":"cat","score":8.5}""", "/topics/t/ideas/b/override")
+            assertEquals(200, put.statusCode(), put.body())
+            probe.awaitRow("b") { near(8.5, it.num("override")) }
+            assertEquals(1, Files.readAllLines(journal).count { """"op":"override"""" in it }, "one override line after the first write")
+
+            val again = probe.putJson("""{"creator":"cat","score":8.5}""", "/topics/t/ideas/b/override")
+            assertEquals(200, again.statusCode(), again.body())
+            assertEquals("""{"id":"b","override":8.5000}""", again.body())
+            assertEquals(
+                1,
+                Files.readAllLines(journal).count { """"op":"override"""" in it },
+                "an identical PUT journals no additional line",
+            )
+
+            val clear1 = probe.putJson("""{"creator":"cat","score":null}""", "/topics/t/ideas/b/override")
+            assertEquals(200, clear1.statusCode(), clear1.body())
+            probe.await { row(parse(it)["aggregates"]!!.jsonObject["t"].toString(), "b")?.get("override") == JsonNull }
+            assertEquals(1, Files.readAllLines(journal).count { """"op":"unoverride"""" in it }, "one unoverride line after the first clear")
+
+            val clear2 = probe.putJson("""{"creator":"cat","score":null}""", "/topics/t/ideas/b/override")
+            assertEquals(200, clear2.statusCode(), clear2.body())
+            assertEquals("""{"id":"b","override":null}""", clear2.body())
+            assertEquals(
+                1,
+                Files.readAllLines(journal).count { """"op":"unoverride"""" in it },
+                "a repeat clear journals no additional line",
+            )
+        }
+    }
+
+    @Test
+    fun `an override on an unrated idea ranks it, and invalid or refused overrides change nothing`() = withApp { _, probe ->
+        seed(probe)
+        // b has no ratings at all: an override still ranks it, with score null and an empty byDim
+        val put = probe.putJson("""{"creator":"cat","score":5}""", "/topics/t/ideas/b/override")
+        assertEquals(200, put.statusCode(), put.body())
+        assertEquals("""{"id":"b","override":5.0000}""", put.body())
+        val b = probe.awaitRow("b") { it["rank"] != JsonNull }
+        assertEquals(JsonNull, b["score"], "$b")
+        assertTrue(near(5.0, b.num("override")), "$b")
+        assertEquals(0, b["byDim"]!!.jsonObject.size, "$b")
+        assertTrue(b["rank"] != JsonNull, "$b")
+
+        val before = probe.state()
+        // non-creator, or no creator field at all: 403, nothing changes
+        assertEquals(403, probe.putJson("""{"creator":"ann","score":3}""", "/topics/t/ideas/a/override").statusCode())
+        assertEquals(403, probe.putJson("""{"score":3}""", "/topics/t/ideas/a/override").statusCode())
+        // unknown idea: 404 before the creator check, even with a non-creator body
+        assertEquals(404, probe.putJson("""{"creator":"ann","score":3}""", "/topics/t/ideas/ghost/override").statusCode())
+        // bad scores: 400
+        for (bad in listOf("\"5\"", "0", "-1", "9.01", "true")) {
+            assertEquals(400, probe.putJson("""{"creator":"cat","score":$bad}""", "/topics/t/ideas/a/override").statusCode(), "score $bad")
+        }
+        assertEquals(400, probe.putJson("""{"creator":"cat"}""", "/topics/t/ideas/a/override").statusCode(), "missing score")
+        // wrong methods: 405
+        assertEquals(405, probe.get("/topics/t/ideas/a/override").statusCode())
+        assertEquals(405, probe.postJson("""{"creator":"cat","score":3}""", "/topics/t/ideas/a/override").statusCode())
+        assertEquals(405, probe.delete("/topics/t/ideas/a/override").statusCode())
+        assertEquals(before, probe.state(), "every refused override changed nothing")
+    }
+
+    @Test
     fun `a restarted app replays its journal to a byte-equal state`() {
         val journal = tmpJournal()
         lateinit var before: String
@@ -743,13 +879,18 @@ class AlignmentServerTest {
             )) {
                 assertEquals(200, probe.putJson(body, "/topics/t/dimensions/effort").statusCode(), body)
             }
-            // the note is written BEFORE the idea edit so replay exercises the D2 hazard: an `idea`
-            // line replaces topic.ideas[id] wholesale, and must not touch the separately-keyed note
+            // the note and an override are both written BEFORE the idea edit so replay exercises the
+            // D2/D1 hazard: an `idea` line replaces topic.ideas[id] wholesale, and must not touch the
+            // separately-keyed note or override
             assertEquals(
                 200,
                 probe.putJson("""{"participant":"bob","text":"decided: ship it"}""", "/topics/t/ideas/b/note").statusCode(),
             )
+            assertEquals(200, probe.putJson("""{"creator":"cat","score":6.5}""", "/topics/t/ideas/b/override").statusCode())
             assertEquals(200, probe.putJson("""{"creator":"cat","title":"B edited","description":"new"}""", "/topics/t/ideas/b").statusCode())
+            // a set-then-cleared override on another idea: replays with no override at all
+            assertEquals(200, probe.putJson("""{"creator":"cat","score":3}""", "/topics/t/ideas/a/override").statusCode())
+            assertEquals(200, probe.putJson("""{"creator":"cat","score":null}""", "/topics/t/ideas/a/override").statusCode())
             assertEquals(
                 200,
                 probe.putJson("""{"creator":"cat","ideas":"facilitator","boardVisibility":"after-reveal"}""", "/topics/t/policy").statusCode(),
@@ -760,12 +901,14 @@ class AlignmentServerTest {
                 // impact: a = mean(ann 8, dee 5), b = dee 5; effort: a = ann 3, b = bob 7
                 near((2.0 * 6.5 + 4.0 * 3) / 6.0, row(agg, "a")?.num("score")) &&
                     near((2.0 * 5 + 4.0 * 7) / 6.0, row(agg, "b")?.num("score")) &&
+                    near(6.5, row(agg, "b")?.num("override")) && row(agg, "a")?.get("override") == JsonNull &&
                     row(agg, "c") == null && """"revealed":true""" in s
             }
             for (want in listOf(
                 """"ideas":"facilitator","boardVisibility":"after-reveal","revealed":true""",
                 """{"id":"effort","name":"Effort","weight":4.0000,"direction":"value","lowLabel":"none","highLabel":"a lot"}""",
                 """"id":"b","title":"B edited","description":"new","proposer":"bob","note":"decided: ship it","noteBy":"bob"""",
+                """"override":6.5000""",
             )) {
                 assertTrue(want in before, "$want in $before")
             }
@@ -777,7 +920,7 @@ class AlignmentServerTest {
         val lines = Files.readAllLines(journal)
         for (op in listOf(
             "topic", "dimension", "idea", "note", "rate", "weight", "unrate", "unidea", "undimension",
-            "direction", "labels", "policy", "visibility", "reveal", "judge", "unjudge",
+            "direction", "labels", "policy", "visibility", "reveal", "judge", "unjudge", "override", "unoverride",
         )) {
             assertTrue(lines.any { """"op":"$op"""" in it }, "journal records $op: $lines")
         }

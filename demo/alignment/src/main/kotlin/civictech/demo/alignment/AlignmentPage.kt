@@ -221,7 +221,10 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  boardVisibility,revealed,dimensions:[{id,name,weight,direction,
  *                  lowLabel,highLabel}]}], ideas:[{topic,id,title,description,
  *                  proposer,note,noteBy}], ratings:[…], aggregates:{tid:{weights,
- *                  participants,ideas:[…]}}}. Replaced wholesale on every frame.
+ *                  participants,ideas:[{id,rank,score,override,…}]}}}. `override`
+ *                  is the facilitator's consensus override (w61az-D6/D13), null
+ *                  unless set; `score` keeps its unchanged computed meaning.
+ *                  Replaced wholesale on every frame.
  * Data access      state.ratings is every participant's raw ratings (and so their
  *                  names). Values and names together are read only by Compare's
  *                  overlay (5eefp-D8) and by the Board's drill-down (renderDrill() in
