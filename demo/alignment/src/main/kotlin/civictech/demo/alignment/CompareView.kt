@@ -157,7 +157,7 @@ function renderCompare() {
 function cmpAwaitCache(tid, old) {
   let n = 0;
   const check = () => {
-    if (topicId() !== tid) return;
+    if (topicId() !== tid || cmpPosting > 0) return; // a POST's own resolution re-renders; never undo its optimistic move
     if (meCache[tid] !== old) { cmpRepaint(); return; }
     if (++n < 40) setTimeout(check, 50); // give up after ~2 s; the next frame renders anyway
   };
@@ -366,6 +366,7 @@ function cmpMakeChip(id) {
   c.addEventListener('pointerdown', e => cmpPress(e, c, id));
   c.addEventListener('click', e => {
     e.stopPropagation();
+    cmpCloseDesc(); // a chip is outside the dialog too; stopPropagation keeps the document handler from seeing it
     if (c._dragged) { c._dragged = false; return; }
     cmpSelect(id);
   });
