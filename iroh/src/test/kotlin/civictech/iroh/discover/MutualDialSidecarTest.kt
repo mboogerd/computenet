@@ -74,9 +74,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Why the staggered orders are forced too: releasing both at once and letting
  * the network order them was observed to produce the staggered shapes only
- * sometimes, and it also produced — in one unforced sample in a Linux
- * container — a `send failed: connection lost` link error on the larger id's
- * losing link. See `doc/distribution/findings.md`, the 2026-09-22 DSC2 BS-08
+ * sometimes. See `doc/distribution/findings.md`, the 2026-09-22 DSC2 BS-08
  * entry.
  *
  * ## And both sides are PROVEN to have dialled, in every trial
@@ -198,10 +196,6 @@ class MutualDialSidecarTest {
         /** `DIAL`s naming [peer] that this relay forwarded. */
         val dialsToPeer = AtomicInteger()
 
-        /** The host-chosen link id of the first `DIAL` naming [peer] — this node's OUTBOUND link to it. */
-        @Volatile
-        var dialLink: Long? = null
-
         /** `DIAL`s naming anyone else — a stray advertiser on the segment. Reported, not held. */
         val otherDials = AtomicInteger()
 
@@ -250,10 +244,7 @@ class MutualDialSidecarTest {
                 if (body[0] == SidecarProtocol.Kind.DIAL) {
                     val target = body.copyOfRange(SidecarProtocol.MSG_HEADER_LEN, bodyLen)
                     if (target.contentEquals(peer)) {
-                        if (dialsToPeer.get() == 0) {
-                            dialLink = java.nio.ByteBuffer.wrap(body, 1, 8).long
-                            releasedPaired = barrier.arrive(label)
-                        }
+                        if (dialsToPeer.get() == 0) releasedPaired = barrier.arrive(label)
                         dialsToPeer.incrementAndGet()
                     } else {
                         otherDials.incrementAndGet()
@@ -425,21 +416,17 @@ class MutualDialSidecarTest {
             assertEquals("Peered(INBOUND)", hi.viewOf(lo.own)?.state, "$t: hi's snapshot")
             assertEquals(resolvedBy(lo.side, hi.own).name, lo.viewOf(hi.own)?.attributedPeer, "$t: lo attributes the survivor")
             assertEquals(resolvedBy(hi.side, lo.own).name, hi.viewOf(lo.own)?.attributedPeer, "$t: hi attributes the survivor")
-            // Link errors: none on lo, whose OUTBOUND link is the survivor. On
-            // hi, only the pinned computenet-yfg48 pair, and only on hi's own
-            // dialled link — the one aas-D7 discards (see [yfg48LinkErrors]).
+            // No link errors on either side, in every order — including hi,
+            // whose own dialled link is the one aas-D7 discards. That link can
+            // be PEERED and carrying frames when the tie-break tears it down;
+            // the sidecar reports a send that meets that close with the link's
+            // LINK_DOWN alone, never an ERROR (computenet-yfg48).
             assertTrue(lo.node.linkErrors.isEmpty(), "$t: lo logged no link error: ${lo.node.linkErrors}")
-            val hiDialLink = checkNotNull(hi.proxy.dialLink) { "$t: hi's DIAL link id was not recorded" }
-            val hiErrors = hi.node.linkErrors
-            val unpinned = hiErrors - yfg48LinkErrors(hiDialLink)
-            assertTrue(unpinned.isEmpty(), "$t: hi logged a link error other than the pinned computenet-yfg48 pair on its losing link $hiDialLink: $hiErrors")
-            if (hiErrors.isNotEmpty()) {
-                assertTrue(hiLinks.single().linkId != hiDialLink, "$t: yfg48's errors are pinned only on the discarded link, not the survivor")
-            }
+            assertTrue(hi.node.linkErrors.isEmpty(), "$t: hi logged no link error: ${hi.node.linkErrors}")
 
             println(
                 "[md1dt] $t PASSED: both dialled (barrier arrivals ${barrier.arrivals}), " +
-                    "lo tie-break closes=$loCount, hi yfg48 link errors=${hiErrors.size}, stray dials lo=${lo.proxy.otherDials.get()} hi=${hi.proxy.otherDials.get()}",
+                    "lo tie-break closes=$loCount, stray dials lo=${lo.proxy.otherDials.get()} hi=${hi.proxy.otherDials.get()}",
             )
         } catch (failure: Throwable) {
             // What each node held when the trial failed: the one thing a CI log
@@ -457,32 +444,6 @@ class MutualDialSidecarTest {
             opened.forEach { runCatching { it.close() } }
         }
     }
-
-    /**
-     * The one link-error pair this test tolerates, **pinned as landed, not as
-     * desired** (bug `computenet-yfg48`), and only on the larger id's own
-     * dialled link [hiDialLink] — the OUTBOUND link aas-D7 discards at that
-     * node. Every other link error on either node, and any error at all on
-     * the smaller id (whose OUTBOUND link survives), still fails the trial.
-     *
-     * What produces it: hi's losing link can already be PEERED at hi, and
-     * carrying its Session's frames, when the tie-break tears it down. When
-     * the QUIC connection goes away while hi's sidecar still has frames queued
-     * for it, the sidecar's host->peer pump fails (`iroh/sidecar/src/server.rs`,
-     * `send failed: {e}`) and a later SEND finds that pump gone (`link N is no
-     * longer sending`). `IrohConnection`'s `onError` records both and prints
-     * "will be re-dialled", though no re-dial follows (the one-`DIAL` count
-     * above still holds). The end state BS-08 requires is unaffected: every
-     * assertion before this one ran and held. First seen unforced in a
-     * container, then on CI run 35682294768 (x86_64) in HI_FIRST trial 3.
-     *
-     * A fix for `computenet-yfg48` deletes this function and restores
-     * `hi.node.linkErrors.isEmpty()`, which its acceptance requires.
-     */
-    private fun yfg48LinkErrors(hiDialLink: Long): Set<String> = setOf(
-        "send failed: sending a frame failed: connection lost",
-        "link $hiDialLink is no longer sending",
-    )
 
     private fun trials(release: Release) {
         val binary = SidecarBinary.orSkip()
