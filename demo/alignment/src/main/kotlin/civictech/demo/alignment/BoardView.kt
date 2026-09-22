@@ -58,7 +58,7 @@ internal const val BOARD_MAIN = """
   #boardMode[hidden] { display: none; }
   #boardMode button { font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; border: 1px solid var(--line);
                        background: var(--surface); color: var(--muted); cursor: pointer; }
-  #boardMode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
+  #boardMode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
   #ranking { position: relative; }
   .rankrow { position: absolute; left: 0; right: 0; top: 0; height: 58px; background: var(--surface);
              box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
