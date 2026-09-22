@@ -394,9 +394,9 @@ class MutualDialTest {
      * it RAW rather than through the connection's quiet close, from inside the
      * window. The in-window assertion below fails first: B wrote a
      * `CLOSE_LINK` for its own outbound link. With the in-window assertions
-     * disabled, the mutant passes everything else here and in
-     * [assertOnePeeringEachWay] (Darwin arm64, 2 runs): the raw close's down
-     * is still classified quiet — by the connection's `tieBreakLoss`
+     * disabled, the mutant fails only "A closed the loser" and passes the
+     * quiet-outcome checks and [assertOnePeeringEachWay] (Darwin arm64): the
+     * raw close's down is still classified quiet — by the connection's `tieBreakLoss`
      * predicate, because B's inbound winner is registered by then — and the
      * verdict's count is deduplicated against it. So what the guard buys in
      * this interleaving is WHICH node closes the loser and WHEN, not a
