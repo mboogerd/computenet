@@ -540,7 +540,7 @@ class DiscoveredPeeringTest {
      * policy's queue has never seen at all, sidesteps that ordering the same
      * way `seedDirectly` sidesteps `seed`'s race with `onLinkUp` — it proves
      * the increment on its own terms rather than by forcing the two-link
-     * interleaving the KDoc's second paragraph describes.
+     * interleaving the KDoc's last paragraph describes.
      *
      * Prescribed mutation: in `DiscoveredPeering.onAdmitted`, drop
      * `if (evicted != null) counters.evicted.increment()` and the `evicted`
