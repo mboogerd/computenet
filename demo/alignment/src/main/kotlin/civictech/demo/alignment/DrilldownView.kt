@@ -24,9 +24,7 @@ package civictech.demo.alignment
  * never shuffles dots; each dot's `title`/`aria-label` is `participant · v.v`, and hover/focus
  * also shows it as a tooltip. `#drillOutlier` (w0i5h-D10): with n >= 3, every dot whose
  * |v - median| is the maximum (within 1e-9) is ringed and named "hear first: …", furthest first,
- * ties by name. One deliberate reading beyond the design text: when that maximum is 0 (everyone
- * gave the same value) nothing is ringed and the callout says so — ringing every dot as an
- * "outlier" would name nobody to hear first.
+ * ties by name.
  *
  * `#drillNote` (w0i5h-D11): the per-idea note, editable iff `mayAddIdea(t)` (the idea policy,
  * w0i5h-D1); read-only with the save control hidden otherwise. Save (button or Ctrl/Cmd+Enter)
@@ -242,7 +240,6 @@ function drillOutliers(ratings) {
   const median = n % 2 === 1 ? vs[(n - 1) / 2] : (vs[n / 2 - 1] + vs[n / 2]) / 2;
   const dist = r => Math.abs(r.value - median);
   const max = Math.max(...ratings.map(dist));
-  if (max < 1e-9) return []; // everyone agrees: nobody to hear first
   return ratings.filter(r => Math.abs(dist(r) - max) < 1e-9)
     .sort((a, b) => (dist(b) - dist(a)) || (a.participant < b.participant ? -1 : a.participant > b.participant ? 1 : 0));
 }
@@ -342,7 +339,6 @@ function drillRenderOutlier(ratings, outliers) {
   const box = el('drillOutlier');
   box.classList.toggle('hear', outliers.length > 0);
   if (ratings.length < 3) { box.textContent = 'need at least three ratings to name an outlier'; return; }
-  if (outliers.length === 0) { box.textContent = 'everyone gave the same rating: no outlier to hear first'; return; }
   box.textContent = 'hear first: ' + outliers.map(r => r.participant + ' (' + r.value.toFixed(1) + ')').join(', ');
 }
 
