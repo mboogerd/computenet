@@ -694,7 +694,7 @@ function renderRanking(t, ideas, participants, stagger) {
     const dotsEl = row.querySelector('.dots');
     if (t.gutCheck === true) {
       dotsEl.hidden = false;
-      dotsEl.textContent = f.dots > 0 ? '● ' + f.dots + ' dots' : 'no dots yet';
+      dotsEl.textContent = f.dots > 0 ? '● ' + f.dots + (f.dots === 1 ? ' dot' : ' dots') : 'no dots yet';
     } else {
       dotsEl.hidden = true;
     }
