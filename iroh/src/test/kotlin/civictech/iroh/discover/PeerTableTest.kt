@@ -534,6 +534,47 @@ class PeerTableTest {
     }
 
     @Test
+    fun `a same-direction sibling's drop leaves the key linked — NoRedial, not Retained, not evictable`() {
+        var now = 0L
+        // computenet-ru6n4: two INBOUND links for one key — a remote that
+        // restarted and re-dialled before this side saw the first link's
+        // LINK_DOWN. B is up and admitted, then C comes up and is admitted
+        // too; C drops while B is still live. The table must still see B.
+        val table = PeerTable(bytes(0x01), maxRetained = 2) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 10, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Admit(close = null, closeLinkId = null),
+            table.judge(k, LinkDirection.INBOUND, linkId = 10, resolved = alice, now = 1),
+        )
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 11, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Admit(close = null, closeLinkId = null),
+            table.judge(k, LinkDirection.INBOUND, linkId = 11, resolved = alice, now = 2),
+            "a same-direction sibling is not a tie-break partner",
+        )
+
+        now = 3
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 11, now = 3), "B (10) is still live")
+        val state = table.stateOf(k)
+        assertTrue(state is PeerState.Peered, "a key still holding link 10 must not fall back to Retained, was $state")
+        assertEquals(emptyList(), table.nextDue(now = 3, maxInFlight = 8), "a linked key is not re-dialled")
+        assertFalse(table.expire(k), "a key still holding a live link is not expired")
+
+        // Evictability: fill the table's second slot, then offer a third key.
+        // The only candidate is k; it holds a live link, so the table rejects.
+        assertEquals(Observation.Dialable, table.observe(key(0x03), listOf("a"), now = 4))
+        table.markDialling(key(0x03), attempt = 0)
+        assertEquals(Observation.Rejected, table.observe(key(0x04), listOf("b"), now = 5), "k must not be evicted")
+        assertEquals(2, table.keysRetained)
+
+        // Only when B itself drops is the key linkless and dialable again.
+        assertEquals(DownOutcome.Redial, table.linkDown(k, linkId = 10, now = 6))
+        assertTrue(table.stateOf(k) is PeerState.Retained)
+    }
+
+    @Test
     fun `dialFailed advances dueAt on the injected schedule and nextDue respects maxInFlight`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 8) { now }

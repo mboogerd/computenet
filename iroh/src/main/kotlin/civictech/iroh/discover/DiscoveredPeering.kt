@@ -453,19 +453,16 @@ class DiscoveredPeering private constructor(
         // so `table.linkUp` here creates it rather than finding it already
         // present (computenet-ik0q1).
         //
-        // The ordinary path's own eviction is also reachable, not only
-        // pinned artificially: the entry can be removed again before this
-        // line runs. `PeerTable.Entry.upLinks` holds one link id per
-        // direction, so a second same-direction link for the key, up after
-        // this one and down before this `Admitted` is drained, leaves
-        // `upLinks` empty; the entry turns `Retained` and evictable, another
-        // key's arrival at capacity evicts it, and this `linkUp` re-creates
-        // it — evicting in turn. That needs two same-direction links for one
-        // key and the policy thread lagging the reader thread's gate; no rig
-        // here drives that interleaving end to end, and it is unverified
-        // whether a real sidecar or remote peer ever produces the two
-        // same-direction links this needs. The one-id-per-direction hazard
-        // itself is computenet-ru6n4.
+        // A second same-direction link for the key does NOT reopen that
+        // path. `PeerTable.Entry.upLinks` records every live link by id, so a
+        // sibling link that came up after this one and went down before this
+        // `Admitted` is drained removes only itself: this link keeps the
+        // entry linked, non-evictable and off the re-dial schedule, and this
+        // `linkUp` finds it present (computenet-ru6n4, pinned in
+        // `PeerTableTest`). Before that fix `upLinks` held one id per
+        // direction, and the sibling's down emptied it — the entry turned
+        // `Retained` and evictable, and this line re-created it, evicting in
+        // turn.
         val evicted = table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
         if (evicted != null) counters.evicted.increment()
         table.admitted(key, view.linkId, peer)
