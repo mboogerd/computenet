@@ -55,7 +55,7 @@ internal const val DRILLDOWN_VIEW = """
   #drillDims button[aria-pressed="true"] { color: var(--ink); border-color: currentColor; font-weight: 600; }
   #drillDims .sw { width: .6rem; height: .6rem; border-radius: 3px; flex: 0 0 auto; }
   #drillDims .dsx { color: var(--warn); font-weight: 600; }
-  #drillPlot { margin: .2rem 0 .3rem; }
+  #drillPlot { margin: 1.5rem 0 .3rem; } /* room above the top lane for a dot's tooltip */
   #drillPlot .drill-empty { color: var(--muted); font-size: var(--fs-2); padding: 1rem 0; text-align: center; }
   #drillPlot .drill-inner { position: relative; margin: 0 12px; }
   #drillPlot .drill-band { position: absolute; top: 0; border-radius: 4px; opacity: .16; }
@@ -156,7 +156,8 @@ el('drill').addEventListener('click', e => { if (e.target === el('drill')) close
 el('drillClose').onclick = closeDrill;
 el('drillNoteSave').onclick = drillSaveNote;
 el('drillNote').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); drillSaveNote(); }
+  const enter = e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter';
+  if (enter && (e.ctrlKey || e.metaKey)) { e.preventDefault(); drillSaveNote(); }
 });
 
 function drillSaveNote() {
@@ -319,12 +320,15 @@ function drillRenderPlot(t, d, ratings, st, outliers) {
     if (focusedWho !== null && p.r.participant === focusedWho) refocus = dot;
   });
   box.appendChild(inner);
-  const anchors = document.createElement('div');
-  anchors.className = 'drill-anchors';
-  const lowA = document.createElement('span'); lowA.textContent = d.lowLabel || '1';
-  const highA = document.createElement('span'); highA.textContent = d.highLabel || '9';
-  anchors.appendChild(lowA); anchors.appendChild(highA);
-  box.appendChild(anchors);
+  // end anchors: the dimension's labels; with neither set the tick numbers already say 1 and 9
+  if (d.lowLabel || d.highLabel) {
+    const anchors = document.createElement('div');
+    anchors.className = 'drill-anchors';
+    const lowA = document.createElement('span'); lowA.textContent = d.lowLabel || '1';
+    const highA = document.createElement('span'); highA.textContent = d.highLabel || '9';
+    anchors.appendChild(lowA); anchors.appendChild(highA);
+    box.appendChild(anchors);
+  }
   if (refocus) refocus.focus();
 }
 
