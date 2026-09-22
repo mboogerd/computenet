@@ -424,7 +424,8 @@ class DiscoveredPeering private constructor(
 
     private fun onLinkUp(command: Command.LinkUp) {
         val view = command.view
-        table.linkUp(NodeKey(view.remoteNodeId), view.direction, view.linkId, sourceOf(view.source))
+        val evicted = table.linkUp(NodeKey(view.remoteNodeId), view.direction, view.linkId, sourceOf(view.source))
+        if (evicted != null) counters.evicted.increment()
     }
 
     private fun onAdmitted(command: Command.Admitted) {
@@ -434,7 +435,8 @@ class DiscoveredPeering private constructor(
         // [DSC2-DIAL-01]/[DSC2-DIAL-07]: an ACCEPTED or CONFIGURED link makes
         // the key peered exactly as a discovered one does, which is what makes
         // a later PEER_DISCOVERED for it Suppressed rather than a second dial.
-        table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
+        val evicted = table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
+        if (evicted != null) counters.evicted.increment()
         table.admitted(key, view.linkId, peer)
     }
 
@@ -593,6 +595,9 @@ class DiscoveredPeering private constructor(
      */
     private fun toVerdict(judgement: Judgement, key: NodeKey, linkId: Long, resolved: PeerId): Verdict = when (judgement) {
         is Judgement.Admit -> {
+            // Only reachable when `judge` created a fresh entry for an unknown
+            // key and the table was at capacity — see `Judgement.Admit.evicted`.
+            if (judgement.evicted != null) counters.evicted.increment()
             if (judgement.close != null && judgement.closeLinkId != null) {
                 // Counted HERE, on the reader thread, rather than inside the
                 // command: the verdict is what says the other link lost, and
@@ -616,6 +621,7 @@ class DiscoveredPeering private constructor(
         }
 
         is Judgement.Supersede -> {
+            if (judgement.evicted != null) counters.evicted.increment()
             counters.superseded.increment()
             post(Command.CancelRetry(judgement.oldKey))
             Verdict.Admit
@@ -674,7 +680,10 @@ class DiscoveredPeering private constructor(
      */
     private fun seed(key: NodeKey, links: List<IrohNode.LinkView>) {
         links.forEach { link ->
-            if (link.linkId !in tieBreakCounted) table.linkUp(key, link.direction, link.linkId, sourceOf(link.source))
+            if (link.linkId !in tieBreakCounted) {
+                val evicted = table.linkUp(key, link.direction, link.linkId, sourceOf(link.source))
+                if (evicted != null) counters.evicted.increment()
+            }
         }
     }
 

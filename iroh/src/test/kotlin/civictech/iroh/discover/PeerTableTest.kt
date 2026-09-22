@@ -162,6 +162,41 @@ class PeerTableTest {
     }
 
     @Test
+    fun `linkUp on an unknown key evicts the oldest evictable entry and returns the victim`() {
+        // computenet-u5ok6: linkUp's eviction was silent — the caller had no
+        // way to know it happened, so DiscoveredPeering.counters.evicted
+        // undercounted. Prescribed mutation: make linkUp return `null`
+        // unconditionally and this reddens on the `assertEquals(oldest, ...)`.
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+        val oldest = key(0x02)
+
+        table.observe(oldest, listOf("a"), 1)
+        table.observe(key(0x03), listOf("a"), 2)
+        table.observe(key(0x04), listOf("a"), 3)
+
+        val evicted = table.linkUp(key(0x05), LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.ACCEPTED)
+
+        assertEquals(oldest, evicted, "linkUp made room the way observe does, and reports its victim")
+        assertEquals(3, table.keysRetained, "linkUp made room instead of growing past maxRetained")
+        assertNull(table.stateOf(oldest), "the oldest evictable entry — not a random one — is the one linkUp gave up")
+    }
+
+    @Test
+    fun `linkUp on an unknown key returns null when nothing was evicted`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+
+        assertNull(table.linkUp(key(0x02), LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.ACCEPTED))
+
+        table.observe(key(0x03), listOf("a"), 1)
+        assertNull(
+            table.linkUp(key(0x03), LinkDirection.OUTBOUND, linkId = 2, source = EntrySource.DISCOVERED),
+            "the key already existed; nothing was evicted to make room for it",
+        )
+    }
+
+    @Test
     fun `a table of nothing but peered entries rejects a new key and does not grow`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
@@ -322,6 +357,10 @@ class PeerTableTest {
 
     @Test
     fun `judge on an unknown key attempts eviction like linkUp — a table at capacity with an evictable entry stays bounded`() {
+        // computenet-u5ok6: judge's eviction was as silent as linkUp's.
+        // Prescribed mutation: drop `evicted = evictedOnCreate` from the
+        // `Judgement.Admit` this branch returns and this reddens on the
+        // `evicted` assertion below.
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
         val oldest = key(0x02)
@@ -330,8 +369,13 @@ class PeerTableTest {
         table.observe(key(0x03), listOf("a"), 2)
         table.observe(key(0x04), listOf("a"), 3)
 
-        table.judge(key(0x05), LinkDirection.INBOUND, linkId = 1, resolved = alice, now = 5)
+        val judgement = table.judge(key(0x05), LinkDirection.INBOUND, linkId = 1, resolved = alice, now = 5)
 
+        assertEquals(
+            oldest,
+            (judgement as Judgement.Admit).evicted,
+            "judge made room the way linkUp does, and reports its victim",
+        )
         assertEquals(3, table.keysRetained, "judge made room the way linkUp does, instead of growing past maxRetained")
         assertNull(table.stateOf(oldest), "the oldest evictable entry — not a random one — is the one judge gave up")
     }
