@@ -65,7 +65,21 @@ sealed interface PeerState {
     /** A dial is in flight. [attempt] is the 0-based retry index this dial is. */
     data class Dialling(val attempt: Int, val since: Long) : PeerState
 
-    /** A link for this key was admitted and carries [attributedPeer] — the `PeerId` a `Session` stamped. */
+    /**
+     * A link for this key was admitted and carries [attributedPeer] — the `PeerId` a `Session` stamped.
+     *
+     * [linkId] and [direction] name a LIVE admitted link whenever one exists
+     * (computenet-oqpqf). A key can hold several admitted links at once — a
+     * same-direction sibling (see `PeerTable.Entry.upLinks`), or the loser of
+     * a mutual dial between its verdict and its `LINK_DOWN` — and when the
+     * one named here drops while another admitted link survives,
+     * [PeerTable.linkDown] re-points this state at the most recently admitted
+     * survivor, keeping [since]. When the only survivors are links not yet
+     * admitted (a mutual dial's other direction before its hello, say), or a
+     * CONFIGURED key's only link dropped, the state keeps naming the dropped
+     * link until a later hello re-points it; [PeerTable.judge] then treats it
+     * as NOT live, so it blocks no hello with `IDENTITY_MISMATCH`.
+     */
     data class Peered(
         val direction: LinkDirection,
         val linkId: Long,
@@ -259,6 +273,24 @@ class PeerTable(
          * re-dialled, evictable, and re-created on its next `Admitted`.
          */
         val upLinks: MutableMap<Long, LinkDirection> = LinkedHashMap()
+
+        /**
+         * The live links this table has ADMITTED for this key — by a [judge]
+         * verdict that left the key [PeerState.Peered] on them, or by
+         * [admitted] — and the identity each carries, in admission order.
+         * Always a subset of [upLinks]: [linkDown] removes a link from both.
+         * It is what [linkDown] re-points a [PeerState.Peered] state to when
+         * the link it names drops and a sibling survives (computenet-oqpqf).
+         */
+        val attributedLinks: MutableMap<Long, PeerId> = LinkedHashMap()
+
+        /** Make [linkId] the entry's Peered link, attributed to [peer]. Caller holds the lock and has put [linkId] in [upLinks]. */
+        fun peer(direction: LinkDirection, linkId: Long, peer: PeerId, since: Long) {
+            attributedPeer = peer
+            attributedLinks.remove(linkId)
+            attributedLinks[linkId] = peer
+            state = PeerState.Peered(direction, linkId, peer, since)
+        }
     }
 
     /** How many keys are retained right now — the `keysRetained` gauge of [DiscoveryCounters] ([DSC2-OBS-01]). */
@@ -463,8 +495,7 @@ class PeerTable(
     fun admitted(key: NodeKey, linkId: Long, peer: PeerId): Boolean = lock.withLock {
         val entry = entries[key] ?: return false
         val direction = entry.upLinks[linkId] ?: return false
-        entry.attributedPeer = peer
-        entry.state = PeerState.Peered(direction = direction, linkId = linkId, attributedPeer = peer, since = clock())
+        entry.peer(direction, linkId, peer, since = clock())
         return true
     }
 
@@ -479,13 +510,27 @@ class PeerTable(
      * holds another live link — which is what a quiet tie-break close looks
      * like from here, and must not provoke a re-dial of a peer this node is
      * still linked to. "Another live link" includes one of the SAME direction
-     * (see `Entry.upLinks`); a [PeerState.Peered] entry whose own link was the
-     * one that dropped stays Peered on the survivor, naming the dropped link
-     * id until a later hello re-points it.
+     * (see `Entry.upLinks`).
+     *
+     * A [PeerState.Peered] entry whose OWN link was the one that dropped is
+     * re-pointed at the most recently admitted link that survives, so its
+     * `linkId`/`direction` never name a dead link while a live admitted one
+     * exists (computenet-oqpqf). With no admitted survivor it keeps naming the
+     * dropped link — see [PeerState.Peered] for why that is safe.
      */
     fun linkDown(key: NodeKey, linkId: Long, now: Long): DownOutcome = lock.withLock {
         val entry = entries[key] ?: return DownOutcome.NoRedial
         entry.upLinks.remove(linkId)
+        entry.attributedLinks.remove(linkId)
+        val peered = entry.state as? PeerState.Peered
+        if (peered != null && peered.linkId == linkId) {
+            val survivor = entry.attributedLinks.entries.lastOrNull()
+            if (survivor != null) {
+                val direction = entry.upLinks.getValue(survivor.key)
+                entry.attributedPeer = survivor.value
+                entry.state = PeerState.Peered(direction, survivor.key, survivor.value, since = peered.since)
+            }
+        }
         if (entry.upLinks.isNotEmpty()) return DownOutcome.NoRedial
         if (entry.source == EntrySource.CONFIGURED) return DownOutcome.NoRedial
         return when (entry.state) {
@@ -526,7 +571,14 @@ class PeerTable(
      * Precedence, and it is a total order, not a preference (ktn1l-D18):
      *
      * 1. **[Judgement.Refuse] (IDENTITY_MISMATCH)** — a live link for THIS key
-     *    is attributed to a different identity. A key whose identity changed
+     *    is attributed to a different identity. "Live" is checked, not
+     *    assumed: the [PeerState.Peered] link must still be in the entry's
+     *    up links. [DSC2-ID-05] refuses a hello whose identity differs from
+     *    one "already attributed to the same key identifier on a live link",
+     *    so a key whose admitted link has dropped — a CONFIGURED key, whose
+     *    state [linkDown] leaves Peered, or any key whose only survivors are
+     *    not yet admitted — refuses nothing on this ground (computenet-oqpqf).
+     *    A key whose identity changed
      *    under a live link is refused before any tie-break gets to reason about
      *    its directions, because the tie-break's premise (these two links are
      *    the same peer) is exactly what has failed ([DSC2-ID-05]).
@@ -577,8 +629,11 @@ class PeerTable(
 
         // 1. Identity mismatch on this key, against a link that is still live.
         val peered = entry.state as? PeerState.Peered
-        if (peered != null && peered.linkId != linkId && peered.attributedPeer != resolved) {
+        if (peered != null && peered.linkId != linkId && peered.linkId in entry.upLinks &&
+            peered.attributedPeer != resolved
+        ) {
             entry.upLinks.remove(linkId)
+            entry.attributedLinks.remove(linkId)
             return Judgement.Refuse(DenialReason.IDENTITY_MISMATCH, live = peered.attributedPeer)
         }
 
@@ -589,10 +644,10 @@ class PeerTable(
         if (other != null) {
             if (direction == loserDirection(ownKey.bytes, key.bytes)) {
                 entry.upLinks.remove(linkId)
+                entry.attributedLinks.remove(linkId)
                 return Judgement.CloseQuietly
             }
-            entry.attributedPeer = resolved
-            entry.state = PeerState.Peered(direction, linkId, resolved, since = now)
+            entry.peer(direction, linkId, resolved, since = now)
             return Judgement.Admit(close = key, closeLinkId = other.key)
         }
 
@@ -600,8 +655,7 @@ class PeerTable(
         val old = entries.values.firstOrNull { candidate ->
             candidate.key != key && (candidate.state as? PeerState.Peered)?.attributedPeer == resolved
         }
-        entry.attributedPeer = resolved
-        entry.state = PeerState.Peered(direction, linkId, resolved, since = now)
+        entry.peer(direction, linkId, resolved, since = now)
         if (old != null) {
             old.state = PeerState.Superseded(byKey = key, since = now)
             return Judgement.Supersede(old.key, evicted = evictedOnCreate)

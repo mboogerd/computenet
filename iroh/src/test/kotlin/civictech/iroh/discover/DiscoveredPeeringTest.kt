@@ -834,6 +834,97 @@ class DiscoveredPeeringTest {
         }
     }
 
+    // ------------- ktn1l-D16: which accepted-link downs are tie-break closes
+
+    /**
+     * A remote key on the chosen side of [OWN_ID]: [smallerThanOwn] false
+     * makes this node the SMALLER id (its INBOUND links are its tie-break
+     * losers), true makes it the larger (its INBOUND links are the winners).
+     */
+    private fun nodeIdRelativeToOwn(smallerThanOwn: Boolean): ByteArray {
+        while (true) {
+            val candidate = nodeId()
+            if ((java.util.Arrays.compareUnsigned(candidate, OWN_ID) < 0) == smallerThanOwn) return candidate
+        }
+    }
+
+    /**
+     * computenet-oqpqf, criterion 3: a SAME-direction sibling is not a
+     * tie-break partner. This node is the smaller id, so INBOUND is its losing
+     * direction and only the opposite-direction requirement tells the two
+     * cases apart. Link 9 is admitted; a second INBOUND link 10 from the same
+     * key — a restarted remote re-dialling before 9's down — drops before its
+     * hello. Nothing lost a tie-break.
+     *
+     * Mutation: let any other live link count in `onLinkDown` (drop the
+     * `it.direction != view.direction` term) — link 10 is counted.
+     */
+    @Test
+    fun `an accepted link that drops unadmitted beside a same-direction sibling is not a tie-break close`() {
+        withPeering { rig ->
+            val key = nodeIdRelativeToOwn(smallerThanOwn = false)
+            rig.fake.presentInbound(9, key)
+            rig.fake.hello1From(9)
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the accepting side answers with a hello")
+            await("link 9 to be peered") { rig.viewOf(key)?.state == "Peered(INBOUND)" }
+
+            rig.fake.presentInbound(10, key)
+            await("the sibling to be registered") { rig.node.links(key).size == 2 }
+            rig.fake.send(SidecarMessage.LinkDown(10, "the sibling dropped before its hello"))
+            await("the sibling's down to reach the node") { rig.node.links(key).map { it.linkId } == listOf(9L) }
+            rig.drained()
+
+            assertEquals(0L, rig.peering.counters.tieBreakClosed.count, "a same-direction sibling's drop is not a tie-break close")
+            assertEquals("Peered(INBOUND)", rig.viewOf(key)?.state, "link 9 still carries the peering")
+        }
+    }
+
+    /**
+     * The other half of the classification: only this node's LOSING direction
+     * is a tie-break loss. This node is the larger id, so an INBOUND link is
+     * the one the tie-break keeps. It is admitted, an OUTBOUND link to the
+     * same key comes up (a configured dial, its hello unanswered), and then
+     * the inbound link drops. The opposite direction is up, but no tie-break
+     * closed anything.
+     *
+     * Mutation: drop `losingDirection` from `onLinkDown`'s predicate — the
+     * winner's drop is counted.
+     */
+    @Test
+    fun `the winning direction's accepted link dropping beside an opposite link is not a tie-break close`() {
+        withPeering { rig ->
+            val key = nodeIdRelativeToOwn(smallerThanOwn = true)
+            rig.fake.presentInbound(INBOUND_LINK, key)
+            rig.fake.hello1From(INBOUND_LINK)
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the accepting side answers with a hello")
+            await("the inbound link to be peered") { rig.viewOf(key)?.state == "Peered(INBOUND)" }
+
+            val connected = settle("connect-configured") {
+                rig.node.connectConfigured(key, listOf("127.0.0.1:4242"), backoff = { 10L })
+            }
+            // The admitted inbound peering may still be announcing: skip its DATA.
+            fun nextControl(): HostMessage {
+                while (true) {
+                    val message = rig.fake.nextHostMessage()
+                    if (message !is HostMessage.Data || message.link != INBOUND_LINK) return message
+                }
+            }
+            assertIs<HostMessage.AddPeer>(nextControl())
+            rig.fake.send(SidecarMessage.PeerAdded(key))
+            val dial = assertIs<HostMessage.Dial>(nextControl())
+            rig.fake.send(SidecarMessage.LinkUp(dial.link, key, DIRECTION_OUTBOUND))
+            connected()
+            assertIs<HostMessage.Data>(nextControl(), "the dialler's hello is its first frame")
+            await("both directions to be up") { rig.node.links(key).map { it.direction }.toSet().size == 2 }
+
+            rig.fake.send(SidecarMessage.LinkDown(INBOUND_LINK, "the winner dropped"))
+            await("the inbound link's down to reach the node") { rig.node.links(key).map { it.linkId } == listOf(dial.link) }
+            rig.drained()
+
+            assertEquals(0L, rig.peering.counters.tieBreakClosed.count, "the winning direction's drop is not a tie-break close")
+        }
+    }
+
     // ------------------------------- BS-05a: a stranger is dialled, then refused
 
     /**
