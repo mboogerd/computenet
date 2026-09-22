@@ -19,8 +19,11 @@ package civictech.demo.alignment
  * segment whose `byDim[d].contribution` is `null` (a cost dimension, or a score-null row) gets
  * zero width and no title instead of throwing on `.toFixed`. Each row (10mvq-D3/D9/D11) also
  * carries a one-decimal score, a muted "N of M rated" line, a "value · cost" line when the topic
- * has a cost dimension, a "÷ cost" badge on the bar, and an agreement indicator (the split pill,
- * "agreed" or "mixed") for every row with rated data. A row ranks and displays on its
+ * has a cost dimension, a "÷ cost" badge on the bar, an agreement indicator (the split pill,
+ * "agreed" or "mixed") for every row with rated data, and — only while the topic's experimental
+ * Gut check round is enabled (`t.gutCheck === true`, teu97-D9) — its dot total as text beside the
+ * raters line ("● N dots"/"no dots yet"), never a bar segment and never a sort key: rows still
+ * rank and render on their unchanged effective score. A row ranks and displays on its
  * "effective" score (computenet-w61az.2, w61az-D8/D9): `f.override` when set, else `f.score`,
  * never re-derived on the page. An overridden row shows the effective score with a marked
  * "override" badge while the computed score stays visible (the raters line gains
@@ -127,6 +130,7 @@ internal const val BOARD_MAIN = """
   .rankrow .sub { display: flex; flex-direction: column; gap: .05rem; margin-left: calc(1.6rem + .6rem);
                   font-size: .72rem; color: var(--muted); }
   .rankrow .sub div[hidden] { display: none; }
+  .rankrow .sub .line1 { display: flex; gap: .5rem; align-items: baseline; }
   .rankrow.unranked { opacity: .5; }
   .rankrow.unranked .stack { visibility: hidden; } /* an unscored idea has no bar, not an empty one */
   .rankrow.unranked.enter, .rankrow.unranked.leave { opacity: 0; }
@@ -517,7 +521,8 @@ function renderRanking(t, ideas, participants, stagger) {
                          '</div>' +
                          '<div class="score"></div><span class="pill" hidden></span>' +
                        '</div>' +
-                       '<div class="sub"><div class="raters" hidden></div><div class="vc" hidden></div><div class="reason" hidden></div></div>';
+                       '<div class="sub"><div class="line1"><div class="raters" hidden></div><div class="dots" hidden></div></div>' +
+                       '<div class="vc" hidden></div><div class="reason" hidden></div></div>';
       // place without transition, flush that style, then fade in. A forced
       // style flush rather than backlog-triage's double requestAnimationFrame:
       // rAF is paused in a background tab, which would leave a fresh row
@@ -683,6 +688,17 @@ function renderRanking(t, ideas, participants, stagger) {
         reasonEl.hidden = true;
       }
     }
+    // gut check dots (teu97-D9): text only, beside the raters line, never a bar segment or sort
+    // key; shown under the same gate as everything else in the Board, hidden unless the topic's
+    // experimental round is enabled.
+    const dotsEl = row.querySelector('.dots');
+    if (t.gutCheck === true) {
+      dotsEl.hidden = false;
+      dotsEl.textContent = f.dots > 0 ? '● ' + f.dots + ' dots' : 'no dots yet';
+    } else {
+      dotsEl.hidden = true;
+    }
+
     row.querySelector('.pos').textContent = ranked ? String(f.rank) : '·';
 
     // agreement indicator (D9): every row with rated data, ranked or not.
