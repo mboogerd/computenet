@@ -446,6 +446,45 @@ class SocialCrashRestartTest {
         }
     }
 
+    /**
+     * The complementary change-broadcast path to the previous test
+     * (computenet-54fv1, residual of computenet-v10ou.1's feature review):
+     * `after start a write to a preloaded cell ...` above exercises the
+     * RETRO-attach loop in [SocialGraph.onChange], where the sink for the two
+     * written persons already existed before `start()`. Here the write
+     * creates a brand-new person — no `personSinks` entry exists for it
+     * before this POST — so its sink is registered through the forward
+     * [SocialGraph.attach] helper instead. Mutating `attach` to return the
+     * sink without registering `it.onChange { fireChange() }` must fail this
+     * test's assertion while leaving the retro-attach test green.
+     */
+    @Test
+    fun `after start a create for a brand-new person reaches SSE subscribers as a change frame`() {
+        val app = SocialApp(port = 0, source = SOURCE).start()
+        try {
+            val newId = app.graph.personIds().last() + 1_000_000
+            assertTrue(newId !in app.graph.personIds(), "the new id must not already exist: $newId")
+            val url = "http://localhost:${app.boundPort}"
+            val posted = AtomicBoolean(false)
+            val frame = awaitSseData("$url/events", timeoutMs = 20_000) { line ->
+                System.err.println("DEBUG-FRAME: $line")
+                if (posted.compareAndSet(false, true)) {
+                    // The first frame is the catch-up; write only once subscribed.
+                    Thread {
+                        val status = HttpProbe(url).use { it.post("action=person&id=$newId&firstName=New&lastName=Person") }
+                        System.err.println("DEBUG-POST status=$status")
+                    }.start()
+                    false
+                } else {
+                    line.contains("\"id\":$newId,")
+                }
+            }
+            assertTrue(frame.contains("\"id\":$newId,"), "change frame carries new person $newId")
+        } finally {
+            app.stop()
+        }
+    }
+
     /** The `knows` ids of person [id] in one `/state` JSON frame (jo2jk-D6 shape). */
     private fun knowsOf(frame: String, id: Long): List<Long> =
         Regex("""\{"id":$id,"name":"[^"]*","knows":\[([0-9,]*)]""").find(frame)
