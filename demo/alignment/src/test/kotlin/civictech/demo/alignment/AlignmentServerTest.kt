@@ -395,6 +395,23 @@ class AlignmentServerTest {
     }
 
     @Test
+    fun `the page serves the override control's route and class strings, and BOARD_MAIN has no dollar sign`() = withApp { _, probe ->
+        // computenet-w61az.2 (w61az-D14): the Board row's facilitator-override control (set,
+        // clear, badge) is part of BOARD_MAIN — its PUT route and CSS classes are in the served
+        // bytes, the slice stays template-literal-free, and the per-topic URL still serves the
+        // same bytes.
+        val page = probe.get("/")
+        assertEquals(200, page.statusCode())
+        val body = page.body()
+        assertTrue("/override'" in body, "override PUT route literal")
+        assertTrue(".ovinput" in body, "override input class")
+        assertTrue(".ovclear" in body, "override clear class")
+        assertTrue(".ovbadge" in body, "override badge class")
+        assertTrue('$' !in BOARD_MAIN, "no dollar sign in BOARD_MAIN")
+        assertEquals(body, probe.get("/t/anything").body(), "/t/anything serves the same page")
+    }
+
+    @Test
     fun `the page serves the Compare roots and an experimental tab that is not the default`() = withApp { _, probe ->
         val page = probe.get("/")
         assertEquals(200, page.statusCode())
