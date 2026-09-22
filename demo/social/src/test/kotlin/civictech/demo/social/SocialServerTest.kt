@@ -2,6 +2,7 @@ package civictech.demo.social
 
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitSseData
+import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -159,5 +160,29 @@ class SocialServerTest {
         } finally {
             app.stop()
         }
+    }
+
+    // --- computenet-a77tu: stop() releases every observe-sink thread --------
+
+    /** Live threads whose name starts with `observe-cell-` (`ObserveCell`'s dispatcher naming). */
+    private fun observeCellThreadCount(): Int {
+        val threads = arrayOfNulls<Thread>(Thread.activeCount() * 2 + 64)
+        val n = Thread.enumerate(threads)
+        return threads.take(n).count { it?.name?.startsWith("observe-cell-") == true }
+    }
+
+    @Test
+    fun `stop releases every observe-cell dispatcher thread a started app minted`() {
+        val before = observeCellThreadCount()
+
+        val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
+        awaitUntil("app to mint at least one observe-cell dispatcher thread") { observeCellThreadCount() > before }
+
+        app.stop()
+
+        awaitUntil("observe-cell dispatcher thread count to return to its pre-construction value") {
+            observeCellThreadCount() == before
+        }
+        assertEquals(before, observeCellThreadCount())
     }
 }

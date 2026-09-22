@@ -18,6 +18,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Interest
 import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.demo.shell.DemoShell
@@ -199,9 +200,20 @@ class SocialApp(
         s.start()
     }
 
-    /** Safe on a never-started app. */
+    /**
+     * Safe on a never-started app. Also releases every observe-sink dispatcher
+     * thread this app minted (computenet-a77tu): [SocialGraph.close] for the
+     * per-keyed-cell sinks, plus this app's own four static-set sinks
+     * ([tags]/[tagClasses]/[places]/[organisations]), cast to [ObserveCell]
+     * the same way and for the same reason [SocialGraph.close] does — the
+     * sole implementation `host.observe` ever returns, and the one that
+     * exposes `close`. Idempotent, since both [SocialGraph.close] and
+     * [ObserveCell.close] are.
+     */
     fun stop() {
         shell?.stop()
+        graph.close()
+        listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
     }
 
     /** A no-op until [start] built the shell. */
