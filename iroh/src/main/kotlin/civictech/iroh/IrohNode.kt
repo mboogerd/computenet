@@ -121,7 +121,13 @@ class IrohNode internal constructor(
      * enqueue-only regardless.
      */
     interface NodeLinkListener {
-        /** A link exists. Not yet admitted: nothing has been said on it. */
+        /**
+         * A link exists. Not yet admitted: nothing has been said on it.
+         *
+         * A dialled link whose `LINK_DOWN` overtook its registration is still
+         * reported here, immediately followed by its [onDown], and is never in
+         * [links] (computenet-wad38).
+         */
         fun onUp(link: LinkView) {}
 
         /** The link's hello was admitted and the gate let it through; [LinkView.attributedPeer] is set. */
@@ -167,6 +173,49 @@ class IrohNode internal constructor(
     val addresses: List<String> get() = listeningAddresses
 
     private val records = ConcurrentHashMap<Long, LinkRecord>()
+
+    /**
+     * Guards [records] writes against [downsBeforeUp], and orders each
+     * link's listener calls: a link's `onUp` is always delivered before its
+     * `onDown`, whichever of [up] and [down] ran first (computenet-wad38).
+     */
+    private val lifecycle = Any()
+
+    /**
+     * Downs of dialled links that reached this node before the link itself
+     * did, by link id, each consumed by the [up] that follows it
+     * (computenet-wad38). Guarded by [lifecycle].
+     *
+     * A dialled link is registered by `openLink` on the DIALLING thread, after
+     * [SidecarClient.dial] returns; the client releases the link's events to
+     * the reader as soon as the dial has decided, which is before that. So a
+     * `LINK_DOWN` arriving right behind the `LINK_UP` — the far side refusing
+     * or quietly closing within microseconds — can reach [down] first. [down]
+     * used to find no record and return silently, and the [up] that followed
+     * registered a link that was already gone: a record in [links] and a
+     * `LinkUp` with no `LinkDown` ever to follow, which left the discovery
+     * table holding the key as linked for good.
+     *
+     * An entry is always consumed: [down] is reached for a dialled link only
+     * through that link's listener, which the client calls only once the dial
+     * has returned the link, and `openLink` goes from there to [up] without a
+     * step that can throw.
+     */
+    private val downsBeforeUp = HashMap<Long, EarlyDown>()
+
+    /** @see downsBeforeUp — a holder, because a down's outcome is itself nullable. */
+    private class EarlyDown(val outcome: IrohTransport.IrohConnection.LinkOutcome?)
+
+    /**
+     * Test seam (computenet-wad38): runs on the dialling thread with a dialled
+     * link after [SidecarClient.dial] has returned it and before its
+     * connection installs it or this node registers it — the window in which
+     * a `LINK_DOWN` can overtake both. A test holds the thread here to put the down inside that
+     * window, which is otherwise as wide as the thread takes to be scheduled.
+     * Null, and never set, outside tests.
+     */
+    @Volatile
+    internal var beforeDialledLinkRegistered: ((SidecarLink) -> Unit)? = null
     private val listeners = CopyOnWriteArrayList<NodeLinkListener>()
     private val connections = CopyOnWriteArrayList<IrohTransport.IrohConnection>()
 
@@ -463,16 +512,35 @@ class IrohNode internal constructor(
     }
 
     private fun observerFor(source: LinkSource) = object : IrohTransport.IrohConnection.LinkObserver {
+        override fun dialReturned(link: SidecarLink) {
+            beforeDialledLinkRegistered?.invoke(link)
+        }
+
         override fun onUp(link: SidecarLink) = up(link, source)
         override fun onAdmitted(linkId: Long, peer: PeerId) = admitted(linkId, peer)
         override fun onDown(linkId: Long, outcome: IrohTransport.IrohConnection.LinkOutcome?) = down(linkId, outcome)
     }
 
+    /**
+     * Register [link] and report it up — or, when its down already arrived
+     * ([downsBeforeUp]), register nothing and report it up and then down, so
+     * a listener that learnt of the link some other way (a registry read such
+     * as [linksWithSettledDials]) sees it end.
+     *
+     * Listeners run under [lifecycle], which is what keeps a link's `onUp`
+     * ahead of its `onDown` when [down] runs concurrently; they are
+     * enqueue-only ([NodeLinkListener]), so the lock is held only as long as
+     * an enqueue takes.
+     */
     private fun up(link: SidecarLink, source: LinkSource) {
-        val record = LinkRecord(link.id, link.remoteNodeId, link.direction, source)
-        records[link.id] = record
-        val view = record.view()
-        listeners.forEach { runCatching { it.onUp(view) } }
+        synchronized(lifecycle) {
+            val record = LinkRecord(link.id, link.remoteNodeId, link.direction, source)
+            val early = downsBeforeUp.remove(link.id)
+            if (early == null) records[link.id] = record
+            val view = record.view()
+            listeners.forEach { runCatching { it.onUp(view) } }
+            if (early != null) listeners.forEach { runCatching { it.onDown(view, early.outcome) } }
+        }
     }
 
     private fun admitted(linkId: Long, peer: PeerId) {
@@ -483,10 +551,17 @@ class IrohNode internal constructor(
         listeners.forEach { runCatching { it.onAdmitted(view) } }
     }
 
+    /** @see downsBeforeUp for a down that arrives before its link is registered. */
     private fun down(linkId: Long, outcome: IrohTransport.IrohConnection.LinkOutcome?) {
-        val record = records.remove(linkId) ?: return
-        val view = record.view()
-        listeners.forEach { runCatching { it.onDown(view, outcome) } }
+        synchronized(lifecycle) {
+            val record = records.remove(linkId)
+            if (record == null) {
+                downsBeforeUp[linkId] = EarlyDown(outcome)
+                return
+            }
+            val view = record.view()
+            listeners.forEach { runCatching { it.onDown(view, outcome) } }
+        }
     }
 
     /**

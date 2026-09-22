@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
@@ -138,6 +139,9 @@ internal class FakeNode(
         }
     }
 
+    /** @see RegistrationHold — held on this node's dialled links. */
+    fun holdDialRegistration(): RegistrationHold = RegistrationHold(node)
+
     override fun close() {
         runCatching { if (::peering.isInitialized) peering.close() }
         runCatching { client.close() }
@@ -175,6 +179,39 @@ internal class FakeNode(
             self.peering = startPeering()
             return self
         }
+    }
+}
+
+/**
+ * Holds every dialling thread of [node] just after `SidecarClient.dial` has
+ * returned its link and before the link's connection installs it or the node
+ * registers it (computenet-wad38), until [release].
+ *
+ * Unlike [FakeNode.holdDialThreads] this hold sits AFTER the dial has
+ * decided, so the client already delivers the link's events to the reader:
+ * a `LINK_DOWN` sent while held is dispatched, and reaches the node, before
+ * the node has been told the link is up. That is the ordering a far side that
+ * closes a link within microseconds of its `LINK_UP` produces on a real
+ * machine, held open for as long as the test needs it.
+ */
+internal class RegistrationHold(private val node: IrohNode) {
+    private val release = CountDownLatch(1)
+    private val held = LinkedBlockingQueue<Long>()
+
+    init {
+        node.beforeDialledLinkRegistered = { link ->
+            held.put(link.id)
+            release.await(30, TimeUnit.SECONDS)
+        }
+    }
+
+    /** The id of the next dialled link a thread is held on, waiting for one to be. */
+    fun awaitHeld(): Long = held.poll(30, TimeUnit.SECONDS) ?: fail("no dialled link was held within 30s")
+
+    /** Let every held thread, and every later one, through. */
+    fun release() {
+        node.beforeDialledLinkRegistered = null
+        release.countDown()
     }
 }
 
