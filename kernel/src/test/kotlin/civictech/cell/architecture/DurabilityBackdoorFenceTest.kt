@@ -32,6 +32,15 @@ import java.io.File
  * `private val fastMode = System.getProperty("cn.wal") != null` to
  * [ManagedHost], or a constructor parameter
  * `durabilityRelaxed: Boolean = false`, must each fail this test.
+ *
+ * Half 3 (computenet-t6b.2.3 review): neither of the above catches a switch
+ * that is not a constructor parameter and reads no environment/property/
+ * runtime call — a mutable `var` inside a `companion object` (a process-wide
+ * global any call site could flip) is exactly such a spelling and is
+ * otherwise invisible to halves 1 and 2. This half fails on any `var`
+ * declared inside a `companion object` block in the scanned files; a `val`/
+ * `const val` companion (the existing legitimate use in `Journal.kt` and
+ * `KeyedCells.kt`, for constants) is unaffected.
  */
 class DurabilityBackdoorFenceTest {
 
@@ -46,10 +55,8 @@ class DurabilityBackdoorFenceTest {
 
     private val forbiddenCalls = listOf("System.getenv", "System.getProperty", "Runtime.getRuntime")
 
-    @Test
-    fun `no durability source reads an environment variable, system property, or the runtime`() {
-        val root = repoRoot()
-
+    /** The same file set both source-scanning halves read: the durability package plus the three named call sites. */
+    private fun scannedProductionFiles(root: File): List<File> {
         val durabilityDir = File(root, "kernel/src/main/kotlin/civictech/cell/durability")
         assertTrue(durabilityDir.isDirectory) { "Missing directory: ${durabilityDir.path}" }
         val durabilityFiles = durabilityDir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
@@ -63,8 +70,13 @@ class DurabilityBackdoorFenceTest {
             File(root, "kernel/src/main/kotlin/civictech/cell/host/KeyedCells.kt"),
         )
         namedFiles.forEach { f -> assertTrue(f.isFile) { "Missing source file: ${f.path}" } }
+        return durabilityFiles + namedFiles
+    }
 
-        val scanned = durabilityFiles + namedFiles
+    @Test
+    fun `no durability source reads an environment variable, system property, or the runtime`() {
+        val root = repoRoot()
+        val scanned = scannedProductionFiles(root)
         val offenders = scanned.flatMap { file ->
             file.readLines().mapIndexedNotNull { idx, line ->
                 val hit = forbiddenCalls.firstOrNull { line.contains(it) }
@@ -123,6 +135,49 @@ class DurabilityBackdoorFenceTest {
         assertTrue(offending.isEmpty()) {
             "ManagedHost constructor parameter(s) look like a host-level durability flag: $offending — " +
                 "the only durability control is the Journal instance journalFor(cellRef) returns (KBLK-03)"
+        }
+    }
+
+    /**
+     * Neither of the two halves above sees a `var` inside a `companion object`
+     * block: it is not a call to `System.getenv`/`getProperty`/`Runtime.getRuntime`,
+     * and it is not a constructor parameter, so it is a second, invisible knob
+     * any call site in the process could flip — exactly the "otherwise
+     * second-guess" case this test's class KDoc already claims to rule out.
+     * Brace-depth scanning (comments stripped first) finds the span of every
+     * `companion object { ... }` block per file and fails if any line inside
+     * that span declares a `var`. A `val`/`const val` companion — the existing,
+     * legitimate use in `Journal.kt` (`MAGIC`, `HEADER_BYTES`) and
+     * `KeyedCells.kt` (`KEYS_FILE`, `HOST_JOURNAL`) — is unaffected.
+     */
+    @Test
+    fun `no companion object in a scanned file declares a mutable var`() {
+        val root = repoRoot()
+        val scanned = scannedProductionFiles(root)
+        val varInCompanion = Regex("""(^|[^\w])var\s+[A-Za-z_]""")
+
+        val offenders = scanned.flatMap { file ->
+            val lines = stripComments(file.readLines())
+            var depth = 0
+            var companionStartDepth = -1
+            val hits = mutableListOf<String>()
+            lines.forEach { line ->
+                if (companionStartDepth == -1 && line.contains("companion object")) {
+                    companionStartDepth = depth
+                } else if (companionStartDepth != -1 && varInCompanion.containsMatchIn(line)) {
+                    hits += "${file.path}: companion object declares a mutable var: ${line.trim()}"
+                }
+                depth += line.count { it == '{' } - line.count { it == '}' }
+                if (companionStartDepth != -1 && depth <= companionStartDepth) {
+                    companionStartDepth = -1
+                }
+            }
+            hits
+        }
+        assertTrue(offenders.isEmpty()) {
+            "durability back door: $offenders — a companion-object var is a process-wide global that " +
+                "could second-guess journalFor(cellRef); the only durability control is the Journal " +
+                "instance journalFor returns (KBLK-03)"
         }
     }
 
