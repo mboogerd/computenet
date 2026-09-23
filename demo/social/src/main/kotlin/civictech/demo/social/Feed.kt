@@ -183,7 +183,9 @@ class FeedSession(
     }
 
     /**
-     * The scope the LAST successful pull derived (4q9is-D1): for a fixed
+     * The scope the most recent pull derived and validated (4q9is-D1) — set
+     * before that pull's legs are issued, so [board] already filters by it
+     * while the pull is in flight: for a fixed
      * source, that value from construction; for a derived one,
      * [Interest.Empty] until the first pull completes. Always `Ranges` or
      * `Empty`. The [board] filter reads it.
