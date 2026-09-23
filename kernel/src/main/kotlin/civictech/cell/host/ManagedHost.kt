@@ -813,9 +813,11 @@ open class ManagedHost(
     /**
      * One batched data-band task: dispatch up to [dispatchBatch] staged
      * messages (band selection and the stride floor re-run per message inside
-     * [AttentionScheduler.dispatchUpTo]), then — in `finally`, so a throwing
-     * delivery cannot leave the flag armed with nobody coming — disarm and, if
-     * staged work remains, re-arm by submitting the next task.
+     * [AttentionScheduler.dispatchUpTo]), then — in `finally`, so an exception
+     * escaping the dispatch loop cannot leave the flag armed with nobody coming
+     * (a cell handler's own exception is absorbed by [deliver] before it gets
+     * here) — disarm and, if staged work remains, re-arm by submitting the next
+     * task.
      *
      * **Drain ordering.** [beginDrain] closes the intake and then submits its
      * phase 2 at priority 30. Every message accepted before the intake closed
