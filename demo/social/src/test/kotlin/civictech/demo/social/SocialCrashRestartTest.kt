@@ -471,13 +471,9 @@ class SocialCrashRestartTest {
             val url = "http://localhost:${app.boundPort}"
             val posted = AtomicBoolean(false)
             val frame = awaitSseData("$url/events", timeoutMs = 20_000) { line ->
-                System.err.println("DEBUG-FRAME: $line")
                 if (posted.compareAndSet(false, true)) {
                     // The first frame is the catch-up; write only once subscribed.
-                    Thread {
-                        val status = HttpProbe(url).use { it.post("action=person&id=$newId&firstName=New&lastName=Person") }
-                        System.err.println("DEBUG-POST status=$status")
-                    }.start()
+                    Thread { HttpProbe(url).use { it.post("action=person&id=$newId&firstName=New&lastName=Person") } }.start()
                     false
                 } else {
                     line.contains("\"id\":$newId,")
