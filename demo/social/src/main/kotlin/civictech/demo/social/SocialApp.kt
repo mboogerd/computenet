@@ -534,7 +534,7 @@ class SocialApp(
                     } else {
                         val ranges = ids.map { Interest.Ranges.Range(it, it + 1) }
                         val session = feedSessions.compute(person) { _, existing ->
-                            if (existing != null && existing.scope.ranges == ranges) existing
+                            if (existing != null && existing.scope == Interest.Ranges(ranges)) existing
                             else feedSession(person, Interest.Ranges(ranges))
                         }!!
                         // computenet-1iz73: pullShared(), not pull(), because two /feed
