@@ -4069,10 +4069,9 @@ ABSENT calls and `file:line` citations needed re-verification against
 | Duplicate-value retraction leaves extremum/top-K standing — BS-02 (`[KAGG-R-03]`) | ALREADY PINNED | `GroupByCellTest.kt:179`, `` `min survives duplicate-value retraction and reshuffles when the extremum dies` ``; `:199`, `` `topK keeps the k largest with duplicate multiplicities under retraction` `` |
 
 No row's PRESENT/ABSENT call diverges from the epic's table at this base
-commit; every DIVERGENCE this entry records is new information the table
-never had a chance to be wrong about (routed read/walk, the `Reason` arm
-count, `MergeableGroupByCell`, the three restore-order tests), not a
-correction of a stale claim.
+commit, so no row is marked DIVERGENCE. The four rows the table never had
+(routed read/walk, the `Reason` arm count, `MergeableGroupByCell`, the three
+restore-order tests) are new information, not corrections of a stale claim.
 
 **Oracle catalog, stated as a non-goal.** The differential-tester's
 `GROUP_BY_AGGREGATES` catalog
@@ -4176,25 +4175,28 @@ Also verified stable under load: 10/10 passes of
 `./gradlew :kernel:test --tests 'civictech.cell.data.AggregatorAuditProbeTest' --tests 'civictech.cell.app.KeyedFanOutOneWaveTest' --tests 'civictech.cell.data.GroupByCellTest' --tests 'civictech.cell.data.MapCellBoundedReadTest' --tests 'civictech.cell.data.KeyedSetCellBoundedReadTest' --tests 'civictech.cell.partition.ShardCellBoundedReadTest' --rerun`
 run back-to-back.
 
-**A harness pitfall this measurement passed through, recorded because it
-looked like a kernel divergence at first.** An earlier version of this test
-read `sink.current()` synchronously the instant `controller.runToIdle()`
-returned. That version failed roughly 1 run in 5 of the combined `--tests`
-invocation above (never alone), always the same way: the second of two
-writes missing from both arms. Root cause, confirmed by inspection:
-`AlignedCompositeCell` dispatches composites off the deterministic simulation
-thread, on its own private single-thread `ExecutorService`
-(`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt:241`,
-`newDispatcher()`; the `dispatcher`/`draining` fields at `:251`/`:261`) —
-`runToIdle()` completing guarantees only that the simulation itself
-quiesced, not that the sink's own async delivery has caught up.
-`AlignedObserveTest` already works around exactly this with `awaitUntil`
-(`kernel/src/test/kotlin/civictech/cell/observe/AlignedObserveTest.kt:144,177`);
-the fan-out probe does the same and is stable once it does (10/10 above).
-Recorded as a harness pitfall, not a `[KAGG-R-05]` divergence: `awaitUntil`
-demonstrates the composite DOES arrive, correctly paired, for every wave —
-the property the acceptance criterion asks about held throughout; only a
-synchronous post-`runToIdle()` read of it was ever racy.
+**How the probe reads the sink, and what a two-wave fan-out does to it.**
+`AlignedCompositeCell.current()` is the publication itself: `publish()` swaps
+the `@Volatile latest` snapshot under the sink's lock on the delivering thread
+(`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt`, `fun
+publish`), so the probe asserts it directly after `controller.runToIdle()`,
+with no wait. Only the `onChange` listener runs on the sink's own
+single-thread dispatcher (`newDispatcher()`), so the probe awaits the
+recorded-composite list with a bounded `awaitUntil`, as `AlignedObserveTest`'s
+`alignedRun` does. The implementer saw a roughly 1-in-5 flake in the combined
+`--tests` run above with an earlier revision; the mechanism was not captured.
+The review's reproducible mechanism: with a 300 ms sleep in the listener, a
+revision that awaited `current()` and then read the listener's list threw
+`List is empty` (**MEASURED**, 2026-09-23, `Darwin arm64`); the current
+revision passes under the same sleep. With the synchronous `current()` read,
+the combined run above passed 10/10 (same date and host).
+
+Discrimination (**MEASURED**, same host): issuing the `personFriend` write
+under `CurrentContext.with(null)`, so it rides a fresh wave instead of the
+ingress delta's, fails the probe at its first `current()` assertion with
+both arms empty. A split fan-out shows up in this sink as a stall (each arm's
+wave held for the other arm's edge), not as a torn composite, so the probe's
+"never torn" check is not what catches it.
 
 ### [KAGG-R-06] — BS-05, the `collectToSet` probe: `civictech.cell.data.AggregatorAuditProbeTest`
 

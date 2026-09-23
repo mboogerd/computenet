@@ -18,6 +18,7 @@ import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
+import java.util.Collections
 import java.util.UUID
 
 /**
@@ -50,22 +51,24 @@ import java.util.UUID
  * `MessageContext.timestamp` as the triggering ingress delta, not a
  * freshly-minted one.
  *
- * **A harness pitfall this test does not repeat.** A first version of this
- * test read `sink.current()` synchronously the instant `controller.runToIdle()`
- * returned and was flaky under Gradle's parallel `:kernel:test` forks —
- * roughly 1 in 5 combined `--tests` runs (mixed with sibling classes; never
- * alone) read a stale composite missing the second of two writes, on BOTH the
- * queued-hop and the direct-call variant alike. Root cause: `AlignedCompositeCell`
- * dispatches composites off the deterministic simulation thread, on its own
- * private single-thread `ExecutorService` (`AlignedObserve.kt`'s
- * `dispatcher`/`draining` fields) — `runToIdle()` completing only guarantees
- * the simulation itself quiesced, not that the sink's own async delivery has
- * caught up. `AlignedObserveTest` already works around exactly this with
- * `awaitUntil`; this test does the same below, and is stable once it does
- * (10/10 runs of the same combined `--tests` invocation the synchronous read
- * flaked on). Not a `[KAGG-R-05]` divergence — a test-harness timing gap, not
- * an alignment failure: `awaitUntil` demonstrates the composite DOES arrive,
- * pairing both arms, for every wave.
+ * **Two reads, two threads.** [AlignedCompositeCell.current] is the
+ * publication itself: `publish()` swaps its `@Volatile latest` under the
+ * sink's lock on the delivering thread, so once `controller.runToIdle()`
+ * returns it is asserted directly, with no wait (`AlignedObserveTest` reads it
+ * the same way). The `onChange` listener is different: it is invoked on the
+ * sink's own single-thread dispatcher (`AlignedObserve.kt`, `newDispatcher()`),
+ * so the recorded composites are filled off this thread and are awaited with
+ * a bounded [awaitUntil] on the list itself, as `AlignedObserveTest`'s
+ * `alignedRun` awaits its `recorded` list. An earlier revision awaited
+ * `current()` and then read `composites.last()` unguarded: a 300 ms sleep in
+ * the listener made that read throw `List is empty`, because `current()` was
+ * already settled when the listener had not yet run.
+ *
+ * **What a two-wave fan-out looks like here.** Issuing the `personFriend`
+ * write under `CurrentContext.with(null)` (a fresh wave, not the ingress
+ * delta's) makes this test fail at the first `current()` assertion with both
+ * arms still empty: the sink holds each arm's wave for the other arm's edge
+ * to settle, so a split fan-out shows up as a stall, not as a torn composite.
  */
 class KeyedFanOutOneWaveTest {
 
@@ -129,7 +132,8 @@ class KeyedFanOutOneWaveTest {
             map("personCity", personCity.ref)
             set("personFriend", personFriend.ref)
         }
-        val composites = mutableListOf<Map<String, Any?>>()
+        // Filled on the sink's own dispatcher thread, read on this one.
+        val composites = Collections.synchronizedList(mutableListOf<Map<String, Any?>>())
         sink.onChange { composites += it }
 
         val ops = host.lookup<PersonEventSetInlet>(source.ref)!!.inlet.call
@@ -141,15 +145,11 @@ class KeyedFanOutOneWaveTest {
             "personFriend" to setOf(2L),
         )
         // The wave-aligned sink assembles from ONE per-source frontier of its
-        // inputs ([22-OBS-01]): if the two forwarded writes had landed as two
-        // separate wave positions, `current()` could only ever show one arm
-        // updated while the other still read its pre-write value, and a
-        // composite pairing them would never be published — exactly the F-5
-        // flash `AlignedObserveTest` proves the point-consistent `CompositeSink`
-        // control exhibits and this sink does not. See the class KDoc for why
-        // this awaits delivery rather than reading `current()` synchronously.
-        awaitUntil("first wave's composite delivered") { sink.current() == settled }
-        composites.last() shouldBe settled
+        // inputs ([22-OBS-01]): both arms' deltas must belong to the same wave
+        // for that wave to be released. `current()` needs no wait (class KDoc);
+        // the listener's copy does.
+        sink.current() shouldBe settled
+        awaitUntil("first wave's composite delivered") { composites.lastOrNull() == settled }
 
         // A second event at a different key: both arms accumulate, still at
         // one wave position each time, not just on the first write.
@@ -159,13 +159,13 @@ class KeyedFanOutOneWaveTest {
             "personCity" to mapOf(1L to 10L, 2L to 11L),
             "personFriend" to setOf(2L, 3L),
         )
-        awaitUntil("second wave's composite delivered") { sink.current() == settledAfterSecond }
-        composites.last() shouldBe settledAfterSecond
+        sink.current() shouldBe settledAfterSecond
+        awaitUntil("second wave's composite delivered") { composites.lastOrNull() == settledAfterSecond }
         // No torn republication ([22-OBS-01]): every recorded composite is
         // either the pre-write (possibly empty catch-up) state, the first
         // wave's settled state, or the second wave's — never a mix showing
         // one arm updated and the other still at its pre-write value.
-        composites.forEach { it shouldBe (it["personCity"] as Map<*, *>).let { m ->
+        composites.toList().forEach { it shouldBe (it["personCity"] as Map<*, *>).let { m ->
             when (m.size) {
                 0 -> mapOf("personCity" to emptyMap<Long, Long>(), "personFriend" to emptySet<Long>())
                 1 -> settled

@@ -70,7 +70,7 @@ class AggregatorAuditProbeTest {
         // Retract p1 only. If `collectToSet` tracked the *projected* value
         // rather than the element, this could not distinguish p1 from p2 (both
         // "NYC") and would either evict both or neither. Observed answer:
-        assertEquals(1, out.size, "retracting one of two live elements under the same lens must not be a no-op")
+        assertEquals(1, out.size, "the initial two-element add publishes exactly one delta")
         cell.inlet.call.propagate(SetDelta(dels = mapOf(p1 to setOf(t1))))
         assertEquals(setOf(p2), out.last().puts.getValue("NYC"), "p2 must remain live: retraction discriminates by element identity, not by the caller-side lens")
 
