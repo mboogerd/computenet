@@ -78,7 +78,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `sweep-stale-claims.sh` | `[--hours N] [--dry-run]` — reopens this machine's task claims abandoned by a dead run |
 | `sweep-merged-prs.sh` | `[--dry-run] [--limit N]` — closes beads whose PR merged after their session; removes their worktrees (holder-blind) |
 | `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — removes worktrees of closed beads, when provably safe |
-| `session-holder.sh` | `[--check <token>]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN |
+| `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 15min reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
 | `claim-epic.sh` | `<epic-id>` — claims or takes over an epic and pushes the acquisition |
 | `claim-item.sh` | `<id>` — claims an item with the session holder token |
@@ -182,7 +182,7 @@ skill from `origin/main`.
 **Release what dead runs left.** Run `sweep-stale-claims.sh`, then list
 `bd list --status=in_progress --assignee="$BEADS_ACTOR" --limit 0 --json` to a
 file and check each non-`skill-friction` row's `metadata.holder` with
-`session-holder.sh --check`:
+`session-holder.sh --check <token> <updated_at>` (the `updated_at` is what keeps a long-running session off the STALE path):
 
 | Answer | Do |
 |---|---|
@@ -246,7 +246,7 @@ Agent({
   run_in_background: true,
   prompt: `You are breaking down epic <epic-id> into features. It is claimed for you; do not claim it.
 You own no worktree: you work in <main-checkout>, SHARED with live sessions — never modify its working tree (no git checkout/restore/stash/clean).
-Read .claude/skills/work/references/agent.md and .../breakdown.md with git show origin/main:<path>; those reads are slow, so give every Bash call a generous timeout.
+Read .claude/skills/work/references/agent.md and .../breakdown.md from <main-checkout> with the Read tool, not cat or git show: under host load plain Bash reads hang 30-120s and the Read tool does not.
 The breakdown token is <token>; stamp every feature you create with it.
 Report the feature ids created, and any re-scope of the epic.`
 })
@@ -517,11 +517,11 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 
 **Ship**, after the reviewer's completion notification:
 
-1. List commits landed on `main` since the fork. If any touch this PR's files
-   and are not independent of it (a shared hunk, or a change to a rule, name or
-   path the other relies on), send it back to a reviewer. Otherwise merge
-   `origin/main` and push; the READY stands, and the checks on the new head
-   (step 3) are the evidence.
+1. Merge `origin/main` only when a commit landed since the fork touches this
+   PR's files and is not independent of it (a shared hunk, or a change to a rule,
+   name or path the other relies on) — then push and send it back to a reviewer.
+   Disjoint commits need no merge (read the ruleset — no required check wants an
+   up-to-date branch — and chasing a busy `main` never ends): ship the green head.
 2. Local HEAD must equal `gh pr view <pr> --json headRefOid`, and `gh pr list
    --head <branch>` must show only your PR.
 3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row must
@@ -532,7 +532,7 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 
 Every new head restarts the required checks; keep at most about two open PRs on
 any one file, sequencing the rest. Close the feature once MERGED, not on the
-verdict. Still open well after shipping: `DIRTY`/`BEHIND` → Ship step 1 again;
+verdict. Still open well after shipping: `DIRTY` → Ship step 1 again (`BEHIND` never blocks);
 red → recovery.md; `CLEAN` → arm again, then push a fresh commit. Cannot land it
 → leave `in_progress` with `review=passed`, name the PR and blocked command in the summary.
 
@@ -546,7 +546,7 @@ routes 2b, 3 and 4 may still dispatch a breakdown.
 | 0 | a capacity lane frees while a unit runs | start a second unit if capacity allows, its claim is disjoint from running units, build contention is handled (scoped gate or no Gradle), and it gets its own branch and PR; candidate from route 3 or 4. Else leave the lane idle and note it on the epic |
 | 2b | your feature is blocked by a sibling feature (check before 1) | park it naming the blocker; work the blocker if it fits the budget (5a), else break it down unclaimed |
 | 1 | another feature under the epic is ready or in progress | 5a (sub-epic → step 4) |
-| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY`/`BEHIND` → resolve; merged → fetch, start; else park |
+| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY` → resolve; merged → fetch, start; else park |
 | 3 | remaining work is blocked only by an item in another epic | acquire the item: pull; `epic-of.sh` — skip if its epic is held by someone or touched within 15 minutes (an `(unparented)` item skips this test); `claim-item.sh`; push |
 | 4 | the epic is dry, budget remains | continuation work, below |
 | 5 | nothing can progress | step 6 |

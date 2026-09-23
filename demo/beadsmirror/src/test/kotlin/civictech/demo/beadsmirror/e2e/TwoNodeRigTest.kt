@@ -189,7 +189,11 @@ class TwoNodeRigTest {
         dialerLogBeforeCreate = dialer.logHead()
 
         // --- one live cross-node create -------------------------------------
-        idAfterIdle = rig.listenerWorkspace.createIssue("created after the rig went idle")
+        // Routed through TwoNodeRig.createIssue (computenet-mivve): a
+        // post-start mutation on the listener's own workspace followed by a
+        // rig.await on the dialer's fold, the shape TwoNodeRig.mutate's KDoc
+        // documents as needing the commit-visibility wait.
+        idAfterIdle = rig.createIssue(listener, "created after the rig went idle")
         rig.await("the listener folds its own create") { listener.view().containsKey(idAfterIdle) }
         rig.await("the create gossips to the dialer's SERVED fold over the real socket") {
             dialer.servedStatus(idAfterIdle) == 200
@@ -201,7 +205,11 @@ class TwoNodeRigTest {
         // never a socket — so the identical sequence runs over a future
         // transport with no edit to this file.
         rig.partition()
-        idDuringPartition = rig.listenerWorkspace.createIssue("created while the peering was partitioned")
+        // Same conversion as idAfterIdle above (computenet-mivve): still a
+        // post-start create on the listener's own workspace, the partition
+        // only severs gossip TO the dialer, not the commit-visibility wait
+        // on the listener's own workspace.
+        idDuringPartition = rig.createIssue(listener, "created while the peering was partitioned")
         // L folds its own create from its own feed; the peering is severed, so
         // nothing can have carried it to D at this instant.
         listener.quiesce()
