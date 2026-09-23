@@ -8,7 +8,7 @@
  *   ([SOC1-SCHEMA-03], [SOC1-SCHEMA-04]); also a [PersonFact] arm.
  * - [Forum] — SNB `Forum`.
  * - [Message] — SNB `Post`/`Comment`, distinguished by `forumId` (post) vs. `replyOfId`
- *   (comment).
+ *   (comment); located in a country id via `locationCountryId`.
  * - [Like] — an SNB `Likes` ingress record (person likes message).
  * - [Tag] / [TagClass] — SNB `Tag` / `TagClass`.
  * - [Place] / [Organisation] — SNB `Place` / `Organisation`.
@@ -74,6 +74,8 @@ data class Message(
     val content: String,
     val forumId: Long? = null,
     val replyOfId: Long? = null,
+    /** SNB `isLocatedIn` Country id; null when the source carries none. */
+    val locationCountryId: Long? = null,
 ) : java.io.Serializable
 
 /** Ingress record: person [personId] likes message [messageId]. */
