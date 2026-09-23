@@ -57,6 +57,19 @@ object Aggregators {
     /** Live group members as a set (M11.4); E must be Serializable. */
     fun <E : Serializable> collectToSet(): Aggregator<E, Set<E>, HashSet<E>> = Collect()
 
+    /**
+     * Count of distinct projected values among live elements (KAGG-R-16), on
+     * the same support multiset as [minOf]/[maxOf]/[topK]: multiplicity per
+     * value survives retraction of one of several elements sharing a
+     * projection, so the reported count only drops when the last element for
+     * a value is retracted. The `Comparable` bound is deliberate, not a
+     * shortcut — a hash-based multiset would duplicate [Support]'s drop-at-zero
+     * mechanic; a caller with a non-comparable projection maps it to a
+     * comparable key first.
+     */
+    fun <E, V> countDistinct(selector: (E) -> V): Aggregator<E, Long, TreeMap<V, Int>>
+            where V : Comparable<V>, V : Serializable = CountDistinct(selector)
+
     data class SumCount(val sum: Long, val n: Long) : Serializable
 
     private class Count<E> : Aggregator<E, Long, Long> {
@@ -114,6 +127,11 @@ object Aggregators {
             }
             return out
         }
+    }
+
+    private class CountDistinct<E, V>(selector: (E) -> V) :
+        Support<E, V, Long>(selector) where V : Comparable<V>, V : Serializable {
+        override fun value(acc: TreeMap<V, Int>): Long = acc.size.toLong()
     }
 
     private class Collect<E : Serializable> : Aggregator<E, Set<E>, HashSet<E>> {
