@@ -2,6 +2,7 @@ package civictech.testkit.dst
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.host.DeadLetter
@@ -464,6 +465,7 @@ class Journals {
 
     private class DecoratedJournal(private val name: String, private val journals: Journals) : Journal {
         override val formatVersion: Int get() = journals.resolve(name).formatVersion
+        override val durability: DurabilityClass get() = journals.resolve(name).durability
         override fun append(record: ByteArray) = journals.resolve(name).append(record)
         override fun replay(): List<ByteArray> = journals.resolve(name).replay()
         override fun reset(records: List<ByteArray>) = journals.resolve(name).reset(records)
