@@ -69,8 +69,9 @@ interface WeightedFusionApi {
 }
 
 /**
- * WeightedFusionCell — the per-idea value ÷ cost aggregate across a topic's
- * creator-defined dimensions (computenet-sigl0-D1..D4, computenet-k1d4g-D2..D4).
+ * WeightedFusionCell — the per-idea value × factor ÷ cost aggregate across a
+ * topic's creator-defined dimensions (computenet-sigl0-D1..D4,
+ * computenet-k1d4g-D2..D4; factor dimensions, design contract 2026-09-22).
  *
  * Demo-local rather than a chain of kernel `CombineLatestCell`s: that cell is
  * binary, and here the number of dimensions is decided at run time per topic.
@@ -81,24 +82,34 @@ interface WeightedFusionApi {
  * Holds the latest stats and dimension configs and recomputes only the ideas
  * an incoming delta touches: a stats delta touches the ideas of its keys; a
  * config delta touches every idea of that topic with stats on the changed
- * dimension, AND — when it flips the topic's has-cost bit (first COST config
- * put; last COST config removed or redirected to VALUE) — every idea of that
- * topic with any stats, because whether a topic has a cost dimension at all
- * decides whether an idea rated only on value dimensions is ranked
- * (k1d4g-D4). Emission is effective-only through [MapDiffPublisher] (exact
- * value equality): an idea whose recompute is unchanged is not re-emitted,
- * and an idea left with no rated-and-configured dimension is REMOVED —
- * unscored is an absent key. A [Scored] with a null score is present: it
- * carries the stats and names the unrated side (k1d4g-D3).
+ * dimension, AND — when it flips the topic's has-cost OR has-factor bit
+ * (first COST/FACTOR config put; last COST/FACTOR config removed or
+ * redirected away) — every idea of that topic with any stats, because
+ * whether a topic has a cost or factor dimension at all decides whether an
+ * idea rated only on value dimensions is ranked (k1d4g-D4, generalised to
+ * FACTOR by the design contract). Emission is effective-only through
+ * [MapDiffPublisher] (exact value equality): an idea whose recompute is
+ * unchanged is not re-emitted, and an idea left with no rated-and-configured
+ * dimension is REMOVED — unscored is an absent key. A [Scored] with a null
+ * score is present: it carries the stats and names the unrated side
+ * (k1d4g-D3).
  */
 class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFusionCellBase(ref) {
     private val statsOf = HashMap<IdeaDimKey, DimStats>()
     private val configOf = HashMap<DimKey, DimConfig>()
 
-    /** topic → its dimensions currently configured COST (rated or not): the has-cost bit is non-emptiness. */
-    private val costDimsOfTopic = HashMap<TopicId, MutableSet<String>>()
+    /**
+     * direction (COST or FACTOR) → topic → its dimensions currently configured that direction
+     * (rated or not): the has-bit is non-emptiness. VALUE needs no such index — it is always
+     * required.
+     */
+    private val dimsOfTopicByDir: Map<Direction, HashMap<TopicId, MutableSet<String>>> =
+        mapOf(Direction.COST to HashMap(), Direction.FACTOR to HashMap())
 
-    /** topic → its ideas that currently have stats on any dimension: the has-cost flip's touch set. */
+    /** [dir] must be COST or FACTOR — [dimsOfTopicByDir] carries no entry for VALUE, which is always required. */
+    private fun hasDir(dir: Direction, topic: TopicId) = !dimsOfTopicByDir.getValue(dir)[topic].isNullOrEmpty()
+
+    /** topic → its ideas that currently have stats on any dimension: the has-cost/has-factor flip's touch set. */
     private val ideasOfTopic = HashMap<TopicId, MutableSet<String>>()
 
     /** idea → its dimensions that currently have stats. */
@@ -141,16 +152,31 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
         val touched = LinkedHashSet<IdeaKey>()
         fun touch(d: DimKey) = ideasOfDim[d]?.forEach { touched += IdeaKey(d.topic, it) }
 
-        /** Applies [config] (null = removal) to [d]'s cost index; on a has-cost flip, touches the whole topic. */
-        fun reindex(d: DimKey, config: DimConfig?) {
-            val hadCost = costDimsOfTopic[d.topic].orEmpty().isNotEmpty()
-            if (config?.direction == Direction.COST) {
-                costDimsOfTopic.getOrPut(d.topic) { mutableSetOf() } += d.dim
+        /** Applies [config] (null = removal) to [d]'s [dir] index; [d]'s dim is in it iff [config] is that direction. */
+        fun reindexDir(dir: Direction, d: DimKey, config: DimConfig?) {
+            val index = dimsOfTopicByDir.getValue(dir)
+            if (config?.direction == dir) {
+                index.getOrPut(d.topic) { mutableSetOf() } += d.dim
             } else {
-                costDimsOfTopic[d.topic]?.let { if (it.remove(d.dim) && it.isEmpty()) costDimsOfTopic.remove(d.topic) }
+                index[d.topic]?.let { if (it.remove(d.dim) && it.isEmpty()) index.remove(d.topic) }
             }
-            val hasCost = costDimsOfTopic[d.topic].orEmpty().isNotEmpty()
-            if (hadCost != hasCost) ideasOfTopic[d.topic]?.forEach { touched += IdeaKey(d.topic, it) }
+        }
+
+        /**
+         * Applies [config] (null = removal) to [d]'s cost and factor indices; on a has-cost or
+         * has-factor flip (either or both — a dim can move directly between COST and FACTOR),
+         * touches the whole topic. Two booleans (not a list) suffice to detect the flip.
+         */
+        fun reindex(d: DimKey, config: DimConfig?) {
+            val beforeCost = hasDir(Direction.COST, d.topic)
+            val beforeFactor = hasDir(Direction.FACTOR, d.topic)
+            reindexDir(Direction.COST, d, config)
+            reindexDir(Direction.FACTOR, d, config)
+            val afterCost = hasDir(Direction.COST, d.topic)
+            val afterFactor = hasDir(Direction.FACTOR, d.topic)
+            if (beforeCost != afterCost || beforeFactor != afterFactor) {
+                ideasOfTopic[d.topic]?.forEach { touched += IdeaKey(d.topic, it) }
+            }
         }
         value.puts.forEach { (d, c) -> configOf[d] = c; reindex(d, c); touch(d) }
         value.removals.forEach { d -> if (configOf.remove(d) != null) { reindex(d, null); touch(d) } }
@@ -164,36 +190,64 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
     /**
      * The idea's [Scored] from current state (k1d4g-D2), or null when it has no
      * rated-and-configured dimension (unconfigured: skipped like unrated, sigl0-D3).
+     *
+     * Mirrors [Alignment.rankBatch]'s operation order term for term (design contract
+     * 2026-09-22, "Bit-identical batch/incremental agreement is mandatory"): [byDim] is built
+     * first as a `TreeMap` (ascending dim-name order), and every weighted mean — including the
+     * factor geometric mean's `Math.pow` product — is folded over that same sorted view.
      */
     private fun score(idea: IdeaKey): Scored? {
         val byDim = TreeMap<String, DimStats>()
-        val valueWeighted = TreeMap<String, Double>() // VALUE dim → w_d·mean_d
-        var valueWeight = 0.0
-        var costWeighted = 0.0
-        var costWeight = 0.0
         for (dim in dimsOfIdea[idea].orEmpty()) {
-            val c = configOf[DimKey(idea.topic, dim)] ?: continue
-            val s = statsOf.getValue(IdeaDimKey(idea.topic, idea.idea, dim))
-            byDim[dim] = s
-            when (c.direction) {
-                Direction.VALUE -> { valueWeighted[dim] = c.weight * s.mean; valueWeight += c.weight }
-                Direction.COST -> { costWeighted += c.weight * s.mean; costWeight += c.weight }
-            }
+            if (configOf[DimKey(idea.topic, dim)] == null) continue
+            byDim[dim] = statsOf.getValue(IdeaDimKey(idea.topic, idea.idea, dim))
         }
         if (byDim.isEmpty()) return null
-        val value = if (valueWeighted.isEmpty()) null else valueWeighted.values.sum() / valueWeight
-        val cost = if (costWeight == 0.0) null else costWeighted / costWeight
-        val score = when {
-            costDimsOfTopic[idea.topic].isNullOrEmpty() -> value
-            value != null && cost != null -> value / cost
-            else -> null
+        fun config(dim: String) = configOf.getValue(DimKey(idea.topic, dim))
+        fun weightedMean(dir: Direction): Double? {
+            val side = byDim.filterKeys { config(it).direction == dir }
+            if (side.isEmpty()) return null
+            val sumW = side.keys.sumOf { config(it).weight }
+            // zero-weight guard (unreachable via HTTP, which validates weight > 0, but a
+            // direct cell/batch user must get null, never NaN, design contract 2026-09-22)
+            if (sumW == 0.0) return null
+            return side.entries.sumOf { (d, s) -> config(d).weight * s.mean } / sumW
         }
+        // weighted GEOMETRIC mean of the normalised factor means, ascending dim-name order (design contract 2026-09-22)
+        fun weightedFactor(): Double? {
+            val side = byDim.filterKeys { config(it).direction == Direction.FACTOR }
+            if (side.isEmpty()) return null
+            val sumW = side.keys.sumOf { config(it).weight }
+            if (sumW == 0.0) return null // zero-weight guard, see weightedMean
+            var factor = 1.0
+            for ((d, s) in side) factor *= Math.pow((s.mean - 1.0) / 8.0, config(d).weight / sumW)
+            return factor
+        }
+        val value = weightedMean(Direction.VALUE)
+        val cost = weightedMean(Direction.COST)
+        val factor = weightedFactor()
+        val hasFactor = hasDir(Direction.FACTOR, idea.topic)
+        val hasCost = hasDir(Direction.COST, idea.topic)
+        val score = when {
+            value == null -> null
+            hasFactor && factor == null -> null
+            hasCost && cost == null -> null
+            else -> {
+                var s = value
+                if (hasFactor) s *= factor!!
+                if (hasCost) s /= cost!!
+                s
+            }
+        }
+        val valueDims = byDim.filterKeys { config(it).direction == Direction.VALUE }
+        val totalValueWeight = valueDims.keys.sumOf { config(it).weight }
         return Scored(
             score = score,
             value = value,
             cost = cost,
+            factor = factor,
             contributions = if (score == null) emptyMap()
-            else valueWeighted.mapValues { it.value / valueWeight / (cost ?: 1.0) },
+            else valueDims.mapValues { (d, s) -> config(d).weight * s.mean / totalValueWeight * (factor ?: 1.0) / (cost ?: 1.0) },
             byDim = byDim,
             split = byDim.values.any { it.n >= 2 && it.stdev >= Alignment.SPLIT_STDEV },
         )
