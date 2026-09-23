@@ -4,7 +4,9 @@ import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.ExportRow
 import civictech.demo.beadsmirror.dolt.DoltSql
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
@@ -75,6 +77,24 @@ class WriteBackApplierTest {
 
     private fun doltCommits(ws: BdScratchWorkspace): Int =
         DoltSql(ws.doltRoot).query("select commit_hash from dolt_log").size
+
+    /**
+     * Runs a raw `dolt sql -q` statement in [ws]'s Dolt root, for writes
+     * [DoltSql.query] (a read-shaped JSON parser) is not meant for. Used to
+     * put the working set into exactly the state a racing `bd update` leaves
+     * between its working-set write and its auto-commit.
+     */
+    private fun doltExec(ws: BdScratchWorkspace, sql: String) {
+        val process = ProcessBuilder("dolt", "sql", "-q", sql)
+            .directory(ws.doltRoot.toFile())
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        check(process.waitFor() == 0) { "dolt sql -q failed for <$sql>:\n$output" }
+    }
+
+    private fun doltHead(ws: BdScratchWorkspace): String =
+        (DoltSql(ws.doltRoot).query("select hashof('HEAD') as h").single().getValue("h") as JsonPrimitive).content
 
     /** A counting importer delegating to the real single-row [BdImport]. */
     private class CountingImporter(ws: BdScratchWorkspace) {
@@ -527,6 +547,103 @@ class WriteBackApplierTest {
             calls shouldBe 1
             second.events.filterIsInstance<WriteBackEvent.Skipped>()
                 .single().reason shouldBe SkipReason.PreviouslyFailed
+        }
+    }
+
+    /**
+     * computenet-oagbm, the deterministic reproduction. A racing local
+     * `bd update X --priority 1` caught between its working-set write and its
+     * auto-commit is planted directly (`dolt sql` writes the same shared
+     * working set bd does; measured, it is visible to `bd export`). The fold
+     * still holds X at 3, so the plan says Impose -- and before the fix the
+     * production applier imported X=3 over the pending write, its commit swept
+     * the row in as 3 -> 3 plus a fresh `cn_echo` (ECHO), and the edit
+     * existed nowhere: the racing update would then find nothing to commit.
+     *
+     * After the fix the production wiring ([WriteBackApplier.forWorkspace])
+     * defers X: no import, no commit, the pending 1 intact; and when the
+     * writer's commit lands it is an ordinary LOCAL-shaped commit (3 -> 1, no
+     * token written), which is what the mirror ingests.
+     */
+    @Test
+    fun `oagbm - an uncommitted local write to a row the plan imposes is deferred, not overwritten`() {
+        BdScratchWorkspace.create().use { ws ->
+            val id = createIssue(ws, "oagbm subject")
+            val winner = mapOf(id to winnerFieldsFrom(row(ws, id))) // the fold: priority 3
+            WriteBackApplier.uncommittedIssueIds(DoltSql(ws.doltRoot)) shouldBe emptySet()
+
+            doltExec(ws, "update issues set priority = 1 where id = '$id'")
+            WriteBackApplier.uncommittedIssueIds(DoltSql(ws.doltRoot)) shouldBe setOf(id)
+            row(ws, id).json["priority"] shouldBe JsonPrimitive(1) // the export sees the pending write
+            val headBefore = doltHead(ws)
+
+            val report = WriteBackApplier.forWorkspace(ws.root, { winner }).applyOnce()
+
+            report.importerInvocations shouldBe 0
+            report.deferred shouldContainExactly listOf(id)
+            report.events.shouldBeEmpty()
+            doltHead(ws) shouldBe headBefore
+            row(ws, id).json["priority"] shouldBe JsonPrimitive(1)
+
+            // The racing writer's auto-commit now lands, carrying the edit.
+            doltExec(ws, "call dolt_commit('-Am', 'bd: update (auto-commit)')")
+            val diff = DoltSql(ws.doltRoot).query(
+                "select from_priority, to_priority, to_metadata from dolt_diff_issues " +
+                    "where to_commit = hashof('HEAD') and to_id = '$id'",
+            ).single()
+            diff["from_priority"] shouldBe JsonPrimitive(3)
+            diff["to_priority"] shouldBe JsonPrimitive(1)
+            diff["to_metadata"].toString() shouldNotContain Provenance.CN_ECHO
+        }
+    }
+
+    /**
+     * computenet-oagbm, the seam's contract: [WriteBackApplier]'s `inFlight`
+     * is consulted only AFTER the pass-start export (so a write the export saw
+     * cannot slip past it), a named row gets no pre-flight, no echo
+     * expectation and no import, an unnamed bystander in the same pass is
+     * imposed as usual, and the deferral is not sticky -- once the row is no
+     * longer in flight the next pass imposes it.
+     */
+    @Test
+    fun `oagbm - inFlight is read after the export and defers only the rows it names, for one pass`() {
+        BdScratchWorkspace.create().use { ws ->
+            val deferredId = createIssue(ws, "oagbm in-flight")
+            val bystanderId = createIssue(ws, "oagbm bystander")
+            val winner = listOf(deferredId, bystanderId)
+                .associateWith { winnerFieldsFrom(row(ws, it)).apply { put("priority", "1") } }
+
+            val trace = mutableListOf<String>()
+            var pending = setOf(deferredId)
+            val real = BdImport(ws.root)
+            val applier = WriteBackApplier(
+                export = { trace += "export"; export(ws) },
+                importer = { r -> trace += "import:${(r.getValue("id") as JsonPrimitive).content}"; real.importRow(r) },
+                winner = { winner },
+                onEvent = { e -> if (e is WriteBackEvent.PreFlight) trace += "preflight:${e.issueId}" },
+                expectEcho = { issueId, _ -> trace += "expectEcho:$issueId" },
+                inFlight = { trace += "inFlight"; pending },
+            )
+
+            val first = applier.applyOnce()
+
+            first.deferred shouldContainExactly listOf(deferredId)
+            first.imposed shouldBe 1
+            first.importerInvocations shouldBe 1
+            trace.first() shouldBe "export"
+            trace.indexOf("inFlight") shouldBeGreaterThan 0
+            trace shouldNotContain "preflight:$deferredId"
+            trace shouldNotContain "expectEcho:$deferredId"
+            trace shouldNotContain "import:$deferredId"
+            row(ws, deferredId).json["priority"] shouldBe JsonPrimitive(3)
+            row(ws, bystanderId).json["priority"] shouldBe JsonPrimitive(1)
+
+            pending = emptySet()
+            val second = applier.applyOnce()
+
+            second.deferred.shouldBeEmpty()
+            second.imposed shouldBe 1
+            row(ws, deferredId).json["priority"] shouldBe JsonPrimitive(1)
         }
     }
 }
