@@ -30,6 +30,7 @@ import com.sun.net.httpserver.HttpExchange
 import java.io.File
 import java.net.URLDecoder
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -113,15 +114,35 @@ class SocialApp(
     // once and shared by the short reads and every feed session (8eb53).
     private val boundedReader: BoundedReader = reader(host)
 
-    val shortReads: ShortReads = ShortReads(boundedReader, GraphLocator(graph, pipeline.families))
+    // flfkm-D8: shared with complexReads below, so a read of the same person
+    // through IS1-IS7 and IC8/IC3 never spawns a cell twice.
+    private val locator: EntityLocator = GraphLocator(graph, pipeline.families)
+
+    val shortReads: ShortReads = ShortReads(boundedReader, locator)
+
+    /** IC8, IC3 (feature `computenet-flfkm`, flfkm-D4..D6) over [locator]. */
+    val complexReads: ComplexReads = ComplexReads(boundedReader, locator)
 
     /**
      * A scatter-gather feed for [viewer] over the authored cells [scope]
      * admits (feature `computenet-8eb53`). The scope is the caller's: this
-     * app does not derive it from `knows`, and there is no `/feed` route yet.
+     * app does not derive it from `knows`; `/feed` (flfkm-D8) is the one
+     * caller that does, through [feedSessions] below.
      */
     fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
         FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
+
+    /**
+     * `/feed`'s per-viewer [FeedSession] cache (flfkm-D8): one session per
+     * viewer, rebuilt only when the viewer's friend-id set (read fresh through
+     * [shortReads].is3 on every request) no longer matches the cached
+     * session's [FeedSession.scope]. A rebuild re-reads every leg from
+     * `since = null` — the retained-frontier path is lost on a friend-set
+     * change, accepted here; feature `computenet-4q9is` later moves scope
+     * maintenance into the session itself so a friend add/remove need not
+     * discard it.
+     */
+    private val feedSessions = ConcurrentHashMap<Long, FeedSession>()
 
     // One observe sink per static dimension set (jo2jk-D2), read the same way
     // SocialGraph reads its keyed families: sink.current() only.
@@ -186,11 +207,22 @@ class SocialApp(
             completeRecovery()
         }
         val s = DemoShell(port)
-        s.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        // flfkm-D8 404 guard: DemoShell.route is server.createContext(path), and
+        // the JDK HttpServer's "/" context is the root context that otherwise
+        // catches every unregistered path (observed 2026-09-23: a probe of a
+        // server with only "/" and "/person/" contexts answered `/shortest ->
+        // 200 PAGE`, quoted on the feature's breakdown comment). Guard on the
+        // exact path here rather than relying on DemoShell to refuse.
+        s.route("/") {
+            if (it.requestURI.path == "/") it.respond(200, PAGE, "text/html; charset=utf-8") else it.respond(404, "not found")
+        }
         s.route("/state") { it.respond(200, stateJson(), "application/json") }
         s.route("/op") { handleOp(it) }
         s.route("/person/") { handlePerson(it) }
         s.route("/message/") { handleMessage(it) }
+        s.route("/feed") { handleFeed(it) }
+        s.route("/replies") { handleReplies(it) }
+        s.route("/fof") { handleFof(it) }
         s.sse("/events") { stateJson() }
         shell = s
 
@@ -434,6 +466,128 @@ class SocialApp(
         }
     }
 
+    // --- /feed, /replies, /fof (SOC1 F6, feature `computenet-flfkm`, flfkm-D8) ---
+
+    /** A query param, URL-decoded (copied from `AlignmentApp.query`'s shape). */
+    private fun HttpExchange.query(key: String): String? =
+        requestURI.rawQuery?.split("&")?.firstOrNull { it.startsWith("$key=") }
+            ?.let { URLDecoder.decode(it.substringAfter("="), Charsets.UTF_8).trim() }
+
+    /** A required numeric param: 400 `"missing <name>"` when absent or non-numeric. */
+    private fun HttpExchange.requiredLong(name: String): Long = query(name)?.toLongOrNull() ?: throw Bad("missing $name")
+
+    /** An optional numeric param, or null when absent or non-numeric. */
+    private fun HttpExchange.optionalLong(name: String): Long? = query(name)?.toLongOrNull()
+
+    /** `limit`, defaulting to 20; 400 `"bad limit"` when non-numeric or `<= 0`. */
+    private fun HttpExchange.limitParam(): Int {
+        val raw = query("limit") ?: return 20
+        val n = raw.toIntOrNull() ?: throw Bad("bad limit")
+        if (n <= 0) throw Bad("bad limit")
+        return n
+    }
+
+    /**
+     * `GET /feed?person=<id>&limit=<n>[&before=<ms>]` — IC2 (flfkm-D8). Reads
+     * the viewer's friend ids fresh through [shortReads].is3 (never
+     * `graph.personFacts`, per the F1 review the file KDoc cites), then pulls
+     * and boards a per-viewer [FeedSession] cached in [feedSessions], rebuilt
+     * only when the friend-id set no longer matches the cached session's
+     * scope. The `is3` future and the session's `pull()` future are composed
+     * into one, so [respondOutcome] bounds both with a single timeout; a
+     * [LegOutcome.Deferred] leg is not a refusal — [FeedSession.board] still
+     * answers from whatever the other legs delivered.
+     */
+    private fun handleFeed(exchange: HttpExchange) {
+        val person: Long
+        val limit: Int
+        val before: Long?
+        try {
+            person = exchange.requiredLong("person")
+            limit = exchange.limitParam()
+            before = exchange.optionalLong("before")
+        } catch (e: IllegalArgumentException) {
+            exchange.respond(400, e.message ?: "bad request")
+            return
+        }
+
+        val future: CompletableFuture<ReadOutcome<List<Message>>> = shortReads.is3(person).thenCompose { outcome ->
+            when (outcome) {
+                is ReadOutcome.Found -> {
+                    val ids = outcome.value.map { it.otherId }.toSortedSet()
+                    if (ids.isEmpty()) {
+                        CompletableFuture.completedFuture<ReadOutcome<List<Message>>>(ReadOutcome.Found(emptyList()))
+                    } else {
+                        val ranges = ids.map { Interest.Ranges.Range(it, it + 1) }
+                        val session = feedSessions.compute(person) { _, existing ->
+                            if (existing != null && existing.scope.ranges == ranges) existing
+                            else feedSession(person, Interest.Ranges(ranges))
+                        }!!
+                        session.pull()
+                            .thenApply { session.board(limit, before) }
+                            .thenApply<ReadOutcome<List<Message>>> { ReadOutcome.Found(it) }
+                    }
+                }
+
+                ReadOutcome.Empty -> CompletableFuture.completedFuture<ReadOutcome<List<Message>>>(ReadOutcome.Empty)
+                is ReadOutcome.Refused -> CompletableFuture.completedFuture<ReadOutcome<List<Message>>>(outcome)
+            }
+        }
+        respondOutcome(exchange, future) { messages ->
+            """{"found":true,"messages":${messages.joinToString(",", "[", "]") { it.json() }}}"""
+        }
+    }
+
+    /** `GET /replies?person=<id>&limit=<n>` — IC8 (flfkm-D8), served straight from [complexReads.ic8]. */
+    private fun handleReplies(exchange: HttpExchange) {
+        val person: Long
+        val limit: Int
+        try {
+            person = exchange.requiredLong("person")
+            limit = exchange.limitParam()
+        } catch (e: IllegalArgumentException) {
+            exchange.respond(400, e.message ?: "bad request")
+            return
+        }
+        respondOutcome(exchange, complexReads.ic8(person, limit)) { messages ->
+            """{"found":true,"messages":${messages.joinToString(",", "[", "]") { it.json() }}}"""
+        }
+    }
+
+    /**
+     * `GET /fof?person=<id>&countryA=<id>&countryB=<id>&from=<ms>&to=<ms>[&limit=<n>]`
+     * — IC3 at two hops (flfkm-D8), served from [complexReads.ic3]. `countryA
+     * == countryB` or `from > to` is validated here, before the call, so the
+     * `require` guards [ComplexReads.ic3] itself carries never throw past a
+     * `respondOutcome` bound.
+     */
+    private fun handleFof(exchange: HttpExchange) {
+        val person: Long
+        val countryA: Long
+        val countryB: Long
+        val from: Long
+        val to: Long
+        val limit: Int
+        try {
+            person = exchange.requiredLong("person")
+            countryA = exchange.requiredLong("countryA")
+            countryB = exchange.requiredLong("countryB")
+            from = exchange.requiredLong("from")
+            to = exchange.requiredLong("to")
+            limit = exchange.limitParam()
+            if (countryA == countryB) throw Bad("countryA and countryB must differ")
+            if (from > to) throw Bad("from must be <= to")
+        } catch (e: IllegalArgumentException) {
+            exchange.respond(400, e.message ?: "bad request")
+            return
+        }
+        respondOutcome(exchange, complexReads.ic3(person, countryA, countryB, from, to, limit)) { rows ->
+            """{"found":true,"rows":${
+                rows.joinToString(",", "[", "]") { """{"personId":${it.personId},"countA":${it.countA},"countB":${it.countB}}""" }
+            }}"""
+        }
+    }
+
     /** The full [Person], every field (IS1's pinned shape, rx8om-D8). */
     private fun Person.json(): String =
         """{"id":$id,"firstName":${esc(firstName)},"lastName":${esc(lastName)},"gender":${esc(gender)},""" +
@@ -445,7 +599,9 @@ class SocialApp(
         """{"id":$id,"creatorId":$creatorId,"creationDate":$creationDate,"content":${esc(content)},""" +
             """"forumId":${forumId ?: "null"},"replyOfId":${replyOfId ?: "null"}}"""
 
-    // --- /state (jo2jk-D6: pinned shape, sorted, esc'd, bounded) ---------------
+    // --- /state (jo2jk-D6: pinned shape, sorted, esc'd, bounded; flfkm-D7 ------
+    // appends the fixed "queries" key after "remaining", naming IC2/IC8/IC3 as
+    // "served" and IC5/IC6/IC12 as "finding" — see Queries.kt's own table) -----
 
     private fun stateJson(): String {
         val personIds = graph.personIds()
@@ -486,6 +642,7 @@ class SocialApp(
             """"counts":{"persons":${personIds.size},"knows":$knowsTotal,"forums":${forumIds.size},""" +
             """"messages":${messageIds.size},"likes":$likesTotal,"tags":$tagsTotal},""" +
             """"applied":${stream?.applied ?: 0},"remaining":${stream?.remaining ?: 0},""" +
+            """"queries":{"ic2":"served","ic8":"served","ic3":"served","ic5":"finding","ic6":"finding","ic12":"finding"},""" +
             """"persons":$personsJson,"forums":$forumsJson,"messages":$messagesJson}"""
     }
 
