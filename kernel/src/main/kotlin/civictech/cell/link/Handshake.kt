@@ -225,18 +225,22 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  *   old-slot → old+new → new and never passes through empty. The slot is
  *   still genuinely retracted (the 4jpd cases pin exactly that), only later.
  *
- *   Residual, stated rather than left to be rediscovered: the intermediate
- *   state now holds TWO slots for one edge instead of zero, which is
- *   invisible to an idempotent fold (`Max`, the default: both slots carry the
- *   same reported level) but visible to a counting one — under
- *   `AttentionAggregator.Sum` a relink transiently doubles the edge's
- *   contribution. Making the swap atomic is not reachable from this file: it
- *   would need `AttentionFrontier` to rekey a slot, i.e. a change on the
- *   attention side, which computenet-dmkp deliberately scopes out. Both zero
- *   and two are transient and self-correcting inside this call; the empty one
- *   was chosen against because neutral-`NORMAL` is a *different band* for
- *   every non-neutral source, whereas the doubled one only perturbs
- *   non-idempotent aggregators.
+ *   Deferring alone moved the window rather than closing it: it held TWO
+ *   slots for one edge instead of zero, invisible to an idempotent fold
+ *   (`Max`, the default) but visible to a counting one — under
+ *   `AttentionAggregator.Sum` a relink transiently doubled the edge's
+ *   contribution (measured `[NORMAL, LOW]` from a source at LOW).
+ *   computenet-3e35 closed it on the attention side, the only place it can be
+ *   closed from: `AttentionSupport`'s outlet face recognises the
+ *   replacement's first report as belonging to the same `(from, to, role)`
+ *   edge as a slot whose link is gone from the port, and hands that slot to
+ *   the replacement's id in one step (`AttentionFrontier.supersede`). The
+ *   frontier therefore goes old → new directly, and the deferred multicast
+ *   below finds the superseded slot already gone. The deferral still earns
+ *   its place: if the replacement's side never reports, the retraction is
+ *   what removes the superseded slot, and it must not empty the frontier
+ *   before a report that IS coming. Pinned by `LinkSupersessionTest`'s
+ *   computenet-3e35 case (`Sum`) beside the computenet-dmkp one (`Max`).
  *
  * This function is called once per side, and the caller multicasts each side's
  * returned records to that side's OWN listeners only — matching the coverage

@@ -220,6 +220,38 @@ class LinkSupersessionTest {
         sourceAttention.band shouldBe AttentionBand.HIGH
     }
 
+    // ---- computenet-3e35: the swap must not transiently DOUBLE the edge either ----
+
+    /**
+     * computenet-3e35 — the other side of computenet-dmkp's window. Deferring
+     * the retraction past the replacement's report took the frontier
+     * old → old+new → new: never empty, but holding TWO slots for one edge in
+     * between. `Max` cannot see that (both slots carry the same level); `Sum`
+     * can, because it counts. The sink sits at LOW and reports 0.25, so one
+     * slot folds to LOW and two fold to 0.5 = NORMAL. Measured on the code
+     * before the slot swap was made atomic, this list was `[NORMAL, LOW]` — a
+     * spurious `onBandChange` and `emitUpstream` pair per relink.
+     */
+    @Test
+    fun `relinking the sole downstream link of a Sum-aggregating source produces no band transition`() {
+        val source = Stage()
+        val sink = Stage()
+        val sourceAttention = AttentionSupport.of(source)
+        sourceAttention.aggregator = AttentionAggregator.Sum
+        AttentionSupport.of(sink).attend(0.2f) // LOW; reports 0.25 upstream
+
+        linkStages(source, sink)
+        sourceAttention.band shouldBe AttentionBand.LOW
+
+        val transitions = mutableListOf<AttentionBand>()
+        sourceAttention.onBandChange { transitions += it }
+
+        linkStages(source, sink) // supersedes the sole downstream link
+
+        transitions shouldBe emptyList()
+        sourceAttention.band shouldBe AttentionBand.LOW
+    }
+
     @Test
     @Suppress("UNCHECKED_CAST")
     fun `an Observe tap and a Consume link over the same pair both survive`() {
