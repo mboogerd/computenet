@@ -54,6 +54,27 @@ object Aggregators {
     fun <E, V> topK(k: Int, selector: (E) -> V): Aggregator<E, List<V>, TreeMap<V, Int>>
             where V : Comparable<V>, V : Serializable = TopK(k, selector)
 
+    /**
+     * The first k rows under a declared multi-column [SortSpec] (KAGG-R-10):
+     * `value` is the live rows in spec order (the spec's own directions encode
+     * DESC — there is no implicit reversal as in [topK]), duplicates expanded,
+     * truncated at k, and exactly the live rows when fewer than k are live (no
+     * padding). Keeps the full support multiset like [topK], on the same
+     * [Support] fold, with [spec] as the `TreeMap` comparator — so the
+     * accumulator carries the spec through snapshot/restore (KAGG-R-15).
+     *
+     * [spec] must be total over the rows [selector] produces; a declared
+     * tie-break that lets two distinct rows compare equal makes `insert` (and
+     * `retract`) throw `IllegalStateException` instead of silently merging
+     * their multiplicities (KAGG-R-12).
+     */
+    fun <E, R : Serializable> topKBy(k: Int, spec: SortSpec<R>, selector: (E) -> R): Aggregator<E, List<R>, TreeMap<R, Int>> =
+        TopKBy(k, spec, selector)
+
+    /** [topKBy] over the elements themselves (the element is the row). */
+    fun <R : Serializable> topKBy(k: Int, spec: SortSpec<R>): Aggregator<R, List<R>, TreeMap<R, Int>> =
+        TopKBy(k, spec, Identity.cast())
+
     /** Live group members as a set (M11.4); E must be Serializable. */
     fun <E : Serializable> collectToSet(): Aggregator<E, Set<E>, HashSet<E>> = Collect()
 
@@ -97,18 +118,40 @@ object Aggregators {
         override fun value(acc: SumCount): Double = acc.sum.toDouble() / acc.n
     }
 
-    /** Shared support-multiset fold; mutates in place, functional signature kept. */
-    private abstract class Support<E, V, A>(private val selector: (E) -> V) :
-        Aggregator<E, A, TreeMap<V, Int>> where V : Comparable<V>, V : Serializable {
-        override fun empty(): TreeMap<V, Int> = TreeMap()
+    /**
+     * Shared support-multiset fold — the one drop-at-zero multiset (KAGG-R-02);
+     * mutates in place, functional signature kept. [comparator] `null` is the
+     * natural order (`TreeMap()`, as before, for [minOf]/[maxOf]/[topK]/
+     * [countDistinct]); a supplied comparator ([topKBy]'s [SortSpec]) orders the
+     * map and is checked for totality on every insert/retract: a key that
+     * compares 0 to the selected value but is not equal to it means the
+     * comparator merged two distinct values, which is refused loudly.
+     */
+    private abstract class Support<E, V : Serializable, A>(
+        private val selector: (E) -> V,
+        private val comparator: Comparator<in V>? = null,
+    ) : Aggregator<E, A, TreeMap<V, Int>> {
+        override fun empty(): TreeMap<V, Int> = TreeMap(comparator)
 
-        override fun insert(acc: TreeMap<V, Int>, element: E): TreeMap<V, Int> =
-            acc.also { it.merge(selector(element), 1, Int::plus) }
+        override fun insert(acc: TreeMap<V, Int>, element: E): TreeMap<V, Int> = acc.also {
+            val v = selector(element)
+            checkTotal(it, v)
+            it.merge(v, 1, Int::plus)
+        }
 
         override fun retract(acc: TreeMap<V, Int>, element: E): TreeMap<V, Int> = acc.also {
             val v = selector(element)
+            checkTotal(it, v)
             val n = checkNotNull(it[v]) { "retract of untracked value $v" }
             if (n <= 1) it.remove(v) else it[v] = n - 1
+        }
+
+        private fun checkTotal(acc: TreeMap<V, Int>, v: V) {
+            val cmp = comparator ?: return
+            val held = acc.floorKey(v) ?: return
+            check(cmp.compare(held, v) != 0 || held == v) {
+                "sort spec is not total: distinct rows $held and $v compare equal (the tie-break must be unique per row)"
+            }
         }
     }
 
@@ -127,6 +170,32 @@ object Aggregators {
             }
             return out
         }
+    }
+
+    private class TopKBy<E, R : Serializable>(private val k: Int, spec: SortSpec<R>, selector: (E) -> R) :
+        Support<E, R, List<R>>(selector, spec) {
+        init {
+            require(k >= 0) { "topKBy k must be non-negative, was $k" }
+        }
+
+        // ascending in the spec's order: its columns' directions already encode DESC
+        override fun value(acc: TreeMap<R, Int>): List<R> {
+            val out = ArrayList<R>(minOf(k, acc.size))
+            for ((row, n) in acc) {
+                if (out.size >= k) break
+                repeat(n.coerceAtMost(k - out.size)) { out += row }
+            }
+            return out
+        }
+    }
+
+    /** Serializable identity selector for [topKBy] over the elements themselves. */
+    private object Identity : (Any?) -> Any?, Serializable {
+        private fun readResolve(): Any = Identity
+        override fun invoke(e: Any?): Any? = e
+
+        @Suppress("UNCHECKED_CAST")
+        fun <R> cast(): (R) -> R = this as (R) -> R
     }
 
     private class CountDistinct<E, V>(selector: (E) -> V) :

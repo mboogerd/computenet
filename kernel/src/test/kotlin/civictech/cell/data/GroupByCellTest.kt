@@ -275,6 +275,76 @@ class GroupByCellTest {
     }
 
     @Test
+    fun `topKBy orders each group by the spec and refills after a column-tie retraction`() {
+        val cell = GroupByCell(keyFn = Emp::dept, aggregator = Aggregators.topKBy(2, salaryDescNameAsc()))
+        val out = collect(cell.outlet)
+        val amy2 = Emp("d", 100, "amy", 2); val amy5 = Emp("d", 100, "amy", 5); val bob = Emp("d", 100, "bob", 3)
+        val xan = Emp("x", 50, "xan", 8)
+
+        val t1 = tag(1); val t2 = tag(2); val t3 = tag(3); val t4 = tag(4)
+        cell.inlet.call.propagate(
+            SetDelta(adds = mapOf(bob to setOf(t1), amy5 to setOf(t2), amy2 to setOf(t3), xan to setOf(t4)))
+        )
+        assertEquals(mapOf("d" to listOf(amy2, amy5), "x" to listOf(xan)), mapFold(out))
+
+        cell.inlet.call.propagate(SetDelta(dels = mapOf(amy2 to setOf(t3))))
+        assertEquals(mapOf("d" to listOf(amy5, bob), "x" to listOf(xan)), mapFold(out))
+    }
+
+    @Test
+    fun `topKBy snapshot-restore keeps the spec-ordered support and honours a later tie retraction`() {
+        val ref = CellRef(UUID.randomUUID())
+        val amy2 = Emp("d", 100, "amy", 2); val amy5 = Emp("d", 100, "amy", 5); val bob = Emp("d", 100, "bob", 3)
+        val cell = GroupByCell(ref, Emp::dept, Aggregators.topKBy(2, salaryDescNameAsc()))
+        val t1 = tag(1); val t2 = tag(2); val t3 = tag(3)
+        cell.inlet.call.propagate(SetDelta(adds = mapOf(bob to setOf(t1), amy5 to setOf(t2), amy2 to setOf(t3))))
+
+        val restored = GroupByCell(ref, Emp::dept, Aggregators.topKBy(2, salaryDescNameAsc()))
+        restored.restore(roundTrip(cell.snapshot()))
+
+        val late = RowCollector()
+        restored.outlet.linkTo(late.inlet as LinkFrom<Propagate<MapDelta<String, List<Emp>>>>)
+        assertEquals(mapOf("d" to listOf(amy2, amy5)), mapFold(late.arrivals))
+
+        // KAGG-R-13 after restore: the column-identical survivor stays, the slot refills from
+        // the restored (not re-derived) support — bob was never visible before the snapshot
+        restored.inlet.call.propagate(SetDelta(dels = mapOf(amy2 to setOf(t3))))
+        assertEquals(mapOf("d" to listOf(amy5, bob)), mapFold(late.arrivals))
+    }
+
+    @Test
+    fun `pipeline - grouped topKBy equals batch recompute on every seed`() {
+        val domain = listOf(
+            Emp("a", 100, "amy", 1), Emp("a", 100, "amy", 2), Emp("a", 120, "bob", 3),
+            Emp("a", 90, "cid", 4), Emp("b", 70, "dan", 5), Emp("b", 70, "eve", 6),
+        )
+        for (seed in 0L until 100L) {
+            val rnd = Random(seed)
+            val writers = listOf(SetCell<Emp>(), SetCell<Emp>())
+            val union = UnionSetCell<Emp>()
+            val grouped = GroupByCell(keyFn = Emp::dept, aggregator = Aggregators.topKBy(2, salaryDescNameAsc()))
+
+            writers.forEach { it.outlet.linkTo(union.inlet as LinkFrom<Propagate<SetDelta<Emp>>>) }
+            union.outlet.linkTo(grouped.inlet as LinkFrom<Propagate<SetDelta<Emp>>>)
+            val out = collect(grouped.outlet)
+
+            val held = writers.map { mutableSetOf<Emp>() }
+            repeat(80) {
+                val w = rnd.nextInt(writers.size)
+                val element = domain[rnd.nextInt(domain.size)]
+                if (rnd.nextInt(10) < 6 || element !in held[w]) {
+                    writers[w].inlet.call.add(element); held[w] += element
+                } else {
+                    writers[w].inlet.call.remove(element); held[w] -= element
+                }
+                val batch = held.flatten().toSet().groupBy(Emp::dept)
+                    .mapValues { (_, rows) -> rows.sortedWith(salaryDescNameAsc()).take(2) }
+                assertEquals(batch, mapFold(out), "diverged from batch on seed $seed")
+            }
+        }
+    }
+
+    @Test
     fun `pipeline - grouped countDistinct equals batch recompute on every seed`() {
         for (seed in 0L until 100L) {
             val rnd = Random(seed)
@@ -373,6 +443,19 @@ class GroupByCellTest {
         init {
             inlet.serve(object : Propagate<MapDelta<String, Long>> {
                 override fun propagate(value: MapDelta<String, Long>) {
+                    arrivals += value
+                }
+            })
+        }
+    }
+
+    class RowCollector(val arrivals: MutableList<MapDelta<String, List<Emp>>> = mutableListOf()) {
+        @Suppress("UNCHECKED_CAST")
+        val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<String, List<Emp>>>>))
+
+        init {
+            inlet.serve(object : Propagate<MapDelta<String, List<Emp>>> {
+                override fun propagate(value: MapDelta<String, List<Emp>>) {
                     arrivals += value
                 }
             })
