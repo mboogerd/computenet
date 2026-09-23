@@ -58,6 +58,7 @@ class OperatorBoundedReadTest {
         pages.forEach { it.caveats.shouldBeEmpty() }
         cell.supportsSince shouldBe false
         cell.supportsScope shouldBe false
+        cell.supportsKeyBound shouldBe false
     }
 
     @Test
@@ -159,6 +160,16 @@ class OperatorBoundedReadTest {
         // a tag-carrying cell stamps a frontier, exact at both ends of a quiet walk
         pages.first().frontier.shouldNotBeNull()
         pages.first().frontier shouldBe pages.last().frontier
+
+        cell.supportsKeyBound shouldBe false
+        val refused = rig.host.readState(
+            cell.ref,
+            StateRead(keyBound = civictech.cell.KeyBound("a", "z")),
+        )
+        refused.isDone shouldBe true
+        refused.get() shouldBe civictech.cell.StateReadResult.Unavailable(
+            civictech.cell.StateReadResult.Reason.KEY_BOUND_UNSUPPORTED,
+        )
     }
 
     @Test
