@@ -145,13 +145,21 @@ class DurabilityBackdoorFenceTest {
      * any call site in the process could flip — exactly the "otherwise
      * second-guess" case this test's class KDoc already claims to rule out.
      * Brace-depth scanning (comments stripped first) finds the span of every
-     * `companion object { ... }` block per file and fails if any line inside
-     * that span declares a `var`. A `val`/`const val` companion — the existing,
-     * legitimate use in `Journal.kt` (`MAGIC`, `HEADER_BYTES`) and
-     * `KeyedCells.kt` (`KEYS_FILE`, `HOST_JOURNAL`) — is unaffected.
+     * `companion object { ... }` block per file and fails if a line declares
+     * a `var` at the companion body's OWN depth — a process-wide property,
+     * exactly the "second knob" shape. It does not fail on a `var` nested one
+     * level deeper (inside a function, `when`, `if`, or lambda body declared
+     * within the companion): that is an ordinary local variable, scoped to
+     * one call and invisible outside it, not a global anyone else can flip —
+     * flagging it would be a false positive on unrelated, legitimate future
+     * code (verified: a companion helper function with a local `var`
+     * accumulator does not trip this test). A `val`/`const val` companion
+     * property — the existing, legitimate use in `Journal.kt` (`MAGIC`,
+     * `HEADER_BYTES`) and `KeyedCells.kt` (`KEYS_FILE`, `HOST_JOURNAL`) — is
+     * unaffected either way.
      */
     @Test
-    fun `no companion object in a scanned file declares a mutable var`() {
+    fun `no companion object in a scanned file declares a mutable var property`() {
         val root = repoRoot()
         val scanned = scannedProductionFiles(root)
         val varInCompanion = Regex("""(^|[^\w])var\s+[A-Za-z_]""")
@@ -162,10 +170,11 @@ class DurabilityBackdoorFenceTest {
             var companionStartDepth = -1
             val hits = mutableListOf<String>()
             lines.forEach { line ->
+                val atCompanionBodyDepth = companionStartDepth != -1 && depth == companionStartDepth + 1
                 if (companionStartDepth == -1 && line.contains("companion object")) {
                     companionStartDepth = depth
-                } else if (companionStartDepth != -1 && varInCompanion.containsMatchIn(line)) {
-                    hits += "${file.path}: companion object declares a mutable var: ${line.trim()}"
+                } else if (atCompanionBodyDepth && varInCompanion.containsMatchIn(line)) {
+                    hits += "${file.path}: companion object declares a mutable var property: ${line.trim()}"
                 }
                 depth += line.count { it == '{' } - line.count { it == '}' }
                 if (companionStartDepth != -1 && depth <= companionStartDepth) {
