@@ -10,6 +10,7 @@ import civictech.cell.data.tagFold
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.Use
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
@@ -20,6 +21,15 @@ import org.junit.jupiter.api.assertThrows
  * The whole graph here is built the same way `civictech.testkit.SimWorld` builds one
  * internally (`SimulationController` + `LocationRegistry` + `ManagedHost(scheduler = ...)`),
  * just without that convenience wrapper, to prove the seam works without it.
+ *
+ * [KBLK-23]'s scenario is a two-host fan-**in** (two sources feeding one sink), not a
+ * fan-**out** into per-key `Set` state: a first attempt at this test fanned one source out to
+ * two `Set`-folded sinks, which review correctly rejected as vacuous for the seeded-pick
+ * property — a `Set` merge is commutative, so every delivery order folds to the same state and
+ * the same step count (500 adds × 3 hops = 1500 steps, independent of pick order, for every
+ * seed 1..30 checked). The fan-in's sink instead records raw arrival order
+ * ([CollectorCell.arrivals]), which *is* a genuine interleaving of the two upstream hosts'
+ * items and therefore does depend on which busy host [SimulationController.step] picks next.
  */
 class DeterministicDriveTest {
 
@@ -39,59 +49,75 @@ class DeterministicDriveTest {
     }
 
     /**
-     * A two-host fan-out: a [SetCell] source on host A streams into two independent
-     * [CollectorCell] sinks on host B — so the seed's across-host pick actually has two busy
-     * hosts to choose between while the bulk load drains, exercising [KBLK-23] rather than a
-     * single fixed order.
+     * A two-host fan-IN: two independent [SetCell] sources, one on host A and one on host B,
+     * both stream into the *same* [CollectorCell] sink. Unlike a fan-out into set-folded state
+     * (which a commutative `Set` merge makes order-insensitive — see the class KDoc below),
+     * the sink's raw [CollectorCell.arrivals] log records deltas in actual delivery order, and
+     * that order is a genuine interleaving of A's and B's items: whichever of the two busy
+     * hosts [SimulationController.step] picks next delivers its pending item next. The final
+     * *set* of delivered items is still order-insensitive (both sources fully drain either
+     * way), but the raw arrival sequence is exactly [KBLK-23]'s observable: it is pinned to
+     * the seed's pick order, not merely to the graph shape.
      */
-    private data class Run(val stateA: Set<String>, val stateB: Set<String>, val steps: Int)
+    private data class Run(val order: List<String>, val delivered: Set<String>, val steps: Int)
 
-    private fun runBulkLoad(seed: Long, opsCount: Int = 500): Run {
+    private fun runFanIn(seed: Long, opsPerSource: Int = 60): Run {
         val controller = SimulationController(seed)
         val registry = LocationRegistry()
         val hostA = ManagedHost(scheduler = controller.scheduler(), registry = registry)
         val hostB = ManagedHost(scheduler = controller.scheduler(), registry = registry)
 
-        val source = SetCell<String>()
-        val sinkA = CollectorCell()
-        val sinkB = CollectorCell()
-        hostA.managementInlet.call.spawn(source)
-        hostB.managementInlet.call.spawn(sinkA)
-        hostB.managementInlet.call.spawn(sinkB)
+        val sourceA = SetCell<String>()
+        val sourceB = SetCell<String>()
+        val sink = CollectorCell()
+        hostA.managementInlet.call.spawn(sourceA)
+        hostB.managementInlet.call.spawn(sourceB)
+        hostA.managementInlet.call.spawn(sink)
 
-        streamInto(source, sinkA, registry)
-        streamInto(source, sinkB, registry)
+        streamInto(sourceA, sink, registry)
+        streamInto(sourceB, sink, registry)
 
-        val sourceApi = (HostedCellProxy.create(source.ref, registry, SetInletProxy::class.java)
+        val apiA = (HostedCellProxy.create(sourceA.ref, registry, SetInletProxy::class.java)
                 as SetInletProxy).inlet.call
-        repeat(opsCount) { i -> sourceApi.add("item-$i") }
+        val apiB = (HostedCellProxy.create(sourceB.ref, registry, SetInletProxy::class.java)
+                as SetInletProxy).inlet.call
+        // queue both hosts' work before driving, so A and B are simultaneously busy throughout
+        // the drain and every step genuinely exercises the controller's cross-host pick.
+        repeat(opsPerSource) { i -> apiA.add("A-$i") }
+        repeat(opsPerSource) { i -> apiB.add("B-$i") }
 
         val steps = controller.runToIdle()
-        return Run(stateA = tagFold(sinkA.arrivals), stateB = tagFold(sinkB.arrivals), steps = steps)
+        val order = sink.arrivals.flatMap { it.adds.keys }
+        return Run(order = order, delivered = tagFold(sink.arrivals), steps = steps)
     }
 
     @Test
     fun `same seed reaches the same quiescent state and step count, every time`() {
-        val expectedItems = (0 until 500).map { "item-$it" }.toSet()
+        val expectedItems = ((0 until 60).map { "A-$it" } + (0 until 60).map { "B-$it" }).toSet()
 
-        val run1 = runBulkLoad(seed = 42)
-        val run2 = runBulkLoad(seed = 42)
-        val run3 = runBulkLoad(seed = 42)
+        val run1 = runFanIn(seed = 42)
+        val run2 = runFanIn(seed = 42)
+        val run3 = runFanIn(seed = 42)
 
-        // sanity: the bulk load actually delivered, on both sinks
-        run1.stateA shouldBe expectedItems
-        run1.stateB shouldBe expectedItems
+        // sanity: the fan-in actually delivered every item from both sources
+        run1.delivered shouldBe expectedItems
+        run1.order.toSet() shouldBe expectedItems
 
-        // [KBLK-23]: identical quiescent state AND identical step count, every repeat of seed 42
-        run2.stateA shouldBe run1.stateA
-        run2.stateB shouldBe run1.stateB
+        // [KBLK-23]: identical quiescent state, identical raw arrival order, and identical step
+        // count, every repeat of seed 42 — (a) same seed, same observable, every time.
+        run2.delivered shouldBe run1.delivered
+        run2.order shouldBe run1.order
         run2.steps shouldBe run1.steps
-        run3.stateA shouldBe run1.stateA
-        run3.stateB shouldBe run1.stateB
+        run3.delivered shouldBe run1.delivered
+        run3.order shouldBe run1.order
         run3.steps shouldBe run1.steps
 
-        // control (not asserted to differ — AGENTS.md: never swap a seed to make a test agree):
-        // seed 43 need not match seed 42's step count or interleaving, only its own repeats would.
+        // (b) a different seed disagrees on the raw interleaving — proving the observable is
+        // actually pinned to the seed's cross-host pick order, not merely to the graph shape
+        // (a fan-out into commutative Set state cannot show this; see the class KDoc). Per
+        // AGENTS.md this seed pair is kept once chosen, never swapped to make the test agree.
+        val differently = runFanIn(seed = 7)
+        differently.order shouldNotBe run1.order
     }
 
     @Test
