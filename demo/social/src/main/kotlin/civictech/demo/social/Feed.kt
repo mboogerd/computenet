@@ -93,6 +93,8 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.link.Interest
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** How one leg of a pull ended (8eb53-D5). */
@@ -165,6 +167,13 @@ class FeedSession(
     private val registry: LocationRegistry,
     private val reader: BoundedReader,
     private val pageLimit: Int = 200,
+    // 4q9is-D7: opt-in demo-layer join of a derived scope to
+    // KeyedCells.getOrSpawn (the kernel seam `doc/demo-findings.md` F-24
+    // records as missing). Null (the default) is today's behavior: an
+    // admitted-but-absent friend gets no leg. Non-null spawns their
+    // `snb-authored` cell durably on the pull that first admits them, so they
+    // get a leg answering Empty at since = null from then on.
+    private val spawner: InterestDrivenFamily? = null,
 ) {
     /** A session over a caller-supplied scope that never changes ([ScopeSource.fixed]). */
     constructor(
@@ -174,12 +183,40 @@ class FeedSession(
         registry: LocationRegistry,
         reader: BoundedReader,
         pageLimit: Int = 200,
-    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit) {
+        spawner: InterestDrivenFamily? = null,
+    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit, spawner) {
         this.scope = scope
     }
 
     init {
         require(pageLimit > 0) { "pageLimit must be positive, got $pageLimit" }
+    }
+
+    internal companion object {
+        /**
+         * 4q9is-D7's admit() call needs a thread that is not the host's own
+         * (see [fanOut]'s KDoc). A shared daemon pool by default — production
+         * (`VirtualThreadScheduler`) drains its queue on its own dedicated
+         * thread regardless of who else is waiting, so a genuinely separate
+         * pool thread calling the blocking `getOrSpawn` is exactly the normal
+         * "application thread" usage pattern every other `getOrSpawn` call
+         * site in this demo already relies on.
+         *
+         * A `var`, package-internal, so `SocialInterestTest`'s
+         * `SimulationController`-based rig can substitute a queueing
+         * [Executor] it drains itself, top-level, between its own
+         * `runToIdle()` calls: `SimulationController`'s own KDoc says
+         * "Stepping and awaiting are expected on one thread... not
+         * thread-safe by design", so a genuine background thread calling
+         * back into it concurrently with the test's driving thread is a
+         * real, observed race (`enqueueAwaiting`'s `check(step())` can throw
+         * "simulation quiescent but awaited future incomplete" even though
+         * the OTHER thread is mid-step, not actually quiescent) — this
+         * override exists so a test can keep the whole thing single-threaded
+         * instead. Production never touches it.
+         */
+        var spawnExecutor: Executor =
+            Executors.newCachedThreadPool { r -> Thread(r, "FeedSession-spawn").apply { isDaemon = true } }
     }
 
     /**
@@ -260,20 +297,39 @@ class FeedSession(
             .whenComplete { _, _ -> inFlight.set(false) }
     }
 
-    /** Legs for [derived] (validated before it becomes [scope]), then the walks. */
+    /**
+     * Legs for [derived] (validated before it becomes [scope]), then the
+     * walks. [spawner], when present, is admitted first — dispatched onto
+     * [spawnExecutor] rather than called inline (see its KDoc): this method
+     * runs as the continuation of [derived]'s own future, which for a derived
+     * [ScopeSource] completes ON THE HOST'S OWN THREAD (the read that
+     * produced it), and `KeyedCells.getOrSpawn` blocks synchronously waiting
+     * on that same host — a wait it (or the production `VirtualThreadScheduler`)
+     * refuses as a same-thread deadlock. A null [spawner] takes the
+     * already-completed branch, so every existing call site (no spawner) runs
+     * exactly as before, inline, on this same thread.
+     */
     private fun fanOut(derived: Interest): CompletableFuture<PullReport> {
         val keys = keysOf(derived)
         scope = derived
-        val legs = keys
-            .filter { families.authored.contains(it) }
-            .map { families.authored.getOrSpawn(it).ref }
-            .filter { registry.interestOf(it).overlaps(derived) }
-        val outcomes = legs.map { ref ->
-            val since = synchronized(state) { retained[ref] }
-            ref to walk(ref, since)
+        val admitted: CompletableFuture<Void> =
+            if (spawner != null) {
+                CompletableFuture.supplyAsync({ spawner.admit(derived) }, spawnExecutor).thenApply { null }
+            } else {
+                CompletableFuture.completedFuture(null)
+            }
+        return admitted.thenCompose {
+            val legs = keys
+                .filter { families.authored.contains(it) }
+                .map { families.authored.getOrSpawn(it).ref }
+                .filter { registry.interestOf(it).overlaps(derived) }
+            val outcomes = legs.map { ref ->
+                val since = synchronized(state) { retained[ref] }
+                ref to walk(ref, since)
+            }
+            CompletableFuture.allOf(*outcomes.map { it.second }.toTypedArray())
+                .thenApply { PullReport(outcomes.associateTo(LinkedHashMap()) { (ref, f) -> ref to f.join() }) }
         }
-        return CompletableFuture.allOf(*outcomes.map { it.second }.toTypedArray())
-            .thenApply { PullReport(outcomes.associateTo(LinkedHashMap()) { (ref, f) -> ref to f.join() }) }
     }
 
     /**
