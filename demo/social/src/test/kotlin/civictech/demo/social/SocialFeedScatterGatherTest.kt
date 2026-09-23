@@ -12,6 +12,7 @@ import civictech.cell.link.Interest
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.io.Serializable
 import java.util.concurrent.TimeUnit
 
@@ -279,5 +280,14 @@ class SocialFeedScatterGatherTest {
         rig.recorder.requestsFor(refD).single().since shouldBe null
         second.legs.keys shouldBe setOf(refA, refD)
         (50L in rig.ids(rig.session.board())) shouldBe true
+    }
+
+    // --- tbmhn: membership check is O(1) per scope key, not a whole-family snapshot ---
+
+    @Test
+    fun `tbmhn pull decides scope-key membership without a whole-family keys snapshot`() {
+        // A Gradle test's working directory is the project directory (SocialFeedFrontierTest relies on the same).
+        val source = File("src/main/kotlin/civictech/demo/social/Feed.kt").readText()
+        (".keys()" in source) shouldBe false
     }
 }
