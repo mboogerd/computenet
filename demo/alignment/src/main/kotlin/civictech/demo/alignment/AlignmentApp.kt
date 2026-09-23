@@ -933,9 +933,10 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
      *
      * `participants` (top level) and each row's `raters` are COUNTS of distinct participants with a
      * live rating, read from the synchronous write-side [ratings] index (k1d4g-D7): no participant
-     * name ever enters the aggregate — the override carries none either (w61az-D2). `value`/`cost` are
-     * the idea's weighted means per side, null when that side is unrated; a byDim `contribution` is
-     * null on a cost dimension and whenever the score is.
+     * name ever enters the aggregate — the override carries none either (w61az-D2). `value`/`cost`/
+     * `factor` are the idea's weighted means per side (`factor` the weighted GEOMETRIC mean, [0, 1]),
+     * null when that side is unrated (factor dimensions, design contract 2026-09-22); a byDim
+     * `contribution` is null on a cost or factor dimension and whenever the score is.
      */
     private fun aggregateJson(topic: Topic): String {
         val w = topic.dims.keys.joinToString(",", "{", "}") { d ->
@@ -961,7 +962,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         }
         fun tail(id: String, s: Scored?) =
             """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
-                """"raters":${ratersOf[id] ?: 0},"dots":${dotsOf[id] ?: 0}}"""
+                """"factor":${s?.factor?.let(::num) ?: "null"},"raters":${ratersOf[id] ?: 0},"dots":${dotsOf[id] ?: 0}}"""
         val rows = ranked.mapIndexed { i, (id, _) ->
             val s = scored[IdeaKey(topic.id, id)] // present with a score (possibly null), or absent
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +

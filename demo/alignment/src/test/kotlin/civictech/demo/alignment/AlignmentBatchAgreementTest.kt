@@ -17,12 +17,14 @@ import kotlin.test.fail
 /**
  * Incremental == batch (computenet-sigl0.1, feature rule 4): the exact pipeline
  * the app wires ([AlignmentPipeline.build]) is driven through a seeded churn of
- * rate / unrate / re-weight / direction-change ops, and after EVERY step the
- * folded `WeightedFusionCell` outlet must equal [Alignment.rankBatch]
- * recomputed from the write-side maps — null-score rows and has-cost flips
- * included (computenet-k1d4g-D2..D4). This is the only place the two
- * implementations meet (computenet-sigl0-D7). A failing seed stays failing —
- * never swap it out.
+ * rate / unrate / re-weight / direction-change ops — the direction-change op
+ * cycles a dimension uniformly among the OTHER two of VALUE, COST and FACTOR
+ * (design contract 2026-09-22) — and after EVERY step the folded
+ * `WeightedFusionCell` outlet must equal [Alignment.rankBatch] recomputed from
+ * the write-side maps — null-score rows and has-cost/has-factor flips included
+ * (computenet-k1d4g-D2..D4, generalised to FACTOR). This is the only place the
+ * two implementations meet (computenet-sigl0-D7). A failing seed stays
+ * failing — never swap it out.
  *
  * A second test pins the all-value case (k1d4g rule 1) against the v1 formula
  * itself, computed inline from the raw ratings, so a shared mistake in the
@@ -43,6 +45,7 @@ class AlignmentBatchAgreementTest {
     fun `the folded fusion outlet equals the batch reference after every step, seeds 0 until 50`() {
         var nullScoreRows = 0L
         var hasCostFlips = 0
+        var hasFactorFlips = 0
         for (seed in 0 until 50) {
             val controller = SimulationController(seed.toLong())
             val host = ManagedHost(scheduler = controller.scheduler())
@@ -98,15 +101,20 @@ class AlignmentBatchAgreementTest {
                         "weight $d=$c"
                     }
                     else -> {
-                        // flip one dimension's direction: VALUE and COST both stay reachable, and
-                        // a topic's first COST / last COST flips its has-cost bit (k1d4g-D4)
+                        // flip one dimension's direction, picked uniformly from every OTHER
+                        // direction (design contract 2026-09-22): all three of VALUE, COST and
+                        // FACTOR stay reachable, and a topic's first/last COST or FACTOR flips
+                        // its respective has-bit (k1d4g-D4, generalised to FACTOR)
                         val d = DimKey(topics[rnd.nextInt(topics.size)], dims[rnd.nextInt(dims.size)])
                         val old = configs.getValue(d)
-                        val c = old.copy(direction = if (old.direction == Direction.VALUE) Direction.COST else Direction.VALUE)
-                        fun hasCost() = configs.any { (k, v) -> k.topic == d.topic && v.direction == Direction.COST }
-                        val before = hasCost()
+                        val others = Direction.entries.filter { it != old.direction }
+                        val c = old.copy(direction = others[rnd.nextInt(others.size)])
+                        fun hasDir(dir: Direction) = configs.any { (k, v) -> k.topic == d.topic && v.direction == dir }
+                        val hadCost = hasDir(Direction.COST)
+                        val hadFactor = hasDir(Direction.FACTOR)
                         weightOps.put(d, c); configs[d] = c
-                        if (before != hasCost()) hasCostFlips++
+                        if (hadCost != hasDir(Direction.COST)) hasCostFlips++
+                        if (hadFactor != hasDir(Direction.FACTOR)) hasFactorFlips++
                         "direction $d=$c"
                     }
                 }
@@ -119,7 +127,8 @@ class AlignmentBatchAgreementTest {
         // the churn must actually reach the cases it exists to check
         assertTrue(nullScoreRows > 0, "no step ever produced a null-score row")
         assertTrue(hasCostFlips > 0, "no step ever flipped a topic's has-cost bit")
-        println("agreement coverage: nullScoreRows=$nullScoreRows hasCostFlips=$hasCostFlips")
+        assertTrue(hasFactorFlips > 0, "no step ever flipped a topic's has-factor bit")
+        println("agreement coverage: nullScoreRows=$nullScoreRows hasCostFlips=$hasCostFlips hasFactorFlips=$hasFactorFlips")
     }
 
     /**
@@ -179,6 +188,7 @@ class AlignmentBatchAgreementTest {
                     near(v1, got.score, "score")
                     near(v1, got.value, "value")
                     assertEquals(null, got.cost, "$where $idea: no cost dim, cost null")
+                    assertEquals(null, got.factor, "$where $idea: no factor dim, factor null")
                     assertEquals(weighted.keys, got.contributions.keys, "$where $idea contribution dims")
                     weighted.forEach { (d, wm) -> near(wm / den, got.contributions[d], "contribution[$d]") }
                 }
@@ -186,25 +196,34 @@ class AlignmentBatchAgreementTest {
         }
     }
 
+    /**
+     * EXACT equality on every `Double?` the two implementations compute (score, value, cost,
+     * factor, each contribution, each byDim mean/stdev) — the mirrored formula (design contract
+     * 2026-09-22, "Bit-identical batch/incremental agreement is mandatory") is meant to produce
+     * bit-identical results, and a 1e-9 tolerance here would let a mutation that reordered, say,
+     * the factor product's terms pass unseen. `Double.NaN` cannot occur (the formulas never divide
+     * by a possibly-zero sum without the `side.isEmpty()`/zero-weight guards), so `assertEquals` on
+     * the boxed `Double?` is safe: two nulls compare equal, and two non-null values compare equal
+     * only when bit-identical. The lone exception is "contributions sum to score", which is an
+     * arithmetic-sum identity of already-exact-equal contributions, not a batch/incremental
+     * agreement check, so it keeps its `1e-9` tolerance.
+     */
     private fun assertAgrees(want: Map<IdeaKey, Scored>, got: Map<IdeaKey, Scored>, where: String) {
         assertEquals(want.keys, got.keys, "$where: scored idea set")
         for ((idea, w) in want) {
             val g = got.getValue(idea)
-            fun near(a: Double?, b: Double?, what: String) {
-                if (a == null && b == null) return
-                if (a == null || b == null || abs(a - b) >= 1e-9) fail("$where $idea $what: batch $a, incremental $b")
-            }
-            near(w.score, g.score, "score")
-            near(w.value, g.value, "value")
-            near(w.cost, g.cost, "cost")
+            assertEquals(w.score, g.score, "$where $idea score")
+            assertEquals(w.value, g.value, "$where $idea value")
+            assertEquals(w.cost, g.cost, "$where $idea cost")
+            assertEquals(w.factor, g.factor, "$where $idea factor")
             assertEquals(w.contributions.keys, g.contributions.keys, "$where $idea contribution dims")
-            w.contributions.forEach { (d, c) -> near(c, g.contributions.getValue(d), "contribution[$d]") }
+            w.contributions.forEach { (d, c) -> assertEquals(c, g.contributions.getValue(d), "$where $idea contribution[$d]") }
             assertEquals(w.byDim.keys, g.byDim.keys, "$where $idea byDim dims")
             w.byDim.forEach { (d, s) ->
                 val gs = g.byDim.getValue(d)
                 assertEquals(s.n, gs.n, "$where $idea n[$d]")
-                near(s.mean, gs.mean, "mean[$d]")
-                near(s.stdev, gs.stdev, "stdev[$d]")
+                assertEquals(s.mean, gs.mean, "$where $idea mean[$d]")
+                assertEquals(s.stdev, gs.stdev, "$where $idea stdev[$d]")
             }
             assertEquals(w.split, g.split, "$where $idea split")
             g.score?.let { score ->

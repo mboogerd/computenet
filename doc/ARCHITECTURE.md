@@ -357,9 +357,9 @@ else `$PORT`, else 8080. See the README for run commands.
   (elo, Bradley–Terry, TrueSkill, …) and a JSON agent API.
 - `:demo:alignment` — team alignment: ideas rated 1–9 per creator-defined
   dimension, `KeyedSetCell` → `GroupByCell` stats → demo-local
-  `WeightedFusionCell` weighted value ÷ cost aggregate (facilitator-configured
-  dimension direction) with a split marker, JSON/SSE API,
-  JSONL journal (ALN1, epic `computenet-6brvy`).
+  `WeightedFusionCell` weighted value × factor ÷ cost aggregate
+  (facilitator-configured dimension direction) with a split marker, JSON/SSE
+  API, JSONL journal (ALN1, epic `computenet-6brvy`).
 - `:demo:dialogue` — argumentation extraction from recorded dialogue
   transcripts (AGO1, epic `computenet-2aw`); depends on `:kernel`,
   `:demo:shell` and `:demo:agora` (reuses agora's claim/edge vocabulary
