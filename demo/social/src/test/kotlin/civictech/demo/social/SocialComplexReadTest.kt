@@ -462,6 +462,87 @@ class SocialComplexReadTest {
         }
     }
 
+    /**
+     * Wraps a [BoundedReader], answering with a [CompletableFuture] that is
+     * never completed for any ref present in [stuck] and delegating
+     * otherwise. Copy of `SocialReadRefusalTest.StuckReader`'s shape
+     * (deliberately duplicated — that class is `private` to its own file),
+     * used here to hold a `/feed` pull's leg read open indefinitely rather
+     * than to hold a short read open.
+     */
+    private class StuckLegReader(
+        private val delegate: BoundedReader,
+        private val stuck: MutableMap<CellRef, CompletableFuture<StateReadResult>>,
+    ) : BoundedReader {
+        override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> =
+            stuck[ref] ?: delegate.read(ref, request)
+    }
+
+    /**
+     * `computenet-1iz73`: two `/feed` requests for the same viewer, the
+     * second arriving while the first's pull legs are still in flight, must
+     * never surface `FeedSession.pull()`'s reentrancy `IllegalStateException`
+     * as an uncaught `ExecutionException`. `feedSessions.compute(person)` is
+     * atomic and hands both requests the same cached [FeedSession] once its
+     * scope matches; the race is in what happens next, at `session.pull()`.
+     *
+     * Reproduced deterministically, no sleeps: [StuckLegReader] holds person
+     * 2's `snb-authored` leg read open forever, so the first `/feed` call's
+     * pull never finishes and its `FeedSession.inFlight` never resets. A
+     * short [SocialApp.shortReadTimeoutSeconds] override means the first call
+     * itself answers `503 TIMEOUT` promptly (documented behavior, unrelated
+     * to this bug) — DemoShell's single dispatcher thread only frees up once
+     * `respondOutcome` gives up waiting, which is exactly how the orchestrator's
+     * race analysis says the second call reaches the still-in-flight session in
+     * practice. The second call then reaches the SAME cached session while its
+     * first pull is still stuck: before the fix, `session.pull()` throws
+     * `IllegalStateException` inside the composed future, which
+     * `respondOutcome` (only catching `TimeoutException`) does not catch —
+     * an uncaught `ExecutionException` propagates out of `handleFeed`, and
+     * DemoShell's JDK `HttpServer` closes the connection without a response,
+     * which surfaces to [HttpProbe] as a thrown exception rather than any
+     * HTTP status. After the fix (`FeedSession.pullShared`), the second call
+     * also just answers `503 TIMEOUT` — the leg is still stuck, so neither
+     * call can ever get a real board, but neither throws.
+     */
+    @Test
+    fun `computenet-1iz73 overlapping same-viewer feed pulls never surface FeedSession pull reentrancy`() {
+        val stuck = ConcurrentHashMap<CellRef, CompletableFuture<StateReadResult>>()
+        val app = SocialApp(
+            port = 0,
+            reader = { host -> StuckLegReader(HostBoundedReader(host), stuck) },
+            shortReadTimeoutSeconds = 1L,
+        ).start()
+        try {
+            app.graph.addPerson(Person(1, "V", "One"))
+            app.graph.addPerson(Person(2, "A", "Two"))
+            app.graph.addKnows(1, 2, 1)
+            awaitUntil("the knows edge to settle") { app.graph.personFacts(1).any { it is Knows } }
+
+            // The ref cannot be named before the cell it names has been
+            // spawned (same constraint SocialReadRefusalTest documents for
+            // `person`); force the spawn directly, mirroring how `pull()`
+            // itself resolves a friend's leg via `families.authored.getOrSpawn`.
+            val authoredRef = app.pipeline.families.authored.getOrSpawn(2).ref
+            stuck[authoredRef] = CompletableFuture() // never completes: the leg is stuck forever
+
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+
+            val first = probe.get("/feed?person=1&limit=20")
+            first.statusCode() shouldBe 503
+            (""""refused":"TIMEOUT"""" in first.body()) shouldBe true
+
+            // Overlapping request for the same viewer: reaches the same
+            // cached FeedSession (same scope, still holding its first pull's
+            // stuck leg). Must not throw.
+            val second = probe.get("/feed?person=1&limit=20")
+            second.statusCode() shouldBe 503
+            (""""refused":"TIMEOUT"""" in second.body()) shouldBe true
+        } finally {
+            app.stop()
+        }
+    }
+
     // --- /replies (IC8) ---------------------------------------------------------
 
     @Test

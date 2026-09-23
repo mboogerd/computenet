@@ -11,6 +11,7 @@
  */
 package civictech.demo.social
 
+import civictech.cell.StateReadResult
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -32,6 +33,7 @@ import java.net.URLDecoder
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -393,12 +395,24 @@ class SocialApp(
      * carry, chosen here because the future itself, not the host, is what
      * failed to complete. [ShortReads] never blocks on its own; this is the
      * one place `:demo:social` does, deliberately.
+     *
+     * `computenet-1iz73`: a future that completes *exceptionally* — e.g. a
+     * `/feed` composition whose `session.pull()` call threw — is mapped to
+     * `503 {"refused":"READ_FAILED"}` rather than propagating the
+     * [ExecutionException] out of this method uncaught. `/feed`'s own fix
+     * (`FeedSession.pullShared`, `Feed.kt`) is expected to keep this path from
+     * firing in practice, but this method is the HTTP boundary's own defense:
+     * no composed future should be able to turn into an ungraceful
+     * 500/closed-connection response, whatever throws inside it.
      */
     private fun <T> respondOutcome(exchange: HttpExchange, future: CompletableFuture<ReadOutcome<T>>, body: (T) -> String) {
         val outcome = try {
             future.get(shortReadTimeoutSeconds, TimeUnit.SECONDS)
         } catch (_: TimeoutException) {
             exchange.respond(503, """{"refused":"TIMEOUT"}""", "application/json")
+            return
+        } catch (_: ExecutionException) {
+            exchange.respond(503, """{"refused":${esc(StateReadResult.Reason.READ_FAILED.name)}}""", "application/json")
             return
         }
         when (outcome) {
@@ -523,7 +537,12 @@ class SocialApp(
                             if (existing != null && existing.scope.ranges == ranges) existing
                             else feedSession(person, Interest.Ranges(ranges))
                         }!!
-                        session.pull()
+                        // computenet-1iz73: pullShared(), not pull(), because two /feed
+                        // requests for the same viewer can reach this cached session
+                        // while an earlier pull is still in flight (the cache-fetch
+                        // above is atomic; a session's pull() is not reentrant, and
+                        // this HTTP layer must never race that check).
+                        session.pullShared()
                             .thenApply { session.board(limit, before) }
                             .thenApply<ReadOutcome<List<Message>>> { ReadOutcome.Found(it) }
                     }
