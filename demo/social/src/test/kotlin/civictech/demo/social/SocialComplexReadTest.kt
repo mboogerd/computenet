@@ -422,6 +422,46 @@ class SocialComplexReadTest {
         }
     }
 
+    @Test
+    fun `a new friend after the session is cached is picked up on the next feed call`() {
+        // review repair (computenet-flfkm.4): SOC1-FEED-09 requires the cached
+        // FeedSession to be rebuilt when the viewer's friend-id set no longer
+        // matches session.scope. No existing test changed a viewer's friend set
+        // between two /feed calls, so a mutant that always reuses the cached
+        // session (deleting the `existing.scope.ranges == ranges` check) passed
+        // every test in this file (mutation observed 2026-09-23: SocialApp.kt's
+        // `if (existing != null && existing.scope.ranges == ranges) existing`
+        // mutated to `if (existing != null) existing` — `:demo:social:test
+        // --tests 'civictech.demo.social.SocialComplexReadTest' --rerun` still
+        // reported all 20 tests PASSED). This test fails under that mutation:
+        // person 3's message would never be read, since the stale session's
+        // scope only ever covered person 2.
+        val app = SocialApp(port = 0).start()
+        try {
+            app.graph.addPerson(Person(1, "V", "One"))
+            app.graph.addPerson(Person(2, "A", "Two"))
+            app.graph.addPerson(Person(3, "B", "Three"))
+            app.graph.addKnows(1, 2, 1)
+            app.graph.addForum(Forum(100, "f", moderatorId = 1))
+            app.graph.addPost(Message(10, creatorId = 2, creationDate = 100, content = "m10", forumId = 100))
+            awaitUntil("initial post to settle") { app.graph.authored(2).size == 1 }
+
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(10, 2, 100, "m10", 100)}]}"""
+
+            // Befriend 3 only after the session above was built and cached.
+            app.graph.addKnows(1, 3, 2)
+            app.graph.addPost(Message(20, creatorId = 3, creationDate = 300, content = "m20", forumId = 100))
+            awaitUntil("new friend's post to settle") { app.graph.authored(3).size == 1 }
+
+            val expected = """{"found":true,"messages":[${messageJson(20, 3, 300, "m20", 100)},${messageJson(10, 2, 100, "m10", 100)}]}"""
+            probe.get("/feed?person=1&limit=20").body() shouldBe expected
+        } finally {
+            app.stop()
+        }
+    }
+
     // --- /replies (IC8) ---------------------------------------------------------
 
     @Test
