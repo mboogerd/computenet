@@ -228,11 +228,18 @@ class TwoNodeRig private constructor(
      * commit's own `dolt_log.date` against `bd`'s exit instant, and counted
      * how many *completed* reads after that exit still saw the old head:
      *
-     * - **145 / 145 mutations produced a visible commit. Zero losses.** Across
-     *   an idle run (15), three in-workspace contention shapes (24: a 200 ms
-     *   `dolt sql` reader loop, a second `bd` writer into the same workspace,
-     *   both), a run under the real `:demo:beadsmirror:test` suite (48, load
-     *   ~8-20) and a deliberately overloaded run (58 at load ~300).
+     * - **71 / 71 attributable mutations produced a visible commit. Zero
+     *   losses in the unconfounded population.** Attributable means the
+     *   visibility check (`head != before`) cannot be satisfied by anyone
+     *   else's commit: an idle run (15: 10 `idle.csv` + 5
+     *   `idle-timestamped.csv`), the `s-reader` shape (8 of `shapes.csv`'s 24
+     *   — a 200 ms `dolt sql` reader loop with no concurrent writer into the
+     *   workspace), and a run under the real `:demo:beadsmirror:test` suite
+     *   (48, load ~8-20). 145 mutations were probed in total; the other 74 —
+     *   `shapes.csv`'s `s-writer`/`s-both` rows (16) and the load ~300 run
+     *   (58) — ran a second `bd` writer into the SAME workspace the check
+     *   reads, so a noise commit satisfying the check cannot be excluded.
+     *   They are reported separately below, not folded into this count.
      * - **The commit predates `bd`'s own exit, always**: `commit date - bd
      *   exit` was **-28 ms to -139 ms** on every one of the 53 timestamped
      *   samples (5 idle + 48 under the suite). `bd` commits synchronously and
@@ -246,14 +253,25 @@ class TwoNodeRig private constructor(
      *   module's own suite** — i.e. a SINGLE `dolt sql` process start on a
      *   contended host can outlast [AWAIT_CONVERGENCE_MS] on its own. (`bd`
      *   itself stretched the same way: 0.5-5.4 s under the suite.)
-     * - **The load ~300 run is coarser evidence, stated as such.** It reports
-     *   23-130 s to a changed head (and `bd` up to 216 s), but it came from
-     *   the earlier probe, which recorded neither commit timestamps nor a
-     *   poll count and ran with a second `bd` writer in the same workspace.
-     *   There the figure is "time until some read returned a changed head",
-     *   and its zero-loss count cannot exclude that the noise writer's commit
-     *   is what satisfied the check. The commit-before-exit and one-read
-     *   findings above rest on the reader-only samples (idle, under-suite).
+     * - **The load ~300 run, and `shapes.csv`'s `s-writer`/`s-both` rows, are
+     *   confounded evidence, stated as such — not coarser evidence of the
+     *   same thing.** All three share the shape excluded from the 71/71
+     *   count above: a second `bd update` writer runs into the SAME
+     *   workspace roughly every 300 ms while the visibility check is only
+     *   `head != before`, so a noise commit landing in that window satisfies
+     *   the check exactly as well as the probed mutation's own commit would.
+     *   The load ~300 run (58, from the earlier probe, which recorded
+     *   neither commit timestamps nor a poll count) reports 23-130 s to a
+     *   changed head (and `bd` up to 216 s). `s-writer` and `s-both` (16,
+     *   7-field `shapes.csv` rows with no `commit_ms`/`polls` column) report
+     *   455-5073 ms `bd_ms` and 177-504 ms observed windows — comparable to
+     *   the noise writer's own ~300 ms period, so the confound is not merely
+     *   theoretical there either. Neither population's zero-loss count can
+     *   exclude that the noise writer's commit, not the probed mutation's
+     *   own, is what satisfied the check. The commit-before-exit and
+     *   one-read findings above rest on the timestamped, reader-only samples
+     *   (idle-timestamped, under-suite) — the 53 that are both attributable
+     *   and carry `commit_ms`/`polls`.
      *
      * So the vacuous-`quiesce` failure is a reader that has not caught up, not
      * a writer that has not written — and in the poller's case an in-flight
@@ -280,6 +298,28 @@ class TwoNodeRig private constructor(
      * - `EchoSuppressionTwoNodeTest`, `WriteBackCloseTwoNodeTest` (already, by
      *   computenet-rl2qx and computenet-khqek).
      * - `WriteBackTwoNodeTest`, `HeadlineLivenessTest` (by this bug).
+     * - `PullRebaselineTest` (by computenet-r5gah): its post-start
+     *   `pair.pusher.run("update", a1, "--title", …)`, on the listener's own
+     *   workspace and followed by a `rig.await` on the dialer's fold, now
+     *   goes through `rig.mutate(listener, "update", a1, "--title", …)`. Its
+     *   pre-start `createIssue` and `dep add` calls stay direct — pre-start
+     *   and immune by the rule above.
+     * - `TwoNodeRigTest` (by computenet-mivve): its two POST-start
+     *   `listenerWorkspace.createIssue` calls (`idAfterIdle`,
+     *   `idDuringPartition`) now go through `rig.createIssue(listener, …)`.
+     *   Its other two creates are pre-start and stay direct — immune by the
+     *   rule above.
+     * - `ConvergenceSuite.runConcurrently` and
+     *   `ConvergenceDivergenceControlTest.runSchedule` (by computenet-mivve):
+     *   each applies every `ScheduleStep` to an already-started node's
+     *   workspace on a driver thread, then awaits equal folds — exactly the
+     *   non-immune shape. Each `it.apply(rig.listenerWorkspace)` /
+     *   `it.apply(rig.dialerWorkspace)` now goes through the lambda overload
+     *   of [mutate]: `rig.mutate(rig.listener) { step.apply(rig.listener.workspace) }`
+     *   (and the dialer counterpart), so both `ConvergenceSuite` and
+     *   `ConvergenceDivergenceControlTest` route through it. `ScheduleStep`
+     *   itself is unchanged — `SeededSchedule.kt`, where it lives, is outside
+     *   this bug's file claim; see [mutate]'s lambda-overload KDoc.
      *
      * Immune, and why:
      * - **Pre-start seeding** — `seedOnBoth` in `WriteBackTwoNodeTest`,
@@ -296,25 +336,12 @@ class TwoNodeRig private constructor(
      *   up as an ordinary slow convergence rather than as a vacuous `quiesce`.
      *   They are **not** proof against the lag — only outside this API.
      *
-     * **Not immune and not yet converted** (outside this bug's file claim,
-     * filed as its own item): `TwoNodeRigTest`'s two POST-start
-     * `listenerWorkspace.createIssue` calls (`idAfterIdle`,
-     * `idDuringPartition`; its other two creates are pre-start and immune by
-     * the rule above), and `ConvergenceSuite`'s `runConcurrently` — used by
-     * it and by `ConvergenceDivergenceControlTest` — which applies seeded
-     * schedule steps to both already-started workspaces on driver threads and
-     * then awaits equal folds. The creates want [createIssue]; the schedule
-     * driver additionally needs `ScheduleStep.apply` to take a [Node] rather
-     * than a bare workspace, which is why it is a separate item and not a
-     * two-line edit. `PullRebaselineTest` belongs here too, and NOT in the
-     * immune list above: it *is* a rig test — it passes
-     * [civictech.demo.beadsmirror.BdScratchWorkspace.createSyncedPair]'s two
-     * workspaces straight into [create], so the listener node owns
-     * `pair.pusher` — and its `pair.pusher.run("update", a1, "--title", …)`
-     * runs after [startListener]/[startDialer] and is followed immediately by
-     * a `rig.await` on the dialer's fold, which is exactly the non-immune
-     * shape. (Its `createIssue` calls there are pre-start and immune by the
-     * rule above.) Corrected by this bug's feature review, 2026-09-18.
+     * **Everything named above as immune or routed is now converted or was
+     * always immune** — inventory closed by computenet-bbb04 (KDoc precision),
+     * computenet-r5gah (`PullRebaselineTest`) and computenet-mivve
+     * (`TwoNodeRigTest`, `ConvergenceSuite`, `ConvergenceDivergenceControlTest`),
+     * 2026-09-23. `PullRebaselineTest` was miscategorized as immune above
+     * before its feature review corrected it, 2026-09-18.
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
@@ -330,18 +357,43 @@ class TwoNodeRig private constructor(
     fun mutate(node: Node, vararg bdArgs: String, timeoutMs: Long = COMMIT_VISIBLE_MS): String {
         val before = node.logHead().firstOrNull()
         val output = node.workspace.run(*bdArgs)
+        awaitCommitVisible(node, before, timeoutMs) {
+            "`bd ${bdArgs.joinToString(" ")}` exited 0 on the ${node.role}'s workspace but never " +
+                "appeared in its dolt_log within ${timeoutMs}ms (head still $before) — " +
+                "nothing downstream of it can converge\n${node.progressReport(null, timeoutMs)}"
+        }
+        return output
+    }
+
+    /**
+     * [mutate]'s wait, for a caller whose mutation is not a single `bd`
+     * invocation — [ConvergenceSuite.runConcurrently] and
+     * [ConvergenceDivergenceControlTest]'s schedule driver apply a
+     * `ScheduleStep`, whose own verb varies (`create`, `update`, `close`,
+     * `dep add`, …), so there is no fixed `bdArgs` to accept. Runs [action]
+     * against [node]'s own workspace and returns only once ITS result is a
+     * commit in the workspace's `dolt_log` — same guarantee as the vararg
+     * overload, same confound noted there (a concurrent import on a
+     * write-back node can satisfy the wait).
+     */
+    fun mutate(node: Node, timeoutMs: Long = COMMIT_VISIBLE_MS, action: () -> Unit) {
+        val before = node.logHead().firstOrNull()
+        action()
+        awaitCommitVisible(node, before, timeoutMs) {
+            "a mutation on the ${node.role}'s workspace never appeared in its dolt_log within " +
+                "${timeoutMs}ms (head still $before) — nothing downstream of it can converge\n" +
+                node.progressReport(null, timeoutMs)
+        }
+    }
+
+    private fun awaitCommitVisible(node: Node, before: String?, timeoutMs: Long, message: () -> String) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (node.logHead().firstOrNull() == before) {
             if (System.currentTimeMillis() > deadline) {
-                throw AssertionFailedError(
-                    "`bd ${bdArgs.joinToString(" ")}` exited 0 on the ${node.role}'s workspace but never " +
-                        "appeared in its dolt_log within ${timeoutMs}ms (head still $before) — " +
-                        "nothing downstream of it can converge\n${node.progressReport(null, timeoutMs)}",
-                )
+                throw AssertionFailedError(message())
             }
             Thread.sleep(pollInterval.toMillis())
         }
-        return output
     }
 
     /**

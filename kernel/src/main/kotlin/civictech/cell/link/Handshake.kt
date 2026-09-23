@@ -225,32 +225,38 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  *   old-slot → old+new → new and never passes through empty. The slot is
  *   still genuinely retracted (the 4jpd cases pin exactly that), only later.
  *
- *   Residual, stated rather than left to be rediscovered: the intermediate
- *   state now holds TWO slots for one edge instead of zero, which is
- *   invisible to an idempotent fold (`Max`, the default: both slots carry the
- *   same reported level) but visible to a counting one — under
- *   `AttentionAggregator.Sum` a relink transiently doubles the edge's
- *   contribution. Making the swap atomic is not reachable from this file: it
- *   would need `AttentionFrontier` to rekey a slot, i.e. a change on the
- *   attention side, which computenet-dmkp deliberately scopes out. Both zero
- *   and two are transient and self-correcting inside this call; the empty one
- *   was chosen against because neutral-`NORMAL` is a *different band* for
- *   every non-neutral source, whereas the doubled one only perturbs
- *   non-idempotent aggregators.
+ *   Deferring alone moved the window rather than closing it: it held TWO
+ *   slots for one edge instead of zero, invisible to an idempotent fold
+ *   (`Max`, the default) but visible to a counting one — under
+ *   `AttentionAggregator.Sum` a relink transiently doubled the edge's
+ *   contribution (measured `[NORMAL, LOW]` from a source at LOW).
+ *   computenet-3e35 closed it on the attention side, the only place it can be
+ *   closed from: `AttentionSupport`'s outlet face recognises the
+ *   replacement's first report as belonging to the same `(from, to, role)`
+ *   edge as a slot whose link is gone from the port, and hands that slot to
+ *   the replacement's id in one step (`AttentionFrontier.supersede`). The
+ *   frontier therefore goes old → new directly, and the deferred multicast
+ *   below finds the superseded slot already gone. The deferral still earns
+ *   its place: if the replacement's side never reports, the retraction is
+ *   what removes the superseded slot, and it must not empty the frontier
+ *   before a report that IS coming. Pinned by `LinkSupersessionTest`'s
+ *   computenet-3e35 case (`Sum`) beside the computenet-dmkp one (`Max`).
  *
  * This function is called once per side, and the caller multicasts each side's
  * returned records to that side's OWN listeners only — matching the coverage
  * `PortLink`'s teardown gives a real unlink, which multicasts to `support` and
  * `sourceLinking` alike.
  *
- * Second residual of the deferral, and the price of the split: removal and
- * notification are no longer adjacent, so a listener that THROWS out of the
- * intervening `onLinkedListeners` multicast strands the superseded record's
- * slot in the frontier permanently — the exact leak computenet-4jpd closed,
- * reachable now only on an exception path. Nothing on that path is guarded
- * today (the handshake is already non-atomic there: `install` and `register`
- * have both run), so this narrows failure-path robustness rather than
- * introducing a new hazard class. See computenet-dmkp's review residuals.
+ * The price of the split was that removal and notification are no longer
+ * adjacent, so a listener that THREW out of the intervening `onLinkedListeners`
+ * multicast stranded the superseded record's slot in the frontier permanently
+ * — the exact leak computenet-4jpd closed, reachable on an exception path.
+ * computenet-1rvt guards that span with [NotificationFailures]: the retraction
+ * multicast runs whatever threw before it, each infrastructure listener is
+ * isolated from its siblings' failures (so a throwing `CatchUp` subscriber
+ * cannot starve `AttentionSupport`'s report either), and the first failure is
+ * rethrown once every notification has run. Pinned by `LinkSupersessionTest`'s
+ * two computenet-1rvt cases.
  *
  * @return the records removed, for the caller's deferred retraction multicast.
  */
@@ -258,6 +264,51 @@ private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, ro
     support.links
         .filter { it.from == from && it.to == to && it.role == role }
         .onEach { support.remove(it) }
+
+/**
+ * computenet-1rvt: failure accounting for the notification tail of a
+ * superseding handshake, where state was already REMOVED before the
+ * notifications run and so a skipped retraction is a leak, not a no-op.
+ *
+ * Two granularities, deliberately:
+ *
+ * - [guard] runs a sequence that stops at its first throw — the ordered core
+ *   (`EdgeOpen`, then the cell-facing `onLinked` hooks, then the multicasts),
+ *   where "Open precedes onLinked catch-up" means a failed step must not be
+ *   followed by the steps that assume it happened.
+ * - [multicast] runs EVERY listener, isolating each from its siblings'
+ *   failures: the infrastructure multicast's subscribers are independent of
+ *   one another (they key their own state by [Link.id]), so one throwing must
+ *   not cost another its notification.
+ *
+ * [rethrow] surfaces the first failure, with later ones attached as
+ * suppressed, after every notification has run — so the handshake still fails
+ * loudly exactly where it did before (the link stays registered, as it always
+ * did at this point), just without abandoning the retraction on the way out.
+ */
+private class NotificationFailures {
+    private var first: Throwable? = null
+
+    private fun record(failure: Throwable) {
+        first?.addSuppressed(failure) ?: run { first = failure }
+    }
+
+    inline fun guard(block: () -> Unit) {
+        try {
+            block()
+        } catch (failure: Throwable) {
+            record(failure)
+        }
+    }
+
+    fun multicast(listeners: List<(Link) -> Unit>, link: Link) {
+        listeners.forEach { listener -> guard { listener(link) } }
+    }
+
+    fun rethrow() {
+        first?.let { throw it }
+    }
+}
 
 /**
  * Runs the handshake shared by the inlet implementations:
@@ -341,28 +392,37 @@ internal fun <Api> handshake(
             // the one promotion consults).
             support.register(link, request.identity)
             sourceLinking?.register(link, request.identity)
-            // Only topology-interested consumers pay for edge markers.  Open
-            // precedes onLinked catch-up and every subsequent data invocation.
-            link.toPort?.let { port ->
-                val protocols = ProtocolSupport.of(port)
-                if (protocols.handles(Protocols.TopologyOrder)) {
-                    protocols.deliver(Protocols.TopologyOrder, link, EdgeOpen)
+            // computenet-1rvt: everything from here to the retraction multicast
+            // runs under `failures`, because the superseded records were REMOVED
+            // above and a throw that skipped their retraction would strand their
+            // id-keyed state (the frontier slot) for the life of the port.
+            val failures = NotificationFailures()
+            failures.guard {
+                // Only topology-interested consumers pay for edge markers.  Open
+                // precedes onLinked catch-up and every subsequent data invocation.
+                link.toPort?.let { port ->
+                    val protocols = ProtocolSupport.of(port)
+                    if (protocols.handles(Protocols.TopologyOrder)) {
+                        protocols.deliver(Protocols.TopologyOrder, link, EdgeOpen)
+                    }
                 }
+                support.onLinked(link)
+                sourceLinking?.onLinked?.invoke(link)
+                failures.multicast(support.onLinkedListeners, link)
+                sourceLinking?.let { failures.multicast(it.onLinkedListeners, link) }
             }
-            support.onLinked(link)
-            sourceLinking?.onLinked?.invoke(link)
-            support.onLinkedListeners.forEach { it(link) }
-            sourceLinking?.onLinkedListeners?.forEach { it(link) }
             // computenet-dmkp: the superseded records' retraction multicast,
             // deliberately LAST — after the replacement has reported itself, so
             // an id-keyed subscriber (`AttentionSupport`'s frontier) never sees
             // the edge absent. Removal already happened before `register`
             // (it has to; see [evictSuperseded]); only the notification is
-            // deferred, so the slot is still retracted.
-            supersededTarget.forEach { superseded -> support.onUnlinkListeners.forEach { it(superseded) } }
+            // deferred, so the slot is still retracted — unconditionally, even
+            // when a step above threw (computenet-1rvt).
+            supersededTarget.forEach { superseded -> failures.multicast(support.onUnlinkListeners, superseded) }
             supersededSource.forEach { superseded ->
-                sourceLinking?.onUnlinkListeners?.forEach { it(superseded) }
+                sourceLinking?.let { failures.multicast(it.onUnlinkListeners, superseded) }
             }
+            failures.rethrow()
             result
         }
 

@@ -154,20 +154,27 @@ class ConvergenceDivergenceControlTest {
         }
     }
 
-    /** Both sides of [schedule], concurrently, failing loudly on either side's `bd` failure. */
+    /**
+     * Both sides of [schedule], concurrently, failing loudly on either side's
+     * `bd` failure. Routed through [TwoNodeRig.mutate]'s lambda overload
+     * (computenet-mivve), same as [ConvergenceSuite.runConcurrently]: both
+     * nodes are already started and the caller awaits an equality assertion
+     * afterward (here deliberately the FAILING one), so a step needs the
+     * commit-visibility wait as much as [ConvergenceSuite]'s does.
+     */
     private fun runSchedule(rig: TwoNodeRig, schedule: SeededSchedule) {
         var listenerFailure: Throwable? = null
         var dialerFailure: Throwable? = null
         val listenerThread = Thread({
             try {
-                schedule.listenerSteps.forEach { it.apply(rig.listenerWorkspace) }
+                schedule.listenerSteps.forEach { step -> rig.mutate(rig.listener) { step.apply(rig.listener.workspace) } }
             } catch (t: Throwable) {
                 listenerFailure = t
             }
         }, "divergence-control-listener")
         val dialerThread = Thread({
             try {
-                schedule.dialerSteps.forEach { it.apply(rig.dialerWorkspace) }
+                schedule.dialerSteps.forEach { step -> rig.mutate(rig.dialer) { step.apply(rig.dialer.workspace) } }
             } catch (t: Throwable) {
                 dialerFailure = t
             }
