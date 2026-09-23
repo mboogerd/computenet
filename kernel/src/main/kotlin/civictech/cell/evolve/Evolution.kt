@@ -11,6 +11,7 @@ import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.link.PortLink
+import civictech.cell.link.notifyAll
 import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -539,8 +540,12 @@ object Promotion {
             to.linking.remove(link)
             target?.linking?.remove(link)
             target?.linking?.onUnlink?.invoke(link)
-            target?.linking?.onUnlinkListeners?.forEach { it(link) }
-            to.linking.onUnlinkListeners.forEach { it(link) }
+            // computenet-7u22s: same isolate-siblings-and-rethrow-first policy
+            // as the handshake teardown lambdas (computenet-1rvt) — a
+            // throwing onUnlinkListeners subscriber on one side must not cost
+            // the other side its notification, nor a sibling on its own side.
+            target?.linking?.let { notifyAll(it.onUnlinkListeners, link) }
+            notifyAll(to.linking.onUnlinkListeners, link)
         }
         to.linking.register(installed, identity)
         target?.linking?.register(installed, identity)

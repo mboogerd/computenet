@@ -266,51 +266,6 @@ private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, ro
         .onEach { support.remove(it) }
 
 /**
- * computenet-1rvt: failure accounting for the notification tail of a
- * superseding handshake, where state was already REMOVED before the
- * notifications run and so a skipped retraction is a leak, not a no-op.
- *
- * Two granularities, deliberately:
- *
- * - [guard] runs a sequence that stops at its first throw — the ordered core
- *   (`EdgeOpen`, then the cell-facing `onLinked` hooks, then the multicasts),
- *   where "Open precedes onLinked catch-up" means a failed step must not be
- *   followed by the steps that assume it happened.
- * - [multicast] runs EVERY listener, isolating each from its siblings'
- *   failures: the infrastructure multicast's subscribers are independent of
- *   one another (they key their own state by [Link.id]), so one throwing must
- *   not cost another its notification.
- *
- * [rethrow] surfaces the first failure, with later ones attached as
- * suppressed, after every notification has run — so the handshake still fails
- * loudly exactly where it did before (the link stays registered, as it always
- * did at this point), just without abandoning the retraction on the way out.
- */
-private class NotificationFailures {
-    private var first: Throwable? = null
-
-    private fun record(failure: Throwable) {
-        first?.addSuppressed(failure) ?: run { first = failure }
-    }
-
-    inline fun guard(block: () -> Unit) {
-        try {
-            block()
-        } catch (failure: Throwable) {
-            record(failure)
-        }
-    }
-
-    fun multicast(listeners: List<(Link) -> Unit>, link: Link) {
-        listeners.forEach { listener -> guard { listener(link) } }
-    }
-
-    fun rethrow() {
-        first?.let { throw it }
-    }
-}
-
-/**
  * Runs the handshake shared by the inlet implementations:
  * target policies → source policies → cardinality (checked by the caller) →
  * onLink → install.
@@ -371,8 +326,8 @@ internal fun <Api> handshake(
         sourceLinking?.remove(link)
         support.remove(link)
         support.onUnlink(link)
-        support.onUnlinkListeners.forEach { it(link) }
-        sourceLinking?.onUnlinkListeners?.forEach { it(link) }
+        notifyAll(support.onUnlinkListeners, link)
+        sourceLinking?.let { notifyAll(it.onUnlinkListeners, link) }
     }
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
@@ -510,10 +465,14 @@ internal fun handshake(
             // Same establishing-identity retention as the in-process path: a
             // bridged link's peer is exactly the identity a rebind must re-present.
             support.register(link, request.identity)
+            // computenet-7u22s: same isolate-siblings-and-rethrow-first policy
+            // as the primary overload's multicasts (computenet-1rvt) — a
+            // throwing onUnlinkListeners subscriber must not cost another its
+            // notification just because this link is bridged.
             link.onUnlink { l ->
                 support.remove(l)
                 support.onUnlink(l)
-                support.onUnlinkListeners.forEach { it(l) }
+                notifyAll(support.onUnlinkListeners, l)
             }
             if (fireEdgeOpen) {
                 // Only topology-interested peers pay: crosses the wire iff the
@@ -521,7 +480,8 @@ internal fun handshake(
                 Protocols.sendDownstream(link, Protocols.TopologyOrder, EdgeOpen)
             }
             support.onLinked(link)
-            support.onLinkedListeners.forEach { it(link) }
+            // computenet-7u22s: same policy for onLinkedListeners.
+            notifyAll(support.onLinkedListeners, link)
             result
         }
 

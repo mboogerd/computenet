@@ -55,7 +55,7 @@ class LinkSupport {
      */
     fun fireLinked(link: Link) {
         onLinked(link)
-        onLinkedListeners.forEach { it(link) }
+        notifyAll(onLinkedListeners, link)
     }
 
     fun reject(request: LinkRequest): LinkResult.Rejected? =
@@ -107,4 +107,66 @@ class LinkSupport {
         establishedBy.remove(link.id)
         return active.remove(link.id) != null
     }
+}
+
+/**
+ * computenet-1rvt / computenet-7u22s: failure accounting for an
+ * infrastructure multicast over [onLinkedListeners]/[onUnlinkListeners].
+ * [guard] runs an ordered step, folding a throw into the accounting instead
+ * of letting it stop the notifications that follow; [multicast] isolates
+ * each listener in a list from its siblings' failures, since these
+ * subscribers key their own state by [Link.id] and are independent of one
+ * another; [rethrow] surfaces only the first failure (later ones attached as
+ * suppressed) once every notification that must run has run.
+ *
+ * `internal`, not file-private: computenet-1rvt introduced this for the
+ * primary handshake overload alone; computenet-7u22s widened it so every
+ * onLinkedListeners/onUnlinkListeners call site in `:kernel` shares one
+ * policy instead of the primary handshake keeping a private copy (see
+ * [notifyAll]).
+ */
+internal class NotificationFailures {
+    private var first: Throwable? = null
+
+    private fun record(failure: Throwable) {
+        first?.addSuppressed(failure) ?: run { first = failure }
+    }
+
+    inline fun guard(block: () -> Unit) {
+        try {
+            block()
+        } catch (failure: Throwable) {
+            record(failure)
+        }
+    }
+
+    fun multicast(listeners: List<(Link) -> Unit>, link: Link) {
+        listeners.forEach { listener -> guard { listener(link) } }
+    }
+
+    fun rethrow() {
+        first?.let { throw it }
+    }
+}
+
+/**
+ * computenet-7u22s: isolate every listener in [listeners] — an
+ * onLinkedListeners/onUnlinkListeners multicast — from its siblings'
+ * failures, then rethrow the first failure (later ones suppressed) once
+ * every listener has run. This is the policy computenet-1rvt established for
+ * the primary handshake overload's own multicasts, applied at every other
+ * site that fires this multicast: the bridged handshake overload (both its
+ * connect-time [LinkSupport.onLinkedListeners] and its teardown lambda's
+ * [LinkSupport.onUnlinkListeners]), the primary overload's own teardown
+ * lambda, [LinkSupport.fireLinked], `civictech.cell.port.streamTo`'s
+ * supersession and teardown sites, and
+ * `civictech.cell.evolve.Evolution.rebind`'s teardown lambda — so whether a
+ * throwing sibling infrastructure listener (CatchUp, AttentionSupport) is
+ * notified no longer depends on which path established or tore down the
+ * link.
+ */
+internal fun notifyAll(listeners: List<(Link) -> Unit>, link: Link) {
+    val failures = NotificationFailures()
+    failures.multicast(listeners, link)
+    failures.rethrow()
 }
