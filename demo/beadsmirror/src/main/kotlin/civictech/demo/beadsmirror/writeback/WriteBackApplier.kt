@@ -94,6 +94,20 @@ data class ApplyReport(
  * nothing will ever echo it back); a zero exit keeps the expectation
  * standing, whatever the read-back later decides -- a commit landed either
  * way.
+ *
+ * **Accepted limit: the pass-start-export window (computenet-uv65o clause
+ * 4).** [export] is called once at the start of [applyOnce] to build the
+ * whole pass's plan (and again per row only AFTER a successful import, to
+ * re-read it). [WriteBackPlanner.preflight] therefore runs against a
+ * snapshot that can already be stale by the time a given row's [importer]
+ * call happens: a local `bd` edit landing between the pass-start [export]
+ * and that row's import is silently overwritten, with no
+ * [WriteBackEvent.PreFlight] loss naming it. This is left open rather than
+ * closed by re-reading the destination immediately before each import: the
+ * pass is short, and closing it would trade one `export()` call per pass for
+ * one per imposed row -- a real cost for a window this narrow. If contention
+ * on a shared destination workspace makes the window matter in practice,
+ * revisit this trade-off rather than assuming it still holds.
  */
 class WriteBackApplier(
     private val export: () -> List<ExportRow>,
