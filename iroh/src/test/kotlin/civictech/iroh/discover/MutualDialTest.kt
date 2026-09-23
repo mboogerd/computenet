@@ -395,11 +395,24 @@ class MutualDialTest {
      *
      * `DiscoveredPeering.linksToSeed` does not seed that link at the larger
      * id, so the gate judges A's hello as the only link and admits it without
-     * naming a loser. The loser is left to the normal path: once released, B
-     * registers its outbound link and says hello on it, A closes it quietly as
-     * ITS inbound loser, and B's connection classifies the resulting down as
-     * the far side's tie-break close. That down is the one tie-break close B
-     * counts, and it is quiet.
+     * naming a loser. The loser is left to the normal path: A, peered on its
+     * OUTBOUND link by B's answer, closes its unadmitted inbound link — B's
+     * outbound loser — quietly as ITS tie-break loser. It does so while B's
+     * dial thread is still held (A's `CLOSE_LINK` precedes the release in
+     * every local run, computenet-4gbnc), so B's `LINK_DOWN` waits on B's
+     * reader for the dial's decision. Once released, B's connection classifies
+     * that down as the far side's tie-break close. That down is the one
+     * tie-break close B counts, and it is quiet.
+     *
+     * Known flake, a production race, not a test fault (computenet-2okbz): the
+     * release lets B's reader deliver that waiting down BEFORE B's dial thread
+     * has run `observer.onUp` in `IrohConnection.openLink`. `IrohNode.down`
+     * then finds no record for the link and tells no listener, so "B's
+     * outbound loser to go down" times out — while B's stderr still carries
+     * the "went down unadmitted ... tie-break loss" line, because `retire`
+     * did run. Seen once on build-test-fast (run 35804856334); the dial thread
+     * wins that race in every local run. Do not loosen the await to hide it:
+     * the listener missing a down is the defect.
      *
      * Mutation (computenet-07hpc): replace `linksToSeed`'s larger-id guard
      * with `if (true)`, seeding settled dials at both ids. B's gate then sees
@@ -464,10 +477,22 @@ class MutualDialTest {
                 release()
             }
 
-            // Released: the loser is closed by A, the node whose gate judged
-            // it with both links registered, and B learns of it at its down.
+            // Released: A has closed the loser (its unadmitted inbound link)
+            // from inside the window, and B learns of it at its down.
             rig.quiesce()
-            await("B's outbound loser to go down") { bDowns.any { it.first == dialFromB.link } }
+            try {
+                await("B's outbound loser to go down") { bDowns.any { it.first == dialFromB.link } }
+            } catch (e: AssertionError) {
+                // computenet-2okbz: the down reached B's connection before its
+                // dial thread published the link, and IrohNode dropped it. The
+                // signature is a registry that still lists the dead link.
+                fail(
+                    "B's listener never saw its outbound loser ${dialFromB.link} go down (computenet-2okbz if B " +
+                        "still lists it): B's links to A ${b.links(a.own)}, downs seen $bDowns, " +
+                        "B wrote ${rig.written.filter { it.first == "B" }.map { it.second }}",
+                    e,
+                )
+            }
             assertTrue(
                 rig.written.any { (who, m) -> who == "A" && m is HostMessage.CloseLink && m.link == aInbound },
                 "A closed the loser as its own inbound tie-break loser",
