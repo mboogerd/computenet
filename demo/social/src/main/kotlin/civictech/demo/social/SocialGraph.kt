@@ -240,15 +240,15 @@ class SocialGraph(
     }
 
     private fun requirePerson(id: Long) {
-        if (id !in personIds()) throw IllegalArgumentException("unknown person $id")
+        if (!isPerson(id)) throw IllegalArgumentException("unknown person $id")
     }
 
     private fun requireForum(id: Long) {
-        if (id !in forumIds()) throw IllegalArgumentException("unknown forum $id")
+        if (!isForum(id)) throw IllegalArgumentException("unknown forum $id")
     }
 
     private fun requireMessage(id: Long) {
-        if (id !in messageIds()) throw IllegalArgumentException("unknown message $id")
+        if (!isMessage(id)) throw IllegalArgumentException("unknown message $id")
     }
 
     /**
@@ -269,7 +269,7 @@ class SocialGraph(
         id: Long,
         write: () -> T,
     ): T {
-        val fresh = id !in family.keys()
+        val fresh = !family.contains(id)
         return try {
             write().also { unadmitted.remove(id) }
         } catch (failure: Throwable) {
@@ -413,6 +413,23 @@ class SocialGraph(
     fun personIds(): SortedSet<Long> = (graph.families.person.keys() - unadmittedPersons).toSortedSet()
     fun forumIds(): SortedSet<Long> = (graph.families.forum.keys() - unadmittedForums).toSortedSet()
     fun messageIds(): SortedSet<Long> = (graph.families.message.keys() - unadmittedMessages).toSortedSet()
+
+    /**
+     * Whether [id] is an admitted person — same predicate as `id in personIds()`
+     * (a live key whose creating write has not been suppressed), but O(1):
+     * [KeyedCells.contains] against the family plus a small-set membership
+     * check, never a copy of the whole family (`computenet-uedpp`, residual of
+     * `computenet-tbmhn`). [suppressUnwrittenKeys] keeps [unadmittedPersons]
+     * covering a restart's ghost keys, so this stays correct across a restart
+     * the same way [personIds] does.
+     */
+    fun isPerson(id: Long): Boolean = graph.families.person.contains(id) && id !in unadmittedPersons
+
+    /** [isPerson]'s counterpart for forums — see its KDoc. */
+    fun isForum(id: Long): Boolean = graph.families.forum.contains(id) && id !in unadmittedForums
+
+    /** [isPerson]'s counterpart for messages — see its KDoc. */
+    fun isMessage(id: Long): Boolean = graph.families.message.contains(id) && id !in unadmittedMessages
 
     fun personFacts(id: Long): Set<PersonFact> = personSinks[id]?.current() ?: emptySet()
     fun authored(id: Long): Set<Message> = authoredSinks[id]?.current() ?: emptySet()
