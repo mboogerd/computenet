@@ -533,6 +533,11 @@ class SocialComplexReadTest {
 
             probe.get("/fof?person=1&countryA=6&countryB=7&from=0").statusCode() shouldBe 400 // missing to
             probe.get("/fof?person=1&countryA=6&countryB=6&from=0&to=100").statusCode() shouldBe 400 // equal countries
+            // review repair (computenet-flfkm.4): the acceptance criterion also names
+            // `from > to` as a 400 case; nothing in this file asserted it, and a mutant
+            // that disabled SocialApp.kt's `if (from > to) throw Bad(...)` guard still
+            // passed every test (mutation observed 2026-09-23).
+            probe.get("/fof?person=1&countryA=6&countryB=7&from=100&to=0").statusCode() shouldBe 400 // from > to
         } finally {
             app.stop()
         }
