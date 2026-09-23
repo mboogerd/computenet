@@ -54,9 +54,13 @@ class DriveWindowContainmentTest {
      * in-flight first page returns: the stop rule never fires, `driveAdds == GUARD_ADDS`, and
      * the trial is still `WALK_OUTLASTS_DRIVE` and admissible. Reproduced by
      * `DriveWindowContainmentStarvedSampleTest`'s stall sample, which freezes its own JVM
-     * for 25-100 ms at random: 6 of 300 admissible trials ran the full 400-add budget, and
-     * 0 of 300 at this budget. Thread-level oversubscription does not produce it, because
-     * it deschedules the two threads independently (0 of 150 at 400 adds, 3x cores).
+     * for 25-100 ms at random. Measured 2026-09-23 on a 16-core darwin/arm64 host: at 400
+     * adds, 16 of 900 admissible trials (three runs: 6, 6, 4 of 300) ran the full budget; at
+     * this budget, 0 of 1,500 (five runs of 300), including returned trials whose first page
+     * came back 63 and 120 ms into the drive and were still cut. Thread-level
+     * oversubscription (3x cores in spinners) does not produce it, because it deschedules
+     * the two threads independently: 0 of 150 at 400 adds, 0 of 750 at this budget. A zero
+     * here bounds this host under these stalls, not a Linux runner.
      *
      * **The limit of the claim:** this is structural only up to a whole-process stall of
      * about one second inside a ~2 ms interval. A longer one still runs the budget out, and
