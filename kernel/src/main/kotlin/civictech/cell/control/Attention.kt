@@ -1,8 +1,10 @@
 package civictech.cell.control
 
 import civictech.cell.link.Link
+import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.port.Port
+import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.protocol.ProtocolSupport
 import civictech.gen.wire.Contract
@@ -43,36 +45,57 @@ fun interface AttentionProtocol { fun attention(message: Attention) }
  * "the attention frontier is the current downstream link set" — garbage
  * collecting the link's contribution; any subsequent in-flight update for a
  * removed link keys a fresh slot rather than resurrecting the retracted one.
+ *
+ * [supersede] is the third operation (computenet-3e35): a relink of one edge
+ * hands that edge's slot from the dead link id to the replacement's in ONE
+ * step, so no fold ever sees the edge absent (zero slots — computenet-dmkp) or
+ * present twice (two slots — visible to a counting aggregator such as
+ * [AttentionAggregator.Sum]). Every operation, and the [levels] snapshot, runs
+ * under one monitor, so a concurrent fold observes the frontier before or
+ * after a swap, never between its halves.
  */
 class AttentionFrontier {
     private data class Slot(val level: Float, val version: Long)
 
-    private val slots = ConcurrentHashMap<UUID, Slot>()
+    private val slots = HashMap<UUID, Slot>()
 
-    /** Current per-link levels for the aggregator's fold. */
-    val levels: Collection<Float> get() = slots.values.map { it.level }
+    /** Current per-link levels for the aggregator's fold (a snapshot). */
+    val levels: Collection<Float> get() = synchronized(slots) { slots.values.map { it.level } }
 
     /** Frontier membership: does this link currently hold a slot? */
-    fun contains(link: UUID): Boolean = slots.containsKey(link)
+    fun contains(link: UUID): Boolean = synchronized(slots) { slots.containsKey(link) }
 
     /**
      * LWW apply (93 I-4 rule 2): applies iff [version] is newer than the
      * slot's stored version, or no slot exists yet. Returns `true` iff the
      * slot changed, so callers only re-fold on a genuine change.
      */
-    fun onUpdate(link: UUID, level: Float, version: Long): Boolean {
-        var applied = false
-        slots.compute(link) { _, existing ->
-            if (existing == null || VersionMinter.isNewer(version, existing.version)) {
-                applied = true
-                Slot(level, version)
-            } else existing
-        }
-        return applied
+    fun onUpdate(link: UUID, level: Float, version: Long): Boolean = synchronized(slots) {
+        val existing = slots[link]
+        if (existing == null || VersionMinter.isNewer(version, existing.version)) {
+            slots[link] = Slot(level, version)
+            true
+        } else false
     }
 
     /** Retraction (93 I-4 rule 3): removes the slot. Returns `true` iff one existed. */
-    fun onUnlink(link: UUID): Boolean = slots.remove(link) != null
+    fun onUnlink(link: UUID): Boolean = synchronized(slots) { slots.remove(link) != null }
+
+    /**
+     * Atomic rekey (computenet-3e35): retract [superseded]'s slot and apply the
+     * first update of its [replacement] as one step. The replacement's slot is
+     * FRESH — it is a new link, so its first update applies whatever its
+     * [version] (the same rule [onUpdate] gives a link with no slot); the
+     * superseded slot's version is not carried over. Returns `true` iff the
+     * superseded slot existed; `false` leaves the frontier untouched, so the
+     * caller falls back to an ordinary [onUpdate].
+     */
+    fun supersede(superseded: UUID, replacement: UUID, level: Float, version: Long): Boolean =
+        synchronized(slots) {
+            if (slots.remove(superseded) == null) return false
+            slots[replacement] = Slot(level, version)
+            true
+        }
 }
 
 /**
@@ -231,6 +254,34 @@ class AttentionSupport private constructor(owner: Any) {
     /** Per-link LWW slot state (93 I-4 Candidate C, G-58 core): see [AttentionFrontier]. */
     private val frontier = AttentionFrontier()
 
+    /**
+     * The edge each frontier slot's link describes, `(from, to, role)` — the
+     * same triple `Handshake.evictSuperseded` treats as one attachment
+     * (computenet-3e35). Lives beside [frontier] for exactly as long as the
+     * slot does. It is how the outlet face recognises a relink: the
+     * replacement's first report finds a slot whose link has the replacement's
+     * triple but is no longer in the port's link set, and takes that slot over
+     * atomically ([AttentionFrontier.supersede]).
+     */
+    private data class Edge(val from: PortRef, val to: PortRef, val role: LinkRole)
+
+    private val slotEdges = ConcurrentHashMap<UUID, Edge>()
+
+    /**
+     * The slot [link]'s first report should take over, if [link] replaces a
+     * superseded record of the same edge on [port]: a slot keyed by another id
+     * with the same triple whose link is gone from [port]'s link set. The
+     * liveness check is what keeps this to supersession — the primary
+     * handshake cannot leave two live records over one triple, but a live
+     * record must never lose its slot to a sibling whatever registered it.
+     */
+    private fun supersededSlot(port: Linked, link: Link, edge: Edge): UUID? {
+        val candidates = slotEdges.entries.filter { (id, e) -> id != link.id && e == edge }
+        if (candidates.isEmpty()) return null
+        val live = port.linking.links.mapTo(HashSet()) { it.id }
+        return candidates.firstOrNull { it.key !in live }?.key
+    }
+
     /** Mints this cell's own outgoing [Attention.version] sequence (G-58 core). */
     private val versionMinter = VersionMinter()
 
@@ -295,9 +346,24 @@ class AttentionSupport private constructor(owner: Any) {
             ProtocolSupport.of(port as Port).handle(Protocols.Attention) { link, message ->
                 if (link.fromPort === port) {
                     val update = message as Attention
-                    // idempotency law (93 I-4 rule 2): a duplicate/stale version is
-                    // absorbed by the LWW slot and must not trigger a re-signal.
-                    if (frontier.onUpdate(link.id, update.level, update.version)) signal()
+                    val edge = Edge(link.from, link.to, link.role)
+                    // computenet-3e35: a relink's first report takes the superseded
+                    // record's slot over in one step, so the fold goes old → new with
+                    // no doubled (or empty) intermediate. The superseded record's
+                    // deferred retraction (computenet-dmkp) then finds no slot.
+                    val superseded = if (frontier.contains(link.id)) null else supersededSlot(port, link, edge)
+                    val changed = if (superseded != null && frontier.supersede(superseded, link.id, update.level, update.version)) {
+                        slotEdges.remove(superseded)
+                        true
+                    } else {
+                        // idempotency law (93 I-4 rule 2): a duplicate/stale version is
+                        // absorbed by the LWW slot and must not trigger a re-signal.
+                        frontier.onUpdate(link.id, update.level, update.version)
+                    }
+                    if (changed) {
+                        slotEdges[link.id] = edge
+                        signal()
+                    }
                 }
             }
             port.linking.onUnlinkListeners += { link ->
@@ -307,7 +373,13 @@ class AttentionSupport private constructor(owner: Any) {
                 // the same edge (`Handshake.evictSuperseded`), which is not an edge
                 // close — but the `link.id` this slot is keyed by does die there, so the
                 // slot must be retracted or the fold keeps one stale level per relink.
-                if (link.fromPort === port && frontier.onUnlink(link.id)) signal()
+                // Since computenet-3e35 that retraction is usually a no-op: the
+                // replacement's first report already took the slot over. It still
+                // matters when no report came (the replacement's side never spoke).
+                if (link.fromPort === port) {
+                    slotEdges.remove(link.id)
+                    if (frontier.onUnlink(link.id)) signal()
+                }
             }
             // inlet face: a fresh inbound link learns our current band at once —
             // scattered (PN-19): a link outside the interest scope learns NONE.
