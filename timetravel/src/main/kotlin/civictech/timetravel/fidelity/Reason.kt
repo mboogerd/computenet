@@ -10,8 +10,7 @@ package civictech.timetravel.fidelity
  * `RECORD_UNDESERIALIZABLE` and `FRAME_UNPARSEABLE` go beyond the feature's original
  * D3 list: without them, those two failure modes would have no reason to carry and
  * would have to be dropped silently, which the epic's honesty rule ([TTD1-34])
- * forbids. F3 (computenet-kxex2) extends this enum with reconstruction reasons; do
- * not add those here.
+ * forbids. F3 (computenet-kxex2) extended this enum with reconstruction reasons below.
  */
 enum class Reason {
     /** No descriptor was found for a record's declared type — it cannot be decoded at all. */
@@ -37,4 +36,34 @@ enum class Reason {
 
     /** The record's type tag is not one this reader recognizes. */
     UNKNOWN_RECORD,
+
+    /** The reconstructed class is [civictech.cell.evolve.Effectful] — its reconstruction is not the run. */
+    EFFECTFUL_CELL,
+
+    /** The reconstructed class is known to hold state the durability mechanism does not capture. */
+    VOLATILE_CELL,
+
+    /** The reconstructed class is not [civictech.cell.Stateful], so there is nothing to reconstruct from. */
+    NOT_STATEFUL,
+
+    /** The class is a source known to emit nondeterministically (wall-clock, random, external I/O). */
+    NONDETERMINISTIC_SOURCE,
+
+    /** Determinism could not be established either way for this class. */
+    UNKNOWN_DETERMINISM,
+
+    /** The reconstructed graph shape does not match the graph the journal was recorded against. */
+    GRAPH_MISMATCH,
+
+    /** The graph source needed to reconstruct is incomplete. */
+    GRAPH_SOURCE_INCOMPLETE,
+
+    /** Recovery of the underlying state did not fully complete. */
+    RECOVERY_INCOMPLETE,
+
+    /** The record needed for this position was compacted away. */
+    COMPACTED_AWAY,
+
+    /** No graph source was available to reconstruct against. */
+    NO_GRAPH_SOURCE,
 }
