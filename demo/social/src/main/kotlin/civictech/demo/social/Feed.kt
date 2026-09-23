@@ -41,6 +41,14 @@
  *   written without doing one of the two, and `SocialFeedFrontierTest` greps
  *   this source for both.
  *
+ * **IC2 ordering (`[SOC1-FEED-09/10]`, feature `computenet-flfkm`, flfkm-D1).**
+ * [board] with a limit orders the accumulated set demo-side —
+ * `creationDate` descending, ties by message id descending — and applies an
+ * optional `before` cutoff and the limit, entirely over the per-leg pages
+ * this file already retains; no kernel operator is involved. The missing
+ * kernel-side ordered top-K / ordered key-range scan this stands in for is
+ * the KAGG-R gap `[SOC1-FIND-02]` records (task `computenet-flfkm.6`).
+ *
  * **8eb53-D1 — what a since-page carries.** `SetCell.readBounded` returns
  * whole `SetStateEntry(element, addTags, delTags)` records, but with `since`
  * set each tag set holds only the tags strictly beyond `since` for their
@@ -128,7 +136,7 @@ data class PullReport(val legs: Map<CellRef, LegOutcome>)
  */
 class FeedSession(
     val viewer: Long,
-    private val scope: Interest.Ranges,
+    val scope: Interest.Ranges,
     private val families: SnbPipeline.Families,
     private val registry: LocationRegistry,
     private val reader: BoundedReader,
@@ -146,6 +154,24 @@ class FeedSession(
 
     /** The union of every answered leg's slice so far (a copy). */
     fun board(): Set<Message> = synchronized(state) { messages.toSet() }
+
+    /**
+     * IC2 (`[SOC1-FEED-09]`): the accumulated set, filtered to
+     * `creationDate < before` when [before] is given, ordered `creationDate`
+     * descending then message id descending, first [limit]. Demo-side over
+     * the per-leg pages already retained by [pull] (`[SOC1-FEED-10]`); no
+     * kernel ordering.
+     */
+    fun board(limit: Int, before: Long? = null): List<Message> {
+        require(limit > 0) { "limit must be positive, got $limit" }
+        return synchronized(state) {
+            messages.asSequence()
+                .filter { before == null || it.creationDate < before }
+                .sortedWith(compareByDescending<Message> { it.creationDate }.thenByDescending { it.id })
+                .take(limit)
+                .toList()
+        }
+    }
 
     /** The frontier retained per leg ref (a copy) — one entry per leg that has ever answered with one. */
     fun frontiers(): Map<CellRef, TagFrontier> = synchronized(state) { retained.toMap() }
