@@ -585,28 +585,35 @@ class IrohNodeTest {
             fake.send(SidecarMessage.PeerAdded(peer))
             val first = fake.nextDial()
             fake.send(SidecarMessage.LinkUp(first.link, peer, DIRECTION_OUTBOUND))
-            (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")).getOrThrow()
-            assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello")
+            val connection = (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")).getOrThrow()
+            // withNode closes the client, not the node: without this the loop,
+            // whose backoff is zero, spins on "client is closed" for the rest
+            // of the test JVM.
+            try {
+                assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello")
 
-            // An ordinary unplanned drop starts the loop; the loop's dial is
-            // the one whose down overtakes its registration.
-            val hold = civictech.iroh.discover.RegistrationHold(node)
-            fake.send(SidecarMessage.LinkDown(first.link, "transport drop"))
-            val second = fake.nextDial()
-            fake.send(SidecarMessage.LinkUp(second.link, peer, DIRECTION_OUTBOUND))
-            assertEquals(second.link, hold.awaitHeld(), "the loop's dialling thread is held with the link in hand")
-            fake.send(SidecarMessage.LinkDown(second.link, "closed within microseconds of LINK_UP"))
-            // A marker behind the LINK_DOWN on the one reader thread: once the
-            // node holds it, the reader has dispatched the down, `retire` included.
-            val marker = nodeId()
-            fake.presentInbound(90, marker)
-            await("the reader to dispatch past the LINK_DOWN") { node.links(marker).isNotEmpty() }
+                // An ordinary unplanned drop starts the loop; the loop's dial is
+                // the one whose down overtakes its registration.
+                val hold = civictech.iroh.discover.RegistrationHold(node)
+                fake.send(SidecarMessage.LinkDown(first.link, "transport drop"))
+                val second = fake.nextDial()
+                fake.send(SidecarMessage.LinkUp(second.link, peer, DIRECTION_OUTBOUND))
+                assertEquals(second.link, hold.awaitHeld(), "the loop's dialling thread is held with the link in hand")
+                fake.send(SidecarMessage.LinkDown(second.link, "closed within microseconds of LINK_UP"))
+                // A marker behind the LINK_DOWN on the one reader thread: once the
+                // node holds it, the reader has dispatched the down, `retire` included.
+                val marker = nodeId()
+                fake.presentInbound(90, marker)
+                await("the reader to dispatch past the LINK_DOWN") { node.links(marker).isNotEmpty() }
 
-            hold.release()
-            val third = fake.nextDial()
-            assertContentEquals(peer, third.peerId, "the loop re-dials the configured peer")
-            assertTrue(third.link != second.link, "as a new link")
-            assertTrue(node.links(peer).none { it.linkId == second.link }, "and the node holds no dead link for it")
+                hold.release()
+                val third = fake.nextDial()
+                assertContentEquals(peer, third.peerId, "the loop re-dials the configured peer")
+                assertTrue(third.link != second.link, "as a new link")
+                assertTrue(node.links(peer).none { it.linkId == second.link }, "and the node holds no dead link for it")
+            } finally {
+                connection.close()
+            }
         }
     }
 
