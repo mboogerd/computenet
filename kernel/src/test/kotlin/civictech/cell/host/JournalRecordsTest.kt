@@ -95,6 +95,15 @@ class JournalRecordsTest {
     }
 
     @Test
+    fun `Frame equality is by payload content, not array identity`() {
+        val a = JournalRecords.decode(byteArrayOf(1, 7, 8))
+        val b = JournalRecords.decode(byteArrayOf(1, 7, 8))
+        a shouldBe b
+        a.hashCode() shouldBe b.hashCode()
+        (a == JournalRecords.decode(byteArrayOf(1, 7, 9))) shouldBe false
+    }
+
+    @Test
     fun `an unlanded leading byte decodes to Unknown`() {
         JournalRecords.decode(byteArrayOf(9, 1, 2)) shouldBe DecodedJournalRecord.Unknown(9)
     }
