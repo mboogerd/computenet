@@ -199,7 +199,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
      * continues at the head of `"groups"` ([OperatorPaging], Decision B).
      *
      * **Decision G — an unbounded accumulator rides whole.** For the
-     * non-invertible aggregator family (`minOf`/`maxOf`/`topK`/`collectToSet`/`countDistinct`,
+     * non-invertible aggregator family (`minOf`/`maxOf`/`topK`/`topKBy`/`collectToSet`/`countDistinct`,
      * `[24-OP-GROUPBY-04]`) the accumulator *is* the group's full support
      * multiset — required, not incidental — so one [GroupEntry] can be
      * arbitrarily large. It is emitted whole and [StateRead.byteBudget], which
