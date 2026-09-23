@@ -15,6 +15,7 @@ import civictech.cell.port.registerPort
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 
 /**
@@ -250,6 +251,80 @@ class LinkSupersessionTest {
 
         transitions shouldBe emptyList()
         sourceAttention.band shouldBe AttentionBand.LOW
+    }
+
+    // ---- computenet-1rvt: a throwing onLinkedListener must not strand the superseded slot ----
+
+    private class ListenerBoom : RuntimeException("onLinkedListener failure (computenet-1rvt)")
+
+    /**
+     * computenet-1rvt — the throwing listener runs AFTER `AttentionSupport`'s
+     * inlet-face report (the order a listener added after spawn gets). The
+     * replacement's slot is therefore established before the throw, and the
+     * superseded record's retraction multicast MUST still run: the recording
+     * subscriber is the id-keyed witness that it did. Before the guard, the
+     * throw skipped the deferred multicast entirely, so no retraction was
+     * observed and (before computenet-3e35) the frontier would keep both slots —
+     * `Sum` over 0.25 + 0.25 reads NORMAL.
+     */
+    @Test
+    fun `a throwing onLinkedListener after the attention report still retracts the superseded record`() {
+        val source = Stage()
+        val sink = Stage()
+        val sourceAttention = AttentionSupport.of(source)
+        sourceAttention.aggregator = AttentionAggregator.Sum
+        AttentionSupport.of(sink).attend(0.2f) // LOW; reports 0.25 upstream
+
+        val first = (linkStages(source, sink) as LinkResult.Connected).link
+        val retracted = mutableListOf<UUID>()
+        source.outlet.linking.onUnlinkListeners += { retracted += it.id }
+        sink.inlet.linking.onLinkedListeners += { throw ListenerBoom() }
+
+        assertThrows<ListenerBoom> { linkStages(source, sink) }
+
+        retracted shouldBe listOf(first.id)
+        source.outlet.linking.links.size shouldBe 1
+        // exactly one 0.25 slot: zero would be neutral NORMAL, two would be 0.5 = NORMAL
+        sourceAttention.band shouldBe AttentionBand.LOW
+    }
+
+    /**
+     * computenet-1rvt — the throwing listener runs BEFORE `AttentionSupport`'s
+     * report. Unguarded, the throw skipped both the report and the
+     * retraction, so the superseded record's slot outlived its link under a
+     * dead id: unlinking the live link afterwards retracted nothing, and the
+     * source stayed HIGH on a contribution from an edge that no longer exists
+     * (measured before the guard: `expected:<NORMAL> but was:<HIGH>`). The
+     * guard isolates each listener, so the report still lands and takes the
+     * slot over (no band flap: a bare try/finally that only ran the retraction
+     * would empty the frontier and flap to NORMAL), the retraction still runs,
+     * and the failure is rethrown afterwards.
+     */
+    @Test
+    fun `a throwing onLinkedListener before the attention report leaves one live slot`() {
+        val source = Stage()
+        val sink = Stage()
+        val sourceAttention = AttentionSupport.of(source)
+        sourceAttention.aggregator = AttentionAggregator.Sum
+        AttentionSupport.of(sink).attend(1f) // HIGH; reports 1.0 upstream
+
+        val first = (linkStages(source, sink) as LinkResult.Connected).link
+        sourceAttention.band shouldBe AttentionBand.HIGH
+        val retracted = mutableListOf<UUID>()
+        source.outlet.linking.onUnlinkListeners += { retracted += it.id }
+        sink.inlet.linking.onLinkedListeners.add(0) { throw ListenerBoom() }
+
+        val transitions = mutableListOf<AttentionBand>()
+        sourceAttention.onBandChange { transitions += it }
+
+        assertThrows<ListenerBoom> { linkStages(source, sink) }
+
+        retracted shouldBe listOf(first.id)
+        transitions shouldBe emptyList() // the replacement reported: never empty, never doubled
+
+        // the one slot left is the LIVE link's: closing that edge empties the frontier
+        source.outlet.linking.links.single().unlink()
+        sourceAttention.band shouldBe AttentionBand.NORMAL
     }
 
     @Test
