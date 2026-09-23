@@ -373,6 +373,34 @@ class BatchedDispatchTest {
         batchedAccounting shouldBe unbatchedAccounting
     }
 
+    /**
+     * The bound is a bound: one data-band task dispatches at most `dispatchBatch`
+     * staged invocations, and a backlog of 50 at a bound of 8 takes exactly
+     * ceil(50 / 8) = 7 tasks (one armed at staging, six re-arms). BS-20's task
+     * count bracket cannot see an unbounded batch, because its interleaved
+     * steps keep every batch small.
+     */
+    @Test
+    fun `one data-band task dispatches at most dispatchBatch invocations`() {
+        val controller = SimulationController()
+        val scheduler = CountingScheduler(controller.scheduler())
+        val host = ManagedHost(scheduler = scheduler, dispatchBatch = 8)
+        val log = mutableListOf<String>()
+        val sink = LogSink("sink", log)
+        host.managementInlet.call.spawn(sink)
+        controller.runToIdle()
+        val tasksBefore = scheduler.dataBandTasks
+
+        repeat(50) { host.enqueueHostedInvocation(sinkInvocation(sink.ref, "v$it")) }
+        controller.step()
+        log.size shouldBe 8
+
+        controller.runToIdle()
+        log.size shouldBe 50
+        host.stagedWorkTotal() shouldBe 0
+        scheduler.dataBandTasks - tasksBefore shouldBe 7
+    }
+
     // ---- BS-22 --------------------------------------------------------------
 
     @Test
