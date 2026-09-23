@@ -450,6 +450,57 @@ class SocialCrashRestartTest {
         }
     }
 
+    /**
+     * The complementary change-broadcast path to the previous test
+     * (computenet-54fv1, residual of computenet-v10ou.1's feature review):
+     * `after start a write to a preloaded cell ...` above exercises the
+     * RETRO-attach loop in [SocialGraph.onChange], where the sink for the two
+     * written persons already existed before `start()`. Here the write
+     * creates a brand-new person — no `personSinks` entry exists for it
+     * before this POST — so its sink is registered through the forward
+     * [SocialGraph.attach] helper instead. Mutating `attach` to return the
+     * sink without registering `it.onChange { fireChange() }` must fail this
+     * test's assertion while leaving the retro-attach test green.
+     *
+     * Deliberately started with NO `source`: [SocialGraph.onChange]'s retro-
+     * attach loop (fired once, in `start()`) also gives every ALREADY-
+     * existing sink an onChange catch-up callback, which the sink interface
+     * invokes immediately — off-thread, on that sink's own single-thread
+     * dispatcher ([civictech.cell.observe.ObserveCell]). With a preloaded
+     * source that is dozens of sinks' worth of async catch-up noise landing
+     * moments after `start()`, each one re-broadcasting the FULL current
+     * state; under load one can be delayed past this test's own write and
+     * accidentally carry the new person, passing even with `attach` mutated
+     * (confirmed empirically: reliably red run alone, falsely green run
+     * right after the sibling retro-attach test in the same class). With no
+     * source, `personSinks` is empty when `start()` registers the retro-
+     * attach loop, so there is no pre-existing sink to fire that noise, and
+     * the only broadcast this test can ever observe is the one the new
+     * person's own (forward-attached) sink produces.
+     */
+    @Test
+    fun `after start a create for a brand-new person reaches SSE subscribers as a change frame`() {
+        val app = SocialApp(port = 0).start()
+        try {
+            val newId = 1L
+            assertTrue(newId !in app.graph.personIds(), "the new id must not already exist: $newId")
+            val url = "http://localhost:${app.boundPort}"
+            val posted = AtomicBoolean(false)
+            val frame = awaitSseData("$url/events", timeoutMs = 20_000) { line ->
+                if (posted.compareAndSet(false, true)) {
+                    // The first frame is the catch-up; write only once subscribed.
+                    Thread { HttpProbe(url).use { it.post("action=person&id=$newId&firstName=New&lastName=Person") } }.start()
+                    false
+                } else {
+                    line.contains("\"id\":$newId,")
+                }
+            }
+            assertTrue(frame.contains("\"id\":$newId,"), "change frame carries new person $newId")
+        } finally {
+            app.stop()
+        }
+    }
+
     /** The `knows` ids of person [id] in one `/state` JSON frame (jo2jk-D6 shape). */
     private fun knowsOf(frame: String, id: Long): List<Long> =
         Regex("""\{"id":$id,"name":"[^"]*","knows":\[([0-9,]*)]""").find(frame)
