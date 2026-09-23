@@ -93,6 +93,29 @@ class JournalFormatMismatch(
  * revisit — and it will be revisitable, because by then the version needed to
  * dispatch a migration will already be on disk.
  */
+/**
+ * The durability guarantee a [Journal] instance offers (`[KBLK-01]`,
+ * `[24-DUR-01]`).
+ *
+ * Not named `VOLATILE`: `[24-DUR-01]` already uses "volatile" for
+ * `journalFor(cellRef) == null` — a cell never journaled at all. An
+ * [IN_MEMORY] journal IS journaled and replayable within the process that
+ * wrote it; it just does not survive that process ending.
+ */
+enum class DurabilityClass {
+    /** Every [Journal.append] is on stable storage before it returns. */
+    SYNCHRONOUS,
+
+    /**
+     * Appended records become durable within a bound the instance declares;
+     * the loss window on crash is at most that many acknowledged records.
+     */
+    BATCHED,
+
+    /** Survives nothing beyond the process that wrote it. */
+    IN_MEMORY,
+}
+
 interface Journal {
     /**
      * The format generation this journal speaks: written into what it writes,
@@ -101,6 +124,18 @@ interface Journal {
      * build at another version.
      */
     val formatVersion: Int get() = JOURNAL_FORMAT_VERSION
+
+    /**
+     * The durability guarantee this instance offers, per [DurabilityClass]
+     * (`[KBLK-01]`, `[24-DUR-01]`). Abstract and undefaulted on purpose: a
+     * default would let an implementation silently inherit a guarantee it does
+     * not actually provide, which is exactly what `[KBLK-05]`'s bound forbids.
+     * Every implementor — including a wrapper, which forwards the wrapped
+     * journal's [durability] rather than picking one of its own — must declare
+     * this as a constant readable on a fresh instance, without appending to or
+     * replaying the log.
+     */
+    val durability: DurabilityClass
 
     fun append(record: ByteArray)
 
@@ -119,6 +154,8 @@ interface Journal {
  * is unreachable here by construction.
  */
 class InMemoryJournal : Journal {
+    override val durability: DurabilityClass = DurabilityClass.IN_MEMORY
+
     private val records = mutableListOf<ByteArray>()
 
     @Synchronized
@@ -254,6 +291,8 @@ class FileJournal(
     private val file: File,
     override val formatVersion: Int = JOURNAL_FORMAT_VERSION,
 ) : Journal {
+
+    override val durability: DurabilityClass = DurabilityClass.SYNCHRONOUS
 
     companion object {
         /** `CNJL` — the marker that distinguishes a versioned journal from a pre-versioning one. */
