@@ -1,0 +1,43 @@
+# Concord corpus scenario (V1C-CONCORD). Canonical schema shape — see concord/schema/scenario.md.
+# Duplicate-retraction rule for a non-count aggregator: two live elements that
+# project to the same maximum are distinct set elements (they differ in a
+# third, unprojected component), and retracting one of them must not disturb
+# the group's reported maximum while the other duplicate is still live. Only
+# the second retraction — the one that removes the last element still
+# carrying the maximum — may change the view. The checks vocabulary asserts
+# only at quiescence (concord/schema/scenario.md `checks`), so this scenario
+# has no way to assert the intermediate view after the first retraction; the
+# narrative states that step, the script performs it, and only the final
+# state after the second retraction is checked. A third element sharing
+# neither the key nor the maximum is included so the group survives to a
+# well-defined final view rather than dying (group death on last retraction
+# is already covered by 24-OP-GROUPBY-02).
+id: 24-OP-GROUPBY-03
+title: Group-by with a non-count aggregator is unmoved by retracting one of two elements sharing the current maximum
+covers: [24-AGG-01, 24-OP-GROUPBY-04]
+profile: core
+kind: example
+narrative:
+  given: a set source of [key, value, tiebreak] triples grouped by key with a max aggregator, observed through a count view, where two live triples share both key and value (the group's current maximum) and differ only in the third component
+  when: one of the two maximum-holding triples is retracted
+  then: the group's reported maximum is unchanged, because the other triple still carries that value — the view only moves once the last triple carrying the maximum is gone
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: g, type: group-by, fn: key-of, agg: max}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: g}
+    - {from: g, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [a, 9, 1]}
+  - {type: apply, on: a, op: add, value: [a, 9, 2]}
+  - {type: apply, on: a, op: add, value: [a, 4, 3]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: remove, value: [a, 9, 1]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: remove, value: [a, 9, 2]}
+checks:
+  - {type: final-view, view: v, equals: {a: 4}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}
