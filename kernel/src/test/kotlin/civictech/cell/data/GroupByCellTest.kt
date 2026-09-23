@@ -296,11 +296,11 @@ class GroupByCellTest {
                 } else {
                     writers[w].inlet.call.remove(element); held[w] -= element
                 }
+                // every call returns quiescent (synchronous in-process links), so check each step
+                val batch = held.flatten().toSet().groupBy(::key)
+                    .mapValues { (_, es) -> es.map(::midVal).toSet().size.toLong() }
+                assertEquals(batch, mapFold(out), "grouped countDistinct diverged from batch on seed $seed, step $it")
             }
-
-            val batch = held.flatten().toSet().groupBy(::key)
-                .mapValues { (_, es) -> es.map(::midVal).toSet().size.toLong() }
-            assertEquals(batch, mapFold(out), "grouped countDistinct diverged from batch on seed $seed")
         }
     }
 
