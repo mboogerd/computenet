@@ -404,7 +404,7 @@ class EchoSuppressionTwoNodeTest {
      * `cn_echo`, which the gate correctly calls an echo. Direct probe,
      * darwin/arm64, bd 1.1.2 / dolt 2.2.3, load 7-12, reader loops running:
      * the edit was lost in 2 of 32 update-vs-import races, and one
-     * committer absorbed the other's write in 3 of 40 races where the
+     * committer absorbed the other's write in 3 of 42 races where the
      * import touched a different issue (scripts on computenet-oagbm).
      *
      * **What counts as carrying the edit:** a commit that is new since this
@@ -468,7 +468,9 @@ class EchoSuppressionTwoNodeTest {
      * the imposition at 9), so the dialer wins. A lost first attempt costs the
      * listener one extra commit, the applier's revert. The retry then mints
      * at height 10, which ties the dialer's genuine edit, and the tie goes to
-     * the listener's source id. Measured: 1 red in 32 loaded iterations,
+     * whichever source id sorts higher. Each id derives from its run's temp
+     * workspace name, so that is the listener's in some runs (forced re-issue
+     * with the padding disabled: 2 red of 5). Measured: 1 red in 32 loaded iterations,
      * `winner.sourceId` was the listener's, and it was the iteration whose
      * listener edit had been re-issued.
      *
