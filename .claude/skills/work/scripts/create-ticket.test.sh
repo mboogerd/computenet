@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "23 passed, 0 failed".
+# Expect "25 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -179,9 +179,12 @@ out=$("$SCRIPT" --description-file x 2>&1); st=$?
 
 # 322dl: the --flag=value spelling bd create uses is accepted, not rejected.
 fixture
-id=$("$SCRIPT" --type=bug --title="t t" --parent=computenet-wpvy 2>/dev/null); st=$?
+id=$("$SCRIPT" --type=bug --title="a=b c" --parent=computenet-wpvy --label=x 2>/dev/null); st=$?
 [ "$st" = 0 ] && [[ "$id" =~ ^computenet-[a-z0-9.]+$ ]] \
-  && ok "--flag=value creates like --flag value" || bad "= form: exit=$st id=$(printf %q "$id")"
+  && grep -q '^create a=b c --type=bug ' "$BD_LOG" && grep -q -- "--label=x" "$BD_LOG" \
+  && grep -q -- "update computenet-h4sh --parent=computenet-wpvy" "$BD_LOG" \
+  && ok "--flag=value creates like --flag value, splitting at the FIRST =" \
+  || bad "= form: exit=$st id=$(printf %q "$id") log=$(cat "$BD_LOG")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
