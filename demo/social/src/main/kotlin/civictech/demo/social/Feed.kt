@@ -41,6 +41,14 @@
  *   written without doing one of the two, and `SocialFeedFrontierTest` greps
  *   this source for both.
  *
+ * **IC2 ordering (`[SOC1-FEED-09/10]`, feature `computenet-flfkm`, flfkm-D1).**
+ * [board] with a limit orders the accumulated set demo-side —
+ * `creationDate` descending, ties by message id descending — and applies an
+ * optional `before` cutoff and the limit, entirely over the per-leg pages
+ * this file already retains; no kernel operator is involved. The missing
+ * kernel-side ordered top-K / ordered key-range scan this stands in for is
+ * the KAGG-R gap `[SOC1-FIND-02]` records (task `computenet-flfkm.6`).
+ *
  * **8eb53-D1 — what a since-page carries.** `SetCell.readBounded` returns
  * whole `SetStateEntry(element, addTags, delTags)` records, but with `since`
  * set each tag set holds only the tags strictly beyond `since` for their
@@ -124,11 +132,15 @@ data class PullReport(val legs: Map<CellRef, LegOutcome>)
  * and they are not in the [PullReport] (there is no ref to key them by); they
  * join the pull that follows their first post, reading from `since = null`.
  *
- * Not reentrant: one caller, one pull at a time.
+ * Not reentrant: one caller, one pull at a time — [pull] itself. A caller
+ * that cannot guarantee single-flight callers of its own (SocialApp's
+ * per-viewer cache, `computenet-1iz73`) must go through [pullShared]
+ * instead, which shares one in-flight pull's future across overlapping
+ * callers rather than racing [pull]'s reentrancy check.
  */
 class FeedSession(
     val viewer: Long,
-    private val scope: Interest.Ranges,
+    val scope: Interest.Ranges,
     private val families: SnbPipeline.Families,
     private val registry: LocationRegistry,
     private val reader: BoundedReader,
@@ -144,8 +156,30 @@ class FeedSession(
     private val retained = HashMap<CellRef, TagFrontier>()
     private val inFlight = AtomicBoolean(false)
 
+    /** Guards [currentPull]: read-and-maybe-start-[pull] must be one atomic step. */
+    private val pullLock = Any()
+    private var currentPull: CompletableFuture<PullReport>? = null
+
     /** The union of every answered leg's slice so far (a copy). */
     fun board(): Set<Message> = synchronized(state) { messages.toSet() }
+
+    /**
+     * IC2 (`[SOC1-FEED-09]`): the accumulated set, filtered to
+     * `creationDate < before` when [before] is given, ordered `creationDate`
+     * descending then message id descending, first [limit]. Demo-side over
+     * the per-leg pages already retained by [pull] (`[SOC1-FEED-10]`); no
+     * kernel ordering.
+     */
+    fun board(limit: Int, before: Long? = null): List<Message> {
+        require(limit > 0) { "limit must be positive, got $limit" }
+        return synchronized(state) {
+            messages.asSequence()
+                .filter { before == null || it.creationDate < before }
+                .sortedWith(compareByDescending<Message> { it.creationDate }.thenByDescending { it.id })
+                .take(limit)
+                .toList()
+        }
+    }
 
     /** The frontier retained per leg ref (a copy) — one entry per leg that has ever answered with one. */
     fun frontiers(): Map<CellRef, TagFrontier> = synchronized(state) { retained.toMap() }
@@ -170,6 +204,32 @@ class FeedSession(
         return CompletableFuture.allOf(*outcomes.map { it.second }.toTypedArray())
             .thenApply { PullReport(outcomes.associateTo(LinkedHashMap()) { (ref, f) -> ref to f.join() }) }
             .whenComplete { _, _ -> inFlight.set(false) }
+    }
+
+    /**
+     * `computenet-1iz73`: a caller that arrives while a pull is already in
+     * flight for this session gets that pull's own future instead of calling
+     * [pull] again — which would throw, since [pull] enforces its own
+     * non-reentrancy unconditionally. This is what lets SocialApp's per-viewer
+     * `FeedSession` cache serve two overlapping `/feed` requests for the same
+     * viewer safely: the cache hands both callers the same session, and this
+     * method is what makes that safe regardless of how the cache decided to
+     * reuse it (rebuild-on-scope-change today; `computenet-4q9is.3` is
+     * expected to move that to `computeIfAbsent` without needing this to
+     * change, since the sharing lives here, per session, not in the cache's
+     * own branching).
+     *
+     * [pullLock] is held only long enough to read/replace [currentPull] and
+     * call [pull] — [pull] itself never blocks (it only issues async reads and
+     * returns), so this never blocks a caller behind a slow leg.
+     */
+    fun pullShared(): CompletableFuture<PullReport> = synchronized(pullLock) {
+        val existing = currentPull
+        if (existing != null && !existing.isDone) return existing
+        val started = pull()
+        currentPull = started
+        started.whenComplete { _, _ -> synchronized(pullLock) { if (currentPull === started) currentPull = null } }
+        started
     }
 
     /**

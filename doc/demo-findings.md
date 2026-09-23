@@ -1313,3 +1313,120 @@ downstream fold. No kernel path is touched by the change that produced it — th
 deliverable is this entry plus `SocialAtomicityTest` and one `SnbPipeline.kt`
 KDoc paragraph. No concord scenario was bound: B11 stays a candidate, because
 no honest 20-series requirement id states the divergence this test asserts.
+
+## F-23 — KAGG-R: SOC1's complex reads order and limit demo-side; what a cross-cell ordered top-K, an ordered key-range scan and count-distinct would each have bought
+
+**Observation**: `:demo:social`'s served complex reads answer their
+ordering/limit clause entirely in Kotlin, over rows already pulled through the
+[SOC1-CREAD-04] bounded-read seam, never inside a kernel operator:
+
+- IC2 (`FeedSession.board(limit, before)`, `demo/social/src/main/kotlin/civictech/demo/social/Feed.kt:173-182`):
+  filters the accumulated per-leg set to `creationDate < before` when a cursor
+  is given, sorts `compareByDescending { creationDate }.thenByDescending { id }`,
+  then `take(limit)` — the file's own KDoc says so in as many words
+  ("no kernel ordering", `Feed.kt:171`).
+- IC8 and IC3 (`ComplexReads`, `demo/social/src/main/kotlin/civictech/demo/social/Queries.kt`):
+  IC8 walks the person's `snb-authored` cell to exhaustion, then one
+  `snb-message` walk per own message and per reply, and sorts/limits the
+  gathered `Message`s in Kotlin (`Queries.kt:98-104`); IC3 walks the viewer's
+  `snb-person` cell, one per friend, one `snb-authored` walk per candidate,
+  counts in `[from, to)` demo-side, and sorts/limits the resulting rows
+  (`Queries.kt:137-144`). Read costs are `1 + ownMessages + replies` (IC8) and
+  `1 + friends + candidatesWithAuthoredCell` (IC3), per the file's own read
+  table (`Queries.kt:12-19`).
+
+`StateRead.limit` is a page size in the cell's frozen enumeration order, not a
+row limit over an ordering — its own KDoc: "**Hard** cap on the number of
+entries in the returned page" (`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt:142`,
+the field declared at `:156`). A caller that wanted "the ten newest" by asking
+`StateRead(limit = 10)` would get the first ten *enumerated* rows, a wrong
+answer rather than a bounded one — the same absence F-21 already named for
+`ShortReads.kt`'s IS2; this entry confirms it costs every served complex read
+in this feature the same way.
+
+**Why it's a gap**, one bullet per KAGG-R name from `computenet-milestone-plan.md`
+line 55 ("verify multi-column ordered top-K over rows, count-distinct, and an
+ordered key-range scan for keyed families; implement only what's missing"):
+
+- **Ordered top-K over rows.** Needed by IC2 and IC8 (and would have served
+  IC5/IC6/IC12 had they been built — see below). `Aggregators.topKBy` landed
+  on main (`kernel/src/main/kotlin/civictech/cell/data/Aggregator.kt:71-76`,
+  commit `139d5f64`, `computenet-rmwqi`): it is a per-group `Aggregator` inside
+  a `GroupByCell`, over live elements of one group, folded incrementally on a
+  `TreeMap` support multiset ordered by a declared `SortSpec`. IC2 and IC8 do
+  not have a group to fold: IC2's rows come from a scatter-gather pull across
+  N per-author cells with no shared owning cell (`Feed.kt`'s own KDoc, "PN-5,
+  rule by rule" — "no author cell holds another author's messages"), and IC8's
+  rows are gathered by walking a chain of refs the locator resolves one at a
+  time, not by grouping live elements of a single cell. `topKBy` orders
+  *within* one cell's incremental fold; neither query has one cell whose
+  elements are the rows to be ordered.
+- **Ordered key-range scan.** Needed by IC2's `before` cutoff and IC3's
+  `[from, to)` date window, both of which today filter *after* a full walk
+  rather than bounding the walk itself. `unverified:`/`observed:` — this is
+  **in flight, not landed**: epic `computenet-t6b.1`'s feature `computenet-83vd6`
+  (PR #1035, draft) adds `KeyBound` to `StateRead` and has it honoured by
+  `MapCell`/`KeyedSetCell`/`ShardCell` (`observed:` `bd show computenet-83vd6`,
+  read 2026-09-23). Task `computenet-83vd6.2` (the cell-honouring half) is
+  parked on question D9: `EntryOrder`, the comparator the bound is checked
+  against, compares by declared natural order only when both sides share a
+  runtime class, else falls back to comparing class names
+  (`kernel/src/main/kotlin/civictech/cell/data/BoundedWalk.kt`'s `EntryOrder`);
+  a `KeyBound` whose `from`/`to` are a different runtime class than the keys
+  being walked (the D9 example: `Int` ends over `Long` keys) silently orders
+  by class name instead of value, producing a bound that admits or excludes
+  the wrong keys with no refusal. This bears directly on SOC1: every SNB id
+  IC2/IC3 would range-scan by — person id, message id, `creationDate` — is a
+  `Long`, so a caller anywhere in this codebase that builds a `KeyBound` from
+  an `Int` literal (a common Kotlin default for a small constant) would hit
+  D9's silent misordering rather than a loud refusal. Until D9 is answered and
+  `computenet-83vd6.2` merges, no cell in this tree honours a key bound at
+  all, so IC2 and IC3 have nothing to call regardless.
+- **Count-distinct.** Needed by **none** of IC2, IC8 or IC3 — none of the
+  three served queries counts distinct values of anything; stated here rather
+  than invented, per the task's instruction not to manufacture a use.
+  `Aggregators.countDistinct` landed on main
+  (`kernel/src/main/kotlin/civictech/cell/data/Aggregator.kt:91-92`, commit
+  `72ceb91f`, `computenet-8lug2`): a per-group `Aggregator` counting distinct
+  projected values on a `TreeMap` support multiset, the same per-group-fold
+  shape as `topKBy` above and so subject to the same "no owning cell to fold
+  over" absence for these three queries, even where it would have been wanted.
+
+**IC5, IC6, IC12 dropped** (decision flfkm-D7, not an attempted-and-failed
+implementation — `[SOC1-CREAD-02]`):
+
+- **IC5** needs a person→forum membership lookup. `ForumFact.Member` lives on
+  the forum's own `snb-forum` cell (`demo/social/src/main/kotlin/civictech/demo/social/Schema.kt`),
+  keyed by forum, not by person; answering "which forums does this person
+  belong to" without a per-person side index requires a scan over every
+  `snb-forum` cell, which `[SOC1-CREAD-04]` forbids. Neither a side index nor
+  a reverse-lookup operator exists in this tree; building either is out of
+  this task's scope (Non-goals).
+- **IC6 and IC12** both need `MessageFact.HasTag`, which no source in this
+  codebase writes: `observed:` `git grep -n 'addMessageTag\|HasTag(' 95905bd5 -- 'demo/social/src/main/*'`
+  hits only `SocialGraph`'s method bodies and `Schema.kt`'s type declaration —
+  no ingest path ever constructs one. Even with tag facts present, IC6 and
+  IC12 both rank tags by message count, which needs an ordered top-K over
+  *counted* rows — the per-group `topKBy`/`countDistinct` combination this
+  entry's first bullets show does not reach a cross-cell read path like IC2's
+  or IC8's, so IC6/IC12 would face the same "no owning cell to fold over" gap
+  as IC2/IC8 even once tags existed.
+
+**What SOC1 did not change**: no kernel operator, no per-query index.
+`observed:` `git diff --stat fe438758..feature/computenet-flfkm` (the feature
+branch's merge-base with `origin/main` at the time this entry was written)
+names ten files, all under `demo/social/src/main/kotlin/civictech/demo/social/`
+and `demo/social/src/test/kotlin/civictech/demo/social/`, none under `kernel/`
+(the feature reviewer re-checks this against the branch's final state).
+
+**Honest limit of this entry**: this is a reading of landed and in-flight code
+and bead state as of 2026-09-23, not a new measurement or benchmark — no test
+accompanies it (Non-goals; the feature reviewer reads the entry itself). The
+`computenet-83vd6` PR is draft and its task `.2` is parked pending a human
+answer to D9; if D9 resolves differently than described (e.g. `EntryOrder` is
+changed to require same-class ends rather than documenting the fallback), this
+bullet's characterization of the residual should be re-checked against
+whatever lands. This entry does not implement IC5, IC6, IC12, `topKBy`,
+`countDistinct` or a key-range scan in `:demo:social`, and does not edit
+`doc/spec/90-roadmap/91-gap-analysis.md` or `doc/spec/CONCORDANCE.md`
+(`[SOC1-FIND-01]`).
