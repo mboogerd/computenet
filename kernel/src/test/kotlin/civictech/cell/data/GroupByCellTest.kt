@@ -226,6 +226,85 @@ class GroupByCellTest {
     }
 
     @Test
+    fun `countDistinct is unchanged by a duplicate-value retraction and drops on the last one`() {
+        val cell = GroupByCell(keyFn = ::key, aggregator = Aggregators.countDistinct(::midVal))
+        val out = collect(cell.outlet)
+
+        val t1 = tag(1); val t2 = tag(2); val t3 = tag(3)
+        cell.inlet.call.propagate(
+            SetDelta(adds = mapOf("a3x" to setOf(t1), "a3y" to setOf(t2), "a7z" to setOf(t3)))
+        )
+        assertEquals(mapOf("a" to 2L), mapFold(out)) // {3, 7}
+
+        // one of two elements projecting to 3 retracts: cardinality unchanged -> no emission
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a3x" to setOf(t1))))
+        assertEquals(1, out.size)
+
+        // the last element projecting to 3 retracts: cardinality drops to 1
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a3y" to setOf(t2))))
+        assertEquals(mapOf("a" to 1L), mapFold(out))
+
+        // the group's last element retracts: group removed from the outlet, not a zero put
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a7z" to setOf(t3))))
+        assertEquals(setOf("a"), out.last().removals)
+    }
+
+    // BS-15's "retract of untracked value" guard fires on the bare aggregator
+    // (AggregatorTest): GroupByCell's own membership-flip gating never calls
+    // aggregator.retract for an element that was never live here, so there is
+    // no GroupByCell-level analogue of that test.
+
+    @Test
+    fun `countDistinct snapshot-restore preserves multiplicities across a shared-value retraction`() {
+        val ref = CellRef(UUID.randomUUID())
+        val cell = GroupByCell(ref, ::key, Aggregators.countDistinct(::midVal))
+        val t1 = tag(1); val t2 = tag(2)
+        cell.inlet.call.propagate(SetDelta(adds = mapOf("a3x" to setOf(t1), "a3y" to setOf(t2))))
+
+        val restored = GroupByCell(ref, ::key, Aggregators.countDistinct(::midVal))
+        restored.restore(roundTrip(cell.snapshot()))
+
+        val late = MapCollector()
+        restored.outlet.linkTo(late.inlet as LinkFrom<Propagate<MapDelta<String, Long>>>)
+        assertEquals(mapOf("a" to 1L), mapFold(late.arrivals))
+
+        // retract one of the two elements that shared a projection: multiplicity
+        // survived the round-trip, so the value is unchanged, not thrown/undercounted
+        restored.inlet.call.propagate(SetDelta(dels = mapOf("a3x" to setOf(t1))))
+        assertEquals(mapOf("a" to 1L), mapFold(late.arrivals))
+    }
+
+    @Test
+    fun `pipeline - grouped countDistinct equals batch recompute on every seed`() {
+        for (seed in 0L until 100L) {
+            val rnd = Random(seed)
+            val writers = listOf(SetCell<String>(), SetCell<String>())
+            val union = UnionSetCell<String>()
+            val grouped = GroupByCell(keyFn = ::key, aggregator = Aggregators.countDistinct(::midVal))
+
+            writers.forEach { it.outlet.linkTo(union.inlet as LinkFrom<Propagate<SetDelta<String>>>) }
+            union.outlet.linkTo(grouped.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+            val out = collect(grouped.outlet)
+
+            val domain = listOf("a1x", "a1y", "a2z", "b3x", "b7y", "c4z")
+            val held = writers.map { mutableSetOf<String>() }
+            repeat(80) {
+                val w = rnd.nextInt(writers.size)
+                val element = domain[rnd.nextInt(domain.size)]
+                if (rnd.nextInt(10) < 6 || element !in held[w]) {
+                    writers[w].inlet.call.add(element); held[w] += element
+                } else {
+                    writers[w].inlet.call.remove(element); held[w] -= element
+                }
+                // every call returns quiescent (synchronous in-process links), so check each step
+                val batch = held.flatten().toSet().groupBy(::key)
+                    .mapValues { (_, es) -> es.map(::midVal).toSet().size.toLong() }
+                assertEquals(batch, mapFold(out), "grouped countDistinct diverged from batch on seed $seed, step $it")
+            }
+        }
+    }
+
+    @Test
     fun `pipeline - grouped max equals batch recompute on every seed`() {
         for (seed in 0L until 100L) {
             val rnd = Random(seed)
