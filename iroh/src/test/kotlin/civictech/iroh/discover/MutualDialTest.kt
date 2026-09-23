@@ -404,7 +404,7 @@ class MutualDialTest {
      * that down as the far side's tie-break close. That down is the one
      * tie-break close B counts, and it is quiet.
      *
-     * Known flake, a production race, not a test fault (computenet-2okbz): the
+     * Known flake, a production race, not a test fault (computenet-wad38): the
      * release lets B's reader deliver that waiting down BEFORE B's dial thread
      * has run `observer.onUp` in `IrohConnection.openLink`. `IrohNode.down`
      * then finds no record for the link and tells no listener, so "B's
@@ -485,11 +485,11 @@ class MutualDialTest {
             try {
                 await("B's outbound loser to go down") { bDowns.any { it.first == dialFromB.link } }
             } catch (e: AssertionError) {
-                // computenet-2okbz: the down reached B's connection before its
+                // computenet-wad38: the down reached B's connection before its
                 // dial thread published the link, and IrohNode dropped it. The
                 // signature is a registry that still lists the dead link.
                 fail(
-                    "B's listener never saw its outbound loser ${dialFromB.link} go down (computenet-2okbz if B " +
+                    "B's listener never saw its outbound loser ${dialFromB.link} go down (computenet-wad38 if B " +
                         "still lists it): B's links to A ${b.links(a.own)}, downs seen $bDowns, " +
                         "B wrote ${rig.written.filter { it.first == "B" }.map { it.second }}",
                     e,
