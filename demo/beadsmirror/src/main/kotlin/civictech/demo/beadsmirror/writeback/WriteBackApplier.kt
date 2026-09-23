@@ -159,6 +159,11 @@ data class ApplyReport(
  * - The default [inFlight] names nothing, i.e. no guard. Only [forWorkspace]
  *   (the production wiring) supplies the real query; a caller constructing
  *   this class directly against a live workspace must supply it too.
+ * - "One pass of latency" assumes the writer commits promptly, as bd's
+ *   auto-commit does. A working set left dirty (a writer killed between its
+ *   write and its commit) keeps the row deferred on every pass until some
+ *   process commits it, and a deferral emits no [WriteBackEvent], so that
+ *   stall is silent (computenet-ilimc).
  */
 class WriteBackApplier(
     private val export: () -> List<ExportRow>,
