@@ -117,6 +117,19 @@ internal object EntryOrder : Comparator<Any?> {
 }
 
 /**
+ * Does [bound] admit [key] under this order's `[from, to)` sense (D3)? A
+ * `null` bound admits everything. An inverted or empty bound (`from` compares
+ * `>= to`) admits nothing, by the arithmetic below — no special case: every
+ * key fails one of the two comparisons.
+ */
+internal fun EntryOrder.admits(key: Any?, bound: civictech.cell.KeyBound?): Boolean {
+    if (bound == null) return true
+    if (bound.from != null && compare(bound.from, key) > 0) return false
+    if (bound.to != null && compare(key, bound.to) >= 0) return false
+    return true
+}
+
+/**
  * Crude per-entry size estimates for [civictech.cell.StateRead.byteBudget]
  * (V1C-CELLS), matching the register `SetCell` uses: the budget is **advisory**
  * and cell-estimated, so these are rough JVM object sizes, not an encoder's

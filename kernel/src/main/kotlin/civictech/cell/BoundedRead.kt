@@ -64,10 +64,11 @@ import java.io.Serializable
  *    weaker guarantee it carries must be declared on the page as
  *    [ReadCaveat.POSITIONAL_CURSOR] — not buried in the cell.
  * 4. **Never page an exclusive value.** See [ExclusiveEntry].
- * 5. **Never silently widen a bound.** [supportsSince] / [supportsScope]
- *    default to `false`, so a family that cannot honour [StateRead.since] or
- *    [StateRead.scope] refuses the request rather than answering full state as
- *    though the bound had been applied.
+ * 5. **Never silently widen a bound.** [supportsSince] / [supportsScope] /
+ *    [supportsKeyBound] default to `false`, so a family that cannot honour
+ *    [StateRead.since], [StateRead.scope] or [StateRead.keyBound] refuses the
+ *    request rather than answering full state as though the bound had been
+ *    applied.
  *
  * ### Threading
  *
@@ -122,14 +123,50 @@ interface BoundedStateful : Stateful {
      * Must be a constant for the cell's lifetime; read on the caller's thread.
      */
     val supportsScope: Boolean get() = false
+
+    /**
+     * Can this cell honour [StateRead.keyBound] — restrict the page to the
+     * `[from, to)` key range [civictech.cell.data.EntryOrder] would admit?
+     * Default `false`, refused with
+     * [StateReadResult.Reason.KEY_BOUND_UNSUPPORTED], for the same
+     * never-silently-widen reason as [supportsSince] and [supportsScope].
+     *
+     * Must be a constant for the cell's lifetime; read on the caller's thread.
+     */
+    val supportsKeyBound: Boolean get() = false
+}
+
+/**
+ * A key range bound on a [StateRead], half-open `[from, to)` under
+ * [civictech.cell.data.EntryOrder]. A `null` end is unbounded on that side;
+ * `from == null && to == null` is rejected — use `keyBound = null` on
+ * [StateRead] instead, which is a different thing (no bound requested at all,
+ * versus a bound that admits everything).
+ *
+ * A bound reduces the entries a walk *answers*, not the keys it *examines*: no
+ * family in this repository is `NavigableMap`-backed, so a bounded walk still
+ * pays O(n log n) to freeze the walk order and O(page) per page to resume it
+ * — the bound narrows the output, not the cost ceiling (`[KAGG-R-29]`).
+ *
+ * [from] and [to], when both non-null, are expected to be the same runtime
+ * type as the keys a bound cell's [civictech.cell.data.EntryOrder] compares.
+ * When an end is a different runtime class than the key it is compared
+ * against, [civictech.cell.data.EntryOrder] rule 3 (compare by class name)
+ * applies exactly as it would to any other cross-type comparison — this type
+ * does not special-case it.
+ */
+data class KeyBound(val from: Any?, val to: Any?) : Serializable {
+    init {
+        require(from != null || to != null) { "KeyBound requires at least one non-null end" }
+    }
 }
 
 /**
  * What a caller asks of [BoundedStateful.readBounded] (V1C-KERNEL).
  *
- * Three orthogonal bounds, deliberately: [since] bounds by **time**, [scope]
- * bounds by **interest**, [cursor]/[limit] bound by **size**. The first two are
- * reused verbatim from
+ * Four orthogonal bounds, deliberately: [since] bounds by **time**, [scope]
+ * bounds by **interest**, [keyBound] bounds by **key**, [cursor]/[limit] bound
+ * by **size**. The first two are reused verbatim from
  * [civictech.cell.protocol.StateRequest] rather than forked or generalized — a
  * big-cell read wants all three at once (search wants `scope`, a live view
  * wants `since`, the UI wants `limit`). This is *not* a `StateRequest`: a pull
@@ -150,6 +187,9 @@ interface BoundedStateful : Stateful {
  *   [Stateful] but not [BoundedStateful], and for a drained host's retained
  *   checkpoint blob. Default `false` — a caller that has not said this is never
  *   handed a whole copy.
+ * @property keyBound `null` ⇒ no key restriction. Added last so every existing
+ *   positional and named construction of [StateRead] is unchanged
+ *   (`[KAGG-R-28]`).
  */
 data class StateRead(
     val cursor: Cursor? = null,
@@ -158,6 +198,7 @@ data class StateRead(
     val scope: Interest? = null,
     val since: TagFrontier? = null,
     val allowWholeCopy: Boolean = false,
+    val keyBound: KeyBound? = null,
 ) {
     init {
         require(limit > 0) { "limit must be positive (was $limit)" }
@@ -496,6 +537,9 @@ sealed interface StateReadResult {
 
         /** [StateRead.scope] was set on a cell that declares [BoundedStateful.supportsScope] false. */
         SCOPE_UNSUPPORTED,
+
+        /** [StateRead.keyBound] was set on a cell that declares [BoundedStateful.supportsKeyBound] false. */
+        KEY_BOUND_UNSUPPORTED,
 
         /** The host's scheduler is terminated; a dead host has no state to read. */
         SCHEDULER_TERMINATED,

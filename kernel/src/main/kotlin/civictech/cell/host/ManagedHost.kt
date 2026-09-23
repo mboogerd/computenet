@@ -1921,10 +1921,11 @@ open class ManagedHost(
      * caller learns what a read costs *before* paying for it — which is what
      * the inspector's search notice currently has to reconstruct afterwards.
      *
-     * **A bound is never silently widened.** [StateRead.since] and
-     * [StateRead.scope] are refused up front — on the caller's thread, before
-     * anything is submitted — for a cell that does not declare
-     * [BoundedStateful.supportsSince] / [BoundedStateful.supportsScope].
+     * **A bound is never silently widened.** [StateRead.since],
+     * [StateRead.scope] and [StateRead.keyBound] are refused up front — on the
+     * caller's thread, before anything is submitted — for a cell that does not
+     * declare [BoundedStateful.supportsSince] / [BoundedStateful.supportsScope]
+     * / [BoundedStateful.supportsKeyBound].
      *
      * **This is not a back door around a pull refusal.** It is not a
      * `StateRequest`, installs no link and fires no `PullOnOpen`, so a
@@ -1992,6 +1993,9 @@ open class ManagedHost(
         }
         if (request.scope != null && request.scope !is Interest.Total && !cell.supportsScope) {
             return answered(unavailable(StateReadResult.Reason.SCOPE_UNSUPPORTED))
+        }
+        if (request.keyBound != null && !cell.supportsKeyBound) {
+            return answered(unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED))
         }
 
         return submitRead {
