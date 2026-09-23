@@ -6,6 +6,7 @@ import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.link.PortLink
 import civictech.cell.link.handshake
+import civictech.cell.link.notifyAll
 
 /**
  * Streaming link through a routed stand-in (M5.7): subscribe [target] —
@@ -112,7 +113,9 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     val link = PortLink(ref, at) { superseded ->
         unsubscribe(at)
         linking.remove(superseded)
-        linking.onUnlinkListeners.forEach { it(superseded) }
+        // computenet-7u22s: same isolate-siblings-and-rethrow-first policy as
+        // the negotiated handshake path's teardown (computenet-1rvt).
+        notifyAll(linking.onUnlinkListeners, superseded)
     }
     // T21: streaming again to the same [at] REPLACES the attachment — that is
     // already what `subscribe` does (`consumers[at] = port`), so the superseded
@@ -136,7 +139,8 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     // what `Link.id`-keyed state needs, and that id genuinely dies here.
     linking.links.filter { it.to == at }.forEach { superseded ->
         linking.remove(superseded)
-        linking.onUnlinkListeners.forEach { it(superseded) }
+        // computenet-7u22s: same policy as the teardown lambda above.
+        notifyAll(linking.onUnlinkListeners, superseded)
     }
     linking.register(link)
     // PN-9: fire the full on-link multicast (catch-up moved to onLinkedListeners),

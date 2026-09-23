@@ -147,7 +147,12 @@ fi
 recheck=$(bd show "$id" --json | sed -n '/^[[{]/,/^[]}]/p')
 held=$(jq -r '.[0].metadata.holder // ""' <<<"$recheck")
 if [ -n "$held" ]; then
-  verdict=$("$SCRIPT_DIR/session-holder.sh" --check "$held"); hrc=$?
+  # The epic's OWN updated_at, which the hot-subtree guard above excludes
+  # (it tests descendants): a holder that wrote moments ago is a long-running
+  # session, not residue, and taking it over puts two sessions on one epic
+  # (computenet-jqxqk).
+  verdict=$("$SCRIPT_DIR/session-holder.sh" --check "$held" \
+            "$(jq -r '.[0].updated_at // ""' <<<"$recheck")"); hrc=$?
   case "$verdict" in
     MINE) : ;;                      # already ours, this session — idempotent
     LIVE)

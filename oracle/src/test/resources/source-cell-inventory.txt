@@ -84,6 +84,7 @@ SetCell
 SetCellBase
 SetCellPorts
 SetOps
+SortSpec
 WatermarkCell
 WatermarkCellPorts
 Windows

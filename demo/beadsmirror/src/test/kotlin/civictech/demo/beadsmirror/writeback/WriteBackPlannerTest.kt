@@ -2,6 +2,7 @@ package civictech.demo.beadsmirror.writeback
 
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.ExportRow
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -183,6 +184,77 @@ class WriteBackPlannerTest {
         val outcomes = WriteBackPlanner.plan(view, export)
 
         outcomes shouldBe listOf(PlanOutcome.NoOp("X"))
+    }
+
+    // ------------------------------------------------ computenet-uv65o: clause-2 residual
+
+    /**
+     * computenet-uv65o criterion 1: when an imposition ALSO changes a
+     * comparable field (so it is decided as an Impose in the first place),
+     * the loss record names the local `updated_at` it overwrites too — even
+     * though `updated_at` is [ImposedFields.NON_COMPARABLE] and plays no part
+     * in the Impose/NoOp decision itself. Unfixed (losses computed only over
+     * [ImposedFields.COMPARABLE]), this reddens: the `updated_at` FieldLoss is
+     * missing from the list.
+     */
+    @Test
+    fun `13 - an imposed row's loss record names the overwritten local updated_at`() {
+        val view = mapOf(
+            "X" to mapOf(
+                "priority" to "1",
+                "updated_at" to "\"2026-09-13T09:30:05Z\"",
+            ),
+        )
+        val export = listOf(exportRow("""{"id":"X","priority":3,"updated_at":"2026-09-13T09:30:00Z"}"""))
+
+        val outcomes = WriteBackPlanner.plan(view, export)
+
+        val outcome = impose(outcomes, "X")
+        outcome.imposition.losses shouldContain FieldLoss(
+            "updated_at",
+            old = JsonPrimitive("2026-09-13T09:30:00Z"),
+            new = JsonPrimitive("2026-09-13T09:30:05Z"),
+        )
+    }
+
+    /**
+     * computenet-uv65o criterion 2: local and winner differing ONLY in
+     * `updated_at` must still be a `NoOp` — no import runs, and (since no
+     * [Imposition] is ever built) no loss record exists to name it either.
+     * The computenet-6wc.1.6 behaviour this pins is unchanged by widening
+     * [ImposedFields.LOSS_FIELDS]: the decision is still made against
+     * [ImposedFields.COMPARABLE].
+     */
+    @Test
+    fun `14 - local and winner differing only in updated_at is a no-op, no import and no loss record`() {
+        val view = mapOf("X" to mapOf("priority" to "3", "updated_at" to "\"2026-09-13T09:30:05Z\""))
+        val export = listOf(exportRow("""{"id":"X","priority":3,"updated_at":"2026-09-13T09:30:00Z"}"""))
+
+        val outcomes = WriteBackPlanner.plan(view, export)
+
+        outcomes shouldBe listOf(PlanOutcome.NoOp("X"))
+    }
+
+    /**
+     * The [WriteBackPlanner.preflight] `fields` seam directly: passing
+     * [ImposedFields.LOSS_FIELDS] surfaces an `updated_at` difference that the
+     * default (`COMPARABLE`) call omits.
+     */
+    @Test
+    fun `preflight with LOSS_FIELDS surfaces updated_at, the default COMPARABLE call does not`() {
+        val row = JsonObject(
+            mapOf("id" to JsonPrimitive("X"), "updated_at" to JsonPrimitive("2026-09-13T09:30:05Z")),
+        )
+        val freshExport = exportRow("""{"id":"X","updated_at":"2026-09-13T09:30:00Z"}""")
+
+        WriteBackPlanner.preflight(row, freshExport) shouldBe emptyList()
+        WriteBackPlanner.preflight(row, freshExport, ImposedFields.LOSS_FIELDS) shouldBe listOf(
+            FieldLoss(
+                "updated_at",
+                old = JsonPrimitive("2026-09-13T09:30:00Z"),
+                new = JsonPrimitive("2026-09-13T09:30:05Z"),
+            ),
+        )
     }
 
     @Test

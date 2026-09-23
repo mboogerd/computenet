@@ -896,13 +896,24 @@ for _state, _blocks in (("DEAD", False), ("STALE", False), ("LIVE", True),
 
 _saved_bd, _saved_hs = nb.bd, nb.holder_state
 nb.bd = lambda *a: [
-    {"id": "gone", "issue_type": "feature", "metadata": {"files": "a.kt", "holder": "tok-dead"}},
+    {"id": "gone", "issue_type": "feature", "updated_at": "2026-09-22T23:16:34Z",
+     "metadata": {"files": "a.kt", "holder": "tok-dead"}},
     {"id": "bare", "issue_type": "task", "metadata": {"files": "b.kt"}},
 ]
-nb.holder_state = lambda tok: {"tok-dead": "DEAD"}[tok]
+# The row's updated_at must reach the checker: without it a long-running
+# session's token reads STALE and its unit is treated as resumable
+# (computenet-jqxqk).
+_seen_updated = []
+def _hs(tok, updated_at=None):
+    _seen_updated.append(updated_at)
+    return {"tok-dead": "DEAD"}[tok]
+nb.holder_state = _hs
 _got = nb.running_elsewhere("MacBoo", "feat", set())
 nb.bd, nb.holder_state = _saved_bd, _saved_hs
 elsewhere_cases += 1
+if _seen_updated != ["2026-09-22T23:16:34Z"]:
+    failed += 1
+    print(f"FAIL: running_elsewhere must pass the row's updated_at to holder_state — got {_seen_updated}")
 if [(u["id"], u["holder"]) for u in _got] != [("gone", "DEAD"), ("bare", "NONE")]:
     failed += 1
     print(f"FAIL: running_elsewhere must report each unit's holder state — got {_got}")

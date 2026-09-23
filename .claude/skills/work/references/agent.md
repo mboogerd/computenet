@@ -32,9 +32,10 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
 - **Never `git push` and never `bd dolt push`.** Your bead writes stay local
   and ride out on the orchestrator's next sync. The one exception: a feature
   reviewer pushes its own repair commits to the feature branch.
-- Read `.claude/skills/work/**` from your own worktree, which is cut from
-  `origin/main`; without one, use `git show origin/main:<path>`. The main
-  checkout's working copy is stale.
+- Read `.claude/skills/work/**` for instruction with the **Read tool**, not `cat`:
+  under host load plain Bash reads hang 30-120s while the Read tool does not.
+  Your own worktree's copy is cut from `origin/main`; the main checkout's is stale.
+  (Reading another REVISION still needs `git show` — review.md does it on purpose.)
 - A refused command is not retried in a different disguise, and a refused
   sanctioned path never justifies a banned shortcut. Do the permitted
   equivalent (such as a refused script's steps, by hand), or list the exact

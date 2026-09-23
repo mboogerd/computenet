@@ -63,9 +63,11 @@ object ImposedFields {
      * an issue row exists, so a difference in one of them, ALONE, is never a
      * reason to import and never a reason to fail a post-import read-back.
      * They are still written into an [Imposition.row] when the winner
-     * carries them — `bd import` silently keeps its own stored value rather
-     * than rejecting the row — but [WriteBackPlanner.preflight] excludes them
-     * from every comparison it makes, which is the ONE place both the
+     * carries them — `bd import` keeps its own stored `created_at`, and stores
+     * its own rounding of the winner's `updated_at`, rather than rejecting the
+     * row — but [WriteBackPlanner.preflight] excludes them from its default
+     * field set ([COMPARABLE]; only the recorded losses of an already-decided
+     * Impose re-add `updated_at`, via [LOSS_FIELDS]), which is the ONE place both the
      * planner's Impose/NoOp decision ([WriteBackPlanner.plan]) and the
      * applier's post-import re-read ([WriteBackApplier]'s `readBackFailure`)
      * draw the set from (computenet-6wc.1.6 clause 3: defined once, used by
@@ -93,8 +95,24 @@ object ImposedFields {
      */
     val NON_COMPARABLE: Set<String> = setOf("created_at", "updated_at")
 
-    /** [FIELDS] minus [NON_COMPARABLE] — what [WriteBackPlanner.preflight] actually compares. */
+    /** [FIELDS] minus [NON_COMPARABLE] — what [WriteBackPlanner.preflight] compares by default (the Impose/NoOp decision and the post-import re-read). */
     val COMPARABLE: Set<String> = FIELDS - NON_COMPARABLE
+
+    /**
+     * [COMPARABLE] plus `updated_at` — the field set [WriteBackPlanner.plan]
+     * computes [Imposition.losses] over ONCE an [PlanOutcome.Impose] has
+     * already been decided against [COMPARABLE]. Closes computenet-uv65o
+     * (clause 2 residual of computenet-6wc.1): `bd import` does write the
+     * winner's `updated_at` into an existing row, so a loss record that
+     * excludes it understates what the imposition overwrote, even though
+     * `updated_at` alone must never be a reason to import in the first place
+     * (computenet-6wc.1.6) — hence the decision still runs against
+     * [COMPARABLE], and only the recorded losses widen. `created_at` stays
+     * excluded even here: `bd import` cannot overwrite it on a row that
+     * already exists, so the destination's own value is never actually lost,
+     * and naming it would be a false loss.
+     */
+    val LOSS_FIELDS: Set<String> = COMPARABLE + "updated_at"
 }
 
 /**
@@ -252,8 +270,20 @@ object WriteBackPlanner {
             } catch (e: UnrenderableFieldException) {
                 return@map PlanOutcome.Unrenderable(issueId, e.field, e.rendering)
             }
-            val losses = preflight(row, exportRow)
-            if (losses.isEmpty()) PlanOutcome.NoOp(issueId) else PlanOutcome.Impose(Imposition(issueId, row, losses))
+            // The Impose/NoOp decision is made against COMPARABLE (preflight's
+            // default) — computenet-6wc.1.6's "updated_at/created_at alone is
+            // never a reason to import" holds unchanged. Only once Impose is
+            // decided is the RECORDED loss list widened to LOSS_FIELDS, so the
+            // loss record also names an overwritten local updated_at
+            // (computenet-uv65o) without updated_at itself ever tipping NoOp
+            // into Impose.
+            val decisionLosses = preflight(row, exportRow)
+            if (decisionLosses.isEmpty()) {
+                PlanOutcome.NoOp(issueId)
+            } else {
+                val losses = preflight(row, exportRow, ImposedFields.LOSS_FIELDS)
+                PlanOutcome.Impose(Imposition(issueId, row, losses))
+            }
         }
     }
 
@@ -309,24 +339,30 @@ object WriteBackPlanner {
 
     /**
      * The losses a proposed [row] would cause against [exportRow], one per
-     * allowlisted field where the two disagree. Exposed separately from
-     * [plan] (rather than folded into its loop) so the applier
-     * (computenet-6wc.1.3) can re-run this exact comparison against its
-     * post-import re-read. Note what the applier does NOT do: it does not
-     * re-read the export immediately before each import. The pre-flight loss
-     * record for every row in a pass is computed against the ONE export taken
-     * at the start of that pass, so a local `bd` edit landing between that
-     * export and a row's import is overwritten without appearing in the loss
-     * record.
+     * [fields] entry where the two disagree. Exposed separately from [plan]
+     * (rather than folded into its loop) so the applier (computenet-6wc.1.3)
+     * can re-run this exact comparison against its post-import re-read. Note
+     * what the applier does NOT do: it does not re-read the export
+     * immediately before each import. The pre-flight loss record for every
+     * row in a pass is computed against the ONE export taken at the start of
+     * that pass (computenet-uv65o clause 4). A local `bd` edit still
+     * UNCOMMITTED when a row's import is decided is no longer overwritten at
+     * all — the applier defers that row (computenet-oagbm) — but one already
+     * COMMITTED between that export and the import is overwritten without
+     * appearing in the loss record; its LOCAL commit is what keeps it from
+     * being lost. Both limits are stated on [WriteBackApplier]'s own KDoc.
      *
-     * Because [ImposedFields.NON_COMPARABLE] is excluded here, and this is
-     * also what fills [Imposition.losses], a loss record never names the
-     * local `updated_at` an imposition overwrites, even though the imposed
-     * row carries the winner's `updated_at` and `bd import` writes it.
-     *
-     * Compares [ImposedFields.COMPARABLE] only — [ImposedFields.NON_COMPARABLE]
-     * fields (`created_at`, `updated_at`) are excluded from every comparison
-     * this method makes, on both call sites (computenet-6wc.1.6 clause 3).
+     * [fields] defaults to [ImposedFields.COMPARABLE] — the set both call
+     * sites (the planner's Impose/NoOp decision in [plan], and the applier's
+     * post-import re-read) MUST keep using, since `updated_at`/`created_at`
+     * alone must never be a reason to import or to fail a read-back
+     * (computenet-6wc.1.6 clause 3). [plan] additionally calls this method a
+     * SECOND time, with [ImposedFields.LOSS_FIELDS], but only after
+     * [ImposedFields.COMPARABLE] has already decided Impose — that second
+     * call is what makes [Imposition.losses] name an overwritten local
+     * `updated_at` (computenet-uv65o), since `bd import` does write the
+     * winner's `updated_at` into an existing row even though a difference in
+     * that field alone never triggers the import.
      *
      * [METADATA_FIELD] is compared through [Provenance.strip] on BOTH sides
      * first, and the stripped (never the raw) values are what a resulting
@@ -352,9 +388,13 @@ object WriteBackPlanner {
      * [civictech.demo.beadsmirror.equality.MirrorExportEquality.asInstant]'s
      * reason for existing at all).
      */
-    fun preflight(row: JsonObject, exportRow: ExportRow?): List<FieldLoss> {
+    fun preflight(
+        row: JsonObject,
+        exportRow: ExportRow?,
+        fields: Set<String> = ImposedFields.COMPARABLE,
+    ): List<FieldLoss> {
         val losses = mutableListOf<FieldLoss>()
-        for (field in ImposedFields.COMPARABLE) {
+        for (field in fields) {
             val rawNew = row[field]
             val rawOld = exportRow?.json?.get(field)?.takeUnless { it is JsonNull }
             val (newValue, oldValue) = if (field == METADATA_FIELD) {

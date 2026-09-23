@@ -35,9 +35,14 @@
 #
 # Usage:
 #   session-holder.sh                 # print this session's holder token
-#   session-holder.sh --check <token> # LIVE | DEAD | STALE | UNKNOWN | MINE | FOREIGN
+#   session-holder.sh --check <token> [<updated-at>] # LIVE | DEAD | STALE | UNKNOWN | MINE | FOREIGN
 # STALE: the pid is alive but the token is older than any slot (>HOLDER_MAX_AGE_S,
 #   default 21600s) — host-process residue, releasable like DEAD (computenet-nkz3).
+#   Token age alone cannot tell residue from a long-running session: a 9h token
+#   whose epic it had written two minutes earlier read STALE twice, and following
+#   the rule put two sessions on one epic for ~3h (computenet-jqxqk). Pass the
+#   held bead's `updated_at` as the optional second argument: a write within
+#   HOLDER_RECENT_S (default 900) answers LIVE, because residue does not write.
 # Exit: 0 for LIVE/MINE, 1 for DEAD or STALE, 3 for UNKNOWN or FOREIGN (nothing was
 #   established — treat exactly like ready-in-epic.sh's exit 3: not an
 #   all-clear; FOREIGN additionally means the row is NOT this machine's
@@ -71,7 +76,8 @@ mine() {
 }
 
 if [ "${1:-}" = --check ]; then
-  token=${2:?usage: session-holder.sh --check <token>}
+  token=${2:?usage: session-holder.sh --check <token> [<updated-at>]}
+  updated=${3:-}
   self=$(mine)
   if [ -n "$self" ] && [ "$token" = "$self" ]; then echo MINE; exit 0; fi
 
@@ -96,6 +102,14 @@ if [ "${1:-}" = --check ]; then
                   || date -d "$start" +%s 2>/dev/null)
     if [ -n "$start_epoch" ] && \
        [ $(( $(date +%s) - start_epoch )) -gt "${HOLDER_MAX_AGE_S:-21600}" ]; then
+      # Unless the holder wrote recently: residue does not write.
+      u=${updated%Z}; u=${u%%.*}
+      upd_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$u" +%s 2>/dev/null \
+                  || date -u -d "$updated" +%s 2>/dev/null)
+      if [ -n "${upd_epoch:-}" ] && \
+         [ $(( $(date -u +%s) - upd_epoch )) -le "${HOLDER_RECENT_S:-900}" ]; then
+        echo LIVE; exit 0
+      fi
       echo STALE; exit 1     # releasable like DEAD; the WORKTREE is still not yours to enter
     fi
     echo LIVE; exit 0

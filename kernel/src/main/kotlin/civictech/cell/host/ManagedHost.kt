@@ -28,6 +28,7 @@ import civictech.cell.control.AttentionScheduler
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.StallNotice
 import civictech.cell.control.StallReason
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.graph.CellFactory
@@ -96,7 +97,39 @@ open class ManagedHost(
      * fires.
      */
     private val hopBound: Int = 64,
+    /**
+     * Batched ingress dispatch (KBLK, `computenet-t6b.2-D4`): the maximum number
+     * of staged invocations one data-band (priority 20) scheduler task may
+     * dispatch. A **scheduling** setting beside [attention] and [intakeBound] —
+     * not a durability one: it never changes which journal a cell uses or when
+     * an append happens.
+     *
+     * `1` (the default) is the pre-KBLK path, byte-for-byte: every accepted
+     * invocation submits its own `dispatchOne` task. A value above `1` (a
+     * benchmark host passes e.g. `64`) coalesces task submission instead: one
+     * armed task drains up to this many staged invocations, then re-arms while
+     * staged work remains (see [drainBatch]).
+     *
+     * It changes the **task count only**, never which message runs next: the
+     * band selection and stride floor run per message inside the task
+     * ([AttentionScheduler.dispatchUpTo] loops the unchanged
+     * [AttentionScheduler.dispatchOne]), so per-cell FIFO, per-link FIFO,
+     * [civictech.cell.MessageContext] and the attention starvation bound are the
+     * same either way. Staging and the journal append stay per invocation, under
+     * [dataLock], at acceptance time.
+     *
+     * The one observable cost: a task that delivers into a cell whose handler
+     * genuinely suspends parks the host (spec 32; [SimulationController],
+     * [CoroutineScheduler]) for the rest of its batch, exactly as one message
+     * does unbatched — only longer, and other-band work (management, protocol)
+     * waits behind a whole batch rather than behind one message.
+     */
+    private val dispatchBatch: Int = 1,
 ) : Host {
+
+    init {
+        require(dispatchBatch >= 1) { "dispatchBatch must be >= 1 (was $dispatchBatch)" }
+    }
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
     internal var parentHost: ManagedHost? = null
@@ -401,6 +434,49 @@ open class ManagedHost(
     internal fun volatileDurableSpawns(): Long = volatileDurableSpawnCount.get()
 
     /**
+     * `[KBLK-06]`/`[KBLK-07]`: per-[DurabilityClass] cumulative spawn count —
+     * how many cells, of ANY manifest, were spawned onto a journal of that
+     * class (`journalSelector(cell.ref)?.durability`). Counted at the same
+     * spawn site as [volatileDurableSpawnCount] (`spawn()`, below), for every
+     * cell whose selector returned a journal — not only `DURABLE`-manifest
+     * ones, because the question this answers is "what class of journal
+     * serves this host's cells", not "which cells declared durability".
+     * Cumulative, like [volatileDurableSpawnCount]: never decremented on
+     * despawn (`computenet-t6b.2-D3`).
+     *
+     * Deliberately not a refusal: PN-12's rationale above (a durable-capable
+     * cell run volatile can be a legitimate deployment) applies equally here.
+     * The kernel only counts; a deployment that requires synchronous
+     * durability asserts over [durabilityAccounting] itself at startup —
+     * e.g. `check(acct.journaledSpawns[DurabilityClass.BATCHED] == 0L &&
+     * acct.journaledSpawns[DurabilityClass.IN_MEMORY] == 0L &&
+     * acct.volatileDurableSpawns == 0L)`. The only way to weaken a cell's
+     * durability is the [Journal] instance [journalFor] returns for it; the
+     * only "no durability" spelling is `journalFor(cellRef) == null`
+     * (`[KBLK-04]`) — there is no second, host-level mechanism.
+     */
+    private val journaledSpawnCounts: Map<DurabilityClass, AtomicLong> =
+        DurabilityClass.entries.associateWith { AtomicLong() }
+
+    /**
+     * Snapshot of this host's per-[DurabilityClass] and volatile-durable
+     * spawn counts (`[KBLK-06]`). Public, not `internal`, because the
+     * deployment that asserts over it (`[KBLK-07]`) lives outside `:kernel`.
+     */
+    data class DurabilityAccounting(
+        /** Every [DurabilityClass] present, zero-filled — never a partial map. */
+        val journaledSpawns: Map<DurabilityClass, Long>,
+        /** The existing PN-12 counter ([ManagedHost.volatileDurableSpawns]), re-exposed here. */
+        val volatileDurableSpawns: Long,
+    )
+
+    /** `[KBLK-06]`/`[KBLK-07]`: see [journaledSpawnCounts] and [DurabilityAccounting]. */
+    fun durabilityAccounting(): DurabilityAccounting = DurabilityAccounting(
+        journaledSpawns = journaledSpawnCounts.mapValues { (_, count) -> count.get() },
+        volatileDurableSpawns = volatileDurableSpawnCount.get(),
+    )
+
+    /**
      * Refusals reported to this host by a hosted membrane's
      * [civictech.cell.BoundaryDenialSink], summed over every boundary
      * (computenet-usd.6).
@@ -437,14 +513,26 @@ open class ManagedHost(
     )
 
     /**
-     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues; each
-     * staged message submits one dispatcher task at data priority, and each
-     * dispatch picks the next cell by attention band. Per-cell FIFO (a superset
-     * of per-link FIFO, spec 31 rule 3) holds because band selection happens
-     * BETWEEN cells, never within one — and the one-task-per-message shape
-     * keeps drain's phase 2 (priority 30) behind every accepted message.
+     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues, and
+     * each dispatch picks the next cell by attention band. Per-cell FIFO (a
+     * superset of per-link FIFO, spec 31 rule 3) holds because band selection
+     * happens BETWEEN cells, never within one.
+     *
+     * Every accepted message is dispatched by a data-band (priority 20) task
+     * submitted after its staging. With [dispatchBatch] `== 1` that is one task
+     * per message (message count <= task count); with [dispatchBatch] `> 1` one
+     * armed task drains up to the bound and re-arms while work remains
+     * ([drainBatch]). Either way drain's phase 2 (priority 30) runs after them,
+     * because every [HostScheduler] orders by priority, then sequence.
      */
     private val dataLock = Any()
+
+    /**
+     * Batched dispatch only ([dispatchBatch] `> 1`): true while a [drainBatch]
+     * task is submitted-and-not-yet-finished. Guarded by [dataLock]; never read
+     * or written on the `dispatchBatch == 1` path.
+     */
+    private var dispatchArmed = false
 
     /**
      * Attention-driven dispatch (spec 34, M6.3/M17) — per-cell FIFO staging,
@@ -730,8 +818,13 @@ open class ManagedHost(
         // contention matters.
         //
         // stage at SEND time (not dispatch time) so a backlog can form and band
-        // selection has something to choose between; one dispatcher task per
-        // message keeps message count <= task count (a task may find nothing)
+        // selection has something to choose between; every accepted message is
+        // then dispatched by a data-band task submitted after its staging. With
+        // dispatchBatch == 1 that is one task per message (message count <=
+        // task count; a task may find nothing); with dispatchBatch > 1 one armed
+        // task drains up to the bound and re-arms while work remains
+        // (drainBatch). Either way drain's phase 2 at 30 runs after them because
+        // schedulers order by priority.
         //
         // T04 finding 1: checkSaturationOnAccept returns a deferred announce
         // instead of running Protocols.sendUpstream's relay traversal here —
@@ -743,7 +836,55 @@ open class ManagedHost(
             intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
         announce?.invoke()
-        enqueue(20) { attentionScheduler.dispatchOne() }
+        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+    }
+
+    /**
+     * Batched dispatch ([dispatchBatch] `> 1`), called after a message is
+     * staged: submits a [drainBatch] task unless one is already armed. An armed
+     * task that has not yet made its final check (in [drainBatch]'s `finally`)
+     * is guaranteed to see this message — both that check and the staging
+     * happen under [dataLock], and the check re-arms whenever anything is
+     * staged — so skipping the submit here never strands a message.
+     */
+    private fun armBatchDispatch() {
+        val arm = synchronized(dataLock) {
+            if (dispatchArmed) false else true.also { dispatchArmed = true }
+        }
+        if (arm) enqueue(20) { drainBatch() }
+    }
+
+    /**
+     * One batched data-band task: dispatch up to [dispatchBatch] staged
+     * messages (band selection and the stride floor re-run per message inside
+     * [AttentionScheduler.dispatchUpTo]), then — in `finally`, so an exception
+     * escaping the dispatch loop cannot leave the flag armed with nobody coming
+     * (a cell handler's own exception is absorbed by [deliver] before it gets
+     * here) — disarm and, if staged work remains, re-arm by submitting the next
+     * task.
+     *
+     * **Drain ordering.** [beginDrain] closes the intake and then submits its
+     * phase 2 at priority 30. Every message accepted before the intake closed
+     * is either already dispatched, or staged with an armed [drainBatch]
+     * pending or running. A pending one runs first (20 < 30). A running one
+     * re-arms at 20 before it returns, and a host drains one task at a time,
+     * so that re-armed task is enqueued before the scheduler next polls — and
+     * wins against the pending 30 on priority, whatever its sequence number.
+     * That holds on every scheduler because each orders by `(priority,
+     * sequence)`: [SimulationController]'s `PriorityQueue<ScheduledTask>`,
+     * [VirtualThreadScheduler]'s and [CoroutineScheduler]'s
+     * `PriorityBlockingQueue<ScheduledTask>`, all via [ScheduledTask.compareTo].
+     * So phase 2 still runs after every accepted message, as it does unbatched.
+     */
+    private suspend fun drainBatch() {
+        try {
+            attentionScheduler.dispatchUpTo(dispatchBatch)
+        } finally {
+            val rearm = synchronized(dataLock) {
+                attentionScheduler.dataQueues.isNotEmpty().also { dispatchArmed = it }
+            }
+            if (rearm) enqueue(20) { drainBatch() }
+        }
     }
 
     /**
@@ -1336,6 +1477,9 @@ open class ManagedHost(
                     civictech.nature.Manifest.DURABLE in descriptor.manifest &&
                     journalSelector(cell.ref) == null
                 ) volatileDurableSpawnCount.incrementAndGet()
+                // [KBLK-06]: per-class accounting, for every cell whose selector
+                // returned a journal (see [journaledSpawnCounts]).
+                journalSelector(cell.ref)?.durability?.let { journaledSpawnCounts.getValue(it).incrementAndGet() }
                 // KFX-12 (spec [24-DUR-04], 93 I-14 Rule S1): a journaled cell's outlets
                 // emit under their ref-derived epoch, so a rebuilt instance re-mints the
                 // identity the network already observed instead of a fresh random one.

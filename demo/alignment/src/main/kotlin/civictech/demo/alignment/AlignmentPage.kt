@@ -41,6 +41,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
     --ok: #0f9f6e; --warn: #b45309; --warn-soft: #fdf0d9;
     --value-1: #2563eb; --value-2: #0d9488; --value-3: #16a34a; --value-4: #4f46e5;
     --cost-1: #ea580c; --cost-2: #dc2626; --cost-3: #ca8a04; --cost-4: #db2777;
+    --factor-1: #9333ea; --factor-2: #a855f7; --factor-3: #c026d3; --factor-4: #7e22ce;
     --unrated: #b4b9c6; --track: #e3e6ee;
     --shadow: 0 1px 2px rgba(20,24,40,.05), 0 6px 20px rgba(20,24,40,.06);
   }
@@ -52,6 +53,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
       --ok: #34d399; --warn: #fbbf24; --warn-soft: #3a2c0e;
       --value-1: #60a5fa; --value-2: #2dd4bf; --value-3: #4ade80; --value-4: #818cf8;
       --cost-1: #fb923c; --cost-2: #f87171; --cost-3: #facc15; --cost-4: #f472b6;
+      --factor-1: #c084fc; --factor-2: #d8b4fe; --factor-3: #e879f9; --factor-4: #c4b5fd;
       --unrated: #4b5060; --track: #272b37;
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.28);
     }
@@ -203,7 +205,7 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
       <div id="ntDims"></div>
       <button type="button" id="ntAddDim">+ add dimension</button>
     </div>
-    <p class="hint">Value dimensions raise an idea's score; cost dimensions divide it. Weights and anchors are set in Setup.</p>
+    <p class="hint">Value dimensions raise an idea's score; factor dimensions multiply it; cost dimensions divide it. Weights and anchors are set in Setup.</p>
     <button class="primary">Create topic</button>
   </form>
 </section>
@@ -258,9 +260,11 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  Until meCache has the topic: {open:false, reason:'rate', rated:0,
  *                  total:0, pending:true}; otherwise pending is false. Applies to the
  *                  creator too.
- * dimColour(t, d)  'var(--value-N)' or 'var(--cost-N)' by d.direction (null counts as
- *                  value), N = 1 + (index of d among t's dimensions of that direction,
- *                  in dimension order) mod 4 (0dvra-D13). Unrated uses var(--unrated).
+ * dimColour(t, d)  'var(--value-N)', 'var(--cost-N)' or 'var(--factor-N)' by d.direction
+ *                  (null or any other value counts as value), N = 1 + (index of d among
+ *                  t's dimensions of that same direction, in dimension order) mod 4
+ *                  (0dvra-D13, three-way split for factor dims: design contract
+ *                  2026-09-22). Unrated uses var(--unrated).
  * editing(root)    true when document.activeElement is an INPUT/TEXTAREA/SELECT inside
  *                  root — the focus guard: never rebuild a row being edited.
  * showTab(name)    'dots' | 'rate' | 'board' | 'setup' | 'compare'; persists sessionStorage.tab.
@@ -283,7 +287,8 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  The shell toggles the view roots' `hidden`; views never do.
  * CSS              tokens --accent, --accent-soft, --accent-ink, --bg, --surface,
  *                  --surface-2, --ink, --muted, --line, --ok, --warn, --warn-soft,
- *                  --value-1..4, --cost-1..4, --unrated, --track, --shadow; scale
+ *                  --value-1..4, --cost-1..4, --factor-1..4, --unrated, --track,
+ *                  --shadow; scale
  *                  --radius, --radius-lg, --fs-1..4. Classes .pane (a view), .card
  *                  (an item inside it), button.primary, button.link, .muted, .num.
  *                  No literal colour outside the token blocks.
@@ -341,11 +346,16 @@ function boardGate(t) {
   return { open: open, reason: open ? null : (done ? 'reveal' : 'rate'), rated: p.rated, total: p.total, pending: false };
 }
 
+// three-way partition (design contract 2026-09-22): a factor dim draws from its own
+// --factor-N family so it neither borrows a value slot nor recolours later value dims.
+function dimFamily(direction) {
+  return direction === 'cost' ? 'cost' : direction === 'factor' ? 'factor' : 'value';
+}
 function dimColour(t, d) {
-  const cost = d.direction === 'cost';
-  const same = (t ? t.dimensions : [d]).filter(x => (x.direction === 'cost') === cost);
+  const family = dimFamily(d.direction);
+  const same = (t ? t.dimensions : [d]).filter(x => dimFamily(x.direction) === family);
   const i = Math.max(0, same.findIndex(x => x.id === d.id));
-  return 'var(--' + (cost ? 'cost' : 'value') + '-' + (1 + i % 4) + ')';
+  return 'var(--' + family + '-' + (1 + i % 4) + ')';
 }
 
 function editing(root) {
@@ -495,7 +505,7 @@ function renderLanding() {
       for (const d of t.dimensions) {
         const s = document.createElement('span');
         s.textContent = d.name; s.style.background = dimColour(t, d);
-        s.title = d.name + ' (' + (d.direction === 'cost' ? 'cost' : 'value') + ')';
+        s.title = d.name + ' (' + (d.direction || 'value') + ')';
         dims.appendChild(s);
       }
     }
@@ -519,7 +529,8 @@ function addDimRow(name, direction) {
   const row = document.createElement('div');
   row.className = 'ntrow';
   row.innerHTML = '<span class="sw" aria-hidden="true"></span><input maxlength="80" aria-label="dimension name">' +
-                  '<select aria-label="direction"><option value="value">value</option><option value="cost">cost</option></select>' +
+                  '<select aria-label="direction"><option value="value">value</option><option value="factor">factor</option>' +
+                  '<option value="cost">cost</option></select>' +
                   '<button type="button" class="link" aria-label="remove dimension">remove</button>';
   row.querySelector('input').placeholder = name;
   row.querySelector('select').value = direction;

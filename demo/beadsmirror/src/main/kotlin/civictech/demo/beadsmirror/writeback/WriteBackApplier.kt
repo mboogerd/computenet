@@ -2,6 +2,8 @@ package civictech.demo.beadsmirror.writeback
 
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.ExportRow
+import civictech.demo.beadsmirror.dolt.DoltSql
+import civictech.demo.beadsmirror.doltRootFor
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.nio.file.Path
@@ -27,6 +29,15 @@ data class ApplyReport(
     val importerInvocations: Int,
     /** Every event emitted during this pass, in emission order. */
     val events: List<WriteBackEvent>,
+    /**
+     * Issues the plan said to impose but that were left alone this pass
+     * because the destination's working set held an uncommitted write to them
+     * at the moment of the import decision (computenet-oagbm; see
+     * [WriteBackApplier]'s "In-flight local writes are deferred"). No event,
+     * no pre-flight, no echo expectation and no import for them; the next
+     * pass re-plans them from a fresh export.
+     */
+    val deferred: List<String> = emptyList(),
 )
 
 /**
@@ -59,6 +70,7 @@ data class ApplyReport(
  * | [PlanOutcome.NoOp] | [WriteBackEvent.Skipped] `(Equal)` — no import (clause 5) |
  * | [PlanOutcome.Unrenderable] | [WriteBackEvent.Failed] `(Unrenderable)` — no import |
  * | [PlanOutcome.Impose], already in the failed set | [WriteBackEvent.Skipped] `(PreviouslyFailed)` — no import (clause 6) |
+ * | [PlanOutcome.Impose], named by [inFlight] | added to [ApplyReport.deferred] — no event, no import (computenet-oagbm) |
  * | [PlanOutcome.Impose], otherwise | [WriteBackEvent.PreFlight], THEN exactly one [importer] call |
  *
  * A non-zero exit is [WriteBackFailure.ImportExited], recorded in the failed
@@ -94,6 +106,64 @@ data class ApplyReport(
  * nothing will ever echo it back); a zero exit keeps the expectation
  * standing, whatever the read-back later decides -- a commit landed either
  * way.
+ *
+ * **In-flight local writes are deferred (computenet-oagbm).** [inFlight]
+ * names every issue whose row in the destination's Dolt WORKING set differs
+ * from its HEAD commit -- a write some process has made and not yet
+ * committed. For each [PlanOutcome.Impose] that is not already
+ * [SkipReason.PreviouslyFailed], the applier calls [inFlight] immediately
+ * before the loss record and the import, strictly AFTER the pass-start
+ * [export]; an issue it names is added to [ApplyReport.deferred] and nothing
+ * else happens to it this pass.
+ *
+ * Why: bd 1.1.2 writes the shared working set and THEN commits the whole
+ * working set, as two steps that are not atomic across processes. A `bd
+ * update` caught between them is visible to [export], so the planner sees
+ * the edit as a divergence from the fold and would impose the fold's value
+ * over it. The import's commit then sweeps the row in as fold-value ->
+ * fold-value plus a fresh `cn_echo` (classified ECHO), the update finds
+ * nothing left to commit and exits 0, and no commit anywhere records the
+ * edit -- it is lost to bd and to the mirror alike (measured on
+ * computenet-oagbm: 2 of 32 raced iterations under reader load). A deferred
+ * row costs one pass of latency and no data: once the writer commits, the
+ * edit is an ordinary LOCAL commit the mirror ingests (epic computenet-6wc:
+ * never-gossiped local edits survive; correctness outranks commit thrift).
+ *
+ * Ordering matters: querying [inFlight] BEFORE [export] would let a write
+ * land between the two, be seen by the export, and not be named as in
+ * flight. After the export, a write that is visible to it is either still
+ * uncommitted at the [inFlight] query (deferred) or already committed (a
+ * LOCAL commit exists, so an overwrite is re-adjudicated by the mirror, not
+ * lost -- see below).
+ *
+ * **Residual limits, stated where the claim is made.**
+ * - A write that lands AFTER the [inFlight] query and before the
+ *   [importer]'s own write is still overwritten and swept. The planner only
+ *   imposes a row the fold disagrees with, and a write landing that late was
+ *   not visible to the export, so this needs a genuine imposition (a peer's
+ *   winner) racing a local edit of the SAME row within one import's runtime.
+ *   It is narrowed, not closed: closing it needs a cross-process lock bd
+ *   does not offer (the non-atomic write/commit is upstream bd's).
+ * - A local edit that is already COMMITTED but not yet ingested by the
+ *   poller is not deferred. It is overwritten, then re-adjudicated when its
+ *   LOCAL commit is ingested -- the self-healing path that predates this
+ *   guard -- at the cost of a transient revert in bd. Deferring it too would
+ *   need the feed checkpoint, which is not one of this class's seams.
+ * - The pre-flight loss record for every row is still computed against the
+ *   ONE pass-start [export] (computenet-uv65o clause 4). A local edit
+ *   COMMITTED between that export and the row's import is overwritten
+ *   without a [WriteBackEvent.PreFlight] loss naming it (it is not lost: its
+ *   commit is LOCAL, per the previous point). An edit still UNCOMMITTED at
+ *   that point is deferred by the guard above, which is what uv65o's
+ *   accepted-limit note did not anticipate: that window did lose edits.
+ * - The default [inFlight] names nothing, i.e. no guard. Only [forWorkspace]
+ *   (the production wiring) supplies the real query; a caller constructing
+ *   this class directly against a live workspace must supply it too.
+ * - "One pass of latency" assumes the writer commits promptly, as bd's
+ *   auto-commit does. A working set left dirty (a writer killed between its
+ *   write and its commit) keeps the row deferred on every pass until some
+ *   process commits it, and a deferral emits no [WriteBackEvent], so that
+ *   stall is silent (computenet-ilimc).
  */
 class WriteBackApplier(
     private val export: () -> List<ExportRow>,
@@ -103,6 +173,7 @@ class WriteBackApplier(
     private val cnDot: (issueId: String) -> String? = { null },
     private val expectEcho: (issueId: String, token: String) -> Unit = { _, _ -> },
     private val cancelEcho: (issueId: String, token: String) -> Unit = { _, _ -> },
+    private val inFlight: () -> Set<String> = { emptySet() },
 ) {
 
     /** `(issueId, imposed row JSON text)` pairs whose import has already failed once. */
@@ -115,6 +186,7 @@ class WriteBackApplier(
         var imposed = 0
         var skipped = 0
         var failed = 0
+        val deferred = mutableListOf<String>()
 
         fun emit(event: WriteBackEvent) {
             events += event
@@ -144,6 +216,14 @@ class WriteBackApplier(
                     if (key in previouslyFailed) {
                         skipped++
                         emit(WriteBackEvent.Skipped(imposition.issueId, SkipReason.PreviouslyFailed))
+                        continue
+                    }
+
+                    // computenet-oagbm: never impose over a write the destination
+                    // has made and not yet committed. Queried here -- after the
+                    // pass-start export, immediately before the import -- per row.
+                    if (imposition.issueId in inFlight()) {
+                        deferred += imposition.issueId
                         continue
                     }
 
@@ -193,7 +273,7 @@ class WriteBackApplier(
             }
         }
 
-        return ApplyReport(imposed, skipped, failed, invocations, events)
+        return ApplyReport(imposed, skipped, failed, invocations, events, deferred)
     }
 
     /**
@@ -246,7 +326,8 @@ class WriteBackApplier(
          * its dedicated scheduler thread (`WorkspaceMirror.WriteBackScheduler`,
          * not the poll thread) — is the sibling app-wiring task's
          * (computenet-6wc.1.5); this factory only spares it from re-deriving
-         * which three seams go together.
+         * which workspace seams go together: `bd export`, `bd import`, and
+         * (computenet-oagbm) the [uncommittedIssueIds] in-flight guard.
          */
         fun forWorkspace(
             workspaceRoot: Path,
@@ -258,7 +339,36 @@ class WriteBackApplier(
         ): WriteBackApplier {
             val reader = BdExportReader(workspaceRoot)
             val bdImport = BdImport(workspaceRoot)
-            return WriteBackApplier(reader::read, bdImport::importRow, winner, onEvent, cnDot, expectEcho, cancelEcho)
+            val dolt = DoltSql(doltRootFor(workspaceRoot))
+            return WriteBackApplier(
+                reader::read,
+                bdImport::importRow,
+                winner,
+                onEvent,
+                cnDot,
+                expectEcho,
+                cancelEcho,
+                inFlight = { uncommittedIssueIds(dolt) },
+            )
         }
+
+        /**
+         * The production [inFlight] query: every issue id whose `issues` row
+         * differs between the Dolt HEAD commit and the WORKING set, read with
+         * `dolt_diff('HEAD','WORKING','issues')` (both sides' ids, so an
+         * uncommitted insert or delete counts too). Measured on bd 1.1.2 /
+         * dolt 2.2.3 (computenet-oagbm): an uncommitted write made by one
+         * process is visible to another process's `dolt sql` and `bd export`
+         * alike, and a workspace with no pending write returns no rows.
+         *
+         * A failure propagates, exactly as an [export] failure does: guessing
+         * "nothing in flight" would re-open the loss this query exists to
+         * prevent.
+         */
+        internal fun uncommittedIssueIds(dolt: DoltSql): Set<String> =
+            dolt.query("select from_id, to_id from dolt_diff('HEAD','WORKING','issues')")
+                .flatMap { row -> listOf(row["from_id"], row["to_id"]) }
+                .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                .toSet()
     }
 }

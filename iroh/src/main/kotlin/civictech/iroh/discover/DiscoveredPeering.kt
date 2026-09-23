@@ -774,11 +774,22 @@ class DiscoveredPeering private constructor(
      *
      * At the larger id they are deliberately NOT seeded. There OUTBOUND is the
      * loser, and seeding one would let [PeerTable.judge] name a link for
-     * [closeLink] that its connection has not yet installed, so the quiet
-     * close would find no current link to close. Nothing is lost by waiting:
-     * this node announces on an outbound link only once it is admitted, and
-     * that hello is judged after registration, against a table that holds both
-     * directions.
+     * [closeLink] that its connection has not yet installed. Named that way,
+     * [closeLink] finds no direction for the link in the node's registry and
+     * takes the raw `node.client.link(id)?.close()` branch instead of the
+     * connection's quiet close, closing the loser from inside the dial
+     * thread's window rather than through the normal path — observed
+     * (computenet-07hpc, guard replaced by `if (true)`): the resulting down is
+     * then classified quiet only because the connection's `tieBreakLoss`
+     * predicate covers it (the far side's winner is registered and admitted
+     * by then), not because the close itself was quiet. Whether an
+     * interleaving exists where that predicate does not yet hold — leaving an
+     * unadmitted open charged and a re-dial armed — is unverified. Nothing is
+     * lost by waiting: this node announces on an outbound link only once it
+     * is admitted, and that hello is judged after registration, against a
+     * table that holds both directions. `MutualDialTest`'s "the larger id's
+     * gate does not name its own settled but unregistered outbound loser"
+     * pins the guard.
      */
     private fun linksToSeed(remoteNodeId: ByteArray): List<IrohNode.LinkView> =
         if (PeerTable.loserDirection(table.ownKey.bytes, remoteNodeId) == LinkDirection.INBOUND) {
