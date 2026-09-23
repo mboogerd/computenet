@@ -537,6 +537,36 @@ class SocialComplexReadTest {
         }
     }
 
+    @Test
+    fun `a refused scope read answers 503 with the person read's own reason, never an empty feed`() {
+        // 4q9is-D4/D8: the viewer's snb-person read (ViewerInterest) refused
+        // fails the pull with ScopeUnavailable, which /feed maps to 503 with
+        // that refusal's reason — not READ_FAILED, and not a 200 empty board.
+        val refused = ConcurrentHashMap<CellRef, StateReadResult.Reason>()
+        val app = SocialApp(port = 0, reader = { host -> RefusingReader(HostBoundedReader(host), refused) }).start()
+        try {
+            app.graph.addPerson(Person(1, "V", "One"))
+            app.graph.addPerson(Person(2, "A", "Two"))
+            app.graph.addKnows(1, 2, 1)
+            app.graph.addForum(Forum(100, "f", moderatorId = 1))
+            app.graph.addPost(Message(10, creatorId = 2, creationDate = 100, content = "m10", forumId = 100))
+            awaitUntil("initial post to settle") { app.graph.authored(2).size == 1 }
+
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            refused[app.pipeline.families.person.getOrSpawn(1).ref] = StateReadResult.Reason.MIGRATING
+
+            val resp = probe.get("/feed?person=1&limit=20")
+            resp.statusCode() shouldBe 503
+            resp.body() shouldBe """{"refused":"MIGRATING"}"""
+
+            refused.clear()
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(10, 2, 100, "m10", 100)}]}"""
+        } finally {
+            app.stop()
+        }
+    }
+
     /**
      * Wraps a [BoundedReader], answering with a [CompletableFuture] that is
      * never completed for any ref present in [stuck] and delegating
