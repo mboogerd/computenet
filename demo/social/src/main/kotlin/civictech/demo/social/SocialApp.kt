@@ -127,22 +127,30 @@ class SocialApp(
 
     /**
      * A scatter-gather feed for [viewer] over the authored cells [scope]
-     * admits (feature `computenet-8eb53`). The scope is the caller's: this
-     * app does not derive it from `knows`; `/feed` (flfkm-D8) is the one
-     * caller that does, through [feedSessions] below.
+     * admits (feature `computenet-8eb53`). The scope is the caller's, fixed
+     * for the session's lifetime ([ScopeSource.fixed]); `SocialPipelineTest`
+     * and `SocialFeedScatterGatherTest` use this overload directly.
      */
     fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
         FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
 
     /**
-     * `/feed`'s per-viewer [FeedSession] cache (flfkm-D8): one session per
-     * viewer, rebuilt only when the viewer's friend-id set (read fresh through
-     * [shortReads].is3 on every request) no longer matches the cached
-     * session's [FeedSession.scope]. A rebuild re-reads every leg from
-     * `since = null` — the retained-frontier path is lost on a friend-set
-     * change, accepted here; feature `computenet-4q9is` later moves scope
-     * maintenance into the session itself so a friend add/remove need not
-     * discard it.
+     * `/feed`'s session (4q9is-D8): the scope is [ViewerInterest], derived
+     * from the viewer's `knows` set fresh on every [FeedSession.pull] — the
+     * session itself tracks a friend add/remove, so [feedSessions] below
+     * never needs to rebuild it.
+     */
+    fun feedSession(viewer: Long, pageLimit: Int = 200): FeedSession =
+        FeedSession(viewer, ViewerInterest(locator, boundedReader, registry, pageLimit), pipeline.families, registry, boundedReader, pageLimit)
+
+    /**
+     * `/feed`'s per-viewer [FeedSession] cache (4q9is-D8): one session per
+     * viewer, for as long as the viewer keeps polling — never rebuilt, so a
+     * friend add or remove neither discards a retained frontier nor drops
+     * `handleFeed`'s reused session. Each session derives its own scope from
+     * the viewer's current `knows` set on every pull ([ViewerInterest]); a
+     * friend change is picked up on the pull that follows it, with no cache
+     * comparison here.
      */
     private val feedSessions = ConcurrentHashMap<Long, FeedSession>()
 
@@ -404,6 +412,12 @@ class SocialApp(
      * firing in practice, but this method is the HTTP boundary's own defense:
      * no composed future should be able to turn into an ungraceful
      * 500/closed-connection response, whatever throws inside it.
+     *
+     * `computenet-4q9is.3`: when the cause is [ScopeUnavailable] (a `/feed`
+     * session's derived-scope read was refused), the reason reported is the
+     * scope read's own — the same shape [ReadOutcome.Refused] already uses —
+     * rather than the generic `READ_FAILED` every other exceptional
+     * completion still gets.
      */
     private fun <T> respondOutcome(exchange: HttpExchange, future: CompletableFuture<ReadOutcome<T>>, body: (T) -> String) {
         val outcome = try {
@@ -411,8 +425,9 @@ class SocialApp(
         } catch (_: TimeoutException) {
             exchange.respond(503, """{"refused":"TIMEOUT"}""", "application/json")
             return
-        } catch (_: ExecutionException) {
-            exchange.respond(503, """{"refused":${esc(StateReadResult.Reason.READ_FAILED.name)}}""", "application/json")
+        } catch (e: ExecutionException) {
+            val reason = (e.cause as? ScopeUnavailable)?.reason ?: StateReadResult.Reason.READ_FAILED
+            exchange.respond(503, """{"refused":${esc(reason.name)}}""", "application/json")
             return
         }
         when (outcome) {
@@ -502,15 +517,37 @@ class SocialApp(
     }
 
     /**
-     * `GET /feed?person=<id>&limit=<n>[&before=<ms>]` — IC2 (flfkm-D8). Reads
-     * the viewer's friend ids fresh through [shortReads].is3 (never
-     * `graph.personFacts`, per the F1 review the file KDoc cites), then pulls
-     * and boards a per-viewer [FeedSession] cached in [feedSessions], rebuilt
-     * only when the friend-id set no longer matches the cached session's
-     * scope. The `is3` future and the session's `pull()` future are composed
-     * into one, so [respondOutcome] bounds both with a single timeout; a
-     * [LegOutcome.Deferred] leg is not a refusal — [FeedSession.board] still
-     * answers from whatever the other legs delivered.
+     * `GET /feed?person=<id>&limit=<n>[&before=<ms>]` — IC2 (4q9is-D8). No
+     * `shortReads.is3` read and no scope comparison here: [feedSessions]
+     * caches one [FeedSession] per viewer, built once over [ViewerInterest]
+     * ([feedSession]), and every pull re-derives that viewer's scope from
+     * their current `knows` set (see [FeedSession]'s "Scope" doc) — a friend
+     * add or remove neither rebuilds the session nor loses its retained
+     * frontiers. An unknown viewer never reaches the cache: `/feed` answers
+     * `{"found":false}` at zero authored reads, matching `is1`'s own
+     * unknown-id behavior. A refused scope read fails [FeedSession.pull]
+     * exceptionally with [ScopeUnavailable], which [respondOutcome] maps to
+     * 503 with that refusal's own reason. A [LegOutcome.Deferred] leg is not
+     * a refusal — [FeedSession.board] still answers from whatever the other
+     * legs delivered.
+     *
+     * **`pullShared` and a just-applied write (`computenet-flfkm` review
+     * lead, relayed on this task's bead).** [FeedSession.pullShared] hands an
+     * overlapping caller the future of a pull already in flight, and that
+     * pull derived its scope, and read every leg's page, before the write
+     * landed — so a request arriving right after a friend add/remove or a
+     * new post can join a pull that does not reflect it. Deriving the scope
+     * per pull (this task) widens that window relative to task 1iz73's
+     * baseline: there, `handleFeed` re-read `is3` fresh on every request and
+     * replaced the cached session outright on a scope change, so a friend
+     * change was visible to the very request that raced it; here it is
+     * visible only once that request's own call to [FeedSession.pullShared]
+     * starts a pull after the write. The intended semantics: `/feed` is
+     * next-pull consistent, not read-your-write consistent, for both a
+     * friend change and a post — the same guarantee `[SOC1-FEED-03/04]`'s
+     * retained-frontier design already gives message content, now extended
+     * to scope. No poller loses data: a friend removed keeps hiding what it
+     * hid, an add keeps widening from the next pull woken by any caller.
      */
     private fun handleFeed(exchange: HttpExchange) {
         val person: Long
@@ -525,33 +562,20 @@ class SocialApp(
             return
         }
 
-        val future: CompletableFuture<ReadOutcome<List<Message>>> = shortReads.is3(person).thenCompose { outcome ->
-            when (outcome) {
-                is ReadOutcome.Found -> {
-                    val ids = outcome.value.map { it.otherId }.toSortedSet()
-                    if (ids.isEmpty()) {
-                        CompletableFuture.completedFuture<ReadOutcome<List<Message>>>(ReadOutcome.Found(emptyList()))
-                    } else {
-                        val ranges = ids.map { Interest.Ranges.Range(it, it + 1) }
-                        val session = feedSessions.compute(person) { _, existing ->
-                            if (existing != null && existing.scope == Interest.Ranges(ranges)) existing
-                            else feedSession(person, Interest.Ranges(ranges))
-                        }!!
-                        // computenet-1iz73: pullShared(), not pull(), because two /feed
-                        // requests for the same viewer can reach this cached session
-                        // while an earlier pull is still in flight (the cache-fetch
-                        // above is atomic; a session's pull() is not reentrant, and
-                        // this HTTP layer must never race that check).
-                        session.pullShared()
-                            .thenApply { session.board(limit, before) }
-                            .thenApply<ReadOutcome<List<Message>>> { ReadOutcome.Found(it) }
-                    }
-                }
-
-                ReadOutcome.Empty -> CompletableFuture.completedFuture<ReadOutcome<List<Message>>>(ReadOutcome.Empty)
-                is ReadOutcome.Refused -> CompletableFuture.completedFuture<ReadOutcome<List<Message>>>(outcome)
+        val future: CompletableFuture<ReadOutcome<List<Message>>> =
+            if (locator.person(person) == null) {
+                CompletableFuture.completedFuture(ReadOutcome.Empty)
+            } else {
+                val session = feedSessions.computeIfAbsent(person) { feedSession(person) }
+                // computenet-1iz73: pullShared(), not pull(), because two /feed
+                // requests for the same viewer can reach this cached session
+                // while an earlier pull is still in flight (the cache-fetch
+                // above is atomic; a session's pull() is not reentrant, and
+                // this HTTP layer must never race that check).
+                session.pullShared()
+                    .thenApply { session.board(limit, before) }
+                    .thenApply<ReadOutcome<List<Message>>> { ReadOutcome.Found(it) }
             }
-        }
         respondOutcome(exchange, future) { messages ->
             """{"found":true,"messages":${messages.joinToString(",", "[", "]") { it.json() }}}"""
         }
