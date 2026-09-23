@@ -96,7 +96,39 @@ open class ManagedHost(
      * fires.
      */
     private val hopBound: Int = 64,
+    /**
+     * Batched ingress dispatch (KBLK, `computenet-t6b.2-D4`): the maximum number
+     * of staged invocations one data-band (priority 20) scheduler task may
+     * dispatch. A **scheduling** setting beside [attention] and [intakeBound] —
+     * not a durability one: it never changes which journal a cell uses or when
+     * an append happens.
+     *
+     * `1` (the default) is the pre-KBLK path, byte-for-byte: every accepted
+     * invocation submits its own `dispatchOne` task. A value above `1` (a
+     * benchmark host passes e.g. `64`) coalesces task submission instead: one
+     * armed task drains up to this many staged invocations, then re-arms while
+     * staged work remains (see [drainBatch]).
+     *
+     * It changes the **task count only**, never which message runs next: the
+     * band selection and stride floor run per message inside the task
+     * ([AttentionScheduler.dispatchUpTo] loops the unchanged
+     * [AttentionScheduler.dispatchOne]), so per-cell FIFO, per-link FIFO,
+     * [civictech.cell.MessageContext] and the attention starvation bound are the
+     * same either way. Staging and the journal append stay per invocation, under
+     * [dataLock], at acceptance time.
+     *
+     * The one observable cost: a task that delivers into a cell whose handler
+     * genuinely suspends parks the host (spec 32; [SimulationController],
+     * [CoroutineScheduler]) for the rest of its batch, exactly as one message
+     * does unbatched — only longer, and other-band work (management, protocol)
+     * waits behind a whole batch rather than behind one message.
+     */
+    private val dispatchBatch: Int = 1,
 ) : Host {
+
+    init {
+        require(dispatchBatch >= 1) { "dispatchBatch must be >= 1 (was $dispatchBatch)" }
+    }
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
     internal var parentHost: ManagedHost? = null
@@ -437,14 +469,26 @@ open class ManagedHost(
     )
 
     /**
-     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues; each
-     * staged message submits one dispatcher task at data priority, and each
-     * dispatch picks the next cell by attention band. Per-cell FIFO (a superset
-     * of per-link FIFO, spec 31 rule 3) holds because band selection happens
-     * BETWEEN cells, never within one — and the one-task-per-message shape
-     * keeps drain's phase 2 (priority 30) behind every accepted message.
+     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues, and
+     * each dispatch picks the next cell by attention band. Per-cell FIFO (a
+     * superset of per-link FIFO, spec 31 rule 3) holds because band selection
+     * happens BETWEEN cells, never within one.
+     *
+     * Every accepted message is dispatched by a data-band (priority 20) task
+     * submitted after its staging. With [dispatchBatch] `== 1` that is one task
+     * per message (message count <= task count); with [dispatchBatch] `> 1` one
+     * armed task drains up to the bound and re-arms while work remains
+     * ([drainBatch]). Either way drain's phase 2 (priority 30) runs after them,
+     * because every [HostScheduler] orders by priority, then sequence.
      */
     private val dataLock = Any()
+
+    /**
+     * Batched dispatch only ([dispatchBatch] `> 1`): true while a [drainBatch]
+     * task is submitted-and-not-yet-finished. Guarded by [dataLock]; never read
+     * or written on the `dispatchBatch == 1` path.
+     */
+    private var dispatchArmed = false
 
     /**
      * Attention-driven dispatch (spec 34, M6.3/M17) — per-cell FIFO staging,
@@ -730,8 +774,13 @@ open class ManagedHost(
         // contention matters.
         //
         // stage at SEND time (not dispatch time) so a backlog can form and band
-        // selection has something to choose between; one dispatcher task per
-        // message keeps message count <= task count (a task may find nothing)
+        // selection has something to choose between; every accepted message is
+        // then dispatched by a data-band task submitted after its staging. With
+        // dispatchBatch == 1 that is one task per message (message count <=
+        // task count; a task may find nothing); with dispatchBatch > 1 one armed
+        // task drains up to the bound and re-arms while work remains
+        // (drainBatch). Either way drain's phase 2 at 30 runs after them because
+        // schedulers order by priority.
         //
         // T04 finding 1: checkSaturationOnAccept returns a deferred announce
         // instead of running Protocols.sendUpstream's relay traversal here —
@@ -743,7 +792,53 @@ open class ManagedHost(
             intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
         announce?.invoke()
-        enqueue(20) { attentionScheduler.dispatchOne() }
+        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+    }
+
+    /**
+     * Batched dispatch ([dispatchBatch] `> 1`), called after a message is
+     * staged: submits a [drainBatch] task unless one is already armed. An armed
+     * task that has not yet made its final check (in [drainBatch]'s `finally`)
+     * is guaranteed to see this message — both that check and the staging
+     * happen under [dataLock], and the check re-arms whenever anything is
+     * staged — so skipping the submit here never strands a message.
+     */
+    private fun armBatchDispatch() {
+        val arm = synchronized(dataLock) {
+            if (dispatchArmed) false else true.also { dispatchArmed = true }
+        }
+        if (arm) enqueue(20) { drainBatch() }
+    }
+
+    /**
+     * One batched data-band task: dispatch up to [dispatchBatch] staged
+     * messages (band selection and the stride floor re-run per message inside
+     * [AttentionScheduler.dispatchUpTo]), then — in `finally`, so a throwing
+     * delivery cannot leave the flag armed with nobody coming — disarm and, if
+     * staged work remains, re-arm by submitting the next task.
+     *
+     * **Drain ordering.** [beginDrain] closes the intake and then submits its
+     * phase 2 at priority 30. Every message accepted before the intake closed
+     * is either already dispatched, or staged with an armed [drainBatch]
+     * pending or running. A pending one runs first (20 < 30). A running one
+     * re-arms at 20 before it returns, and a host drains one task at a time,
+     * so that re-armed task is enqueued before the scheduler next polls — and
+     * wins against the pending 30 on priority, whatever its sequence number.
+     * That holds on every scheduler because each orders by `(priority,
+     * sequence)`: [SimulationController]'s `PriorityQueue<ScheduledTask>`,
+     * [VirtualThreadScheduler]'s and [CoroutineScheduler]'s
+     * `PriorityBlockingQueue<ScheduledTask>`, all via [ScheduledTask.compareTo].
+     * So phase 2 still runs after every accepted message, as it does unbatched.
+     */
+    private suspend fun drainBatch() {
+        try {
+            attentionScheduler.dispatchUpTo(dispatchBatch)
+        } finally {
+            val rearm = synchronized(dataLock) {
+                attentionScheduler.dataQueues.isNotEmpty().also { dispatchArmed = it }
+            }
+            if (rearm) enqueue(20) { drainBatch() }
+        }
     }
 
     /**
