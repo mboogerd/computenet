@@ -1177,6 +1177,55 @@ untouched; both remain exactly as described above.
   reproduction `BS-5` (`EffectReplayReproTest`, cited above under the
   journaled-source double-fire boundary, `[CHA2-14]`).
 
+### The fifth boundary (`design ceiling`, `[24-DUR-05]` under a relaxed durability class, `[KBLK-14]`/`[KBLK-26]`, `computenet-t6b.2.2`) — the Effectful window of a `BATCHED` journal — RECORDED as a named limitation, not refused
+
+**What it is.** `BatchedFileJournal` (`kernel/.../durability/BatchedFileJournal.kt`,
+`DurabilityClass.BATCHED`) writes exactly `FileJournal`'s bytes but fsyncs once per
+`syncEvery` acknowledged appends instead of once per append. An `Effectful` inlet's
+processed-frontier advance (`RECORD_FRONTIER`, appended by
+`HostDurability.advanceAndJournalFrontier` *after* the handler — and so the effect —
+ran) or its baseline discharge (`RECORD_BASELINE`) can therefore sit in the unsynced
+tail when the process dies. It is lost; on `recoverFrom` the frame it guarded replays
+against a frontier that does not cover it, and **the effect re-fires**. That is a
+duplicate — the failure mode `[24-DUR-07]` already chose over omission ("firing is
+loud and bounded") — not an omission and not a new kind of failure.
+
+**Scope of the weakening.** `[24-DUR-05]` is **not** weakened for a
+`SYNCHRONOUS` journal (`FileJournal`), whose every append — frontier records
+included — is on stable storage before it returns; everything the entries above
+assert holds unchanged there. It is weakened for the `BATCHED` class only, by
+exactly this window, and the class says so in its own contract (its KDoc) rather
+than leaving `[24-DUR-05]` reading as unconditional.
+
+**Why recorded rather than refused** (`computenet-t6b.2-D1`). A journal sees bytes,
+not cells, so the class cannot refuse to serve an `Effectful` cell; a refusal would
+have to be a host-side spawn veto keyed on the selector's class — the kernel refusing
+on the deployment's behalf, which `[KBLK-07]` forbids (and which PN-12 already
+rejected for the volatile-durable case). The deployment reads the host's per-class
+journal counts and refuses itself at startup if it needs `SYNCHRONOUS` durability.
+
+**No physical loss bound is claimed** (`[KBLK-26]`). "At most `syncEvery - 1`
+acknowledged records" is the class's *declared* window, not a measured one. The
+kernel tests (`BatchedFileJournalTest`) kill nothing below the JVM: a truncated or
+abandoned file leaves the OS page cache intact, so the truncation sweep there proves
+that the *reader* recovers a prefix of whatever reached the file — never a gap or a
+reorder — and nothing about what a power loss would leave. That needs power loss or
+a fault-injecting filesystem, which nothing in this repository has.
+
+Deliberately **no corpus scenario** accompanies this entry, for two reasons:
+
+- A scenario asserting "the effect re-fires under a batched journal" would state a
+  weaker rule than `[24-DUR-05]` as though it were the decided one — the same
+  reasoning the KFX-16 entry above gives. The class KDoc carries the contract; this
+  ledger carries the honesty.
+- A corpus scenario for `[24-DUR-02]`/`[24-DUR-03]` *across* durability classes
+  (the byte-identical cross-replay and per-journal scoping `BatchedFileJournalTest`
+  asserts in the kernel) is blocked on a schema-gated change: the `dur` driver holds
+  one `InMemoryJournal` (`KernelDriverDur`) and `concord/schema/cell-catalog.md`
+  §Durability has no class-selectable or file-backed journal type
+  (`computenet-t6b.2-D5`). A later feature that wants that equivalence in the corpus
+  files a catalog-type ticket rather than inventing one.
+
 ### Not covered (deferred, honestly out of reach at W4-B)
 
 - `24-DUR-04` (replay-stable identity, no resurrected removals) — **NARROWED
