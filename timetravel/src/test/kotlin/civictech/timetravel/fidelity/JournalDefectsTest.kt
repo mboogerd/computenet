@@ -17,8 +17,8 @@ import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 
 /**
- * TTD1 F3 (computenet-kxex2.2), decision kxex2-D6: [journalDefectsUpTo] names every journal
- * defect at or before a position, and nothing after it ([TTD1-36]).
+ * TTD1 F3 (computenet-kxex2.2): [journalDefectsUpTo] names every record defect at or before a
+ * position and nothing after it, and a tear at every position ([TTD1-36], epic BS-5).
  */
 class JournalDefectsTest {
 
@@ -85,12 +85,23 @@ class JournalDefectsTest {
     }
 
     @Test
-    fun `the tear counts once the position reaches the last intact record`() {
+    fun `the tear counts at every legal position, not only at the last intact record (BS-5)`() {
         val journal = summary(recordCount = 8, tear = JournalFileScan.Tear(lastIntactIndex = 7, trailingBytes = 3))
         val records = (0..7).map { filler(it) }
 
-        journalDefectsUpTo(journal, records, 6) shouldBe emptySet()
-        journalDefectsUpTo(journal, records, 7) shouldBe setOf(Reason.JOURNAL_TORN)
+        for (position in -1..7) {
+            journalDefectsUpTo(journal, records, position) shouldBe setOf(Reason.JOURNAL_TORN)
+        }
+    }
+
+    @Test
+    fun `an untorn journal is never marked JOURNAL_TORN`() {
+        val journal = summary(recordCount = 8)
+        val records = (0..7).map { filler(it) }
+
+        for (position in -1..7) {
+            journalDefectsUpTo(journal, records, position) shouldBe emptySet()
+        }
     }
 
     @Test

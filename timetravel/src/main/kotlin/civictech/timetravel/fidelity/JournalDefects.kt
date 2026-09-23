@@ -12,15 +12,15 @@ import civictech.timetravel.journal.JournalSummary
  * function does not accept a [civictech.timetravel.journal.JournalReading] on purpose.
  *
  * The union, in order:
- * 1. Every reason in [JournalSummary.reasons] except [Reason.JOURNAL_TORN] (that one is
- *    positional, handled by the tear rule below) — today that is only
- *    [Reason.FORMAT_VERSION_MISMATCH]. These apply at every legal position.
+ * 1. Every reason in [JournalSummary.reasons] except [Reason.JOURNAL_TORN] (added by the tear
+ *    rule below) — today that is only [Reason.FORMAT_VERSION_MISMATCH]. These apply at every
+ *    legal position.
  * 2. The reasons of every record in [records] whose `journalId` matches [journal]'s and whose
  *    `index` is `<= position`; records of other journals are ignored, and a record whose index is
  *    strictly greater than [position] contributes nothing.
- * 3. [Reason.JOURNAL_TORN] iff [JournalSummary.tear] is non-null and
- *    `position >= tear.lastIntactIndex` — the torn record is the one that would have followed the
- *    last intact record, so a prefix ending at the last intact record already ends at the tear.
+ * 3. [Reason.JOURNAL_TORN] iff [JournalSummary.tear] is non-null, at every legal position: epic
+ *    BS-5 requires a reconstruction of a torn journal to be at most DEGRADED "at any position"
+ *    ([TTD1-36]), so a tear is a journal-level defect, not a positional one.
  *
  * @throws IllegalArgumentException if [journal] was refused (it has no records and no position to
  *   ask about — the reconstructor never asks about a refused journal), or if [position] is outside
@@ -50,8 +50,7 @@ fun journalDefectsUpTo(journal: JournalSummary, records: Iterable<JournalRecord>
         }
     }
 
-    val tear = journal.tear
-    if (tear != null && position >= tear.lastIntactIndex) {
+    if (journal.tear != null) {
         result += Reason.JOURNAL_TORN
     }
 
