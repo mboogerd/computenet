@@ -345,10 +345,12 @@ object WriteBackPlanner {
      * what the applier does NOT do: it does not re-read the export
      * immediately before each import. The pre-flight loss record for every
      * row in a pass is computed against the ONE export taken at the start of
-     * that pass, so a local `bd` edit landing between that export and a row's
-     * import is overwritten without appearing in the loss record — an
-     * accepted limit, documented with its reason on [WriteBackApplier]'s own
-     * KDoc rather than closed (computenet-uv65o clause 4).
+     * that pass (computenet-uv65o clause 4). A local `bd` edit still
+     * UNCOMMITTED when a row's import is decided is no longer overwritten at
+     * all — the applier defers that row (computenet-oagbm) — but one already
+     * COMMITTED between that export and the import is overwritten without
+     * appearing in the loss record; its LOCAL commit is what keeps it from
+     * being lost. Both limits are stated on [WriteBackApplier]'s own KDoc.
      *
      * [fields] defaults to [ImposedFields.COMPARABLE] — the set both call
      * sites (the planner's Impose/NoOp decision in [plan], and the applier's
