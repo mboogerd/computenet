@@ -258,6 +258,42 @@ class SocialGeneratorTest {
         graph.messageIds().toList() shouldBe slice.messages.map { it.id }.sorted()
     }
 
+    // --- [SOC1-CREAD-01] data half: every message locates in one of two countries,
+    // derived from the message id, no new random draw (computenet-flfkm.1) ---
+
+    @Test
+    fun `every message has a locationCountryId in 6 or 7 with no new random draw across seeds 0 to 19`() {
+        for (seed in 0L until 20L) {
+            val generator = SnbGenerator(seed, 0.02)
+            val slice = generator.staticSlice()
+            val updates = generator.updates().toList()
+
+            val countryIds = HashSet<Long?>()
+            slice.messages.forEach { countryIds += it.locationCountryId }
+            updates.filterIsInstance<IU6AddPost>().forEach { countryIds += it.message.locationCountryId }
+            updates.filterIsInstance<IU7AddComment>().forEach { countryIds += it.message.locationCountryId }
+
+            assertTrue(
+                countryIds.all { it == 6L || it == 7L },
+                "seed=$seed: every message should have locationCountryId in {6, 7}, got $countryIds",
+            )
+            assertTrue(6L in countryIds, "seed=$seed: expected country 6 to occur, got $countryIds")
+            assertTrue(7L in countryIds, "seed=$seed: expected country 7 to occur, got $countryIds")
+
+            val countryPlaces = slice.places.filter { it.type == "country" }
+            assertEquals(
+                setOf(6L, 7L),
+                countryPlaces.map { it.id }.toSet(),
+                "seed=$seed: expected exactly the two country places with ids 6 and 7",
+            )
+            val cityPlaces = slice.places.filter { it.type == "city" }
+            assertTrue(
+                cityPlaces.all { it.partOfId in setOf(6L, 7L) },
+                "seed=$seed: every city's partOfId should name one of the two countries: $cityPlaces",
+            )
+        }
+    }
+
     @Test
     fun `SocialLoader contains no branch on the source runtime type`() {
         val loaderSource = File("src/main/kotlin/civictech/demo/social/SocialLoader.kt").readText()
