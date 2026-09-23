@@ -23,7 +23,7 @@ class ReplayStable(private val extraFaithful: Set<Class<out Cell>> = emptySet())
         if (Effectful::class.java.isAssignableFrom(cls)) {
             return Fidelity.Degraded(setOf(Reason.EFFECTFUL_CELL))
         }
-        if (cls.packageName in FAITHFUL_PACKAGES || extraFaithful.any { it.isAssignableFrom(cls) }) {
+        if (cls.packageName in FAITHFUL_PACKAGES || cls in extraFaithful) {
             return Fidelity.Faithful
         }
         return Fidelity.Degraded(setOf(Reason.UNKNOWN_DETERMINISM))

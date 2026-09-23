@@ -26,6 +26,10 @@ class ReplayStableAllowListTest {
 
     private class EffectfulProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Effectful
 
+    private open class VouchedBase(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell
+
+    private class UnvouchedSubclass : VouchedBase()
+
     @Test
     fun everyConcreteDataCellClassifiesFaithfulUnderDefault() {
         val classes = concreteDataCellClasses()
@@ -70,6 +74,14 @@ class ReplayStableAllowListTest {
         val vouching = ReplayStable(setOf(OpaqueProbe::class.java))
 
         vouching.classify(OpaqueProbe::class.java) shouldBe Fidelity.Faithful
+    }
+
+    @Test
+    fun vouchingForAClassDoesNotVouchForItsSubclasses() {
+        val vouching = ReplayStable(setOf(VouchedBase::class.java))
+
+        vouching.classify(VouchedBase::class.java) shouldBe Fidelity.Faithful
+        vouching.classify(UnvouchedSubclass::class.java) shouldBe Fidelity.Degraded(setOf(Reason.UNKNOWN_DETERMINISM))
     }
 
     companion object {
