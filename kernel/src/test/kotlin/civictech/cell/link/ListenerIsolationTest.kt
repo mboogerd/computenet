@@ -105,6 +105,24 @@ class ListenerIsolationTest {
         outlet.linking.links shouldBe emptyList()
     }
 
+    @Test
+    fun `an ordinary unlink still notifies the source side when a target-side listener throws`() {
+        val outlet = FanOutlet.create<Consumer<String>>()
+        val inlet = collectingInlet()
+        @Suppress("UNCHECKED_CAST")
+        val link = (outlet.linkTo(inlet as LinkFrom<Consumer<String>>) as LinkResult.Connected).link
+
+        // The target (inlet) list is multicast first; AttentionSupport's
+        // retraction lives on the SOURCE (outlet) list, run second.
+        val notified = mutableListOf<Link>()
+        inlet.linking.onUnlinkListeners += { throw Boom() }
+        outlet.linking.onUnlinkListeners += { notified += it }
+
+        assertThrows<Boom> { link.unlink() }
+
+        notified shouldBe listOf(link)
+    }
+
     // ---- StreamTo's bypass teardown and supersession sites ----
 
     @Test

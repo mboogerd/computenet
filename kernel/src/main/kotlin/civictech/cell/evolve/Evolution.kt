@@ -10,8 +10,8 @@ import civictech.cell.link.Link
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
+import civictech.cell.link.NotificationFailures
 import civictech.cell.link.PortLink
-import civictech.cell.link.notifyAll
 import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -544,8 +544,10 @@ object Promotion {
             // as the handshake teardown lambdas (computenet-1rvt) — a
             // throwing onUnlinkListeners subscriber on one side must not cost
             // the other side its notification, nor a sibling on its own side.
-            target?.linking?.let { notifyAll(it.onUnlinkListeners, link) }
-            notifyAll(to.linking.onUnlinkListeners, link)
+            val failures = NotificationFailures()
+            target?.linking?.let { failures.multicast(it.onUnlinkListeners, link) }
+            failures.multicast(to.linking.onUnlinkListeners, link)
+            failures.rethrow()
         }
         to.linking.register(installed, identity)
         target?.linking?.register(installed, identity)

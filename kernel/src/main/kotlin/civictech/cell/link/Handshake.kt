@@ -326,8 +326,14 @@ internal fun <Api> handshake(
         sourceLinking?.remove(link)
         support.remove(link)
         support.onUnlink(link)
-        notifyAll(support.onUnlinkListeners, link)
-        sourceLinking?.let { notifyAll(it.onUnlinkListeners, link) }
+        // computenet-7u22s: ONE accounting across both sides' lists, as the
+        // Connected branch below does — a throwing target-side subscriber must
+        // not cost the source side its retraction (AttentionSupport's frontier
+        // slot lives on the source outlet's list, and the record is gone).
+        val failures = NotificationFailures()
+        failures.multicast(support.onUnlinkListeners, link)
+        sourceLinking?.let { failures.multicast(it.onUnlinkListeners, link) }
+        failures.rethrow()
     }
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {

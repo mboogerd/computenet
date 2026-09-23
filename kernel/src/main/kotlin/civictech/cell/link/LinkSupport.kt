@@ -157,13 +157,14 @@ internal class NotificationFailures {
  * the primary handshake overload's own multicasts, applied at every other
  * site that fires this multicast: the bridged handshake overload (both its
  * connect-time [LinkSupport.onLinkedListeners] and its teardown lambda's
- * [LinkSupport.onUnlinkListeners]), the primary overload's own teardown
- * lambda, [LinkSupport.fireLinked], `civictech.cell.port.streamTo`'s
- * supersession and teardown sites, and
- * `civictech.cell.evolve.Evolution.rebind`'s teardown lambda — so whether a
- * throwing sibling infrastructure listener (CatchUp, AttentionSupport) is
- * notified no longer depends on which path established or tore down the
- * link.
+ * [LinkSupport.onUnlinkListeners]), [LinkSupport.fireLinked], and
+ * `civictech.cell.port.streamTo`'s supersession and teardown sites — so
+ * whether a throwing sibling infrastructure listener (CatchUp,
+ * AttentionSupport) is notified no longer depends on which path established
+ * or tore down the link. A site that multicasts over BOTH endpoints' lists
+ * (the primary overload's teardown lambda, `Promotion.rebind`'s) uses one
+ * [NotificationFailures] across both instead of two [notifyAll] calls, so a
+ * throw on one side cannot skip the other side's list either.
  */
 internal fun notifyAll(listeners: List<(Link) -> Unit>, link: Link) {
     val failures = NotificationFailures()
