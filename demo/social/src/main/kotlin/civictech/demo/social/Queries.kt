@@ -14,9 +14,9 @@
  * | IC2   | (served by [Feed.kt]'s `FeedSession.board`, not this file) | — |
  * | IC8   | the person's `snb-authored`, one `snb-message` per own message, one `snb-message` per reply | `1 + ownMessages + replies` |
  * | IC3   | the viewer's `snb-person`, one `snb-person` per friend, one `snb-authored` per candidate that has one | `1 + friends + candidatesWithAuthoredCell` |
- * | IC5   | dropped to finding `F-<next>` (`doc/demo-findings.md`) — forum membership lives only on the forum's cell | — |
- * | IC6   | dropped to finding `F-<next>` — no source writes `MessageFact.HasTag`/`ForumFact.HasTag` | — |
- * | IC12  | dropped to finding `F-<next>` — needs tag facts and an ordered top-K over counted rows | — |
+ * | IC5   | dropped to finding `F-23` (`doc/demo-findings.md`) — forum membership lives only on the forum's cell | — |
+ * | IC6   | dropped to finding `F-23` — no source writes `MessageFact.HasTag`/`ForumFact.HasTag` | — |
+ * | IC12  | dropped to finding `F-23` — needs tag facts and an ordered top-K over counted rows | — |
  *
  * **Own page walk, deliberately duplicated from `ShortReads.kt`**: that file
  * is claimed by open sibling tasks in this feature, so [walk]/[membersOf] and
