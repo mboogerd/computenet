@@ -90,6 +90,11 @@ class SocialApp(
     // handle because start()'s quiescence fence submits onto it. Tests pass
     // SimulationController.scheduler().
     scheduler: HostScheduler? = null,
+    // 4q9is-D7: appended LAST. Opt-in because the spawn it wires in is
+    // durable (`authored/keys` grows for every admitted-but-absent friend,
+    // forever) — the default app never spawns ahead of a post, matching
+    // SocialFeedScatterGatherTest's AMENDS behaviour and [SOC1-SREAD-03].
+    private val interestDriven: Boolean = false,
 ) {
     private val registry = LocationRegistry()
     private val hostScheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("SocialApp")
@@ -125,6 +130,12 @@ class SocialApp(
     /** IC8, IC3 (feature `computenet-flfkm`, flfkm-D4..D6) over [locator]. */
     val complexReads: ComplexReads = ComplexReads(boundedReader, locator)
 
+    // 4q9is-D7: opt-in join of a derived scope to KeyedCells.getOrSpawn over
+    // the authored family. Null unless interestDriven — the default app never
+    // spawns ahead of a post.
+    private val spawner: InterestDrivenFamily? =
+        if (interestDriven) InterestDrivenFamily(pipeline.families.authored) else null
+
     /**
      * A scatter-gather feed for [viewer] over the authored cells [scope]
      * admits (feature `computenet-8eb53`). The scope is the caller's, fixed
@@ -132,7 +143,7 @@ class SocialApp(
      * and `SocialFeedScatterGatherTest` use this overload directly.
      */
     fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
-        FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
+        FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
 
     /**
      * `/feed`'s session (4q9is-D8): the scope is [ViewerInterest], derived
@@ -141,7 +152,15 @@ class SocialApp(
      * never needs to rebuild it.
      */
     fun feedSession(viewer: Long, pageLimit: Int = 200): FeedSession =
-        FeedSession(viewer, ViewerInterest(locator, boundedReader, registry, pageLimit), pipeline.families, registry, boundedReader, pageLimit)
+        FeedSession(
+            viewer,
+            ViewerInterest(locator, boundedReader, registry, pageLimit),
+            pipeline.families,
+            registry,
+            boundedReader,
+            pageLimit,
+            spawner,
+        )
 
     /**
      * `/feed`'s per-viewer [FeedSession] cache (4q9is-D8): one session per
