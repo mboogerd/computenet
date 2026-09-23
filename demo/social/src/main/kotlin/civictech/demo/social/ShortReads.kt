@@ -94,8 +94,10 @@ interface EntityLocator {
  * durable key record — so a read of a known id spawns nothing, and an id that
  * is not known never reaches `getOrSpawn` at all.
  *
- * [SocialGraph.personIds]/[SocialGraph.messageIds] already subtract the ids
- * whose creating write failed, so an "unadmitted" id is not locatable either.
+ * [SocialGraph.isPerson]/[SocialGraph.isMessage] already subtract the ids
+ * whose creating write failed (an id an unfinished restart left as a ghost
+ * key included, `computenet-v10ou`), so an "unadmitted" id is not locatable
+ * either — in O(1), never a copy of the whole family (`computenet-uedpp`).
  * [authored] is guarded **twice** — a person with no messages has no
  * `snb-authored` cell, and spawning one would grow `authored.keys()`, which
  * [SOC1-SREAD-03] asserts against directly.
@@ -106,17 +108,17 @@ class GraphLocator(
 ) : EntityLocator {
 
     override fun person(id: Long): CellRef? =
-        if (id in graph.personIds()) families.person.getOrSpawn(id).ref else null
+        if (graph.isPerson(id)) families.person.getOrSpawn(id).ref else null
 
     override fun authored(id: Long): CellRef? =
-        if (id in graph.personIds() && families.authored.contains(id)) {
+        if (graph.isPerson(id) && families.authored.contains(id)) {
             families.authored.getOrSpawn(id).ref
         } else {
             null
         }
 
     override fun message(id: Long): CellRef? =
-        if (id in graph.messageIds()) families.message.getOrSpawn(id).ref else null
+        if (graph.isMessage(id)) families.message.getOrSpawn(id).ref else null
 }
 
 /**

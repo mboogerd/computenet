@@ -12,6 +12,7 @@ import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
@@ -304,6 +305,49 @@ class SocialShortReadTest {
             f.families.forum.keys().toSet(),
             f.families.message.keys().toSet(),
         ) shouldBe before
+    }
+
+    // --- computenet-uedpp: admitted-membership guards are O(1), not a whole-family snapshot ---
+
+    /**
+     * Residual of `computenet-tbmhn`: [GraphLocator]'s `person`/`authored`/
+     * `message` guards must decide "is this id an admitted entity" against
+     * [SocialGraph.isPerson]/[SocialGraph.isMessage] (O(1): a `KeyedCells.contains`
+     * plus a small-set check), never by testing membership in [SocialGraph.personIds]/
+     * [SocialGraph.messageIds] — each of which copies the whole family, subtracts
+     * the unadmitted set, and sorts, per call ([SocialGraph.kt]'s KDoc on those
+     * methods). Source guard, same shape as `SocialFeedScatterGatherTest`'s
+     * `tbmhn pull decides scope-key membership ...` test: mutating [GraphLocator]
+     * back to `id in graph.personIds()` / `id in graph.messageIds()` reddens this
+     * without changing any other assertion in this suite.
+     */
+    @Test
+    fun `computenet-uedpp GraphLocator decides membership without a personIds or messageIds snapshot`() {
+        // A Gradle test's working directory is the project directory (SocialFeedScatterGatherTest relies on the same).
+        val source = File("src/main/kotlin/civictech/demo/social/ShortReads.kt").readText()
+        ("personIds()" in source) shouldBe false
+        ("messageIds()" in source) shouldBe false
+    }
+
+    /**
+     * [SocialGraph.creating] decides whether a write is the id's *first* one
+     * (and so must record it in the unadmitted set on failure) with
+     * `!family.contains(id)`, an O(1) [civictech.cell.host.KeyedCells.contains]
+     * call — never `id !in family.keys()`, which copies every key of the whole
+     * family on every creating write. Scoped to `creating`'s own body so the
+     * legitimate whole-family `keys()` reads elsewhere in [SocialGraph] —
+     * [SocialGraph.personIds]/[forumIds]/[messageIds] themselves, and the
+     * once-per-restart `spawnKnown`/`suppressUnwrittenKeys` — don't false-fail
+     * this guard.
+     */
+    @Test
+    fun `computenet-uedpp SocialGraph creating decides freshness without a whole-family keys snapshot`() {
+        val source = File("src/main/kotlin/civictech/demo/social/SocialGraph.kt").readText()
+        val start = source.indexOf("private fun <T> creating(")
+        val end = source.indexOf("private inline fun <reified F : Any> writeApi", start)
+        assertTrue(start >= 0 && end > start, "could not locate SocialGraph.creating's body in the source")
+        val body = source.substring(start, end)
+        (".keys()" in body) shouldBe false
     }
 
     // --- [SOC1-FIND-03] -----------------------------------------------------
