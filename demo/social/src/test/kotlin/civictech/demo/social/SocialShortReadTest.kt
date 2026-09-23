@@ -350,6 +350,25 @@ class SocialShortReadTest {
         (".keys()" in body) shouldBe false
     }
 
+    /**
+     * The call-site guard above only proves [GraphLocator] delegates to
+     * [SocialGraph.isPerson]/[SocialGraph.isMessage]; a short read is O(1) only
+     * if those predicates are too. Each must be a one-line `contains` plus
+     * unadmitted-set check — no `keys()` copy and no `personIds()`-style
+     * sorted snapshot in its definition.
+     */
+    @Test
+    fun `computenet-uedpp SocialGraph admitted-membership predicates take no whole-family snapshot`() {
+        val source = File("src/main/kotlin/civictech/demo/social/SocialGraph.kt").readText()
+        for (name in listOf("isPerson", "isForum", "isMessage")) {
+            val start = source.indexOf("fun $name(id: Long): Boolean")
+            assertTrue(start >= 0, "could not locate SocialGraph.$name in the source")
+            val line = source.substring(start, source.indexOf('\n', start))
+            assertTrue(".contains(id)" in line, "$name: $line")
+            assertTrue("keys()" !in line && "Ids()" !in line, "$name: $line")
+        }
+    }
+
     // --- [SOC1-FIND-03] -----------------------------------------------------
 
     /** Answers [result] to every read, recording how many it was asked for. */
