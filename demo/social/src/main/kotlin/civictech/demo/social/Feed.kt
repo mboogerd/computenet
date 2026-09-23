@@ -15,7 +15,8 @@
  *
  * - *A pull fans out to every instance whose interest overlaps the
  *   requester's scope* — [FeedSession.pull] issues one bounded read walk per
- *   `snb-authored` cell the viewer's [Interest.Ranges] scope admits, legs
+ *   `snb-authored` cell the viewer's scope (an [Interest.Ranges], or
+ *   [Interest.Empty] for no legs at all) admits, legs
  *   enumerated from the scope's own ranges (never from a scan of the family),
  *   and checked against the interest each cell registered at spawn
  *   ([SnbPipeline.build]'s `registry`, 8eb53-D3/D4).
@@ -119,9 +120,28 @@ data class PullReport(val legs: Map<CellRef, LegOutcome>)
 /**
  * One viewer's feed over the `snb-authored` family (8eb53-D3..D6).
  *
- * [scope] is passed in: its arms are the viewer's friends as singleton ranges
- * `Range(id, id + 1)` (07k-D2 — `Range` is half-open). Deriving it from the
- * `knows` set is a later feature's job.
+ * **Scope (4q9is-D1, D5, D6).** The session asks its [ScopeSource] for the
+ * viewer's scope at the START of every [pull]: its arms are the viewer's
+ * friends as singleton ranges `Range(id, id + 1)` (07k-D2 — `Range` is
+ * half-open), or [Interest.Empty] for a viewer who knows nobody. A
+ * [ViewerInterest] source derives it from the viewer's `knows` set — one
+ * extra bounded read of the viewer's `snb-person` cell per pull, which is
+ * what lets an added edge widen the next pull and a removed edge narrow it
+ * with no event plumbing (`[SOC1-INT-02/03]`). The secondary constructor
+ * keeps the caller-supplied fixed scope ([ScopeSource.fixed]). Any scope
+ * other than `Ranges` or `Empty` fails the pull: `Total` in particular is the
+ * control-b anti-pattern (`[SOC1-FEED-02]`) and nothing here may pull it. A
+ * refused scope read fails the pull with [ScopeUnavailable] and leaves
+ * [scope], the board and every retained frontier as they were (4q9is-D4).
+ *
+ * **Narrowing keeps state and hides output (4q9is-D6).** A removed friend
+ * gets no leg from the next pull on, so nothing they post afterwards is
+ * pulled. Their already-delivered messages stay in the accumulated set and
+ * their retained frontier stays in [frontiers] — PN-5 promises no retraction
+ * on unfollow — but both [board] overloads admit only messages whose
+ * `creatorId` the current [scope] admits, so those messages leave the board.
+ * Re-adding the edge resumes the leg from its retained frontier
+ * (`since != null`) and the filter shows the old messages again.
  *
  * **Legs.** Keys are enumerated from [scope]'s ranges, never by scanning the
  * family. `KeyedCells.refFor` is private and `getOrSpawn` spawns for an
@@ -140,15 +160,39 @@ data class PullReport(val legs: Map<CellRef, LegOutcome>)
  */
 class FeedSession(
     val viewer: Long,
-    val scope: Interest.Ranges,
+    private val source: ScopeSource,
     private val families: SnbPipeline.Families,
     private val registry: LocationRegistry,
     private val reader: BoundedReader,
     private val pageLimit: Int = 200,
 ) {
+    /** A session over a caller-supplied scope that never changes ([ScopeSource.fixed]). */
+    constructor(
+        viewer: Long,
+        scope: Interest.Ranges,
+        families: SnbPipeline.Families,
+        registry: LocationRegistry,
+        reader: BoundedReader,
+        pageLimit: Int = 200,
+    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit) {
+        this.scope = scope
+    }
+
     init {
         require(pageLimit > 0) { "pageLimit must be positive, got $pageLimit" }
     }
+
+    /**
+     * The scope the most recent pull derived and validated (4q9is-D1) — set
+     * before that pull's legs are issued, so [board] already filters by it
+     * while the pull is in flight: for a fixed
+     * source, that value from construction; for a derived one,
+     * [Interest.Empty] until the first pull completes. Always `Ranges` or
+     * `Empty`. The [board] filter reads it.
+     */
+    @Volatile
+    var scope: Interest = Interest.Empty
+        private set
 
     /** Guards [messages] and [retained]: pages complete on the host's scheduler thread. */
     private val state = Any()
@@ -160,11 +204,19 @@ class FeedSession(
     private val pullLock = Any()
     private var currentPull: CompletableFuture<PullReport>? = null
 
-    /** The union of every answered leg's slice so far (a copy). */
-    fun board(): Set<Message> = synchronized(state) { messages.toSet() }
+    /**
+     * The union of every answered leg's slice so far that the current [scope]
+     * admits by `creatorId` (a copy; 4q9is-D6 — a removed friend's delivered
+     * messages are kept but not shown).
+     */
+    fun board(): Set<Message> {
+        val admitted = scope
+        return synchronized(state) { messages.filterTo(HashSet()) { admitted.admits(it.creatorId) } }
+    }
 
     /**
-     * IC2 (`[SOC1-FEED-09]`): the accumulated set, filtered to
+     * IC2 (`[SOC1-FEED-09]`): the accumulated set, filtered to messages the
+     * current [scope] admits by `creatorId` (4q9is-D6) and to
      * `creationDate < before` when [before] is given, ordered `creationDate`
      * descending then message id descending, first [limit]. Demo-side over
      * the per-leg pages already retained by [pull] (`[SOC1-FEED-10]`); no
@@ -172,8 +224,10 @@ class FeedSession(
      */
     fun board(limit: Int, before: Long? = null): List<Message> {
         require(limit > 0) { "limit must be positive, got $limit" }
+        val admitted = scope
         return synchronized(state) {
             messages.asSequence()
+                .filter { admitted.admits(it.creatorId) }
                 .filter { before == null || it.creationDate < before }
                 .sortedWith(compareByDescending<Message> { it.creationDate }.thenByDescending { it.id })
                 .take(limit)
@@ -185,25 +239,52 @@ class FeedSession(
     fun frontiers(): Map<CellRef, TagFrontier> = synchronized(state) { retained.toMap() }
 
     /**
-     * Fans one bounded read walk out per leg, all issued before any is
-     * awaited, and completes when every leg has answered or been deferred.
-     * Never blocks: on a simulated host the pages land on `runToIdle()`.
+     * Derives the scope from the [ScopeSource] first (4q9is-D6), then fans
+     * one bounded read walk out per leg that scope admits, all issued before
+     * any is awaited, and completes when every leg has answered or been
+     * deferred. Never blocks: on a simulated host the pages land on
+     * `runToIdle()`. A failed derivation ([ScopeUnavailable]) or a scope that
+     * is neither `Ranges` nor `Empty` completes the future exceptionally
+     * with no leg issued and [scope] unchanged. Every completion path,
+     * exceptional included, releases the non-reentrancy guard.
      */
     fun pull(): CompletableFuture<PullReport> {
         check(inFlight.compareAndSet(false, true)) { "FeedSession.pull() is not reentrant" }
-        val legs = scope.ranges
-            .flatMap { r -> (r.lo until r.hi).asIterable() }
-            .distinct()
+        val derivation = try {
+            source.scopeOf(viewer)
+        } catch (e: Throwable) {
+            CompletableFuture.failedFuture(e)
+        }
+        return derivation
+            .thenCompose { derived -> fanOut(derived) }
+            .whenComplete { _, _ -> inFlight.set(false) }
+    }
+
+    /** Legs for [derived] (validated before it becomes [scope]), then the walks. */
+    private fun fanOut(derived: Interest): CompletableFuture<PullReport> {
+        val keys = keysOf(derived)
+        scope = derived
+        val legs = keys
             .filter { families.authored.contains(it) }
             .map { families.authored.getOrSpawn(it).ref }
-            .filter { registry.interestOf(it).overlaps(scope) }
+            .filter { registry.interestOf(it).overlaps(derived) }
         val outcomes = legs.map { ref ->
             val since = synchronized(state) { retained[ref] }
             ref to walk(ref, since)
         }
         return CompletableFuture.allOf(*outcomes.map { it.second }.toTypedArray())
             .thenApply { PullReport(outcomes.associateTo(LinkedHashMap()) { (ref, f) -> ref to f.join() }) }
-            .whenComplete { _, _ -> inFlight.set(false) }
+    }
+
+    /**
+     * 4q9is-D5: `Ranges` -> every key of every arm, distinct; `Empty` -> none;
+     * anything else (`Total`, `Slots`, `Union`, ...) is refused — a feed never
+     * pulls an unbounded scope.
+     */
+    private fun keysOf(scope: Interest): List<Long> = when (scope) {
+        is Interest.Ranges -> scope.ranges.flatMap { r -> (r.lo until r.hi).asIterable() }.distinct()
+        Interest.Empty -> emptyList()
+        else -> throw IllegalStateException("feed scope must be Ranges or Empty, got $scope")
     }
 
     /**
