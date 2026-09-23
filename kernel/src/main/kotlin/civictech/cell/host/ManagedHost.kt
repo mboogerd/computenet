@@ -28,6 +28,7 @@ import civictech.cell.control.AttentionScheduler
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.StallNotice
 import civictech.cell.control.StallReason
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.graph.CellFactory
@@ -431,6 +432,49 @@ open class ManagedHost(
 
     /** PN-12: how many `DURABLE`-manifest cells were spawned onto a null journal selector. */
     internal fun volatileDurableSpawns(): Long = volatileDurableSpawnCount.get()
+
+    /**
+     * `[KBLK-06]`/`[KBLK-07]`: per-[DurabilityClass] cumulative spawn count —
+     * how many cells, of ANY manifest, were spawned onto a journal of that
+     * class (`journalSelector(cell.ref)?.durability`). Counted at the same
+     * spawn site as [volatileDurableSpawnCount] (`spawn()`, below), for every
+     * cell whose selector returned a journal — not only `DURABLE`-manifest
+     * ones, because the question this answers is "what class of journal
+     * serves this host's cells", not "which cells declared durability".
+     * Cumulative, like [volatileDurableSpawnCount]: never decremented on
+     * despawn (`computenet-t6b.2-D3`).
+     *
+     * Deliberately not a refusal: PN-12's rationale above (a durable-capable
+     * cell run volatile can be a legitimate deployment) applies equally here.
+     * The kernel only counts; a deployment that requires synchronous
+     * durability asserts over [durabilityAccounting] itself at startup —
+     * e.g. `check(acct.journaledSpawns[DurabilityClass.BATCHED] == 0L &&
+     * acct.journaledSpawns[DurabilityClass.IN_MEMORY] == 0L &&
+     * acct.volatileDurableSpawns == 0L)`. The only way to weaken a cell's
+     * durability is the [Journal] instance [journalFor] returns for it; the
+     * only "no durability" spelling is `journalFor(cellRef) == null`
+     * (`[KBLK-04]`) — there is no second, host-level mechanism.
+     */
+    private val journaledSpawnCounts: Map<DurabilityClass, AtomicLong> =
+        DurabilityClass.entries.associateWith { AtomicLong() }
+
+    /**
+     * Snapshot of this host's per-[DurabilityClass] and volatile-durable
+     * spawn counts (`[KBLK-06]`). Public, not `internal`, because the
+     * deployment that asserts over it (`[KBLK-07]`) lives outside `:kernel`.
+     */
+    data class DurabilityAccounting(
+        /** Every [DurabilityClass] present, zero-filled — never a partial map. */
+        val journaledSpawns: Map<DurabilityClass, Long>,
+        /** The existing PN-12 counter ([ManagedHost.volatileDurableSpawns]), re-exposed here. */
+        val volatileDurableSpawns: Long,
+    )
+
+    /** `[KBLK-06]`/`[KBLK-07]`: see [journaledSpawnCounts] and [DurabilityAccounting]. */
+    fun durabilityAccounting(): DurabilityAccounting = DurabilityAccounting(
+        journaledSpawns = journaledSpawnCounts.mapValues { (_, count) -> count.get() },
+        volatileDurableSpawns = volatileDurableSpawnCount.get(),
+    )
 
     /**
      * Refusals reported to this host by a hosted membrane's
@@ -1433,6 +1477,9 @@ open class ManagedHost(
                     civictech.nature.Manifest.DURABLE in descriptor.manifest &&
                     journalSelector(cell.ref) == null
                 ) volatileDurableSpawnCount.incrementAndGet()
+                // [KBLK-06]: per-class accounting, for every cell whose selector
+                // returned a journal (see [journaledSpawnCounts]).
+                journalSelector(cell.ref)?.durability?.let { journaledSpawnCounts.getValue(it).incrementAndGet() }
                 // KFX-12 (spec [24-DUR-04], 93 I-14 Rule S1): a journaled cell's outlets
                 // emit under their ref-derived epoch, so a rebuilt instance re-mints the
                 // identity the network already observed instead of a fresh random one.
