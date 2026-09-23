@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "23 passed, 0 failed".
+# Expect "25 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -172,6 +172,19 @@ out=$("$SCRIPT" --description-file x 2>&1); st=$?
 [ "$st" = 2 ] && grep -q -- '--desc-file' <<<"$out" \
   && ok "a wrong flag shows the usage that names the right one" \
   || bad "unknown-arg usage: exit=$st out=$out"
+
+[ "$(tail -1 <<<"$out")" = "unknown argument: --description-file" ] \
+  && ok "the unknown flag is named on the LAST line, below the usage" \
+  || bad "last line: $(tail -1 <<<"$out")"
+
+# 322dl: the --flag=value spelling bd create uses is accepted, not rejected.
+fixture
+id=$("$SCRIPT" --type=bug --title="a=b c" --parent=computenet-wpvy --label=x 2>/dev/null); st=$?
+[ "$st" = 0 ] && [[ "$id" =~ ^computenet-[a-z0-9.]+$ ]] \
+  && grep -q '^create a=b c --type=bug ' "$BD_LOG" && grep -q -- "--label=x" "$BD_LOG" \
+  && grep -q -- "update computenet-h4sh --parent=computenet-wpvy" "$BD_LOG" \
+  && ok "--flag=value creates like --flag value, splitting at the FIRST =" \
+  || bad "= form: exit=$st id=$(printf %q "$id") log=$(cat "$BD_LOG")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

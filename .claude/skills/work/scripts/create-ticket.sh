@@ -71,6 +71,8 @@ usage() {
 }
 
 while [ $# -gt 0 ]; do
+  # --flag=value is the bd create spelling; split it so both forms work (computenet-322dl).
+  case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
   case "$1" in
     --type)     TYPE=$2; shift 2 ;;
     --title)    TITLE=$2; shift 2 ;;
@@ -87,7 +89,7 @@ while [ $# -gt 0 ]; do
     --breakdown) BREAKDOWN=$2; shift 2 ;;
     --claim)    CLAIM=1; shift ;;
     -h|--help)  usage; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    *) usage >&2; echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$TYPE" in bug|feature|task|chore) ;; *) echo "--type must be bug, feature, task or chore" >&2; exit 2 ;; esac
