@@ -57,6 +57,7 @@ Every demo serves HTTP + SSE; the port is the first argument (default 8080, or
 | tiering | see [multi-node](#multi-node-two-jvms) | Score fusion: valuations + pairwise preferences → one tier board |
 | backlog-triage | `./gradlew :demo:backlog-triage:run --args="8094"` | Collective ranking with pluggable engines (elo, Bradley–Terry, TrueSkill…), JSON agent API |
 | social | `./gradlew :demo:social:run --args="8095"` | LDBC-SNB social graph as four per-key keyed-cell families behind one ingress API |
+| alignment | `./gradlew :demo:alignment:run --args="8096"` | Team alignment: rate ideas 1–9 per creator-defined dimension, creator-weighted live value × factor ÷ cost aggregate with facilitator-configured dimension direction and a split marker, JSON API + SSE |
 
 Durability: `shopping`, `agora`, and `exchange` accept `--journal <dir>` and
 become `kill -9` safe — restart with the same flag and state recovers from the

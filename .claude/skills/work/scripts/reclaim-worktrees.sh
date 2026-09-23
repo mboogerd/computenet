@@ -133,10 +133,14 @@ while IFS= read -r line; do
     rc=1
     continue
   fi
-  for h in "$(jq -r '.[0].metadata.holder // ""' <<<"$json" 2>/dev/null)" \
-           "$(jq -r '.[0].metadata.holder // ""' <<<"$pjson" 2>/dev/null)"; do
+  # The bead's own `updated_at` rides along: it is what stops a long-running
+  # session's token reading STALE and its worktree being removed under it
+  # (computenet-jqxqk).
+  for hu in "$(jq -r '[.[0].metadata.holder // "", .[0].updated_at // ""]|@tsv' <<<"$json" 2>/dev/null)" \
+            "$(jq -r '[.[0].metadata.holder // "", .[0].updated_at // ""]|@tsv' <<<"$pjson" 2>/dev/null)"; do
+    h=${hu%%	*}; u=${hu#*	}
     [ -n "$h" ] || continue
-    v=$("$HOLDER_CHECK" --check "$h" 2>/dev/null)
+    v=$("$HOLDER_CHECK" --check "$h" "$u" 2>/dev/null)
     case "$v" in
       LIVE|FOREIGN) live="$h, $v"; break ;;
       MINE|DEAD|STALE|UNKNOWN) ;;

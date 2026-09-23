@@ -166,6 +166,7 @@ the sidecar. `DATA` (`0x05`) is the single kind that travels both ways.
 | `0x05` | `DATA` | an established link | the peer frame, verbatim | nothing, or `ERROR` on that id |
 | `0x06` | `CLOSE_LINK` | an established link | empty | `LINK_DOWN` on that id, or `ERROR` if unknown |
 | `0x07` | `SHUTDOWN` | 0 | empty | nothing; every link is closed and the process ends |
+| `0x08` | `WATCH_PEERS` | 0 | empty | `WATCHING` |
 
 **`GET_ID`** — report this endpoint's own id. Legal at any time.
 
@@ -199,6 +200,24 @@ single notification.
 **`SHUTDOWN`** — close every link and end the process. The sidecar sends nothing
 further.
 
+**`WATCH_PEERS`** — start delivery of LAN peer-discovery events on this host
+connection (`DSC2`, `aas-D8`). The answer is exactly one `WATCHING` on link 0,
+and from then on `PEER_DISCOVERED` and `PEER_EXPIRED` may arrive unsolicited.
+
+* **Idempotent.** A second `WATCH_PEERS` answers `WATCHING` and starts nothing
+  new; there is never more than one event stream per host connection.
+* **No events before it.** A sidecar that was never asked emits neither
+  `PEER_DISCOVERED` nor `PEER_EXPIRED`.
+* **A sidecar with no enumerating address lookup still answers `WATCHING`.**
+  Started without `--mdns`, or with it but with mDNS unavailable on the host,
+  it answers `WATCHING` and then never emits an event. That is not an error and
+  is not reported as one: **the host learns it from the absence of events**, not
+  from the reply. A host that needs to know whether enumeration is live has to
+  decide on a timeout of its own, or on how the sidecar was started.
+* `WATCH_PEERS` on a **non-zero** link is answered with `ERROR` on that link and
+  starts nothing. A `WATCH_PEERS` carrying a **payload** is answered with
+  `ERROR` on link 0 and starts nothing.
+
 ### Sidecar → host
 
 | kind | name | link | payload |
@@ -209,6 +228,9 @@ further.
 | `0x84` | `LINK_UP` | the link | 32-byte remote endpoint id, then 1 direction byte |
 | `0x85` | `LINK_DOWN` | the link | UTF-8 reason |
 | `0x86` | `ERROR` | the link it concerns, or 0 | UTF-8 message |
+| `0x87` | `PEER_DISCOVERED` | 0 | 32-byte endpoint id, then UTF-8 comma-separated socket addresses (`ADD_PEER`'s payload shape; an empty list is legal) |
+| `0x88` | `PEER_EXPIRED` | 0 | the 32-byte endpoint id that expired |
+| `0x89` | `WATCHING` | 0 | empty |
 
 **`LISTENING`** — the addresses this endpoint is bound to, in the exact form
 another sidecar's `ADD_PEER` accepts. This is how two sidecars are introduced
@@ -262,6 +284,35 @@ recovery contract, and it needs nothing from the frame that the header does not
 already carry). On link `0`, or on a link whose `DIAL` it is answering, it
 closes nothing.
 
+**`PEER_DISCOVERED`** — a peer was seen on the LAN. Emitted only after
+`WATCH_PEERS`, once for each newly seen endpoint and again whenever that
+endpoint's addresses change.
+
+* The payload is exactly `ADD_PEER`'s: 32 bytes of endpoint id, then the peer's
+  socket addresses as UTF-8, comma separated (`127.0.0.1:41001,[::1]:41001`).
+  Only **IP** addresses appear; a relay address the discovery record may also
+  carry is omitted, and a peer with no IP address yields an empty list.
+* **The sidecar has already fed those addresses to its own address lookup when
+  the host reads this message.** A bare `DIAL` of that id therefore resolves
+  with **no `ADD_PEER` in between** — that ordering is the point of the message
+  and is what makes LAN dialling work offline.
+* The sidecar **never** emits `PEER_DISCOVERED` naming its own endpoint id.
+
+**`PEER_EXPIRED`** — a peer that had been discovered has gone silent, per the
+underlying lookup's own expiry rule. With `iroh-mdns-address-lookup` over
+`swarm-discovery` at its default cadence that is on the order of half a minute
+of silence (`ne2oh-B5`: 30–43 s measured at swarm-discovery 0.6.3's defaults) —
+a property of that implementation, **not a guarantee of this protocol**. A host
+must not treat the delay as bounded, and must not treat `PEER_EXPIRED` as proof
+the peer is unreachable; it is a hint that the address is stale.
+
+**Events are scoped to one host connection.** They stop when the connection
+ends, and a host that reconnects and sends `WATCH_PEERS` again starts a fresh
+subscription: **peers discovered before it reconnected are not replayed**, so it
+sees only what is discovered from then on (`ne2oh-B8`, a stated limitation, not
+a bug). A host that needs the earlier peers has to rediscover them — by waiting
+for their next announcement — or learn them some other way.
+
 ## 4. A complete exchange
 
 Two sidecars, A (accepting) and B (dialling), with a host driving both:
@@ -297,3 +348,41 @@ host→B   SHUTDOWN     link 0
 ```
 
 `tests/protocol.rs` is this exchange, asserted.
+
+## 5. A discovery exchange
+
+Two sidecars started `--offline --mdns`, A and B, on the same LAN, with a host
+driving both. Neither is told the other's address by anyone:
+
+```text
+host→A   WATCH_PEERS       link 0
+A→host   WATCHING          link 0
+host→B   WATCH_PEERS       link 0
+B→host   WATCHING          link 0
+
+host→A   LISTEN            link 0
+A→host   LISTENING         link 0   "127.0.0.1:49812"
+
+(…mDNS announcements cross the LAN…)
+
+B→host   PEER_DISCOVERED   link 0   <A id> "127.0.0.1:49812"
+A→host   PEER_DISCOVERED   link 0   <B id> "127.0.0.1:49813"
+
+host→B   DIAL              link 1   <A id>          (no ADD_PEER: B already resolves A)
+B→host   LINK_UP           link 1   <A id> 0x00
+A→host   LINK_UP           link 2   <B id> 0x01
+
+(…A goes silent for the lookup's expiry period…)
+
+B→host   PEER_EXPIRED      link 0   <A id>
+```
+
+The `DIAL` with no preceding `ADD_PEER` is the whole claim: by the time the host
+reads `PEER_DISCOVERED`, the sidecar has already taught its own endpoint that
+address. `tests/mdns.rs` is this exchange down to the `LINK_UP` pair, asserted —
+minus the `PEER_EXPIRED` line, which costs the lookup's expiry period per run
+and is pinned instead by a unit test in `src/server.rs` over an injected event
+stream. That test is also where "a `Discovered` naming our own id emits nothing"
+is pinned. `tests/mdns.rs` needs real multicast delivery, so on a host that
+denies it the test prints a `SKIPPED` line naming the reason and passes; it
+never fails for the host's lack of multicast (`[DSC2-NV-01]`).

@@ -59,6 +59,7 @@ class SidecarCodecTest {
 
         assertEquals(HostMessage.CloseLink(9L), roundTripHost(HostMessage.CloseLink(9L)))
         assertIs<HostMessage.Shutdown>(roundTripHost(HostMessage.Shutdown))
+        assertIs<HostMessage.WatchPeers>(roundTripHost(HostMessage.WatchPeers))
     }
 
     @Test
@@ -98,6 +99,98 @@ class SidecarCodecTest {
         val data = assertIs<SidecarMessage.Data>(roundTripSidecar(SidecarMessage.Data(2L, byteArrayOf(9, 8))))
         assertEquals(2L, data.link)
         assertContentEquals(byteArrayOf(9, 8), data.payload)
+
+        assertIs<SidecarMessage.Watching>(roundTripSidecar(SidecarMessage.Watching))
+
+        val discovered = assertIs<SidecarMessage.PeerDiscovered>(
+            roundTripSidecar(SidecarMessage.PeerDiscovered(peerId, listOf("127.0.0.1:41001", "[::1]:41001"))),
+        )
+        assertContentEquals(peerId, discovered.nodeId)
+        assertEquals(listOf("127.0.0.1:41001", "[::1]:41001"), discovered.addresses)
+
+        val discoveredEmpty = assertIs<SidecarMessage.PeerDiscovered>(
+            roundTripSidecar(SidecarMessage.PeerDiscovered(peerId, emptyList())),
+        )
+        assertEquals(emptyList(), discoveredEmpty.addresses)
+
+        val expired = assertIs<SidecarMessage.PeerExpired>(roundTripSidecar(SidecarMessage.PeerExpired(peerId)))
+        assertContentEquals(peerId, expired.nodeId)
+    }
+
+    @Test
+    fun `a PEER_DISCOVERED payload shorter than 32 bytes is a typed decode failure (BS-10)`() {
+        assertEquals(
+            DecodeProblem.MALFORMED_PAYLOAD,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asSidecarMessage(Frame(Kind.PEER_DISCOVERED, CONTROL_LINK, ByteArray(31))),
+            ).problem,
+        )
+    }
+
+    @Test
+    fun `a PEER_DISCOVERED payload with invalid UTF-8 addresses is a typed decode failure, though ADD_PEER decodes it leniently (BS-10)`() {
+        val invalidUtf8 = peerId + byteArrayOf(0xff.toByte(), 0xfe.toByte())
+
+        assertEquals(
+            DecodeProblem.MALFORMED_PAYLOAD,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asSidecarMessage(Frame(Kind.PEER_DISCOVERED, CONTROL_LINK, invalidUtf8)),
+            ).problem,
+        )
+
+        // Scoped strictness: the identical bytes as an ADD_PEER (host -> sidecar,
+        // still lenient) decode fine, showing PEER_DISCOVERED's strictness is new
+        // and does not widen to existing kinds.
+        val lenient = assertIs<Decoded.Ok<HostMessage>>(
+            SidecarCodec.asHostMessage(Frame(Kind.ADD_PEER, CONTROL_LINK, invalidUtf8)),
+        ).message
+        assertIs<HostMessage.AddPeer>(lenient)
+    }
+
+    @Test
+    fun `PEER_DISCOVERED on a non-zero link is WRONG_LINK (BS-10)`() {
+        assertEquals(
+            DecodeProblem.WRONG_LINK,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asSidecarMessage(Frame(Kind.PEER_DISCOVERED, 4L, peerId)),
+            ).problem,
+        )
+    }
+
+    @Test
+    fun `a PEER_EXPIRED payload of 33 bytes is a typed decode failure (BS-10)`() {
+        assertEquals(
+            DecodeProblem.MALFORMED_PAYLOAD,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asSidecarMessage(Frame(Kind.PEER_EXPIRED, CONTROL_LINK, ByteArray(33))),
+            ).problem,
+        )
+    }
+
+    @Test
+    fun `WATCHING with a payload is a typed decode failure`() {
+        assertEquals(
+            DecodeProblem.MALFORMED_PAYLOAD,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asSidecarMessage(Frame(Kind.WATCHING, CONTROL_LINK, byteArrayOf(1))),
+            ).problem,
+        )
+    }
+
+    @Test
+    fun `the discovery kinds decoded against the wrong direction are WRONG_DIRECTION`() {
+        assertEquals(
+            DecodeProblem.WRONG_DIRECTION,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asSidecarMessage(Frame(Kind.WATCH_PEERS, CONTROL_LINK, ByteArray(0))),
+            ).problem,
+        )
+        assertEquals(
+            DecodeProblem.WRONG_DIRECTION,
+            assertIs<Decoded.Malformed>(
+                SidecarCodec.asHostMessage(Frame(Kind.PEER_DISCOVERED, CONTROL_LINK, peerId)),
+            ).problem,
+        )
     }
 
     @Test

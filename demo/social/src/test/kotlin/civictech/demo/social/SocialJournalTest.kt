@@ -1,6 +1,7 @@
 package civictech.demo.social
 
 import civictech.cell.CellRef
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -162,6 +163,7 @@ class SocialJournalTest {
         val refused = CellRef(UUID.nameUUIDFromBytes("snb-person:2".toByteArray()))
         val wal = KeyedCells.hostJournal(dir)!!
         val refusing = object : Journal {
+            override val durability: DurabilityClass = DurabilityClass.IN_MEMORY
             override fun append(record: ByteArray) = throw IllegalStateException("refused by test")
             override fun replay(): List<ByteArray> = emptyList()
             override fun reset(records: List<ByteArray>) = Unit

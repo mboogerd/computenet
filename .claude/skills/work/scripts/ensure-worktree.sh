@@ -42,6 +42,17 @@ BASE="${3:-origin/main}"
 
 note() { echo "ensure-worktree: $*" >&2; }
 
+# Refuse a mis-split call before any git write. A zsh caller that word-splits
+# feature-branch.sh's tab-joined output gets "<branch>\t<path>" as the path and
+# its base ref as the branch; unchecked, that created a tab-named worktree in
+# the shared checkout and a local refs/heads/origin/main that made origin/main
+# ambiguous for every session on the machine (computenet-ley2g).
+refuse() { echo "ensure-worktree: refusing $1 — $2" >&2; exit 2; }
+case "$WORKTREE" in /*) ;; *) refuse "path '$WORKTREE'" "must be absolute" ;; esac
+case "$WORKTREE$BRANCH" in *[[:space:]]*) refuse "'$WORKTREE' '$BRANCH'" "path and branch must contain no whitespace" ;; esac
+case "$BRANCH" in origin/*|refs/*|remotes/*) refuse "branch '$BRANCH'" "that is a ref, not a branch name (arguments are <path> <branch> [base-ref])" ;; esac
+git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || refuse "branch '$BRANCH'" "not a valid branch name"
+
 mkdir -p "$(dirname "$WORKTREE")"
 # Absolute path: a relative one resolves differently inside a subagent's own
 # worktree, which is how an agent ends up working in the main checkout.

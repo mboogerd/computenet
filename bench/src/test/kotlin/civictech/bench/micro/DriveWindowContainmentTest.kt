@@ -38,8 +38,42 @@ class DriveWindowContainmentTest {
     /** Entries per page for the guards: small, so a 10^3 walk takes ~125 pages. */
     private val GUARD_PAGE_LIMIT = 8
 
-    /** Nominal budget per guard drive — a fraction of `CONTAINMENT_ADDS`, for speed. */
-    private val GUARD_ADDS = 400
+    /**
+     * The TRUNCATED guards' nominal budget: 20,000 adds, i.e. **one second** of drive at
+     * `CONTAINMENT_SPACING_NANOS`. It costs nothing on a working knob, because the drive is
+     * cut at the walk's first page (~2 ms in) and the budget is only the terminator for a
+     * drive that reaches no stop rule. Its size is what makes `driveAdds < GUARD_ADDS`
+     * below a statement about the knob rather than about the host.
+     *
+     * It was 400 (20 ms) "for speed", which bought no speed and made that assertion a race
+     * (`computenet-566fx`, one Linux CI failure). `DriveShape.parkUntilDue` paces against an
+     * absolute schedule, so a stall of the WHOLE process — both the drive and the pager
+     * frozen together — leaves every add that fell due during it owed at once. A stall that
+     * lands between the drive opening and the walk's first page, and outlasts what is left
+     * of the budget, lets the drive pay off its entire budget in a burst before the pager's
+     * in-flight first page returns: the stop rule never fires, `driveAdds == GUARD_ADDS`, and
+     * the trial is still `WALK_OUTLASTS_DRIVE` and admissible. Reproduced by
+     * `DriveWindowContainmentStarvedSampleTest`'s stall sample, which freezes its own JVM
+     * for 25-100 ms at random. Measured 2026-09-23 on a 16-core darwin/arm64 host: at 400
+     * adds, 16 of 900 admissible trials (three runs: 6, 6, 4 of 300) ran the full budget; at
+     * this budget, 0 of 1,500 (five runs of 300), including returned trials whose first page
+     * came back 63 and 120 ms into the drive and were still cut. Thread-level
+     * oversubscription (3x cores in spinners) does not produce it, because it deschedules
+     * the two threads independently: 0 of 150 at 400 adds, 0 of 750 at this budget. A zero
+     * here bounds this host under these stalls, not a Linux runner.
+     *
+     * **The limit of the claim:** this is structural only up to a whole-process stall of
+     * about one second inside a ~2 ms interval. A longer one still runs the budget out, and
+     * the assertion then fails. That is deliberately not handled by the discard rule: such a
+     * trial IS admissible by `ContainmentTrial.isValidForItsArm` — the pre-registration's
+     * rule, which asks only for non-containment — so the only way to absorb it would be a
+     * second, test-local discard rule keyed on the budget, i.e. retrying past exactly the
+     * trial this assertion exists to catch. Against a dead knob the larger budget still
+     * fails: the drive runs the full second, contains the walk, and every attempt is
+     * inadmissible (`computenet-fvrm`'s review mutated `stopEarly` to `{ false }` and saw
+     * that exhaustion error).
+     */
+    private val GUARD_ADDS = 20_000
 
     /**
      * The covering arm's guard budget: **one add**, so containment cannot come from the
@@ -121,6 +155,8 @@ class DriveWindowContainmentTest {
             // The truncation is what shortened it: the drive stopped well inside its
             // nominal budget, so this is a cut drive rather than a budget that happened to
             // run out. Without this the test would pass against a knob that did nothing.
+            // Structural only because GUARD_ADDS is a second of drive — see its KDoc for
+            // the whole-process-stall race a 20 ms budget lost (computenet-566fx).
             trial.driveAdds shouldBeGreaterThan 0
             (trial.driveAdds < GUARD_ADDS).shouldBeTrue()
             // And the walk really did have pages left to pay for after the cut.
@@ -489,8 +525,11 @@ class DriveWindowContainmentStarvedSampleTest {
     /** Entries per page — the fast guards' limit, so a 10^3 walk takes ~125 pages. */
     private val GUARD_PAGE_LIMIT = 8
 
-    /** Nominal budget per drive, matching the fast guards'. */
-    private val GUARD_ADDS = 400
+    /**
+     * Nominal budget per drive, matching the fast guards' — see
+     * `DriveWindowContainmentTest.GUARD_ADDS` for why it is a second of drive and not 20 ms.
+     */
+    private val GUARD_ADDS = 20_000
 
     /**
      * Trials in the sample. 150 is `computenet-fvrm`'s own sample size, kept so this run and
@@ -504,6 +543,13 @@ class DriveWindowContainmentStarvedSampleTest {
 
     /** Spinner threads per core. 3x is the acceptance's ">= 3x cores". */
     private val OVERSUBSCRIPTION: Int = 3
+
+    /**
+     * Trials in the whole-process stall sample. Larger than [SAMPLE_TRIALS] because a stall
+     * only matters when it lands in the ~2 ms between the drive opening and the walk's first
+     * page, so most trials are untouched by it.
+     */
+    private val STALL_TRIALS: Int = 300
 
     @Test
     @Timeout(value = 45, unit = TimeUnit.MINUTES)
@@ -523,40 +569,95 @@ class DriveWindowContainmentStarvedSampleTest {
                 }
             }.apply { isDaemon = true; priority = Thread.MAX_PRIORITY; name = "starve-$index" }
         }
-
-        val returned = ArrayList<ContainmentTrial>(SAMPLE_TRIALS)
-        // Indexed by the trial that produced them, so a reader can see whether the
-        // inadmissible ones cluster in the cold opening trials or are spread through the run.
-        val discarded = ArrayList<Pair<Int, ContainmentTrial>>()
         try {
             threads.forEach { it.start() }
-            repeat(SAMPLE_TRIALS) { index ->
-                // A fresh rig per trial, deliberately. `LiveTrafficRig.elementsAdded` drifts
-                // upward across drives on one rig (that file's item 4), so reusing a rig for
-                // 150 trials would grow the target from 10^3 to ~10^4 and the walk from
-                // ~125 pages to ~10x that — the sample would be measuring a moving subject
-                // rather than 150 repetitions of one.
-                BoundedReadFixtures.rig(SetScale.N1E3).use { rig ->
-                    rig.seed()
-                    val attempt = admissibleContainmentTrial(
-                        rig = rig,
-                        arm = DriveWindowArm.TRUNCATED,
-                        pageLimit = GUARD_PAGE_LIMIT,
-                        adds = GUARD_ADDS,
-                    )
-                    returned += attempt.trial
-                    attempt.discarded.forEach { discarded += index to it }
-                }
-            }
+            sample("cores=$cores spinners=$spinners", SAMPLE_TRIALS)
         } finally {
             running.set(false)
             threads.forEach { it.join(10_000) }
+        }
+    }
+
+    /**
+     * The `computenet-566fx` sample: the whole test JVM frozen at random moments, which is
+     * what an in-process spinner cannot produce and what a shared CI runner does to a JVM
+     * (a hypervisor steal, a cgroup throttle, a stop-the-world pause).
+     *
+     * Thread-level oversubscription deschedules the drive and the pager INDEPENDENTLY. A
+     * process-wide stall freezes both TOGETHER, and `DriveShape.parkUntilDue` paces against
+     * an absolute schedule (`t0 + spacing * emitted`), so on resume every add that fell due
+     * during the stall is owed at once. If the stall lands between the drive opening and the
+     * walk's first page and outlasts what is left of the nominal budget, the drive pays off
+     * its whole budget in a burst before the pager's in-flight first page returns: the stop
+     * rule never fires, `driveAdds == adds`, and the walk still outlasts the (short) window
+     * — admissible, but not cut.
+     *
+     * The stall is injected by the JVM against its OWN pid only (`kill -STOP`, a sleep, then
+     * `kill -CONT`, run by a child shell that is not itself stopped), so it perturbs nothing
+     * else on the host.
+     */
+    @Test
+    @Timeout(value = 45, unit = TimeUnit.MINUTES)
+    fun `the TRUNCATED arm's drive is cut before its budget through whole-process stalls`() {
+        val pid = ProcessHandle.current().pid()
+        val running = AtomicBoolean(true)
+        val stalls = java.util.concurrent.atomic.AtomicInteger(0)
+        val random = java.util.Random(566L)
+        val injector = Thread {
+            while (running.get()) {
+                Thread.sleep(random.nextInt(40).toLong())
+                val stallMs = STALL_MIN_MS + random.nextInt(STALL_MAX_MS - STALL_MIN_MS + 1)
+                val stallSeconds = "%.3f".format(java.util.Locale.ROOT, stallMs / 1000.0)
+                ProcessBuilder("/bin/sh", "-c", "kill -STOP $pid; sleep $stallSeconds; kill -CONT $pid")
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor()
+                stalls.incrementAndGet()
+            }
+        }.apply { isDaemon = true; name = "stall-injector" }
+        try {
+            injector.start()
+            sample("whole-process stalls of $STALL_MIN_MS-$STALL_MAX_MS ms", STALL_TRIALS)
+        } finally {
+            running.set(false)
+            injector.join(10_000)
+            println("computenet-566fx: stalls injected=${stalls.get()}")
+        }
+    }
+
+    /**
+     * Run [trials] admissible TRUNCATED trials under whatever pressure the caller holds, print
+     * the tallies, and assert the arm's two guarantees: no returned trial is inadmissible, and
+     * no returned trial's drive ran its whole budget (`computenet-566fx`).
+     */
+    private fun sample(pressure: String, trials: Int) {
+        val returned = ArrayList<ContainmentTrial>(trials)
+        // Indexed by the trial that produced them, so a reader can see whether the
+        // inadmissible ones cluster in the cold opening trials or are spread through the run.
+        val discarded = ArrayList<Pair<Int, ContainmentTrial>>()
+        repeat(trials) { index ->
+            // A fresh rig per trial, deliberately. `LiveTrafficRig.elementsAdded` drifts
+            // upward across drives on one rig (that file's item 4), so reusing a rig for
+            // 150 trials would grow the target from 10^3 to ~10^4 and the walk from
+            // ~125 pages to ~10x that — the sample would be measuring a moving subject
+            // rather than 150 repetitions of one.
+            BoundedReadFixtures.rig(SetScale.N1E3).use { rig ->
+                rig.seed()
+                val attempt = admissibleContainmentTrial(
+                    rig = rig,
+                    arm = DriveWindowArm.TRUNCATED,
+                    pageLimit = GUARD_PAGE_LIMIT,
+                    adds = GUARD_ADDS,
+                )
+                returned += attempt.trial
+                attempt.discarded.forEach { discarded += index to it }
+            }
         }
 
         val byClass = returned.groupingBy { it.containment }.eachCount()
         val discardsCoveredByDrain = discarded.count { (_, t) -> t.outlastsDriveAdds }
         println(
-            "computenet-fvrm starved sample: cores=$cores spinners=$spinners " +
+            "computenet-fvrm starved sample: $pressure " +
                 "trials=${returned.size} returned=$byClass " +
                 "discarded=${discarded.size} " +
                 "(walk outlasted the ADDS in $discardsCoveredByDrain of them, i.e. the drain " +
@@ -566,10 +667,33 @@ class DriveWindowContainmentStarvedSampleTest {
         )
         discarded.forEach { (index, t) -> println("  DISCARDED trial#$index ${t.describe()}") }
 
-        returned.size shouldBe SAMPLE_TRIALS
+        // The computenet-566fx signature: an ADMISSIBLE trial whose drive ran its whole
+        // budget, i.e. the stop rule never fired. `firstPageAtMs` is when the walk's first
+        // page returned, measured from the drive's window opening (walk start plus the
+        // first page's own latency; the pager's bookkeeping between the two is nanoseconds).
+        fun firstPageAtMs(t: ContainmentTrial): Double =
+            (t.walkWindow.startNanos - t.driveWindow.startNanos) / 1_000_000.0 + t.walk.pageLatenciesMs.first()
+        val ranFullBudget = returned.filter { it.driveAdds >= GUARD_ADDS }
+        val firstPages = returned.map(::firstPageAtMs).sorted()
+        println(
+            "computenet-566fx: $pressure budget=$GUARD_ADDS adds " +
+                "(nominal %.1f ms) ".format(GUARD_ADDS * CONTAINMENT_SPACING_NANOS / 1_000_000.0) +
+                "returned trials whose drive ran its full budget=${ranFullBudget.size} of ${returned.size}; " +
+                "firstPageAt ms median=%.2f p95=%.2f max=%.2f".format(
+                    firstPages[firstPages.size / 2],
+                    firstPages[(firstPages.size * 95) / 100],
+                    firstPages.last(),
+                ),
+        )
+        ranFullBudget.forEach { t ->
+            println("  FULL-BUDGET firstPageAt=%.2f ms ".format(firstPageAtMs(t)) + t.describe())
+        }
+
+        returned.size shouldBe trials
         byClass[DriveWindowContainment.CONTAINED] shouldBe null
         byClass[DriveWindowContainment.WALK_PRECEDES_DRIVE] shouldBe null
         returned.all { it.isValidForItsArm }.shouldBeTrue()
+        ranFullBudget.size shouldBe 0
     }
 
     private companion object {
@@ -577,5 +701,11 @@ class DriveWindowContainmentStarvedSampleTest {
         @Volatile
         @JvmStatic
         var blackhole: Long = 0
+
+        /** Shortest injected whole-process stall: past the old 20 ms budget. */
+        const val STALL_MIN_MS: Int = 25
+
+        /** Longest injected whole-process stall. */
+        const val STALL_MAX_MS: Int = 100
     }
 }

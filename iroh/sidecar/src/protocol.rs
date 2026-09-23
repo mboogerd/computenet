@@ -26,7 +26,7 @@
 
 use std::io;
 
-use iroh::EndpointId;
+use iroh::{EndpointAddr, EndpointId};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::frame::{LENGTH_PREFIX_LEN, MAX_FRAME_LEN};
@@ -65,6 +65,11 @@ pub mod kind {
     pub const CLOSE_LINK: u8 = 0x06;
     /// Host → sidecar. Close every link and end the process.
     pub const SHUTDOWN: u8 = 0x07;
+    /// Host → sidecar. Start delivery of LAN peer-discovery events on this host
+    /// connection. Link [`super::CONTROL_LINK`], empty payload. Reply:
+    /// [`WATCHING`] — including on a sidecar with no enumerating lookup, which
+    /// then simply never emits (`PROTOCOL.md` §3). Idempotent.
+    pub const WATCH_PEERS: u8 = 0x08;
 
     /// Sidecar → host. Payload: the 32-byte endpoint id.
     pub const ID: u8 = 0x81;
@@ -79,6 +84,18 @@ pub mod kind {
     /// Sidecar → host. Payload: UTF-8 message. Link id names the link it
     /// concerns, or [`super::CONTROL_LINK`].
     pub const ERROR: u8 = 0x86;
+    /// Sidecar → host. A LAN peer was seen, or its addresses changed. Link
+    /// [`super::CONTROL_LINK`]; payload as [`super::peer_discovered_payload`]
+    /// builds it — 32-byte endpoint id, then the peer's IP sockets as UTF-8,
+    /// comma separated, exactly [`ADD_PEER`]'s shape. Emitted only after
+    /// [`WATCH_PEERS`], and never for this sidecar's own id.
+    pub const PEER_DISCOVERED: u8 = 0x87;
+    /// Sidecar → host. A discovered LAN peer went silent past the lookup's own
+    /// expiry. Link [`super::CONTROL_LINK`]; payload: the 32-byte endpoint id.
+    pub const PEER_EXPIRED: u8 = 0x88;
+    /// Sidecar → host. Answers [`WATCH_PEERS`]. Link
+    /// [`super::CONTROL_LINK`], empty payload.
+    pub const WATCHING: u8 = 0x89;
 }
 
 /// [`kind::LINK_UP`] direction byte: this side dialled.
@@ -220,6 +237,31 @@ pub fn decode_hex(s: &str) -> Option<Vec<u8>> {
 pub fn endpoint_id_from_slice(bytes: &[u8]) -> Option<EndpointId> {
     let raw: [u8; 32] = bytes.get(..32)?.try_into().ok()?;
     EndpointId::from_bytes(&raw).ok()
+}
+
+/// Builds a [`kind::PEER_DISCOVERED`] payload: the 32-byte endpoint id, then
+/// the peer's socket addresses as UTF-8, comma separated — exactly the shape
+/// [`kind::ADD_PEER`] accepts, so a host can hand one straight to another
+/// sidecar.
+///
+/// **Only `TransportAddr::Ip` addresses are carried.** A relay address the
+/// discovery record may also hold is omitted, because `ADD_PEER`'s payload has
+/// no room for one; an address set with no IP address yields an empty list,
+/// which is legal on both sides.
+///
+/// The order is [`EndpointAddr`]'s own: its `addrs` is a `BTreeSet`, so the
+/// list is sorted by `TransportAddr`'s `Ord` rather than by whatever order the
+/// lookup reported. It is deterministic, and this function is the single site
+/// that decides it — `src/server.rs` and the tests all build the payload here.
+pub fn peer_discovered_payload(addr: &EndpointAddr) -> Vec<u8> {
+    let mut payload = addr.id.as_bytes().to_vec();
+    let addrs = addr
+        .ip_addrs()
+        .map(|socket| socket.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    payload.extend_from_slice(addrs.as_bytes());
+    payload
 }
 
 #[cfg(test)]

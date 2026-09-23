@@ -4025,3 +4025,238 @@ before diagnosis` — whether the fix is a tiebreak field on `Stamped` or a
 fence on `(epoch, instanceId)` at apply is a design fork the fix bead owns).
 Per `[CHA2-44]`, that bead's acceptance is the annotated test going green for
 the right reason and the annotation being removed.
+
+## KAGG-R — the aggregate/scan audit table, re-cited row by row, and the two probes it could not answer by reading
+
+Recorded by: `computenet-qi2tz` (feature, epic `computenet-t6b.1` = KAGG-R).
+Base commit: `be957545` (`main`; `origin/main` at the same sha). Owns
+`[KAGG-R-01]`..`[KAGG-R-06]` (the epic's BS-01..BS-05); mints no id. Sibling
+features under the same epic own the three ABSENT-row fills:
+`computenet-rmwqi` (`Aggregators.topKBy` + `SortSpec`), `computenet-8lug2`
+(`Aggregators.countDistinct`), `computenet-83vd6` (`StateRead.keyBound` +
+`supportsKeyBound` + `KEY_BOUND_UNSUPPORTED`); `computenet-l5sru` is the
+corpus admission for BS-02, blocked on those three.
+
+### What was expected
+
+The epic's pre-ticket audit table (filed 2026-08-08) cites the
+aggregate/bounded-read surface at a commit two kernel epics have since
+touched — KE1 (`computenet-j2x`, closed) and KRD (`computenet-t6b.3`, closed;
+routed bounded read in `civictech.cell.observe`) — so the table's PRESENT/
+ABSENT calls and `file:line` citations needed re-verification against
+`be957545`, not trust.
+
+### What was found — every table row, re-cited at `be957545`
+
+| Surface | State | Anchor |
+|---|---|---|
+| `Aggregator<E, A, ACC>` (4-method interface) | PRESENT | `kernel/src/main/kotlin/civictech/cell/data/Aggregator.kt:19`, `interface Aggregator` |
+| `Aggregators.count/sumOf/avgOf/minOf/maxOf/topK/collectToSet` (7 factories) | PRESENT | `Aggregator.kt:26`, `object Aggregators` |
+| `private abstract class Support` — `TreeMap<V, Int>` multiset, `merge(v, 1, Int::plus)` on insert, drop-at-zero on retract, `checkNotNull(it[v]) { "retract of untracked value $v" }` | PRESENT, `private` | `Aggregator.kt:88-99`, `Support.insert`/`Support.retract` |
+| `TopK.value` — natural-order descending over `acc.descendingMap()` | PRESENT | `Aggregator.kt:107-116`, `class TopK` |
+| Comparator / multi-column / mixed-direction top-K (`topKBy`, `SortSpec`) | ABSENT | `grep -rn 'topKBy\|SortSpec' kernel/src` = 0 hits (fill: `computenet-rmwqi`) |
+| `countDistinct` | ABSENT | `grep -rn 'countDistinct' kernel/src` = 0 hits (fill: `computenet-8lug2`) |
+| `StateRead` fields | `cursor, limit, byteBudget, scope, since, allowWholeCopy` — no key bound | `kernel/src/main/kotlin/civictech/cell/BoundedRead.kt:154-160`, `data class StateRead` (fill: `computenet-83vd6` adds `keyBound`) |
+| `StateReadResult.Reason` arms | 9 arms (`NOT_HOSTED, NOT_STATEFUL, NOT_BOUNDED, CHECKPOINT_NOT_BOUNDED, MIGRATING, SINCE_UNSUPPORTED, SCOPE_UNSUPPORTED, SCHEDULER_TERMINATED, READ_FAILED`), no key-bound arm | `BoundedRead.kt:466-508`, `enum class Reason`; enumerated exhaustively in `inspect/src/main/kotlin/civictech/inspect/PagedState.kt:378`, `unreadableOf` |
+| `EntryOrder` total order + `KeyWalk` | PRESENT, `internal` | `kernel/src/main/kotlin/civictech/cell/data/BoundedWalk.kt:51` (`KeyWalk`), `:88` (`EntryOrder`) |
+| Ordered walks: `MapCell` (`supportsScope=true`), `KeyedSetCell` (`supportsSince=true`, scope declined by comment), `ShardCell` (both `true`) | PRESENT | `MapCell.kt:119,153`; `KeyedSetCell.kt:205,207,253`; `ShardCell.kt:295-296,247` |
+| `SetCell.openWalk` — `adds`-then-`dels` encounter order, own `SetWalk` type, not `EntryOrder`/`KeyWalk` | UNORDERED (as the table said) | `SetCell.kt:1443`, `private fun openWalk(scope)`; distinct token type at `SetCell.kt` (`SetWalk`, not `BoundedWalk.kt`'s `KeyWalk`) |
+| `Interest.Ranges.admits` numeric-only | PRESENT | `kernel/src/main/kotlin/civictech/cell/link/Interest.kt:147-149`, `(key as? Number)?.toLong() ?: return false` |
+| Host-side refusal on caller's thread for `since`/`scope` | PRESENT | `kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt:1798`, `fun readState`; refusal ordering documented in its own KDoc ("honest refusals are decided on the caller's thread") |
+| Routed read/walk (new since the epic's table) | PRESENT | `kernel/src/main/kotlin/civictech/cell/observe/RoutedRead.kt:58`, `fun readRouted`; `kernel/src/main/kotlin/civictech/cell/observe/StateWalk.kt:474`, `fun walkRouted` |
+| `MergeableGroupByCell` (new since the table; KE1) | PRESENT, imports no `Aggregator` — KE1 added no aggregate factory | `kernel/src/main/kotlin/civictech/cell/data/op/MergeableGroupByCell.kt:48`, `class MergeableGroupByCell`; its import block (lines 3-18) has no `civictech.cell.data.Aggregator` |
+| Walk order survives restore — BS-03 (`[KAGG-R-04]`) | ALREADY PINNED for all three families | `MapCellBoundedReadTest.kt:104`, `` `the enumeration order is imposed - stable across walks, across a restore, and under remove-then-re-add` ``; `KeyedSetCellBoundedReadTest.kt:157`, same title with "re-put"; `ShardCellBoundedReadTest.kt:242`, same title with "a snapshot-restore round trip" |
+| Duplicate-value retraction leaves extremum/top-K standing — BS-02 (`[KAGG-R-03]`) | ALREADY PINNED | `GroupByCellTest.kt:179`, `` `min survives duplicate-value retraction and reshuffles when the extremum dies` ``; `:199`, `` `topK keeps the k largest with duplicate multiplicities under retraction` `` |
+
+No row's PRESENT/ABSENT call diverges from the epic's table at this base
+commit, so no row is marked DIVERGENCE. The four rows the table never had
+(routed read/walk, the `Reason` arm count, `MergeableGroupByCell`, the three
+restore-order tests) are new information, not corrections of a stale claim.
+
+**Oracle catalog, stated as a non-goal.** The differential-tester's
+`GROUP_BY_AGGREGATES` catalog
+(`oracle/src/main/kotlin/civictech/oracle/bind/CoreOperators.kt:151`) is
+pinned at exactly 7 entries by two tests —
+`oracle/src/test/kotlin/civictech/oracle/bind/VocabularyCompletenessTest.kt:84`
+and `oracle/src/test/kotlin/civictech/oracle/bind/CoreOperatorsTest.kt:217`,
+both `CoreOperators.Ids.GROUP_BY_AGGREGATES.size shouldBe 7`. This epic does
+NOT widen that catalog for the fill features' `topKBy`/`countDistinct` —
+recorded here as a follow-up for the oracle lane, per this feature's own
+description; no bead is filed for it (the acceptance criteria ask only that
+this be recorded, unlike `[KAGG-R-06]`'s defect-branch clause, which does ask
+for one).
+
+**The Decision-G page-size note (epic's Risk 5), recorded rather than
+measured.** `GroupByCell` pages carry the whole accumulator unsplit
+(`kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt:201-210`,
+"Decision G — an unbounded accumulator rides whole", re-cited at this base
+commit — the epic's own Risk 5 cites this KDoc at an earlier line span that
+has since drifted; `main` has moved under it since the epic was filed).
+`Aggregators.topKBy`'s accumulator (`computenet-rmwqi`, not built here) will
+be a support multiset over whole rows rather than scalars, which makes that
+page entry larger; `StatePage.byteBudget` is advisory
+(`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt:143-146`, `@property
+byteBudget **Advisory**...`, field default at `:157`), not an enforced
+ceiling. Whether a wide-row `topKBy` accumulator blows a realistic byte
+budget in practice is a measurement question for BEN1, not something this
+audit-only feature can answer — named here, as the epic's Risk 5 asks, so
+the fill feature `computenet-rmwqi` inherits the question rather than
+re-discovering it.
+
+### [KAGG-R-02] — every drop-at-zero support multiset reachable from `civictech.cell.data`
+
+```
+grep -rn 'merge(.*1, Int::plus)\|it.remove(v) else' kernel/src/main
+kernel/src/main/kotlin/civictech/cell/data/Aggregator.kt:93:            acc.also { it.merge(selector(element), 1, Int::plus) }
+kernel/src/main/kotlin/civictech/cell/data/Aggregator.kt:98:            if (n <= 1) it.remove(v) else it[v] = n - 1
+```
+
+Exactly one: `Aggregators.Support` (private, backing `Extremum`/`TopK`). The
+fill features (`rmwqi`, `8lug2`) are bound to reuse this multiset rather than
+mint a second one; this feature only records the baseline count.
+
+### [KAGG-R-03] — BS-02, cited with fresh `--rerun` evidence
+
+```
+./gradlew :kernel:test --tests 'civictech.cell.data.GroupByCellTest' --rerun
+```
+
+**MEASURED** (2026-09-23, `be957545`, `Darwin arm64`, `NL-MGD6FQJW91`): 12
+tests, 0 failures — `BUILD SUCCESSFUL`; JUnit `TEST-civictech.cell.data.GroupByCellTest.xml`
+`timestamp="2026-09-23T05:18:40.936Z"`. Both cited tests are in that 12:
+`` `min survives duplicate-value retraction and reshuffles when the extremum dies` ``
+and `` `topK keeps the k largest with duplicate multiplicities under retraction` ``.
+
+### [KAGG-R-04] — BS-03, cited with fresh `--rerun` evidence
+
+```
+./gradlew :kernel:test --tests 'civictech.cell.data.MapCellBoundedReadTest' --tests 'civictech.cell.data.KeyedSetCellBoundedReadTest' --tests 'civictech.cell.partition.ShardCellBoundedReadTest' --rerun
+```
+
+**MEASURED** (2026-09-23, `be957545`, `Darwin arm64`): `MapCellBoundedReadTest`
+8/8, `KeyedSetCellBoundedReadTest` 11/11, `ShardCellBoundedReadTest` 12/12 — 0
+failures across all three, `BUILD SUCCESSFUL`. JUnit timestamps:
+`2026-09-23T05:18:41.070Z`, `2026-09-23T05:18:40.879Z`, `2026-09-23T05:18:41.088Z`
+respectively. The three enumeration-order-survives-restore tests named above
+are each in their suite's passing set.
+
+### [KAGG-R-05] — BS-04, the fan-out probe: `civictech.cell.app.KeyedFanOutOneWaveTest`
+
+**The question.** One ingress `SetDelta` fanned to two keyed cells — a
+`MapCell`-shaped view and a `KeyedSetCell`-shaped view, the SNB person/edge
+shape — driven to quiescence on a `SimulationController`: are both cells'
+state changes observable at one wave position through
+`civictech.cell.observe.AlignedObserve` (`[22-OBS-01]`/`[22-OBS-02]`)?
+
+**Why a distributor cell, not two declared links.** `MapCell` and
+`KeyedSetCell` both take `Use`-typed inlets (`MapOps`/`KeyedSetOps`, F-3) —
+the call-style shape every application driver in this repo writes through,
+never a link target. So the new test builds a small distributor cell that
+receives the one ingress `SetDelta<PersonEvent>` and forwards a `personCity`
+(`MapCell`-shaped) write and a `personFriend` (`KeyedSetCell`-shaped) write
+directly on the target cells' own `inlet.call`, from inside its own inbound
+delivery — a plain synchronous call nested inside the same
+`CurrentContext.with(ctx) { ... }` frame the triggering delta's delivery
+installed (`civictech.cell.port.FanOutlet`), so both forwarded writes carry
+the SAME `MessageContext.timestamp`, not a freshly-minted one.
+
+**MEASURED — CONFIRMED, correct within its documented scope.**
+`./gradlew :kernel:test --tests 'civictech.cell.app.KeyedFanOutOneWaveTest' --rerun`,
+2026-09-23, `be957545`, `Darwin arm64`: 1/1, `BUILD SUCCESSFUL`; JUnit
+`TEST-civictech.cell.app.KeyedFanOutOneWaveTest.xml`
+`timestamp="2026-09-23T05:18:40.781Z"`. The test drives two successive
+writes through the distributor and asserts, per wave: `AlignedObserve`'s
+composite pairs the `personCity` and `personFriend` updates together (never
+one arm advanced while the other still reads its pre-write value — the same
+"no torn republication" property `AlignedObserveTest` pins for its own fused
+two-arm graph), and every recorded composite across both waves is one of the
+three well-formed states (empty catch-up, wave 1, wave 2) — never a mix.
+Also verified stable under load: 10/10 passes of
+`./gradlew :kernel:test --tests 'civictech.cell.data.AggregatorAuditProbeTest' --tests 'civictech.cell.app.KeyedFanOutOneWaveTest' --tests 'civictech.cell.data.GroupByCellTest' --tests 'civictech.cell.data.MapCellBoundedReadTest' --tests 'civictech.cell.data.KeyedSetCellBoundedReadTest' --tests 'civictech.cell.partition.ShardCellBoundedReadTest' --rerun`
+run back-to-back.
+
+**How the probe reads the sink, and what a two-wave fan-out does to it.**
+`AlignedCompositeCell.current()` is the publication itself: `publish()` swaps
+the `@Volatile latest` snapshot under the sink's lock on the delivering thread
+(`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt`, `fun
+publish`), so the probe asserts it directly after `controller.runToIdle()`,
+with no wait. Only the `onChange` listener runs on the sink's own
+single-thread dispatcher (`newDispatcher()`), so the probe awaits the
+recorded-composite list with a bounded `awaitUntil`, as `AlignedObserveTest`'s
+`alignedRun` does. The implementer saw a roughly 1-in-5 flake in the combined
+`--tests` run above with an earlier revision; the mechanism was not captured.
+The review's reproducible mechanism: with a 300 ms sleep in the listener, a
+revision that awaited `current()` and then read the listener's list threw
+`List is empty` (**MEASURED**, 2026-09-23, `Darwin arm64`); the current
+revision passes under the same sleep. With the synchronous `current()` read,
+the combined run above passed 10/10 (same date and host).
+
+Discrimination (**MEASURED**, same host): issuing the `personFriend` write
+under `CurrentContext.with(null)`, so it rides a fresh wave instead of the
+ingress delta's, fails the probe at its first `current()` assertion with
+both arms empty. A split fan-out shows up in this sink as a stall (each arm's
+wave held for the other arm's edge), not as a torn composite, so the probe's
+"never torn" check is not what catches it.
+
+### [KAGG-R-06] — BS-05, the `collectToSet` probe: `civictech.cell.data.AggregatorAuditProbeTest`
+
+**The question.** The epic's audit table raises a "non-injective projection"
+concern for `collectToSet`: if the aggregator kept only a *projected* value
+per element, two elements mapping to the same projection could be
+indistinguishable in the accumulator, and retracting one could wrongly evict
+both or neither.
+
+**Why the concern cannot be expressed through this aggregator's own API.**
+`Aggregators.collectToSet()` takes no selector — `Collect.insert`/
+`Collect.retract` (`Aggregator.kt:119-123`, `private class Collect`) close
+over the element type `E` itself and mutate a `HashSet<E>` keyed by the
+element's own `equals`/`hashCode`, never by a caller-supplied lens. And
+`GroupByCell` drives `insert`/`retract` by membership flips
+(`[24-OP-GROUPBY-02]`), so the same element is never inserted twice while
+live — there is no route through which two elements could collide in
+`Collect`'s own accumulator on a projected value, because `Collect` never
+computes one.
+
+**MEASURED — CONFIRMED, correct within its documented scope.**
+`./gradlew :kernel:test --tests 'civictech.cell.data.AggregatorAuditProbeTest' --rerun`,
+2026-09-23, `be957545`, `Darwin arm64`: 1/1, `BUILD SUCCESSFUL`; JUnit
+`TEST-civictech.cell.data.AggregatorAuditProbeTest.xml`
+`timestamp="2026-09-23T05:18:40.776Z"`. The probe groups two distinct
+`Person` elements (different `id`) that collide on `city` — the `keyFn`
+lens `GroupByCell` groups by is deliberately chosen to double as the
+"projection" the concern describes — retracts one, and observes the other
+remains live in the group's `Set<Person>` (`out.last().puts.getValue("NYC") == setOf(p2)`),
+then retracts the second and observes SQL group-death semantics (a `MapDelta`
+removal, `out.last().removals == setOf("NYC")`), not an empty-set put.
+`Aggregators.Collect` is unchanged in this feature's diff (`git diff --stat`
+below).
+
+### Disposition
+
+Every table row is re-cited and PRESENT/ABSENT-correct at `be957545`; no
+DIVERGENCE row against the epic's own claims. Both probes (BS-04/`[KAGG-R-05]`,
+BS-05/`[KAGG-R-06]`) are CONFIRMED correct within their documented scope —
+neither found a defect, so no bug bead is filed and `concord/corpus/DISPUTES.md`
+is untouched (per the description's disposition rule, a bug bead and a
+`DISPUTES.md` entry are filed only on the defect branch). BS-01/`[KAGG-R-02]`
+and the citation-only rows (BS-02/BS-03, `[KAGG-R-03]`/`[KAGG-R-04]`) are
+discharged by citation, as decided.
+
+`git diff --stat` against this feature's `metadata.files` claim: exactly
+`doc/kernel-lane-findings.md` (this entry) and the two new test files,
+`kernel/src/test/kotlin/civictech/cell/data/AggregatorAuditProbeTest.kt` and
+`kernel/src/test/kotlin/civictech/cell/app/KeyedFanOutOneWaveTest.kt`. No
+edit to `Aggregator.kt`, `BoundedRead.kt`, any cell, `91-gap-analysis.md`,
+`CONCORDANCE.md`, or any spec/plan document.
+
+### Cross-references
+
+- Epic: `computenet-t6b.1` (KAGG-R). Fills: `computenet-rmwqi` (`topKBy`/
+  `SortSpec`), `computenet-8lug2` (`countDistinct`), `computenet-83vd6`
+  (`StateRead.keyBound`). Corpus: `computenet-l5sru` (BS-02 scenario, blocked
+  on the three fills).
+- Prior kernel epics re-verified against: KE1 `computenet-j2x` (closed —
+  `MergeableGroupByCell`), KRD `computenet-t6b.3` (closed — routed bounded
+  read in `civictech.cell.observe`).
+- Oracle follow-up: `GROUP_BY_AGGREGATES` (`oracle/.../CoreOperators.kt:151`)
+  is not widened by this epic — recorded above, no bead filed.

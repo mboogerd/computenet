@@ -884,6 +884,40 @@ _ecase(["a"], None, [],
        [(t("a", "wire/src/main/kotlin/Y.kt"), False)],
        "no units running elsewhere is the old behaviour")
 
+# A DEAD/STALE holder's unit is a resume marker, not a running agent: it must
+# not hold its files (computenet-09o4w). LIVE and unchecked holders still do.
+for _state, _blocks in (("DEAD", False), ("STALE", False), ("LIVE", True),
+                        ("NONE", True), ("UNKNOWN", True)):
+    _ecase([] if _blocks else ["sigl0.1"],
+           "running outside this feature: computenet-63um5" if _blocks else None,
+           [{"id": "computenet-63um5", "files": ["doc/ARCHITECTURE.md"], "holder": _state}],
+           [(t("sigl0.1", "doc/ARCHITECTURE.md"), False)],
+           f"a {_state} holder's overlapping unit {'blocks' if _blocks else 'does not block'}")
+
+_saved_bd, _saved_hs = nb.bd, nb.holder_state
+nb.bd = lambda *a: [
+    {"id": "gone", "issue_type": "feature", "updated_at": "2026-09-22T23:16:34Z",
+     "metadata": {"files": "a.kt", "holder": "tok-dead"}},
+    {"id": "bare", "issue_type": "task", "metadata": {"files": "b.kt"}},
+]
+# The row's updated_at must reach the checker: without it a long-running
+# session's token reads STALE and its unit is treated as resumable
+# (computenet-jqxqk).
+_seen_updated = []
+def _hs(tok, updated_at=None):
+    _seen_updated.append(updated_at)
+    return {"tok-dead": "DEAD"}[tok]
+nb.holder_state = _hs
+_got = nb.running_elsewhere("MacBoo", "feat", set())
+nb.bd, nb.holder_state = _saved_bd, _saved_hs
+elsewhere_cases += 1
+if _seen_updated != ["2026-09-22T23:16:34Z"]:
+    failed += 1
+    print(f"FAIL: running_elsewhere must pass the row's updated_at to holder_state — got {_seen_updated}")
+if [(u["id"], u["holder"]) for u in _got] != [("gone", "DEAD"), ("bare", "NONE")]:
+    failed += 1
+    print(f"FAIL: running_elsewhere must report each unit's holder state — got {_got}")
+
 # running_elsewhere() itself: what it includes and what it must not.
 _saved_bd = nb.bd
 nb.bd = lambda *a: [

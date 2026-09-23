@@ -10,6 +10,7 @@ import civictech.cell.link.Link
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
+import civictech.cell.link.NotificationFailures
 import civictech.cell.link.PortLink
 import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
@@ -539,8 +540,14 @@ object Promotion {
             to.linking.remove(link)
             target?.linking?.remove(link)
             target?.linking?.onUnlink?.invoke(link)
-            target?.linking?.onUnlinkListeners?.forEach { it(link) }
-            to.linking.onUnlinkListeners.forEach { it(link) }
+            // computenet-7u22s: same isolate-siblings-and-rethrow-first policy
+            // as the handshake teardown lambdas (computenet-1rvt) — a
+            // throwing onUnlinkListeners subscriber on one side must not cost
+            // the other side its notification, nor a sibling on its own side.
+            val failures = NotificationFailures()
+            target?.linking?.let { failures.multicast(it.onUnlinkListeners, link) }
+            failures.multicast(to.linking.onUnlinkListeners, link)
+            failures.rethrow()
         }
         to.linking.register(installed, identity)
         target?.linking?.register(installed, identity)

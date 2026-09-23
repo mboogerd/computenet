@@ -495,6 +495,17 @@ export const DENIAL_REASONS = [
    *  `[DSC1-NV-01]` stays EXPLICITLY UNVERIFIED: this says nothing about
    *  revocation or about a key held by someone other than its owner. */
   'STATEMENT_EXPIRED',
+  /** Seam 1 hello: this link's proven key identifier is already attributed, on
+   *  a LIVE link, to a different identity than the binding now resolves it to
+   *  (DSC2 `[DSC2-ID-05]`; computenet-ktn1l). The newer link is refused; the
+   *  live one stays. Distinct from `ID_MISMATCH`, a disagreement *inside one
+   *  hello* (the claimed id is not the id its own presented key derives to):
+   *  here nothing inside either hello is inconsistent — both resolutions
+   *  succeeded — and what disagrees is this key's identity now versus the
+   *  identity a still-up link was attributed with. Distinct from
+   *  `UNVOUCHED`/`STATEMENT_EXPIRED`, where the presented statements do not
+   *  back the key at all. */
+  'IDENTITY_MISMATCH',
 ] as const;
 
 export type DenialReason = (typeof DENIAL_REASONS)[number];

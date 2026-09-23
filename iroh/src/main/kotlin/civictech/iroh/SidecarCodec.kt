@@ -6,13 +6,17 @@ import civictech.iroh.SidecarProtocol.LENGTH_PREFIX_LEN
 import civictech.iroh.SidecarProtocol.MAX_MESSAGE_LEN
 import civictech.iroh.SidecarProtocol.MSG_HEADER_LEN
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 
 /**
  * One message as it sits on the host socket, length prefix stripped:
  * a kind byte, an 8-byte big-endian link id, and a kind-specific payload.
  *
  * This is the untyped layer. [SidecarCodec] turns a frame into one of the
- * thirteen typed messages `PROTOCOL.md` §3 names, and back.
+ * seventeen typed messages `PROTOCOL.md` §3 names, and back.
  */
 class Frame(val kind: Byte, val link: Long, val payload: ByteArray) {
 
@@ -129,6 +133,11 @@ sealed interface HostMessage {
     data object Shutdown : HostMessage {
         override val link: Long get() = CONTROL_LINK
     }
+
+    /** Start delivery of discovery events; answered by [SidecarMessage.Watching] (DSC2, aas-D8). */
+    data object WatchPeers : HostMessage {
+        override val link: Long get() = CONTROL_LINK
+    }
 }
 
 /** A message the sidecar sends to the host (`PROTOCOL.md` §3, sidecar → host). */
@@ -163,6 +172,27 @@ sealed interface SidecarMessage {
     /** One peer frame, sidecar → host. */
     class Data(override val link: Long, val payload: ByteArray) : SidecarMessage {
         override fun toString(): String = "Data(link=$link, ${payload.size} bytes)"
+    }
+
+    /** Answers [HostMessage.WatchPeers] (DSC2, aas-D8). */
+    data object Watching : SidecarMessage {
+        override val link: Long get() = CONTROL_LINK
+    }
+
+    /**
+     * A newly seen endpoint. 32-byte id, then UTF-8 comma-separated socket
+     * addresses in [HostMessage.AddPeer]'s payload shape; an empty address list
+     * is legal (DSC2, aas-D8).
+     */
+    class PeerDiscovered(val nodeId: ByteArray, val addresses: List<String>) : SidecarMessage {
+        override val link: Long get() = CONTROL_LINK
+        override fun toString(): String = "PeerDiscovered(${nodeId.toHex()}, $addresses)"
+    }
+
+    /** A previously discovered endpoint expired. 32-byte id (DSC2, aas-D8). */
+    class PeerExpired(val nodeId: ByteArray) : SidecarMessage {
+        override val link: Long get() = CONTROL_LINK
+        override fun toString(): String = "PeerExpired(${nodeId.toHex()})"
     }
 }
 
@@ -202,6 +232,7 @@ object SidecarCodec {
         is HostMessage.Data -> dataFrame(message.link, message.payload)
         is HostMessage.CloseLink -> Frame(Kind.CLOSE_LINK, message.link, EMPTY)
         is HostMessage.Shutdown -> Frame(Kind.SHUTDOWN, CONTROL_LINK, EMPTY)
+        is HostMessage.WatchPeers -> Frame(Kind.WATCH_PEERS, CONTROL_LINK, EMPTY)
     }
 
     fun frameOf(message: SidecarMessage): Frame = when (message) {
@@ -214,6 +245,14 @@ object SidecarCodec {
         is SidecarMessage.LinkDown -> Frame(Kind.LINK_DOWN, message.link, message.reason.toByteArray(Charsets.UTF_8))
         is SidecarMessage.Failure -> Frame(Kind.ERROR, message.link, message.reason.toByteArray(Charsets.UTF_8))
         is SidecarMessage.Data -> dataFrame(message.link, message.payload)
+        is SidecarMessage.Watching -> Frame(Kind.WATCHING, CONTROL_LINK, EMPTY)
+        is SidecarMessage.PeerDiscovered ->
+            Frame(
+                Kind.PEER_DISCOVERED,
+                CONTROL_LINK,
+                message.nodeId + message.addresses.joinToString(",").toByteArray(Charsets.UTF_8),
+            )
+        is SidecarMessage.PeerExpired -> Frame(Kind.PEER_EXPIRED, CONTROL_LINK, message.nodeId)
     }
 
     /**
@@ -285,7 +324,10 @@ object SidecarCodec {
                 Decoded.Ok(HostMessage.CloseLink(frame.link))
             }
         Kind.SHUTDOWN -> controlEmpty(frame) { HostMessage.Shutdown }
-        Kind.ID, Kind.LISTENING, Kind.PEER_ADDED, Kind.LINK_UP, Kind.LINK_DOWN, Kind.ERROR ->
+        Kind.WATCH_PEERS -> controlEmpty(frame) { HostMessage.WatchPeers }
+        Kind.ID, Kind.LISTENING, Kind.PEER_ADDED, Kind.LINK_UP, Kind.LINK_DOWN, Kind.ERROR,
+        Kind.PEER_DISCOVERED, Kind.PEER_EXPIRED, Kind.WATCHING,
+        ->
             Decoded.Malformed(DecodeProblem.WRONG_DIRECTION, "kind 0x%02x originates at the sidecar".format(frame.kind))
         else -> Decoded.Malformed(DecodeProblem.UNKNOWN_KIND, "kind 0x%02x names no message".format(frame.kind))
     }
@@ -320,7 +362,26 @@ object SidecarCodec {
         Kind.DATA ->
             if (frame.link == CONTROL_LINK) wrongLink(frame)
             else Decoded.Ok(SidecarMessage.Data(frame.link, frame.payload))
-        Kind.GET_ID, Kind.LISTEN, Kind.ADD_PEER, Kind.DIAL, Kind.CLOSE_LINK, Kind.SHUTDOWN ->
+        Kind.WATCHING -> controlEmpty(frame) { SidecarMessage.Watching }
+        Kind.PEER_EXPIRED -> nodeIdPayload(frame, "PEER_EXPIRED") { SidecarMessage.PeerExpired(it) }
+        Kind.PEER_DISCOVERED ->
+            if (frame.link != CONTROL_LINK) {
+                wrongLink(frame)
+            } else if (frame.payload.size < NODE_ID_LEN) {
+                Decoded.Malformed(
+                    DecodeProblem.MALFORMED_PAYLOAD,
+                    "PEER_DISCOVERED payload is ${frame.payload.size} bytes, needs at least $NODE_ID_LEN",
+                )
+            } else {
+                val id = frame.payload.copyOfRange(0, NODE_ID_LEN)
+                val addrText = utf8StrictOrNull(frame.payload, NODE_ID_LEN, frame.payload.size - NODE_ID_LEN)
+                if (addrText == null) {
+                    Decoded.Malformed(DecodeProblem.MALFORMED_PAYLOAD, "PEER_DISCOVERED addresses are not valid UTF-8")
+                } else {
+                    Decoded.Ok(SidecarMessage.PeerDiscovered(id, splitAddresses(addrText)))
+                }
+            }
+        Kind.GET_ID, Kind.LISTEN, Kind.ADD_PEER, Kind.DIAL, Kind.CLOSE_LINK, Kind.SHUTDOWN, Kind.WATCH_PEERS ->
             Decoded.Malformed(DecodeProblem.WRONG_DIRECTION, "kind 0x%02x originates at the host".format(frame.kind))
         else -> Decoded.Malformed(DecodeProblem.UNKNOWN_KIND, "kind 0x%02x names no message".format(frame.kind))
     }
@@ -329,6 +390,23 @@ object SidecarCodec {
 
     private fun splitAddresses(raw: String): List<String> =
         raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /**
+     * Strict UTF-8 decode of `payload[offset, offset+len)`: `null` on any
+     * invalid sequence, rather than silently replacing it the way `String(...,
+     * Charsets.UTF_8)` does. Scoped to `PEER_DISCOVERED` (F1-D6); every
+     * other kind's lenient decode is unchanged and out of scope here.
+     */
+    private fun utf8StrictOrNull(payload: ByteArray, offset: Int, len: Int): String? {
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return try {
+            decoder.decode(ByteBuffer.wrap(payload, offset, len)).toString()
+        } catch (e: CharacterCodingException) {
+            null
+        }
+    }
 
     private inline fun <T> controlEmpty(frame: Frame, build: () -> T): Decoded<T> = when {
         frame.link != CONTROL_LINK -> wrongLink(frame)

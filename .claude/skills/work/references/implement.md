@@ -143,9 +143,10 @@ Artifacts under the worktree die with it. Copy evidence that must outlive the
 task to `$HOME/computenet-runs/<task-id>/` and name that path; mark any other
 recorded path ephemeral.
 
-**Stop cleanly if you will not finish within about 45–60 minutes** of the
-dispatch time your prompt gives; compare `date -u +%s` against it before each
-long run. Commit,
+**Stop cleanly if you will not finish within about 45–60 minutes** of starting.
+Read `date -u +%s` in your first Bash call, write it into your scratch directory,
+and compare against it before each long run — a budget you take yourself is the
+only one that cannot arrive wrong. Commit,
 leave the task `in_progress`, and write a state comment: what is done, what is
 left, and the branch and sha it describes. State each next step against that
 sha or the file as it is there, never as a bare imperative, because the tree

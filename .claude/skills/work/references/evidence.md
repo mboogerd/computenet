@@ -59,8 +59,8 @@ Whether the run you asked for is the run you got:
   `--tests` filter. Run a narrow and a broad suite as two calls.
 - **`--tests` filters mislead the count.** A filtered run deletes the XML of
   every class it did not match, so count the broad run first. A nonexistent
-  class is ignored when a sibling filter matches, so pass
-  `--expect-classes <distinct classes named>` on any multi-filter run.
+  class is ignored when a sibling filter matches, so after any multi-filter run
+  pass `junit-count.py` (never `./gradlew`) `--expect-classes <count of classes named>`.
 
 Test stdout never reaches the console on this build. Read it from the XML:
 `sed -n '/<system-out>/,/<\/system-out>/p' <module>/build/test-results/test/*.xml`.
@@ -163,14 +163,14 @@ touching sockets, ports, filesystem semantics, paths or process spawning,
 measure the gap: a JDK-21 Linux container when `docker info` shows a running
 daemon, otherwise the branch's own CI run.
 
-Wait for checks with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`; its
-header documents it.
+Wait for checks with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`.
 
 | last line | means |
 |---|---|
 | `SETTLED` | every required check finished; read the rows above for red |
 | `TIMEOUT-PENDING`, or the call never returns | no verdict; a reviewer's one invocation for this head is spent ([review.md](review.md#feature-review)) |
 | `NO-RUN` | GitHub never built this head; never wait it out |
+| `UNBOUND` | the rows settled over a transport that names no commit: not evidence for this diff |
 | `QUERY-FAILED` | nothing was read |
 
 **A green check does not prove the diff's tests ran.** An `assumeTrue`-guarded
@@ -249,9 +249,7 @@ is what turns a flake into a false finding against good work (computenet-sbgxs).
 **The test is reachability, not load, and not the shape of the failure.** A red
 suite in a module your diff does not touch: is there a dependency path from a
 module you changed to the module that failed? Answer it before re-running
-anything — the session that had been told this cleared a red `:inspect` suite in
-one isolated run, where the session that had not spent two full repo-wide runs
-plus a git-history investigation on the same shape.
+anything.
 
 **Three changes have no honest reachability answer, and a "no path" reading of
 any of them licenses dismissing a real defect:**
@@ -289,15 +287,7 @@ git log -1 --format='%h %s' -- <path/to/FailingTest.kt>
 bd list --all --json | grep -i -e '<TestName>' -e 'seed <n>'
 ```
 
-The first instance found its own answer this way: the file's last commit named
-seed 132 as a known stranded-reorder-frame artifact (`ce9f7d137`,
-computenet-pa5l). Quote whichever names it in your report.
-
-**If it reproduces under load and passes alone, do not stop there.** That is
-also the signature of a genuine race, and "re-run in isolation until it passes"
-is a procedure that discards the only condition under which such a defect is
-observable. Attribute it to an existing flake bead or file one, naming the load
-at which it reproduced; never dismiss it as cleared.
+Quote whichever names it in your report.
 
 | symptom | do |
 |---|---|
@@ -306,5 +296,5 @@ at which it reproduced; never dismiss it as cleared.
 | an `awaitUntil`-style timeout, at any load | re-run that suite alone before reporting it |
 | a generative/property suite failing an assertion, in a module your diff cannot reach | the same contention shape as a timeout; clear it by reachability, isolated re-run, then `--rerun-tasks` — and if it passed alone after failing under load, also file or attribute it per the row below. The gate being green and the flake being recorded are both required, not alternatives |
 | a red suite in a module your diff did not touch | your change invalidated its cache and exposed a latent flake; attribute it, do not dismiss it |
-| it reproduces under load and passes alone | a genuine race presents exactly this way; attribute or file it, naming the load — do not record it as cleared |
+| it reproduces under load and passes alone | a genuine race presents exactly this way, and isolated re-runs discard the only condition that shows it; attribute or file it, naming the load — never record it as cleared |
 | a wrong value in a suite your diff CAN reach | never contention; it is yours |

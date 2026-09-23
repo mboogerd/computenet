@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "31 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "35 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -84,6 +84,44 @@ out=$("$SCRIPT" computenet-e 2>&1); st=$?
 [ "$st" = 1 ] && grep -q "feature branch tip" <<<"$out" && ! grep -q -- "--claim" "$BD_LOG" \
   && ok "fresh feature ref skips the epic" || bad "hot ref: exit=$st out=$out"
 git -C "$ROOT/git" update-ref -d refs/remotes/origin/feature/computenet-e.1
+
+# 2e. x3f5a: a child THIS MACHINE's sweep just released is not another machine's
+# activity. Step 3 runs sweep-stale-claims.sh immediately before this, and its
+# releases are local-only, so without the discount every resumable epic the
+# sweep cleaned is unclaimable for STALE_MIN minutes — exactly the epics the
+# resume preference exists for.
+fixture
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+echo "$(date +%s) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 0 ] && grep -q -- "--claim" "$BD_LOG" \
+  && ok "a child this run's own sweep released does not make the subtree hot" \
+  || bad "self-swept: exit=$st out=$out"
+
+# ... but only within the window, and only for the ids actually recorded.
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"},{"id":"computenet-e.4","parent":"computenet-e","updated_at":"%s"}]' "$now" "$now" > "$CTRL/list.json"
+echo "$(date +%s) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "computenet-e.4" <<<"$out" && ! grep -q -- "--claim" "$BD_LOG" \
+  && ok "an unrecorded sibling still makes the subtree hot" \
+  || bad "unrecorded sibling: exit=$st out=$out"
+
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+echo "$(( $(date +%s) - 3600 )) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "subtree is hot" <<<"$out" \
+  && ok "a sweep record older than the window does not license the claim" \
+  || bad "stale sweep record: exit=$st out=$out"
+
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+out=$(CLAIM_SWEPT_FILE="$CTRL/no-such-file" "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "subtree is hot" <<<"$out" \
+  && ok "no sweep file at all leaves the hot test exactly as it was" \
+  || bad "absent sweep file: exit=$st out=$out"
 
 # 2d. cold subtree (old child, no refs) claims normally; CLAIM_SKIP_HOT bypasses a hot one
 fixture
@@ -191,9 +229,9 @@ out=$("$SCRIPT" computenet-e 2>&1); st=$?
 # crash leftover are the same row. The holder is what tells them apart.
 HOLDER_SH="$(dirname "$SCRIPT")/session-holder.sh"
 
-holder_show() { # status assignee holder
-  printf '[{"id":"computenet-e","status":"%s","assignee":"%s","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}}]' \
-    "$1" "$2" "$3" > "$CTRL/show.json"
+holder_show() { # status assignee holder [updated_at]
+  printf '[{"id":"computenet-e","status":"%s","assignee":"%s","updated_at":"%s","metadata":{"holder":"%s"}}]' \
+    "$1" "$2" "${4:-2020-01-01T00:00:00Z}" "$3" > "$CTRL/show.json"
 }
 
 # A fresh claim stamps a holder, so the NEXT session has something exact to test.
@@ -202,6 +240,30 @@ out=$("$SCRIPT" computenet-e 2>&1)
 grep -q -- "--set-metadata holder=" "$BD_LOG" \
   && ok "a fresh claim stamps metadata.holder" \
   || bad "no holder stamped — log: $(grep set-metadata "$BD_LOG" | tr '\n' '|')"
+
+# jqxqk: a STALE-aged holder whose EPIC was written moments ago is a
+# long-running session, not host residue. The hot-subtree guard cannot catch it
+# — it tests descendants, not the epic's own updated_at — so the takeover below
+# is the last thing between a live session and a second claimant. End-to-end
+# through the REAL session-holder.sh, with HOLDER_MAX_AGE_S forcing the age.
+fixture
+jq_pid=$$; jq_start=$(ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')
+holder_show in_progress "testbox" "$(hostname -s)/other:$jq_pid:$jq_start" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "LIVE session" <<<"$out" \
+  && ! grep -qE -- "--claim|--set-metadata holder=" "$BD_LOG"; } \
+  && ok "an old token whose epic was just written is refused, not taken over" \
+  || bad "jqxqk takeover: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# The converse must still work, or the guard above has disabled STALE takeover.
+fixture
+holder_show in_progress "testbox" "$(hostname -s)/other:$jq_pid:$jq_start" \
+            "2020-01-01T00:00:00Z"
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "residue, taking over" <<<"$out"; } \
+  && ok "an old token with an old write is still taken over" \
+  || bad "STALE takeover regressed: rc=$rc out=$out"
 
 # A LIVE holder is refused even though the recency test would have allowed the
 # takeover: this is the four-concurrent-sessions case, decided exactly.

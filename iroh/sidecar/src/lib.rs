@@ -37,7 +37,9 @@
 //!
 //! The binary is a thin wrapper: bind an endpoint, bind an ephemeral
 //! `127.0.0.1` TCP port, print one JSON handshake line
-//! ([`handshake_line`]), and hand each host connection to [`serve`].
+//! ([`handshake_line`]), and hand each host connection to [`serve`]. Passing
+//! `--mdns` sets [`SidecarConfig::mdns`], adding opt-in LAN peer enumeration
+//! (`iroh-mdns-address-lookup`) beside the always-present in-memory lookup.
 
 #![deny(missing_docs)]
 
@@ -58,3 +60,8 @@ pub use server::{serve, serve_io, ServeOutcome};
 // Re-exported so callers need not depend on iroh directly for the few types
 // that appear in this crate's signatures.
 pub use iroh::{EndpointAddr, EndpointId, SecretKey};
+
+// Re-exported so callers (tests, the binary, and later the protocol/server
+// task) need not depend on iroh-mdns-address-lookup directly for the types
+// that appear in `SidecarEndpoint::mdns`'s signature and its event stream.
+pub use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};

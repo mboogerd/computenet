@@ -35,10 +35,11 @@
  * `<root>/host.journal`, `<root>/person/keys`, `<root>/authored/keys`,
  * `<root>/forum/keys`, `<root>/message/keys`).
  *
- * A later feature (F7, `computenet-v10ou`) recovers by pre-spawning every
- * family's known keys FIRST, then calling
- * `host.recoverFrom(KeyedCells.hostJournal(journalDir))` exactly ONCE against
- * the shared root WAL. **Four `family.recover()` calls would replay nothing
+ * Recovery (F7, `computenet-v10ou`) is [SocialRecovery]: it pre-spawns every
+ * family's known keys FIRST, through [SocialGraph.spawnKnown] so each cell's
+ * observe sink exists, then calls `host.recoverFrom` exactly ONCE against the
+ * shared root WAL ([KeyedCells.hostJournal]`(journalDir)`). It never calls
+ * `family.recover()`: **four `family.recover()` calls would replay nothing
  * at all, silently** — not, as this KDoc claimed until `computenet-5ab6f`,
  * replay the same host journal four times over. [KeyedCells.recover] resolves
  * `hostJournal` against its OWN per-family `journalDir`
@@ -46,9 +47,10 @@
  * here is `<root>/person/host.journal` — a file this pipeline never writes —
  * so the replay half of each call finds an absent journal and does nothing.
  * The other half of [KeyedCells.recover], pre-spawning that family's
- * durably-known keys, is correct and is a perfectly good way to do the
- * pre-spawn step above; it is only the root-WAL `recoverFrom` that must
- * happen exactly once.
+ * durably-known keys, is correct in itself, but it spawns through the family
+ * alone and would leave [SocialGraph] with no observe sink for the key — which
+ * is why the pre-spawn goes through [SocialGraph.spawnKnown] instead — and
+ * the root-WAL `recoverFrom` must happen exactly once.
  *
  * `parse = String::toLong` is required on every family: [KeyedCells]'s
  * default `parse` is an unchecked identity cast from the keys-file `String`
@@ -84,6 +86,7 @@ package civictech.demo.social
 import civictech.cell.CellRef
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.refAs
@@ -92,6 +95,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.Interest
 import java.io.File
+import java.util.UUID
 
 object SnbPipeline {
     /** The four per-entity keyed families, each its own [KeyedCells]`<Long>`. */
@@ -118,6 +122,9 @@ object SnbPipeline {
      * [KeyedCells] family). Two `build` calls against two hosts mint the same
      * per-key refs for the same namespace+key ([SOC1-SCHEMA-05]), since
      * [KeyedCells]'s ref derivation is a pure function of namespace and key.
+     * The four static cells likewise carry fixed refs ([staticIdentity]), so
+     * their journaled frames replay onto the same cells after a restart —
+     * and so [build] runs at most once per host.
      *
      * [registry], when given, receives each `snb-authored` cell's per-author
      * interest at spawn (8eb53-D4); `null` registers nothing.
@@ -158,12 +165,29 @@ object SnbPipeline {
         )
         val (statics, _) = graphOf(host.managementInlet) {
             Statics(
-                tags = spawn("snb-tags") { ref -> SetCell<Tag>(ref) }.refAs(),
-                tagClasses = spawn("snb-tagclasses") { ref -> SetCell<TagClass>(ref) }.refAs(),
-                places = spawn("snb-places") { ref -> SetCell<Place>(ref) }.refAs(),
-                organisations = spawn("snb-organisations") { ref -> SetCell<Organisation>(ref) }.refAs(),
+                tags = spawn("snb-tags", identity = staticIdentity("snb-tags")) { ref -> SetCell<Tag>(ref) }.refAs(),
+                tagClasses = spawn("snb-tagclasses", identity = staticIdentity("snb-tagclasses")) { ref ->
+                    SetCell<TagClass>(ref)
+                }.refAs(),
+                places = spawn("snb-places", identity = staticIdentity("snb-places")) { ref -> SetCell<Place>(ref) }.refAs(),
+                organisations = spawn("snb-organisations", identity = staticIdentity("snb-organisations")) { ref ->
+                    SetCell<Organisation>(ref)
+                }.refAs(),
             )
         }
         return Graph(families, statics)
     }
+
+    /**
+     * The four static cells' fixed, restart-stable identity (computenet-v10ou.1,
+     * orchestrator decision on the task review): `nameUUIDFromBytes(name)`,
+     * the same derivation [KeyedCells] uses per key. With the default fresh
+     * ref each build minted new refs, so a recovering app's WAL frames for the
+     * static sets targeted refs that no longer existed and dead-lettered as
+     * `unknown cell` — the recovered app served zero tags/places/organisations.
+     * The consequence: at most ONE [build] per host; a second on the same host
+     * is refused as "Cell already spawned".
+     */
+    private fun staticIdentity(name: String): IdentityBinding =
+        IdentityBinding.Exact(CellRef(UUID.nameUUIDFromBytes(name.toByteArray())))
 }

@@ -20,7 +20,10 @@ import civictech.testkit.HttpProbe
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.long
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
@@ -111,6 +114,8 @@ class AppRestartEquivalenceTest {
         const val REPORT_PATH = "/state/report"
         const val INGEST_PATH = "/state/ingest"
         const val LAST_STEP = 3
+        val DELETED_AT: Instant = Instant.parse("2026-08-11T23:30:00Z")
+        val RESTORED_AT: Instant = Instant.parse("2026-08-11T23:45:00Z")
     }
 
     /** One app's world: its own directory, log, run dir, declaration and clock. */
@@ -161,6 +166,18 @@ class AppRestartEquivalenceTest {
 
                 else -> error("no such step: $step")
             }
+        }
+
+        /** The spend log disappears (6jbep-D1): deleted, not truncated. */
+        fun deleteLog() {
+            Files.delete(log)
+            clock.set(DELETED_AT)
+        }
+
+        /** The log comes back with exactly the content it had before it was deleted. */
+        fun restoreLog() {
+            append(R1, R2, R3, R4, R5, R6)
+            clock.set(RESTORED_AT)
         }
 
         private fun append(vararg lines: String) {
@@ -249,6 +266,89 @@ class AppRestartEquivalenceTest {
         ingest.getValue("recordCount").jsonPrimitive.int shouldBe 10
         ingest.getValue("declarationEvents").jsonPrimitive.int shouldBe 2
     }
+
+    /**
+     * Design entry 6jbep-D1: a spend log DELETED while the app is down no longer
+     * makes a restart diverge in the fold. A log this process has read and that
+     * is now gone counts as the log replaced by an empty one, so the process
+     * that never stopped empties its fold exactly as the restarted one starts
+     * empty — and when the log comes back, both re-read it whole.
+     *
+     * Two phases, each discriminating one half of `convergeOnDeletedLog`:
+     *
+     * - **Deleted.** Without the fold being emptied, the uninterrupted app keeps
+     *   r1..r6 (recordCount 6) while the restarted one serves 0 — the
+     *   divergence the bead measured (`uninterrupted=3 restarted=0`).
+     * - **Restored with its old content.** Without the offset store going back
+     *   to its cold state, the uninterrupted app resumes from its checkpoint,
+     *   which the byte-identical file still matches (same length, same head
+     *   fingerprint), so it reads nothing new and stays at 0 while the
+     *   restarted app's first read of the restored file finds all six.
+     *
+     * Measured when this test was written (bead comment on computenet-6jbep):
+     * removing the fold emptying fails the deleted phase on the report bytes;
+     * making `forget()` leave `read()` resuming fails the restored phase on the
+     * report bytes; deleting the `forget()` call outright fails earlier, on
+     * `reBaselineCount` 2 instead of 1, because the store never leaves the
+     * seen state and every absent tick then re-counts the deletion.
+     *
+     * The per-process account is pinned separately rather than compared: only
+     * the uninterrupted app saw the records go, so only it counts the deletion
+     * as a re-baseline; both serve `checkpointOffset: null` while the log is
+     * absent.
+     */
+    @Test
+    fun `a log deleted while the app is down converges both processes on its absence`() {
+        val uninterruptedRig = Rig("deleted-uninterrupted")
+        uninterruptedRig.inputs(0)
+        val uninterrupted = uninterruptedRig.app().start()
+        uninterruptedRig.inputs(1)
+        uninterrupted.pollOnce()
+        // Premise: the fold holds records before the log is deleted, so an empty
+        // answer afterwards is the deletion's doing and not an empty fixture.
+        ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 6
+        uninterruptedRig.deleteLog()
+        // Two ticks observe the absence, so the count below also pins that a
+        // deletion is counted once rather than once per tick that sees it.
+        uninterrupted.pollOnce()
+        uninterrupted.pollOnce()
+
+        val restartedRig = Rig("deleted-restarted")
+        restartedRig.inputs(0)
+        val first = restartedRig.app().start()
+        restartedRig.inputs(1)
+        first.pollOnce()
+        first.stop()
+        restartedRig.deleteLog()
+        val restarted = restartedRig.app().start()
+
+        withClue("log deleted") {
+            probe(restarted).state(REPORT_PATH) shouldBe probe(uninterrupted).state(REPORT_PATH)
+            for (app in listOf(uninterrupted, restarted)) {
+                val ingest = ingest(app)
+                ingest.getValue("recordCount").jsonPrimitive.int shouldBe 0
+                ingest.getValue("checkpointOffset") shouldBe JsonNull
+            }
+            ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
+            ingest(restarted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 0L
+        }
+
+        uninterruptedRig.restoreLog()
+        uninterrupted.pollOnce()
+        restartedRig.restoreLog()
+        restarted.pollOnce()
+
+        withClue("log restored with its old content") {
+            probe(restarted).state(REPORT_PATH) shouldBe probe(uninterrupted).state(REPORT_PATH)
+            ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 6
+            ingest(restarted).getValue("recordCount").jsonPrimitive.int shouldBe 6
+            // The reappearance is a cold whole-file read, not a second re-baseline.
+            ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
+        }
+    }
+
+    private fun ingest(app: AllocatorObserveApp): JsonObject =
+        Json.parseToJsonElement(probe(app).state(INGEST_PATH)).jsonObject
 
     /** Names the failing boundary when an assertion inside the loop fails. */
     private fun clue(boundary: Int): String = "restart boundary s=$boundary"

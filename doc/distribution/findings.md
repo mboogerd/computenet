@@ -821,3 +821,230 @@ R4), the same correction this entry makes to 43-security.md and
 95-research-plan.md. Left to whoever next has that row in their claim.
 
 `concord/corpus/DISPUTES.md` is unchanged by this feature.
+
+## 2026-09-22 — DSC2 BS-08: the mutual-dial tie-break over REAL sidecars (`computenet-md1dt`)
+
+**Names, does not edit, the entries above.** BS-08 (`[DSC2-DIAL-05]`,
+aas-D7) was covered only by `MutualDialTest`, which plays the POLICY over two
+hand-relayed `FakeSidecar`s in three chosen orders. No merged test had put two
+real iroh endpoints into a mutual dial. This entry records the first real-sidecar
+run: `iroh/src/test/kotlin/civictech/iroh/discover/MutualDialSidecarTest.kt`.
+
+### How the race is forced, and why it has to be
+
+Left alone, the race nearly always goes one way. The first node to see a
+`PEER_DISCOVERED` dials. Its link is usually up at the other node before that
+node discovers anything, and the late sighting is then `Suppressed` because the
+key already holds a link. So only one side dials, and a tie-break test would pass
+without a tie-break ever happening. Measured with the hold disabled (container
+copy only): of 5 trials, 2 were one-sided (`hi never dialled lo`), 2 were real
+mutual dials that passed, and 1 was a mutual dial that logged the link error
+described below.
+
+The test therefore routes each node's `SidecarClient` through a loopback relay.
+The relay parses only the host→sidecar framing and **holds the first `DIAL`
+naming the other node** until both nodes have issued one. No link exists anywhere
+until a `DIAL` reaches a sidecar, so neither node's sighting can be suppressed,
+and every trial is a genuine mutual dial by construction. Each trial also PROVES
+that both sides dialled rather than assuming it:
+
+- the barrier paired;
+- exactly one `DIAL` to the peer crossed each relay, then and after quiescence;
+- the larger id's `tieBreakClosed` reached 1, which happens only when that node
+  held both directions of the key.
+
+Three release orders are forced, each in its own test method and each run as 3
+trials with fresh keys:
+
+- `TOGETHER` — both `DIAL`s are released at once, and the handshakes race freely.
+- `LO_FIRST` — the smaller id's link is admitted at the larger id before the
+  larger id's already-issued `DIAL` is let through.
+- `HI_FIRST` — the mirror order: the larger id's link is admitted at the smaller
+  id first, and the smaller id's later OUTBOUND link has to displace it.
+  `MutualDialTest`'s fake orders do not include this one.
+
+### Result
+
+In all three orders, both nodes end with the end state BS-08 requires:
+
+- exactly ONE live link each, peered: the smaller id's OUTBOUND link, which is
+  the larger id's INBOUND link;
+- both snapshots agree (`Peered(OUTBOUND)` / `Peered(INBOUND)`);
+- no admission denial, no refusal attributed, no pre-hello drop, no unadmitted
+  open charged, no link error, no retry armed;
+- no re-dial of the loser.
+
+Linux container runs (aarch64, `computenet-codex-worker:local`, container-local
+copy, no host mounts):
+
+- the single-order version: 33 of 33 trials green;
+- the committed three-order version: 10 of 10 runs green, 90 of 90 trials,
+  0 skipped (`tests="3" skipped="0" failures="0"` in each run's JUnit XML);
+- after merging main `de4beef1` and adding the pins (head `2cdd3da7`): 12 of 12
+  runs green, 108 of 108 trials, 0 skipped. The run before `TOGETHER`'s count
+  was pinned went red in 2 of 11 completed runs, on that count alone;
+- earlier three-order runs: `TOGETHER` and `LO_FIRST` green in every trial.
+  Those runs were red only on `HI_FIRST`'s tie-break count, which led to the
+  divergence below.
+
+Discrimination: flipping `PeerTable.loserDirection` (container copy only) turns
+the test red on `the smaller id kept its OUTBOUND link`, in 2 of 2 runs.
+
+Evidence of record is CI's `iroh-sidecar` lane, which runs
+`:iroh:check -Piroh.enabled=true` unfiltered. On macOS the class reports
+SKIPPED by name, because the host has no multicast delivery (`ne2oh-B6`).
+
+**CI's first run of the class**, run 35682294768 (ubuntu-latest x86_64, PR #992
+head `00a5961c` merged with main `de4beef1`), executed it with 0 skipped:
+
+- `TOGETHER` passed 3 of 3 trials.
+- `LO_FIRST` passed 3 of 3 trials.
+- `HI_FIRST` passed trials 1 and 2 (the smaller node counted 0, then 1: both
+  values of the divergence below, on x86_64). Trial 3 failed on
+  `hi logged no link error`. Every end-state assertion before that one had held.
+  See the link-error section below.
+
+### One divergence, fixed: `computenet-i74gh`
+
+In `HI_FIRST`, the smaller node's `DiscoveryCounters.tieBreakClosed` was
+observed to read **0 in most trials and 1 in the rest** (container, across 62
+`HI_FIRST` trials: 0 in 53, 1 in 9). The larger node's count was always 1.
+ktn1l-D16 says each node counts exactly one tie-break close, however it
+learned of the loss. `TOGETHER` could produce the same shape without forcing,
+when the race after the release happened to admit the larger node's link at
+the smaller node first. That was seen in 2 of 35 container `TOGETHER` trials
+after the 2026-09-22 main merge, and in 0 of 55 before it; whether the merge
+made it likelier was never established.
+
+When the smaller node's OUTBOUND link comes up, it is already holding the
+larger node's link PEERED, and two events raced at the smaller node:
+
+- **The count was 1** when the larger node's hello on the new outbound link
+  was judged first. The gate answers `Admit(close = the inbound link)` and
+  counts that link.
+- **The count was 0** when the `LINK_DOWN` of the inbound link, which the
+  larger node had already closed as its loser, landed first.
+  `DiscoveredPeering.onLinkDown` classified an accepted link as a tie-break
+  loss only when it was never peered (`outcome == null && !view.peered &&
+  otherLinkUp`), so nothing was counted there. The later hello then found no
+  second link, so the gate counted nothing either.
+
+A container-only mutation confirmed the 0 route at the time: with
+`!view.peered` removed, all 9 trials were green with the smaller node
+counting 1. That was a diagnostic, not the shipped fix.
+
+**Fixed by `computenet-i74gh`** (PR #1008, merged to main as `ca9b11c0`,
+worked together with `computenet-oqpqf` because both change
+`DiscoveredPeering.onLinkDown`'s tie-break-loss classification). The fix
+replaces the `!view.peered` predicate: `onLinkDown` now counts an ACCEPTED
+link in this node's *losing direction* as a tie-break loss whenever a link of
+the *opposite* direction is up, whether or not the losing link was ever
+admitted — so the smaller node's inbound link is counted on its `LINK_DOWN`
+even though it had already been peered. `closeLink` no longer recounts
+separately (removing its count was checked safe: the only `CloseLoser` post
+happens from `toVerdict Admit`, which counts before it posts).
+
+`MutualDialSidecarTest` dropped its `{0, 1}` allowance (`Release.loTieBreaksLanded`)
+and now asserts the smaller node's `tieBreakClosed` is exactly 1 in all three
+orders; the KDoc caveats naming `computenet-i74gh` were removed. Evidence
+recorded on `computenet-i74gh`'s feature-review comment (2026-09-22):
+
+- CI `iroh-sidecar` lane, run `35738300041`, job `106781118880` (Linux,
+  head `0c0f44ac`): `MutualDialSidecarTest` executed `TOGETHER`, `LO_FIRST`
+  and `HI_FIRST`, 3 trials each, asserting the smaller node's
+  `tieBreakClosed == 1` in every order. All passed.
+- A local mutation (Darwin arm64, `--rerun`): restoring the old
+  `!view.peered` predicate reddens `MutualDialTest`'s new HI_FIRST-shaped
+  case ("the larger id's link admitted first, with its close overtaking its
+  hello…"), which times out awaiting the smaller node's tie-break count.
+
+No container (Linux aarch64) run of the fix itself is recorded on
+`computenet-i74gh` or `computenet-oqpqf`; the fix's own evidence is the
+Darwin-local mutation above and the CI Linux x86_64 run cited above
+(unverified: whether the fix has also been exercised under the aarch64
+container harness used for the pre-fix measurements in this entry).
+
+### A second divergence, pinned, then fixed in the sidecar: `computenet-yfg48`
+
+The larger node could record link errors on **its own dialled link**, which is
+the one aas-D7 discards at that node:
+
+1. `send failed: sending a frame failed: connection lost`
+2. `link N is no longer sending`, where N is that link's id
+
+Where it was seen: once unforced in the container (the hold-disabled sample
+above), then on CI run 35682294768 in `HI_FIRST` trial 3, where it failed the
+required check, then once in a container `TOGETHER` trial. md1dt shipped with a
+narrow pin for the pair, and filed the bug. In every occurrence the end state,
+the counts and the absence of blame all held, and no re-dial followed, although
+`IrohConnection.onError` printed "will be re-dialled".
+
+**Cause: the sidecar reported one link-down twice.** Both strings come from
+`iroh/sidecar/src/server.rs`. When the tie-break closed the link's QUIC
+connection while the host still had frames queued for it, the host→peer pump's
+send failed with `WriteError::ConnectionLost`. The pump answered with an
+`ERROR` and stopped, and a `DATA` written before the host learned of the close
+then found the pump's queue shut. The link's own `LINK_DOWN` already reported
+the same event. `PROTOCOL.md` §2 makes an `ERROR` on an established link
+terminal and a refusal, so the host recorded it as one.
+
+**Why the sidecar and not the JVM.** The host cannot tell, in every
+interleaving, that the link was a tie-break loser when the `ERROR` arrives. It
+cannot always tell even at the `LINK_DOWN`:
+
+- CI's `HI_FIRST` trial 3 ordered the two `ERROR`s before the connection's
+  quiet-close classification (`link 1 closed quietly`).
+- The container `TOGETHER` occurrence was on a link that was never admitted, and
+  was classified as a tie-break loss only at its `LINK_DOWN`.
+- A PEERED losing link is closed from the policy thread (`CloseLoser`), after
+  the verdict. The far side can close it first, because the acceptor hello is
+  written straight after the verdict. So the `LINK_DOWN` can reach `retire`
+  before anything on the host marks the link as discarded. This is reasoned
+  from the code. It was not observed.
+
+The sidecar does know the cause exactly: the send failed because the connection
+is gone.
+
+**The fix.** A send that fails with `ConnectionLost` is left to the link's
+`LINK_DOWN`. The pump sends no `ERROR` and keeps draining its queue until the
+link is deregistered. A `DATA` racing the `LINK_DOWN` is then accepted and
+dropped, as any frame queued when a link goes down is. It is no longer refused.
+A send failure that leaves the connection up, such as the peer stopping the
+stream, still answers `ERROR` as before. What `PROTOCOL.md` says each `ERROR`
+means is unchanged.
+
+Two tests in `server.rs` force the interleaving: the far side closes, this side
+observes the close, and only then are frames queued and the pumps started. They
+go red without the fix, with the CI string itself:
+`frames_queued_for_a_link_that_went_down_draw_its_link_down_and_no_error` and
+`a_link_whose_send_met_its_close_keeps_accepting_until_it_is_deregistered`.
+
+**The pin is gone.** `MutualDialSidecarTest` asserts empty `linkErrors` on both
+nodes in all three orders again. It has no exception for this case.
+
+Linux container, aarch64 (`computenet-codex-worker:local`, container-local
+copy, no host mounts), with the pin removed, at `ab7dfccb`:
+
+- 24 runs, each JUnit XML `skipped="0"`. 214 trials ran: `HI_FIRST` 72 of 72
+  green, `LO_FIRST` 72 of 72, `TOGETHER` 69 of 70.
+- `linkErrors` was empty on both nodes in all 214 trials: by assertion in the
+  213 that passed, and in the failure dump of the one that did not.
+- The one red trial failed earlier in the test, on `nothing was dropped on hi`
+  (3, expected 0). That is a different defect, on the receive side: frames that
+  arrive on a dialled link which the node's own gate closed quietly are charged
+  to `preHelloDrops`. It is filed as `computenet-3mcum`.
+- `HI_FIRST`'s smaller-node count read 0 in 65 trials and 1 in 7, unchanged by
+  the `computenet-yfg48` fix (it does not touch `DiscoveredPeering`); this was
+  the divergence separately fixed by `computenet-i74gh` above.
+
+Evidence: `~/computenet-runs/computenet-yfg48/container-iter/`.
+
+### Not verified
+
+- Loopback and `--offline` only. This says nothing about two hosts on a real LAN
+  (`[DSC2-NV-01]`).
+- Only `DIAL` issue order is forced. The order of the QUIC handshakes and hellos
+  after the release is sampled, not enumerated.
+- CI's `iroh-sidecar` lane has run this class only on `00a5961c` (run
+  35682294768, red on the `computenet-yfg48` link error, before the pin). This
+  entry's final head has not been run in CI.

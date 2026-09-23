@@ -1,3 +1,0 @@
-# computenet-cgdt: review-feature.md §7 names the READY-with-follow-on shape and
-# points it at the residual attachment rules.
-work +12

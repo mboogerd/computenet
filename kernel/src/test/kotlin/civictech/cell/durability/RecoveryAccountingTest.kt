@@ -139,6 +139,7 @@ class RecoveryAccountingTest {
 
         // Arm 1 — the pre-retrofit decorator, verbatim from 67399fc23^ (RecoveryAccountingTest.kt:82).
         val preRetrofit = object : Journal {
+            override val durability: DurabilityClass get() = journal.durability
             override fun append(record: ByteArray) = journal.append(record)
             override fun replay(): List<ByteArray> =
                 journal.replay().mapIndexed { i, r -> if (i == corruptAt) byteArrayOf(99) else r }

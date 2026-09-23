@@ -1,0 +1,863 @@
+package civictech.iroh.discover
+
+import civictech.cell.DenialReason
+import civictech.cell.link.KeyId
+import civictech.cell.link.PeerId
+import civictech.iroh.HelloGate
+import civictech.iroh.IrohNode
+import civictech.iroh.IrohTransport
+import civictech.iroh.LinkDirection
+import civictech.iroh.PeerWatchListener
+import civictech.iroh.Verdict
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * How many keys this policy retains, how many it dials at once, and when it
+ * dials them again (F3-D1, [DSC2-DIAL-03], [DSC2-MDNS-05]).
+ *
+ * @param maxRetained the bound on [PeerTable] entries a LAN flood can create.
+ * @param maxInFlightDials both the dial-pool size and the bound on `Dialling`
+ *   entries. They are one number on purpose: a dial *blocks its thread* until
+ *   the link is up or the timeout expires (`SidecarClient.dial`), so a bound on
+ *   in-flight dials that was not also the thread count would either starve or
+ *   queue behind itself.
+ * @param refusedDialLimit consecutive unadmitted opens after which a key is
+ *   abandoned. Enforced inside the connection, not here (F3-D4).
+ * @param schedule the backoff, in milliseconds, before retry [attempt]. The
+ *   only source of delay in this package, together with the [DialTimer] that
+ *   realises it.
+ * @param dialTimeout how long one `openLink` may block before it counts as a
+ *   failed dial.
+ */
+data class DialPolicy(
+    val maxRetained: Int = 1024,
+    val maxInFlightDials: Int = 4,
+    val refusedDialLimit: Int = IrohTransport.REFUSED_DIAL_LIMIT,
+    val schedule: (attempt: Int) -> Long = IrohTransport.DEFAULT_RECONNECT_BACKOFF,
+    val dialTimeout: Duration = 30.seconds,
+) {
+    init {
+        require(maxInFlightDials > 0) { "maxInFlightDials must be positive, was $maxInFlightDials" }
+    }
+}
+
+/**
+ * Discovery events in, bounded dials out: the policy loop that turns a
+ * sidecar's `PEER_DISCOVERED`/`PEER_EXPIRED` stream into peerings on an
+ * [IrohNode] (DSC2 feature `computenet-ktn1l`, task `.3`; F3-D1, F3-D3, F3-D4,
+ * F3-D8, F3-D9).
+ *
+ * It owns no transport mechanics and no state machine. [IrohNode] holds the
+ * links; [PeerTable] holds what each key is doing and decides every transition;
+ * this class owns the **threads, the queue and the timer** that connect the
+ * two, and nothing else. That split is the whole design: the table is pure and
+ * exhaustively testable, and the concurrency lives here where it can be stated
+ * in one place.
+ *
+ * ## The thread rule, which is the point of this class
+ *
+ * Three kinds of thread, all daemon, none of them the kernel's scheduler
+ * ([DSC2-NEU-04], ktn1l-D17):
+ *
+ * 1. **The sidecar reader thread** (`iroh-sidecar-reader`, owned by
+ *    `SidecarClient`). Every callback this class registers on it — the
+ *    [PeerWatchListener] and the [IrohNode.NodeLinkListener] — does exactly
+ *    one thing: `queue.offer(...)`. **It never dials, never blocks and never
+ *    takes a lock the policy thread holds.** A dial issued from the reader
+ *    thread would wait for a `LINK_UP` that only the reader thread can
+ *    deliver: an immediate, total deadlock of the endpoint. Every enqueue-only
+ *    callback in this file is marked `// ENQUEUE ONLY` for that reason, and
+ *    `DiscoveredPeeringTest` pins it.
+ * 2. **One policy thread** (`iroh-discover-policy`). It drains the queue and
+ *    is the *only* thread that applies a table transition, arms or cancels a
+ *    timer, or submits a dial. Single, so the table's transitions are
+ *    serialised by construction rather than by argument.
+ * 3. **A dial pool** of [DialPolicy.maxInFlightDials] threads
+ *    (`iroh-discover-dial-N`). Each runs one blocking `openLink` and posts the
+ *    result back onto the queue.
+ *
+ * The **one** deliberate exception is the [HelloGate] this class installs. A
+ * hello must be judged synchronously, on the reader thread, because the
+ * verdict decides what is written next on that very link — there is nothing to
+ * come back to later. It is a single lock-guarded call into [PeerTable.judge]
+ * plus counter increments: no IO, no dial, no wait, and no lock this class
+ * holds across anything else. That is why [PeerTable] is pure.
+ *
+ * ## Time
+ *
+ * Every "when" is [clock] plus [DialPolicy.schedule]; every "later" is the
+ * injected [DialTimer]. There is no `System.currentTimeMillis()` and no
+ * `Thread.sleep` in this package, production or test ([DSC2-DIAL-08]).
+ *
+ * ## Identity
+ *
+ * This package reads no allowlist and constructs no [PeerId]
+ * ([DSC2-ID-01..04]). A discovered stranger is *dialled*, and its hello is
+ * refused inside `Session` exactly as any other hello would be; the refusals
+ * arrive here only as accounting — an abandoned connection and a
+ * [DenialReason] to record. The only `PeerId` this class ever touches is one a
+ * `Session` already stamped and handed to it.
+ *
+ * ## Lifecycle
+ *
+ * [start] installs the policy; it then runs until one of two ends. [close]
+ * stops it and closes every connection it made. [detach] stops it the same
+ * way but hands those connections, links still up, to the caller and puts
+ * [IrohNode.gate] back to [HelloGate.ADMIT_ALL] — discovery's job was
+ * formation, and from there the caller holds the peering by hand. Neither
+ * closes the [IrohNode], and the node's link listener stays registered (the
+ * node's listener list is append-only); it posts into a policy that has
+ * stopped, and `post` drops. A late answer to a `DIAL` the stop interrupted
+ * never reaches it: `SidecarClient` closes an abandoned dial's link itself
+ * (computenet-r2zhu, computenet-r3301).
+ */
+class DiscoveredPeering private constructor(
+    private val node: IrohNode,
+    private val policy: DialPolicy,
+    private val clock: () -> Long,
+    private val timer: DialTimer,
+) : AutoCloseable {
+
+    /** The state machine. Pure; every call below is on the policy thread or under the gate. */
+    private val table = PeerTable(node.nodeId, maxRetained = policy.maxRetained, clock = clock)
+
+    /** @see DiscoveryCounters — populated here, read by anyone ([DSC2-OBS-01..03]). */
+    val counters: DiscoveryCounters = DiscoveryCounters(
+        keysRetained = { table.keysRetained },
+        malformedEventSource = { node.client.malformedDiscoveryEvents },
+    )
+
+    /**
+     * One [IrohTransport.IrohConnection] per discovered key, for that key's
+     * whole life here (F3-D4).
+     *
+     * Kept rather than rebuilt per dial because the connection is what carries
+     * the *run*: its `unadmittedOpens` and `abandonedAfterRefusals` are
+     * consecutive-refusal accounting, and a fresh connection per attempt would
+     * reset the run and never reach [DialPolicy.refusedDialLimit].
+     */
+    private val connections = ConcurrentHashMap<NodeKey, IrohTransport.IrohConnection>()
+
+    private val queue = LinkedBlockingQueue<Command>()
+
+    /** Armed retries, by key. Written and read **only** on the policy thread. */
+    private val armed = HashMap<NodeKey, AutoCloseable>()
+
+    /**
+     * Link ids already counted on [DiscoveryCounters.tieBreakClosed], and by
+     * the same token the links this policy has decided to close (ktn1l-D16).
+     *
+     * **One closed link moves the counter once**, and a mutual dial gives this
+     * class up to three independent chances to learn that a link lost: the
+     * gate's own `CloseQuietly`, the gate's `Admit` naming the *other* link,
+     * and the link's `LINK_DOWN`. Which of them fires first depends on when
+     * each side's acceptor hello lands, and that is exactly what BS-08
+     * requires the end state to be independent of — so the count is made
+     * idempotent per link rather than assigned to one privileged learning
+     * point (the assignment earlier attempts made, and the reason a two-node
+     * scenario could count 0, 1 or 2 for the same physical outcome).
+     *
+     * It is also what [seed] skips: a link this policy has closed must not be
+     * re-seeded into the table from the node's registry in the window before
+     * its `LINK_DOWN` lands, or the *other* direction's hello would judge
+     * against a link that is already on its way out and close it a second time.
+     */
+    private val tieBreakCounted: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    /** Link ids whose refusal is already counted under [DiscoveryCounters.refusedBy]. @see tieBreakCounted */
+    private val refusalCounted: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    private val running = AtomicBoolean(true)
+
+    private val dialThreads = AtomicInteger()
+
+    private val dialPool: ExecutorService =
+        Executors.newFixedThreadPool(policy.maxInFlightDials) { runnable ->
+            Thread(runnable, "iroh-discover-dial-${dialThreads.incrementAndGet()}").apply { isDaemon = true }
+        }
+
+    private val policyThread = Thread({ drain() }, "iroh-discover-policy").apply { isDaemon = true }
+
+    // -------------------------------------------------------------- the API
+
+    /** Every retained key as an observability surface sees it. @see PeerTable.snapshot */
+    fun snapshot(): List<PeerView> = table.snapshot()
+
+    /**
+     * Stop the policy: no further events are acted on, every armed retry is
+     * cancelled, the dial pool is shut down and waited for, and every
+     * connection this policy opened is closed. A `DIAL` the stop interrupted
+     * and the sidecar answers later is closed by `SidecarClient` when it lands.
+     *
+     * The [node] is **not** closed — it is the caller's, and the connections
+     * here hold `ownsClient = false` precisely so that closing them leaves the
+     * endpoint usable.
+     *
+     * After [detach] this closes nothing further — the connections are the
+     * caller's by then — and returns. Idempotent either way.
+     */
+    override fun close() {
+        if (!stop()) return
+        connections.values.forEach { runCatching { it.close() } }
+        connections.clear()
+    }
+
+    /**
+     * Stop the policy and hand its live connections to the caller instead of
+     * closing them (63um5-D1).
+     *
+     * The stop is [close]'s, step for step (one private `stop()`, so the two
+     * cannot drift): no further event is acted on, every armed retry is
+     * cancelled, the timer and the dial pool are shut. What differs is only
+     * the ending — no connection is closed, so a `Peered` link stays up, and
+     * the returned map (a copy; this policy's own is emptied) is the caller's
+     * to `sever()`, `heal()` and `close()` from here on.
+     *
+     * Why it exists: a planned [IrohTransport.IrohConnection.sever] under a
+     * RUNNING policy is re-dialled within one pump (`retire` reports the down,
+     * [PeerTable.linkDown] answers `Redial` for a discovered key with no other
+     * link up), so a caller cannot hold a partition without first taking the
+     * policy away. This is also the JVM-side meaning of "discovery stopped
+     * after formation": the protocol has no `UNWATCH`, so the sidecar keeps
+     * emitting `PEER_DISCOVERED`, and the `post` that drops on `!running` is
+     * what silences it here.
+     *
+     * Two more things the caller inherits, both deliberate:
+     *
+     * - [IrohNode.gate] is restored to [HelloGate.ADMIT_ALL]. The gate this
+     *   policy installed judges against its table, and a table that no longer
+     *   moves would judge a re-dialled key's hello against its own stale
+     *   `Peered` entry.
+     * - A returned connection **does not re-dial on its own**: it was made
+     *   with an empty `onUnplannedDown` delegate (see [pump]), so an unplanned
+     *   drop leaves it down until the caller calls `heal()`.
+     *
+     * A connection whose dial was still in flight is handed over too — the
+     * map is "every connection this policy made", not "every one that is
+     * up" — and it is **quiescent** by the time this returns (computenet-iesmw):
+     * the stop interrupts the dial and then waits for the pool, bounded by
+     * `CLOSE_JOIN_MILLIS`, so no pool thread is still in its `openLink`. The
+     * dial either landed, and the connection holds that link like any other
+     * handed connection, or it did not, and the connection holds none and a
+     * `heal()` opens exactly one. If the interrupted `DIAL` is answered —
+     * before the interrupt reached the dial or after — `SidecarClient.dial`
+     * closes that link rather than leaving it up beside the one `heal()` makes
+     * (computenet-r2zhu, computenet-r3301).
+     *
+     * `heal()` is for a connection with no link. On one whose dial landed it
+     * dials a second link, as it would on any connection that is up — a
+     * property of `IrohConnection.heal`, not of this handover.
+     *
+     * [counters] and [snapshot] stay readable and are frozen from here on.
+     * Idempotent: a second call, or a call after [close], returns an empty
+     * map and changes nothing.
+     */
+    fun detach(): Map<NodeKey, IrohTransport.IrohConnection> {
+        if (!stop()) return emptyMap()
+        node.gate = HelloGate.ADMIT_ALL
+        val handed = HashMap(connections)
+        connections.clear()
+        return handed
+    }
+
+    /**
+     * The one stop sequence [close] and [detach] share. Returns false when the
+     * policy was already stopped, in which case it did nothing.
+     *
+     * On return no dial-pool thread is running `openLink`, unless the pool
+     * outlived `CLOSE_JOIN_MILLIS` after its interrupt — which is logged, and
+     * which an interrupted dial with only local work left does not approach.
+     */
+    private fun stop(): Boolean {
+        if (!running.compareAndSet(true, false)) return false
+        queue.offer(Command.Stop)
+        policyThread.join(CLOSE_JOIN_MILLIS)
+        synchronized(armed) { armed.values.forEach { runCatching { it.close() } }; armed.clear() }
+        runCatching { timer.shutdown() }
+        // A dial that starts after `running` went false sends nothing (see
+        // [pump]); one this interrupts leaves no link behind, because
+        // `SidecarClient.dial` closes an abandoned dial's link itself.
+        dialPool.shutdownNow()
+        // The interrupt alone is not enough (computenet-iesmw): one that lands
+        // after `SidecarClient.dial` has returned does not stop `openLink`,
+        // which goes on to install the link and write its hello. Waiting here
+        // is what makes a returned connection quiescent — no pool thread is
+        // still inside its `openLink` when the caller gets it, so a `heal()`
+        // the caller makes is the only `openLink` running on it. Bounded: an
+        // interrupted dial has only local work left, and a pool that outlives
+        // the bound is reported rather than waited on for ever.
+        val terminated = try {
+            dialPool.awaitTermination(CLOSE_JOIN_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!terminated) {
+            System.err.println(
+                "[DiscoveredPeering] dial pool still running ${CLOSE_JOIN_MILLIS}ms after stop; " +
+                    "returning without it",
+            )
+        }
+        return true
+    }
+
+    /**
+     * The connection this policy holds for [key], while it holds one.
+     * Internal: it reaches a connection's refusal accounting
+     * ([IrohTransport.IrohConnection.unadmittedOpens]), which is what a test
+     * of the abandonment rule has to read.
+     */
+    internal fun connectionFor(key: NodeKey): IrohTransport.IrohConnection? = connections[key]
+
+    /**
+     * Whether every dial-pool thread has finished — true from the moment
+     * [close] or [detach] returns (computenet-iesmw). Internal, as
+     * [connectionFor] is: it is what a test of that guarantee reads.
+     */
+    internal val dialPoolTerminated: Boolean get() = dialPool.isTerminated
+
+    // ------------------------------------------------------------- commands
+
+    /**
+     * Everything the policy thread acts on. One type, one queue, one order —
+     * so "what happened first" is a fact about the queue rather than a race
+     * between the reader thread and a dial thread.
+     */
+    private sealed interface Command {
+        class Discovered(val key: NodeKey, val addresses: List<String>) : Command
+        class Expired(val key: NodeKey) : Command
+        class LinkUp(val view: IrohNode.LinkView) : Command
+        class Admitted(val view: IrohNode.LinkView) : Command
+        class LinkDown(val view: IrohNode.LinkView, val outcome: IrohTransport.IrohConnection.LinkOutcome?) : Command
+
+        /** One `openLink` finished. [success] is whether it produced a link, not whether it was admitted. */
+        class DialDone(val key: NodeKey, val success: Boolean, val failure: String?) : Command
+
+        /** Close the link this key's tie-break lost, off the reader thread (aas-D7). */
+        class CloseLoser(val key: NodeKey, val linkId: Long) : Command
+
+        /** A key the gate superseded: its armed retry is no longer wanted (F3-D6). */
+        class CancelRetry(val key: NodeKey) : Command
+
+        /** A timer fired, or something else wants the dial schedule re-examined. */
+        data object Due : Command
+
+        /** [close] or [detach] was called. */
+        data object Stop : Command
+    }
+
+    /** ENQUEUE ONLY — safe from any thread, including the reader thread. */
+    private fun post(command: Command) {
+        if (running.get()) queue.offer(command)
+    }
+
+    // -------------------------------------------------------- policy thread
+
+    private fun drain() {
+        while (running.get()) {
+            val command = try {
+                queue.take()
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+            if (command === Command.Stop) return
+            runCatching { apply(command) }.onFailure { failure ->
+                System.err.println("[DiscoveredPeering] policy step failed: $failure")
+            }
+            runCatching { pump() }.onFailure { failure ->
+                System.err.println("[DiscoveredPeering] pump step failed: $failure")
+            }
+        }
+    }
+
+    private fun apply(command: Command) = when (command) {
+        is Command.Discovered -> onDiscovered(command)
+        is Command.Expired -> onExpired(command)
+        is Command.LinkUp -> onLinkUp(command)
+        is Command.Admitted -> onAdmitted(command)
+        is Command.LinkDown -> onLinkDown(command)
+        is Command.DialDone -> onDialDone(command)
+        is Command.CloseLoser -> closeLink(command.key, command.linkId)
+        is Command.CancelRetry -> cancelRetry(command.key)
+        Command.Due -> Unit
+        Command.Stop -> Unit
+    }
+
+    private fun onDiscovered(command: Command.Discovered) {
+        counters.eventsReceived.increment()
+        when (val observation = table.observe(command.key, command.addresses, clock())) {
+            Observation.Self -> {
+                // BS-12, [DSC2-DIAL-04]: never dialled, never retained. The
+                // table dropped it before an entry existed.
+                counters.selfDropped.increment()
+            }
+
+            Observation.Dialable -> Unit
+
+            is Observation.Suppressed -> counters.duplicatesSuppressed.increment()
+
+            is Observation.Evicted -> counters.evicted.increment()
+
+            Observation.Rejected ->
+                System.err.println(
+                    "[DiscoveredPeering] ${command.key.short} not retained: every one of the " +
+                        "${policy.maxRetained} entries is live or configured",
+                )
+        }
+    }
+
+    private fun onExpired(command: Command.Expired) {
+        // [DSC2-DIAL-06]: an expiry only cancels a retry when the table agrees
+        // the key has nothing live on it — a key with a link up is not expired
+        // just because the LAN stopped advertising it.
+        if (table.expire(command.key)) cancelRetry(command.key)
+    }
+
+    private fun onLinkUp(command: Command.LinkUp) {
+        val view = command.view
+        val evicted = table.linkUp(NodeKey(view.remoteNodeId), view.direction, view.linkId, sourceOf(view.source))
+        if (evicted != null) counters.evicted.increment()
+    }
+
+    private fun onAdmitted(command: Command.Admitted) {
+        val view = command.view
+        val key = NodeKey(view.remoteNodeId)
+        val peer = view.attributedPeer ?: return
+        // [DSC2-DIAL-01]/[DSC2-DIAL-07]: an ACCEPTED or CONFIGURED link makes
+        // the key peered exactly as a discovered one does, which is what makes
+        // a later PEER_DISCOVERED for it Suppressed rather than a second dial.
+        //
+        // `evicted` is null on every ordinary path. The queue orders
+        // `Command.LinkUp` before `Command.Admitted` for one link:
+        // `IrohNode.admitted()` returns early unless `up()` already
+        // registered the link, `up()` posts `LinkUp` before it returns, and
+        // an accepted link's hello is read on the reader thread after `up()`,
+        // a dialled one's only after `openLink` has run `up()` and sent our
+        // hello. So the key's entry was created — by `onLinkUp`, or earlier
+        // by the gate's `seed`/`judge` — before this line, and `table.linkUp`
+        // on a known key returns null on that ordinary path.
+        //
+        // The increment is pinned directly, by calling `onAdmitted` itself
+        // through the queue-bypassing `onAdmittedDirectly` reflection helper
+        // in `DiscoveredPeeringTest` — the same technique `seedDirectly` uses
+        // for `seed` — with a link the queue has never turned into an entry,
+        // so `table.linkUp` here creates it rather than finding it already
+        // present (computenet-ik0q1).
+        //
+        // A second same-direction link for the key does NOT reopen that
+        // path. `PeerTable.Entry.upLinks` records every live link by id, so a
+        // sibling link that came up after this one and went down before this
+        // `Admitted` is drained removes only itself: this link keeps the
+        // entry linked, non-evictable and off the re-dial schedule, and this
+        // `linkUp` finds it present (computenet-ru6n4, pinned in
+        // `PeerTableTest`). Before that fix `upLinks` held one id per
+        // direction, and the sibling's down emptied it — the entry turned
+        // `Retained` and evictable, and this line re-created it, evicting in
+        // turn.
+        val evicted = table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
+        if (evicted != null) counters.evicted.increment()
+        table.admitted(key, view.linkId, peer)
+    }
+
+    private fun onLinkDown(command: Command.LinkDown) {
+        val view = command.view
+        val key = NodeKey(view.remoteNodeId)
+        val outcome = command.outcome
+        // Was this link a tie-break loser? Two ways to know it here, and a
+        // link can arrive by either (ktn1l-D16):
+        //
+        //  - the dialling connection says so outright (`quiet`) — this side's
+        //    own quiet close, or the far side's, which `IrohConnection`'s
+        //    `tieBreakLoss` predicate classifies for us;
+        //  - or it is an ACCEPTED link, which has no connection to classify it
+        //    at all. Such a link is a tie-break loss when it went down with no
+        //    refusal recorded against it, in THIS node's losing direction
+        //    (`PeerTable.loserDirection`), while a link of the OPPOSITE
+        //    direction for the same key is still up. Both directions up is
+        //    what a mutual dial is, and the tie-break closes the losing one
+        //    whichever node reaches the verdict first.
+        //
+        // Admitted or not does not matter (computenet-i74gh). When the larger
+        // id's link is admitted here first and this node's own OUTBOUND link
+        // arrives second, the larger id closes the peered inbound link as ITS
+        // loser, and that `LINK_DOWN` can reach this node before the far
+        // hello that would have let this gate count it — so the down is the
+        // only place left to learn of it.
+        //
+        // A SAME-direction sibling is not a partner (computenet-oqpqf): two
+        // inbound links from one key are producible without any mutual dial —
+        // a restarted remote re-dialling before the old link's down — and one
+        // that drops before its hello is not a tie-break close. Nor is the
+        // WINNING direction's accepted link: at the larger id an inbound link
+        // is the one the tie-break keeps, so its drop is a drop.
+        //
+        // Residual, accepted: a losing-direction accepted link that drops for
+        // some other reason while the opposite link is up is counted here too.
+        // Unless the opposite link's hello is then refused, the tie-break
+        // would have closed this link the moment that hello was judged, so it
+        // is the same one closed link either way.
+        //
+        // Both routes fold into one idempotent count. @see tieBreakCounted
+        //
+        // "Up" includes this node's own OUTBOUND link when the reader has
+        // settled its dial but the dialling thread has not yet registered it
+        // (computenet-311xs): the far side can close the loser in that window,
+        // and this down is then the only place this node learns of it.
+        val oppositeLinkUp = node.linksWithSettledDials(view.remoteNodeId)
+            .any { it.linkId != view.linkId && it.direction != view.direction }
+        val losingDirection = view.direction == PeerTable.loserDirection(table.ownKey.bytes, view.remoteNodeId)
+        val quiet = outcome?.quiet == true ||
+            (outcome == null && losingDirection && oppositeLinkUp)
+        if (quiet) countTieBreakClose(view.linkId)
+        // One refused hello, counted once ([DSC2-ID-01..04], BS-05a). Charged
+        // at the DOWN rather than at the refusal, because a refusal is
+        // recorded inside a `Session` and reaches this class only as the
+        // outcome's `lastDenial` — including the ones that never reach the
+        // gate at all: the allowlist's (ktn1l-D12) and, on an accepted link,
+        // every refusal the identity binding takes before the gate is
+        // consulted, which is exactly BS-05b's second reason ([DSC2-ID-05]).
+        // A quiet close carries no blame and is never counted here. The gate
+        // counts its own `Refuse` the moment it makes it, so this is
+        // idempotent per link. @see refusalCounted
+        val reason = if (quiet) null else outcome?.lastDenial?.reason
+        if (reason != null) countRefusal(view.linkId, reason)
+        tieBreakCounted -= view.linkId
+        refusalCounted -= view.linkId
+        // The table must know of a surviving link before it decides whether
+        // this key is re-dialled, and the one it can miss is this node's own
+        // settled-but-unregistered outbound link — whose `LinkUp` is not even
+        // posted yet (computenet-311xs). Without it the down of a tie-break
+        // loser reads as "no link left" and re-dials a key that is about to
+        // be peered. Seeded by the gate's rule, for the gate's reason.
+        seed(key, linksToSeed(view.remoteNodeId))
+        val outcomeOfDown = table.linkDown(key, view.linkId, clock())
+        if (outcome?.abandoned == true) {
+            table.abandon(key, reason)
+            System.err.println(
+                "[DiscoveredPeering] ${key.short} abandoned after ${policy.refusedDialLimit} " +
+                    "unadmitted opens (last denial: $reason)",
+            )
+            cancelRetry(key)
+            return
+        }
+        if (outcomeOfDown === DownOutcome.Redial) {
+            // [DSC2-DIAL-06]: back in the dialable set, due now. pump() runs
+            // right after every command and will pick it up.
+            cancelRetry(key)
+        }
+    }
+
+    private fun onDialDone(command: Command.DialDone) {
+        if (command.success) return // The link is up; Admitted or LinkDown says what became of it.
+        counters.dialsFailed.increment()
+        val dueAt = table.dialFailed(command.key, clock(), policy.schedule) ?: return
+        arm(command.key, dueAt - clock())
+    }
+
+    /**
+     * Submit a dial for every key the table says is due, up to the in-flight
+     * bound ([DSC2-DIAL-03]). Runs after **every** command, so a freed slot,
+     * an expired backoff and a fresh sighting all reach the same one place.
+     */
+    private fun pump() {
+        if (!running.get()) return
+        for (key in table.nextDue(clock(), policy.maxInFlightDials)) {
+            val attempt = (table.stateOf(key) as? PeerState.Retained)?.attempt ?: 0
+            if (!table.markDialling(key, attempt)) continue
+            val connection = connections.computeIfAbsent(key) {
+                node.dialDiscovered(
+                    peerNodeId = key.bytes,
+                    redialTimeout = policy.dialTimeout,
+                    refusedDialLimit = policy.refusedDialLimit,
+                    // Required non-null, and deliberately empty: passing a
+                    // delegate is what stops the connection from re-dialling
+                    // on its own loop (`IrohTransport.retire`), while the
+                    // outcome itself has ALREADY reached this class through
+                    // the node's LinkObserver — `reportUnplanned` calls the
+                    // observer first and this second, with the same
+                    // LinkOutcome. Acting here too would process every
+                    // discovered down twice.
+                    onUnplannedDown = { },
+                )
+            }
+            counters.dialsAttempted.increment()
+            dialPool.execute {
+                if (!running.get()) return@execute
+                val result = runCatching { connection.openLink(policy.dialTimeout) }
+                post(Command.DialDone(key, result.isSuccess, result.exceptionOrNull()?.message))
+            }
+        }
+    }
+
+    private fun arm(key: NodeKey, delayMs: Long) {
+        cancelRetry(key)
+        val handle = timer.schedule(delayMs) { post(Command.Due) } // ENQUEUE ONLY — runs on the timer thread.
+        synchronized(armed) { armed[key] = handle }
+    }
+
+    private fun cancelRetry(key: NodeKey) {
+        synchronized(armed) { armed.remove(key) }?.let { runCatching { it.close() } }
+    }
+
+    /**
+     * Close the link [linkId] of [key], which lost the mutual-dial tie-break
+     * (aas-D7, ktn1l-D16). On the policy thread: closing a link writes a frame.
+     *
+     * A link this node DIALLED is closed through its [IrohTransport.IrohConnection],
+     * not through the raw [SidecarLink], and the difference is the whole point:
+     * the connection marks the close blame-free first, so the `LINK_DOWN` it
+     * produces charges no unadmitted open and provokes no re-dial. Closing the
+     * raw link would be the same physical close read as a peer that dropped us.
+     * An ACCEPTED link has no connection and nothing to charge, so the raw
+     * close is the right one there.
+     *
+     * It counts nothing. The gate counted [linkId] when it posted this close,
+     * and counting it again here was not idempotent: when the loser's
+     * `LINK_DOWN` is read just before the hello that condemns it, and the
+     * policy thread has not yet taken that down off the queue, the gate still
+     * finds the loser in the table and counts it, the down then runs first and
+     * clears its mark from [tieBreakCounted], and a count here would move the
+     * counter a second time for the same link (ktn1l-D16, computenet-i74gh).
+     */
+    private fun closeLink(key: NodeKey, linkId: Long) {
+        val direction = node.links(key.bytes).firstOrNull { it.linkId == linkId }?.direction
+        val connection = connections[key]
+        val closed = runCatching {
+            if (direction == LinkDirection.OUTBOUND && connection != null) {
+                connection.closeCurrentLinkQuietly()
+            } else {
+                node.client.link(linkId)?.close()
+            }
+        }
+        if (closed.isFailure) System.err.println("[DiscoveredPeering] closing ${key.short}'s losing link failed: ${closed.exceptionOrNull()}")
+    }
+
+    /** One tie-break close, counted once however this class learned of it. @see tieBreakCounted */
+    private fun countTieBreakClose(linkId: Long) {
+        if (tieBreakCounted.add(linkId)) counters.tieBreakClosed.increment()
+    }
+
+    /** One refused hello, counted once however this class learned of it. @see refusalCounted */
+    private fun countRefusal(linkId: Long, reason: DenialReason) {
+        if (refusalCounted.add(linkId)) counters.refused(reason)
+    }
+
+    // ------------------------------------------------------------- the gate
+
+    /**
+     * [PeerTable.judge]'s answer, as a hello verdict — the one synchronous
+     * step this class takes on the reader thread.
+     *
+     * Every arm is now reached by a test: the plain [Judgement.Admit] by task
+     * `.3`, and the tie-break, supersession and refusal arms by task `.4`'s
+     * two-fake rig — `MutualDialTest` (BS-08), `KeyRotationContinuityFakeTest`
+     * (BS-06's fake twin) and `IdentityMismatchFakeTest` (BS-05b).
+     */
+    private fun toVerdict(judgement: Judgement, key: NodeKey, linkId: Long, resolved: PeerId): Verdict = when (judgement) {
+        is Judgement.Admit -> {
+            // Only reachable when `judge` created a fresh entry for an unknown
+            // key and the table was at capacity — see `Judgement.Admit.evicted`.
+            if (judgement.evicted != null) counters.evicted.increment()
+            if (judgement.close != null && judgement.closeLinkId != null) {
+                // Counted HERE, on the reader thread, rather than inside the
+                // command: the verdict is what says the other link lost, and
+                // the command only carries out the close it implies. Marking
+                // it now is also what keeps `seed` from handing that link to
+                // the next hello as if it were live. @see closeLink
+                countTieBreakClose(judgement.closeLinkId)
+                // Off the reader thread: closing a link writes a frame.
+                post(Command.CloseLoser(judgement.close, judgement.closeLinkId))
+            }
+            Verdict.Admit
+        }
+
+        Judgement.CloseQuietly -> {
+            // This link is the loser and the Session closes it as it returns.
+            // Counted here rather than at its down because the down of an
+            // ACCEPTED link carries no outcome to read it from — and counted
+            // idempotently, because the down of a DIALLED one does.
+            countTieBreakClose(linkId)
+            Verdict.CloseQuietly("tie-break loser for ${key.short} (aas-D7)")
+        }
+
+        is Judgement.Supersede -> {
+            if (judgement.evicted != null) counters.evicted.increment()
+            counters.superseded.increment()
+            post(Command.CancelRetry(judgement.oldKey))
+            Verdict.Admit
+        }
+
+        is Judgement.Refuse -> {
+            // Counted at the refusal for the reason CloseQuietly is: an
+            // accepted link's down may carry the denial, but this is the one
+            // point that is certain to run. Idempotent against that down.
+            countRefusal(linkId, judgement.reason)
+            // Blamed: the identity THIS hello resolved to, not the live one.
+            // The live peer did nothing — it is holding a link it was admitted
+            // on — and a denial record names who was refused (F3-D7; every
+            // other refusal on this path, `refuseClaimMismatch` included,
+            // attributes the peer that was turned away). The live identity is
+            // the *evidence*, and it belongs in the detail, which names both so
+            // that a reader of the record can see the conflict without holding
+            // the table.
+            Verdict.Refuse(
+                judgement.reason,
+                resolved,
+                "hello on key ${key.short} resolves ${resolved.name} while a live link for that key is " +
+                    "attributed to ${judgement.live.name}; the newer link is refused and the live one kept " +
+                    "([DSC2-ID-05])",
+            )
+        }
+    }
+
+    /**
+     * Tell the table, synchronously, about every link this node holds for
+     * [key] before its hello is judged — the fact that decides the tie-break
+     * (ktn1l-D16, aas-D7, `[DSC2-DIAL-05]`).
+     *
+     * The table learns of links from [Command.LinkUp] on the policy thread,
+     * and the gate runs on the reader thread, so without this the verdict on a
+     * mutual dial would turn on whether the policy thread had drained its
+     * queue yet — the same two links judged either as a tie-break or as two
+     * unrelated admissions. That is not a rare interleaving: an accepted link
+     * is enqueued and its hello read on the *same* thread, back to back, so
+     * the policy thread is routinely still behind.
+     *
+     * The consequence is not only a miscount. Admitting the loser announces on
+     * it, which `[DSC2-DIAL-05]` forbids: the losing link must be closed
+     * **before** anything is announced on it, and it is only closed if the
+     * verdict that closes it is reached at the hello. Reading the registry
+     * here is what makes that verdict a function of the links that exist
+     * rather than of a queue depth. The node's registry alone lags the reader
+     * for this node's own dialled links, so the gate reads it through
+     * [linksToSeed] (computenet-311xs).
+     *
+     * Cheap and safe on the reader thread: a filter over a `ConcurrentHashMap`
+     * and one O(1) locked table call per link. [Command.LinkUp] still runs and
+     * is still where a link with no hello is recorded; this only ensures the
+     * table is never *behind* at the one moment the answer depends on it.
+     *
+     * Links this policy has already decided to close are skipped — see
+     * [tieBreakCounted] for why re-seeding one would close it twice.
+     */
+    private fun seed(key: NodeKey, links: List<IrohNode.LinkView>) {
+        links.forEach { link ->
+            if (link.linkId !in tieBreakCounted) {
+                val evicted = table.linkUp(key, link.direction, link.linkId, sourceOf(link.source))
+                if (evicted != null) counters.evicted.increment()
+            }
+        }
+    }
+
+    /**
+     * The links [seed] tells the table about before a hello from
+     * [remoteNodeId] is judged.
+     *
+     * [IrohNode.links] alone is NOT "the links that exist" for this node's own
+     * OUTBOUND link (computenet-311xs): the node registers a dialled link on
+     * the dialling thread, after the reader has settled the dial and moved on,
+     * so the reader can judge the peer's hello on the INBOUND link while the
+     * outbound one is up and unregistered. At the smaller id that is exactly
+     * the mutual dial `[DSC2-DIAL-05]` is about — INBOUND is the loser — and
+     * judging without the outbound link admits the loser and announces on it.
+     * So at the smaller id the settled-but-unregistered outbound links are
+     * seeded too, and the verdict is `CloseQuietly` before anything is written.
+     *
+     * At the larger id they are deliberately NOT seeded. There OUTBOUND is the
+     * loser, and seeding one would let [PeerTable.judge] name a link for
+     * [closeLink] that its connection has not yet installed. Named that way,
+     * [closeLink] finds no direction for the link in the node's registry and
+     * takes the raw `node.client.link(id)?.close()` branch instead of the
+     * connection's quiet close, closing the loser from inside the dial
+     * thread's window rather than through the normal path — observed
+     * (computenet-07hpc, guard replaced by `if (true)`): the resulting down is
+     * then classified quiet only because the connection's `tieBreakLoss`
+     * predicate covers it (the far side's winner is registered and admitted
+     * by then), not because the close itself was quiet. Whether an
+     * interleaving exists where that predicate does not yet hold — leaving an
+     * unadmitted open charged and a re-dial armed — is unverified. Nothing is
+     * lost by waiting: this node announces on an outbound link only once it
+     * is admitted, and that hello is judged after registration, against a
+     * table that holds both directions. `MutualDialTest`'s "the larger id's
+     * gate does not name its own settled but unregistered outbound loser"
+     * pins the guard.
+     */
+    private fun linksToSeed(remoteNodeId: ByteArray): List<IrohNode.LinkView> =
+        if (PeerTable.loserDirection(table.ownKey.bytes, remoteNodeId) == LinkDirection.INBOUND) {
+            node.linksWithSettledDials(remoteNodeId)
+        } else {
+            node.links(remoteNodeId)
+        }
+
+    // ----------------------------------------------------------- start-up
+
+    private fun begin() {
+        policyThread.start()
+        node.onLinkEvent(object : IrohNode.NodeLinkListener {
+            // ENQUEUE ONLY — every one of these runs on the sidecar reader
+            // thread (onUp, for an outbound link, on the dial thread).
+            override fun onUp(link: IrohNode.LinkView) = post(Command.LinkUp(link))
+            override fun onAdmitted(link: IrohNode.LinkView) = post(Command.Admitted(link))
+            override fun onDown(link: IrohNode.LinkView, outcome: IrohTransport.IrohConnection.LinkOutcome?) =
+                post(Command.LinkDown(link, outcome))
+        })
+        node.gate = HelloGate { _: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, linkId: Long, resolved: PeerId ->
+            // The ONE synchronous consult on the reader thread (ktn1l-D17):
+            // one lock-guarded O(1) table call and counter increments. No IO,
+            // no dial, no wait — anything else here stops the endpoint.
+            val key = NodeKey(remoteNodeId)
+            seed(key, linksToSeed(remoteNodeId))
+            toVerdict(table.judge(key, direction, linkId, resolved, clock()), key, linkId, resolved)
+        }
+        node.client.watchPeers(object : PeerWatchListener {
+            // ENQUEUE ONLY — the sidecar reader thread delivers both of these.
+            override fun onDiscovered(nodeId: ByteArray, addresses: List<String>) =
+                post(Command.Discovered(NodeKey(nodeId), addresses))
+
+            override fun onExpired(nodeId: ByteArray) = post(Command.Expired(NodeKey(nodeId)))
+        })
+    }
+
+    companion object {
+        private const val CLOSE_JOIN_MILLIS: Long = 5_000
+
+        /**
+         * Install the policy on [node] and start watching for peers.
+         *
+         * Blocks until the sidecar answers `WATCH_PEERS` with `WATCHING`; the
+         * listener is registered before the request goes out, so no event can
+         * be lost in between (`SidecarClient.watchPeers`).
+         *
+         * The [node] stays the caller's to close. [DiscoveredPeering.close]
+         * ends this policy and the connections it made, and nothing else;
+         * [DiscoveredPeering.detach] ends the policy and hands those
+         * connections, still up, to the caller.
+         *
+         * @param clock the only source of time. Injected, not defaulted away:
+         *   a test drives it by hand and nothing here reads a wall clock.
+         * @param timer how a delay becomes a wake-up. @see DialTimer
+         */
+        fun start(
+            node: IrohNode,
+            policy: DialPolicy = DialPolicy(),
+            clock: () -> Long = System::currentTimeMillis,
+            timer: DialTimer = DialTimer.threaded(),
+        ): DiscoveredPeering = DiscoveredPeering(node, policy, clock, timer).also { it.begin() }
+    }
+}
+
+/** An [IrohNode] link source, as the table names it. The two enums are deliberately separate: one is transport, one is policy. */
+private fun sourceOf(source: IrohNode.LinkSource): EntrySource = when (source) {
+    IrohNode.LinkSource.ACCEPTED -> EntrySource.ACCEPTED
+    IrohNode.LinkSource.DISCOVERED -> EntrySource.DISCOVERED
+    IrohNode.LinkSource.CONFIGURED -> EntrySource.CONFIGURED
+}

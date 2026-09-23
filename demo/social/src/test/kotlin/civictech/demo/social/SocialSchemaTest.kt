@@ -190,11 +190,16 @@ class SocialSchemaTest {
 
     @Test
     fun `an unknown referenced id throws before any write and leaves every family's keys unchanged`() {
-        val (controller, host, graph) = newGraph()
+        // computenet-v10ou.1: the graph's OWN pipeline, not a second build on the
+        // same host — the static cells now carry fixed refs, so a second build
+        // is refused ("Cell already spawned"); a second pipeline's families were
+        // also never the ones [graph] writes, so their keys could not move.
+        val (controller, host) = newHost()
+        val pipeline = SnbPipeline.build(host, journalDir = null)
+        val graph = SocialGraph(host, pipeline)
         graph.addPerson(Person(1, "a", "a"))
         controller.runToIdle()
 
-        val pipeline = SnbPipeline.build(host, journalDir = null)
         fun snapshot() = Triple(
             pipeline.families.person.keys(),
             Pair(pipeline.families.forum.keys(), pipeline.families.message.keys()),

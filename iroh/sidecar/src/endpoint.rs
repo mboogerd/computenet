@@ -1,6 +1,7 @@
 //! The sidecar endpoint: binds an iroh endpoint, accepts links, dials by id.
 
 use std::{
+    io::Write,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -9,9 +10,15 @@ use std::{
 };
 
 use iroh::{
-    address_lookup::memory::MemoryLookup, endpoint::presets, Endpoint, EndpointAddr, EndpointId,
-    RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
+    address_lookup::{
+        memory::MemoryLookup, AddrFilter, AddressLookupBuilderError, DnsAddressLookup,
+        PkarrPublisher, PkarrResolver,
+    },
+    dns::DnsResolver,
+    endpoint::presets,
+    Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 use crate::{
     error::{Error, Result},
@@ -24,7 +31,8 @@ pub const ALPN: &[u8] = b"computenet/sidecar/0";
 
 /// Where a bound endpoint looks up peer addresses it was not handed directly.
 ///
-/// Deliberately not `Copy`: [`LookupMode::Relay`] carries a [`RelayUrl`].
+/// Deliberately not `Copy`: [`LookupMode::Relay`] carries a [`RelayUrl`] and
+/// [`LookupMode::Rendezvous`] carries a [`url::Url`] and a [`String`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LookupMode {
     /// Only addresses supplied locally via [`SidecarEndpoint::add_peer`] are
@@ -41,20 +49,52 @@ pub enum LookupMode {
     /// DNS/pkarr infrastructure. This is the mode CI uses against a
     /// self-hosted relay.
     Relay(RelayUrl),
+    /// A **self-hosted** rendezvous: an operator-run pkarr relay and DNS
+    /// origin take the place of n0's public ones (aas-D4, F2-D1). The endpoint
+    /// publishes its own address record to `pkarr_relay` and resolves peers
+    /// both from that relay and by DNS under `dns_origin`, so a peer known
+    /// only by its id is dialable without any n0 infrastructure being reached.
+    ///
+    /// The n0 constants (`N0_DNS_PKARR_RELAY_PROD`,
+    /// `N0_DNS_ENDPOINT_ORIGIN_PROD`) are referenced only by iroh's `n0_dns()`
+    /// constructors, which this mode never calls, so "reaches n0 for nothing"
+    /// holds by construction.
+    Rendezvous {
+        /// The pkarr relay to publish to and resolve from, e.g.
+        /// `http://127.0.0.1:8080/pkarr`.
+        pkarr_relay: url::Url,
+        /// The DNS origin peer records live under, e.g. `irohdns.example.`.
+        dns_origin: String,
+        /// An explicit UDP nameserver for the endpoint's DNS resolver (F2-D8).
+        /// `None` leaves iroh's system-default resolver in place, which is
+        /// correct when the operator has delegated the origin zone; `Some`
+        /// points the resolver straight at the rendezvous server's DNS half,
+        /// which is what a loopback deployment needs.
+        dns_nameserver: Option<SocketAddr>,
+        /// An optional relay, composing exactly as [`LookupMode::Relay`] does.
+        /// `None` keeps `presets::Minimal`'s disabled relay, in which case
+        /// peers reach each other over the IP addresses this mode publishes.
+        relay: Option<RelayUrl>,
+    },
 }
 
 impl LookupMode {
     /// The relay configuration this mode adds on top of its preset, or `None`
     /// when the preset's own relay behaviour stands.
     ///
-    /// Only [`LookupMode::Relay`] overrides: it pins the endpoint to exactly
-    /// the one configured relay. [`LookupMode::Offline`] keeps
-    /// `presets::Minimal`'s disabled relay and [`LookupMode::N0`] keeps
-    /// `presets::N0`'s public relay map.
+    /// [`LookupMode::Relay`] always overrides and [`LookupMode::Rendezvous`]
+    /// overrides when it carries a relay: each pins the endpoint to exactly
+    /// the one configured relay. [`LookupMode::Offline`] and a
+    /// [`LookupMode::Rendezvous`] with no relay keep `presets::Minimal`'s
+    /// disabled relay; [`LookupMode::N0`] keeps `presets::N0`'s public relay
+    /// map.
     pub fn relay_override(&self) -> Option<RelayMode> {
         match self {
             LookupMode::Offline | LookupMode::N0 => None,
             LookupMode::Relay(url) => Some(RelayMode::Custom(RelayMap::from_iter([url.clone()]))),
+            LookupMode::Rendezvous { relay, .. } => relay
+                .as_ref()
+                .map(|url| RelayMode::Custom(RelayMap::from_iter([url.clone()]))),
         }
     }
 }
@@ -71,6 +111,12 @@ pub struct SidecarConfig {
     pub bind_addrs: Vec<SocketAddr>,
     /// ALPN to speak. Empty means [`ALPN`].
     pub alpn: Vec<u8>,
+    /// Opt-in LAN peer enumeration via `iroh-mdns-address-lookup` (aas-D3),
+    /// orthogonal to [`LookupMode`]: it adds a second address lookup service
+    /// beside [`iroh::address_lookup::memory::MemoryLookup`] rather than
+    /// replacing anything [`LookupMode`] configures. Default `false`.
+    /// `Offline + mdns` is the test configuration.
+    pub mdns: bool,
 }
 
 impl SidecarConfig {
@@ -91,6 +137,49 @@ impl SidecarConfig {
     }
 }
 
+/// Degrades a failed mDNS build to a single stderr line rather than an error
+/// (F1-D8): the sidecar's handshake line is still written and links still
+/// serve without LAN enumeration. `Ok` passes the lookup through unchanged.
+///
+/// The fixed prefix `mdns unavailable` is a contract the JVM reads from
+/// stderr (task 4) — do not reword it.
+///
+/// Known limitation: on a host whose OS denies multicast *sends* (observed on
+/// macOS, ne2oh-B6), `build()` itself succeeds — the denial surfaces only
+/// later, asynchronously, inside swarm-discovery's actor — so this function
+/// never sees that failure and this stderr line does not fire for it.
+fn mdns_or_warn(
+    result: std::result::Result<MdnsAddressLookup, AddressLookupBuilderError>,
+    stderr: &mut impl Write,
+) -> Option<MdnsAddressLookup> {
+    match result {
+        Ok(mdns) => Some(mdns),
+        Err(e) => {
+            let _ = writeln!(
+                stderr,
+                "computenet-iroh-sidecar: mdns unavailable, continuing without LAN enumeration: {}",
+                describe_chain(&e)
+            );
+            None
+        }
+    }
+}
+
+/// `AddressLookupBuilderError`'s own `Display` is a fixed, provenance-only
+/// message (`Service 'mdns' error`); the underlying cause — what actually
+/// failed — lives in its `std::error::Error::source()` chain. This renders
+/// the whole chain on one line so the stderr diagnostic is actionable.
+fn describe_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = err.to_string();
+    let mut cause = err.source();
+    while let Some(c) = cause {
+        out.push_str(": ");
+        out.push_str(&c.to_string());
+        cause = c.source();
+    }
+    out
+}
+
 /// A bound iroh endpoint that accepts and dials sidecar links.
 ///
 /// Cheap to clone; clones share the underlying endpoint and its link-id counter.
@@ -98,6 +187,7 @@ impl SidecarConfig {
 pub struct SidecarEndpoint {
     endpoint: Endpoint,
     lookup: MemoryLookup,
+    mdns: Option<MdnsAddressLookup>,
     alpn: Arc<Vec<u8>>,
     next_link_id: Arc<AtomicU64>,
 }
@@ -112,12 +202,35 @@ impl SidecarEndpoint {
         };
         let lookup = MemoryLookup::new();
 
-        // `Relay` shares `Offline`'s minimal preset — no DNS/pkarr address
-        // lookup service — and then replaces its disabled relay with exactly
-        // the configured one. Everything after this point is identical across
-        // the three modes.
+        // The secret key is resolved eagerly — rather than left to the
+        // builder to generate one internally — because building the mDNS
+        // lookup below needs the public key first (ne2oh-B2). This changes
+        // nothing observable for the `None` case: iroh generated one before,
+        // we do now, and it is always handed to the builder explicitly.
+        let secret_key = config.secret_key.unwrap_or_else(SecretKey::generate);
+
+        // When `config.mdns`, build the mDNS lookup BEFORE binding, so a
+        // failure to bind it is known before the endpoint exists. Binding
+        // proceeds either way (F1-D8): a failure degrades to a single stderr
+        // line, never an error returned from `bind`.
+        let mdns = if config.mdns {
+            mdns_or_warn(
+                MdnsAddressLookup::builder().build(secret_key.public()),
+                &mut std::io::stderr(),
+            )
+        } else {
+            None
+        };
+
+        // `Relay` and `Rendezvous` share `Offline`'s minimal preset — no
+        // n0-configured DNS/pkarr address lookup service — and then replace its
+        // disabled relay with exactly the configured one, if any. Only
+        // `Rendezvous` adds address lookup services of its own, all pointed at
+        // the operator's own server.
         let mut builder = match &config.lookup {
-            LookupMode::Offline | LookupMode::Relay(_) => Endpoint::builder(presets::Minimal),
+            LookupMode::Offline | LookupMode::Relay(_) | LookupMode::Rendezvous { .. } => {
+                Endpoint::builder(presets::Minimal)
+            }
             LookupMode::N0 => Endpoint::builder(presets::N0),
         };
         if let Some(relay_mode) = config.lookup.relay_override() {
@@ -125,9 +238,42 @@ impl SidecarEndpoint {
         }
         builder = builder
             .alpns(vec![alpn.clone()])
+            .secret_key(secret_key)
             .address_lookup(lookup.clone());
-        if let Some(secret_key) = config.secret_key {
-            builder = builder.secret_key(secret_key);
+        if let LookupMode::Rendezvous {
+            pkarr_relay,
+            dns_origin,
+            dns_nameserver,
+            ..
+        } = &config.lookup
+        {
+            // The BUILDERS are handed to `address_lookup`, exactly as
+            // `presets::N0` does: each takes the endpoint's TLS config and DNS
+            // resolver at bind time (iroh 1.0.3 `AddressLookupBuilder`
+            // impls), so nothing here needs to construct either (F2-D10).
+            //
+            // `AddrFilter::unfiltered()` is required, not cosmetic (F2-D9):
+            // `PkarrPublisherBuilder::new` defaults to
+            // `AddrFilter::relay_only()`, whose point is to avoid leaking IPs
+            // to n0's *public* server. Against a self-hosted server with no
+            // relay that default would publish an empty address set, and a
+            // bare-id dial could never succeed.
+            builder = builder
+                .address_lookup(
+                    PkarrPublisher::builder(pkarr_relay.clone())
+                        .addr_filter(AddrFilter::unfiltered()),
+                )
+                .address_lookup(PkarrResolver::builder(pkarr_relay.clone()))
+                .address_lookup(DnsAddressLookup::builder(dns_origin.clone()));
+            if let Some(nameserver) = dns_nameserver {
+                // Set on the endpoint rather than on each service: the
+                // builders above read the endpoint's resolver at bind time
+                // when none was set on them individually.
+                builder = builder.dns_resolver(DnsResolver::with_nameserver(*nameserver));
+            }
+        }
+        if let Some(m) = &mdns {
+            builder = builder.address_lookup(m.clone());
         }
         if !config.bind_addrs.is_empty() {
             builder = builder.clear_ip_transports();
@@ -143,9 +289,18 @@ impl SidecarEndpoint {
         Ok(SidecarEndpoint {
             endpoint,
             lookup,
+            mdns,
             alpn: Arc::new(alpn),
             next_link_id: Arc::new(AtomicU64::new(1)),
         })
+    }
+
+    /// The mDNS LAN-enumeration address lookup, when [`SidecarConfig::mdns`]
+    /// was set and it bound successfully. `None` when `mdns` was `false`, or
+    /// when it was `true` but binding failed (see [`mdns_or_warn`] for the
+    /// degrade path and its stated limitation).
+    pub fn mdns(&self) -> Option<&MdnsAddressLookup> {
+        self.mdns.as_ref()
     }
 
     /// This endpoint's id — its ed25519 public key, and the address peers dial.
@@ -354,5 +509,185 @@ mod tests {
         );
 
         endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn offline_loopback_binds_memory_lookup_only() {
+        // Pins [DSC2-MDNS-03]'s "no multicast socket" half at the only seam
+        // this crate has: the address lookup service count and mdns().
+        let endpoint = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("offline binds");
+
+        assert_eq!(
+            endpoint
+                .endpoint
+                .address_lookup()
+                .expect("the endpoint is open")
+                .len(),
+            1,
+            "MemoryLookup only: mdns defaults to false"
+        );
+        assert!(endpoint.mdns().is_none());
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn mdns_adds_a_second_lookup_service() {
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            mdns: true,
+            ..SidecarConfig::offline_loopback()
+        })
+        .await
+        .expect("offline+mdns binds");
+
+        let count = endpoint
+            .endpoint
+            .address_lookup()
+            .expect("the endpoint is open")
+            .len();
+        match endpoint.mdns() {
+            Some(_) => assert_eq!(
+                count, 2,
+                "MemoryLookup plus mdns: both should be registered"
+            ),
+            None => {
+                // [DSC2-NV-01]: this must never fail for lack of multicast on
+                // the host running the test — only assert the fallback shape.
+                eprintln!("mdns build failed on this host; asserting the no-mdns shape instead");
+                assert_eq!(count, 1, "MemoryLookup only, since mdns did not bind");
+            }
+        }
+
+        endpoint.close().await;
+    }
+
+    /// A rendezvous config pointed at dead loopback ports: nothing here
+    /// reaches the network. The pkarr publisher's first PUT fails and is
+    /// logged; it does not block `bind`, exactly as the Relay test's
+    /// `https://127.0.0.1:65535` does not.
+    fn rendezvous(relay: Option<RelayUrl>) -> LookupMode {
+        LookupMode::Rendezvous {
+            pkarr_relay: url::Url::parse("http://127.0.0.1:1/pkarr").expect("literal pkarr url"),
+            dns_origin: "irohdns.example.".to_string(),
+            dns_nameserver: Some("127.0.0.1:1".parse().expect("literal nameserver addr")),
+            relay,
+        }
+    }
+
+    #[test]
+    fn rendezvous_relay_override_follows_its_optional_relay() {
+        let url = relay_url();
+        let mode = rendezvous(Some(url.clone()))
+            .relay_override()
+            .expect("a rendezvous carrying a relay overrides the preset");
+        assert_eq!(mode, RelayMode::Custom(RelayMap::from_iter([url.clone()])));
+        assert_eq!(mode.relay_map().urls::<Vec<_>>(), vec![url]);
+
+        assert_eq!(
+            rendezvous(None).relay_override(),
+            None,
+            "no relay keeps Minimal's disabled relay"
+        );
+    }
+
+    #[tokio::test]
+    async fn rendezvous_binds_memory_lookup_plus_three_custom_services() {
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            lookup: rendezvous(None),
+            bind_addrs: vec!["127.0.0.1:0".parse().expect("literal loopback addr")],
+            ..Default::default()
+        })
+        .await
+        .expect("a rendezvous config binds even with nothing listening");
+
+        // [DSC2-RDV-01] at the only seam this crate has: the service COUNT.
+        // MemoryLookup + PkarrPublisher + PkarrResolver + DnsAddressLookup.
+        assert_eq!(
+            endpoint
+                .endpoint
+                .address_lookup()
+                .expect("the endpoint is open")
+                .len(),
+            4,
+            "MemoryLookup plus the publisher, the resolver and the DNS lookup"
+        );
+        assert!(endpoint.mdns().is_none(), "mdns defaults to false");
+
+        // No relay was configured, so Minimal's disabled relay stands.
+        assert!(
+            endpoint.endpoint.remove_relay(&relay_url()).await.is_none(),
+            "a rendezvous with relay: None configures no relay"
+        );
+        assert!(
+            endpoint.endpoint.remove_relay(&other_url()).await.is_none(),
+            "a rendezvous with relay: None configures no relay"
+        );
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn rendezvous_with_a_relay_pins_exactly_that_relay() {
+        let url = relay_url();
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            lookup: rendezvous(Some(url.clone())),
+            bind_addrs: vec!["127.0.0.1:0".parse().expect("literal loopback addr")],
+            ..Default::default()
+        })
+        .await
+        .expect("a rendezvous config with a relay binds");
+
+        // Destructive, so `other` comes first.
+        assert!(
+            endpoint.endpoint.remove_relay(&other_url()).await.is_none(),
+            "no relay other than the configured one"
+        );
+        assert!(
+            endpoint.endpoint.remove_relay(&url).await.is_some(),
+            "the configured relay is in the bound endpoint's relay map"
+        );
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn an_explicit_secret_key_still_names_the_endpoint() {
+        // Guards the eager-key refactor in `bind`: an explicitly supplied key
+        // still produces the matching endpoint id, exactly as before.
+        let key = SecretKey::generate();
+        let endpoint =
+            SidecarEndpoint::bind(SidecarConfig::offline_loopback().with_secret_key(key.clone()))
+                .await
+                .expect("offline binds");
+
+        assert_eq!(endpoint.id(), key.public());
+
+        endpoint.close().await;
+    }
+
+    #[test]
+    fn a_failed_mdns_build_is_reported_once_and_binding_continues() {
+        let mut buf: Vec<u8> = Vec::new();
+        let err = AddressLookupBuilderError::from_err(
+            "mdns",
+            std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "no multicast"),
+        );
+
+        let result = mdns_or_warn(Err(err), &mut buf);
+
+        assert!(result.is_none());
+        let text = String::from_utf8(buf).expect("stderr line is utf-8");
+        let mut lines = text.lines();
+        let line = lines.next().expect("exactly one line was written");
+        assert!(lines.next().is_none(), "exactly one line, was: {text:?}");
+        assert!(
+            line.starts_with(
+                "computenet-iroh-sidecar: mdns unavailable, continuing without LAN enumeration: "
+            ),
+            "must not reword the fixed prefix task 4's JVM test reads, was: {line}"
+        );
+        assert!(line.contains("no multicast"), "was: {line}");
     }
 }

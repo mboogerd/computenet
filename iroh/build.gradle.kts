@@ -87,6 +87,20 @@ if (project.hasProperty("iroh.enabled")) {
         if (project.hasProperty("iroh.relay.url")) {
             systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
         }
+        // computenet-vnscs F2-D5/F2-D8: same idiom, for the rendezvous flags
+        // SidecarProcess.effectiveArgs steers on. -Piroh.pkarr.url and
+        // -Piroh.dns.origin are required together by that steering; passing
+        // only one through here reproduces the JVM's own refusal rather than
+        // hiding it. -Piroh.dns.nameserver is optional.
+        if (project.hasProperty("iroh.pkarr.url")) {
+            systemProperty("iroh.pkarr.url", project.property("iroh.pkarr.url") as String)
+        }
+        if (project.hasProperty("iroh.dns.origin")) {
+            systemProperty("iroh.dns.origin", project.property("iroh.dns.origin") as String)
+        }
+        if (project.hasProperty("iroh.dns.nameserver")) {
+            systemProperty("iroh.dns.nameserver", project.property("iroh.dns.nameserver") as String)
+        }
     }
 
     // Exec's default behavior already fails the Gradle build on a nonzero

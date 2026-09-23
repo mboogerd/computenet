@@ -36,22 +36,51 @@ class UnboundDenialTest {
         )
     }
 
+    /**
+     * The tail grows by one per feature that adds a constant, and the
+     * assertion is rewritten each time — `computenet-ktn1l.2` appended
+     * [DenialReason.IDENTITY_MISMATCH] and lengthened it from three to four.
+     *
+     * What it protects, precisely: the constants that were last keep their
+     * order and stay last, so a new constant can only be APPENDED — never
+     * inserted among them, and never reordered, either of which would
+     * renumber ordinals that persisted records and the Inspector UI's union
+     * are read against. What it does NOT protect is the order of the
+     * constants before this tail; nothing here pins those, and a reordering
+     * confined to them would pass. Lengthening the tail is the way this test
+     * is updated; shortening it, or replacing it with a set comparison, would
+     * drop the only order guarantee in the file.
+     */
     @Test
-    fun `DenialReason is append-only and ends with MALFORMED_ANNOUNCEMENT, UNVOUCHED, STATEMENT_EXPIRED`() {
+    fun `DenialReason is append-only and ends with MALFORMED_ANNOUNCEMENT, UNVOUCHED, STATEMENT_EXPIRED, IDENTITY_MISMATCH`() {
         assertEquals(
-            listOf(DenialReason.MALFORMED_ANNOUNCEMENT, DenialReason.UNVOUCHED, DenialReason.STATEMENT_EXPIRED),
-            DenialReason.entries.takeLast(3),
+            listOf(
+                DenialReason.MALFORMED_ANNOUNCEMENT,
+                DenialReason.UNVOUCHED,
+                DenialReason.STATEMENT_EXPIRED,
+                DenialReason.IDENTITY_MISMATCH,
+            ),
+            DenialReason.entries.takeLast(4),
         )
     }
 
+    /**
+     * [DenialReason.IDENTITY_MISMATCH] joined this list in `computenet-ktn1l.2`
+     * for the reason the list exists: it is the constant most at risk of being
+     * merged into [DenialReason.ID_MISMATCH] by a later reader who sees two
+     * near-identical names. They are different facts — a claim disagreeing
+     * with its own hello's resolution, versus one key resolving to two
+     * identities across two live links (`[DSC2-ID-05]`).
+     */
     @Test
-    fun `UNVOUCHED, STATEMENT_EXPIRED, NOT_ADMITTED and ID_MISMATCH are four distinct constants`() {
-        val four = listOf(
+    fun `UNVOUCHED, STATEMENT_EXPIRED, NOT_ADMITTED, ID_MISMATCH and IDENTITY_MISMATCH are five distinct constants`() {
+        val five = listOf(
             DenialReason.UNVOUCHED,
             DenialReason.STATEMENT_EXPIRED,
             DenialReason.NOT_ADMITTED,
             DenialReason.ID_MISMATCH,
+            DenialReason.IDENTITY_MISMATCH,
         )
-        assertEquals(4, four.toSet().size)
+        assertEquals(5, five.toSet().size)
     }
 }

@@ -83,17 +83,60 @@ class SidecarProcess private constructor(
         private val HANDSHAKE_NODE_ID = Regex(""""nodeId"\s*:\s*"([0-9a-f]{64})"""")
 
         /**
-         * The pure decision behind [spawn]'s `iroh.relay.url` steering: append
-         * `--relay-url <relayUrl>` to [args] when [relayUrl] is non-null and
-         * [args] contains neither `--offline` nor `--relay-url` already;
-         * otherwise return [args] unchanged. Factored out of [spawn] so the
-         * decision is unit-testable without spawning a process — see
-         * `SidecarProcessArgsTest`.
+         * The pure decision behind [spawn]'s `iroh.relay.url` and
+         * `iroh.pkarr.url`/`iroh.dns.origin`/`iroh.dns.nameserver` steering.
+         * Factored out of [spawn] so the decision is unit-testable without
+         * spawning a process — see `SidecarProcessArgsTest`.
+         *
+         * Applied in order:
+         * 1. Relay steering, exactly as before [pkarrUrl]/[dnsOrigin]/
+         *    [dnsNameserver] existed: append `--relay-url <relayUrl>` to
+         *    [args] when [relayUrl] is non-null and [args] contains neither
+         *    `--offline` nor `--relay-url` already; otherwise leave [args]
+         *    unchanged. Call the result `withRelay`.
+         * 2. Rendezvous steering on `withRelay` (computenet-vnscs F2-D5/F2-D8):
+         *    - [pkarrUrl] and [dnsOrigin] both `null` -> return `withRelay`
+         *      unchanged; [dnsNameserver] alone is ignored (F2-D13).
+         *    - exactly one of [pkarrUrl]/[dnsOrigin] non-null -> throw
+         *      [IllegalArgumentException] naming both `iroh.pkarr.url` and
+         *      `iroh.dns.origin` — a half-configured JVM must fail before a
+         *      sidecar is spawned, mirroring the binary's own `--offline`/
+         *      `--relay-url` refusal, so a mis-typed `-P` flag in CI is never
+         *      indistinguishable from the unconfigured path.
+         *    - both non-null and `args` names none of `--offline`,
+         *      `--pkarr-relay-url`, `--dns-origin`, `--dns-nameserver` ->
+         *      append `--pkarr-relay-url <pkarrUrl> --dns-origin <dnsOrigin>`
+         *      to `withRelay`, then `--dns-nameserver <dnsNameserver>` when
+         *      [dnsNameserver] is non-null. An explicit `--relay-url` in
+         *      [args] does not block this: it is not one of the four
+         *      rendezvous flags, so the pair still composes after it.
+         *    - both non-null but `args` names any of those four flags ->
+         *      return `withRelay` unchanged — explicit caller args win,
+         *      exactly the `iroh.relay.url` rule.
          */
-        internal fun effectiveArgs(args: List<String>, relayUrl: String?): List<String> {
-            if (relayUrl == null) return args
-            if (args.contains("--offline") || args.contains("--relay-url")) return args
-            return args + listOf("--relay-url", relayUrl)
+        internal fun effectiveArgs(
+            args: List<String>,
+            relayUrl: String?,
+            pkarrUrl: String? = null,
+            dnsOrigin: String? = null,
+            dnsNameserver: String? = null,
+        ): List<String> {
+            val withRelay = if (relayUrl == null || args.contains("--offline") || args.contains("--relay-url")) {
+                args
+            } else {
+                args + listOf("--relay-url", relayUrl)
+            }
+            if (pkarrUrl == null && dnsOrigin == null) return withRelay
+            if (pkarrUrl == null || dnsOrigin == null) {
+                throw IllegalArgumentException(
+                    "iroh.pkarr.url and iroh.dns.origin must both be set or both unset " +
+                        "(iroh.pkarr.url=$pkarrUrl, iroh.dns.origin=$dnsOrigin)"
+                )
+            }
+            val rendezvousFlags = listOf("--offline", "--pkarr-relay-url", "--dns-origin", "--dns-nameserver")
+            if (rendezvousFlags.any { args.contains(it) }) return withRelay
+            val withPair = withRelay + listOf("--pkarr-relay-url", pkarrUrl, "--dns-origin", dnsOrigin)
+            return if (dnsNameserver != null) withPair + listOf("--dns-nameserver", dnsNameserver) else withPair
         }
 
         /**
@@ -105,12 +148,15 @@ class SidecarProcess private constructor(
          *   verbatim — the binary's own contract (`iroh/sidecar/src/main.rs`):
          *   `--offline`, `--secret-key <64 hex>`, `--bind-addr <ip:port>`,
          *   `--socket-port <port>`, `--relay-url <url>` (refused together with
-         *   `--offline`). Empty by default, which is a fresh key on an
-         *   ephemeral UDP port: an endpoint whose id changes every run. A caller
-         *   that must bring the SAME endpoint back after its process died — the
-         *   far side of a reconnect test — pins both with `--secret-key` and
-         *   `--bind-addr`, so the NodeId a dialler was given and the addresses it
-         *   was taught still name this endpoint after the restart.
+         *   `--offline`), `--pkarr-relay-url <url>` and `--dns-origin <domain>`
+         *   (required together, refused with `--offline`), `--dns-nameserver
+         *   <ip:port>` (optional, meaningless without the pair). Empty by
+         *   default, which is a fresh key on an ephemeral UDP port: an endpoint
+         *   whose id changes every run. A caller that must bring the SAME
+         *   endpoint back after its process died — the far side of a reconnect
+         *   test — pins both with `--secret-key` and `--bind-addr`, so the
+         *   NodeId a dialler was given and the addresses it was taught still
+         *   name this endpoint after the restart.
          *
          *   When the JVM system property `iroh.relay.url` is set, and [args]
          *   contains neither `--offline` nor `--relay-url`, `--relay-url
@@ -121,8 +167,23 @@ class SidecarProcess private constructor(
          *   already names `--offline` or `--relay-url` is passed through
          *   unchanged. With the property unset, [args] is passed through
          *   byte-identical to before this parameter existed.
+         *
+         *   Likewise for `iroh.pkarr.url`, `iroh.dns.origin` and
+         *   `iroh.dns.nameserver` (computenet-vnscs F2-D5/F2-D8): when both
+         *   `iroh.pkarr.url` and `iroh.dns.origin` are set, and [args] names
+         *   none of `--offline`, `--pkarr-relay-url`, `--dns-origin`,
+         *   `--dns-nameserver`, `--pkarr-relay-url <iroh.pkarr.url>
+         *   --dns-origin <iroh.dns.origin>` is appended, followed by
+         *   `--dns-nameserver <iroh.dns.nameserver>` when that property is
+         *   also set. Setting only one of `iroh.pkarr.url`/`iroh.dns.origin`
+         *   throws [IllegalArgumentException] naming both keys — a
+         *   half-configured JVM must fail before a sidecar is spawned, rather
+         *   than silently behaving like the unconfigured path. See
+         *   [effectiveArgs] for the full steering order.
          * @throws SidecarException when the binary does not exist, exits before
          *   the handshake, or writes a line that is not `PROTOCOL.md` §1's.
+         * @throws IllegalArgumentException when exactly one of the JVM system
+         *   properties `iroh.pkarr.url`/`iroh.dns.origin` is set.
          */
         fun spawn(
             binary: Path,
@@ -133,7 +194,13 @@ class SidecarProcess private constructor(
             val file: File = binary.toFile()
             if (!file.isFile) throw SidecarException("sidecar binary $binary does not exist")
 
-            val effectiveArgs = effectiveArgs(args, System.getProperty("iroh.relay.url"))
+            val effectiveArgs = effectiveArgs(
+                args,
+                System.getProperty("iroh.relay.url"),
+                System.getProperty("iroh.pkarr.url"),
+                System.getProperty("iroh.dns.origin"),
+                System.getProperty("iroh.dns.nameserver"),
+            )
             val process = ProcessBuilder(listOf(file.absolutePath) + effectiveArgs)
                 .redirectErrorStream(false)
                 .start()

@@ -66,6 +66,7 @@ class AllocatorJsonTest {
             lastPollAt = NOW,
             failures = IngestFailureCounts(malformed = 1L, unknownVersion = 2L, declarationParseFailed = 3L),
             declarationEvents = 1,
+            declarationReplayFailures = 4L,
         )
 
         return ServedState(
@@ -88,6 +89,7 @@ class AllocatorJsonTest {
         ingest.getValue("polls").jsonPrimitive.long shouldBe 1L
         ingest.getValue("lastPollAt").jsonPrimitive.content shouldBe NOW.toString()
         ingest.getValue("declarationEvents").jsonPrimitive.int shouldBe 1
+        ingest.getValue("declarationReplayFailures").jsonPrimitive.long shouldBe 4L
 
         val failures = ingest.getValue("failures").jsonObject
         failures.getValue("malformed").jsonPrimitive.long shouldBe 1L

@@ -107,7 +107,7 @@ has "$out" "NO-TEST" "but it is reported"
 echo
 echo "the gate runs BEFORE the commit — uncommitted work must be visible"
 # A three-dot diff sees only committed work, so the gate would pass on exactly
-# the change step 4 asks it to test.
+# the change §5 asks it to test.
 mkrepo
 printf '#!/usr/bin/env bash\nexit 1\n' > "$D/foo.test.sh"   # red, and NOT committed
 echo '# edit' >> "$D/foo.sh"                                  # edited, NOT committed

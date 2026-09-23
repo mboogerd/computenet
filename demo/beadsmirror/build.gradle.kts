@@ -78,6 +78,19 @@ if (project.hasProperty("iroh.enabled")) {
         if (project.hasProperty("iroh.relay.url")) {
             systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
         }
+        // computenet-vnscs F2-D5/F2-D8: same forwarding as iroh/build.gradle.kts
+        // for the rendezvous flags SidecarProcess.effectiveArgs steers on, so
+        // this module's own sidecar-spawning tests (including
+        // IrohMirrorTransport's) receive them too.
+        if (project.hasProperty("iroh.pkarr.url")) {
+            systemProperty("iroh.pkarr.url", project.property("iroh.pkarr.url") as String)
+        }
+        if (project.hasProperty("iroh.dns.origin")) {
+            systemProperty("iroh.dns.origin", project.property("iroh.dns.origin") as String)
+        }
+        if (project.hasProperty("iroh.dns.nameserver")) {
+            systemProperty("iroh.dns.nameserver", project.property("iroh.dns.nameserver") as String)
+        }
     }
 }
 

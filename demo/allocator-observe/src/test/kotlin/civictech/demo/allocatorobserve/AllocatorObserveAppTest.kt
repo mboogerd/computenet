@@ -1,5 +1,9 @@
 package civictech.demo.allocatorobserve
 
+import civictech.demo.allocatorobserve.declaration.AllocationDeclaration
+import civictech.demo.allocatorobserve.declaration.DeclarationEvent
+import civictech.demo.allocatorobserve.http.PollLoopStopped
+import civictech.demo.allocatorobserve.restart.DeclarationHistoryJournal
 import civictech.testkit.HttpProbe
 import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
@@ -341,6 +345,69 @@ class AllocatorObserveAppTest {
         frame.obj("stale").recordCount() shouldBe 3
     }
 
+    // computenet-p29ai: the two tests above show every CONNECTING window lands
+    // on the frozen envelope, but that rests on a fact neither one asserts —
+    // `holder.stop` marks the served state stopped strictly BEFORE the
+    // terminal frame is broadcast. Swap those two lines in
+    // `AllocatorObserveApp.start()` and both tests above still pass (every
+    // window still ends on frozen, just via a different path), so they cannot
+    // stand in for this. `stopBroadcastProbe` fires inside the terminal
+    // frame's lambda with the app's stopped marker AT THAT INSTANT, so the
+    // verdict is a state reading on the poll thread — no sleep, no race.
+    @Test
+    fun `the poll loop marks the served state stopped before it broadcasts the terminal frozen frame`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }
+        val seen = java.util.concurrent.CopyOnWriteArrayList<PollLoopStopped?>()
+        app.stopBroadcastProbe = { seen += it }
+        app.start()
+
+        broken.set(true)
+        awaitUntil("the terminal frame to be computed") { seen.isNotEmpty() }
+
+        seen.size shouldBe 1
+        seen.single() shouldNotBe null
+        seen.single() shouldBe app.pollLoopStopped
+    }
+
+    // computenet-l7vdc — the `/state` 503 body (`AllocatorRoutes.respondFold`)
+    // and the `/events` frozen SSE frame (`ServedState.frozenJson`) both build
+    // the envelope by calling the same `frozenEnvelope` function now, but a
+    // future regression could reintroduce a second, independent construction
+    // without either of the tests above catching it: each asserts only its own
+    // surface's fields (`ingest`, `failure`, `stale`), never the two surfaces
+    // against each other. This test compares the raw response bytes of both
+    // surfaces for the SAME frozen fold, so a key renamed, a field added or
+    // `stale_status` altered on either surface alone fails it.
+    @Test
+    fun `the frozen state 503 body and the frozen events frame are the same envelope, byte for byte`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        val broken = AtomicBoolean(false)
+        val app = app(pollInterval = Duration.ofMillis(20)) {
+            if (broken.get()) throw IllegalStateException("clock broke") else clock.get()
+        }.start()
+
+        broken.set(true)
+        awaitUntil("the poll loop to stop on the broken clock") { app.pollLoopStopped != null }
+
+        val stateBody = probe(app).get("/state").body()
+
+        // A raw-string tap (identity parse), not the `tap()` fixture helper,
+        // whose parse into `JsonElement` would discard the exact bytes this
+        // test exists to compare.
+        SseTap<String>("http://localhost:${app.boundPort}/events") { it }.use { rawTap ->
+            val frame = rawTap.awaitAtLeast(1, "the frozen initial frame").first()
+            frame shouldBe stateBody
+        }
+    }
+
     // -----------------------------------------------------------------
     // fpml.4-D7 — re-baseline accounting
     // -----------------------------------------------------------------
@@ -360,6 +427,59 @@ class AllocatorObserveAppTest {
         val after = Json.parseToJsonElement(probe.state())
         after.obj("ingest", "reBaselineCount").jsonPrimitive.long shouldBe 1L
         after.recordCount() shouldBe 1
+    }
+
+    // -----------------------------------------------------------------
+    // computenet-utib7 — declaration-history replay failures are served
+    // -----------------------------------------------------------------
+
+    /**
+     * `DeclarationHistoryJournal.replayFailures` (`restart/`) was previously
+     * reachable only in-process, via `AllocatorObserveApp.declarationReplayFailures`
+     * — this proves the count actually reaches `GET /state/ingest`, so an
+     * operator watching that route (not the process) can see a restart dropped
+     * declaration history. Seeds the journal directly with one good line and
+     * one line the journal cannot parse, the same way
+     * `DeclarationHistoryJournalTest`'s own "an unparseable line is counted"
+     * test does, BEFORE the app under test is constructed — replay happens once,
+     * in `AllocatorObserveApp.init`, so the journal must already hold both
+     * lines at that point.
+     */
+    @Test
+    fun `an unparseable declaration-history journal line is reported as declarationReplayFailures over GET slash state slash ingest`() {
+        append(*lines(3).toTypedArray())
+        writeDeclaration()
+
+        // Content matches VALID_DECLARATION exactly (including `window`, which
+        // DeclarationIngester.poll compares along with weights and the cap) so
+        // the first poll reads it as Unchanged rather than a second Appended
+        // event — this test is about the journal's own replay count, not about
+        // the ingester noticing a declaration the journal never recorded.
+        val seedJournal = DeclarationHistoryJournal(runDir)
+        seedJournal.append(
+            DeclarationEvent(
+                NOW.minus(Duration.ofDays(1)),
+                AllocationDeclaration(weights = mapOf(CN to 60.0, GF to 40.0), monthlyCapHours = 100.0, window = "rolling-month"),
+            ),
+        )
+        Files.writeString(
+            runDir.resolve(JOURNAL_FILE_NAME),
+            "{not a parseable journal line\n",
+            StandardOpenOption.CREATE,
+            StandardOpenOption.APPEND,
+        )
+
+        val app = app().start()
+        val probe = probe(app)
+
+        val ingest = Json.parseToJsonElement(probe.state(INGEST_PATH))
+        ingest.obj("declarationReplayFailures").jsonPrimitive.long shouldBe 1L
+        // The good line still replayed: this counts loss, it does not amplify it.
+        ingest.obj("declarationEvents").jsonPrimitive.int shouldBe 1
+        // Cross-checked against the in-process accessor this task's KDoc says
+        // always agrees with the served field, so a divergence between the two
+        // readings of the same counter is itself a failure.
+        app.declarationReplayFailures shouldBe 1L
     }
 
     // -----------------------------------------------------------------
@@ -404,6 +524,9 @@ class AllocatorObserveAppTest {
         const val LOG_NAME = "spend.jsonl"
 
         const val INGEST_PATH = "/state/ingest"
+
+        /** `DeclarationHistoryJournal`'s file name, mirrored here so the fixture can pre-seed it. */
+        const val JOURNAL_FILE_NAME = "declaration-history"
 
         val NOW: Instant = Instant.parse("2026-09-18T12:00:00Z")
         val WINDOW: Duration = Duration.ofHours(168)

@@ -35,10 +35,29 @@ class SidecarProcessSpawnRelayUrlTest {
     private val propertyKey = "iroh.relay.url"
     private val relayUrl = "http://127.0.0.1:49312"
 
+    /**
+     * The rendezvous properties `spawn` also reads (computenet-vnscs F2-D5/
+     * F2-D8). They are saved and cleared alongside `iroh.relay.url` because
+     * the `iroh-sidecar` lane now sets all four on the Gradle test JVM: a
+     * test that asserts a literal argv must control every property that argv
+     * is built from, or it asserts the lane's configuration rather than the
+     * behaviour under test. It did not, and the lane went red on this file
+     * the first time both halves ran together (run 35547948651).
+     */
+    private val pkarrKey = "iroh.pkarr.url"
+    private val dnsOriginKey = "iroh.dns.origin"
+    private val dnsNameserverKey = "iroh.dns.nameserver"
+    private val pkarrUrl = "http://127.0.0.1:38923/pkarr"
+    private val dnsOrigin = "irohdns.example."
+    private val dnsNameserver = "127.0.0.1:34746"
+
+    private val rendezvousKeys = listOf(pkarrKey, dnsOriginKey, dnsNameserverKey)
+
     /** A port and a 64-hex nodeId, the shape `spawn` insists the child writes. */
     private val handshakeLine = """{"port":12345,"nodeId":"${"ab".repeat(32)}"}"""
 
     private var savedProperty: String? = null
+    private var savedRendezvous: Map<String, String?> = emptyMap()
     private lateinit var dir: Path
     private lateinit var argvFile: Path
     private lateinit var stub: Path
@@ -47,6 +66,8 @@ class SidecarProcessSpawnRelayUrlTest {
     fun setUp() {
         savedProperty = System.getProperty(propertyKey)
         System.clearProperty(propertyKey)
+        savedRendezvous = rendezvousKeys.associateWith { System.getProperty(it) }
+        rendezvousKeys.forEach { System.clearProperty(it) }
 
         dir = Files.createTempDirectory("sidecar-spawn-argv")
         argvFile = dir.resolve("argv")
@@ -66,6 +87,9 @@ class SidecarProcessSpawnRelayUrlTest {
     fun tearDown() {
         if (savedProperty == null) System.clearProperty(propertyKey)
         else System.setProperty(propertyKey, savedProperty)
+        savedRendezvous.forEach { (key, value) ->
+            if (value == null) System.clearProperty(key) else System.setProperty(key, value)
+        }
         dir.toFile().deleteRecursively()
     }
 
@@ -99,5 +123,37 @@ class SidecarProcessSpawnRelayUrlTest {
     fun `spawn leaves an --offline caller alone even with the property set`() {
         System.setProperty(propertyKey, relayUrl)
         assertEquals(listOf("--offline"), argvOf(listOf("--offline")))
+    }
+
+    /**
+     * The same seam as the relay case, for the rendezvous pair: that `spawn`
+     * reads `iroh.pkarr.url`/`iroh.dns.origin`/`iroh.dns.nameserver` and
+     * applies them to the child's argv. Without it, isolating those three
+     * properties above would leave the configuration the `iroh-sidecar` lane
+     * actually runs untested at this seam, which is the gap this whole file
+     * exists to close.
+     */
+    @Test
+    fun `spawn appends the rendezvous flags from their three properties`() {
+        System.setProperty(propertyKey, relayUrl)
+        System.setProperty(pkarrKey, pkarrUrl)
+        System.setProperty(dnsOriginKey, dnsOrigin)
+        System.setProperty(dnsNameserverKey, dnsNameserver)
+
+        assertEquals(
+            listOf(
+                "--secret-key",
+                "cd".repeat(32),
+                "--relay-url",
+                relayUrl,
+                "--pkarr-relay-url",
+                pkarrUrl,
+                "--dns-origin",
+                dnsOrigin,
+                "--dns-nameserver",
+                dnsNameserver,
+            ),
+            argvOf(listOf("--secret-key", "cd".repeat(32))),
+        )
     }
 }

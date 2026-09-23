@@ -1,4 +1,0 @@
-# computenet-q1jc3 + computenet-ci7k: 5b's empty-model rule stamps in place with
-# bd update --set-metadata and logs friction only for breakdown-filed beads;
-# create-ticket.sh --model prevents it (mechanical half costs no budget).
-work +2

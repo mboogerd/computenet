@@ -600,3 +600,84 @@ async fn close_link_on_an_unflooded_sibling_link_is_answered_while_another_is_fl
         .send(Message::control(kind::SHUTDOWN, Vec::new()))
         .await;
 }
+
+/// `PROTOCOL.md` §3, `WATCH_PEERS`: a sidecar with no enumerating lookup — this
+/// one is `offline_loopback()`, no `--mdns` — answers `WATCHING` and then never
+/// emits an event.
+///
+/// The "never emits" half is pinned by **order**, not by a sleep: `GET_ID` is
+/// sent right after `WATCHING` arrives, and `ID` must be the very next message
+/// on the socket. A `PEER_DISCOVERED` slipped in ahead of it would fail
+/// `expect`, which asserts kind and link of the next message.
+#[tokio::test]
+async fn watch_peers_without_mdns_answers_watching_and_emits_nothing() {
+    let addr = spawn_sidecar().await;
+    let mut host = Host::connect("host", addr).await;
+
+    host.send(Message::control(kind::WATCH_PEERS, Vec::new()))
+        .await;
+    let watching = host.expect(kind::WATCHING, CONTROL_LINK).await;
+    assert!(watching.is_empty(), "WATCHING carries no payload");
+
+    host.send(Message::control(kind::GET_ID, Vec::new())).await;
+    let id = host.expect(kind::ID, CONTROL_LINK).await;
+    assert_eq!(id.len(), 32);
+
+    // Idempotent: a second WATCH_PEERS answers WATCHING again and starts
+    // nothing, which the following GET_ID/ID pair pins the same way.
+    host.send(Message::control(kind::WATCH_PEERS, Vec::new()))
+        .await;
+    assert!(host.expect(kind::WATCHING, CONTROL_LINK).await.is_empty());
+    host.send(Message::control(kind::GET_ID, Vec::new())).await;
+    assert_eq!(host.expect(kind::ID, CONTROL_LINK).await, id);
+
+    host.send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+}
+
+/// `WATCH_PEERS` is a control message: on any other link it is `ERROR` on that
+/// link, and nothing is started. The `GET_ID` that follows pins "nothing else",
+/// `WATCHING` included.
+#[tokio::test]
+async fn watch_peers_on_a_non_zero_link_is_an_error_on_that_link() {
+    let addr = spawn_sidecar().await;
+    let mut host = Host::connect("host", addr).await;
+
+    host.send(Message::new(kind::WATCH_PEERS, 3, Vec::new()))
+        .await;
+    let reason = host.expect(kind::ERROR, 3).await;
+    assert!(
+        String::from_utf8_lossy(&reason).contains("control"),
+        "the reason should say WATCH_PEERS is a control message, was: {}",
+        String::from_utf8_lossy(&reason)
+    );
+
+    host.send(Message::control(kind::GET_ID, Vec::new())).await;
+    host.expect(kind::ID, CONTROL_LINK).await;
+
+    host.send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+}
+
+/// `WATCH_PEERS` takes no payload: one that carries any is `ERROR` on link 0,
+/// and starts nothing.
+#[tokio::test]
+async fn watch_peers_with_a_payload_is_an_error_on_link_zero() {
+    let addr = spawn_sidecar().await;
+    let mut host = Host::connect("host", addr).await;
+
+    host.send(Message::control(kind::WATCH_PEERS, vec![0x01]))
+        .await;
+    let reason = host.expect(kind::ERROR, CONTROL_LINK).await;
+    assert!(
+        String::from_utf8_lossy(&reason).contains("no payload"),
+        "the reason should say WATCH_PEERS takes no payload, was: {}",
+        String::from_utf8_lossy(&reason)
+    );
+
+    host.send(Message::control(kind::GET_ID, Vec::new())).await;
+    host.expect(kind::ID, CONTROL_LINK).await;
+
+    host.send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+}

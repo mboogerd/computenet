@@ -3,6 +3,7 @@ package civictech.testkit.dst
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.host.HostedCellProxy
@@ -268,6 +269,7 @@ class JournalFaultTest {
     fun `journal decorators forward their delegate's format version`() {
         val pinned = object : Journal {
             override val formatVersion: Int = 7
+            override val durability: DurabilityClass = DurabilityClass.IN_MEMORY
             override fun append(record: ByteArray) = Unit
             override fun replay(): List<ByteArray> = listOf(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3))
             override fun reset(records: List<ByteArray>) = Unit

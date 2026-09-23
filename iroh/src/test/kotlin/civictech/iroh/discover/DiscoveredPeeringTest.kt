@@ -1,0 +1,1280 @@
+package civictech.iroh.discover
+
+import civictech.cell.DenialReason
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.link.IdentityResolution
+import civictech.cell.link.KeyId
+import civictech.cell.link.PeerId
+import civictech.cell.wire.Peering
+import civictech.identity.Ed25519
+import civictech.identity.fingerprint
+import civictech.iroh.FakeSidecar
+import civictech.iroh.Frame
+import civictech.iroh.HostMessage
+import civictech.iroh.IrohNode
+import civictech.iroh.IrohTransport
+import civictech.iroh.LinkDirection
+import civictech.iroh.SidecarClient
+import civictech.iroh.SidecarMessage
+import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
+import civictech.iroh.SidecarProtocol.Kind
+import civictech.iroh.SidecarProtocol.NODE_ID_LEN
+import civictech.iroh.Verdict
+import civictech.iroh.await
+import civictech.iroh.neverWithin
+import civictech.iroh.quiesced
+import org.junit.jupiter.api.Test
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlin.time.Duration.Companion.seconds
+
+/**
+ * [DiscoveredPeering]: discovery events in, bounded and clock-injected dials
+ * out (DSC2 feature `computenet-ktn1l`, task `.3`; F3-D1, F3-D3, F3-D4, F3-D8,
+ * F3-D9, and requirements [DSC2-DIAL-01..04], [DSC2-DIAL-06..09],
+ * [DSC2-NEU-04], scenario BS-12).
+ *
+ * ## Everything here runs on the default lanes, and no test waits
+ *
+ * No test in this file spawns a sidecar: each drives a [FakeSidecar] loopback
+ * socket that answers exactly when the test says so. There is **no
+ * `Thread.sleep` in this package**, production or test — a delay is a number
+ * the policy computes and a [ManualTimer] the test advances, so a backoff is
+ * asserted rather than waited out. Presences are `await`, absences are
+ * `neverWithin`/`quiesced` and `pollHostMessage`.
+ *
+ * What this file does NOT cover, by design: anything that needs two nodes —
+ * the mutual-dial tie-break, key rotation, and the identity-mismatch refusal.
+ * Those verdicts are mapped in [DiscoveredPeering] and proven by task `.4`.
+ * Here only the plain `Admit` arm of `PeerTable.judge` is exercised.
+ */
+class DiscoveredPeeringTest {
+
+    // --------------------------------------------------------------- fixtures
+
+    /** A fresh, valid 32-byte iroh NodeId. */
+    private fun nodeId(): ByteArray = Ed25519.rawPublicKey(Ed25519.generateKeyPair().public)
+
+    private fun keyOf(nodeId: ByteArray): KeyId = fingerprint(Ed25519.publicKeyFromRaw(nodeId))
+
+    private fun side(allow: Set<PeerId>? = null): Peering.Side {
+        val registry = LocationRegistry()
+        return Peering.Side(registry, ManagedHost(registry = registry), peer = PeerId("node"), allow = allow)
+    }
+
+    /** Who [side]'s binding resolves a link's key to — the identity a mirror is stamped with. */
+    private fun resolved(side: Peering.Side, nodeId: ByteArray): PeerId =
+        when (val resolution = side.identityBinding.resolve(keyOf(nodeId), emptyList())) {
+            is IdentityResolution.Bound -> resolution.peer
+            is IdentityResolution.Unbound -> fail("expected ${keyOf(nodeId)} to be bound, got $resolution")
+        }
+
+    /** There is no child process behind [FakeSidecar]; this node's own id is a value the test chooses. */
+    private class FixedSidecar(override val nodeId: ByteArray) : IrohTransport.Sidecar {
+        override fun close() = Unit
+    }
+
+    /**
+     * A node, a policy over it, and the fake both speak to.
+     *
+     * The clock is a plain field the test writes: [advanceTo] moves it and
+     * then releases every retry due at that point, which is the only way time
+     * passes anywhere in this file.
+     */
+    private class Rig(
+        val fake: FakeSidecar,
+        val client: SidecarClient,
+        val node: IrohNode,
+        val own: ByteArray,
+        val side: Peering.Side,
+    ) : AutoCloseable {
+
+        @Volatile
+        var now: Long = 0L
+
+        val timer = ManualTimer { now }
+
+        lateinit var peering: DiscoveredPeering
+
+        /** Move the clock to [instant] and run every retry armed for it or earlier. */
+        fun advanceTo(instant: Long) {
+            now = instant
+            timer.advanceTo(instant)
+        }
+
+        /** One `PEER_DISCOVERED`, as the sidecar's mDNS enumeration emits it. */
+        fun discover(key: ByteArray, addresses: List<String> = listOf("127.0.0.1:1")) {
+            fake.send(SidecarMessage.PeerDiscovered(key, addresses))
+        }
+
+        fun expire(key: ByteArray) = fake.send(SidecarMessage.PeerExpired(key))
+
+        fun viewOf(key: ByteArray): PeerView? = peering.snapshot().firstOrNull { it.keyHex == NodeKey(key).hex }
+
+        /** The next `DIAL`, strictly: anything else in front of it — an `ADD_PEER`, say — fails here. */
+        fun nextDial(): HostMessage.Dial = assertIs<HostMessage.Dial>(fake.nextHostMessage())
+
+        /**
+         * Returns once the policy thread has finished every command it had
+         * taken before this call: a sighting of this node's own key is queued
+         * behind them and counted only when its turn comes. Call it after
+         * awaiting a counter that `onDialDone` bumps, because that counter is
+         * incremented BEFORE the retry is armed — reading `timer.pending()`
+         * straight after it races the arm.
+         */
+        fun drained() {
+            val before = peering.counters.selfDropped.count
+            discover(own)
+            await("the policy thread to drain") { peering.counters.selfDropped.count == before + 1 }
+        }
+
+        override fun close() {
+            runCatching { if (::peering.isInitialized) peering.close() }
+            runCatching { client.close() }
+            runCatching { fake.close() }
+        }
+    }
+
+    /**
+     * Start a node and a [DiscoveredPeering] over a fake, answering the
+     * `LISTEN` and the `WATCH_PEERS` by hand, and run [body] against them.
+     *
+     * Both start calls block on a control reply, so each runs on its own
+     * thread while this one plays the sidecar.
+     */
+    private fun withPeering(
+        side: Peering.Side = side(),
+        own: ByteArray = OWN_ID,
+        policy: DialPolicy = DialPolicy(),
+        body: (Rig) -> Unit,
+    ) {
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                val rig = Rig(fake, client, IrohNode(FixedSidecar(own), client, side), own, side)
+                rig.use {
+                    settle("node start") { rig.node.start(30.seconds) }.let { started ->
+                        assertEquals(HostMessage.Listen, fake.nextHostMessage(), "a node LISTENs on its one shared client")
+                        fake.send(SidecarMessage.Listening(listOf("127.0.0.1:1")))
+                        started()
+                    }
+                    val startPeering = settle("peering start") {
+                        DiscoveredPeering.start(rig.node, policy, clock = { rig.now }, timer = rig.timer)
+                    }
+                    assertEquals(
+                        HostMessage.WatchPeers,
+                        fake.nextHostMessage(),
+                        "start() subscribes to discovery on the node's own client",
+                    )
+                    fake.send(SidecarMessage.Watching)
+                    rig.peering = startPeering()
+                    body(rig)
+                }
+            }
+        }
+    }
+
+    /** Run [call] on a daemon thread and return a function that waits for its result. */
+    private fun <T> settle(what: String, call: () -> T): () -> T {
+        val done = ArrayBlockingQueue<Result<T>>(1)
+        Thread({ done.put(runCatching { call() }) }, what).apply { isDaemon = true }.start()
+        return { (done.poll(30, TimeUnit.SECONDS) ?: fail("$what did not settle within 30s")).getOrThrow() }
+    }
+
+    /** Every counter of [counters], by name, plus the refusals — one comparable sample ([DSC2-OBS-02]). */
+    private fun sample(counters: DiscoveryCounters): Map<String, Long> =
+        counters.every.associate { it.name to it.count } +
+            counters.refusedBy().entries.associate { "refused:${it.key}" to it.value }
+
+    /** No count in [after] is below the same count in [before] ([DSC2-OBS-02]). */
+    private fun assertMonotonic(before: Map<String, Long>, after: Map<String, Long>, step: String) {
+        before.forEach { (name, was) ->
+            val now = after[name] ?: 0L
+            assertTrue(now >= was, "$name went backwards over '$step': $was -> $now")
+        }
+    }
+
+    // ------------------------------------------------------- BS-12: self drop
+
+    /**
+     * [DSC2-DIAL-04], BS-12. The event is counted as received and as
+     * self-dropped, and leaves nothing at all behind: no entry, so no
+     * eviction pressure and nothing to dial.
+     *
+     * Prescribed mutation: drop `observe`'s own-key comparison and this test
+     * fails on `selfDropped`.
+     */
+    @Test
+    fun `an event naming this node's own key is dropped, never retained and never dialled`() {
+        withPeering { rig ->
+            rig.discover(rig.own)
+
+            await("the self event to be counted") { rig.peering.counters.eventsReceived.count == 1L }
+            await("the self drop") { rig.peering.counters.selfDropped.count == 1L }
+            assertEquals(emptyList(), rig.peering.snapshot(), "a self sighting retains nothing")
+            assertTrue(neverWithin(500) { rig.fake.dials.get() > 0L }, "this node never dials itself")
+            assertNull(rig.fake.pollHostMessage(200), "and writes nothing at all about itself")
+        }
+    }
+
+    // ------------------------------------------- DIAL-02: one dial, no ADD_PEER
+
+    @Test
+    fun `a discovered key is dialled exactly once, with no ADD_PEER, and a second sighting is suppressed`() {
+        withPeering { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            // Strict: an ADD_PEER ahead of the DIAL would fail this assertion
+            // rather than be skipped, which is what pins "no ADD_PEER"
+            // ([DSC2-DIAL-02]) — the sidecar already knows these addresses.
+            val dial = rig.nextDial()
+            assertTrue(dial.peerId.contentEquals(key), "the key discovery named is the key dialled")
+            assertEquals(1L, rig.peering.counters.dialsAttempted.count)
+
+            // A second sighting while the first dial is still in flight.
+            rig.discover(key)
+            await("the duplicate to be suppressed") { rig.peering.counters.duplicatesSuppressed.count == 1L }
+            assertEquals(1L, quiesced { rig.fake.dials.get() }, "a key with a dial in flight is not dialled again")
+            assertNull(rig.fake.pollHostMessage(200), "nothing else was written for this key — no ADD_PEER, no re-DIAL")
+            assertEquals("Dialling(attempt=0)", assertNotNull(rig.viewOf(key)).state)
+        }
+    }
+
+    // --------------------------------------------- DIAL-03: the injected schedule
+
+    /**
+     * [DSC2-DIAL-03]. The delays asserted here — 1000 and then 3000 — are the
+     * *policy's* numbers, `schedule(0)` and `schedule(1)` applied to the clock
+     * the test owns. Nothing waits for them: the dial that does not arrive at
+     * 999 is an absence proven by the queue being empty while the clock says
+     * 999.
+     */
+    @Test
+    fun `a failed dial is retried at clock plus schedule, and not one tick earlier`() {
+        withPeering(policy = DialPolicy(schedule = { attempt -> 1_000L * (attempt + 1) })) { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            val first = rig.nextDial()
+            rig.fake.send(SidecarMessage.Failure(first.link, "unreachable"))
+            await("the failed dial to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+            await("a retry to be armed") { rig.timer.pending() == 1 }
+
+            rig.advanceTo(999)
+            assertNull(rig.fake.pollHostMessage(200), "schedule(0) is 1000ms: nothing is due at 999")
+            assertEquals(1, rig.timer.pending(), "and the retry is still armed")
+
+            rig.advanceTo(1_000)
+            val second = rig.nextDial()
+            assertTrue(second.peerId.contentEquals(key))
+            assertEquals(2L, rig.peering.counters.dialsAttempted.count)
+
+            // schedule(1) is 2000ms, from the clock's 1000 — so 3000, not 2000.
+            rig.fake.send(SidecarMessage.Failure(second.link, "unreachable"))
+            await("the second failure to be counted") { rig.peering.counters.dialsFailed.count == 2L }
+            await("the second retry to be armed") { rig.timer.pending() == 1 }
+            rig.advanceTo(2_999)
+            assertNull(rig.fake.pollHostMessage(200), "the second backoff runs to 3000")
+            rig.advanceTo(3_000)
+            assertTrue(rig.nextDial().peerId.contentEquals(key), "the third attempt")
+        }
+    }
+
+    /**
+     * [DSC2-DIAL-03]'s bound. Five keys are announced and none is answered, so
+     * every dial that starts stays in flight; exactly `maxInFlightDials` of
+     * them may exist, and a slot only frees when one of them ends.
+     *
+     * Prescribed mutation: make `nextDue` ignore `maxInFlight` and the
+     * `quiesced` assertion below fails at 5.
+     */
+    @Test
+    fun `dials in flight never exceed maxInFlightDials, and a failure frees exactly one slot`() {
+        withPeering(policy = DialPolicy(maxInFlightDials = 2, schedule = { 60_000L })) { rig ->
+            val keys = List(5) { nodeId() }
+            keys.forEach { rig.discover(it) }
+
+            await("every sighting to be counted") { rig.peering.counters.eventsReceived.count == 5L }
+            assertEquals(2L, quiesced { rig.fake.dials.get() }, "two dials in flight, three keys waiting")
+            assertEquals(2, rig.peering.snapshot().count { it.state.startsWith("Dialling") })
+            assertEquals(5, rig.peering.snapshot().size, "the other three are retained and due")
+
+            val inFlight = rig.nextDial()
+            rig.fake.send(SidecarMessage.Failure(inFlight.link, "unreachable"))
+            await("the third dial to take the freed slot") { rig.fake.dials.get() == 3L }
+            assertEquals(3L, quiesced { rig.fake.dials.get() }, "one slot freed means exactly one more dial")
+            assertEquals(2, rig.peering.snapshot().count { it.state.startsWith("Dialling") })
+        }
+    }
+
+    // ----------------------------------------------- MDNS-05: evicted counts linkUp too
+
+    /**
+     * [DSC2-MDNS-05], computenet-u5ok6. `evicted` used to count only
+     * `observe`'s own eviction; `linkUp`'s was silent. Here the table is
+     * filled to `maxRetained` with a `Dialling` entry (protected) and a
+     * `Retained`-but-undialled one (evictable — `maxInFlightDials = 1` leaves
+     * it waiting), and then a link comes up ([FakeSidecar.presentInbound])
+     * for a brand-new key with **no hello following it**, so only
+     * `DiscoveredPeering.onLinkUp` — the plain `Command.LinkUp` apply, not
+     * the gate's `seed`/`judge` — ever runs. That keeps this test off the
+     * race the accepted-hello path would otherwise have: a hello's `seed()`
+     * calls `PeerTable.linkUp` synchronously on the reader thread, which can
+     * beat the queued `Command.LinkUp` to the actual eviction and mask a
+     * mutation in whichever call site loses that race. `judge`'s own
+     * eviction path is pinned separately, at the table level, in
+     * `PeerTableTest`.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.onLinkUp`, drop
+     * `if (evicted != null) counters.evicted.increment()` and this reddens
+     * on the `evicted` await below (it never reaches 1).
+     */
+    @Test
+    fun `a link coming up and evicting to make room for a new key is counted on evicted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // dialling's DIAL — never answered, so it stays in flight (protected)
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            // maxInFlightDials = 1 is already spent on `dialling`, so this one
+            // waits Retained — no dial, no upLinks: exactly what `evictionVictim`
+            // requires.
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+
+            val accepted = nodeId()
+            rig.fake.presentInbound(9, accepted) // LINK_UP only — no hello, so the gate never runs.
+
+            await("the new key to reach the table via linkUp") { rig.viewOf(accepted) != null }
+            await("the eviction to be counted") { rig.peering.counters.evicted.count == 1L }
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(dialling), "the in-flight dial is never evicted")
+            assertEquals(2, rig.peering.snapshot().size, "eviction made room; the table stayed bounded")
+        }
+    }
+
+    // ------------------------------- ik0q1: the gate's own eviction sites
+
+    /**
+     * Reflective access to the private `DiscoveredPeering.seed(key, links)` —
+     * the gate's synchronous seeding of the table from [IrohNode]'s own link
+     * registry, before `judge`. computenet-u5ok6's implementer found that
+     * driving this through a real hello races `seed` against the queued
+     * `Command.LinkUp` for the very same link, and that in practice
+     * `onLinkUp` wins that race (its own comment on that bead). Calling
+     * `seed` directly sidesteps the race rather than fighting it: it proves
+     * `seed`'s own `evicted`-counting line on its own terms, with a
+     * [IrohNode.LinkView] this class's queue has never seen and therefore
+     * cannot have already turned into a table entry.
+     */
+    private fun DiscoveredPeering.seedDirectly(key: NodeKey, links: List<IrohNode.LinkView>) {
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("seed", NodeKey::class.java, List::class.java)
+        method.isAccessible = true
+        method.invoke(this, key, links)
+    }
+
+    /**
+     * `seed`'s own eviction, isolated from the `onLinkUp` race
+     * computenet-u5ok6 documented. The table is filled to `maxRetained`
+     * exactly as the `onLinkUp` eviction test above does — a protected
+     * `Dialling` entry and an evictable `Retained` one — and then `seed` is
+     * invoked directly with a [IrohNode.LinkView] for a brand-new key that
+     * has never passed through this policy's queue at all, so nothing but
+     * `seed`'s own `table.linkUp` call can have created its entry.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.seed`, drop
+     * `if (evicted != null) counters.evicted.increment()` and this reddens —
+     * `evicted` stays 0 even though the table plainly made room.
+     */
+    @Test
+    fun `seed evicts to make room for a link the queue has not yet turned into an entry, and it alone is counted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // never answered: stays Dialling, protected from eviction
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing has been evicted yet")
+
+            val fresh = nodeId()
+            val link = IrohNode.LinkView(
+                linkId = 4242L,
+                remoteNodeId = fresh,
+                direction = LinkDirection.INBOUND,
+                source = IrohNode.LinkSource.ACCEPTED,
+                peered = false,
+                attributedPeer = null,
+            )
+            rig.peering.seedDirectly(NodeKey(fresh), listOf(link))
+
+            assertEquals(1L, rig.peering.counters.evicted.count, "seed's own linkUp call evicted to make room")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(fresh), "seed created the new key's entry directly, off the queue")
+        }
+    }
+
+    /**
+     * `toVerdict`'s plain [Judgement.Admit] arm's `evicted` branch — reached
+     * only when `judge` creates a fresh entry for an unknown key at capacity
+     * (case 5). Driven with the gate called directly, the same technique
+     * `the gate forwards the hello's own link id...` above uses, because
+     * routing a real hello through a [FakeSidecar] link would first run
+     * `onLinkUp`/`seed` for that same key and create the entry before `judge`
+     * ever saw it — exactly the ordering the `onAdmitted` KDoc now documents.
+     * Calling the gate with a key this policy's table and node registry have
+     * never seen means `seed` iterates zero links and does nothing, so
+     * `judge` alone creates the entry.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.toVerdict`'s `Admit` arm,
+     * drop `if (judgement.evicted != null) counters.evicted.increment()` and
+     * the `evicted` assertion below reddens.
+     */
+    @Test
+    fun `the gate's Admit arm counts the eviction judge made to create a brand-new key's entry`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial()
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+
+            val fresh = nodeId()
+            val verdict = rig.node.gate.judge(keyOf(fresh), fresh, LinkDirection.INBOUND, 9001L, PeerId("fresh-identity"))
+
+            assertEquals(Verdict.Admit, verdict, "nothing else holds this key or this identity")
+            assertEquals(1L, rig.peering.counters.evicted.count, "toVerdict's Admit arm counted judge's eviction-on-create")
+            assertNull(rig.viewOf(evictable), "the evictable entry was dropped to make room for the fresh key")
+            assertEquals("Peered(INBOUND)", assertNotNull(rig.viewOf(fresh)).state)
+        }
+    }
+
+    /**
+     * `toVerdict`'s [Judgement.Supersede] arm's `evicted` branch — reached
+     * only when creating the SUPERSEDING key's entry both evicts (case 4, at
+     * capacity) and finds an existing key already peered under the same
+     * identity. Built the same way as the Admit-arm test above: the gate
+     * called directly so no real link ever reaches `onLinkUp`/`seed` for
+     * these keys first. `old` is peered by a first direct gate call (room to
+     * spare, no eviction); a second, unrelated `evictable` key fills the
+     * table; then `fresh`'s hello resolves to `old`'s identity while the
+     * table is full, so creating `fresh`'s entry both evicts `evictable` and
+     * supersedes `old`.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.toVerdict`'s `Supersede`
+     * arm, drop `if (judgement.evicted != null) counters.evicted.increment()`
+     * and the `evicted` assertion below reddens.
+     */
+    @Test
+    fun `the gate's Supersede arm counts the eviction judge made alongside the supersession`() {
+        withPeering(policy = DialPolicy(maxRetained = 3, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial()
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+
+            val rotatedIdentity = PeerId("rotated-identity")
+            val old = nodeId()
+            val firstVerdict = rig.node.gate.judge(keyOf(old), old, LinkDirection.INBOUND, 1L, rotatedIdentity)
+            assertEquals(Verdict.Admit, firstVerdict, "old is peered with room to spare — no eviction yet")
+            assertEquals(3, rig.peering.snapshot().size, "dialling, evictable and old now fill the table")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing evicted so far")
+
+            val fresh = nodeId()
+            val secondVerdict = rig.node.gate.judge(keyOf(fresh), fresh, LinkDirection.INBOUND, 2L, rotatedIdentity)
+
+            assertEquals(Verdict.Admit, secondVerdict, "a Supersede is still admitted on the new link")
+            assertEquals(1L, rig.peering.counters.superseded.count, "old is superseded by fresh")
+            assertEquals(1L, rig.peering.counters.evicted.count, "toVerdict's Supersede arm counted judge's eviction-on-create")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling or peered ones, was dropped")
+            assertEquals("Superseded(by=${NodeKey(fresh).short})", assertNotNull(rig.viewOf(old)).state)
+            assertEquals("Peered(INBOUND)", assertNotNull(rig.viewOf(fresh)).state)
+        }
+    }
+
+    /**
+     * Reflective access to the private `DiscoveredPeering.onAdmitted(Command.Admitted)`,
+     * the same technique [seedDirectly] uses for `seed`. `onAdmitted`'s own
+     * KDoc argues its `evicted` increment is ordinarily unreachable because
+     * the queue always drains `Command.LinkUp` for a link before
+     * `Command.Admitted` for the same link, so the key's entry already exists
+     * by the time this line runs and `table.linkUp` returns null. Calling
+     * `onAdmitted` directly, with a [IrohNode.LinkView] for a key this
+     * policy's queue has never seen at all, sidesteps that ordering the same
+     * way `seedDirectly` sidesteps `seed`'s race with `onLinkUp` — it proves
+     * the increment on its own terms rather than by forcing the two-link
+     * interleaving the KDoc's last paragraph describes.
+     *
+     * Prescribed mutation: in `DiscoveredPeering.onAdmitted`, drop
+     * `if (evicted != null) counters.evicted.increment()` and the `evicted`
+     * assertion below reddens.
+     */
+    private fun DiscoveredPeering.onAdmittedDirectly(view: IrohNode.LinkView) {
+        val admittedClass = Class.forName("civictech.iroh.discover.DiscoveredPeering\$Command\$Admitted")
+        val ctor = admittedClass.getDeclaredConstructor(IrohNode.LinkView::class.java)
+        ctor.isAccessible = true
+        val command = ctor.newInstance(view)
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("onAdmitted", admittedClass)
+        method.isAccessible = true
+        method.invoke(this, command)
+    }
+
+    @Test
+    fun `onAdmitted evicts to make room for a link the queue has not yet turned into an entry, and it alone is counted`() {
+        withPeering(policy = DialPolicy(maxRetained = 2, maxInFlightDials = 1)) { rig ->
+            val dialling = nodeId()
+            rig.discover(dialling)
+            rig.nextDial() // never answered: stays Dialling, protected from eviction
+            await("dialling to read as Dialling") {
+                rig.viewOf(dialling)?.state?.startsWith("Dialling") == true
+            }
+
+            val evictable = nodeId()
+            rig.discover(evictable)
+            await("evictable to be retained and not yet dialled") {
+                rig.viewOf(evictable)?.state == "Retained"
+            }
+            assertEquals(2, rig.peering.snapshot().size, "the table is at maxRetained")
+            assertEquals(0L, rig.peering.counters.evicted.count, "nothing has been evicted yet")
+
+            val fresh = nodeId()
+            val link = IrohNode.LinkView(
+                linkId = 4343L,
+                remoteNodeId = fresh,
+                direction = LinkDirection.INBOUND,
+                source = IrohNode.LinkSource.ACCEPTED,
+                peered = true,
+                attributedPeer = PeerId("fresh-identity"),
+            )
+            rig.peering.onAdmittedDirectly(link)
+
+            assertEquals(1L, rig.peering.counters.evicted.count, "onAdmitted's own linkUp call evicted to make room")
+            assertNull(rig.viewOf(evictable), "the evictable entry, not the protected dialling one, was dropped")
+            assertNotNull(rig.viewOf(fresh), "onAdmitted created the new key's entry directly, off the queue")
+        }
+    }
+
+    // --------------------------------------- DIAL-06: re-dial, and expiry cancels
+
+    @Test
+    fun `a peering that drops unplanned returns to the dialable set and is re-dialled`() {
+        withPeering { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            val dial = rig.nextDial()
+            rig.fake.admit(dial.link, key)
+            await("the key to read as peered") { rig.viewOf(key)?.state?.startsWith("Peered") == true }
+            assertEquals(
+                resolved(rig.side, key).name,
+                assertNotNull(rig.viewOf(key)).attributedPeer,
+                "the view carries the Session's own attribution, never a second derivation",
+            )
+
+            rig.fake.send(SidecarMessage.LinkDown(dial.link, "peer went away"))
+            // The skipping form here, not Rig.nextDial: an admitted peering
+            // announces, so `DATA` frames precede the re-dial. The "no
+            // ADD_PEER" clause is pinned by the strict form in the
+            // one-dial-per-key test, where no link is ever admitted.
+            val redial = rig.fake.nextDial()
+            assertTrue(redial.link != dial.link, "a re-dial is a new link id")
+            assertTrue(redial.peerId.contentEquals(key))
+            assertEquals(
+                0,
+                assertNotNull(rig.peering.connectionFor(NodeKey(key))).unadmittedOpens,
+                "the dropped link had been admitted, so it charges no unadmitted open",
+            )
+        }
+    }
+
+    @Test
+    fun `PEER_EXPIRED for a key with no live link cancels its armed retry for good`() {
+        withPeering(policy = DialPolicy(schedule = { 1_000L })) { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            val dial = rig.nextDial()
+            rig.fake.send(SidecarMessage.Failure(dial.link, "unreachable"))
+            await("a retry to be armed") { rig.timer.pending() == 1 }
+
+            rig.expire(key)
+            await("the retry to be cancelled") { rig.timer.pending() == 0 }
+            assertEquals("Expired", assertNotNull(rig.viewOf(key)).state)
+
+            rig.advanceTo(Long.MAX_VALUE / 2)
+            assertNull(rig.fake.pollHostMessage(300), "an expired key is not dialled however far the clock moves")
+            assertEquals(1L, rig.fake.dials.get())
+        }
+    }
+
+    /**
+     * `computenet-hlw0e`. The ordering the residual was filed against:
+     * `PEER_EXPIRED` lands while a dial is still open — before `dialFailed`
+     * ever runs — so `PeerTable.dialFailed` finds no `Dialling` entry when the
+     * dial's later failure arrives, and `onDialDone` arms nothing at all
+     * ([DSC2-DIAL-06]). The sibling test above only ever expires a key
+     * *after* its retry is already armed; this one expires it *mid-dial*,
+     * which is the ordering `IrohDiscoveredKeyRotationTest` (CI run
+     * `35552410099`) actually hit.
+     *
+     * Prescribed mutation: replace `dialFailed`'s
+     * `entry.state as? PeerState.Dialling ?: return null` with an
+     * unconditional cast, and the `timer.pending() == 0` assertion below
+     * fails — a retry gets armed for an already-expired key.
+     */
+    @Test
+    fun `a PEER_EXPIRED that lands while the dial is still open arms no retry when the dial later fails`() {
+        withPeering(policy = DialPolicy(schedule = { 1_000L })) { rig ->
+            val key = nodeId()
+            rig.discover(key)
+
+            val dial = rig.nextDial()
+            // The LAN stops advertising the key WHILE the dial is still
+            // outstanding — no Failure has been sent yet, so the entry is
+            // still Dialling when the expiry is applied.
+            rig.expire(key)
+            await("the key to read as Expired while its dial is still open") {
+                rig.viewOf(key)?.state == "Expired"
+            }
+
+            rig.fake.send(SidecarMessage.Failure(dial.link, "unreachable"))
+            await("the failure to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+            rig.drained()
+
+            assertEquals(0, rig.timer.pending(), "dialFailed found no Dialling entry, so onDialDone armed nothing")
+            assertEquals("Expired", assertNotNull(rig.viewOf(key)).state, "the late failure did not resurrect it")
+
+            rig.advanceTo(Long.MAX_VALUE / 2)
+            assertNull(rig.fake.pollHostMessage(300), "an expired key is not dialled however far the clock moves")
+            assertEquals(1L, rig.fake.dials.get())
+        }
+    }
+
+    /**
+     * `computenet-hlw0e`'s contrasting ordering: a `LINK_DOWN` — not an
+     * expiry — moves the key off `Dialling` while its outbound dial is still
+     * in flight. The link that goes down is an inbound one for the same key
+     * (accepted while the dial was open, dropped before any hello), so
+     * `PeerTable.linkDown` answers `Redial` and `pump()` — which runs after
+     * every command — marks the key `Dialling` again and issues a second
+     * dial. When the FIRST dial's failure finally arrives, `dialFailed` finds
+     * that second generation's `Dialling` entry and a retry IS armed: the
+     * opposite of the `PEER_EXPIRED` ordering above, where the same late
+     * failure finds `Expired` and arms nothing. The retry is charged to the
+     * wrong generation, so the second dial's own failure then finds
+     * `Retained` and arms nothing further — asserted as landed behaviour,
+     * not endorsed.
+     *
+     * Prescribed mutation: make `PeerTable.linkDown` treat a `Dialling` entry
+     * like `Expired` (`NoRedial`, state untouched) and no second dial is ever
+     * issued, so `nextDial()` fails.
+     */
+    @Test
+    fun `a LINK_DOWN while the dial is still open re-dials, and the first dial's late failure arms a retry, unlike a PEER_EXPIRED`() {
+        withPeering(policy = DialPolicy(schedule = { 1_000L })) { rig ->
+            val key = nodeId()
+            rig.discover(key)
+            val dial = rig.nextDial()
+
+            // An inbound link for the same key comes up while the outbound
+            // dial is still unanswered, and drops before any hello.
+            rig.fake.presentInbound(INBOUND_LINK, key)
+            await("the inbound link to be up on the node") { rig.node.links(key).any { it.linkId == INBOUND_LINK } }
+            rig.fake.send(SidecarMessage.LinkDown(INBOUND_LINK, "dropped before any hello"))
+
+            // DownOutcome.Redial: pump() re-dials at once, while the first
+            // dial is still open.
+            val redial = rig.nextDial()
+            assertTrue(redial.link != dial.link, "the pump-driven redial is a second, concurrent dial")
+            assertEquals("Dialling(attempt=0)", assertNotNull(rig.viewOf(key)).state)
+            assertEquals(0, rig.timer.pending(), "nothing is armed before any dial has failed")
+
+            // The first dial's late failure finds the second generation's
+            // Dialling entry, and a retry is armed.
+            rig.fake.send(SidecarMessage.Failure(dial.link, "unreachable"))
+            await("the first dial's failure to be counted") { rig.peering.counters.dialsFailed.count == 1L }
+            rig.drained()
+            assertEquals(1, rig.timer.pending(), "unlike PEER_EXPIRED, the late failure finds a Dialling entry and arms a retry")
+            assertEquals("Retained", assertNotNull(rig.viewOf(key)).state)
+
+            // The second dial's own failure now finds Retained: nothing more.
+            rig.fake.send(SidecarMessage.Failure(redial.link, "unreachable"))
+            await("the second dial's failure to be counted") { rig.peering.counters.dialsFailed.count == 2L }
+            rig.drained()
+            assertEquals(1, rig.timer.pending(), "the one retry already armed is the only one")
+        }
+    }
+
+    // ---------------------------------------- computenet-5e58q: the pump guard
+
+    /**
+     * [computenet-5e58q]. `drain()` guards the command step (`apply`) with a
+     * `runCatching`, but `pump()` used to run bare right after it — an
+     * exception out of `pump()` (`node.dialDiscovered`, or `dialPool.execute`
+     * once the pool is shut down: [DiscoveredPeering.close]'s race) escaped
+     * `drain()`'s loop and silently ended the one `iroh-discover-policy`
+     * thread. After that, nothing ever applies another command again — no
+     * crash, no log line beyond the JVM's default uncaught-exception dump.
+     *
+     * The test shuts the dial pool down out of band — the same
+     * `RejectedExecutionException` [DiscoveredPeering.pump] documents as
+     * reachable from the real close() race, forced here so the failure is
+     * deterministic rather than a timing window. The first discovery's
+     * `apply` step (`onDiscovered`, which only touches `table`/`counters`)
+     * still succeeds and increments `eventsReceived`; it is `pump()`'s
+     * subsequent `dialPool.execute` that throws. A second discovery only
+     * increments `eventsReceived` again if the policy thread survived that
+     * throw to keep draining the queue.
+     *
+     * Prescribed mutation: replace `runCatching { pump() }.onFailure { ... }`
+     * with the bare `pump()` call it replaced, and the second `await` below
+     * times out and fails — the policy thread died on the first throw and
+     * never reads the second command off the queue.
+     */
+    @Test
+    fun `a pump step that throws is caught and logged, and the policy keeps draining later commands`() {
+        withPeering { rig ->
+            val poolField = DiscoveredPeering::class.java.getDeclaredField("dialPool")
+            poolField.isAccessible = true
+            (poolField.get(rig.peering) as java.util.concurrent.ExecutorService).shutdown()
+
+            rig.discover(nodeId())
+            await("the first discovery's apply step to land despite the pump step about to throw") {
+                rig.peering.counters.eventsReceived.count == 1L
+            }
+
+            // If the pump step's throw killed iroh-discover-policy, this
+            // second command sits in the queue forever and this never reaches 2.
+            rig.discover(nodeId())
+            await(
+                "a later command to still be applied after an earlier pump step threw",
+                timeoutMs = 5_000,
+            ) {
+                rig.peering.counters.eventsReceived.count == 2L
+            }
+        }
+    }
+
+    // ------------------------- DIAL-01 / DIAL-07: one peering across the sources
+
+    @Test
+    fun `a key already peered on an accepted link is never dialled`() {
+        val local = side()
+        withPeering(local) { rig ->
+            val key = nodeId()
+            rig.fake.presentInbound(9, key)
+            rig.fake.hello1From(9)
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the accepting side answers with a hello")
+            await("the accepted link to read as peered") { rig.viewOf(key)?.state?.startsWith("Peered") == true }
+            assertEquals("ACCEPTED", assertNotNull(rig.viewOf(key)).source)
+
+            rig.discover(key)
+            await("the sighting to be suppressed") { rig.peering.counters.duplicatesSuppressed.count == 1L }
+            assertEquals(0L, quiesced { rig.fake.dials.get() }, "[DSC2-DIAL-01]: a live peering means no dial")
+        }
+    }
+
+    @Test
+    fun `a key with a configured peering under this node is never dialled by discovery`() {
+        withPeering { rig ->
+            val key = nodeId()
+            val connected = settle("connect-configured") {
+                rig.node.connectConfigured(key, listOf("127.0.0.1:4242"), backoff = { 10L })
+            }
+            val added = assertIs<HostMessage.AddPeer>(rig.fake.nextHostMessage())
+            assertTrue(added.nodeId.contentEquals(key))
+            rig.fake.send(SidecarMessage.PeerAdded(key))
+            val dial = rig.nextDial()
+            rig.fake.send(SidecarMessage.LinkUp(dial.link, key, DIRECTION_OUTBOUND))
+            connected()
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the dialler's hello is its first frame")
+            await("the configured link to reach the table") { rig.viewOf(key) != null }
+            assertEquals("CONFIGURED", assertNotNull(rig.viewOf(key)).source)
+
+            rig.discover(key)
+            await("the sighting to be suppressed") { rig.peering.counters.duplicatesSuppressed.count == 1L }
+            assertEquals(1L, quiesced { rig.fake.dials.get() }, "[DSC2-DIAL-07]: the configured dial is the only one")
+        }
+    }
+
+    // ------------- ktn1l-D16: which accepted-link downs are tie-break closes
+
+    /**
+     * A remote key on the chosen side of [OWN_ID]: [smallerThanOwn] false
+     * makes this node the SMALLER id (its INBOUND links are its tie-break
+     * losers), true makes it the larger (its INBOUND links are the winners).
+     */
+    private fun nodeIdRelativeToOwn(smallerThanOwn: Boolean): ByteArray {
+        while (true) {
+            val candidate = nodeId()
+            if ((java.util.Arrays.compareUnsigned(candidate, OWN_ID) < 0) == smallerThanOwn) return candidate
+        }
+    }
+
+    /**
+     * computenet-oqpqf, criterion 3: a SAME-direction sibling is not a
+     * tie-break partner. This node is the smaller id, so INBOUND is its losing
+     * direction and only the opposite-direction requirement tells the two
+     * cases apart. Link 9 is admitted; a second INBOUND link 10 from the same
+     * key — a restarted remote re-dialling before 9's down — drops before its
+     * hello. Nothing lost a tie-break.
+     *
+     * Mutation: let any other live link count in `onLinkDown` (drop the
+     * `it.direction != view.direction` term) — link 10 is counted.
+     */
+    @Test
+    fun `an accepted link that drops unadmitted beside a same-direction sibling is not a tie-break close`() {
+        withPeering { rig ->
+            val key = nodeIdRelativeToOwn(smallerThanOwn = false)
+            rig.fake.presentInbound(9, key)
+            rig.fake.hello1From(9)
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the accepting side answers with a hello")
+            await("link 9 to be peered") { rig.viewOf(key)?.state == "Peered(INBOUND)" }
+
+            rig.fake.presentInbound(10, key)
+            await("the sibling to be registered") { rig.node.links(key).size == 2 }
+            rig.fake.send(SidecarMessage.LinkDown(10, "the sibling dropped before its hello"))
+            await("the sibling's down to reach the node") { rig.node.links(key).map { it.linkId } == listOf(9L) }
+            rig.drained()
+
+            assertEquals(0L, rig.peering.counters.tieBreakClosed.count, "a same-direction sibling's drop is not a tie-break close")
+            assertEquals("Peered(INBOUND)", rig.viewOf(key)?.state, "link 9 still carries the peering")
+        }
+    }
+
+    /**
+     * The other half of the classification: only this node's LOSING direction
+     * is a tie-break loss. This node is the larger id, so an INBOUND link is
+     * the one the tie-break keeps. It is admitted, an OUTBOUND link to the
+     * same key comes up (a configured dial, its hello unanswered), and then
+     * the inbound link drops. The opposite direction is up, but no tie-break
+     * closed anything.
+     *
+     * Mutation: drop `losingDirection` from `onLinkDown`'s predicate — the
+     * winner's drop is counted.
+     */
+    @Test
+    fun `the winning direction's accepted link dropping beside an opposite link is not a tie-break close`() {
+        withPeering { rig ->
+            val key = nodeIdRelativeToOwn(smallerThanOwn = true)
+            rig.fake.presentInbound(INBOUND_LINK, key)
+            rig.fake.hello1From(INBOUND_LINK)
+            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the accepting side answers with a hello")
+            await("the inbound link to be peered") { rig.viewOf(key)?.state == "Peered(INBOUND)" }
+
+            val connected = settle("connect-configured") {
+                rig.node.connectConfigured(key, listOf("127.0.0.1:4242"), backoff = { 10L })
+            }
+            // The admitted inbound peering may still be announcing: skip its DATA.
+            fun nextControl(): HostMessage {
+                while (true) {
+                    val message = rig.fake.nextHostMessage()
+                    if (message !is HostMessage.Data || message.link != INBOUND_LINK) return message
+                }
+            }
+            assertIs<HostMessage.AddPeer>(nextControl())
+            rig.fake.send(SidecarMessage.PeerAdded(key))
+            val dial = assertIs<HostMessage.Dial>(nextControl())
+            rig.fake.send(SidecarMessage.LinkUp(dial.link, key, DIRECTION_OUTBOUND))
+            connected()
+            assertIs<HostMessage.Data>(nextControl(), "the dialler's hello is its first frame")
+            await("both directions to be up") { rig.node.links(key).map { it.direction }.toSet().size == 2 }
+
+            rig.fake.send(SidecarMessage.LinkDown(INBOUND_LINK, "the winner dropped"))
+            await("the inbound link's down to reach the node") { rig.node.links(key).map { it.linkId } == listOf(dial.link) }
+            rig.drained()
+
+            assertEquals(0L, rig.peering.counters.tieBreakClosed.count, "the winning direction's drop is not a tie-break close")
+        }
+    }
+
+    /** `onLinkDown`, called past the queue — the technique [onAdmittedDirectly] uses. */
+    private fun DiscoveredPeering.onLinkDownDirectly(
+        view: IrohNode.LinkView,
+        outcome: IrohTransport.IrohConnection.LinkOutcome? = null,
+    ) {
+        val downClass = Class.forName("civictech.iroh.discover.DiscoveredPeering\$Command\$LinkDown")
+        val ctor = downClass.getDeclaredConstructor(
+            IrohNode.LinkView::class.java,
+            IrohTransport.IrohConnection.LinkOutcome::class.java,
+        )
+        ctor.isAccessible = true
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("onLinkDown", downClass)
+        method.isAccessible = true
+        method.invoke(this, ctor.newInstance(view, outcome))
+    }
+
+    /** `closeLink`, the body of a queued `CloseLoser`, called past the queue. */
+    private fun DiscoveredPeering.closeLinkDirectly(key: NodeKey, linkId: Long) {
+        val method = DiscoveredPeering::class.java.getDeclaredMethod("closeLink", NodeKey::class.java, java.lang.Long.TYPE)
+        method.isAccessible = true
+        method.invoke(this, key, linkId)
+    }
+
+    /**
+     * ktn1l-D16's "counted once", in the interleaving where the loser's
+     * `LINK_DOWN` is read just BEFORE the hello that condemns it and the
+     * policy thread is still behind (computenet-i74gh). The gate then finds
+     * the loser in the table and counts it; the down, handled next, clears the
+     * loser's mark; and the `CloseLoser` the gate posted runs last.
+     *
+     * The race is forced at the seam: the two hellos are judged by calling the
+     * gate directly (as the computenet-n0hew test does), then the down and the
+     * close are run in that order past the queue. Link ids that no node
+     * registry holds keep the down from counting on its own, so only a close
+     * that counts can move the counter past 1.
+     *
+     * Mutation: restore `countTieBreakClose(linkId)` at the top of
+     * `closeLink` — the one closed link is counted twice.
+     */
+    @Test
+    fun `a losing link whose down is handled between its verdict and its close is counted once`() {
+        withPeering { rig ->
+            val remote = nodeIdRelativeToOwn(smallerThanOwn = false) // this node is the smaller id: INBOUND loses
+            val keyId = keyOf(remote)
+            val peer = PeerId("remote")
+
+            assertEquals(Verdict.Admit, rig.node.gate.judge(keyId, remote, LinkDirection.INBOUND, 9L, peer))
+            assertEquals(
+                Verdict.Admit,
+                rig.node.gate.judge(keyId, remote, LinkDirection.OUTBOUND, 10L, peer),
+                "the smaller id's OUTBOUND link wins and names inbound link 9 for closing",
+            )
+            assertEquals(1L, rig.peering.counters.tieBreakClosed.count, "the gate counts the loser at its verdict")
+
+            val loser = IrohNode.LinkView(9L, remote, LinkDirection.INBOUND, IrohNode.LinkSource.ACCEPTED, peered = true, attributedPeer = peer)
+            rig.peering.onLinkDownDirectly(loser)
+            rig.peering.closeLinkDirectly(NodeKey(remote), 9L)
+            rig.drained() // and the queued CloseLoser has run too
+
+            assertEquals(1L, rig.peering.counters.tieBreakClosed.count, "one closed link, counted once")
+        }
+    }
+
+    /**
+     * The other order of the same two steps (computenet-311xs, ktn1l-D16
+     * "whatever order"): the `CloseLoser` the gate posted runs BEFORE the
+     * loser's `LINK_DOWN` is handled. The verdict counted the link; the close
+     * counts nothing; the down finds the link already marked and counts
+     * nothing either. Together with the test above this pins both orders.
+     *
+     * The down carries a quiet outcome, so it is itself a way of learning of
+     * the close and would count were the link not already marked.
+     *
+     * Mutation: drop the dedupe in `countTieBreakClose` (increment whether or
+     * not the id was new) — the one closed link is counted twice.
+     */
+    @Test
+    fun `a losing link whose close runs before its down is handled is counted once`() {
+        withPeering { rig ->
+            val remote = nodeIdRelativeToOwn(smallerThanOwn = false) // this node is the smaller id: INBOUND loses
+            val keyId = keyOf(remote)
+            val peer = PeerId("remote")
+
+            assertEquals(Verdict.Admit, rig.node.gate.judge(keyId, remote, LinkDirection.INBOUND, 9L, peer))
+            assertEquals(Verdict.Admit, rig.node.gate.judge(keyId, remote, LinkDirection.OUTBOUND, 10L, peer))
+            assertEquals(1L, rig.peering.counters.tieBreakClosed.count, "the gate counts the loser at its verdict")
+
+            rig.peering.closeLinkDirectly(NodeKey(remote), 9L)
+            // A down classified quiet, so it would count on its own had the verdict not.
+            val loser = IrohNode.LinkView(9L, remote, LinkDirection.INBOUND, IrohNode.LinkSource.ACCEPTED, peered = true, attributedPeer = peer)
+            val quiet = IrohTransport.IrohConnection.LinkOutcome(peered = true, quiet = true, afterRefusal = false, abandoned = false, lastDenial = null)
+            rig.peering.onLinkDownDirectly(loser, quiet)
+            rig.drained()
+
+            assertEquals(1L, rig.peering.counters.tieBreakClosed.count, "one closed link, counted once")
+        }
+    }
+
+    // ------------------------------- BS-05a: a stranger is dialled, then refused
+
+    /**
+     * BS-05a, [DSC2-ID-01..04]. The policy knows nothing about who is
+     * allowed: it dials the stranger, and `Session` refuses the hello on this
+     * side's allowlist — a refusal this package only ever *accounts for*.
+     *
+     * The absence that carries the requirement is asserted by a grep in the
+     * task's verification, not here: `civictech.iroh.discover` reads
+     * `Side.allow` nowhere and constructs no `PeerId`.
+     */
+    @Test
+    fun `a discovered stranger is dialled, refused inside Session, and abandoned after the refusal limit`() {
+        val friendly = side(allow = setOf(PeerId("bob")))
+        withPeering(friendly, policy = DialPolicy(refusedDialLimit = 2)) { rig ->
+            val stranger = nodeId()
+            rig.discover(stranger)
+
+            repeat(2) { attempt ->
+                val dial = rig.nextDial()
+                // Bring the link all the way to a hello: LINK_UP, our hello
+                // drained, the peer's hello written back. The allowlist then
+                // refuses the identity it resolves to.
+                rig.fake.admit(dial.link, stranger)
+                assertEquals(
+                    HostMessage.CloseLink(dial.link),
+                    rig.fake.nextHostMessage(),
+                    "attempt $attempt: a hello outside the allowlist is closed",
+                )
+                rig.fake.send(SidecarMessage.LinkDown(dial.link, "refused"))
+            }
+
+            await("the key to be abandoned") { rig.viewOf(stranger)?.state?.startsWith("Abandoned") == true }
+            val view = assertNotNull(rig.viewOf(stranger))
+            assertEquals("Abandoned(NOT_ADMITTED)", view.state)
+            assertEquals(DenialReason.NOT_ADMITTED, view.lastDenial)
+            assertEquals(
+                mapOf(DenialReason.NOT_ADMITTED to 2L),
+                rig.peering.counters.refusedBy(),
+                "each refused open is counted once, by reason",
+            )
+            assertEquals(2L, rig.peering.counters.dialsAttempted.count)
+
+            // An abandoned key is a terminal state: a fresh sighting suppresses.
+            rig.discover(stranger)
+            await("the post-abandonment sighting to be suppressed") {
+                rig.peering.counters.duplicatesSuppressed.count == 1L
+            }
+            assertEquals(2L, quiesced { rig.fake.dials.get() }, "an abandoned key is not dialled again")
+        }
+    }
+
+    // --------------------- computenet-n0hew: the gate forwards the judged link id
+
+    /**
+     * Pins the installed gate (`DiscoveredPeering.begin()`'s `node.gate =
+     * HelloGate { ... }`) forwarding the hello's OWN link id to
+     * `PeerTable.judge` — unpinned until now (`computenet-n0hew`, found by
+     * the feature review of computenet-2utc8, PR #958). The Session -> gate
+     * half (what `linkId` a hello's judged with) is pinned by
+     * `IrohNodeTest`'s "HelloGate judge carries the link id of the hello
+     * actually being judged"; this is the other half, the gate's own forward
+     * of that id into `table.judge(...)`.
+     *
+     * The gate is invoked directly here — `rig.node.gate.judge(...)` twice,
+     * with no wire frame and no wait between the two calls — because a wrong
+     * forwarded id has exactly one observable effect anywhere in
+     * `PeerTable`: the IDENTITY_MISMATCH comparison `peered.linkId != linkId`
+     * inside `judge`. Every other read of a `Peered` entry's `linkId` is
+     * gone the moment `DiscoveredPeering.onAdmitted` re-runs `table.admitted`
+     * with the real id from `IrohNode`'s own registry — which is also why a
+     * mutation run over the *wired* path (a `FakeSidecar` hello, `await`ed
+     * to admitted) stayed green: the async correction almost always wins the
+     * race before a second hello can observe the corrupted id. Calling the
+     * gate synchronously past that window is what makes the corruption
+     * observable without racing the policy thread.
+     *
+     * Prescribed mutation: replace the `linkId` argument to
+     * `table.judge(...)` in the gate lambda with `-1L`. Every hello then
+     * forwards that same constant regardless of its real, distinct link id,
+     * so the second hello's argument to `PeerTable.judge` reads equal to the
+     * first hello's stored `Peered.linkId` (`-1L == -1L`) instead of
+     * different — the IDENTITY_MISMATCH check never fires, and a hello that
+     * resolves to a different identity than the live link's is wrongly
+     * `Admit`ted instead of `Refuse`d.
+     */
+    @Test
+    fun `the gate forwards the hello's own link id, so a later different identity on the same live link is refused`() {
+        withPeering { rig ->
+            val remoteNodeId = nodeId()
+            val key = keyOf(remoteNodeId)
+            val firstIdentity = PeerId("first-hello")
+            val secondIdentity = PeerId("second-hello-different-identity")
+
+            val firstVerdict = rig.node.gate.judge(key, remoteNodeId, LinkDirection.OUTBOUND, 111L, firstIdentity)
+            assertEquals(Verdict.Admit, firstVerdict, "the first hello on a fresh key is admitted and its link kept live")
+
+            val secondVerdict = rig.node.gate.judge(key, remoteNodeId, LinkDirection.OUTBOUND, 222L, secondIdentity)
+            val refusal = assertIs<Verdict.Refuse>(
+                secondVerdict,
+                "a different identity on the same key, while the first hello's link is still live, must be refused " +
+                    "([DSC2-ID-05]) rather than admitted — admitting it is what a wrong forwarded link id produces",
+            )
+            assertEquals(DenialReason.IDENTITY_MISMATCH, refusal.reason)
+            assertEquals(secondIdentity, refusal.principal, "the denial blames the identity this hello resolved to, not the live one (F3-D7)")
+        }
+    }
+
+    // --------------------------------------------------- OBS: counters and views
+
+    /**
+     * [DSC2-OBS-01..03]. Two properties in one run: every counter is
+     * non-decreasing across a sequence of unrelated steps, and every row of
+     * `snapshot()` is public material — a 64-character key hex, the addresses
+     * the LAN advertised, a state name, a source name.
+     */
+    @Test
+    fun `counters are monotonic across a mixed run and views carry only public material`() {
+        withPeering(policy = DialPolicy(schedule = { 500L })) { rig ->
+            var before = sample(rig.peering.counters)
+            fun step(what: String, body: () -> Unit) {
+                body()
+                val after = sample(rig.peering.counters)
+                assertMonotonic(before, after, what)
+                before = after
+            }
+
+            val key = nodeId()
+            step("a self sighting") {
+                rig.discover(rig.own)
+                await("the self drop") { rig.peering.counters.selfDropped.count == 1L }
+            }
+            step("a discovered key") {
+                rig.discover(key, listOf("192.0.2.7:4242"))
+                rig.nextDial()
+            }
+            step("a duplicate sighting") {
+                rig.discover(key)
+                await("the duplicate") { rig.peering.counters.duplicatesSuppressed.count == 1L }
+            }
+            step("a failed dial and its retry") {
+                rig.fake.send(SidecarMessage.Failure(1, "unreachable"))
+                await("the failure") { rig.peering.counters.dialsFailed.count == 1L }
+                await("a retry to be armed") { rig.timer.pending() == 1 }
+                rig.advanceTo(500)
+                rig.nextDial()
+            }
+
+            assertEquals(
+                0L,
+                rig.peering.counters.malformedEvents.count,
+                "malformedEvents is read live from the client, which saw no bad frame",
+            )
+            val view = assertNotNull(rig.viewOf(key))
+            assertEquals(64, view.keyHex.length, "a key hex is the full 32 bytes")
+            assertTrue(view.keyHex.all { it in "0123456789abcdef" }, "lowercase hex and nothing else")
+            assertEquals(listOf("192.0.2.7:4242"), view.addresses, "the addresses the LAN advertised, unchanged")
+            assertEquals("DISCOVERED", view.source)
+            assertNull(view.lastDenial, "nothing was refused here")
+        }
+    }
+
+    /**
+     * [DSC2-OBS-01]. `malformedEvents` is the one count this class does not
+     * keep: the frames it counts are rejected inside `SidecarClient` and never
+     * reach the policy at all, so the number is *read* from
+     * `SidecarClient.malformedDiscoveryEvents` rather than copied
+     * (`Counter.derived`). The assertion that matters is the second one — the
+     * counter equals the client's own number — because a copy taken at start
+     * would still read 0 here while the client read 1.
+     *
+     * The malformed frame is the one `SidecarWatchPeersTest` uses for BS-10: a
+     * `PEER_DISCOVERED` whose payload is 5 bytes, short of the 32 a NodeId
+     * needs.
+     */
+    @Test
+    fun `malformedEvents is the client's own live count, and no such frame is a discovery event`() {
+        withPeering { rig ->
+            assertEquals(0L, rig.peering.counters.malformedEvents.count, "nothing malformed has arrived yet")
+
+            rig.fake.sendRaw(Frame(Kind.PEER_DISCOVERED, 0L, ByteArray(5)))
+
+            await("the malformed frame to show in the policy's counters") {
+                rig.peering.counters.malformedEvents.count == 1L
+            }
+            assertEquals(
+                rig.client.malformedDiscoveryEvents,
+                rig.peering.counters.malformedEvents.count,
+                "the counter reports the client's number, not a copy of it",
+            )
+            assertEquals(0L, rig.peering.counters.eventsReceived.count, "a frame the codec refused is no sighting")
+            assertEquals(emptyList(), rig.peering.snapshot(), "and it retains nothing")
+        }
+    }
+
+    // ------------------------------------------------- NEU-04: whose threads
+
+    /**
+     * [DSC2-NEU-04], and the structural constraint this whole class exists to
+     * hold: **the sidecar reader thread only enqueues.**
+     *
+     * Two facts, and the second is the one that would catch a regression:
+     *
+     * 1. While a dial is blocked on an unanswered `DIAL`, no thread outside
+     *    `iroh-discover-policy`, `iroh-discover-dial-*` and this test carries
+     *    a `civictech.iroh.discover` frame — in particular not
+     *    `iroh-sidecar-reader`, whose presence is asserted so the check cannot
+     *    pass vacuously.
+     * 2. The reader thread is still *serving* while that dial blocks: an
+     *    inbound link presented at that moment is accepted and answered. A
+     *    policy that dialled from the reader thread would deadlock here — the
+     *    `LINK_UP` it waits for can only be delivered by the thread it is
+     *    blocking — and this test would hang rather than fail, which is why
+     *    the bounded `nextHostMessage` is the assertion.
+     */
+    @Test
+    fun `the reader thread only enqueues, and keeps serving while a dial blocks`() {
+        withPeering { rig ->
+            val key = nodeId()
+            rig.discover(key)
+            rig.nextDial() // Never answered: a dial thread is now parked inside openLink.
+            await("the key to read as dialling") { rig.viewOf(key)?.state?.startsWith("Dialling") == true }
+
+            val offenders = Thread.getAllStackTraces()
+                .filterValues { frames -> frames.any { it.className.startsWith("civictech.iroh.discover") } }
+                .keys
+                .map { it.name }
+                .filterNot { it == "iroh-discover-policy" || it.startsWith("iroh-discover-dial-") }
+                .filterNot { it == Thread.currentThread().name }
+            assertEquals(emptyList(), offenders, "policy code ran on a thread this package does not own")
+            assertTrue(
+                Thread.getAllStackTraces().keys.any { it.name == "iroh-sidecar-reader" },
+                "the reader thread exists, so the absence above is a real absence",
+            )
+
+            // The endpoint is alive while the dial blocks.
+            val other = nodeId()
+            rig.fake.presentInbound(9, other)
+            rig.fake.hello1From(9)
+            assertIs<HostMessage.Data>(
+                rig.fake.nextHostMessage(),
+                "the reader thread answered an inbound hello while a dial was blocked",
+            )
+            await("the accepted link to be peered") { rig.viewOf(other)?.state?.startsWith("Peered") == true }
+        }
+    }
+
+    private companion object {
+        /** This node's own endpoint id. Distinct from every [nodeId] a test mints. */
+        val OWN_ID: ByteArray = ByteArray(NODE_ID_LEN) { 0x11 }
+
+        /** An inbound link id the fake presents; far above the ids it assigns to `DIAL`s. */
+        const val INBOUND_LINK: Long = 900L
+    }
+}

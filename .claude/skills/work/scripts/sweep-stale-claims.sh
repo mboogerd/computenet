@@ -105,6 +105,15 @@ if [ -z "$stale" ]; then
   exit 0
 fi
 
+# Every release below bumps the item's updated_at in the LOCAL Dolt DB, and
+# `claim-epic.sh`'s hot-subtree test reads exactly that field to decide whether
+# ANOTHER machine is inside an epic. So this script's own writes look like the
+# other machine's, and the epics it looks hottest for are the resumable ones the
+# sweep just cleaned — which is the preference step 3 states (computenet-x3f5a).
+# Record what we released here, with the time, so claim-epic.sh can discount it.
+# Local file, not a bead field: these releases are not published either.
+SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
+
 count=0
 for id in $stale; do
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -112,6 +121,8 @@ for id in $stale; do
   else
     bd update "$id" --status=open >/dev/null
     echo "released: $id"
+    echo "$(date +%s) $id" >> "$SWEPT_FILE" 2>/dev/null \
+      || echo "warning: could not record $id in $SWEPT_FILE — claim-epic.sh may read this release as another machine's activity" >&2
   fi
   count=$((count + 1))
 done

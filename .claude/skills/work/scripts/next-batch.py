@@ -52,7 +52,9 @@ feature, with its claim. Those claims seed the disjointness test, so a unit
 dispatched through SKILL.md 5f route 0 — a direct child of the epic, invisible
 to a query about one feature — can no longer have its files handed to a second
 agent (computenet-z6q2). It is emitted so the caller can see what a short batch
-was held behind.
+was held behind. Each unit carries its `holder` liveness; a DEAD or STALE one
+is a resume marker, not a running agent, so it is reported but blocks nothing
+(computenet-09o4w).
 """
 import json
 import os
@@ -634,6 +636,7 @@ def plan_batch(candidates, feature=None, elsewhere=()):
     over a path that does not exist, and batches like any other.
     """
     batch, skipped, taken = [], [], set()
+    elsewhere = [u for u in elsewhere if u.get("holder") not in RELEASABLE]
     # Seed with what is already running outside this feature (computenet-z6q2),
     # so an overlap with a route-0 unit is skipped by the same rule that skips
     # an overlap with a sibling — no second implementation, no memory.
@@ -737,10 +740,11 @@ def running_elsewhere(actor, feature, candidate_ids):
     Everything `in_progress` and assigned to this actor counts, minus the
     candidates themselves (this feature's resumable tasks are legitimately in
     the batch) and minus epics and this feature, which claim no files of their
-    own. A STALE claim from a dead session therefore blocks a batch — the
-    conservative direction, and visible: every unit found is reported in the
-    output, so the caller can see what it was held behind rather than
-    wondering why the batch is short.
+    own. Each unit's `metadata.holder` is checked: DEAD or STALE marks a resume
+    marker left by a dead session (a feature left in_progress on purpose), which
+    plan_batch() does not treat as running. A unit with no holder, or one that
+    cannot be checked, still blocks — the conservative direction. Every unit is
+    reported, so the caller can see what a short batch was held behind.
     """
     out = []
     for task in bd("list", "--status", "in_progress", "--assignee", actor):
@@ -754,8 +758,26 @@ def running_elsewhere(actor, feature, candidate_ids):
         except ClaimError:
             continue                      # not ours to diagnose; 5b names it
         if files:
-            out.append({"id": tid, "files": sorted(files)})
+            token = (task.get("metadata") or {}).get("holder")
+            out.append({"id": tid, "files": sorted(files),
+                        "holder": holder_state(token, task.get("updated_at")) if token else "NONE"})
     return out
+
+
+RELEASABLE = ("DEAD", "STALE")
+
+
+def holder_state(token, updated_at=None):
+    """session-holder.sh --check's answer for `token`; UNKNOWN if it cannot run.
+    `updated_at` keeps a long-running session off the STALE path (computenet-jqxqk)."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session-holder.sh")
+    cmd = [script, "--check", token] + ([updated_at] if updated_at else [])
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "UNKNOWN"
+    words = out.stdout.split()
+    return words[0] if words else "UNKNOWN"
 
 
 def _siblings():

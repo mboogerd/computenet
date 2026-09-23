@@ -752,14 +752,27 @@ internal fun Array<String>.extractFlagAll(name: String): Pair<List<String>, Arra
  * `internal` so the parsing is testable directly rather than only through the
  * process-exiting [main] — the same reason [extractFlag] is.
  *
+ * @param discover whether `--discover <sidecar-binary>` was given (task
+ *   computenet-63um5.4, DSC2). `false` (the default) leaves every rule above
+ *   byte-for-byte unchanged. `true` changes three things: `--peer` is refused
+ *   (discovery finds the peer, so a URI would be a lie); `--rig` is still
+ *   required, refused the same way as always; and "no endpoint flag" no
+ *   longer means "refuse" — it means the discovering end,
+ *   [MirrorWire.Dial] of [MirrorWire.Dial.DISCOVERED]. `--listen <port>`
+ *   still means the accepting end, unchanged, because the sidecar still needs
+ *   telling which side advertises and which side watches.
  * @throws IllegalArgumentException on any partial or contradictory combination.
  */
-internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<String>> {
+internal fun Array<String>.extractPeering(discover: Boolean = false): Pair<MirrorPeeringSettings?, Array<String>> {
     val (rig, afterRig) = extractFlag("--rig")
     val (listen, afterListen) = afterRig.extractFlag("--listen")
     val (peer, rest) = afterListen.extractFlag("--peer")
 
-    if (rig == null && listen == null && peer == null) return null to rest
+    if (discover) {
+        require(peer == null) { "--discover finds the peer; drop --peer" }
+    }
+
+    if (!discover && rig == null && listen == null && peer == null) return null to rest
     require(listen == null || peer == null) {
         "--listen and --peer name opposite roles; give exactly one (--listen <wsPort> to be the " +
             "listener, --peer <ws-uri> to be the dialer)"
@@ -773,6 +786,7 @@ internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<
             requireNotNull(listen.toIntOrNull()) { "--listen takes a port number (0 = any free port), not '$listen'" },
         )
         peer != null -> MirrorWire.Dial(peer)
+        discover -> MirrorWire.Dial(MirrorWire.Dial.DISCOVERED)
         else -> throw IllegalArgumentException(
             "--rig $rig names a rig but no endpoint; add --listen <wsPort> or --peer <ws-uri>",
         )
@@ -780,26 +794,77 @@ internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<
     return MirrorPeeringSettings(rig, wire) to rest
 }
 
+/**
+ * Builds the startup banner's peering line and, when non-null, the port
+ * [main] announces to the caller as `ws`.
+ *
+ * Pulled out of [main] so the discover-mode accepting-end banner
+ * (computenet-emn9z) is testable without invoking a process-exiting
+ * function. [discover] mirrors `main`'s `discoverBinaryPath != null`: under
+ * discovery the accepting end ([MirrorWire.Listen]) has no real WebSocket
+ * port to advertise — [boundWsPort] there is
+ * [DiscoveredIrohMirrorTransport.ListenLink.boundWsPort], a number read off
+ * the iroh endpoint's UDP address, not a WebSocket port — so that branch
+ * neither prints a `ws://` URI nor returns a port to announce. Every other
+ * branch, including non-discover [MirrorWire.Listen], is unchanged.
+ */
+internal fun peeringBanner(
+    peering: MirrorPeeringSettings?,
+    discover: Boolean,
+    boundWsPort: Int?,
+): Pair<String, Int?> = when (val wire = peering?.wire) {
+    is MirrorWire.Listen -> if (discover) {
+        "  rig '${peering.rigName}' as ${peering.role}; advertising for discovery on the local segment" to null
+    } else {
+        // the BOUND port, not `wire.wsPort`: `--listen 0` asks for any free
+        // one, and only this process knows which it got (computenet-dqy.25)
+        val wsPort = checkNotNull(boundWsPort) { "a listening node must have a bound ws port" }
+        "  rig '${peering.rigName}' as ${peering.role}; awaiting a peer on ws://localhost:$wsPort" to wsPort
+    }
+    is MirrorWire.Dial -> if (wire.uri == MirrorWire.Dial.DISCOVERED) {
+        "  rig '${peering.rigName}' as ${peering.role}; discovering a peer on the local segment" to null
+    } else {
+        "  rig '${peering.rigName}' as ${peering.role}; peered with ${wire.uri}" to null
+    }
+    null -> "  single-node mode; add --rig <name> with --listen <wsPort> or --peer <ws-uri> to span two JVMs" to null
+}
+
 fun main(args: Array<String>) {
     val (workspaceArgs, afterWorkspace) = args.extractFlagAll("--workspace")
     if (workspaceArgs.isEmpty()) {
         System.err.println(
             "usage: beadsmirror --workspace <path> [--workspace <path> ...] [--poll-interval-ms <ms>] " +
-                "[--run-dir <path>] [--write-back] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]\n" +
+                "[--run-dir <path>] [--write-back] [--rig <name> ((--listen <wsPort> | --peer <ws-uri>) | " +
+                "--discover <sidecar-binary> [--listen <ignored-port>])] [port]\n" +
                 "  --workspace may repeat: one mirror per workspace, all on one HTTP port. Two-node " +
                 "mode (--rig) is single-workspace only.\n" +
                 "  --write-back is opt-in per process: every configured workspace imposes its own " +
-                "fold's winner onto its own bd data (bd import --allow-stale, one row at a time).",
+                "fold's winner onto its own bd data (bd import --allow-stale, one row at a time).\n" +
+                "  --discover: form the peering by iroh mDNS discovery on the local segment " +
+                "(--offline --mdns); no NodeId or address is configured; --listen marks the " +
+                "accepting end (its port is ignored), no endpoint flag marks the discovering end.",
         )
         exitProcess(1)
     }
     val (pollIntervalArg, afterPollInterval) = afterWorkspace.extractFlag("--poll-interval-ms")
     val (runDirArg, afterRunDir) = afterPollInterval.extractFlag("--run-dir")
     val (writeBack, afterWriteBack) = afterRunDir.extractBareFlag("--write-back")
+    val (discoverBinary, afterDiscover) = afterWriteBack.extractFlag("--discover")
     val (peering, remaining) = try {
-        afterWriteBack.extractPeering()
+        afterDiscover.extractPeering(discover = discoverBinary != null)
     } catch (e: IllegalArgumentException) {
         System.err.println("beadsmirror: ${e.message}")
+        exitProcess(1)
+    }
+    // Belt and braces: extractPeering(discover = true) already refuses a
+    // missing --rig, so peering is never null here when discoverBinary isn't.
+    require(discoverBinary == null || peering != null) {
+        "--discover needs --rig <name>: the rig name is hashed into the shared logical CellRefs " +
+            "both nodes must derive, so there is no default that could ever match a peer's"
+    }
+    val discoverBinaryPath = discoverBinary?.let { Path.of(it) }
+    if (discoverBinaryPath != null && !Files.isRegularFile(discoverBinaryPath)) {
+        System.err.println("beadsmirror: --discover names '$discoverBinary', which is not a regular file")
         exitProcess(1)
     }
 
@@ -809,6 +874,7 @@ fun main(args: Array<String>) {
         pollInterval = Duration.ofMillis(pollIntervalArg?.toLongOrNull() ?: 1000L),
         runDir = runDirArg?.let { Path.of(it) },
         peering = peering,
+        peeringTransport = discoverBinaryPath?.let { DiscoveredIrohMirrorTransport(it) },
         writeBack = writeBack,
     )
 
@@ -828,15 +894,7 @@ fun main(args: Array<String>) {
     println("computenet beadsmirror: http://localhost:${app.boundPort}")
     app.mirrors.forEach { println("  mirroring ${it.workspace} as '${it.identity}' (run dir ${it.runDir})") }
     announcePort("http", app.boundPort)
-    when (val wire = peering?.wire) {
-        is MirrorWire.Listen -> {
-            // the BOUND port, not `wire.wsPort`: `--listen 0` asks for any free
-            // one, and only this process knows which it got (computenet-dqy.25)
-            val wsPort = checkNotNull(app.boundWsPort) { "a listening node must have a bound ws port" }
-            println("  rig '${peering.rigName}' as ${peering.role}; awaiting a peer on ws://localhost:$wsPort")
-            announcePort("ws", wsPort)
-        }
-        is MirrorWire.Dial -> println("  rig '${peering.rigName}' as ${peering.role}; peered with ${wire.uri}")
-        null -> println("  single-node mode; add --rig <name> with --listen <wsPort> or --peer <ws-uri> to span two JVMs")
-    }
+    val (bannerLine, wsPortToAnnounce) = peeringBanner(peering, discoverBinaryPath != null, app.boundWsPort)
+    println(bannerLine)
+    wsPortToAnnounce?.let { announcePort("ws", it) }
 }

@@ -1,7 +1,6 @@
 package civictech.demo.allocatorobserve.http
 
 import civictech.demo.shell.DemoShell
-import civictech.demo.shell.esc
 import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
 
@@ -72,30 +71,22 @@ class AllocatorRoutes(private val holder: ServedStateHolder) {
      * [frozen] is non-null — a `503` naming the failure, with [liveBody]
      * preserved verbatim under `stale` (fpml.4-D6, `MirrorRoutes`'
      * `respondFold` shape — relabel a dead loop's fold, never withhold it).
+     * Delegates the frozen envelope to [frozenEnvelope] — the same function
+     * `ServedState.frozenJson` uses for the `/events` SSE frame
+     * (computenet-w20a4), so this 503 body and that SSE frame cannot drift
+     * apart silently (computenet-l7vdc).
      */
     private fun respondFold(exchange: HttpExchange, frozen: PollLoopStopped?, liveBody: String) {
         if (frozen == null) {
             exchange.respond(200, liveBody, "application/json")
             return
         }
-        val body = buildString {
-            append("""{"ingest":"frozen",""")
-            append("\"failure\":").append(esc(frozen.failure.toString()))
-            append(",\"stale_status\":200")
-            append(",\"stale\":").append(liveBody)
-            append('}')
-        }
-        exchange.respond(503, body, "application/json")
+        exchange.respond(503, frozenEnvelope(frozen, liveBody), "application/json")
     }
 
     private companion object {
-        // Built from a Char literal rather than a leading-slash string
-        // literal so this HTTP route path is never mistaken, by this
-        // module's NoHardcodedLogPathTest lexical scan, for a hardcoded
-        // spend-log filesystem path (fpml.1-D1 guards *that* concern; this
-        // constant is an HTTP route, not a path on disk).
-        val STATE_PATH: String = '/' + "state"
-        val INGEST_SUFFIX: String = '/' + "ingest"
-        val REPORT_SUFFIX: String = '/' + "report"
+        val STATE_PATH: String = "/state"
+        val INGEST_SUFFIX: String = "/ingest"
+        val REPORT_SUFFIX: String = "/report"
     }
 }

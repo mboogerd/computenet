@@ -64,5 +64,13 @@ fun interface BoundedReader {
  */
 class HostBoundedReader(private val host: ManagedHost) : BoundedReader {
     override fun read(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> =
+        // KRD-27: single-read delegation, not a walk loop (BoundedReadConsumerFenceTest's
+        // fenced pattern), and safe to bypass civictech.cell.observe's readRouted
+        // registry lookup — `:demo:social` is single-JVM/single-`ManagedHost`
+        // (SocialApp constructs exactly one `host` and binds this reader to it,
+        // `SocialApp.kt`), so [ref] never names a peer-hosted or migrating cell
+        // that routing would need to resolve; every ref this reader ever sees
+        // already resolves to [host] itself. If `:demo:social` grows a second
+        // host or peer replication, this call must reroute through `readRouted`.
         host.readState(ref, request)
 }

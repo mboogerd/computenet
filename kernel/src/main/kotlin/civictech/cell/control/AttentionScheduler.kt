@@ -6,12 +6,16 @@ import java.util.LinkedHashMap
 
 /**
  * Data-plane dispatch (spec 34, M6.3/M17), extracted from [civictech.cell.host.ManagedHost]
- * (RS-8.1): messages stage in per-cell FIFO queues; each staged message submits
- * one dispatcher task at data priority, and each dispatch picks the next cell
- * by attention band. Per-cell FIFO (a superset of per-link FIFO, spec 31 rule 3)
- * holds because band selection happens BETWEEN cells, never within one — and the
- * one-task-per-message shape keeps drain's phase 2 (priority 30) behind every
- * accepted message.
+ * (RS-8.1): messages stage in per-cell FIFO queues, and each dispatch picks the
+ * next cell by attention band. Per-cell FIFO (a superset of per-link FIFO, spec
+ * 31 rule 3) holds because band selection happens BETWEEN cells, never within one.
+ *
+ * The host dispatches every accepted message by a data-band task submitted after
+ * its staging: with its `dispatchBatch == 1` that is one [dispatchOne] task per
+ * message (message count <= task count); with `dispatchBatch > 1` one armed task
+ * runs [dispatchUpTo] and re-arms while work remains. Either way drain's phase 2
+ * (priority 30) runs after them, because schedulers order by priority. Batching
+ * changes the task count only: selection is per message, inside [dispatchOne].
  *
  * Shares [dataLock] with the owning host rather than owning an independent lock:
  * several host-only critical sections (intake saturation transitions, teardown
@@ -169,6 +173,27 @@ class AttentionScheduler(
         listeners.forEach { it() }
         toPark?.forEach { parkForAttention(it) }
         next?.let { deliver(it) }
+    }
+
+    /**
+     * Batched dispatch (KBLK, `computenet-t6b.2-D4`): run [dispatchOne] up to
+     * [bound] times, stopping early once nothing is staged, and return how many
+     * iterations ran. [dispatchOne] is unchanged and re-runs band selection and
+     * the stride floor on every iteration, so fairness is **per message, not per
+     * task**: the stride floor bounds how long lower-band work is passed over by
+     * the same number of dispatched messages with or without batching.
+     *
+     * An iteration that parks a region (band NONE past the window) counts
+     * against [bound] exactly as it consumes one task unbatched.
+     */
+    suspend fun dispatchUpTo(bound: Int): Int {
+        var dispatched = 0
+        while (dispatched < bound) {
+            if (synchronized(dataLock) { dataQueues.isEmpty() }) break
+            dispatchOne()
+            dispatched++
+        }
+        return dispatched
     }
 
     fun parkForAttention(cellRef: CellRef) {
