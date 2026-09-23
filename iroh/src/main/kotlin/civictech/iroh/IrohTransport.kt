@@ -1454,6 +1454,14 @@ object IrohTransport {
          * re-dial loop's). **Enqueue only** on all three.
          */
         internal interface LinkObserver {
+            /**
+             * Test seam (computenet-wad38): [SidecarClient.dial] has just
+             * returned [link] on the dialling thread, and nothing about it is
+             * installed yet — the start of the window in which its `LINK_DOWN`
+             * can overtake [onUp]. Does nothing outside tests.
+             */
+            fun dialReturned(link: SidecarLink) {}
+
             fun onUp(link: SidecarLink)
             fun onAdmitted(linkId: Long, peer: PeerId)
 
@@ -1794,15 +1802,36 @@ object IrohTransport {
                 },
                 timeout,
             )
+            observer?.dialReturned(link)
             linkHolder.set(link)
             currentLink.set(link)
             currentSession.set(session)
+            // The link's LINK_DOWN may already have been dispatched: the client
+            // releases a dialled link's events once the dial has decided, which
+            // is before this thread gets here (computenet-wad38). If `retire`
+            // ran first, its compare-and-sets found nothing to clear and the two
+            // sets above installed a dead link — a configured connection's
+            // re-dial loop, which runs while `currentSession` is null, would
+            // then stop for good. The reader marks `downDelivered` before it
+            // calls `retire`, so either this reads it and clears, or `retire`
+            // runs after the sets and clears them itself.
+            //
+            // Such a link still returns normally, without a hello: it did come
+            // up, and classifying and reporting its down is `retire`'s — a
+            // hello written now could only fail on a link that is gone, and
+            // would turn a dial that succeeded into a failed one.
+            val alreadyDown = link.downDelivered.get()
+            if (alreadyDown) {
+                currentSession.compareAndSet(session, null)
+                currentLink.compareAndSet(link, null)
+            }
             // The dialler's hello is its FIRST frame, and it is what adopts the
             // QUIC stream at the accepting sidecar (PROTOCOL.md §3). The peer
             // cannot have spoken before it: an accepting Session sends nothing
             // until it has read this hello (Session.onHello), so no inbound DATA
             // can reach the listener above before this line runs.
             observer?.onUp(link)
+            if (alreadyDown) return
             session.openLocalHello()
         }
 
