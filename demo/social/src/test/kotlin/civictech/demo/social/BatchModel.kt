@@ -152,6 +152,67 @@ class BatchModel {
         authored = authored.nonEmpty(),
     )
 
+    // --- SOC1 F6 derived reads (feature `computenet-flfkm`, design flfkm-D9) ---
+
+    /**
+     * IC2: messages authored by one of [viewer]'s friends, filtered to
+     * `creationDate < before` when given, ordered `creationDate` descending
+     * then message id descending, first [limit] (mirrors
+     * `FeedSession.board(limit, before)`, flfkm-D1).
+     */
+    fun ic2(viewer: Long, limit: Int, before: Long? = null): List<Message> {
+        val friends = knows[viewer]?.mapTo(HashSet()) { it.otherId } ?: emptySet()
+        return messages.values.asSequence()
+            .filter { it.creatorId in friends }
+            .filter { before == null || it.creationDate < before }
+            .sortedWith(compareByDescending<Message> { it.creationDate }.thenByDescending { it.id })
+            .take(limit)
+            .toList()
+    }
+
+    /**
+     * IC8: [person]'s own messages' replies, newest first, ties by comment id
+     * ascending — LDBC's tie rule for IC8, deliberately unlike [ic2]'s
+     * descending (mirrors `ComplexReads.ic8`, flfkm-D5).
+     */
+    fun ic8(person: Long, limit: Int): List<Message> {
+        val ownIds = authored[person] ?: emptySet()
+        val childIds = ownIds.flatMap { replies[it] ?: emptySet() }
+        return childIds.mapNotNull { messages[it] }
+            .sortedWith(compareByDescending<Message> { it.creationDate }.thenBy { it.id })
+            .take(limit)
+    }
+
+    /**
+     * IC3 at fixed two hops: friends and friends-of-friends of [person]
+     * (never [person] itself) with at least one message in each of
+     * [countryA]/[countryB] inside the half-open window `[from, to)`,
+     * counted and ranked by the combined count, ties by person id ascending
+     * (mirrors `ComplexReads.ic3`, flfkm-D6).
+     */
+    fun ic3(person: Long, countryA: Long, countryB: Long, from: Long, to: Long, limit: Int = 20): List<Ic3Row> {
+        val friends = knows[person]?.mapTo(HashSet()) { it.otherId } ?: emptySet()
+        val friendsOfFriends = friends.flatMapTo(HashSet()) { f -> knows[f]?.map { it.otherId } ?: emptySet() }
+        val candidates = ((friends + friendsOfFriends) - person)
+        return candidates.mapNotNull { candidate ->
+            val authoredIds = authored[candidate] ?: return@mapNotNull null
+            var countA = 0
+            var countB = 0
+            for (id in authoredIds) {
+                val m = messages[id] ?: continue
+                if (m.creationDate in from until to) {
+                    when (m.locationCountryId) {
+                        countryA -> countA++
+                        countryB -> countB++
+                    }
+                }
+            }
+            if (countA > 0 && countB > 0) Ic3Row(candidate, countA, countB) else null
+        }
+            .sortedWith(compareByDescending<Ic3Row> { it.countA + it.countB }.thenBy { it.personId })
+            .take(limit)
+    }
+
     /**
      * Asserts every relation of this model equals the one [observe] reads out
      * of [graph]; the failure names the relation and carries [label] (the
