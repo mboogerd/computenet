@@ -2,7 +2,9 @@ package civictech.demo.beadsmirror.e2e
 
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.TaggedMapDelta
+import civictech.demo.beadsmirror.dolt.DoltSql
 import civictech.demo.beadsmirror.projector.Classification
+import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorKey
 import civictech.demo.beadsmirror.writeback.Provenance
 import civictech.demo.beadsmirror.writeback.WriteBackEvent
@@ -14,6 +16,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -22,6 +25,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.opentest4j.AssertionFailedError
 import java.util.UUID
 
 /**
@@ -118,6 +122,16 @@ import java.util.UUID
  * the applier's own import commit rather than by the edit (see
  * [TwoNodeRig.mutate]'s stated limit).
  *
+ * **That residual recurred on Linux CI and was the whole of bug
+ * computenet-d9kmx** (six build-test-fast failures, 2026-09-21..22, at "the
+ * dialer imposes X" and at the genuine-edit LOCAL await). It is not a slow
+ * loop. The edit is LOST before any await starts: the node's own applier
+ * reverts it and bd folds the two writes into a single commit. That
+ * product-side lost update is filed as computenet-oagbm. Every edit in this
+ * class therefore goes through [editPriority]. It checks for a commit
+ * carrying the edit, which a head-advance check cannot do, and re-issues an
+ * edit that got none. No await budget changed.
+ *
  * Guarded exactly like [WriteBackTwoNodeTest] and [TwoNodeRigTest]:
  * green-but-**skipped** where `bd`/`dolt` are not on PATH.
  */
@@ -177,8 +191,7 @@ class EchoSuppressionTwoNodeTest {
         val dialerHighWaterOnListener = highWaterCounter(listener, dialer.dotSourceId, PRIORITY)
         dialerHighWaterOnDialer.shouldNotBeNull()
 
-        rigOrFail.mutate(listener, "update", x, "--priority", "1")
-        listener.quiesce()
+        editPriority(listener, 1)
 
         rigOrFail.await("the dialer imposes X") {
             dialer.writeBackEvents().any { it is WriteBackEvent.Imposed && it.issueId == x }
@@ -301,12 +314,12 @@ class EchoSuppressionTwoNodeTest {
 
         // Get the dialer's row stamped first — that is the precondition this
         // test is about.
-        rigOrFail.mutate(listener, "update", x, "--priority", "1")
-        listener.quiesce()
+        editPriority(listener, 1)
         rigOrFail.await("the dialer imposes X") {
             dialer.writeBackEvents().any { it is WriteBackEvent.Imposed && it.issueId == x }
         }
         rigOrFail.await("bd show on the dialer reports the imposed value") { bdShowPriority(dialer, x) == 1 }
+        padDialerPastListenersDot(listener, dialer)
         Thread.sleep(rigOrFail.pollIntervalMs() * 3)
 
         val dialerHighWater = highWaterCounter(dialer, dialer.dotSourceId, PRIORITY)
@@ -314,8 +327,7 @@ class EchoSuppressionTwoNodeTest {
 
         // The DIALER's own workspace this time — a human `bd update`, not an
         // imposition.
-        rigOrFail.mutate(dialer, "update", x, "--priority", "2")
-        dialer.quiesce()
+        editPriority(dialer, 2)
 
         // The genuine edit's record: LOCAL, and carrying the stamp the earlier
         // imposition left on the row (`cnEcho != null`). The dialer's own
@@ -361,6 +373,134 @@ class EchoSuppressionTwoNodeTest {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /**
+     * `bd update x --priority <priority>` on [node]'s own workspace. Returns
+     * only once a commit **that carries the edit as a non-echo change** is in
+     * that workspace's `dolt_log` and [node]'s poller has passed it. That is
+     * the precondition every later await in this class relies on. When the
+     * edit got no such commit (see below), it re-issues the edit, at most
+     * [MAX_EDIT_ATTEMPTS] times.
+     *
+     * **Why [TwoNodeRig.mutate] alone was not enough (bug computenet-d9kmx).**
+     * `mutate` returns once the head moves. On a write-back node the head
+     * can move because of the node's OWN applier import, even when the edit
+     * never became a commit at all. [TwoNodeRig.mutate] states that as its
+     * limit. The CI failures this bug was filed for were that case. Traced
+     * (computenet-btt30's feature reviewer, 2026-09-22): after the seed the
+     * listener's `dolt_log` gained ONE commit, an ECHO record from its own
+     * write-back import. There was no commit for the update and the fold
+     * stayed at the seeded value. No loop was starved. The edit was gone
+     * before any await began, so "the dialer imposes X" waited for a change
+     * nobody had made.
+     *
+     * **The mechanism is a product-side lost update, filed as
+     * computenet-oagbm and NOT fixed here.** The node's applier sees the
+     * edit in `bd export` before its poller has ingested it, and imposes the
+     * stale fold value over it. Meanwhile bd 1.1.2's auto-commit commits the
+     * whole shared working set, so whichever of the two writers commits
+     * first sweeps up the other's pending write. The edit then has no commit
+     * of its own, and the only commit that touched the row wrote a fresh
+     * `cn_echo`, which the gate correctly calls an echo. Direct probe,
+     * darwin/arm64, bd 1.1.2 / dolt 2.2.3, load 7-12, reader loops running:
+     * the edit was lost in 2 of 32 update-vs-import races, and one
+     * committer absorbed the other's write in 3 of 42 races where the
+     * import touched a different issue (scripts on computenet-oagbm).
+     *
+     * **What counts as carrying the edit:** a commit that is new since this
+     * attempt began, whose `dolt_diff_issues` row for `x` has `to_priority
+     * == priority`, and which left `cn_echo` unchanged (from side == to
+     * side). The token rule matters. An import can commit the edit's value
+     * together with a token it wrote itself, and the gate then correctly
+     * drops that commit as an echo, so the edit is lost just the same.
+     * Commit messages are deliberately NOT used: the probe showed the edit
+     * arriving inside a `bd import` commit AND the import's revert arriving
+     * inside a `bd: update` commit.
+     *
+     * **Why the retry does not hide anything this class tests.** Suppression
+     * and the LOCAL verdict are still asserted on the commit that carries
+     * the edit. A gate that misclassified such a commit would still fail
+     * the awaits downstream, because a carrying commit ends the loop here
+     * whatever the gate made of it. Re-issuing is idempotent, since the
+     * value lost has always been the one being written. Every lost attempt
+     * is printed to stderr with the node, attempt number and new commits.
+     * That line lands in the JUnit XML's `system-err`, not in the Gradle
+     * console (testLogging shows only PASSED/FAILED/SKIPPED events), and CI
+     * uploads that XML only for failed or cancelled runs. So a GREEN CI run
+     * does not show whether computenet-oagbm fired. Locally, `-i` or the XML
+     * under `build/test-results/test/` does.
+     *
+     * The single read after [TwoNodeRig.Node.quiesce] is enough to decide
+     * "no carrying commit". `bd` commits before it exits (measured on
+     * computenet-3zr5k, recorded on [TwoNodeRig.mutate]), so every read that
+     * starts after [TwoNodeRig.mutate] has returned already sees the edit's
+     * commit, if there is one.
+     */
+    private fun editPriority(node: TwoNodeRig.Node, priority: Int) {
+        val lost = mutableListOf<String>()
+        repeat(MAX_EDIT_ATTEMPTS) { attempt ->
+            val before = node.logHead().toSet()
+            rigOrFail.mutate(node, "update", x, "--priority", priority.toString())
+            node.quiesce()
+            val newRows = priorityDiffRows(node).filter { commitOf(it) !in before }
+            val carrying = newRows.filter {
+                (it["to_priority"] as? JsonPrimitive)?.contentOrNull == priority.toString() &&
+                    stamp(it, FROM_METADATA, Provenance.CN_ECHO) == stamp(it, TO_METADATA, Provenance.CN_ECHO)
+            }
+            if (carrying.isNotEmpty()) return
+            val report = "attempt ${attempt + 1}/$MAX_EDIT_ATTEMPTS: `bd update $x --priority $priority` on the " +
+                "${node.role} left no commit carrying it as a non-echo change (computenet-oagbm); new rows for " +
+                "$x: ${newRows.map { "${commitOf(it)} priority->${it["to_priority"]}" }}"
+            System.err.println("EchoSuppressionTwoNodeTest: $report")
+            lost += report
+        }
+        throw AssertionFailedError(
+            "the ${node.role}'s edit of $x to priority $priority was lost $MAX_EDIT_ATTEMPTS times running:\n" +
+                lost.joinToString("\n") + "\n" + node.progressReport(null, TwoNodeRig.AWAIT_CONVERGENCE_MS),
+        )
+    }
+
+    /**
+     * Restores the commit-height lead that clause 3's "the dialer's genuine
+     * edit wins the key" depends on, in case [editPriority] had to re-issue
+     * the listener's edit.
+     *
+     * A dot's counter is its workspace's commit height (the high bits of
+     * [DotMinter.counter]). [TaggedMapDelta.DOT_ORDER] compares counters
+     * before sources. In the symmetric fixture the listener's edit mints at
+     * height 9 and the dialer's genuine edit at height 10 (seed at 8, then
+     * the imposition at 9), so the dialer wins. A lost first attempt costs the
+     * listener one extra commit, the applier's revert. The retry then mints
+     * at height 10, which ties the dialer's genuine edit, and the tie goes to
+     * whichever source id sorts higher. Each id derives from its run's temp
+     * workspace name, so that is the listener's in some runs (forced re-issue
+     * with the padding disabled: 2 red of 5). Measured: 1 red in 32 loaded iterations,
+     * `winner.sourceId` was the listener's, and it was the iteration whose
+     * listener edit had been re-issued.
+     *
+     * The padding is idempotent `bd update x --priority 1`. It goes on the
+     * dialer, which already holds 1, until the dialer's head is at least as
+     * high as the listener's winning dot. Each pad commit changes only
+     * `updated_at`, and it lands before `commitsBefore` is read, so no
+     * assertion below can pick it up. In the unlost case the loop does not
+     * run at all.
+     */
+    private fun padDialerPastListenersDot(listener: TwoNodeRig.Node, dialer: TwoNodeRig.Node) {
+        val listenerDotHeight = winningDot(listener, PRIORITY).shouldNotBeNull().counter ushr
+            (DotMinter.KEY_INDEX_BITS + DotMinter.ORDINAL_BITS)
+        while (dialer.logHead().size - 1L < listenerDotHeight) {
+            rigOrFail.mutate(dialer, "update", x, "--priority", "1")
+        }
+        dialer.quiesce()
+    }
+
+    /** `dolt_diff_issues` rows for `x` on [node]'s workspace, with the priority column [editPriority] needs. */
+    private fun priorityDiffRows(node: TwoNodeRig.Node): List<Map<String, JsonElement>> {
+        val quoted = "'" + x.replace("'", "''") + "'"
+        return DoltSql(node.workspace.doltRoot).query(
+            "select to_commit, to_priority, from_metadata, to_metadata from dolt_diff_issues where to_id = $quoted",
+        )
+    }
 
     /** Seeds [x] independently on both workspaces, at the same [priority], BEFORE either node starts. */
     private fun seedOnBoth(priority: String = "3") {
@@ -446,5 +586,13 @@ class EchoSuppressionTwoNodeTest {
 
         /** Decision 6wc.3-D8: the quiescence window, in this rig's poll intervals. */
         const val QUIESCENT_POLL_INTERVALS: Long = 8
+
+        /**
+         * [editPriority]'s attempt cap. The lost-edit rate measured on
+         * computenet-oagbm was a few percent per race, in a probe that raced
+         * on purpose. Three consecutive losses therefore mean something other
+         * than that race, and the test fails naming each attempt.
+         */
+        const val MAX_EDIT_ATTEMPTS: Int = 3
     }
 }
