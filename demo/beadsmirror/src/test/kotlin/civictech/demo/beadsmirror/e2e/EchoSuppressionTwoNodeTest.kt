@@ -4,6 +4,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.demo.beadsmirror.dolt.DoltSql
 import civictech.demo.beadsmirror.projector.Classification
+import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorKey
 import civictech.demo.beadsmirror.writeback.Provenance
 import civictech.demo.beadsmirror.writeback.WriteBackEvent
@@ -318,6 +319,7 @@ class EchoSuppressionTwoNodeTest {
             dialer.writeBackEvents().any { it is WriteBackEvent.Imposed && it.issueId == x }
         }
         rigOrFail.await("bd show on the dialer reports the imposed value") { bdShowPriority(dialer, x) == 1 }
+        padDialerPastListenersDot(listener, dialer)
         Thread.sleep(rigOrFail.pollIntervalMs() * 3)
 
         val dialerHighWater = highWaterCounter(dialer, dialer.dotSourceId, PRIORITY)
@@ -452,6 +454,38 @@ class EchoSuppressionTwoNodeTest {
             "the ${node.role}'s edit of $x to priority $priority was lost $MAX_EDIT_ATTEMPTS times running:\n" +
                 lost.joinToString("\n") + "\n" + node.progressReport(null, TwoNodeRig.AWAIT_CONVERGENCE_MS),
         )
+    }
+
+    /**
+     * Restores the commit-height lead that clause 3's "the dialer's genuine
+     * edit wins the key" depends on, in case [editPriority] had to re-issue
+     * the listener's edit.
+     *
+     * A dot's counter is its workspace's commit height (the high bits of
+     * [DotMinter.counter]). [TaggedMapDelta.DOT_ORDER] compares counters
+     * before sources. In the symmetric fixture the listener's edit mints at
+     * height 9 and the dialer's genuine edit at height 10 (seed at 8, then
+     * the imposition at 9), so the dialer wins. A lost first attempt costs the
+     * listener one extra commit, the applier's revert. The retry then mints
+     * at height 10, which ties the dialer's genuine edit, and the tie goes to
+     * the listener's source id. Measured: 1 red in 32 loaded iterations,
+     * `winner.sourceId` was the listener's, and it was the iteration whose
+     * listener edit had been re-issued.
+     *
+     * The padding is idempotent `bd update x --priority 1`. It goes on the
+     * dialer, which already holds 1, until the dialer's head is at least as
+     * high as the listener's winning dot. Each pad commit changes only
+     * `updated_at`, and it lands before `commitsBefore` is read, so no
+     * assertion below can pick it up. In the unlost case the loop does not
+     * run at all.
+     */
+    private fun padDialerPastListenersDot(listener: TwoNodeRig.Node, dialer: TwoNodeRig.Node) {
+        val listenerDotHeight = winningDot(listener, PRIORITY).shouldNotBeNull().counter ushr
+            (DotMinter.KEY_INDEX_BITS + DotMinter.ORDINAL_BITS)
+        while (dialer.logHead().size - 1L < listenerDotHeight) {
+            rigOrFail.mutate(dialer, "update", x, "--priority", "1")
+        }
+        dialer.quiesce()
     }
 
     /** `dolt_diff_issues` rows for `x` on [node]'s workspace, with the priority column [editPriority] needs. */
