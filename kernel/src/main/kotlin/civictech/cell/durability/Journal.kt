@@ -436,6 +436,59 @@ internal class JournalFile(
         return records
     }
 
+    /**
+     * The read-only, non-refusing counterpart of [replay], backing [scanJournalFile]
+     * (computenet-wzbww D2): the same header recognition and the same record loop, but it
+     * reports the declared version instead of comparing it, and reports a torn tail instead
+     * of dropping it. Whenever [replay] would not throw, [JournalFileScan.records] is
+     * exactly [replay]'s list. Opens the file for reading only; never touches [sink],
+     * [headerLocks] or [reset].
+     */
+    fun scan(): JournalFileScan {
+        val length = file.length()
+        DataInputStream(file.inputStream().buffered()).use { input ->
+            val magic = input.readNBytes(FileJournal.MAGIC.size)
+            if (magic.isEmpty()) return JournalFileScan(null, emptyList(), null)
+            val declared: Int
+            var offset: Long
+            if (magic.contentEquals(FileJournal.MAGIC)) {
+                declared = try {
+                    input.readInt()
+                } catch (_: EOFException) {
+                    // MAGIC with no version int: the same torn header readAndCheckHeader() reads as empty.
+                    return JournalFileScan(null, emptyList(), JournalFileScan.Tear(-1, length))
+                }
+                offset = HEADER_BYTES.toLong()
+            } else {
+                // Pre-versioning journal: the bytes just read are the first record's length prefix.
+                declared = PRE_VERSIONING_FORMAT_VERSION
+                offset = 0L
+            }
+            val records = mutableListOf<ByteArray>()
+            // Re-read from the record start so the loop below has exactly replay()'s shape.
+            DataInputStream(file.inputStream().buffered()).use { body ->
+                body.skipNBytes(offset)
+                while (true) {
+                    val size = try {
+                        body.readInt()
+                    } catch (_: EOFException) {
+                        break
+                    }
+                    val record = ByteArray(size)
+                    try {
+                        body.readFully(record)
+                    } catch (_: EOFException) {
+                        break // torn trailing record: reported below, not dropped silently
+                    }
+                    records += record
+                    offset += Int.SIZE_BYTES + size
+                }
+            }
+            val tear = if (offset == length) null else JournalFileScan.Tear(records.size - 1, length - offset)
+            return JournalFileScan(declared, records, tear)
+        }
+    }
+
     fun reset(records: List<ByteArray>) {
         // Drop the append handle first: the move below replaces this path's
         // inode, and a descriptor held across it would append into the file
@@ -492,4 +545,45 @@ internal class JournalFile(
         if (declared != formatVersion) throw JournalFormatMismatch(declared, formatVersion, file.path)
         return skip
     }
+}
+
+/**
+ * What a file journal holds, read without judging it (computenet-wzbww D2; the kernel half
+ * of `[TTD1-11]`): the version its header declares, every intact record, and the torn tail
+ * [Journal.replay] silently drops.
+ *
+ * @property declaredFormatVersion the header's version — any value, never compared here —
+ *   or [PRE_VERSIONING_FORMAT_VERSION] for a file with no header; `null` for an empty file
+ *   or a torn header ([FileJournal.MAGIC] with no version after it).
+ * @property records every intact record in file order — identical to [Journal.replay]'s
+ *   list whenever `replay()` would not throw.
+ * @property tear the bytes after the last intact record, or `null` when the file ends
+ *   exactly on a record boundary.
+ */
+data class JournalFileScan(
+    val declaredFormatVersion: Int?,
+    val records: List<ByteArray>,
+    val tear: Tear?,
+) {
+    /**
+     * A partial length prefix or a short payload at the end of the file.
+     *
+     * @property lastIntactIndex `records.size - 1`, so `-1` when nothing intact precedes the tear.
+     * @property trailingBytes the file's length minus the offset where the last intact record ended.
+     */
+    data class Tear(val lastIntactIndex: Int, val trailingBytes: Long)
+}
+
+/**
+ * Scan a file journal ([FileJournal] / [BatchedFileJournal] encoding) for an out-of-kernel
+ * reader: never throws on a foreign format version, reports a torn tail instead of dropping
+ * it, and creates, locks and writes nothing. Shares [JournalFile]'s encoding, so it cannot
+ * drift from what the kernel replays.
+ *
+ * @throws IllegalArgumentException if [file] is not a readable regular file — checked
+ *   before a [JournalFile] exists, because constructing one creates the parent directory.
+ */
+fun scanJournalFile(file: File): JournalFileScan {
+    require(file.isFile && file.canRead()) { "not a readable regular file: $file" }
+    return JournalFile(file, JOURNAL_FORMAT_VERSION).scan()
 }
