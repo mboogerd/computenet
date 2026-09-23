@@ -98,6 +98,7 @@ class CorpusCrossCheckTest {
         "24-OP-FLATMAP-01",
         "24-OP-GROUPBY-01",
         "24-OP-GROUPBY-02",
+        "24-OP-GROUPBY-03",
         "24-OP-INTERSECT-01",
         "24-OP-JOIN-01",
         "24-OP-KEYEDSET-01",
@@ -231,7 +232,7 @@ class CorpusCrossCheckTest {
             ?: error("listFiles returned null for $corpusDir — not a readable directory")
 
         withClue("non-vacuity: a broken directory listing would silently check nothing") {
-            ids.size shouldBe 33
+            ids.size shouldBe 34
         }
 
         val unaccounted = ids - CROSS_CHECKED - OUT_OF_VOCABULARY.keys
@@ -836,6 +837,38 @@ class CorpusCrossCheckTest {
         )
 
         model.eval(script) shouldBe mapOf("v" to ModelState.MapState(mapOf<Any?, Any?>("b" to 9L)))
+    }
+
+    /**
+     * concord/corpus/24-data-cells/24-OP-GROUPBY-03.yaml — elements are `[key, value, n]`
+     * triples; the yaml's `key-of` and the `max` selector read `x[0]`/`x[1]`
+     * (KernelFunctions.kt `keyOf`/`valueOf`), so two triples sharing key and value are
+     * distinct set elements selecting the same value.
+     */
+    @Test
+    fun `24-OP-GROUPBY-03_yaml - group-by with a max aggregator is unmoved by retracting one of two elements sharing the maximum`() {
+        val a = SourceId("a")
+        val firstOfTriple = ElementKey { element -> (element as Triple<*, *, *>).first }
+        val secondOfTripleAsLong = object : LongSelector {
+            override fun selectLong(element: Any?): Long = ((element as Triple<*, *, *>).second as Number).toLong()
+            override fun toString(): String = "secondOfTripleAsLong"
+        }
+        val model = ReferenceModel.terminal(
+            "v",
+            ModelNode.Operator(NodeId("g"), GroupByModel(firstOfTriple, Aggregates.maxOf(secondOfTripleAsLong)), NodeId("a")),
+            ModelNode.Source(NodeId("a"), a, SetSourceModel),
+        )
+        val adds = listOf("a", "b", "c").flatMap { k ->
+            listOf(Triple(k, 9, 1), Triple(k, 9, 2), Triple(k, 4, 3)).map { ScriptEvent.Add(writer, it) }
+        }
+        val removes = listOf(
+            Triple("a", 9, 1), Triple("b", 9, 1), Triple("c", 9, 1),
+            Triple("b", 9, 2), Triple("c", 9, 2),
+            Triple("c", 4, 3),
+        ).map { ScriptEvent.Remove(writer, it) }
+        val script = Script.of(a, *(adds + removes).toTypedArray())
+
+        model.eval(script) shouldBe mapOf("v" to ModelState.MapState(mapOf<Any?, Any?>("a" to 9L, "b" to 4L)))
     }
 
     /**
