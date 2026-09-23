@@ -67,6 +67,28 @@ class JournalFormatMismatch(
 )
 
 /**
+ * The durability guarantee a [Journal] instance offers (`[KBLK-01]`,
+ * `[24-DUR-01]`).
+ *
+ * Not named `VOLATILE`: `[24-DUR-01]` already uses "volatile" for
+ * `journalFor(cellRef) == null` — a cell never journaled at all. An
+ * [IN_MEMORY] journal IS journaled and replayable within the process that
+ * wrote it; it just does not survive that process ending.
+ */
+enum class DurabilityClass {
+    /** Every [Journal.append] is on stable storage before it returns. */
+    SYNCHRONOUS,
+
+    /**
+     * Appended records become durable within a bound the instance declares.
+     */
+    BATCHED,
+
+    /** Survives nothing beyond the process that wrote it. */
+    IN_MEMORY,
+}
+
+/**
  * Append-only record log (spec 24 durability, G-25): the journal half of
  * "state transitions are journaled serializable invocations; replay =
  * recovery" (43 §5). Records are opaque bytes — the durable host writes
@@ -102,6 +124,18 @@ interface Journal {
      */
     val formatVersion: Int get() = JOURNAL_FORMAT_VERSION
 
+    /**
+     * The durability guarantee this instance offers, per [DurabilityClass]
+     * (`[KBLK-01]`, `[24-DUR-01]`). Abstract and undefaulted on purpose: a
+     * default would let an implementation silently inherit a guarantee it does
+     * not actually provide, which is exactly what `[KBLK-05]`'s bound forbids.
+     * Every implementor — including a wrapper, which forwards the wrapped
+     * journal's [durability] rather than picking one of its own — must declare
+     * this as a constant readable on a fresh instance, without appending to or
+     * replaying the log.
+     */
+    val durability: DurabilityClass
+
     fun append(record: ByteArray)
 
     /** @throws JournalFormatMismatch if the log was written at another [formatVersion]. */
@@ -119,6 +153,8 @@ interface Journal {
  * is unreachable here by construction.
  */
 class InMemoryJournal : Journal {
+    override val durability: DurabilityClass = DurabilityClass.IN_MEMORY
+
     private val records = mutableListOf<ByteArray>()
 
     @Synchronized
@@ -198,9 +234,9 @@ class InMemoryJournal : Journal {
  *
  * ## Interleaving correctly, not refusing or a shared instance (computenet-k1by)
  *
- * [sink] makes the header decision — "is this file empty, and if so, write
+ * [JournalFile]'s `sink()` makes the header decision — "is this file empty, and if so, write
  * the header" — inside a lock keyed by the file's canonical path
- * ([headerLocks]), so two instances opening their handles at the same moment
+ * ([JournalFile]'s `headerLocks`), so two instances opening their handles at the same moment
  * serialize on that one decision: whichever gets there first writes the
  * header, and the other observes a non-empty file and writes none. Once the
  * header is settled, each instance's own `append` writes a whole framed
@@ -222,14 +258,14 @@ class InMemoryJournal : Journal {
  *   this repo's own test suite already relies on, which the acceptance
  *   criteria for this fix require to keep passing UNCHANGED. A per-instance
  *   *lifetime* lock is therefore off the table; only a lock scoped to the
- *   header decision itself survives that constraint, which is what [sink]
+ *   header decision itself survives that constraint, which is what `sink()`
  *   does.
  * - **A process-wide instance cache keyed by canonical path** was rejected
  *   because [Journal] deliberately has no lifecycle for callers to hook (see
  *   "One handle" above) — a cache needs eviction, and nothing here owns the
  *   moment an instance becomes safe to evict.
  *
- * The remaining gap is deliberate and is the cost of this choice: [headerLocks]
+ * The remaining gap is deliberate and is the cost of this choice: `headerLocks`
  * is a JVM-local mutex keyed by canonical path, so it serializes instances
  * **within one process, reaching one file by paths that canonicalize the
  * same** — it does not serialize two OS processes racing the same path, nor
@@ -238,7 +274,7 @@ class InMemoryJournal : Journal {
  * decision alone cannot fully close without also refusing legitimate
  * sequential reuse across processes, which nothing here has a way to permit
  * safely. Readers are unaffected either way: [replay] never touches
- * [headerLocks], so a second instance can still replay a journal a live
+ * `headerLocks`, so a second instance can still replay a journal a live
  * writer holds open (pinned by `FileJournalHandleTest`'s cross-instance
  * visibility test, unchanged by this fix).
  *
@@ -247,25 +283,67 @@ class InMemoryJournal : Journal {
  * is constructed after the writer is gone — so this is a guard against a
  * latent hazard at an API that did not forbid it, not a fix to a live defect.
  *
- * ponytail: one file, fsync per append, whole-log replay in memory — segments,
- * group commit, and streaming replay when a real workload's journal hurts.
+ * The encoding itself — header, frame, torn-tail rule, header lock — lives in
+ * [JournalFile], shared with [BatchedFileJournal], so there is exactly one
+ * encoding of a file journal in this package and the two classes cannot drift.
+ *
+ * ponytail: one file, whole-log replay in memory — segments and streaming
+ * replay are still deferred until a real workload's journal hurts. Group
+ * commit (amortizing the fsync per append) is [BatchedFileJournal].
  */
 class FileJournal(
-    private val file: File,
+    file: File,
     override val formatVersion: Int = JOURNAL_FORMAT_VERSION,
 ) : Journal {
+
+    override val durability: DurabilityClass = DurabilityClass.SYNCHRONOUS
 
     companion object {
         /** `CNJL` — the marker that distinguishes a versioned journal from a pre-versioning one. */
         val MAGIC: ByteArray = byteArrayOf(0x43, 0x4E, 0x4A, 0x4C)
+    }
 
-        /** [MAGIC] plus the big-endian `int` version that follows it. */
+    private val log = JournalFile(file, formatVersion)
+
+    @Synchronized
+    override fun append(record: ByteArray) {
+        log.write(record)
+        log.force()
+    }
+
+    @Synchronized
+    override fun replay(): List<ByteArray> = log.replay()
+
+    @Synchronized
+    override fun reset(records: List<ByteArray>) = log.reset(records)
+}
+
+/**
+ * The ONE on-disk encoding of a file-backed [Journal], shared by [FileJournal]
+ * (`SYNCHRONOUS`) and [BatchedFileJournal] (`BATCHED`) so a log written by
+ * either is byte-identical and readable by the other (`[KBLK-10]`). The two
+ * classes differ ONLY in when they call [force]; everything that decides what
+ * the bytes are is here.
+ *
+ * Not thread-safe on its own: every owner calls it under its own monitor
+ * (`@Synchronized`), exactly as [FileJournal]'s members did before this was
+ * extracted. The cross-*instance* header decision is serialized by
+ * [headerLocks], which is static and therefore shared by every owner of either
+ * class on one path.
+ */
+internal class JournalFile(
+    private val file: File,
+    private val formatVersion: Int,
+) {
+
+    companion object {
+        /** [FileJournal.MAGIC] plus the big-endian `int` version that follows it. */
         private const val HEADER_BYTES = 8
 
         /**
          * Per-canonical-path mutex serializing the header decision across
-         * concurrently constructed [FileJournal] instances on the same file
-         * (computenet-k1by; see the class KDoc's "Interleaving correctly, not
+         * concurrently constructed journal instances on the same file
+         * (computenet-k1by; see [FileJournal]'s "Interleaving correctly, not
          * refusing" section). Held only for the few instructions of
          * [sink]'s header check-and-write, never for a handle's lifetime, so
          * it does not block legitimate sequential reuse of short-lived
@@ -286,10 +364,7 @@ class FileJournal(
         file.parentFile?.mkdirs()
     }
 
-    /**
-     * The kept append handle, opened on first use and dropped by [reset].
-     * Guarded by this object's monitor, like every other member here.
-     */
+    /** The kept append handle, opened on first use and dropped by [reset]. */
     private var sink: FileOutputStream? = null
 
     /**
@@ -313,8 +388,12 @@ class FileJournal(
         return opened
     }
 
-    @Synchronized
-    override fun append(record: ByteArray) {
+    /**
+     * Frame [record] (big-endian `int` length, then the bytes) and hand it to
+     * the OS in ONE `write` — **without** fsync; the owner decides when to
+     * [force].
+     */
+    fun write(record: ByteArray) {
         val out = sink()
         // One `write` syscall for the whole framed record. Two writers on one
         // path (TwoWriterDurabilityTest) each hold an O_APPEND descriptor, and
@@ -326,11 +405,14 @@ class FileJournal(
             .put(record)
             .array()
         out.write(framed)
-        out.fd.sync()
     }
 
-    @Synchronized
-    override fun replay(): List<ByteArray> {
+    /** fsync everything [write] has handed to the OS through the kept handle; a no-op before the first write. */
+    fun force() {
+        sink?.fd?.sync()
+    }
+
+    fun replay(): List<ByteArray> {
         if (!file.exists()) return emptyList()
         val skip = readAndCheckHeader() ?: return emptyList()
         val records = mutableListOf<ByteArray>()
@@ -354,8 +436,7 @@ class FileJournal(
         return records
     }
 
-    @Synchronized
-    override fun reset(records: List<ByteArray>) {
+    fun reset(records: List<ByteArray>) {
         // Drop the append handle first: the move below replaces this path's
         // inode, and a descriptor held across it would append into the file
         // that was just unlinked — the compacted records would then be
@@ -378,13 +459,13 @@ class FileJournal(
     }
 
     private fun writeHeader(out: DataOutputStream) {
-        out.write(MAGIC)
+        out.write(FileJournal.MAGIC)
         out.writeInt(formatVersion)
     }
 
-    /** [MAGIC] and the big-endian version, as the [HEADER_BYTES] they occupy on disk. */
+    /** [FileJournal.MAGIC] and the big-endian version, as the [HEADER_BYTES] they occupy on disk. */
     private fun header(): ByteArray =
-        ByteBuffer.allocate(HEADER_BYTES).put(MAGIC).putInt(formatVersion).array()
+        ByteBuffer.allocate(HEADER_BYTES).put(FileJournal.MAGIC).putInt(formatVersion).array()
 
     /**
      * The version this file declares, checked against [formatVersion] before a single
@@ -395,8 +476,8 @@ class FileJournal(
      */
     private fun readAndCheckHeader(): Long? {
         val head = DataInputStream(file.inputStream().buffered()).use { input ->
-            val magic = input.readNBytes(MAGIC.size)
-            if (!magic.contentEquals(MAGIC)) {
+            val magic = input.readNBytes(FileJournal.MAGIC.size)
+            if (!magic.contentEquals(FileJournal.MAGIC)) {
                 return@use if (magic.isEmpty()) null else PRE_VERSIONING_FORMAT_VERSION to 0L
             }
             try {
