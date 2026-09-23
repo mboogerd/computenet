@@ -148,8 +148,8 @@ class BatchedDispatchTest {
     /**
      * host1: `relay` (x+1) -> `a` (host1), `c` (host2), `doubler` (host2, x*2) -> `d` (host1).
      * Five links, two hosts, a cross-host hop and a cross-host return hop. 200
-     * inputs into `relay`, interleaved with a few simulation steps so batches
-     * form mid-flight rather than only over one pre-staged backlog.
+     * inputs into `relay`: the first 150 interleaved with a few simulation steps
+     * so batches form mid-flight, the last 50 as one burst larger than a batch.
      */
     private fun runBs20(dispatchBatch: Int): Bs20Run {
         val controller = SimulationController(seed = 7)
@@ -186,7 +186,9 @@ class BatchedDispatchTest {
         val input = host1.lookup<IntInlet>(relay.ref)!!.inlet.call
         repeat(200) { i ->
             input.provide(i)
-            if (i % 7 == 0) repeat(3) { controller.step() }
+            // the last 50 arrive as one burst: a backlog larger than a batch,
+            // which only a re-armed task can finish
+            if (i < 150 && i % 7 == 0) repeat(3) { controller.step() }
         }
         controller.runToIdle()
 
@@ -327,6 +329,41 @@ class BatchedDispatchTest {
         // oldest head first, per message: the monitor is interleaved, not held behind a batch of hot
         batched shouldBe runStride(policy = null, dispatchBatch = 1)
         longestHotRunWhileMonitorPending(batched) shouldBeLessThanOrEqual 4
+    }
+
+    private class ThrowingSink(val log: MutableList<String>, override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet by input<Consumer<String>>()
+
+        override fun onActivate(ctx: CellContext) {
+            inlet.serve(object : Consumer<String> {
+                override fun provide(input: String) {
+                    if (input == "boom") error("boom")
+                    log += input
+                }
+            })
+        }
+    }
+
+    @Test
+    fun `a delivery that throws mid-batch strands nothing behind it`() {
+        fun run(dispatchBatch: Int): Pair<List<String>, SupervisionAccounting> {
+            val controller = SimulationController()
+            val host = ManagedHost(scheduler = controller.scheduler(), dispatchBatch = dispatchBatch)
+            val log = mutableListOf<String>()
+            val sink = ThrowingSink(log)
+            host.managementInlet.call.spawn(sink)
+            controller.runToIdle()
+            val api = host.lookup<StringInlet>(sink.ref)!!.inlet.call
+            (0 until 20).forEach { api.provide(if (it == 3) "boom" else "v$it") }
+            controller.runToIdle()
+            host.stagedWorkTotal() shouldBe 0
+            return log.toList() to host.supervisionAccounting()
+        }
+        val (unbatchedLog, unbatchedAccounting) = run(dispatchBatch = 1)
+        val (batchedLog, batchedAccounting) = run(dispatchBatch = 8)
+        batchedLog shouldBe (0 until 20).filter { it != 3 }.map { "v$it" }
+        batchedLog shouldBe unbatchedLog
+        batchedAccounting shouldBe unbatchedAccounting
     }
 
     // ---- BS-22 --------------------------------------------------------------
