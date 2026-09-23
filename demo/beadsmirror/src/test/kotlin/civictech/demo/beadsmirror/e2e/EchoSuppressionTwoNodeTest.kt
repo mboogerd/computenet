@@ -423,8 +423,12 @@ class EchoSuppressionTwoNodeTest {
      * the awaits downstream, because a carrying commit ends the loop here
      * whatever the gate made of it. Re-issuing is idempotent, since the
      * value lost has always been the one being written. Every lost attempt
-     * is printed to stderr with the node, attempt number and new commits,
-     * so a CI log shows how often computenet-oagbm fired.
+     * is printed to stderr with the node, attempt number and new commits.
+     * That line lands in the JUnit XML's `system-err`, not in the Gradle
+     * console (testLogging shows only PASSED/FAILED/SKIPPED events), and CI
+     * uploads that XML only for failed or cancelled runs. So a GREEN CI run
+     * does not show whether computenet-oagbm fired. Locally, `-i` or the XML
+     * under `build/test-results/test/` does.
      *
      * The single read after [TwoNodeRig.Node.quiesce] is enough to decide
      * "no carrying commit". `bd` commits before it exits (measured on
