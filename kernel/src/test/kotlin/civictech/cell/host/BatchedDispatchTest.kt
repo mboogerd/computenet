@@ -7,7 +7,10 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionSupport
+import civictech.cell.durability.BatchedFileJournal
+import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
 import civictech.cell.link.LinkResult
 import civictech.cell.CellContext
 import civictech.cell.port.PortRef
@@ -417,8 +420,35 @@ class BatchedDispatchTest {
 
     @Test
     fun `BS-23 journal replay order equals acceptance order under batching`() {
-        val controller = SimulationController()
         val journal = InMemoryJournal()
+        val (accepted, cells) = driveAcceptances(journal)
+        decodeFrames(journal.replay(), cells) shouldBe accepted
+    }
+
+    /**
+     * Feature seam (computenet-t6b.2 feature review): batched dispatch (t6b.2.4) over a
+     * durable host whose journal is a [BatchedFileJournal] (t6b.2.2) — neither task could
+     * compose the two. `syncEvery = 7` is coprime with the batch bound 8, so fsync
+     * boundaries and dispatch-task boundaries never line up. The log is read back both by
+     * the journal itself and by a fresh [FileJournal] reader on the same file, which is
+     * what a restarting host would open.
+     */
+    @Test
+    fun `BS-23 journal order equals acceptance order under batching with a BatchedFileJournal`() {
+        val file = kotlin.io.path.createTempFile("bs23-batched", ".journal").toFile().apply { delete() }
+        val journal = BatchedFileJournal(file, syncEvery = 7)
+        val (accepted, cells) = driveAcceptances(journal)
+        decodeFrames(journal.replay(), cells) shouldBe accepted
+        decodeFrames(FileJournal(file).replay(), cells) shouldBe accepted
+    }
+
+    /**
+     * Drive 50 seeded acceptances across two cells through a host on [journal] with
+     * `dispatchBatch = 8`, interleaving dispatch steps with acceptances; return the
+     * acceptance order and the two cells.
+     */
+    private fun driveAcceptances(journal: Journal): Pair<List<Pair<CellRef, String>>, Set<CellRef>> {
+        val controller = SimulationController()
         val host = ManagedHost(scheduler = controller.scheduler(), journal = journal, dispatchBatch = 8)
         val log = mutableListOf<String>()
         val left = LogSink("left", log)
@@ -443,12 +473,14 @@ class BatchedDispatchTest {
         host.stagedWorkTotal() shouldBe 0
         log.size shouldBe 50
 
-        val replayed = journal.replay()
+        accepted.map { it.first }.toSet() shouldBe cells // both cells were exercised
+        return accepted to cells
+    }
+
+    private fun decodeFrames(records: List<ByteArray>, cells: Set<CellRef>): List<Pair<CellRef, String>> =
+        records
             .filter { it[0] == 1.toByte() } // RECORD_FRAME, as HostDurability.recoverFrom reads it
             .map { WireCodec.decode(it.copyOfRange(1, it.size)) }
             .filter { it.cellRef in cells }
             .map { it.cellRef to it.invocation.args[0] as String }
-        replayed shouldBe accepted
-        accepted.map { it.first }.toSet() shouldBe cells // both cells were exercised
-    }
 }

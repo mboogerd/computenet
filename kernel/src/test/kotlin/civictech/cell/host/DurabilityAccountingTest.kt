@@ -2,6 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.CellRef
 import civictech.cell.data.SetCell
+import civictech.cell.durability.BatchedFileJournal
 import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
@@ -116,6 +117,47 @@ class DurabilityAccountingTest {
                 acct.journaledSpawns[DurabilityClass.IN_MEMORY] == 0L &&
                 acct.volatileDurableSpawns == 0L
         )
+    }
+
+    /**
+     * Feature seam (computenet-t6b.2 feature review): the stub above stands in for
+     * `BatchedFileJournal` because t6b.2.3 could not depend on t6b.2.2. Here the real
+     * class, served through the whole-host `journal` convenience and through a
+     * per-cell `journalFor`, is counted as BATCHED end-to-end, and the deployment's
+     * own startup assertion refuses it.
+     */
+    @Test
+    fun `a real BatchedFileJournal is counted as BATCHED and fails the deployment assertion`() {
+        val dir = createTempDirectory("durability-accounting-batched").toFile()
+        val batched = BatchedFileJournal(dir.resolve("batched.journal"), syncEvery = 16)
+        val sync = FileJournal(dir.resolve("sync.journal"))
+
+        val wholeHost = ManagedHost(journal = batched)
+        wholeHost.managementInlet.call.spawn(SetCell<String>())
+        wholeHost.managementInlet.call.spawn(SetCell<String>())
+        wholeHost.durabilityAccounting().journaledSpawns shouldBe mapOf(
+            DurabilityClass.SYNCHRONOUS to 0L,
+            DurabilityClass.BATCHED to 2L,
+            DurabilityClass.IN_MEMORY to 0L,
+        )
+
+        val refBatched = CellRef(UUID.randomUUID())
+        val refSync = CellRef(UUID.randomUUID())
+        val mixed = ManagedHost(journalFor = { if (it == refBatched) batched else if (it == refSync) sync else null })
+        mixed.managementInlet.call.spawn(SetCell<String>(refBatched))
+        mixed.managementInlet.call.spawn(SetCell<String>(refSync))
+        val acct = mixed.durabilityAccounting()
+        acct.journaledSpawns shouldBe mapOf(
+            DurabilityClass.SYNCHRONOUS to 1L,
+            DurabilityClass.BATCHED to 1L,
+            DurabilityClass.IN_MEMORY to 0L,
+        )
+        acct.volatileDurableSpawns shouldBe 0L
+        shouldThrow<IllegalStateException> {
+            check(acct.journaledSpawns[DurabilityClass.BATCHED] == 0L) {
+                "relaxed durability in use: BATCHED=${acct.journaledSpawns[DurabilityClass.BATCHED]}"
+            }
+        }.message shouldContain "BATCHED=1"
     }
 
     @Test
