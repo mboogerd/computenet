@@ -1320,11 +1320,11 @@ no honest 20-series requirement id states the divergence this test asserts.
 ordering/limit clause entirely in Kotlin, over rows already pulled through the
 [SOC1-CREAD-04] bounded-read seam, never inside a kernel operator:
 
-- IC2 (`FeedSession.board(limit, before)`, `demo/social/src/main/kotlin/civictech/demo/social/Feed.kt:165-174`):
+- IC2 (`FeedSession.board(limit, before)`, `demo/social/src/main/kotlin/civictech/demo/social/Feed.kt:173-182`):
   filters the accumulated per-leg set to `creationDate < before` when a cursor
   is given, sorts `compareByDescending { creationDate }.thenByDescending { id }`,
   then `take(limit)` — the file's own KDoc says so in as many words
-  ("no kernel ordering", `Feed.kt:163`).
+  ("no kernel ordering", `Feed.kt:171`).
 - IC8 and IC3 (`ComplexReads`, `demo/social/src/main/kotlin/civictech/demo/social/Queries.kt`):
   IC8 walks the person's `snb-authored` cell to exhaustion, then one
   `snb-message` walk per own message and per reply, and sorts/limits the
