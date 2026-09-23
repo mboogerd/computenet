@@ -318,8 +318,18 @@ class TwoNodeRig private constructor(
      *   of [mutate]: `rig.mutate(rig.listener) { step.apply(rig.listener.workspace) }`
      *   (and the dialer counterpart), so both `ConvergenceSuite` and
      *   `ConvergenceDivergenceControlTest` route through it. `ScheduleStep`
-     *   itself is unchanged — `SeededSchedule.kt`, where it lives, is outside
-     *   this bug's file claim; see [mutate]'s lambda-overload KDoc.
+     *   itself is unchanged: its `apply` keeps taking a bare
+     *   `BdScratchWorkspace` rather than a [Node], because its non-rig
+     *   callers `ReadyScheduleTest` and `ReadyDifferentialHarness` call
+     *   `step.apply(workspace)` with no `Node` to route through; see
+     *   [mutate]'s lambda-overload KDoc.
+     * - `IssueLessCommitQuiesceTest` (by computenet-btt30): its post-start
+     *   `rig.createIssue(node, …)` and
+     *   `rig.mutate(node, "comments", "add", …)` calls already go through
+     *   this wait.
+     * - `DiscoveryStoppedAfterFormationTest` (by computenet-63um5): its
+     *   `theRig.createIssue(…)` and `theRig.mutate(…)` calls on both started
+     *   nodes already go through this wait.
      *
      * Immune, and why:
      * - **Pre-start seeding** — `seedOnBoth` in `WriteBackTwoNodeTest`,
@@ -340,8 +350,11 @@ class TwoNodeRig private constructor(
      * always immune** — inventory closed by computenet-bbb04 (KDoc precision),
      * computenet-r5gah (`PullRebaselineTest`) and computenet-mivve
      * (`TwoNodeRigTest`, `ConvergenceSuite`, `ConvergenceDivergenceControlTest`),
-     * 2026-09-23. `PullRebaselineTest` was miscategorized as immune above
-     * before its feature review corrected it, 2026-09-18.
+     * 2026-09-23; `IssueLessCommitQuiesceTest` and
+     * `DiscoveryStoppedAfterFormationTest` were already routed and are named
+     * above rather than converted. `PullRebaselineTest` was miscategorized as
+     * immune during that same 2026-09-18 review, before its feature review
+     * corrected it into the routed set above.
      *
      * Polled at this rig's own poll interval rather than [awaitUntil]'s 5 ms,
      * because each check is a `dolt` subprocess.
