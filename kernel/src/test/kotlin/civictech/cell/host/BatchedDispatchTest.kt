@@ -344,8 +344,15 @@ class BatchedDispatchTest {
         }
     }
 
+    /**
+     * A handler failure mid-batch is accounted exactly as unbatched and strands
+     * nothing. Limit: `deliver` absorbs a handler's exception into supervision
+     * before it reaches the batch loop, so this does NOT prove `drainBatch`'s
+     * `finally` re-arm (removing the `try` leaves this green); that `finally`
+     * guards an exception escaping `dispatchUpTo` itself, argued in its KDoc.
+     */
     @Test
-    fun `a delivery that throws mid-batch strands nothing behind it`() {
+    fun `a handler that throws mid-batch is accounted as unbatched and strands nothing`() {
         fun run(dispatchBatch: Int): Pair<List<String>, SupervisionAccounting> {
             val controller = SimulationController()
             val host = ManagedHost(scheduler = controller.scheduler(), dispatchBatch = dispatchBatch)
