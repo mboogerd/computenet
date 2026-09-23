@@ -1,6 +1,9 @@
 package civictech.timetravel.journal
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Consumer
+import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.ReBaselineNotice
 import civictech.cell.TagFrontier
@@ -11,14 +14,17 @@ import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.JOURNAL_FORMAT_VERSION
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.Effectful
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RecoveryIncomplete
 import civictech.cell.host.SimulationController
+import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
@@ -257,6 +263,48 @@ class JournalReaderTest {
         }
         // non-vacuity: at least one outlet had emitted by the checkpoint
         waves.any { it.highWater > 0 } shouldBe true
+    }
+
+    /** An `Effectful` sink: the only kind of cell whose deliveries journal frontier / baseline records. */
+    class EffectSink(override val ref: CellRef) : Cell, Effectful {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {}
+            })
+        }
+    }
+
+    interface EffectSinkProxy {
+        val inlet: Use<Consumer<Int>>
+    }
+
+    @Test
+    fun `TTD1-09 frontier and baseline-discharge records carry the cell, the inlet and the exact position`() {
+        val journal = InMemoryJournal()
+        val controller = SimulationController(seed = 9)
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val ref = CellRef(UUID(9, 9))
+        host.managementInlet.call.spawn(EffectSink(ref))
+        controller.runToIdle()
+        val sink = (HostedCellProxy.create(ref, host, EffectSinkProxy::class.java) as EffectSinkProxy).inlet.call
+        val lane = UUID(4, 2)
+        // a catch-up baseline at position 5 (journals a baseline discharge), then a live frame at
+        // position 1 on the same lane (advances the processed-frontier) — the shapes
+        // EffectfulBaselineGuardTest drives
+        val baseline = MessageContext(Timestamp(lane, 5), PortRef.generate(), baseline = TagFrontier(mapOf(UUID(7, 7) to 4L)))
+        CurrentContext.with(baseline) { sink.provide(100) }
+        controller.runToIdle()
+        CurrentContext.with(MessageContext(Timestamp(lane, 1), PortRef.generate())) { sink.provide(1) }
+        controller.runToIdle()
+
+        val records = read(journal)
+        records.filterIsInstance<BaselineDischargeRecord>().map { Triple(it.cellRef, it.portName, it.timestamp) } shouldBe
+            listOf(Triple(ref, "inlet", Timestamp(lane, 5)))
+        records.filterIsInstance<FrontierRecord>().map { Triple(it.cellRef, it.portName, it.timestamp) } shouldBe
+            listOf(Triple(ref, "inlet", Timestamp(lane, 1)))
+        records.forEach { withClue(it) { it.reasons.shouldBeEmpty() } }
     }
 
     @Test
