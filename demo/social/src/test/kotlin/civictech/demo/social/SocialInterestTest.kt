@@ -288,4 +288,59 @@ class SocialInterestTest {
         session.scope shouldBe Interest.Empty
         session.board() shouldBe emptySet()
     }
+
+    // --- review: the non-reentrancy guard and pullShared over a derived source ---
+
+    @Test
+    fun `a source that throws synchronously fails the pull and releases the guard`() {
+        val rig = Rig()
+        rig.knows(A, 7)
+        rig.post(10, A)
+        var throwing = true
+        val session = FeedSession(
+            V,
+            { viewer -> if (throwing) throw IllegalStateException("boom") else rig.interest.scopeOf(viewer) },
+            rig.families,
+            rig.registry,
+            rig.recorder,
+        )
+
+        val failed = session.pull()
+        rig.controller.runToIdle()
+        shouldThrow<ExecutionException> { failed.get(20, TimeUnit.SECONDS) }.cause!!
+            .shouldBeInstanceOf<IllegalStateException>().message shouldBe "boom"
+        session.scope shouldBe Interest.Empty
+
+        throwing = false
+        val later = session.pull() // throws "not reentrant" if the guard leaked
+        rig.controller.runToIdle()
+        later.get(20, TimeUnit.SECONDS).legs.keys shouldBe setOf(rig.authoredRef(A))
+        session.scope shouldBe ranges(A)
+    }
+
+    @Test
+    fun `overlapping pullShared callers share one derivation and one fan-out`() {
+        val rig = Rig()
+        rig.knows(A, 7)
+        rig.post(10, A)
+        rig.recorder.reset()
+
+        val first = rig.session.pullShared()
+        val second = rig.session.pullShared() // before runToIdle: the first pull is still in flight
+        rig.controller.runToIdle()
+
+        (second === first) shouldBe true
+        first.get(20, TimeUnit.SECONDS).legs.keys shouldBe setOf(rig.authoredRef(A))
+        rig.personReads() shouldBe 1
+        rig.recorder.count shouldBe 2 // 1 person + 1 (A)
+        rig.boardIds() shouldBe setOf(10L)
+
+        // Once it completed, the next pullShared starts a fresh pull that re-derives.
+        rig.recorder.reset()
+        val third = rig.session.pullShared()
+        rig.controller.runToIdle()
+        (third === first) shouldBe false
+        third.get(20, TimeUnit.SECONDS)
+        rig.personReads() shouldBe 1
+    }
 }
