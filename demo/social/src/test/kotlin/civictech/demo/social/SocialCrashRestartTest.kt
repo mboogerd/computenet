@@ -461,12 +461,28 @@ class SocialCrashRestartTest {
      * [SocialGraph.attach] helper instead. Mutating `attach` to return the
      * sink without registering `it.onChange { fireChange() }` must fail this
      * test's assertion while leaving the retro-attach test green.
+     *
+     * Deliberately started with NO `source`: [SocialGraph.onChange]'s retro-
+     * attach loop (fired once, in `start()`) also gives every ALREADY-
+     * existing sink an onChange catch-up callback, which the sink interface
+     * invokes immediately — off-thread, on that sink's own single-thread
+     * dispatcher ([civictech.cell.observe.ObserveCell]). With a preloaded
+     * source that is dozens of sinks' worth of async catch-up noise landing
+     * moments after `start()`, each one re-broadcasting the FULL current
+     * state; under load one can be delayed past this test's own write and
+     * accidentally carry the new person, passing even with `attach` mutated
+     * (confirmed empirically: reliably red run alone, falsely green run
+     * right after the sibling retro-attach test in the same class). With no
+     * source, `personSinks` is empty when `start()` registers the retro-
+     * attach loop, so there is no pre-existing sink to fire that noise, and
+     * the only broadcast this test can ever observe is the one the new
+     * person's own (forward-attached) sink produces.
      */
     @Test
     fun `after start a create for a brand-new person reaches SSE subscribers as a change frame`() {
-        val app = SocialApp(port = 0, source = SOURCE).start()
+        val app = SocialApp(port = 0).start()
         try {
-            val newId = app.graph.personIds().last() + 1_000_000
+            val newId = 1L
             assertTrue(newId !in app.graph.personIds(), "the new id must not already exist: $newId")
             val url = "http://localhost:${app.boundPort}"
             val posted = AtomicBoolean(false)
