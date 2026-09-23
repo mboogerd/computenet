@@ -410,9 +410,11 @@ class MutualDialTest {
      * then finds no record for the link and tells no listener, so "B's
      * outbound loser to go down" times out — while B's stderr still carries
      * the "went down unadmitted ... tie-break loss" line, because `retire`
-     * did run. Seen once on build-test-fast (run 35804856334); the dial thread
-     * wins that race in every local run. Do not loosen the await to hide it:
-     * the listener missing a down is the defect.
+     * did run. Seen on build-test-fast in both attempts of run 35804856334
+     * (PR #1024, head 568f0a9d); whether that head raises the rate, and why,
+     * is open (computenet-4gbnc). The dial thread won that race in 15 of 15
+     * local runs of each of dff87ead and 568f0a9d (Darwin arm64). Do not loosen
+     * the await to hide it: the listener missing a down is the defect.
      *
      * Mutation (computenet-07hpc): replace `linksToSeed`'s larger-id guard
      * with `if (true)`, seeding settled dials at both ids. B's gate then sees
