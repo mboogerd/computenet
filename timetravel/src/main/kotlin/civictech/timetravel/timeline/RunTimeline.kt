@@ -32,7 +32,7 @@ data class TimelinePosition(
 
 /**
  * One journal's records as addressable [Position]s (TTD1 F2): index resolution, per-source
- * frontier-cut resolution (feature D3), and checkpoint anchors (feature D4).
+ * frontier-cut resolution (feature D3), and checkpoint anchors (feature D2).
  *
  * @param records this journal's records, in journal order. Every record's `journalId` must equal
  *   [journalId], and `records[k].index` must equal `k`.

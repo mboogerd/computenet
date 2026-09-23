@@ -15,7 +15,9 @@ import civictech.cell.data.SetOps
 import civictech.timetravel.journal.CheckpointRecord
 import civictech.timetravel.journal.FrameRecord
 import civictech.timetravel.journal.JournalReader
+import civictech.timetravel.journal.JournalReading
 import civictech.timetravel.journal.JournalSource
+import civictech.timetravel.journal.JournalSummary
 import civictech.timetravel.journal.OutletWaveRecord
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -139,5 +141,23 @@ class RunTimelineTest {
         }
         timelines.values.flatMap { it.positions }.mapNotNull { (it.record as? FrameRecord)?.cellRef }.toSet() shouldBe
             setOf(a.ref, b.ref)
+    }
+
+    @Test
+    fun `56io0-D5 of keeps a refused summary as an empty timeline, not a missing key`() {
+        val journal = InMemoryJournal()
+        writeJournal(journal)
+        val read = JournalReader.open(JournalSource.InMemory(journal, "j"))
+        val refused = JournalSummary(
+            journalId = "refused.bin", declaredFormatVersion = null, recordCount = 0,
+            tear = null, refusal = "not a readable regular file", reasons = emptySet(),
+        )
+        val reading = JournalReading(listOf(refused) + read.journals, read.records, read.reasons)
+
+        val timelines = RunTimeline.of(reading)
+
+        timelines.keys.toList() shouldBe listOf("refused.bin", "j")
+        timelines.getValue("refused.bin").size shouldBe 0
+        timelines.getValue("j").size shouldBe read.journals.single().recordCount
     }
 }
