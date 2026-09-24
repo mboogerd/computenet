@@ -174,6 +174,12 @@ class FeedSession(
     // `snb-authored` cell durably on the pull that first admits them, so they
     // get a leg answering Empty at since = null from then on.
     private val spawner: InterestDrivenFamily? = null,
+    // computenet-pvtcj: the executor [fanOut] dispatches spawner.admit() onto
+    // (see the companion's KDoc). Unused when spawner is null. A constructor
+    // parameter rather than the former mutable companion `var`, so
+    // `SocialApp` can own and shut down its own instance, and a test can
+    // inject its own without touching shared global state.
+    private val spawnExecutor: Executor = DEFAULT_SPAWN_EXECUTOR,
 ) {
     /** A session over a caller-supplied scope that never changes ([ScopeSource.fixed]). */
     constructor(
@@ -184,7 +190,8 @@ class FeedSession(
         reader: BoundedReader,
         pageLimit: Int = 200,
         spawner: InterestDrivenFamily? = null,
-    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit, spawner) {
+        spawnExecutor: Executor = DEFAULT_SPAWN_EXECUTOR,
+    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit, spawner, spawnExecutor) {
         this.scope = scope
     }
 
@@ -192,30 +199,33 @@ class FeedSession(
         require(pageLimit > 0) { "pageLimit must be positive, got $pageLimit" }
     }
 
-    internal companion object {
+    private companion object {
         /**
-         * 4q9is-D7's admit() call needs a thread that is not the host's own
-         * (see [fanOut]'s KDoc). A shared daemon pool by default — production
+         * Fallback [spawnExecutor] used only when a caller omits the
+         * constructor parameter. 4q9is-D7's admit() call needs a thread that
+         * is not the host's own (see [fanOut]'s KDoc): production
          * (`VirtualThreadScheduler`) drains its queue on its own dedicated
          * thread regardless of who else is waiting, so a genuinely separate
          * pool thread calling the blocking `getOrSpawn` is exactly the normal
          * "application thread" usage pattern every other `getOrSpawn` call
          * site in this demo already relies on.
          *
-         * A `var`, package-internal, so `SocialInterestTest`'s
-         * `SimulationController`-based rig can substitute a queueing
-         * [Executor] it drains itself, top-level, between its own
-         * `runToIdle()` calls: `SimulationController`'s own KDoc says
-         * "Stepping and awaiting are expected on one thread... not
-         * thread-safe by design", so a genuine background thread calling
-         * back into it concurrently with the test's driving thread is a
-         * real, observed race (`enqueueAwaiting`'s `check(step())` can throw
-         * "simulation quiescent but awaited future incomplete" even though
-         * the OTHER thread is mid-step, not actually quiescent) — this
-         * override exists so a test can keep the whole thing single-threaded
-         * instead. Production never touches it.
+         * Every caller that never sets [spawner] (the default) never touches
+         * this either, since [fanOut] only reads [spawnExecutor] on the
+         * `spawner != null` branch. `SocialApp(interestDriven = true)` is the
+         * one production caller that does use it, and it builds and passes
+         * its own instance instead of relying on this fallback, so it can
+         * shut that instance down in `stop()` (computenet-pvtcj residual of
+         * 4q9is). This value is an immutable default, not shared mutable
+         * state: nothing here mutates it, and no test substitutes it by
+         * assignment — `SocialInterestTest`'s queueing [Executor] (needed
+         * because `SimulationController`'s own KDoc says "Stepping and
+         * awaiting are expected on one thread... not thread-safe by design",
+         * and a genuine background thread calling back into it concurrently
+         * with the test's driving thread is a real, observed race) is passed
+         * through this same constructor parameter instead.
          */
-        var spawnExecutor: Executor =
+        val DEFAULT_SPAWN_EXECUTOR: Executor =
             Executors.newCachedThreadPool { r -> Thread(r, "FeedSession-spawn").apply { isDaemon = true } }
     }
 

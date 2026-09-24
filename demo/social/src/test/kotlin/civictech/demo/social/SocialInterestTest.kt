@@ -44,7 +44,7 @@ class SocialInterestTest {
     }
 
     /**
-     * SOC1-INT-04's [FeedSession.spawnExecutor] override: queues rather than
+     * SOC1-INT-04's `spawnExecutor` constructor argument: queues rather than
      * runs, so the test can [drainAll] itself, top-level, between its own
      * `runToIdle()` calls instead of letting a real background thread call
      * back into the single-threaded [SimulationController] concurrently.
@@ -61,6 +61,29 @@ class SocialInterestTest {
                 val next = pending.poll() ?: return
                 next.run()
             }
+        }
+    }
+
+    /**
+     * computenet-pvtcj: an executor whose FIRST `execute()` throws
+     * synchronously — simulating `spawnExecutor` itself refusing the admit
+     * task (e.g. a real pool's `RejectedExecutionException`) — and every
+     * later call defers to an internal [QueueExecutor] the test drains
+     * itself, so a subsequent pull on the same [FeedSession] can still be
+     * driven safely on the single-threaded [SimulationController] rig.
+     */
+    private class FlakyExecutor : Executor {
+        private val queue = QueueExecutor()
+        private var failNext = true
+
+        fun drainAll() = queue.drainAll()
+
+        override fun execute(command: Runnable) {
+            if (failNext) {
+                failNext = false
+                throw IllegalStateException("admit executor boom")
+            }
+            queue.execute(command)
         }
     }
 
@@ -242,9 +265,6 @@ class SocialInterestTest {
         val refA = rig.authoredRef(A)
 
         val spawner = InterestDrivenFamily(rig.families.authored)
-        val session = FeedSession(V, rig.interest, rig.families, rig.registry, rig.recorder, spawner = spawner)
-        rig.recorder.reset()
-
         // FeedSession.fanOut dispatches admit() off the completing thread
         // (its own KDoc explains why: KeyedCells.getOrSpawn blocks on the
         // host, which a derived scope's own read completion runs on).
@@ -257,22 +277,21 @@ class SocialInterestTest {
         // the OTHER thread is mid-step). QueueExecutor below defers the
         // admit task instead of running it on another thread; this test
         // drains it itself, top-level, between its own runToIdle() calls —
-        // strictly single-threaded, so no race is possible.
+        // strictly single-threaded, so no race is possible. Injected through
+        // the constructor (computenet-pvtcj), never through global state.
         val queue = QueueExecutor()
-        val previousExecutor = FeedSession.spawnExecutor
-        FeedSession.spawnExecutor = queue
-        val report = try {
-            val future = session.pull()
-            awaitUntil("SOC1-INT-04 pull with a spawner to settle", timeoutMs = 20_000) {
-                rig.controller.runToIdle()
-                queue.drainAll()
-                rig.controller.runToIdle()
-                future.isDone
-            }
-            future.get(20, TimeUnit.SECONDS)
-        } finally {
-            FeedSession.spawnExecutor = previousExecutor
+        val session =
+            FeedSession(V, rig.interest, rig.families, rig.registry, rig.recorder, spawner = spawner, spawnExecutor = queue)
+        rig.recorder.reset()
+
+        val future = session.pull()
+        awaitUntil("SOC1-INT-04 pull with a spawner to settle", timeoutMs = 20_000) {
+            rig.controller.runToIdle()
+            queue.drainAll()
+            rig.controller.runToIdle()
+            future.isDone
         }
+        val report = future.get(20, TimeUnit.SECONDS)
 
         rig.families.authored.contains(D) shouldBe true
         rig.families.authored.keys() shouldBe setOf(A, D)
@@ -329,6 +348,78 @@ class SocialInterestTest {
             app.stop()
             defaultApp.stop()
         }
+    }
+
+    // --- computenet-pvtcj: FeedSession's spawn executor is owned, not a mutable global ---
+
+    @Test
+    fun `SocialApp(interestDriven = true) owns its spawn executor and stop() shuts it down`() {
+        val app = SocialApp(port = 0, interestDriven = true)
+        try {
+            app.graph.addPerson(Person(V, "p$V", "person"))
+            app.graph.addPerson(Person(A, "p$A", "person"))
+            app.graph.addForum(Forum(FORUM, "forum", V))
+            app.graph.addKnows(V, A, 7)
+            app.graph.addPost(Message(10, A, 10, "m10", forumId = FORUM))
+            awaitUntil("post to settle", timeoutMs = 20_000) { app.graph.authored(A).size == 1 }
+
+            // Any pull with a spawner dispatches admit() onto the app's own
+            // executor regardless of whether it needs to spawn anything
+            // (fanOut runs it unconditionally), which is enough to mint a
+            // real `FeedSession-spawn` thread on this app's own pool.
+            app.feedSession(V).pull().get(20, TimeUnit.SECONDS)
+
+            awaitUntil("a FeedSession-spawn thread this app started to come up", timeoutMs = 20_000) {
+                Thread.getAllStackTraces().keys.any { it.name == "FeedSession-spawn" && it.isAlive }
+            }
+        } finally {
+            app.stop()
+        }
+
+        awaitUntil("every FeedSession-spawn thread to die after stop()", timeoutMs = 20_000) {
+            Thread.getAllStackTraces().keys.none { it.name == "FeedSession-spawn" && it.isAlive }
+        }
+    }
+
+    @Test
+    fun `an admit that fails completes the pull exceptionally with no leg read issued, and a later pull succeeds`() {
+        val rig = Rig()
+        rig.knows(A, 7)
+        rig.post(10, A)
+        val refA = rig.authoredRef(A)
+
+        val spawner = InterestDrivenFamily(rig.families.authored)
+        val flaky = FlakyExecutor()
+        val session = FeedSession(
+            V,
+            rig.interest,
+            rig.families,
+            rig.registry,
+            rig.recorder,
+            spawner = spawner,
+            spawnExecutor = flaky,
+        )
+        rig.recorder.reset()
+
+        val failed = session.pull()
+        rig.controller.runToIdle()
+        val cause = shouldThrow<ExecutionException> { failed.get(20, TimeUnit.SECONDS) }.cause!!
+
+        cause.shouldBeInstanceOf<IllegalStateException>().message shouldBe "admit executor boom"
+        rig.legReads() shouldBe emptyList() // no leg read issued
+
+        // inFlight was released by the exceptional completion: a later pull
+        // does not throw FeedSession's own "not reentrant" check, and
+        // succeeds once the (now non-throwing) executor is drained.
+        val later = session.pull()
+        awaitUntil("the later pull to settle", timeoutMs = 20_000) {
+            rig.controller.runToIdle()
+            flaky.drainAll()
+            rig.controller.runToIdle()
+            later.isDone
+        }
+        val report = later.get(20, TimeUnit.SECONDS)
+        report.legs.keys shouldBe setOf(refA)
     }
 
     @Test
