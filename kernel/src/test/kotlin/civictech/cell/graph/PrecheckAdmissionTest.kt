@@ -69,6 +69,11 @@ class PrecheckAdmissionTest {
         val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>(singleWriter = true))
     }
 
+    private class SingleRelay(override val ref: CellRef = fresh()) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>(singleWriter = true))
+        val outlet by output<Consumer<String>>()
+    }
+
     private class OwnedSrc(override val ref: CellRef = fresh()) : Cell {
         val outlet = registerPort("outlet", FanOutlet.create<PrecheckOwnedPush>())
     }
@@ -412,6 +417,67 @@ class PrecheckAdmissionTest {
         outbound.verdict shouldBe Verdict.Appliable
 
         f.footprint() shouldBe before
+    }
+
+    // ---- multi-fault links: the first refusal is the one a real connect reports ----
+
+    @Test
+    fun `a link both at capacity and payload-mismatched reports what a real connect reports`() {
+        val f = Fixture(seed = 71)
+        val producer = f.spawn(Src())
+        val sink = f.spawn(SingleSink())
+        f.connect(producer.ref, "outlet", sink.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+        val before = f.footprint()
+        val stagedRef = fresh()
+
+        val plan = GraphSpec(listOf(spawn("o", stagedRef) { OwnedSrc(it) }))
+            .precheck(listOf(BoundaryLink(sink.ref, "inlet", "o", "outlet", Direction.OUTBOUND)), f.view)
+
+        f.footprint() shouldBe before
+        val refused = plan.step("o.outlet->${sink.ref}.inlet").result.refused()
+        refused.reason shouldBe liveReason { t ->
+            val p = t.spawn(Src())
+            val s = t.spawn(SingleSink())
+            t.spawn(OwnedSrc(stagedRef))
+            t.connect(p.ref, "outlet", s.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+            t.connect(stagedRef, "outlet", s.ref, "inlet")
+        }
+        refused.code shouldBe RefusalCode.AT_CAPACITY
+    }
+
+    @Test
+    fun `a link both closing a headless cycle and at capacity reports what a real connect reports`() {
+        val f = Fixture(seed = 72)
+        val producer = f.spawn(Src())
+        val a = f.spawn(SingleRelay())
+        val b = f.spawn(Relay())
+        f.connect(producer.ref, "outlet", a.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+        f.connect(a.ref, "outlet", b.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+        val before = f.footprint()
+        val cRef = fresh()
+
+        val plan = GraphSpec(listOf(spawn("c", cRef) { Relay(it) })).precheck(
+            listOf(
+                BoundaryLink(b.ref, "outlet", "c", "inlet", Direction.INBOUND),
+                BoundaryLink(a.ref, "inlet", "c", "outlet", Direction.OUTBOUND),
+            ),
+            f.view,
+        )
+
+        f.footprint() shouldBe before
+        plan.step("${b.ref}.outlet->c.inlet").result shouldBe StepCheck.Ok
+        val refused = plan.step("c.outlet->${a.ref}.inlet").result.refused()
+        refused.reason shouldBe liveReason { t ->
+            val tp = t.spawn(Src())
+            val ta = t.spawn(SingleRelay(a.ref))
+            val tb = t.spawn(Relay(b.ref))
+            val tc = t.spawn(Relay(cRef))
+            t.connect(tp.ref, "outlet", ta.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+            t.connect(ta.ref, "outlet", tb.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+            t.connect(tb.ref, "outlet", tc.ref, "inlet").shouldBeInstanceOf<LinkResult.Connected>()
+            t.connect(tc.ref, "outlet", ta.ref, "inlet")
+        }
+        refused.code shouldBe RefusalCode.CYCLE_WITHOUT_HEAD
     }
 
     private companion object {
