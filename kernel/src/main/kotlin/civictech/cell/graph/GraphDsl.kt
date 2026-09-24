@@ -278,6 +278,12 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     }
 
     /**
+     * [applyRemote] with no progress observer (computenet-4jdw0-D2) — every
+     * existing caller's behaviour and returned [ApplyReport] are unchanged.
+     */
+    fun applyRemote(host: Use<HostManagementApi>): ApplyReport = applyRemote(host, ApplyProgress { })
+
+    /**
      * Remote application (93 I-21 §4.4, G-51): every spawn step ships through
      * [HostManagementApi.spawnBound] — the factory-based wire form, never a
      * live [Cell]. Loud failure degrades from synchronous to asynchronous:
@@ -288,11 +294,16 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
      * the decided **partial + report** semantics; compensating rollback of
      * the successful prefix (full partial-apply *atomicity*) is explicitly
      * research-gated (95 §R4) and is NOT implemented here.
+     *
+     * [progress] is invoked synchronously, once per [lowered] step, in step
+     * order, immediately after that step's [StepResult] is folded into the
+     * returned [ApplyReport] (computenet-4jdw0-D1/D2) — every branch that
+     * writes a [StepResult] reports its [StepEvent] before the next step runs.
      */
-    fun applyRemote(host: Use<HostManagementApi>): ApplyReport {
+    fun applyRemote(host: Use<HostManagementApi>, progress: ApplyProgress): ApplyReport {
         val refs = mutableMapOf<String, CellRef>()
         val results = mutableMapOf<String, StepResult>()
-        lowered().forEach { step ->
+        lowered().forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
                     val parentRef = step.parent?.let { refs[it] }
@@ -300,11 +311,13 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
                         refs[step.handle] = ref
                         results[step.handle] = StepResult.Applied(ref)
+                        progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
                     } catch (e: Exception) {
                         // dead-lettered on the target host already (ManagedHost.spawnBound);
                         // here we only fold the outcome into the report, never rethrow —
                         // the wire form never surfaces a synchronous cross-wire reply.
                         results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
+                        progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
                     }
                 }
 
@@ -316,14 +329,17 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         results[key] = StepResult.Rejected(
                             "endpoint not constructed: '${step.from}' or '${step.to}' was rejected/missing",
                         )
+                        progress.onStep(StepEvent(index, key, results.getValue(key)))
                     } else {
                         try {
                             when (val result = host.call.connect(from, step.outlet, to, step.inlet)) {
                                 is LinkResult.Rejected -> results[key] = StepResult.Rejected(result.reason)
                                 else -> results[key] = StepResult.Applied(null)
                             }
+                            progress.onStep(StepEvent(index, key, results.getValue(key)))
                         } catch (e: Exception) {
                             results[key] = StepResult.Rejected(e.message ?: e.toString())
+                            progress.onStep(StepEvent(index, key, results.getValue(key)))
                         }
                     }
                 }
