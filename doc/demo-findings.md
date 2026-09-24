@@ -1531,3 +1531,45 @@ existing instances, per `[42-INT-01]`'s own text — "each instance carries an
 `Interest`" — it does not create them) and a policy for who is allowed to
 conjure a new instance purely from another instance's stated demand. Neither
 question is resolved here.
+
+## F-25 — The journal carries no topology and per-cell journals have no manifest, so offline reconstruction needs a caller-supplied graph
+
+**Observation**: TTD1's `timetravel` CLI (`inspect`/`reconstruct`/`diff`,
+epic `computenet-ocv`) cannot reconstruct a crash artifact from the journal
+alone. `reconstruct` refuses with `NO_GRAPH_SOURCE` unless given `--graph
+<serialized GraphSpec>` or `--graph-provider <fqcn> [--graph-arg <s>]`
+(`Reconstructor.NO_GRAPH_SOURCE_MESSAGE`, `timetravel/src/main/kotlin/civictech/timetravel/reconstruct/Reconstructor.kt`)
+— `inspect` and record-level `diff` still succeed with no graph source,
+but a reconstruction never does. `:demo:agora`'s own TTD1 walkthrough needs a
+test-side adapter, `AgoraGraphSource(journalDir)`, that rebuilds the graph by
+replaying agora's own `graph.jsonl` structure log rather than reading it out
+of the journal (computenet-3qkx1 D2/D12); `:timetravel` was deliberately kept
+agnostic of that convention (epic §9.1). Separately, a `journalFor` selector
+(CP-C1, `[24-DUR-03]`) can give a run many per-cell journal files with no
+manifest naming them or mapping them to cells — the CLI reads a directory and
+learns the cell↔journal mapping only from the records themselves (epic §9.6).
+
+**Why it's a gap**: `doc/spec/90-roadmap/93-feature-interactions.md` I-7 is
+the decided classification that a journal should carry `PORT_API` data plus
+topology events — decided but still unlanded (I-7's own landed-state note:
+"Topology journaling … (recovery currently depends on out-of-band graph
+rebuild)"). The shipped tee journals invocations only:
+`doc/spec/20-dataflow-semantics/24-data-cells.md` §Durability spectrum states
+the tee "does not journal topology at all — the graph is rebuilt out-of-band
+before `recoverFrom`" (G-25). Until I-7 lands, every offline reconstruction
+— the CLI's, and any future consumer of the same `GraphSource` seam — pays
+for that gap with a caller-supplied graph or an application-specific adapter,
+and a directory of per-cell journals carries no map of its own contents.
+
+**Proposed shape**: land I-7's topology-events classification in the kernel
+lane — its own spec argument, out of TTD1's scope by epic §4 ("Journaling
+topology … is precisely why it is out of scope here: it is a kernel-lane
+durability change with its own spec argument. TTD1 takes the graph from the
+caller and files the pain as a finding") — and, as its companion, a
+per-journal-directory manifest naming each file's cell(s) so a `journalFor`
+split needs no record-level discovery. `:timetravel` should keep declining to
+standardise agora's `graph.jsonl` as its own convention (epic §9.1): the
+`GraphSource` seam already lets an application supply one adapter, and
+generalising it is I-7's job, not this CLI's. This is a finding, not a spec
+or gap-table edit; it implements no part of I-7 and edits no file under
+`doc/spec/`.
