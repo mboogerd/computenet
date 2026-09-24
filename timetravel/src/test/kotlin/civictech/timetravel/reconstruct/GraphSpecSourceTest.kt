@@ -69,6 +69,25 @@ class GraphSpecSourceTest {
         recording.spec.lowered().map { shapeOf(it) } shouldBe loweredShapeBefore
     }
 
+    @Test
+    fun `build applies every ConnectStep of the spec`() {
+        val recording = DurableGraphFixture.record(seed = 105, sourceCount = 2, script = listOf(0 to "a"))
+        val registry = LocationRegistry()
+        val (controller, host) = freshHost(105, registry, journalFor = { DiscardingJournal })
+
+        GraphSpecSource(recording.spec).build(host)
+        controller.runToIdle()
+
+        val lowered = recording.spec.lowered()
+        val refOf = lowered.filterIsInstance<SpawnStep>()
+            .associate { it.handle to (it.identity as civictech.cell.graph.IdentityBinding.Exact).ref }
+        val expected = lowered.filterIsInstance<ConnectStep>()
+            .map { PortRef.of(refOf.getValue(it.from), it.outlet) to PortRef.of(refOf.getValue(it.to), it.inlet) }
+            .toSet()
+        expected.size shouldBe 3 // two sources -> union, union -> view
+        registry.localLinks().map { it.from to it.to }.toSet() shouldBe expected
+    }
+
     /** A [civictech.cell.graph.GraphStep]'s replay-relevant data, factory excluded (it is code, not data). */
     private fun shapeOf(step: civictech.cell.graph.GraphStep): Any = when (step) {
         is SpawnStep -> Triple(step.handle, step.identity, step.parent)
