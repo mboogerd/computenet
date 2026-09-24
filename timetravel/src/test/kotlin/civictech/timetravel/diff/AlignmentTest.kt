@@ -147,6 +147,16 @@ class AlignmentTest {
         RecordKey.Index(5).render() shouldBe "#5"
     }
 
+    @Test
+    fun `si0tl-D13 key rendering takes the sourceId and the cellRef from their own fields`() {
+        // Every fixture UUID above renders as "00000000", so it cannot tell the two fields apart.
+        val source = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000000")
+        val cell = CellRef(UUID.fromString("11111111-0000-0000-0000-000000000000"))
+
+        RecordKey.Wave(source, 3, cell, "inlet").render() shouldBe "wave(aaaaaaaa, 3) 11111111.inlet"
+        RecordKey.Ordinal("frame", cell, "inlet", 2).render() shouldBe "frame 11111111.inlet #2"
+    }
+
     // --- [TTD1-43] mode selection -----------------------------------------------------------------
 
     @Test
@@ -206,6 +216,20 @@ class AlignmentTest {
         d.indexA shouldBe 2
         d.indexB shouldBe 2
         d.keyB shouldBe wave(a, 3)
+    }
+
+    @Test
+    fun `si0tl-D9 step 3 - when neither key occurs later in the other run, ONLY_IN_B takes precedence`() {
+        val d = RecordAlignment.align(
+            timeline(w(a, 1), w(a, 2)),
+            timeline(w(a, 1), w(b, 1)),
+        ).divergence!!
+
+        d.kind shouldBe DivergenceClass.ONLY_IN_B
+        d.indexA shouldBe 1
+        d.indexB shouldBe 1
+        d.keyA shouldBe wave(a, 2)
+        d.keyB shouldBe wave(b, 1)
     }
 
     @Test
