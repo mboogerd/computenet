@@ -6,12 +6,22 @@ import civictech.cell.Stateful
 import civictech.cell.durability.FileJournal
 import civictech.cell.graph.GraphSpec
 import civictech.cell.host.ManagedHost
+import civictech.timetravel.diff.CANONICAL_JSON
 import civictech.timetravel.diff.RoutedRunFixture
+import civictech.timetravel.diff.RunDiff
+import civictech.timetravel.diff.RunDiffReport
+import civictech.timetravel.journal.JournalReader
+import civictech.timetravel.journal.JournalReading
+import civictech.timetravel.journal.JournalSource
 import civictech.timetravel.reconstruct.GraphBuild
 import civictech.timetravel.reconstruct.GraphSource
 import civictech.timetravel.reconstruct.GraphSpecSource
 import civictech.timetravel.reconstruct.Reconstructor
+import civictech.timetravel.reconstruct.ReconstructorResult
+import civictech.timetravel.timeline.RunTimeline
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import kotlinx.serialization.decodeFromString
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
@@ -302,6 +312,48 @@ class CliExitCodeTest {
         mixed.code shouldBe 2
         mixed.err shouldContain "cannot diff a journal file against a directory"
         CliFixture.assertNoStackTrace(mixed.err)
+    }
+
+    @Test
+    fun `diff -- a suffixed graph flag overrides the unsuffixed one for its side only (3qkx1-D7)`(@TempDir dir: File) {
+        val a = File(dir, "a.bin")
+        val recording = CliFixture.record(a)
+        val b = File(dir, "b.bin").also { CliFixture.record(it) }
+        val spec = CliFixture.writeSpec(recording.spec, File(dir, "spec.bin")).path
+        val absent = File(dir, "absent.bin").path
+
+        // Both sides override the unsuffixed --graph, so the absent file is never loaded.
+        cli("diff", a.path, b.path, "--graph", absent, "--graph-a", spec, "--graph-b", spec).code shouldBe 0
+        // Only side B overrides: side A falls back to the unsuffixed (absent) file and refuses.
+        val fallback = cli("diff", a.path, b.path, "--graph", absent, "--graph-b", spec)
+        fallback.code shouldBe 2
+        fallback.err shouldContain absent
+
+        // --graph-a reaches side A only: side B's state is the unavailable one.
+        val result = cli("diff", a.path, b.path, "--graph-a", spec, "--json")
+        result.code shouldBe 0
+        fun open(f: File): Pair<JournalReading, RunTimeline> =
+            JournalReader.open(JournalSource.File(f)).let { it to RunTimeline.of(it).values.single() }
+        val (readingA, tA) = open(a)
+        val (_, tB) = open(b)
+        val reconstructorA = (Reconstructor.of(readingA, tA, GraphSpecSource(recording.spec)) as ReconstructorResult.Ready).reconstructor
+        val expected = RunDiff.diff(tA, tB, reconstructorA, null)
+        expected shouldNotBe RunDiff.diff(tA, tB, null, null) // non-vacuity: side A's source is visible in the report
+        CANONICAL_JSON.decodeFromString<RunDiffReport>(result.out.trim()) shouldBe expected
+    }
+
+    @Test
+    fun `diff -- a directory diff refuses --seed rather than ignore it`(@TempDir dir: File) {
+        val dirA = File(dir, "A")
+        val dirB = File(dir, "B")
+        CliFixture.record(File(dirA, "run.bin"))
+        CliFixture.record(File(dirB, "run.bin"))
+
+        cli("diff", dirA.path, dirB.path).code shouldBe 0
+        val seeded = cli("diff", dirA.path, dirB.path, "--seed", "3")
+        seeded.code shouldBe 2
+        seeded.err shouldContain "--seed"
+        CliFixture.assertNoStackTrace(seeded.err)
     }
 
     @Test
