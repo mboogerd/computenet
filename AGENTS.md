@@ -78,6 +78,14 @@ for documentation maintenance.
   machine-distinguishable refusal reasons, and key-derived `PeerId`
   fingerprints implementing the kernel's `SignatureVerifier` seam (DSC1, epic
   `computenet-ssa`). Depends on `:kernel`; `:kernel` must not depend on it.
+- `demograph/` (`:demograph`): data structures for capturing subjective
+  stances and personal preferences per actor, and consolidating them into
+  aggregate views (DGR, epic `computenet-drz8`). Same dependency shape as
+  `:identity` — depends on `:kernel` (and, transitively, `:nature`); `:kernel`
+  must not depend on it. `civictech.demograph.Vocabulary` KDocs the six-term
+  charter vocabulary (actor, stance, preference, weight, contestation,
+  aggregation) and its boundary line (no need, credit, subsidy, or
+  vote-as-civic-act).
 - `concord/`: the executable specification — implementation-neutral conformance
   suite. YAML scenarios in `concord/corpus/` cover EARS requirement ids in
   `doc/spec/`; `concord/schema/*.md` are the authoring contracts (single-writer,

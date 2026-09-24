@@ -53,6 +53,10 @@ include(":loader:fixtures:wire-delta")
 // promotion-candidate cell, both built through the real ksp-cell pipeline.
 include(":loader:fixtures:flow")
 include(":identity")
+// DGR (epic computenet-drz8): subjective-stance and preference structures with
+// consolidated aggregate views. Same dependency shape as :identity — depends
+// on :kernel (and, transitively, :nature); :kernel never depends on it.
+include(":demograph")
 include(":inspect")
 include(":timetravel")
 include(":iroh")
