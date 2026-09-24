@@ -3,6 +3,7 @@ package civictech.agora
 import civictech.agora.cell.*
 import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
+import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
@@ -227,6 +228,19 @@ class AgoraService(
         val snapshot = synchronized(nodesLock) { nodes.entries.map { it.key to it.value } }
         return snapshot.map { (ref, info) -> Node(ref, info, hub.credenceOf(ref) ?: 0.5) }
     }
+
+    /**
+     * Every cell instance this service spawned and still holds: [hub] plus every
+     * live claim and edge cell. A point-in-time copy for callers at rest — the
+     * underlying map is mutated by [createClaim]/[createEdge]/[remove] on the
+     * app's mutation thread, so a caller racing those sees one side of the race.
+     *
+     * Added for `:timetravel`'s `GraphSource` contract (computenet-3qkx1 D12):
+     * a reconstruction adapter hands back `GraphBuild(cells())`, and that must be
+     * *all* of the spawned instances or the reconstructor refuses with
+     * `GRAPH_SOURCE_INCOMPLETE`.
+     */
+    fun cells(): Collection<Cell> = listOf<Cell>(hub) + cells.values.toList()
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 
