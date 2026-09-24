@@ -110,6 +110,12 @@ class RunDiffIdenticalTest {
         report.stateDiff shouldBe StateDiff.Compared(8, 8, faithful, faithful, emptyList())
         withState.journals[1].report shouldBe null
 
+        // Each side's graph source reaches that side's reconstructor: only B lacks one here.
+        val onlyA = RunDiff.diffReadings(readingA, readingB, graph, null)
+        onlyA.journals[0].report!!.stateDiff shouldBe StateDiff.Unavailable(
+            listOf(RunUnavailable(RunSide.B, listOf(Reason.NO_GRAPH_SOURCE), Reconstructor.NO_GRAPH_SOURCE_MESSAGE)),
+        )
+
         for (multi in listOf(recordOnly, withState)) {
             multi.journals.mapNotNull { it.report }.forEach { assertNoPathIn(it) }
             val journals = Json.parseToJsonElement(multi.toJson()).jsonObject.getValue("journals")
