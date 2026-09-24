@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.wire.WireCodec
 import civictech.timetravel.fidelity.Reason
 import kotlinx.serialization.json.JsonElement
 import java.util.UUID
@@ -36,6 +37,9 @@ sealed interface JournalRecord {
  * @property args the raw `args` element of the frame, or `JsonNull` when the key is absent.
  * @property wireVersion the frame's explicit `version` key, `null` when absent (the codec never
  *   emits it, so absent is the normal case and is never a mismatch — `[TTD1-06]`).
+ * @property expectedWireVersion the version this reader's `WireCodec` would have written —
+ *   `WireCodec.VERSION` — so a `WIRE_VERSION_MISMATCH` consumer can report both the found and
+ *   the expected value without importing `WireCodec` itself (`[TTD1-06]`).
  * @property hydrationFailure the exception `WireCodec.decodeFrame` threw, as text, when
  *   hydration was attempted and failed; `null` otherwise.
  */
@@ -50,6 +54,7 @@ data class FrameRecord(
     val context: MessageContext?,
     val args: JsonElement,
     val wireVersion: Int?,
+    val expectedWireVersion: Int = WireCodec.VERSION,
     val hydrated: HydratedFrame?,
     val hydrationFailure: String?,
     override val reasons: Set<Reason>,
