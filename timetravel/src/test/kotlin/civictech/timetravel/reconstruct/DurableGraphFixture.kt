@@ -67,6 +67,12 @@ object DurableGraphFixture {
      * filled), the [spec] that built its topology (replayable by
      * [GraphSpecSource]), its [refs], the per-add [steps], and each source
      * outlet's live emission-epoch [epochs] (6tm33-D9's comparison target).
+     *
+     * [controller] and [proxies] (one `SetOps` call surface per source, in
+     * `refs.sources` order) are the still-live recording host's drive handles,
+     * exposed so a test can append a crash-shaped burst — adds accepted and
+     * journaled but never drained — after [record] returns (BS-3,
+     * computenet-6tm33.5). A test that only reads the journal ignores them.
      */
     class Recording(
         val journal: Journal,
@@ -74,6 +80,8 @@ object DurableGraphFixture {
         val refs: Refs,
         val steps: List<Step>,
         val epochs: List<UUID>,
+        val controller: SimulationController,
+        val proxies: List<SetOps<String>>,
     )
 
     /**
@@ -136,7 +144,7 @@ object DurableGraphFixture {
             (PortRegistry.of(cell)["outlet"] as FanOutlet<*>).waveState().sourceId
         }
 
-        return Recording(journal, spec, refs, steps, epochs)
+        return Recording(journal, spec, refs, steps, epochs, controller, proxies)
     }
 
     /** Every [cell]'s [Stateful.snapshot], keyed by ref — every cell here is [Stateful]. */
