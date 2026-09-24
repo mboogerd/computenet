@@ -41,7 +41,7 @@ object JournalReader {
      *   refuses its format version.
      */
     fun open(source: JournalSource): JournalReading {
-        val journals: List<Pair<JournalSummary, List<JournalRecord>>> = when (source) {
+        val journals: List<Read> = when (source) {
             is JournalSource.File -> {
                 val file = source.file
                 if (!file.isFile || !file.canRead()) throw JournalUnreadable(file.path, "not a readable regular file")
@@ -71,23 +71,31 @@ object JournalReader {
                 listOf(read(source.label, source.journal.formatVersion, records, tear = null))
             }
         }
-        val summaries = journals.map { it.first }
-        val records = journals.flatMap { it.second }
+        val summaries = journals.map { it.summary }
+        val records = journals.flatMap { it.records }
         val reasons = summaries.flatMapTo(mutableSetOf()) { it.reasons } +
             records.flatMap { it.reasons }
-        return JournalReading(summaries, records.asSequence(), reasons)
+        val rawRecords = journals.associate { it.summary.journalId to it.raw }
+        return JournalReading(summaries, records.asSequence(), reasons, rawRecords)
     }
 
+    /** One journal's read outcome: its summary, its typed records, and the raw bytes each came from. */
+    private class Read(val summary: JournalSummary, val records: List<JournalRecord>, val raw: List<ByteArray>)
+
     /** One file of a directory: an unreadable one is a refused summary, not an exception. */
-    private fun readDirectoryEntry(file: java.io.File): Pair<JournalSummary, List<JournalRecord>> {
-        fun refused(why: String) = JournalSummary(
-            journalId = file.path,
-            declaredFormatVersion = null,
-            recordCount = 0,
-            tear = null,
-            refusal = why,
-            reasons = emptySet(),
-        ) to emptyList<JournalRecord>()
+    private fun readDirectoryEntry(file: java.io.File): Read {
+        fun refused(why: String) = Read(
+            JournalSummary(
+                journalId = file.path,
+                declaredFormatVersion = null,
+                recordCount = 0,
+                tear = null,
+                refusal = why,
+                reasons = emptySet(),
+            ),
+            emptyList(),
+            emptyList(),
+        )
 
         if (!file.canRead()) return refused("not a readable regular file")
         val scan = try {
@@ -105,7 +113,7 @@ object JournalReader {
         declaredFormatVersion: Int?,
         raw: List<ByteArray>,
         tear: JournalFileScan.Tear?,
-    ): Pair<JournalSummary, List<JournalRecord>> {
+    ): Read {
         val journalReasons = mutableSetOf<Reason>()
         val versionMismatch = declaredFormatVersion != null && declaredFormatVersion != JOURNAL_FORMAT_VERSION
         if (versionMismatch) journalReasons += Reason.FORMAT_VERSION_MISMATCH
@@ -125,7 +133,7 @@ object JournalReader {
             refusal = null,
             reasons = journalReasons,
         )
-        return summary to records
+        return Read(summary, records, raw)
     }
 
     private fun classify(index: Int, journalId: String, bytes: ByteArray): JournalRecord {
