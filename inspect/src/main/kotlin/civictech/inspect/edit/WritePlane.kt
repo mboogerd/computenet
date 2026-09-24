@@ -79,8 +79,10 @@ class Capability(val value: String) {
      * [MessageDigest.isEqual] over the UTF-8 bytes rather than `==`.
      *
      * `String.equals` returns at the first differing character, so the time it
-     * takes leaks how long a correct prefix a guesser has found; `isEqual` has
-     * examined every byte of the presented value by the time it answers
+     * takes leaks how long a correct prefix a guesser has found; `isEqual`
+     * loops over every byte of its *first* argument whatever the second holds,
+     * so with the capability passed first its running time depends on the
+     * capability's length only, never on where a presented value differs
      * (`[WKB2-43]`). No test measures that — a timing assertion would be a
      * flaky test of the JDK — so the reason is recorded here instead, and
      * swapping this for `==` is a change no test in this module catches.
