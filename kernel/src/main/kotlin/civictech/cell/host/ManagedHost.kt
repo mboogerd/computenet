@@ -1794,6 +1794,18 @@ open class ManagedHost(
     }
 
     /**
+     * The port registered as [name] on the cell [ref] names, when that cell is
+     * hosted here; null when it is not, or when it registers no such port.
+     * Same rationale as [outletAt]: everything handed back is already reachable
+     * via `PortRegistry.of(cell)` to any caller holding the cell object — this
+     * threads the host's own [cells] map into that lookup rather than
+     * reflecting the map out of it. The caller is
+     * [civictech.cell.graph.precheck], which reads a live boundary port
+     * (policies, cardinality, payload class, natures) without linking it.
+     */
+    fun portAt(ref: CellRef, name: String): Port? = cells[ref]?.let { findPort(it, name) }
+
+    /**
      * Host-routed state read (the [Stateful] half of the observation seam,
      * spec 33 §Snapshot / G-25): [ref]'s own `snapshot()`, captured **on this
      * host's execution context** rather than on the caller's thread — off-thread
