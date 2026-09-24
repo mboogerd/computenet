@@ -197,12 +197,14 @@ class JournalReaderTest {
         val records = read(journal)
         val foreign = records[0].shouldBeInstanceOf<FrameRecord>()
         foreign.wireVersion shouldBe 99
+        foreign.expectedWireVersion shouldBe WireCodec.VERSION
         foreign.hydrated shouldBe null
         foreign.hydrationFailure shouldBe null // decodeFrame was not called
         foreign.reasons shouldBe setOf(Reason.WIRE_VERSION_MISMATCH)
 
         val untouched = records[1].shouldBeInstanceOf<FrameRecord>()
         untouched.wireVersion shouldBe null
+        untouched.expectedWireVersion shouldBe WireCodec.VERSION
         untouched.reasons.shouldBeEmpty()
         untouched.hydrated shouldNotBe null
     }
