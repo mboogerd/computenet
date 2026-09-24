@@ -2,6 +2,7 @@ package civictech.timetravel.reconstruct
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 
 /**
@@ -19,6 +20,15 @@ import civictech.cell.host.ManagedHost
  */
 fun interface GraphSource {
     fun build(host: ManagedHost): GraphBuild
+
+    /**
+     * [build], additionally handed the [registry] [host] publishes its spawned cells into
+     * (computenet-3qkx1 D6). Override this form when the topology is wired through
+     * `LocationRegistry.inlet` — a fresh registry of the source's own would hold no location for
+     * the reconstruction host's cells. The reconstructor calls this form; the default delegates
+     * to [build], so every one-argument source keeps working unchanged.
+     */
+    fun build(host: ManagedHost, registry: LocationRegistry): GraphBuild = build(host)
 }
 
 /**

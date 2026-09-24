@@ -117,7 +117,7 @@ open class Reconstructor(
         val host = ManagedHost(scheduler = scheduler, registry = registry, journalFor = { DiscardingJournal })
         var opened = false
         try {
-            val build = graph.build(host)
+            val build = graph.build(host, registry)
             controller.runToIdle()
             val suppressed = EffectSuppression.apply(build)
             onBuilt(build)
