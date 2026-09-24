@@ -53,9 +53,16 @@ data class JournalSummary(
  *   built eagerly, so it is re-iterable; typed as a [Sequence] so a streaming implementation
  *   later is not an API break.
  * @property reasons the union of every journal's and every record's reasons.
+ * @property rawRecords one entry per [JournalSummary] in [journals], keyed by
+ *   [JournalSummary.journalId] — a refused summary maps to an empty list. `rawRecords[id][k]` is
+ *   exactly the [ByteArray] the record with that `journalId` and `index == k` was classified
+ *   from (same object or equal content); alignment holds because [JournalReader] derives both
+ *   from one indexed pass over the same raw list. The reader neither copies nor modifies the
+ *   bytes it hands out here.
  */
 data class JournalReading(
     val journals: List<JournalSummary>,
     val records: Sequence<JournalRecord>,
     val reasons: Set<Reason>,
+    val rawRecords: Map<String, List<ByteArray>> = emptyMap(),
 )
