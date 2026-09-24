@@ -49,7 +49,15 @@ sealed interface ReconstructorResult {
  *
  * `open`, with [stateAt] final and composed of `protected` steps ([openSession], [replayInto],
  * [observe], [close]) so F5's cursor and suppression can extend it without re-deriving it
- * (6tm33-D12). [onBuilt] is F5's hook; this feature leaves it a no-op.
+ * (6tm33-D12). [onBuilt] runs after the session's effect suppression and is otherwise a no-op.
+ *
+ * Effect suppression is always on (TTD1 F5, yhvlz-D5, `[TTD1-26]`): [openSession] NoOp-serves
+ * every `Effectful` cell's fan-in inlets and every effect-contract inlet through
+ * [civictech.cell.evolve.Shadow] ([EffectSuppression]) after the build drained and before any
+ * record is replayed, and [observe] reports each such cell as at most `Degraded(EFFECTFUL_CELL)`
+ * with an [EffectInletsSuppressed] detail (`[TTD1-27]`). A cell the [GraphBuild.journaled]
+ * predicate names unjournaled is `Unreconstructible(VOLATILE_CELL)` and is never snapshotted
+ * (yhvlz-D8, `[TTD1-28]`).
  *
  * Nothing is caught except the kernel's `RecoveryIncomplete` in [replayInto]: a [GraphSource]
  * that throws, or a `Stateful` cell whose `snapshot()` fails, propagates out of [stateAt].
@@ -67,7 +75,8 @@ open class Reconstructor(
      * One reconstruction host's lifetime: built by [openSession], fed by [replayInto], read by
      * [observe], torn down by [close]. [localRefs] is `registry.localRefs()` captured right after
      * the build drained — the graph's membership, against which the journal's refs are checked
-     * (`[TTD1-24]`).
+     * (`[TTD1-24]`). [suppressed] is what [EffectSuppression.apply] NoOp-served, per cell
+     * (yhvlz-D5/D6); empty when the graph has no effect inlet.
      */
     protected class Session(
         val registry: LocationRegistry,
@@ -76,6 +85,7 @@ open class Reconstructor(
         val host: ManagedHost,
         val build: GraphBuild,
         val localRefs: Set<CellRef>,
+        val suppressed: Map<CellRef, Set<String>> = emptyMap(),
     )
 
     /** The run's state after the prefix [position] resolves to. */
@@ -95,7 +105,8 @@ open class Reconstructor(
 
     /**
      * Builds a fresh reconstruction host and the graph on it, drives the (management-band,
-     * asynchronous) spawns to idle, then hands the build to [onBuilt] (6tm33-D12). [anchor] is
+     * asynchronous) spawns to idle, NoOp-serves its effect inlets through [EffectSuppression]
+     * (yhvlz-D5), then hands the build to [onBuilt] (6tm33-D12). [anchor] is
      * where replay will start; the base implementation does not need it.
      */
     @Suppress("UNUSED_PARAMETER")
@@ -108,8 +119,9 @@ open class Reconstructor(
         try {
             val build = graph.build(host)
             controller.runToIdle()
+            val suppressed = EffectSuppression.apply(build)
             onBuilt(build)
-            val session = Session(registry, controller, scheduler, host, build, registry.localRefs())
+            val session = Session(registry, controller, scheduler, host, build, registry.localRefs(), suppressed)
             opened = true
             return session
         } finally {
@@ -141,9 +153,16 @@ open class Reconstructor(
     }
 
     /**
-     * Reads every built cell's state from the drained host and assigns each its verdict: the
-     * class's own verdict (`NOT_STATEFUL`, or [ReplayStable.classify]) worsened by the run's
-     * reasons — journal defects up to the prefix end, `GRAPH_MISMATCH`, `RECOVERY_INCOMPLETE`.
+     * Reads every built cell's state from the drained host and assigns each its verdict, in the
+     * order of yhvlz-D8, reasons unioned: a volatile cell (`build.journaled(ref) == false`) is
+     * `Unreconstructible(VOLATILE_CELL)` and is **not** snapshotted; a non-`Stateful` cell is
+     * `NOT_STATEFUL`; any other is [ReplayStable.classify]. A cell whose inlets were suppressed
+     * also carries `EFFECTFUL_CELL` (at most `Degraded`), and gets an [EffectInletsSuppressed]
+     * detail. Every verdict is worsened by the run's reasons — journal defects up to the prefix
+     * end, `GRAPH_MISMATCH`, `RECOVERY_INCOMPLETE`.
+     *
+     * Not modelled (yhvlz-D8): a cell downstream of a volatile cell is classified by its own
+     * class, although its replay lacked the volatile cell's inputs.
      */
     protected open fun observe(
         session: Session,
@@ -155,9 +174,11 @@ open class Reconstructor(
         val summary = reading.journals.first { it.journalId == timeline.journalId }
         val mismatched = timeline.positions.subList(0, n).flatMapTo(mutableSetOf()) { it.touches } - session.localRefs
 
+        val journaled = session.build.journaled
+        val volatile = session.build.cells.filterTo(mutableSetOf()) { journaled != null && !journaled(it.ref) }
         val futures = LinkedHashMap<Cell, CompletableFuture<Serializable?>?>()
         for (cell in session.build.cells) {
-            futures[cell] = if (cell is Stateful) session.host.snapshotOf(cell.ref) else null
+            futures[cell] = if (cell is Stateful && cell !in volatile) session.host.snapshotOf(cell.ref) else null
         }
         session.controller.runToIdle()
 
@@ -171,13 +192,21 @@ open class Reconstructor(
         val cells = LinkedHashMap<CellRef, CellReconstruction>()
         for ((cell, future) in futures) {
             val cls = cell.javaClass.name
+            val effectful = cell.ref in session.suppressed
             if (future == null) {
-                val fidelity = worst(Fidelity.unreconstructible(Reason.NOT_STATEFUL), runDegradation)
+                val reasons = buildSet {
+                    if (cell in volatile) add(Reason.VOLATILE_CELL)
+                    if (cell !is Stateful) add(Reason.NOT_STATEFUL)
+                    if (effectful) add(Reason.EFFECTFUL_CELL)
+                }
+                val fidelity = worst(Fidelity.Unreconstructible(reasons), runDegradation)
                 cells[cell.ref] = CellReconstruction.Unreconstructible(cls, fidelity as Fidelity.Unreconstructible)
                 continue
             }
             val snapshot = future.get() ?: throw IllegalStateException("snapshot() of ${cell.ref} failed")
-            val fidelity = worst(replayStable.classify(cell.javaClass), runDegradation)
+            val classified = replayStable.classify(cell.javaClass)
+            val own = if (effectful) worst(classified, Fidelity.Degraded(setOf(Reason.EFFECTFUL_CELL))) else classified
+            val fidelity = worst(own, runDegradation)
             cells[cell.ref] = if (fidelity is Fidelity.Unreconstructible) {
                 CellReconstruction.Unreconstructible(cls, fidelity)
             } else {
@@ -188,6 +217,7 @@ open class Reconstructor(
         val details = buildSet<ReconstructionDetail> {
             mismatched.forEach { add(GraphMismatch(it)) }
             recovery?.let { add(it) }
+            session.suppressed.forEach { (ref, inlets) -> add(EffectInletsSuppressed(ref, inlets)) }
         }
         return Reconstruction(
             position = ResolvedPosition(requested, n, anchor, n - anchor),
