@@ -133,6 +133,33 @@ class ApplyProgressTest {
         (seen.single().result is StepResult.Applied) shouldBe true
     }
 
+    /**
+     * computenet-4jdw0-D2, connect branch: a callback that throws only on an
+     * applied connect step's event propagates, and that step is reported
+     * exactly once, as Applied — never re-reported as Rejected.
+     */
+    @Test
+    fun `a throwing progress callback on an applied connect step propagates and reports it once`() {
+        val controller = SimulationController(seed = 17)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep("a", CellFactory { ref -> SetCell<String>(ref = ref) }),
+                SpawnStep("b", CellFactory { ref -> CountCell<String>(ref = ref) }),
+                ConnectStep("a", "outlet", "b", "inlet"),
+            ),
+        )
+
+        val seen = mutableListOf<StepEvent>()
+        shouldThrow<ProgressBoom> {
+            spec.applyRemote(host.managementInlet) { seen += it; if (it.index == 2) throw ProgressBoom() }
+        }
+        controller.runToIdle()
+
+        seen.map { it.index to it.handle } shouldBe listOf(0 to "a", 1 to "b", 2 to "a.outlet->b.inlet")
+        seen.last().result shouldBe StepResult.Applied(null)
+    }
+
     // --- rule 2: ApplyProgressCell (computenet-4jdw0.2, computenet-4jdw0-D3) ---
 
     private class Recorder {
