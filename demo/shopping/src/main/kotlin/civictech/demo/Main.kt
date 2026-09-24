@@ -25,6 +25,8 @@ import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
+import civictech.inspect.edit.Capability
+import civictech.inspect.edit.WritePlane
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.net.URI
@@ -404,10 +406,15 @@ class DemoApp(
      * that is exactly how each side addresses its counterpart without a
      * discovery protocol), so they can be both named and declared here before
      * the peer has ever connected.
+     *
+     * [writePlane] is [WritePlane.Disabled] by default (`[WKB2-06]`): the write
+     * plane is a per-process opt-in, decided by `main`'s `--inspect-write`
+     * flag, never by this method's own defaults changing.
      */
     fun startInspector(
         inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
         netName: String = this.netName ?: "local",
+        writePlane: WritePlane = WritePlane.Disabled,
     ): civictech.inspect.InspectorServer {
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
@@ -444,6 +451,7 @@ class DemoApp(
             port = inspectPort,
             cellNames = names,
             netName = netName,
+            writePlane = writePlane,
         ).nameGraph(itemsUnion.ref, "shopping").start()
         if (wire != null) {
             started.declareLink(itemsUnion.ref, "outlet", peerItems, "inlet")
@@ -503,10 +511,12 @@ fun main(args: Array<String>) {
     val inspectPort = args.value("--inspect-port")?.trim()?.toIntOrNull()
         ?: System.getenv("INSPECT_PORT")?.trim()?.toIntOrNull()
     val netName = args.value("--net-name")?.trim()?.takeUnless { it.isEmpty() }
+    val writeCapabilityValue = args.value("--inspect-write-capability")?.trim()?.takeUnless { it.isEmpty() }
+        ?: System.getenv("INSPECT_WRITE_CAPABILITY")?.trim()?.takeUnless { it.isEmpty() }
     // strip the inspector's own `--flag value` pairs before [demoPort], which
     // reads the first non-`--` argument as this demo's port and would
     // otherwise take one of their values (the skillmatch pilot's precedent)
-    val demoArgs = stripPairs(args, "--inspect-port", "--net-name")
+    val demoArgs = stripPairs(args, "--inspect-port", "--net-name", "--inspect-write-capability")
 
     val port = demoPort(demoArgs)
     val wire = args.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
@@ -517,6 +527,11 @@ fun main(args: Array<String>) {
     // needs NO stripPairs entry: `demoPort` skips any token starting with `--`
     // (DemoShell.kt:128-130), so it can never be mistaken for the demo's port.
     val replicate = "--replicate" in args
+    // WKB2-06: presence of the bare flag is the ONLY opt-in — a capability
+    // given without it is ignored and the plane stays Disabled. Same
+    // bare-flag posture as `--replicate` above, for the same reason: an
+    // optional positional value would collide with `demoPort`'s convention.
+    val writeEnabled = "--inspect-write" in args
 
     val app = DemoApp(port, wire, journalDir, netName, replicate).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
@@ -539,10 +554,18 @@ fun main(args: Array<String>) {
         if (wire == null) println("  (no --listen/--peer: the replica mesh has no peer to gossip with)")
     }
     inspectPort?.let { p ->
-        val inspector = app.startInspector(p, netName ?: "local")
+        val writePlane = if (writeEnabled) {
+            WritePlane.Enabled(writeCapabilityValue?.let(::Capability) ?: Capability.mint())
+        } else {
+            WritePlane.Disabled
+        }
+        val inspector = app.startInspector(p, netName ?: "local", writePlane)
         println("computenet inspector: http://localhost:${inspector.boundPort}/api/inspect/topology")
         announcePort("inspect", inspector.boundPort)
         println("  this JVM's network host: ${netName ?: "local"}")
+        if (writePlane is WritePlane.Enabled) {
+            println("inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}")
+        }
     }
 }
 
