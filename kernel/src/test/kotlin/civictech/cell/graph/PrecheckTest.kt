@@ -220,13 +220,36 @@ class PrecheckTest {
         ).precheck(listOf(BoundaryLink(f.liveSet.ref, "outlet", "count", "inlet", Direction.INBOUND)), f.view)
 
         val expected = reconcileNatures(port(f.liveSet, "outlet").natures, port(staged!!, "inlet").natures).shouldNotBeNull()
-        listOf("set.outlet->count.inlet", "${f.liveSet.ref}.outlet->count.inlet").forEach { key ->
-            val refused = plan.step(key).result.refused()
-            refused.code shouldBe RefusalCode.CONTRACT_MISMATCH
-            refused.reason shouldBe expected.reason
-            refused.mismatch.shouldNotBeNull().axis shouldBe NatureAxis.OWNERSHIP
-            refused.mismatch shouldBe expected.mismatch
+        val refused = plan.step("set.outlet->count.inlet").result.refused()
+        refused.code shouldBe RefusalCode.CONTRACT_MISMATCH
+        refused.reason shouldBe expected.reason
+        refused.mismatch.shouldNotBeNull().axis shouldBe NatureAxis.OWNERSHIP
+        refused.mismatch shouldBe expected.mismatch
+        // [WKB2-26] (computenet-91xzn.2): an INBOUND link into an EXCLUSIVE staged inlet is refused on its shape first.
+        plan.step("${f.liveSet.ref}.outlet->count.inlet").result.refused().code shouldBe RefusalCode.OWNED_INTAKE
+    }
+
+    @Test
+    fun `a nature refusal across an OUTBOUND boundary link is CONTRACT_MISMATCH carrying the typed NatureMismatch`() {
+        val f = Fixture(seed = 27)
+        // A live consumer requiring an EXCLUSIVE-ownership producer; the staged SetCell.outlet offers less.
+        val liveExclusive = CountCell<String>().also {
+            PortNatures.stamp(port(it, "inlet"), NatureVector.of(Ownership.EXCLUSIVE))
+            f.host.managementInlet.call.spawn(it)
         }
+        val before = f.footprint()
+        var staged: SetCell<String>? = null
+        val plan = GraphSpec(
+            listOf(SpawnStep("set", CellFactory { ref -> SetCell<String>(ref = ref).also { staged = it } })),
+        ).precheck(listOf(BoundaryLink(liveExclusive.ref, "inlet", "set", "outlet", Direction.OUTBOUND)), f.view)
+
+        f.footprint() shouldBe before
+        val expected = reconcileNatures(port(staged!!, "outlet").natures, port(liveExclusive, "inlet").natures).shouldNotBeNull()
+        val refused = plan.step("set.outlet->${liveExclusive.ref}.inlet").result.refused()
+        refused.code shouldBe RefusalCode.CONTRACT_MISMATCH
+        refused.reason shouldBe expected.reason
+        refused.mismatch.shouldNotBeNull().axis shouldBe NatureAxis.OWNERSHIP
+        refused.mismatch shouldBe expected.mismatch
     }
 
     // ---- spawn refusals ----
