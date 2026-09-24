@@ -2,19 +2,33 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.host.LinkAdmission
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RoutedInletResolution
+import civictech.cell.host.TopologyIndex
 import civictech.cell.host.TopologyLink
+import civictech.cell.link.CurrentPeer
+import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkResult
+import civictech.cell.link.LinkRole
+import civictech.cell.link.Linked
 import civictech.cell.link.checkPayload
 import civictech.cell.link.reconcileNatures
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.FeedbackInlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.LinkTo
 import civictech.cell.port.Port
+import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.natures
+import civictech.nature.ContractRegistry
+import civictech.nature.NatureAxis
 import civictech.nature.NatureMismatch
+import civictech.nature.Ownership
+import java.util.UUID
 
 /*
  * WKB2 F2 (computenet-91xzn) — cold structural precheck of a GraphSpec against
@@ -83,8 +97,12 @@ class HostLiveView(override val host: ManagedHost, private val registry: Locatio
 /**
  * Why a planned step would not apply. `UNRESOLVED_PORT` (91xzn-D2) and
  * `LIVE_REF` extend the feature's list. `AT_CAPACITY`, `OWNERSHIP_VIOLATION`,
- * `POLICY_DENIAL`, `CYCLE_WITHOUT_HEAD` and `OWNED_INTAKE` are the admission
- * dry-run's codes (computenet-91xzn.2) and are not produced yet.
+ * `POLICY_DENIAL` and `CYCLE_WITHOUT_HEAD` are the admission dry-run's codes
+ * ([WKB2-12]) and carry the live admission path's own reason strings;
+ * `OWNED_INTAKE` is [WKB2-26]'s refusal of an INBOUND boundary link into an
+ * exclusive staged inlet. `CYCLE_WITHOUT_HEAD` covers both of
+ * `LinkAdmission`'s cycle strings (`CycleWithoutHead:` and
+ * `CycleWithoutDamping:`): [13-LINK-06] names one reason for both.
  */
 enum class RefusalCode {
     UNRESOLVED_HANDLE,
@@ -164,7 +182,7 @@ data class Plan(val steps: List<PlannedStep>, val verdict: Verdict)
  * structural verdict and propagates.
  */
 fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveView): Plan {
-    val scratch = Scratch()
+    val scratch = Scratch(live)
     val planned = mutableListOf<PlannedStep>()
     steps.forEach { step ->
         when (step) {
@@ -197,16 +215,41 @@ private fun refusedInstanceSet(step: InstanceSetStep, e: IllegalArgumentExceptio
 /** A staged spawn: the ref its binding resolved to and the cold cell. */
 private class Staged(val ref: CellRef, val cell: Cell)
 
-/** A link accepted earlier in this plan. Recorded for the admission dry-run's in-plan checks (computenet-91xzn.2). */
+/**
+ * A link accepted earlier in this plan (every one is a Consume link). The
+ * cardinality and SPSC checks count these beside the live `linking.links`; a
+ * refused link is never recorded, so it never counts.
+ */
 private class PlannedLink(val outlet: LinkTo<*>, val inlet: LinkFrom<*>, val from: CellRef, val to: CellRef)
 
-/** A link about to be checked, both endpoints resolved. */
-private class LinkCandidate(val outlet: LinkTo<*>, val inlet: LinkFrom<*>, val from: CellRef, val to: CellRef)
+/**
+ * A link about to be checked, both endpoints resolved. [outletName] and
+ * [inletName] are the port names as the step spelled them, which is what the
+ * live `LinkAdmission` cycle strings print.
+ */
+private class LinkCandidate(
+    val outlet: LinkTo<*>,
+    val inlet: LinkFrom<*>,
+    val from: CellRef,
+    val to: CellRef,
+    val outletName: String,
+    val inletName: String,
+)
 
-private class Scratch {
+private class Scratch(live: LiveView) {
     val staged = mutableMapOf<String, Staged>()
     val refusedHandles = mutableSetOf<String>()
     val links = mutableListOf<PlannedLink>()
+
+    /**
+     * 91xzn-D5: a private [TopologyIndex] seeded once with the live links and
+     * fed every link this plan accepts, so [cycleCheck] asks
+     * [TopologyIndex.wouldCloseCycle] — the live walk, verbatim — over
+     * live ∪ planned. Planned edges are keyed by the endpoints' cell refs (a
+     * staged endpoint's is the ref its binding resolved to); the port ids are
+     * fresh because the walk reads only `link.to.cell`.
+     */
+    val topology = TopologyIndex().apply { live.allLinks().forEach(::linked) }
 
     fun unresolvedHandle(handle: String, role: String) =
         if (handle in refusedHandles) "unresolved handle '$handle' ($role): its spawn step was refused"
@@ -252,7 +295,7 @@ private class Scratch {
             ?: return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_PORT, outletUnresolved(step.outlet, step.from)))
         val inlet = PortRegistry.of(to.cell)[step.inlet] as? LinkFrom<*>
             ?: return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_PORT, inletUnresolved(step.inlet, step.to)))
-        return planned(checkLink(LinkCandidate(outlet, inlet, from.ref, to.ref)))
+        return planned(checkLink(LinkCandidate(outlet, inlet, from.ref, to.ref, step.outlet, step.inlet)))
     }
 
     fun boundary(link: BoundaryLink, live: LiveView): PlannedStep {
@@ -289,14 +332,23 @@ private class Scratch {
                     ?: return refuse(RefusalCode.UNRESOLVED_PORT, outletUnresolved(link.livePort, link.liveRef))
                 val inlet = stagedPort as? LinkFrom<*>
                     ?: return refuse(RefusalCode.UNRESOLVED_PORT, inletUnresolved(link.handlePort, link.handle))
-                LinkCandidate(outlet, inlet, link.liveRef, stagedCell.ref)
+                // [WKB2-26]: refused on its shape, before any admission check.
+                if (carriesExclusive(inlet)) {
+                    return refuse(
+                        RefusalCode.OWNED_INTAKE,
+                        "boundary link into staged '${link.handle}'.${link.handlePort}: the inlet carries " +
+                            "Owned/Leased payloads, and STAGE would consume an Owned/Leased payload that " +
+                            "cannot be un-consumed ([WKB2-26])",
+                    )
+                }
+                LinkCandidate(outlet, inlet, link.liveRef, stagedCell.ref, link.livePort, link.handlePort)
             }
             Direction.OUTBOUND -> {
                 val outlet = stagedPort as? LinkTo<*>
                     ?: return refuse(RefusalCode.UNRESOLVED_PORT, outletUnresolved(link.handlePort, link.handle))
                 val inlet = livePort as? LinkFrom<*>
                     ?: return refuse(RefusalCode.UNRESOLVED_PORT, inletUnresolved(link.livePort, link.liveRef))
-                LinkCandidate(outlet, inlet, stagedCell.ref, link.liveRef)
+                LinkCandidate(outlet, inlet, stagedCell.ref, link.liveRef, link.handlePort, link.livePort)
             }
         }
         return planned(checkLink(candidate))
@@ -310,23 +362,128 @@ private class Scratch {
     fun checkLink(candidate: LinkCandidate): StepCheck {
         linkChecks.forEach { check -> check(candidate)?.let { return it } }
         links += PlannedLink(candidate.outlet, candidate.inlet, candidate.from, candidate.to)
+        topology.linked(TopologyLink(UUID.randomUUID(), PortRef.generate(candidate.from), PortRef.generate(candidate.to)))
         return StepCheck.Ok
     }
 
     /**
-     * Ordered per 91xzn-D7, which is the live order (`Handshake.handshake` +
-     * `LinkAdmission.connect`). computenet-91xzn.2 inserts its checks at the
-     * marked positions.
+     * The live admission order, as `LinkAdmission.connect` actually runs it:
+     * `admitCycle` before `outlet.linkTo`; `FanOutlet.linkTo`'s SPSC check
+     * before it delegates to `inlet.linkFrom`; `FanInlet`/`FeedbackInlet.linkFrom`'s
+     * cardinality before `handshake`; then `handshake`'s target policies,
+     * source policies, payload class, natures. First refusal wins, so a link
+     * with several faults reports the one a real connect would.
+     *
+     * This deviates from the order 91xzn-D7 lists (cardinality, policies,
+     * payload, natures, SPSC, cycle): D7's stated intent is "the live order",
+     * and the list it gives is not the order the code runs (computenet-91xzn.2
+     * bead comment). OWNED_INTAKE is not here: it is a refusal of an INBOUND
+     * boundary link's shape and runs in [boundary] before any of these.
      */
     val linkChecks: List<(LinkCandidate) -> StepCheck.Refused?> = listOf(
-        // 91xzn-D7 slot: cardinality (single-writer / FeedbackInlet) — AT_CAPACITY
-        // 91xzn-D7 slot: target policies, then source policies — POLICY_DENIAL
+        ::cycleCheck,
+        ::ownershipCheck,
+        ::capacityCheck,
+        ::policyCheck,
         ::payloadCheck,
         ::natureCheck,
-        // 91xzn-D7 slot: SPSC ownership on the outlet — OWNERSHIP_VIOLATION
-        // 91xzn-D7 slot: cycle over live ∪ planned links — CYCLE_WITHOUT_HEAD
-        // (OWNED_INTAKE for an INBOUND boundary link is task 2's as well)
     )
+
+    private fun plannedInto(inlet: LinkFrom<*>) = links.any { it.inlet.ref == inlet.ref }
+
+    private fun plannedFrom(outlet: LinkTo<*>) = links.any { it.outlet.ref == outlet.ref }
+
+    /**
+     * CYCLE_WITHOUT_HEAD ([13-LINK-06]): [topology] (live ∪ planned) decides
+     * whether the edge closes a cycle; `LinkAdmission.cycleRefusal` supplies
+     * the headedness and damping verdicts and their strings, so a headed,
+     * damped closing edge is admitted exactly as it would be live.
+     */
+    private fun cycleCheck(c: LinkCandidate): StepCheck.Refused? {
+        if (!topology.wouldCloseCycle(c.from, c.to)) return null
+        return LinkAdmission.cycleRefusal(c.from, c.outletName, c.outlet, c.to, c.inletName, c.inlet)
+            ?.toRefused(RefusalCode.CYCLE_WITHOUT_HEAD)
+    }
+
+    /**
+     * OWNERSHIP_VIOLATION (spec 23 SPSC, 91xzn-D1): an exclusive-carrying
+     * [FanOutlet] admits one Consume subscriber. The live rule counts the
+     * outlet's private `consumers` map; the witness here is the outlet's
+     * Consume records in `linking.links` (the handshake registers every
+     * link on the source side too) plus links planned earlier in this plan.
+     * A subscriber attached by a bare `subscribe`, outside any handshake, is
+     * in `consumers` but not in `linking.links`, and is not seen here.
+     * Exclusivity is either witness [carriesExclusive] reads; the live rule
+     * reads only the descriptor bit, which KSP sets together with the
+     * natures stamp.
+     */
+    private fun ownershipCheck(c: LinkCandidate): StepCheck.Refused? {
+        val outlet = c.outlet as? FanOutlet<*> ?: return null
+        if (!carriesExclusive(outlet)) return null
+        val subscribed = outlet.linking.links.any { it.role == LinkRole.Consume } || plannedFrom(outlet)
+        if (!subscribed) return null
+        return StepCheck.Refused(
+            RefusalCode.OWNERSHIP_VIOLATION,
+            "SPSC (spec 23): ${outlet.clazz.name} carries Owned/Leased payloads; outlet already has a subscriber",
+        )
+    }
+
+    /**
+     * AT_CAPACITY ([13-LINK-05] "at capacity"): a single-writer [FanInlet]
+     * (FU-6) or a [FeedbackInlet] admits one Consume producer. For
+     * `FanInlet` the witness is the live rule's own (`linking.links`). For
+     * `FeedbackInlet` the live rule reads its private `activeProducer`; the
+     * witness here is `linking.links` Consume records, which agree with it
+     * on the in-process path: `handshake` sets `activeProducer` in `install`
+     * and registers the link right after, and the unlink clears both.
+     * A staged inlet has no live links; planned ones still count.
+     */
+    private fun capacityCheck(c: LinkCandidate): StepCheck.Refused? {
+        val inlet = c.inlet
+        val live = (inlet as? Linked)?.linking?.links.orEmpty().any { it.role == LinkRole.Consume }
+        return when {
+            inlet is FanInlet<*> && inlet.singleWriter && (live || plannedInto(inlet)) -> StepCheck.Refused(
+                RefusalCode.AT_CAPACITY,
+                "single-writer inlet already has a producer (strict point-to-point, FU-6)",
+            )
+            inlet is FeedbackInlet<*> && (live || plannedInto(inlet)) -> StepCheck.Refused(
+                RefusalCode.AT_CAPACITY,
+                "FeedbackInlet at capacity: already has an active producer (strict point-to-point)",
+            )
+            else -> null
+        }
+    }
+
+    /**
+     * POLICY_DENIAL ([13-LINK-05] "policy denial"): `handshake`'s walk over
+     * the same request — the target's policies first, then the source's. It
+     * is also what `Promotion.reauthorizeRebinds` dry-runs
+     * (`LinkSupport.reauthorize` = `reject`), reused here without a
+     * `graph -> evolve` edge (91xzn-D5).
+     */
+    private fun policyCheck(c: LinkCandidate): StepCheck.Refused? {
+        val request = LinkRequest(c.outlet.ref, c.inlet.ref, CurrentPeer.get(), LinkRole.Consume)
+        val rejected = (c.inlet as? Linked)?.linking?.reject(request)
+            ?: (c.outlet as? Linked)?.linking?.reject(request)
+            ?: return null
+        return rejected.toRefused(RefusalCode.POLICY_DENIAL)
+    }
+}
+
+/**
+ * Whether [port] carries `Owned`/`Leased` payloads, by either witness the KSP
+ * processor writes: a descriptor method with `exclusive = true` on the Fan
+ * port's contract class, or the port's natures stamped
+ * `OWNERSHIP = EXCLUSIVE`.
+ */
+private fun carriesExclusive(port: Port): Boolean {
+    val clazz = when (port) {
+        is FanOutlet<*> -> port.clazz
+        is FanInlet<*> -> port.clazz
+        else -> null
+    }
+    val byDescriptor = clazz?.let { ContractRegistry.descriptor(it)?.methods?.any { m -> m.exclusive } } == true
+    return byDescriptor || port.natures.level(NatureAxis.OWNERSHIP) == Ownership.EXCLUSIVE
 }
 
 private fun payloadCheck(c: LinkCandidate): StepCheck.Refused? =
@@ -340,7 +497,6 @@ private fun LinkResult.Rejected.toRefused(code: RefusalCode) = StepCheck.Refused
 /** A ref is live when the view locates it anywhere, or the apply host itself hosts it. */
 private fun isLive(ref: CellRef, live: LiveView): Boolean =
     live.locationOf(ref) != null || live.host.resolveInlet(ref, "") !is RoutedInletResolution.NoCell
-
 
 private fun outletUnresolved(name: String, owner: Any) = "Outlet not found or not linkable: $name on $owner"
 
