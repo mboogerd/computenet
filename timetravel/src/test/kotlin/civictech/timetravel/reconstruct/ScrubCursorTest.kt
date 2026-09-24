@@ -1,5 +1,7 @@
 package civictech.timetravel.reconstruct
 
+import civictech.cell.CellRef
+import civictech.cell.data.SetCell
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.host.ManagedHost
@@ -20,6 +22,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.kotest.matchers.types.shouldNotBeSameInstanceAs
 import org.junit.jupiter.api.Test
+import java.util.UUID
 
 /**
  * TTD1 F5 (`computenet-yhvlz.2`) BS-14, `[TTD1-30]` and `[TTD1-31]` (yhvlz-D9): a [ScrubCursor]
@@ -244,6 +247,38 @@ class ScrubCursorTest {
         withClue("a partially fed host is never advanced: the forward request restarts") {
             cursor.opened.size shouldBe 2
             cursor.closedHosts shouldContainExactly listOf(cursor.opened[0].second)
+        }
+        cursor.close()
+    }
+
+    /**
+     * A graph source that spawns a cell it does not hand back: the cursor's own session is closed
+     * without replay, no session stays live, and the answer is the inherited `stateAt` refusal
+     * (6tm33-D11) — equal to from-scratch. Every host opened, the cursor's and `stateAt`'s
+     * throwaway one alike, is closed.
+     */
+    @Test
+    fun `a graph source that spawns an unreturned cell yields the inherited refusal and leaves no live session`() {
+        val recording = DurableGraphFixture.record(seed = 14, sourceCount = 1, script = singleScript)
+        val extraRef = CellRef(UUID(14, 999))
+        val leaky = GraphSource { host ->
+            GraphSpecSource(recording.spec).build(host).also {
+                host.managementInlet.call.spawn(SetCell<String>(extraRef))
+            }
+        }
+        val reading = JournalReader.open(JournalSource.InMemory(recording.journal, "j"))
+        val fixture = Fixture(reading, RunTimeline.of(reading).getValue("j"), leaky)
+        val cursor = fixture.cursor()
+        val requested = Position.Index(fixture.timeline.size - 1)
+
+        val refused = cursor.at(requested)
+
+        refused shouldBe fixture.fromScratch(requested)
+        refused.details shouldBe setOf(GraphSourceIncomplete(setOf(extraRef)))
+        cursor.prefixEnd shouldBe null
+        withClue("the cursor's session and stateAt's throwaway session are both closed") {
+            cursor.opened.size shouldBe 2
+            cursor.closedHosts shouldContainExactly cursor.opened.map { it.second }
         }
         cursor.close()
     }
