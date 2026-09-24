@@ -61,7 +61,7 @@ import java.io.Serializable
  * endorsement. Which verdict and reason those cells should carry instead (`[TTD1-34]` reads as
  * `Unreconstructible`, and no existing [Reason] describes "starved by a volatile upstream"), and
  * where the reconstructor would learn the edge topology (`GraphBuild` carries none), are open
- * decisions recorded on computenet-ocv.1 / computenet-ocv — change this test when they land.
+ * decisions recorded on computenet-ocv.2 — change this test when they land.
  */
 class VolatileDownstreamFidelityTest {
 
