@@ -1,5 +1,8 @@
 package civictech.demo.skillmatch
 
+import civictech.inspect.InspectorServer
+import civictech.inspect.edit.Capability
+import civictech.inspect.edit.WritePlane
 import civictech.testkit.HttpProbe
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -85,6 +88,34 @@ class SkillMatchInspectorTest {
             assertTrue(""""candidates":{}""" in HttpProbe("http://localhost:${app.boundPort}").state())
         } finally {
             app.stop()
+        }
+    }
+
+    /**
+     * WKB2 F5 (`[WKB2-06]`): the write plane defaults to off, and `startInspector`
+     * passing an [WritePlane.Enabled] plane is what advertises it — the demo-flag
+     * half (`main`'s `--inspect-write`) is verified by compile plus the manual
+     * run the epic prescribes, per this task's bead.
+     */
+    @Test
+    fun `the write plane stays off unless asked for`() {
+        val disabledApp = SkillMatchApp(port = 0).start()
+        val enabledApp = SkillMatchApp(port = 0).start()
+        try {
+            val disabledPort = disabledApp.startInspector(port = 0).boundPort
+            val enabledPort = enabledApp.startInspector(
+                port = 0,
+                writePlane = WritePlane.Enabled(Capability("t")),
+            ).boundPort
+
+            val disabledBody = HttpProbe("http://localhost:$disabledPort").state(InspectorServer.CAPABILITIES_PATH)
+            val enabledBody = HttpProbe("http://localhost:$enabledPort").state(InspectorServer.CAPABILITIES_PATH)
+
+            assertEquals("""{"writePlane":false}""", disabledBody, "disabled by default: $disabledBody")
+            assertTrue(""""writePlane":true""" in enabledBody, "enabled when passed: $enabledBody")
+        } finally {
+            disabledApp.stop()
+            enabledApp.stop()
         }
     }
 }
