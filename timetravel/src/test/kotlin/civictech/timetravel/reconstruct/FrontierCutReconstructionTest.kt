@@ -192,6 +192,18 @@ class FrontierCutReconstructionTest {
         membership(reconstruction.cells.getValue(recording.refs.union)) shouldBe folded
         membership(reconstruction.cells.getValue(recording.refs.view)) shouldBe folded
         assertAllFaithful(reconstruction, recording)
+
+        // The waved frames are themselves replayed, not merely re-derived: on the routed host
+        // above, each replayed source frame re-propagates, so the fold would come out the same
+        // even if no union/view frame were fed. On a host with the same cells but NO edges, a
+        // replayed source frame reaches nothing downstream, so the union and view hold exactly
+        // the elements of their own waved frames inside [0, n): (A,1..3) and (B,1) — b2's union
+        // frame is at n, outside.
+        val reading = JournalReader.open(JournalSource.InMemory(recording.journal, "j"))
+        val unlinked = Reconstructor(reading, timeline, GraphSpecSource(recording.spec)).stateAt(Position.Cut(cut))
+        unlinked.position.prefixEnd shouldBe n
+        membership(unlinked.cells.getValue(recording.refs.union)) shouldBe setOf("a1", "a2", "b1", "a3")
+        membership(unlinked.cells.getValue(recording.refs.view)) shouldBe setOf("a1", "a2", "b1", "a3")
     }
 
     @Test
