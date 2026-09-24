@@ -9,7 +9,11 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.beginSse
 import civictech.demo.shell.respond
 import civictech.demo.shell.sseFrame
+import civictech.inspect.edit.WriteGate
+import civictech.inspect.edit.WritePlane
+import civictech.inspect.edit.respondRefusal
 import com.sun.net.httpserver.HttpExchange
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.net.InetAddress
@@ -89,6 +93,14 @@ import java.util.concurrent.TimeUnit
  *   V2-KERNEL's [ManagedHost.onLifecycle]. `CellDetail.attention` stops being
  *   a hard-coded null in the same wave, off [ManagedHost.attentionOf].
  *
+ * WKB2 F5 adds the opt-in **write plane** (see [WritePlane] and [WriteGate]) —
+ * the one place this otherwise read-only instrument accepts graph edits, and
+ * only when the embedding process constructs it with [WritePlane.Enabled]:
+ *
+ * - `GET /api/inspect/capabilities` — a [CapabilitiesDto] saying whether it did;
+ * - `POST /api/inspect/apply/precheck` — a placeholder mutating route that
+ *   exists to prove the gate, replaced by WKB2 F6.
+ *
  * ### What it can and cannot see
  *
  * The inspector reads one [LocationRegistry]. **Cells on registry-less hosts
@@ -152,6 +164,14 @@ class InspectorServer internal constructor(
      */
     uiDist: Path = defaultUiDist(),
     /**
+     * WKB2 F5 — whether this inspector accepts graph edits, and from whom.
+     * [WritePlane.Disabled] by default (`[WKB2-06]`): nothing about the server
+     * behaves differently then, except that `GET /capabilities` says so and the
+     * write routes answer 404. Enabling it changes no bind: the shell is still
+     * asked for loopback (`[WKB2-08]`, see [shell]).
+     */
+    private val writePlane: WritePlane = WritePlane.Disabled,
+    /**
      * Where [shell] comes from — [Shells.Real] for every caller outside this
      * module, and the seam that makes T19's **named**-port half assertable
      * (see [Shells], computenet-lxq).
@@ -181,7 +201,8 @@ class InspectorServer internal constructor(
         cellNames: Map<CellRef, String> = emptyMap(),
         netName: String = Node.LOCAL_NET,
         uiDist: Path = defaultUiDist(),
-    ) : this(registry, hosts, port, cellNames, netName, uiDist, Shells.Real)
+        writePlane: WritePlane = WritePlane.Disabled,
+    ) : this(registry, hosts, port, cellNames, netName, uiDist, writePlane, Shells.Real)
 
     /** Name the hosts by ref — the convenience form when the app has no names of its own. */
     constructor(registry: LocationRegistry, hosts: Set<ManagedHost>, port: Int = DEFAULT_PORT) :
@@ -208,6 +229,9 @@ class InspectorServer internal constructor(
      */
     private val shell = shells.open(port, InetAddress.getLoopbackAddress())
     private val broadcaster = SseBroadcaster()
+
+    /** WKB2 F5 — called first by every write-plane route (see [WriteGate]). */
+    private val writeGate = WriteGate(writePlane)
 
     /**
      * V1C-BE — the one registry, held rather than only captured, so
@@ -505,6 +529,21 @@ class InspectorServer internal constructor(
             runCatching { serveSearch(exchange) }
                 .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
         }
+        // WKB2 F5 — the write plane's advertisement and its (placeholder)
+        // mutating route. Neither path prefixes, or is prefixed by, any other
+        // route here — see [CAPABILITIES_PATH] and [APPLY_PATH].
+        shell.route(CAPABILITIES_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            if (exchange.requestMethod != "GET") {
+                return@route exchange.respond(404, problem("expected GET /capabilities"), JSON)
+            }
+            exchange.respond(200, inspectorJson.encodeToString(CapabilitiesDto.serializer(), capabilities()), JSON)
+        }
+        shell.route(APPLY_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            runCatching { serveApply(exchange) }
+                .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
+        }
         shell.route(EVENTS_PATH) { exchange ->
             exchange.allowCrossOrigin()
             exchange.beginSse()
@@ -607,6 +646,41 @@ class InspectorServer internal constructor(
             }.toString(),
             JSON,
         )
+    }
+
+    /** `GET /capabilities`'s body: `{"writePlane":false}` unless this server was opted in. */
+    private fun capabilities(): CapabilitiesDto = when (val plane = writePlane) {
+        WritePlane.Disabled -> CapabilitiesDto(writePlane = false)
+        is WritePlane.Enabled -> CapabilitiesDto(writePlane = true, verbs = plane.verbs, identity = plane.identityLabel)
+    }
+
+    /**
+     * The `/apply/…` subtree — one route today, `POST .../precheck`, and a
+     * **placeholder**: WKB2 F5 needs a mutating route to prove [WriteGate] on,
+     * and WKB2 F6 replaces this body with the real precheck.
+     *
+     * The order is the point. The route shape is checked first (anything but
+     * `POST /apply/precheck` is a 404, as [serveGraph] does), then the gate —
+     * which refuses without reading the body — and only an admitted request
+     * reaches the body at all: malformed JSON is `400 malformed body`,
+     * well-formed is `501 precheck not implemented`. The two distinct reasons
+     * are what let a test tell "refused by the gate" from "passed the gate and
+     * read the body".
+     */
+    private fun serveApply(exchange: HttpExchange) {
+        if (exchange.tailSegments(APPLY_PATH) != listOf(PRECHECK) || exchange.requestMethod != "POST") {
+            return exchange.respond(404, problem("expected POST /apply/precheck"), JSON)
+        }
+        when (val admission = writeGate.admit(exchange)) {
+            is WriteGate.Admission.Refused -> exchange.respondRefusal(admission)
+            is WriteGate.Admission.Admitted -> {
+                val body = exchange.requestBody.use { it.readBytes().toString(Charsets.UTF_8) }
+                if (runCatching { Json.parseToJsonElement(body) }.isFailure) {
+                    return exchange.respond(400, problem("malformed body"), JSON)
+                }
+                exchange.respond(501, problem("precheck not implemented"), JSON)
+            }
+        }
     }
 
     private fun serveCell(exchange: HttpExchange) {
@@ -1069,6 +1143,24 @@ class InspectorServer internal constructor(
         const val GRAPH_PATH = "$BASE_PATH/graph"
         const val SEARCH_PATH = "$BASE_PATH/search"
 
+        /**
+         * WKB2 F5 — the write plane's advertisement (`[WKB2-51]`), a read like
+         * any other. Neither a prefix nor a prefixee of any other route under
+         * [BASE_PATH] (`cell` is not `capabilities`), so it is exempt from the
+         * registration-order discipline [GRAPH_PATH] documents.
+         */
+        const val CAPABILITIES_PATH = "$BASE_PATH/capabilities"
+
+        /**
+         * WKB2 F5 — the write plane's mutating subtree, gated by [WriteGate];
+         * today only the placeholder `POST $APPLY_PATH/precheck`. Neither a
+         * prefix nor a prefixee of any existing route under [BASE_PATH]
+         * (`activity` is not `apply`), so no registration-order care is needed
+         * yet. WKB2 F6 adds `applies` beside it, which `apply` *does* prefix —
+         * that feature owns the ordering [GRAPH_PATH] describes.
+         */
+        const val APPLY_PATH = "$BASE_PATH/apply"
+
         /** Contract §SSE: "Server sends `heartbeat` every 15 s". */
         const val HEARTBEAT_SECONDS = 15L
 
@@ -1161,6 +1253,7 @@ class InspectorServer internal constructor(
         private const val STATE = "state"
         private const val OBSERVE = "observe"
         private const val WAKE = "wake"
+        private const val PRECHECK = "precheck"
 
         /**
          * T19 — required on every `POST .../wake`; see that route's KDoc and
@@ -1185,7 +1278,8 @@ class InspectorServer internal constructor(
             return CellRef(id, instance)
         }
 
-        private fun problem(reason: String): String =
+        /** The `{"reason": …}` body every refusal carries; internal so [WriteGate]'s routes share it. */
+        internal fun problem(reason: String): String =
             buildJsonObject { put("reason", reason) }.toString()
     }
 }
@@ -1238,7 +1332,7 @@ private fun HttpExchange.noContent() {
  * [InspectorServer]'s own `shell` binds `InetAddress.getLoopbackAddress()` —
  * is not reachable from anywhere but this machine to begin with.
  *
- * Two things served through this helper are *not* reads, and saying so is the
+ * Three things served through this helper are *not* reads, and saying so is the
  * whole point of this rewrite:
  *
  * - `POST GRAPH_PATH/{id}/wake` is a management mutation ([Waker.wake] resumes
@@ -1250,6 +1344,16 @@ private fun HttpExchange.noContent() {
  *   between `observe` and anything off this machine is the loopback bind.
  *   Recorded here rather than quietly widened, so the next reader is not told
  *   again that everything behind this helper is read-only.
+ * - The **write plane**'s routes (WKB2 F5; today `POST APPLY_PATH/precheck`)
+ *   mutate the graph once F6 lands, and every one calls [WriteGate] first: 404
+ *   while the plane is [WritePlane.Disabled], then 400 without
+ *   [WriteGate.WRITE_HEADER], then 403 for a value that is not the process
+ *   capability — all before the body is read. That header is non-simple too,
+ *   so the same no-`OPTIONS`, fail-closed preflight argument as the wake
+ *   route's applies. The wake route does **not** go through [WriteGate]
+ *   (`[WKB2-50]`): its own [WAKE_HEADER] gate is unchanged and narrower on
+ *   purpose — a wake resumes what already exists, it builds nothing — and
+ *   `observe` stays as described above. `GET CAPABILITIES_PATH` is a read.
  *
  * This stays one helper for all of them because the wildcard origin header
  * alone was never the problem on the wake route; the problem was treating "no
