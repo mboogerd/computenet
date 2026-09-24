@@ -214,4 +214,46 @@ class ReconstructionShapeTest {
         }
         reconstruction.run.reasons shouldContainAll listOf(Reason.RECOVERY_INCOMPLETE, Reason.FRAME_UNPARSEABLE)
     }
+
+    // computenet-6tm33.4 review: the offset half of `recordIndex = anchor + e.recordIndex`
+    // (6tm33-D7). In the landed format a checkpoint is only ever record 0, so `stateAt`'s anchor
+    // is always 0 and no end-to-end case can tell the offset from its absence; this drives the
+    // protected `replayInto` seam directly with a non-zero `from`, so the kernel numbers the bad
+    // record `bad - from` and only the offset maps it back to the timeline index `bad`.
+    @Test
+    fun aRecoveryIncompleteFromANonZeroReplayStartIsReportedAtItsTimelineIndex() {
+        val recording = DurableGraphFixture.record(
+            seed = 11,
+            sourceCount = 1,
+            script = listOf(0 to "a", 0 to "b", 0 to "c"),
+        )
+        val bad = recording.steps[2].proxyIndex
+        val records = recording.journal.replay().toMutableList()
+        records[bad] = byteArrayOf(1) + "{not json".encodeToByteArray()
+        val reading = JournalReader.open(JournalSource.InMemory(InMemoryJournal().apply { reset(records) }, "j"))
+        val timeline = RunTimeline.of(reading).getValue("j")
+        val from = 1
+        val until = timeline.size
+
+        val detail = ReplayFrom(reading, timeline, GraphSpecSource(recording.spec)).replay(from, until)
+
+        detail.shouldBeInstanceOf<RecoveryIncomplete>()
+        detail.recordIndex shouldBe bad
+        detail.total shouldBe until - from
+    }
+
+    private class ReplayFrom(
+        reading: civictech.timetravel.journal.JournalReading,
+        timeline: RunTimeline,
+        graph: GraphSource,
+    ) : Reconstructor(reading, timeline, graph) {
+        fun replay(from: Int, until: Int): RecoveryIncomplete? {
+            val session = openSession(from)
+            try {
+                return replayInto(session, from, until)
+            } finally {
+                close(session)
+            }
+        }
+    }
 }
