@@ -30,9 +30,9 @@ checks the implementation against requirement ids embedded in the spec.
       :demo:shopping┤       pure HTTP/SSE plumbing)   :demo:shopping,
       :demo:exchange┘            ▲                    :demo:skillmatch —
       :demo:{agora,slotfinder,skillmatch,tiering,backlog-triage}    --inspect-port)
+                                  (every runnable demo depends on :demo:shell)
 
                 :kernel ◄── :timetravel  (offline journal reader / reconstruction / diff; TTD1)
-                                  (every runnable demo depends on :demo:shell)
 ```
 
 `:gen` is a `ksp(...)`-only (processor-time) dependency of `:kernel` and every
