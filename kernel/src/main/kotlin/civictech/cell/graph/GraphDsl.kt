@@ -311,14 +311,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
                         refs[step.handle] = ref
                         results[step.handle] = StepResult.Applied(ref)
-                        progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
                     } catch (e: Exception) {
                         // dead-lettered on the target host already (ManagedHost.spawnBound);
                         // here we only fold the outcome into the report, never rethrow —
                         // the wire form never surfaces a synchronous cross-wire reply.
                         results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
-                        progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
                     }
+                    // Outside the try: a throw from the callback propagates (D2) and
+                    // is never folded into the report as the step's own failure.
+                    progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
                 }
 
                 is ConnectStep -> {
@@ -329,19 +330,17 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         results[key] = StepResult.Rejected(
                             "endpoint not constructed: '${step.from}' or '${step.to}' was rejected/missing",
                         )
-                        progress.onStep(StepEvent(index, key, results.getValue(key)))
                     } else {
                         try {
                             when (val result = host.call.connect(from, step.outlet, to, step.inlet)) {
                                 is LinkResult.Rejected -> results[key] = StepResult.Rejected(result.reason)
                                 else -> results[key] = StepResult.Applied(null)
                             }
-                            progress.onStep(StepEvent(index, key, results.getValue(key)))
                         } catch (e: Exception) {
                             results[key] = StepResult.Rejected(e.message ?: e.toString())
-                            progress.onStep(StepEvent(index, key, results.getValue(key)))
                         }
                     }
+                    progress.onStep(StepEvent(index, key, results.getValue(key)))
                 }
 
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.

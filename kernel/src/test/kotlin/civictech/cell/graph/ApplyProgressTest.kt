@@ -10,6 +10,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
@@ -104,6 +105,32 @@ class ApplyProgressTest {
         (oneArgReport.results.getValue("dup") is StepResult.Rejected) shouldBe true
         oneArgReport.results.getValue("a") shouldBe StepResult.Applied(refA)
         oneArgReport.results.getValue("b") shouldBe StepResult.Applied(refB)
+    }
+
+    private class ProgressBoom : RuntimeException("progress callback failed")
+
+    /**
+     * computenet-4jdw0-D2: a throw from `onStep` propagates to the applier and
+     * is NOT folded into the report as the step's own failure — the step
+     * reported exactly once, with its real (Applied) outcome, and the apply
+     * stops there.
+     */
+    @Test
+    fun `a throwing progress callback propagates and never re-reports the step as rejected`() {
+        val controller = SimulationController(seed = 13)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val liveRef = CellRef(UUID.randomUUID())
+        host.managementInlet.call.spawn(SetCell<String>(ref = liveRef))
+
+        val seen = mutableListOf<StepEvent>()
+        shouldThrow<ProgressBoom> {
+            specWithFourSteps(liveRef).applyRemote(host.managementInlet) { seen += it; throw ProgressBoom() }
+        }
+        controller.runToIdle()
+
+        seen.size shouldBe 1
+        seen.single().handle shouldBe "a"
+        (seen.single().result is StepResult.Applied) shouldBe true
     }
 
     // --- rule 2: ApplyProgressCell (computenet-4jdw0.2, computenet-4jdw0-D3) ---
