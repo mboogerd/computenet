@@ -23,6 +23,7 @@ import civictech.nature.ModuleId
 import civictech.nature.StableHash
 import civictech.timetravel.fidelity.Fidelity
 import civictech.timetravel.fidelity.Reason
+import civictech.timetravel.fidelity.ReplayStable
 import civictech.timetravel.journal.FrameRecord
 import civictech.timetravel.journal.FrontierRecord
 import civictech.timetravel.journal.JournalReader
@@ -107,6 +108,27 @@ class EffectfulReconstructionSuppressedTest {
                 }
             })
         }
+    }
+
+    /**
+     * NOT `Effectful` but `Stateful`, over a registered effect contract: the only kind of cell whose
+     * `EFFECTFUL_CELL` verdict comes from [Reconstructor.observe]'s suppression union and not from
+     * [civictech.timetravel.fidelity.ReplayStable.classify].
+     */
+    class StatefulContractEffectCell(override val ref: CellRef, private val world: MutableList<Int>) : Cell, Stateful {
+        val inlet = registerPort("inlet", FanInlet.create<TestEffectApi>())
+
+        init {
+            inlet.serve(object : TestEffectApi {
+                override fun fire(n: Int) {
+                    world += n
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = world.size
+
+        override fun restore(state: Serializable) {}
     }
 
     private class Recorded(
@@ -230,6 +252,73 @@ class EffectfulReconstructionSuppressedTest {
             EffectSuppression.apply(GraphBuild(listOf(cell))) shouldBe mapOf(cell.ref to setOf("inlet"))
             cell.inlet.call.fire(7)
             world.shouldBeEmpty()
+        } finally {
+            ContractRegistry.unregister(module)
+        }
+    }
+
+    @Test
+    fun `a ScrubCursor stepping forward over the burst does not fire it (suppression survives a forward step)`() {
+        val recorded = record(checkpoint = false)
+        val reading = JournalReader.open(JournalSource.InMemory(recorded.journal, "j"))
+        val timeline = RunTimeline.of(reading).getValue("j")
+        val graph = GraphSource { host ->
+            val sink2 = CountingSink(recorded.sinkRef, recorded.world)
+            host.managementInlet.call.spawn(sink2)
+            GraphBuild(listOf(sink2))
+        }
+        ScrubCursor(reading, timeline, graph).use { cursor ->
+            // opened before the burst: every record up to the last frontier, none of the burst's frames
+            cursor.at(Position.Index(timeline.size - 3))
+            val before = cursor.prefixEnd
+            // the forward step feeds exactly the two burst frames to the live, already-suppressed host
+            val last = cursor.at(Position.Index(timeline.size - 1))
+            cursor.prefixEnd shouldBe timeline.size
+            (cursor.prefixEnd!! - before!!) shouldBe 2
+
+            recorded.world shouldBe listOf(1, 2, 3)
+            assertEffectVerdict(last, recorded.sinkRef, snapshot = 0)
+        }
+    }
+
+    @Test
+    fun `a non-Effectful cell whose effect-contract inlet was suppressed is at most Degraded(EFFECTFUL_CELL) end to end`() {
+        val recorded = record(checkpoint = false)
+        val reading = JournalReader.open(JournalSource.InMemory(recorded.journal, "j"))
+        val timeline = RunTimeline.of(reading).getValue("j")
+        val module = ModuleId("timetravel-effect-test-observe")
+        val fqn = TestEffectApi::class.java.name.replace('$', '.')
+        ContractRegistry.register(
+            object : ContractModule {
+                override val contracts = listOf(
+                    ContractDescriptor(
+                        contractId = StableHash.of(fqn),
+                        fqn = fqn,
+                        management = false,
+                        effect = true,
+                        methods = listOf(MethodDescriptor(StableHash.of("$fqn#fire(I)V"), "fire", "(I)V")),
+                    ),
+                )
+            },
+            module,
+        )
+        try {
+            val contractRef = CellRef(UUID(7, 4))
+            val graph = GraphSource { host ->
+                val sink2 = CountingSink(recorded.sinkRef, recorded.world)
+                val contractCell = StatefulContractEffectCell(contractRef, mutableListOf())
+                host.managementInlet.call.spawn(sink2)
+                host.managementInlet.call.spawn(contractCell)
+                GraphBuild(listOf(sink2, contractCell))
+            }
+            // classify alone would call the class Faithful: the EFFECTFUL_CELL below is the suppression's
+            val stable = ReplayStable(extraFaithful = setOf(StatefulContractEffectCell::class.java))
+            val reconstruction = Reconstructor(reading, timeline, graph, replayStable = stable)
+                .stateAt(Position.Index(timeline.size - 1))
+
+            val cell = reconstruction.cells.getValue(contractRef).shouldBeInstanceOf<CellReconstruction.Reconstructed>()
+            cell.fidelity shouldBe Fidelity.Degraded(setOf(Reason.EFFECTFUL_CELL))
+            reconstruction.details shouldContain EffectInletsSuppressed(contractRef, setOf("inlet"))
         } finally {
             ContractRegistry.unregister(module)
         }
