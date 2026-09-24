@@ -22,7 +22,7 @@ import java.util.UUID
  */
 class ReconstructAtWaveTest {
 
-    /** A cell with no state at all — the `[TTD1-25]` case. Not `Stateful`, not `Effectful`. */
+    /** A cell with no state at all — the `[TTD1-25]` case. Not `Stateful`, and has no effects. */
     class Opaque(override val ref: CellRef) : Cell
 
     private val script = listOf("a", "b", "c", "d", "e").map { 0 to it }
