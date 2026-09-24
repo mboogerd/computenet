@@ -45,8 +45,9 @@ data class GraphMismatch(val ref: CellRef) : ReconstructionDetail {
 }
 
 /**
- * The [GraphSource] returned fewer refs than the journal touches; [unreturned] is what it
- * failed to account for ([Reason.GRAPH_SOURCE_INCOMPLETE]).
+ * The [GraphSource] spawned cells onto the host that it did not return in its [GraphBuild];
+ * [unreturned] is those refs ([Reason.GRAPH_SOURCE_INCOMPLETE], 6tm33-D2/D11). A ref the journal
+ * touches but the graph lacks is [GraphMismatch], not this.
  */
 data class GraphSourceIncomplete(val unreturned: Set<CellRef>) : ReconstructionDetail {
     override val reason: Reason = Reason.GRAPH_SOURCE_INCOMPLETE
