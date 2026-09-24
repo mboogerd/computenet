@@ -171,21 +171,7 @@ class SocialServerTest {
     // unrelated `observe-cell-` thread that happens to be alive in the same
     // JVM (another test class's dispatcher still winding down) — a false
     // positive/negative the old raw-count comparison could not tell apart
-    // from a real leak. A local reproduction (`DIAG` instrumentation, since
-    // reverted) showed the actual mechanism behind the two recorded CI
-    // timeouts: SocialApp(source = SnbGenerator(42, 0.05)).start() calls
-    // SocialGraph.onChange, which retroactively attaches a listener to every
-    // per-key sink the static load already created — 297 sinks in that run —
-    // and each attach's late-join catch-up (Observe.kt:235) mints that sink's
-    // OWN dispatcher thread. stop() returns after closing all of them, but
-    // shutdown() only starts an orderly stop; on a 16-core machine the last
-    // straggler was gone well under a second later, but that is 297 near-
-    // simultaneous OS thread creations and shutdowns, the kind of burst a
-    // constrained-core CI runner can plausibly take tens of seconds to drain.
-    // The survivors on both recorded occurrences are therefore this app's own
-    // — not another test's dispatcher, the hypothesis this rewrite was asked
-    // to check — which is a production-shaped slow-close, not a test defect;
-    // see the bead comment for the files and clause that fix needs.
+    // from a real leak.
 
     /** Live threads whose name starts with `observe-cell-` (`ObserveCell`'s dispatcher naming). */
     private fun observeCellThreadNames(): Set<String> {
