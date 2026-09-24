@@ -2,10 +2,20 @@ package civictech.timetravel.reconstruct
 
 import civictech.cell.CellRef
 import civictech.timetravel.fidelity.Fidelity
+import civictech.cell.durability.InMemoryJournal
 import civictech.timetravel.fidelity.Reason
+import civictech.timetravel.journal.JournalReader
+import civictech.timetravel.journal.JournalSource
+import civictech.timetravel.journal.MalformedRecord
 import civictech.timetravel.timeline.Position
+import civictech.timetravel.timeline.RunTimeline
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.collections.shouldContainAll
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldNotBeBlank
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
@@ -162,5 +172,46 @@ class ReconstructionShapeTest {
     fun ofRendersAScalar() {
         val view = CellStateView.of(42)
         view shouldBe CellStateView("scalar", "42", listOf("value" to "42"))
+    }
+
+    // -- [TTD1-32]: a recoverFrom that aborts surfaces as RecoveryIncomplete, never silently. --
+
+    // computenet-6tm33.4: a proxy frame replaced by bytes that are a frame by type (1) but not
+    // JSON makes the kernel's `recoverFrom` throw `RecoveryIncomplete` at that record; the
+    // reconstruction reports it at its timeline index, and the reader's own classification of the
+    // same record (FRAME_UNPARSEABLE) reaches the verdict through `journalDefectsUpTo`.
+    @Test
+    fun anAbortedRecoveryIsReportedAsRecoveryIncompleteAtTheBadRecordsTimelineIndex() {
+        val recording = DurableGraphFixture.record(
+            seed = 11,
+            sourceCount = 1,
+            script = listOf(0 to "a", 0 to "b", 0 to "c"),
+        )
+        val bad = recording.steps[1].proxyIndex
+        val records = recording.journal.replay().toMutableList()
+        records[bad] = byteArrayOf(1) + "{not json".encodeToByteArray()
+        val journal = InMemoryJournal().apply { reset(records) }
+        val reading = JournalReader.open(JournalSource.InMemory(journal, "j"))
+        val timeline = RunTimeline.of(reading).getValue("j")
+        val last = timeline.size - 1
+
+        val malformed = reading.records.toList()[bad].shouldBeInstanceOf<MalformedRecord>()
+        malformed.reason shouldBe Reason.FRAME_UNPARSEABLE
+
+        val reconstruction = Reconstructor(reading, timeline, GraphSpecSource(recording.spec))
+            .stateAt(Position.Index(last))
+
+        val detail = reconstruction.details.single().shouldBeInstanceOf<RecoveryIncomplete>()
+        detail.recordIndex shouldBe bad
+        detail.total shouldBe last + 1 - reconstruction.position.anchor
+        detail.total shouldBe last + 1
+        detail.cause.shouldNotBeBlank()
+        reconstruction.position.replayedRecords shouldBe last + 1
+        reconstruction.cells.keys shouldBe recording.refs.all
+        reconstruction.cells.values.forEach { cell ->
+            cell.fidelity.reasons shouldContain Reason.RECOVERY_INCOMPLETE
+            cell.fidelity shouldNotBe Fidelity.Faithful
+        }
+        reconstruction.run.reasons shouldContainAll listOf(Reason.RECOVERY_INCOMPLETE, Reason.FRAME_UNPARSEABLE)
     }
 }
