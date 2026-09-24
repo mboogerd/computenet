@@ -919,3 +919,26 @@ data class SearchCost(
     /** Candidate cells skipped as not hot — suspended, or held mid-migration. */
     val coldSkipped: Int,
 )
+
+/**
+ * `GET /api/inspect/capabilities` (WKB2 F5, `[WKB2-06]`, `[WKB2-51]`) — whether
+ * this inspector accepts graph edits, and if so which verbs and under what
+ * identity. A client offers editing only when [writePlane] is true.
+ *
+ * Disabled, the body is **exactly** `{"writePlane":false}`: [verbs] and
+ * [identity] are `@EncodeDefault(NEVER)` against the module-wide
+ * `encodeDefaults = true` (see [inspectorJson]), because on a disabled plane
+ * they are not "null" — there is no verb list and no identity to report.
+ * Enabled, both are present:
+ * `{"writePlane":true,"verbs":["spawn","connect","despawn"],"identity":"capability-holder"}`.
+ */
+@Serializable
+data class CapabilitiesDto(
+    val writePlane: Boolean,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @OptIn(ExperimentalSerializationApi::class)
+    val verbs: List<String>? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @OptIn(ExperimentalSerializationApi::class)
+    val identity: String? = null,
+)
