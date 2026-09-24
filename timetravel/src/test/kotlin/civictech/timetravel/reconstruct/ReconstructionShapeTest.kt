@@ -35,6 +35,16 @@ class ReconstructionShapeTest {
         offending shouldBe emptyList()
     }
 
+    // Exact-type equality above only catches a field literally typed `Serializable` or
+    // `CellStateView`; a value smuggled in under any other type (a `Serializable` subtype, or
+    // `Any`) would slip past it. This closes that gap: `Unreconstructible` must declare exactly
+    // its two documented fields (`cellClass`, `fidelity`) and no other, of any type.
+    @Test
+    fun unreconstructibleDeclaresExactlyCellClassAndFidelityAndNoOtherField() {
+        val fieldNames = CellReconstruction.Unreconstructible::class.java.declaredFields.map { it.name }.toSet()
+        fieldNames shouldBe setOf("cellClass", "fidelity")
+    }
+
     @Test
     fun reconstructedDeclaresBothASerializableAndACellStateViewProperty() {
         val fields = CellReconstruction.Reconstructed::class.java.declaredFields
