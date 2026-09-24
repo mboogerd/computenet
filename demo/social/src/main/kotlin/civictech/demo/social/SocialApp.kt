@@ -34,6 +34,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -136,6 +138,20 @@ class SocialApp(
     private val spawner: InterestDrivenFamily? =
         if (interestDriven) InterestDrivenFamily(pipeline.families.authored) else null
 
+    // computenet-pvtcj: this app's own pool for FeedSession.fanOut to
+    // dispatch spawner.admit() onto (Feed.kt's companion KDoc explains why a
+    // separate thread is needed). Null unless interestDriven, matching
+    // [spawner] above — every FeedSession this app builds gets this instance
+    // instead of FeedSession's own (unused-here) default, so [stop] can shut
+    // it down rather than leaving its daemon threads running past the app's
+    // lifetime.
+    private val spawnExecutor: ExecutorService? =
+        if (interestDriven) {
+            Executors.newCachedThreadPool { r -> Thread(r, "FeedSession-spawn").apply { isDaemon = true } }
+        } else {
+            null
+        }
+
     /**
      * A scatter-gather feed for [viewer] over the authored cells [scope]
      * admits (feature `computenet-8eb53`). The scope is the caller's, fixed
@@ -143,7 +159,11 @@ class SocialApp(
      * and `SocialFeedScatterGatherTest` use this overload directly.
      */
     fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
-        FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
+        if (spawnExecutor != null) {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner, spawnExecutor)
+        } else {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
+        }
 
     /**
      * `/feed`'s session (4q9is-D8): the scope is [ViewerInterest], derived
@@ -151,16 +171,14 @@ class SocialApp(
      * session itself tracks a friend add/remove, so [feedSessions] below
      * never needs to rebuild it.
      */
-    fun feedSession(viewer: Long, pageLimit: Int = 200): FeedSession =
-        FeedSession(
-            viewer,
-            ViewerInterest(locator, boundedReader, registry, pageLimit),
-            pipeline.families,
-            registry,
-            boundedReader,
-            pageLimit,
-            spawner,
-        )
+    fun feedSession(viewer: Long, pageLimit: Int = 200): FeedSession {
+        val scope = ViewerInterest(locator, boundedReader, registry, pageLimit)
+        return if (spawnExecutor != null) {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner, spawnExecutor)
+        } else {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
+        }
+    }
 
     /**
      * `/feed`'s per-viewer [FeedSession] cache (4q9is-D8): one session per
@@ -269,12 +287,18 @@ class SocialApp(
      * the same way and for the same reason [SocialGraph.close] does — the
      * sole implementation `host.observe` ever returns, and the one that
      * exposes `close`. Idempotent, since both [SocialGraph.close] and
-     * [ObserveCell.close] are.
+     * [ObserveCell.close] are. computenet-pvtcj: also shuts down [spawnExecutor]
+     * when this app minted one (`interestDriven = true`), so no
+     * `FeedSession-spawn` thread outlives the app; `shutdownNow` rather than
+     * `shutdown`, since a pending `admit()` running past `stop()` would race
+     * a graph this method just closed. `ExecutorService.shutdownNow` is
+     * itself idempotent.
      */
     fun stop() {
         shell?.stop()
         graph.close()
         listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
+        spawnExecutor?.shutdownNow()
     }
 
     /** A no-op until [start] built the shell. */
