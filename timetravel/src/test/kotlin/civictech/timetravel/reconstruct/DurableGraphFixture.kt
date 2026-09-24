@@ -48,8 +48,10 @@ object DurableGraphFixture {
      * One scripted `add` and what it did: [proxyIndex] is the journal length
      * just before the add was issued (the record it will occupy, if the
      * source cell is journaled); [lastIndex] is the journal length minus one
-     * just after the drive settled (the last record this step wrote, source
-     * frame through every reactive re-emission downstream); [liveSnapshots]
+     * just after the drive settled (the last record this step wrote — only
+     * source frames are journaled here, locally-linked downstream deliveries
+     * never are, so this equals [proxyIndex]; see GraphSpecSourceTest's
+     * record-shape test); [liveSnapshots]
      * is every graph cell's [Stateful.snapshot] right after this step.
      */
     data class Step(
