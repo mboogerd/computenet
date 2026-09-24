@@ -278,6 +278,12 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     }
 
     /**
+     * [applyRemote] with no progress observer (computenet-4jdw0-D2) — every
+     * existing caller's behaviour and returned [ApplyReport] are unchanged.
+     */
+    fun applyRemote(host: Use<HostManagementApi>): ApplyReport = applyRemote(host, ApplyProgress { })
+
+    /**
      * Remote application (93 I-21 §4.4, G-51): every spawn step ships through
      * [HostManagementApi.spawnBound] — the factory-based wire form, never a
      * live [Cell]. Loud failure degrades from synchronous to asynchronous:
@@ -288,11 +294,16 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
      * the decided **partial + report** semantics; compensating rollback of
      * the successful prefix (full partial-apply *atomicity*) is explicitly
      * research-gated (95 §R4) and is NOT implemented here.
+     *
+     * [progress] is invoked synchronously, once per [lowered] step, in step
+     * order, immediately after that step's [StepResult] is folded into the
+     * returned [ApplyReport] (computenet-4jdw0-D1/D2) — every branch that
+     * writes a [StepResult] reports its [StepEvent] before the next step runs.
      */
-    fun applyRemote(host: Use<HostManagementApi>): ApplyReport {
+    fun applyRemote(host: Use<HostManagementApi>, progress: ApplyProgress): ApplyReport {
         val refs = mutableMapOf<String, CellRef>()
         val results = mutableMapOf<String, StepResult>()
-        lowered().forEach { step ->
+        lowered().forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
                     val parentRef = step.parent?.let { refs[it] }
@@ -306,6 +317,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         // the wire form never surfaces a synchronous cross-wire reply.
                         results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
                     }
+                    // Outside the try: a throw from the callback propagates (D2) and
+                    // is never folded into the report as the step's own failure.
+                    progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
                 }
 
                 is ConnectStep -> {
@@ -326,6 +340,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                             results[key] = StepResult.Rejected(e.message ?: e.toString())
                         }
                     }
+                    progress.onStep(StepEvent(index, key, results.getValue(key)))
                 }
 
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
