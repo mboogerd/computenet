@@ -1431,7 +1431,108 @@ whatever lands. This entry does not implement IC5, IC6, IC12, `topKBy`,
 `doc/spec/90-roadmap/91-gap-analysis.md` or `doc/spec/CONCORDANCE.md`
 (`[SOC1-FIND-01]`).
 
-## F-24 — The journal carries no topology and per-cell journals have no manifest, so offline reconstruction needs a caller-supplied graph
+## F-24 — the kernel joins `Interest` to no spawn path: `InterestDrivenFamily` is the demo-layer join, and it has to run off the host's own thread to do it
+
+**Observation**: epic `computenet-07k` §3.2 states the gap directly ("Honest
+statement of what does not exist"), and feature `computenet-4q9is` task
+`computenet-4q9is.2` confirms it against the code, not just the prose, at
+`origin/main` 9bf4d0e3:
+
+- `KeyedCells.getOrSpawn(key)` (`kernel/src/main/kotlin/civictech/cell/host/KeyedCells.kt:71`)
+  is touch-driven — an explicit app call, with no `Interest` parameter
+  anywhere in the class and no link/handshake/subscription hook.
+- `LocationRegistry.setInterest`/`interestOf` (`InstanceIndex.kt:71-77`) only
+  *record* a declaration; nothing reads it back to trigger a spawn.
+- Every `spawn(` site in kernel main is explicit, touch-driven the same way.
+  `doc/spec/00-foundations/01-vision.md:38` asserts "Execution is
+  **interest-driven**" as a goal PN-5's own machinery (`[42-INT-01]`) does not
+  yet reach as far as instantiation — only demand-scoped propagation once an
+  instance already exists.
+
+So SOC1 joins the two halves at the demo layer
+(`demo/social/src/main/kotlin/civictech/demo/social/InterestDrivenFamily.kt`):
+`admit(scope: Interest)` walks every key a `Ranges` scope names and calls
+`KeyedCells.getOrSpawn` for any the family does not already know, durably
+(`authored/keys`); `FeedSession` (`Feed.kt`) takes an optional
+`spawner: InterestDrivenFamily?` and calls `admit` after deriving a pull's
+scope and before enumerating legs, so an admitted-but-absent friend gets a
+leg from that pull on (`[SOC1-INT-04]`, pinned by `SocialInterestTest`).
+`SocialApp(interestDriven = true)` wires it in; the default app does not, so
+`authored.keys()` never grows for a friend who has not posted unless a caller
+opts in.
+
+**A second, unplanned half of the same gap, found while wiring the join**:
+`KeyedCells.getOrSpawn`, for a key the family does not already hold, blocks
+synchronously on the host's own management call
+(`host.managementInlet.call.spawn(cell)`, `KeyedCells.kt:75`) — the same
+blocking RPC `SocialGraph.addPost` and every other existing `getOrSpawn`
+call site in `:demo:social` also goes through, but every one of THOSE calls
+happens on a plain application/test thread, never nested inside a callback
+the host itself is running. `admit()` cannot make that same assumption:
+`FeedSession.pull()`'s scope, for the derived (`ViewerInterest`) case, is
+itself the result of a bounded read, and the future it returns completes ON
+the host's own execution thread (the dedicated thread `VirtualThreadScheduler`
+drains its queue with in production; the calling thread's own re-entrant
+`SimulationController.stepOne()` frame in a simulated test). Calling a
+blocking spawn from directly inside that continuation trips the same
+deadlock guard `graph.addPost` never reaches: `VirtualThreadScheduler.await`
+refuses outright ("await called from the host's own execution context"),
+and `SimulationController`'s single-threaded stepper reports "simulation
+quiescent but awaited future incomplete" — both are the SAME fact, that
+`enqueueAwaiting`'s blocking wait cannot be satisfied by the very thread it
+would need to keep draining. `FeedSession.fanOut` works around this by
+dispatching `admit()` onto a small dedicated executor (`Feed.kt`'s
+`spawnExecutor`) rather than calling it inline, so the read's own completion
+always returns promptly and releases the host; a null `spawner` (every
+existing call site) takes the already-completed branch and runs exactly as
+before, inline.
+
+That workaround has its own sharp edge, measured rather than assumed:
+production's `VirtualThreadScheduler` drains its queue on one dedicated
+thread regardless of who else is waiting, so handing `admit()` to any other
+thread is exactly the "ordinary application thread" pattern every existing
+`getOrSpawn` call site already relies on — safe. `SimulationController`
+is not: its own KDoc says stepping and awaiting "are expected on one
+thread... not thread-safe by design", and a genuine background thread pool
+calling back into `enqueueAwaiting`'s `step()` loop *while* a test's own
+`runToIdle()` is also mid-loop is a real, observed race, not a theoretical
+one — an early version of `SocialInterestTest`'s `SOC1-INT-04` test, driven
+by a plain cached thread pool, passed alone and in short repeats but failed
+intermittently once run inside the full `:demo:social:test` suite with
+`java.lang.IllegalStateException: simulation quiescent but awaited future
+incomplete` — the SAME exception `fanOut`'s workaround exists to avoid,
+now thrown from the *other* thread because the two were mid-step at the same
+moment. `Feed.kt` makes `spawnExecutor` a package-internal `var` for exactly
+this reason: the test substitutes a queueing `Executor` it drains itself,
+top-level, between its own `runToIdle()` calls, so exactly one thread ever
+steps the controller. This is a second, narrower instance of the same
+underlying absence: a kernel-level interest-driven spawn would not need any
+caller-side executor at all, on either scheduler.
+
+**Why it's a gap**: a kernel seam that joined `Interest` to instantiation
+would not have this shape at all — spawning in response to a declared
+interest is naturally something the host's *own* machinery would trigger
+(on receipt of a link/handshake, the way `LocationRegistry.setInterest` is
+already recorded), not something appended by a caller reacting to a read
+result after the fact. That a demo-layer caller has to reach for a
+side-channel executor just to call an existing, synchronous, host-owned API
+from the "wrong" thread is itself evidence the seam is missing lower down:
+a first-class interest-driven spawn would run *as part of* the host's own
+dispatch, with no caller-side threading concern at all.
+
+**The open question, not a proposal**: whether `KeyedCells` or the linker
+(`Replication.maybeLink`, `[42-INT-01]`) should own the join from a declared
+`Interest` to `getOrSpawn`. Each placement has different things to decide
+that this finding does not answer: a `KeyedCells`-owned join would need to
+know which `Interest` scope it is watching and when that scope changes
+(today only a caller, like `ViewerInterest`, knows that); a linker-owned
+join would need a spawn authority the linker does not have today (it links
+existing instances, per `[42-INT-01]`'s own text — "each instance carries an
+`Interest`" — it does not create them) and a policy for who is allowed to
+conjure a new instance purely from another instance's stated demand. Neither
+question is resolved here.
+
+## F-25 — The journal carries no topology and per-cell journals have no manifest, so offline reconstruction needs a caller-supplied graph
 
 **Observation**: TTD1's `timetravel` CLI (`inspect`/`reconstruct`/`diff`,
 epic `computenet-ocv`) cannot reconstruct a crash artifact from the journal

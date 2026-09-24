@@ -424,18 +424,16 @@ class SocialComplexReadTest {
 
     @Test
     fun `a new friend after the session is cached is picked up on the next feed call`() {
-        // review repair (computenet-flfkm.4): SOC1-FEED-09 requires the cached
-        // FeedSession to be rebuilt when the viewer's friend-id set no longer
-        // matches session.scope. No existing test changed a viewer's friend set
-        // between two /feed calls, so a mutant that always reuses the cached
-        // session (deleting the `existing.scope.ranges == ranges` check) passed
-        // every test in this file (mutation observed 2026-09-23: SocialApp.kt's
-        // `if (existing != null && existing.scope.ranges == ranges) existing`
-        // mutated to `if (existing != null) existing` — `:demo:social:test
-        // --tests 'civictech.demo.social.SocialComplexReadTest' --rerun` still
-        // reported all 20 tests PASSED). This test fails under that mutation:
-        // person 3's message would never be read, since the stale session's
-        // scope only ever covered person 2.
+        // computenet-4q9is.3: /feed's cached FeedSession is never rebuilt on a
+        // friend change (SOC1-FEED-09 is now met by per-pull scope derivation,
+        // ViewerInterest, not by comparing a cached scope) — the session's own
+        // ScopeSource re-reads the viewer's `knows` set at the start of every
+        // pull, so a friend added between two /feed calls is picked up on the
+        // second call's pull with no session rebuild. The mutation this test
+        // catches: a FeedSession built with a one-shot fixed scope (the pre-
+        // 4q9is-D8 shape) captured at first use instead of ViewerInterest's
+        // derive-on-every-pull source. Under that mutation person 3's message
+        // would never be read, since the scope was fixed to {2} at construction.
         val app = SocialApp(port = 0).start()
         try {
             app.graph.addPerson(Person(1, "V", "One"))
@@ -457,6 +455,113 @@ class SocialComplexReadTest {
 
             val expected = """{"found":true,"messages":[${messageJson(20, 3, 300, "m20", 100)},${messageJson(10, 2, 100, "m10", 100)}]}"""
             probe.get("/feed?person=1&limit=20").body() shouldBe expected
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `an unfriended author's messages leave the feed and a new post by them is never read`() {
+        val app = SocialApp(port = 0).start()
+        try {
+            app.graph.addPerson(Person(1, "V", "One"))
+            app.graph.addPerson(Person(2, "A", "Two"))
+            app.graph.addPerson(Person(3, "B", "Three"))
+            app.graph.addKnows(1, 2, 1)
+            app.graph.addKnows(1, 3, 2)
+            app.graph.addForum(Forum(100, "f", moderatorId = 1))
+            app.graph.addPost(Message(10, creatorId = 2, creationDate = 100, content = "m10", forumId = 100))
+            app.graph.addPost(Message(20, creatorId = 3, creationDate = 200, content = "m20", forumId = 100))
+            awaitUntil("both initial posts to settle") {
+                app.graph.authored(2).size == 1 && app.graph.authored(3).size == 1
+            }
+
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(20, 3, 200, "m20", 100)},${messageJson(10, 2, 100, "m10", 100)}]}"""
+
+            // Unfriend 3, then have 3 post again: the removal narrows the
+            // NEXT pull's scope (4q9is-D6), so 3's leg is not read at all and
+            // the new post is never seen. Same date as the add: SocialGraph's
+            // undirected removal removes by element equality (SocialInterestTest
+            // pins the same idiom).
+            app.graph.removeKnows(1, 3, 2)
+            app.graph.addPost(Message(21, creatorId = 3, creationDate = 300, content = "m21", forumId = 100))
+            awaitUntil("the unfriend and the new post to settle") {
+                app.graph.personFacts(1).none { it is Knows && it.otherId == 3L } &&
+                    app.graph.authored(3).size == 2
+            }
+
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(10, 2, 100, "m10", 100)}]}"""
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `a friend change keeps the cached session's retained frontiers`() {
+        val readers = mutableListOf<RecordingReader>()
+        val app = SocialApp(port = 0, reader = { host -> RecordingReader(HostBoundedReader(host)).also { readers += it } }).start()
+        try {
+            app.graph.addPerson(Person(1, "V", "One"))
+            app.graph.addPerson(Person(2, "A", "Two"))
+            app.graph.addPerson(Person(3, "B", "Three"))
+            app.graph.addKnows(1, 2, 1)
+            app.graph.addForum(Forum(100, "f", moderatorId = 1))
+            app.graph.addPost(Message(10, creatorId = 2, creationDate = 100, content = "m10", forumId = 100))
+            awaitUntil("initial post to settle") { app.graph.authored(2).size == 1 }
+
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(10, 2, 100, "m10", 100)}]}"""
+
+            app.graph.addKnows(1, 3, 2)
+            app.graph.addPost(Message(20, creatorId = 3, creationDate = 300, content = "m20", forumId = 100))
+            awaitUntil("the new friend and post to settle") {
+                app.graph.personFacts(1).count { it is Knows } == 2 && app.graph.authored(3).size == 1
+            }
+
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(20, 3, 300, "m20", 100)},${messageJson(10, 2, 100, "m10", 100)}]}"""
+
+            // A's leg (person 2, an unchanged friend across both calls) must
+            // have been asked with a retained `since` on this second pull —
+            // under flfkm.4's rebuild-on-scope-change, the whole session (and
+            // every leg's frontier) was replaced, so this would have been null.
+            val authoredARef = app.pipeline.families.authored.getOrSpawn(2).ref
+            val lastRequestForA = readers.single().requestsFor(authoredARef).last()
+            (lastRequestForA.since != null) shouldBe true
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `a refused scope read answers 503 with the person read's own reason, never an empty feed`() {
+        // 4q9is-D4/D8: the viewer's snb-person read (ViewerInterest) refused
+        // fails the pull with ScopeUnavailable, which /feed maps to 503 with
+        // that refusal's reason — not READ_FAILED, and not a 200 empty board.
+        val refused = ConcurrentHashMap<CellRef, StateReadResult.Reason>()
+        val app = SocialApp(port = 0, reader = { host -> RefusingReader(HostBoundedReader(host), refused) }).start()
+        try {
+            app.graph.addPerson(Person(1, "V", "One"))
+            app.graph.addPerson(Person(2, "A", "Two"))
+            app.graph.addKnows(1, 2, 1)
+            app.graph.addForum(Forum(100, "f", moderatorId = 1))
+            app.graph.addPost(Message(10, creatorId = 2, creationDate = 100, content = "m10", forumId = 100))
+            awaitUntil("initial post to settle") { app.graph.authored(2).size == 1 }
+
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            refused[app.pipeline.families.person.getOrSpawn(1).ref] = StateReadResult.Reason.MIGRATING
+
+            val resp = probe.get("/feed?person=1&limit=20")
+            resp.statusCode() shouldBe 503
+            resp.body() shouldBe """{"refused":"MIGRATING"}"""
+
+            refused.clear()
+            probe.get("/feed?person=1&limit=20").body() shouldBe
+                """{"found":true,"messages":[${messageJson(10, 2, 100, "m10", 100)}]}"""
         } finally {
             app.stop()
         }
