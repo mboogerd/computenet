@@ -103,6 +103,14 @@ class HostLiveView(override val host: ManagedHost, private val registry: Locatio
  * exclusive staged inlet. `CYCLE_WITHOUT_HEAD` covers both of
  * `LinkAdmission`'s cycle strings (`CycleWithoutHead:` and
  * `CycleWithoutDamping:`): [13-LINK-06] names one reason for both.
+ *
+ * `UNKNOWN_CATALOGUE_ID` and `INVALID_PARAMS` (WKB2 F12, va0c4-D5) are minted
+ * only by `civictech.inspect.edit.DraftCompiler`, when a browser draft names a
+ * catalogue entry it cannot resolve (an unregistered id) or a parameter map
+ * that does not fit the entry's schema; [precheck] itself never produces
+ * them. They live here because the compiler reports them in this [Plan]
+ * shape, keyed by the draft node's handle, and an enum is not extensible from
+ * another module.
  */
 enum class RefusalCode {
     UNRESOLVED_HANDLE,
@@ -119,6 +127,8 @@ enum class RefusalCode {
     UNREACHABLE_REF,
     OWNED_INTAKE,
     MULTI_HOST,
+    UNKNOWN_CATALOGUE_ID,
+    INVALID_PARAMS,
 }
 
 /** The cold verdict on one planned step. */
