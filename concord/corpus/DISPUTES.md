@@ -3687,3 +3687,43 @@ otherwise find nothing.
   anchor rebinding. DSC4 excludes revocation by its own residual R4, so the
   trigger is not DSC4 completing — it is whatever item finally builds the
   superseding-binding path DSC4 makes possible.
+
+## WKB2 — requirements cite 51/53 by section because those chapters carry no EARS ids (`spec-gap`, `[WKB2-63]`)
+
+Filed 2026-09-24 by `computenet-t728h.2`. Like `[DSC1-NV-01]` above, this entry
+names **no scenario id** — not because a scenario is forbidden, but because
+there is no requirement id for one to bind to, so no `covers:` binding is
+possible in either direction.
+
+- **Requirements affected**: WKB2's requirement set (`[WKB2-01]`…`[WKB2-63]`,
+  epic `computenet-7p8` §5) cites `doc/spec/50-development-process/51-construction.md`
+  and `doc/spec/50-development-process/53-evolution.md` by *section* — "Graph
+  construction DSL" (51), "The promotion swap" and "Replicated promotion" (53)
+  — rather than by `[NN-SLUG-nn]` id, because `doc/spec/CONCORDANCE.md`
+  §"Denominator honesty" lists `50-development-process/51-construction.md` and
+  `50-development-process/53-evolution.md` among the 13 normative chapters
+  that carry no requirement ids at all. That table already treats the absence
+  as structurally excluded rather than silently clean; this entry is the
+  dispute it points to for WKB2's specific citations.
+- **Missing capability**: EARS ids in 51 and 53. Without them no `covers:`
+  binding is possible, so the requirements WKB2 derives from those two
+  chapters are verifiable by named test but not by the concordance matrix —
+  they cannot appear as covered, dangling, or orphaned; they simply do not
+  exist as denominator.
+- **What was NOT done instead**: no id is minted in `doc/spec/` (`[WKB2-62]`
+  forbids editing spec/plan documents from this epic), no scenario binds to
+  an id that does not exist, and the workbench half of the epic's behaviour
+  specifications B1–B18 is asserted by named `:inspect`/`:kernel` tests — the
+  failure-case catalogue F13 (`computenet-n7iuo`) appends to
+  `doc/product/findings.md` — rather than by concord scenarios. The research
+  plan's R4 closure note (`doc/spec/90-roadmap/95-research-plan.md` §R4
+  Actions: "close this as (1) with a spec note") is itself a spec edit the
+  epic forbids itself, and it remains OPEN for a human; the evidence that
+  note would cite is `doc/product/findings.md` (this task's sibling file) and
+  the failure-case entries F13 appends there.
+- **Check to restore**: when 51/53 gain EARS ids, bind the WKB2 properties
+  those chapters ground to ordinary scenarios via `covers:`, regenerate
+  `doc/spec/CONCORDANCE.md`, and retire this entry.
+- **Revisit trigger**: an id-minting pass over `50-development-process/51-construction.md`
+  and `50-development-process/53-evolution.md`, or the R4 closure note (95
+  §R4) landing.
