@@ -401,7 +401,7 @@ Agent({
 Worktree <task-worktree>, branch task/<task-id>; base commit (cut from, not a diff baseline): <sha> <subject>.
 Diff your work against git merge-base <feature-branch> HEAD.
 Read <task-worktree>/.claude/skills/work/references/agent.md, then <task-worktree>/.claude/skills/work/references/implement.md.
-Read the bead: .claude/skills/work/scripts/bead.sh -C <main-checkout> <task-id>; comments: bd -C <main-checkout> comments <task-id> --json.
+Read the bead: .claude/skills/work/scripts/bead.sh -C <main-checkout> <task-id>; its feature's design: bead.sh -C <main-checkout> <feature-id> -r '.design'; comments: bd -C <main-checkout> comments <task-id> --json.
 Change only files in metadata.files. If the acceptance needs another, comment the file and clause on the bead at once and keep working inside the claim.
 Tracker writes: <cross_bead, or "only this bead and items you create">.
 Gate: <"the repo-wide ./gradlew test" | "scope to <modules>; the PR's required checks give repo-wide evidence">.
