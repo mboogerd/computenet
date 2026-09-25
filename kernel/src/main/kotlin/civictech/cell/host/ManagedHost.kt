@@ -1512,9 +1512,14 @@ open class ManagedHost(
                 // for introspection; membrane/exposure enforcement is G-9 (unbuilt,
                 // out of this ticket's scope) — a non-null parent is bookkept only.
                 val ref = identity.resolve()
-                val cell = factory.create(ref)
-                requireBoundRef("spawnBound", identity, ref, cell.ref)
                 return try {
+                    // [15-APPLY-01]/G-51: factory construction and the bound-ref
+                    // check are part of "the step", not preconditions to it — a
+                    // throwing factory or an identity/ref mismatch is as much a
+                    // rejected step as a spawn() failure, so both live inside this
+                    // dead-lettering try alongside spawn() itself.
+                    val cell = factory.create(ref)
+                    requireBoundRef("spawnBound", identity, ref, cell.ref)
                     spawn(cell).also { spawnedRef -> if (parent != null) cellParents[spawnedRef] = parent }
                 } catch (e: Exception) {
                     // G-51: per-step rejections surface as dead letters on the
