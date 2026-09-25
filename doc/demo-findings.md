@@ -1648,32 +1648,37 @@ ms across a ~5.7x cell-count range, per the sibling comment), and the jump
 from scale 2.0 to scale 5.0 (2.5x scale) is what crosses the 5-minute wall —
 but that crossing produced a timeout, not a measured `loadWallMs`.
 
-**On the scale=5.0 timeout and criterion (c) — two readings, this entry takes
-the broader one**: criterion (c) as stated in `74yvm-D4` is "`loadWallMs` >
-60,000". Read narrowly, (c) requires a *completed* run's reported
-`loadWallMs`; scale 5.0 produced no report line, so under this reading (c)
-cannot be evaluated there at all, and the only evidence available is that
-0.05–2.0 all fall short. Read broadly, the JUnit `TimeoutException` fired
-after the full 5-minute (300,000 ms) per-method budget elapsed without the
-load finishing — so the load's wall-clock time necessarily exceeded 300,000
-ms, which is itself far past the 60,000 ms threshold, independent of any
-printed report. This entry takes the broad reading: a run that has not
-finished after 300 s has already spent more than 60 s loading, and there is
-no principled reason to discard that fact merely because the harness's own
-timeout, not the test's own measurement, is what surfaced it.
+**On the scale=5.0 timeout and criterion (c)**: criterion (c) as stated in
+`74yvm-D4` is "`loadWallMs` > 60,000" — a specific reported measurement, per
+`74yvm-D3`'s fixed report shape, of the load step alone. Scale 5.0 produced no
+report line, so there is no `loadWallMs` value for it to evaluate; this entry
+does not treat the timeout itself as a criterion-(c) trip, for two reasons.
+First, the JUnit per-method timeout (`kotlin-jvm.gradle.kts:442`) bounds the
+*whole test method* — the load, two `System.gc()` passes, the
+`HostBoundedReader` walk of the largest cell, and the assertions — not the
+load step in isolation, so a 300,000 ms method timeout does not by itself
+establish how much of that time the load step took. Second, the run was made
+on a shared host whose concurrent load at the time is unknown to this entry;
+this repo's own review guidance treats an unexplained stall or timeout as
+probably contention rather than a measurement of the code under test
+(`.claude/skills/work/references/evidence.md`, "Flakes and contention"), so a
+contended host cannot be ruled out as a contributor to the 5-minute wall.
+`74yvm-D4`'s own template for an incomplete scale — "the next step (Y) fails
+on `<heap|timeout|budget>`" — lists timeout alongside heap and budget
+failures as the wording for the *not-pulled* branch, not the pulled one; the
+scale-5.0 timeout is exactly that case, not a second, broader reading of (c).
 
-**Verdict**: trigger pulled at scale 5.0, under criterion (c) (`74yvm-D4`
-(c), load wall time > 60 s) — G-24. The largest scale that completed inside
-the 2 g / 5 min budget and produced a measurement is 2.0 (`loadWallMs =
-36351`, itself the entry's high-water mark for a *measured* value and still
-under the 60 s line); the next sweep step, 5.0, is where the budget itself
-first fails, on the JUnit per-method timeout rather than on the 2 g heap
-bound. Under the narrower reading of (c) above, the trigger is not pulled by
-any scale that produced a report, and the honest statement is: "trigger not
-pulled at scale 2.0 on this budget; the next step (5.0) fails on the 5-minute
-per-method timeout, not on heap." Both readings are recorded here because the
-distinction matters for anyone re-running this sweep with a longer timeout to
-get an actual scale-5.0 `loadWallMs` number.
+**Verdict**: trigger not pulled at scale 2.0 on this budget (`74yvm-D4`); the
+next step, scale 5.0, fails on the 5-minute per-method JUnit timeout, not on
+the 2 g heap bound. The largest scale that completed inside the 2 g / 5 min
+budget and produced a measurement is 2.0 (`loadWallMs = 36351`, the entry's
+high-water *measured* value, still under the 60 s line on all three
+criteria). The timeout at scale 5.0 is recorded above because `loadWallMs`
+was growing worse-than-linearly and the sweep crossed the 5-minute wall
+somewhere between scale 2.0 and scale 5.0 — that trend is worth carrying to
+whoever re-runs this sweep with a longer timeout to get an actual scale-5.0
+`loadWallMs` number — but a timeout is not a `loadWallMs` measurement, so it
+is not cited here as a G-24 criterion-(c) trip.
 
 **Proposed shape**: G-24's realization (per `91-gap-analysis.md:58`) is the
 kernel-lane chunk already named there — `PartitionedCell` as a composite cell
