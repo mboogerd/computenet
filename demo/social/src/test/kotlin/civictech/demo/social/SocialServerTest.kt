@@ -163,26 +163,50 @@ class SocialServerTest {
     }
 
     // --- computenet-a77tu: stop() releases every observe-sink thread --------
+    // computenet-f0v6m: rewritten to track this app's OWN minted dispatcher
+    // threads BY NAME rather than a process-wide COUNT. `observe-cell-` names
+    // embed a per-instance UUID (kernel/.../observe/Observe.kt:182,
+    // ObserveCell.newDispatcher), so the exact set this app minted can be
+    // captured at mint time and diffed against later, independent of any
+    // unrelated `observe-cell-` thread that happens to be alive in the same
+    // JVM (another test class's dispatcher still winding down) — a false
+    // positive/negative the old raw-count comparison could not tell apart
+    // from a real leak.
 
     /** Live threads whose name starts with `observe-cell-` (`ObserveCell`'s dispatcher naming). */
-    private fun observeCellThreadCount(): Int {
+    private fun observeCellThreadNames(): Set<String> {
         val threads = arrayOfNulls<Thread>(Thread.activeCount() * 2 + 64)
         val n = Thread.enumerate(threads)
-        return threads.take(n).count { it?.name?.startsWith("observe-cell-") == true }
+        return threads.take(n).mapNotNull { it?.name }.filter { it.startsWith("observe-cell-") }.toSet()
     }
 
     @Test
     fun `stop releases every observe-cell dispatcher thread a started app minted`() {
-        val before = observeCellThreadCount()
+        val before = observeCellThreadNames()
 
         val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
-        awaitUntil("app to mint at least one observe-cell dispatcher thread") { observeCellThreadCount() > before }
+        awaitUntil("app to mint at least one observe-cell dispatcher thread") {
+            (observeCellThreadNames() - before).isNotEmpty()
+        }
+        // The exact set of threads THIS app minted, named at the moment of
+        // minting — not touched again, so a sibling test minting its own
+        // (differently-UUID-named) dispatcher afterward cannot inflate it.
+        val minted = observeCellThreadNames() - before
 
         app.stop()
 
-        awaitUntil("observe-cell dispatcher thread count to return to its pre-construction value") {
-            observeCellThreadCount() == before
-        }
-        assertEquals(before, observeCellThreadCount())
+        val deadline = System.currentTimeMillis() + 30_000
+        var survivors: Set<String>
+        do {
+            survivors = observeCellThreadNames().intersect(minted)
+            if (survivors.isEmpty()) break
+            Thread.sleep(5)
+        } while (System.currentTimeMillis() < deadline)
+
+        assertTrue(
+            survivors.isEmpty(),
+            "observe-cell dispatcher thread(s) minted by this app (${survivors.size} of ${minted.size}) " +
+                "did not terminate within 30s of stop(): $survivors",
+        )
     }
 }
