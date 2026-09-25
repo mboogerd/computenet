@@ -22,6 +22,9 @@ import org.junit.jupiter.api.assertThrows
  *   pinned-because-current.
  * - a manifest-drop guard: at least one vector per rejection word this task's
  *   table introduced still exists in the manifest.
+ * - [WIR1-I04] (task computenet-ncz.5): an `unsupported-version` vector's
+ *   rejection message names the offending version number, read from its own
+ *   `encoded.utf8`.
  */
 class NegativeVectorsTest {
 
@@ -54,6 +57,25 @@ class NegativeVectorsTest {
         }
 
     @TestFactory
+    fun `an unsupported-version vector's rejection names the version from its own bytes`(): List<DynamicTest> =
+        negatives.filter { it.reject == "unsupported-version" }.map { doc ->
+            DynamicTest.dynamicTest(doc.id) {
+                val sourceUtf8 = checkNotNull(doc.encoded?.utf8) { "${doc.id}: unsupported-version vector without `encoded.utf8`" }
+                val parsed = kotlinx.serialization.json.Json.parseToJsonElement(sourceUtf8) as JsonObject
+                val version = (parsed.getValue("version") as JsonPrimitive).content
+                val bytes = checkNotNull(doc.encoded).bytes
+                val thrown = assertThrows<Throwable>("${doc.id}: decodeFrame(encoded) must throw") {
+                    WireCodec.decodeFrame(bytes)
+                }
+                val message = thrown.message.orEmpty()
+                assertTrue(
+                    message.contains("unsupported wire version $version"),
+                    "${doc.id}: rejection message \"$message\" does not contain `unsupported wire version $version`",
+                )
+            }
+        }
+
+    @TestFactory
     fun `every negative vector's notes names its source, mutation and rejection provenance`(): List<DynamicTest> =
         negatives.map { doc ->
             DynamicTest.dynamicTest(doc.id) {
@@ -71,7 +93,7 @@ class NegativeVectorsTest {
     fun `every rejection word this task introduced still has a manifest vector`(): List<DynamicTest> =
         listOf(
             "malformed", "truncated", "unknown-frame-type", "unknown-discriminator",
-            "missing-required-field", "unknown-ids",
+            "missing-required-field", "unknown-ids", "unsupported-version", "unknown-envelope-field",
         ).map { word ->
             DynamicTest.dynamicTest(word) {
                 assertTrue(

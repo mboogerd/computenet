@@ -1,0 +1,23 @@
+{
+  "id": "WV-HELLO-HELLO2-01",
+  "title": "HELLO2 line carrying a mirrorRef, claimedPeerId, public key SPKI and nonce",
+  "category": "handshake",
+  "kind": "handshake-text",
+  "covers": ["WIR1-C07", "WIR1-I12", "DSC1 9.1"],
+  "codecVersion": 2,
+  "messageKind": "text",
+  "decoded": {
+    "type": "HELLO2",
+    "fields": {
+      "mirrorRef": "00000000-0000-0000-0000-0000000000c1",
+      "claimedPeerId": "ed25519:tXDpF0k1mzfe06XbfQX24A6RwZFEgiNwy-0hUAUCfpY",
+      "publicKeySpki": "MCowBQYDK2VwAyEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "nonce": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8"
+    }
+  },
+  "encoded": {
+    "utf8": "HELLO2 00000000-0000-0000-0000-0000000000c1 ed25519:tXDpF0k1mzfe06XbfQX24A6RwZFEgiNwy-0hUAUCfpY MCowBQYDK2VwAyEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8",
+    "base64": "SEVMTE8yIDAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBjMSBlZDI1NTE5OnRYRHBGMGsxbXpmZTA2WGJmUVgyNEE2UndaRkVnaU53eS0waFVBVUNmcFkgTUNvd0JRWURLMlZ3QXlFQUFRSURCQVVHQndnSkNnc01EUTRQRUJFU0V4UVZGaGNZR1JvYkhCMGVIeUEgRUJFU0V4UVZGaGNZR1JvYkhCMGVIeUFoSWlNa0pTWW5LQ2txS3l3dExpOA=="
+  },
+  "notes": "One WebSocket TEXT message, no terminator (SCHEMA.md §Kinds handshake-text). Pins only the HELLO2 TEXT GRAMMAR ([DSC1-HELLO-*], decision ncz.5-D1: cryptographic binding is out of scope here) — that encodeHello2 renders four space-separated base64url tokens after the HELLO2 prefix and that parseHello2 of the line round-trips to the same Hello2 fields. Signature/nonce validity is DSC1's own concern (HelloProtocolTest, WsAuthenticatedHelloTest), not this vector's. mirrorRef, claimedPeerId, publicKeySpki and nonce are synthetic constants, not a real keypair's (decision ncz.5-D6): publicKeySpki is the 12-byte Ed25519 SubjectPublicKeyInfo prefix followed by raw bytes 0x01..0x20 (44 bytes); claimedPeerId is `ed25519:` + unpadded base64url of SHA-256 over those 44 SPKI bytes — a key-derived SHAPE only, whose equality with civictech.identity.fingerprint's own minting is deliberately unverified (ncz.5-D1); nonce is bytes 0x10..0x2F (32 bytes, HELLO_NONCE_BYTES). All base64url tokens are unpadded per RFC 4648 §5, matching what encodeHello2 emits."
+}

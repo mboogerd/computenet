@@ -89,6 +89,48 @@
       "category": "negative",
       "kind": "negative",
       "file": "negative/WV-NEG-UNKNOWN-TYPE-01.json"
+    },
+    {
+      "id": "WV-NEG-UNKNOWN-ENVELOPE-KEY-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-UNKNOWN-ENVELOPE-KEY-01.json"
+    },
+    {
+      "id": "WV-NEG-VERSION-ABOVE-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-VERSION-ABOVE-01.json"
+    },
+    {
+      "id": "WV-NEG-VERSION-BELOW-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-VERSION-BELOW-01.json"
+    },
+    {
+      "id": "WV-HELLO-HELLO2-01",
+      "category": "handshake",
+      "kind": "handshake-text",
+      "file": "handshake/WV-HELLO-HELLO2-01.json"
+    },
+    {
+      "id": "WV-HELLO-NAMED-01",
+      "category": "handshake",
+      "kind": "handshake-text",
+      "file": "handshake/WV-HELLO-NAMED-01.json"
+    },
+    {
+      "id": "WV-HELLO-PROOF-01",
+      "category": "handshake",
+      "kind": "handshake-text",
+      "file": "handshake/WV-HELLO-PROOF-01.json"
+    },
+    {
+      "id": "WV-HELLO-UNNAMED-01",
+      "category": "handshake",
+      "kind": "handshake-text",
+      "file": "handshake/WV-HELLO-UNNAMED-01.json"
     }
   ],
   "pending": [
