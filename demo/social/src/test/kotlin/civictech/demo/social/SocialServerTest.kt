@@ -195,18 +195,19 @@ class SocialServerTest {
 
         app.stop()
 
-        val deadline = System.currentTimeMillis() + 30_000
-        var survivors: Set<String>
-        do {
-            survivors = observeCellThreadNames().intersect(minted)
-            if (survivors.isEmpty()) break
-            Thread.sleep(5)
-        } while (System.currentTimeMillis() < deadline)
+        // computenet-cpybp: stop() itself awaits every dispatcher it caused
+        // (bounded by SocialApp's STOP_DISPATCHER_BOUND_MS; it throws naming
+        // the survivors when that bound is exceeded), so the check is made at
+        // the instant stop() returns — no grace period. A grace period is what
+        // let this test stay green with the await removed: unawaited, the
+        // dispatchers usually do die within a second, just not before stop()
+        // returns.
+        val survivors = observeCellThreadNames().intersect(minted)
 
         assertTrue(
             survivors.isEmpty(),
             "observe-cell dispatcher thread(s) minted by this app (${survivors.size} of ${minted.size}) " +
-                "did not terminate within 30s of stop(): $survivors",
+                "were still alive when stop() returned: $survivors",
         )
     }
 }
