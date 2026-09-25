@@ -72,8 +72,9 @@ class FanOutlet<Api : Any>(
      * `ConcurrentHashMap` forbids a null key, but a cross-host
      * [HostedCellProxy]-backed `Use.ref` genuinely reports null (the real
      * ref lives on the remote side) — [keyOf] substitutes a stable sentinel,
-     * preserving the prior plain map's "at most one null-ref entry, last
-     * write wins" behavior. [consumerOrder] tracks insertion order
+     * so there is at most one null-ref entry. That entry is no longer "last
+     * write wins": a second, distinct null-ref consumer is refused
+     * ([putConsumer], computenet-mt306). [consumerOrder] tracks insertion order
      * separately — `ConcurrentHashMap` (unlike the prior `LinkedHashMap`-
      * backed `mutableMapOf`) does not preserve it, and taps/consumers fire
      * in a documented order (spec 20/23 "taps-fire-first", emission order).
@@ -97,7 +98,33 @@ class FanOutlet<Api : Any>(
     private val tapOrder = CopyOnWriteArrayList<PortRef>()
 
     private fun putConsumer(key: PortRef, port: Use<Api>) {
+        if (key === NULL_PORT_REF) {
+            // computenet-mt306: every null-ref Use shares this one key, so a
+            // plain put would silently replace an earlier null-ref consumer —
+            // e.g. a second `linkTo(hostedProxy.inlet)`, whose `ref` is null.
+            // Atomic, so two racing null-ref subscribes cannot both pass.
+            val prior = consumers.putIfAbsent(key, port)
+            if (prior == null) consumerOrder += key else refuseSecondNullRef(prior === port)
+            return
+        }
         if (consumers.put(key, port) == null) consumerOrder += key
+    }
+
+    /**
+     * computenet-mt306: a second, *distinct* attachment whose [Use.ref] is null
+     * would overwrite the first on the shared [NULL_PORT_REF] key and silently
+     * lose its deliveries — which AGENTS.md's explicit-port-identity invariant
+     * forbids. Re-attaching the very same object is an idempotent no-op.
+     * Keying null-ref attachments by object identity instead would let both
+     * deliver but leave them undetachable ([unsubscribe] takes a [PortRef]),
+     * so the attachment is refused loudly and the caller names it.
+     */
+    private fun refuseSecondNullRef(sameObject: Boolean) {
+        check(sameObject) {
+            "FanOutlet $ref (${clazz.name}): a second attachment with a null port ref would silently " +
+                "replace the first (a hosted-proxy port reports ref = null). Give each target its own " +
+                "identity, e.g. Use.fixed(proxy.call, PortRef.generate())"
+        }
     }
 
     private fun removeConsumer(key: PortRef) {
