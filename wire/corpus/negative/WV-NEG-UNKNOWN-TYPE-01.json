@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-UNKNOWN-TYPE-01",
+  "title": "\"type\":\"PORT_TELEPATHY\" names no frame kind",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I09"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_TELEPATHY\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfVEVMRVBBVEhZIiwiYXJncyI6W1siU3RhbGwiLHsicmVhc29uIjoiU1VTUEVOREVEIn1dXX0="
+  },
+  "expect": {
+    "reject": "unknown-frame-type"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: `\"type\":\"PORT_API\"` rewritten to `\"type\":\"PORT_TELEPATHY\"`, an enum constant HostedPortInvocation.Type does not have. normative ([WIR1-I09]): observed kotlinx.serialization.SerializationException \"civictech.cell.proxy.HostedPortInvocation.Type does not contain element with name 'PORT_TELEPATHY' at path $.type\". Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

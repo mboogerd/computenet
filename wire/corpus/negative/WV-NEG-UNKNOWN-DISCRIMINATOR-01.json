@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-UNKNOWN-DISCRIMINATOR-01",
+  "title": "The polymorphic discriminator \"QuantumDelta\" is registered nowhere",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I08"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"QuantumDelta\",{}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siUXVhbnR1bURlbHRhIix7fV1dfQ=="
+  },
+  "expect": {
+    "reject": "unknown-discriminator"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: `\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]` rewritten to `\"args\":[[\"QuantumDelta\",{}]]`, a discriminator no `SerializersModule` registration knows. normative ([WIR1-I08]): observed kotlinx.serialization.SerializationException \"Serializer for subclass 'QuantumDelta' is not found in the polymorphic scope of 'Any'.\" — decodeFrame throws; the value is neither dropped nor null-substituted, so an invocation with args == [null] or args == [] would be a driver failure, not this vector's outcome. Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

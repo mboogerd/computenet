@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-MALFORMED-01",
+  "title": "An explicit trailing comma before the closing brace is not well-formed JSON",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I07"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"version\":2,",
+    "base64": "eyJ2ZXJzaW9uIjoyLA=="
+  },
+  "expect": {
+    "reject": "malformed"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: the bytes are exactly the literal {\"version\":2, (B3.1) — not derived from the seed by field-level edit, since B3.1 asks for JSON that never parses at all. normative ([WIR1-I07]'s malformed-JSON clause): observed kotlinx.serialization.SerializationException (JsonDecodingException) \"Unexpected JSON token at offset 12: Trailing comma before the end of JSON object at path: $.version\". Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

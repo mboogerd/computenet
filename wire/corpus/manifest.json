@@ -41,6 +41,54 @@
       "category": "negative",
       "kind": "negative",
       "file": "negative/WV-NEG-INVALID-UTF8-01.json"
+    },
+    {
+      "id": "WV-NEG-MALFORMED-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-MALFORMED-01.json"
+    },
+    {
+      "id": "WV-NEG-MISSING-REQUIRED-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-MISSING-REQUIRED-01.json"
+    },
+    {
+      "id": "WV-NEG-PROTOCOL-NO-EDGE-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-PROTOCOL-NO-EDGE-01.json"
+    },
+    {
+      "id": "WV-NEG-PROTOCOL-NO-PROTOCOLID-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-PROTOCOL-NO-PROTOCOLID-01.json"
+    },
+    {
+      "id": "WV-NEG-TRUNCATED-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-TRUNCATED-01.json"
+    },
+    {
+      "id": "WV-NEG-UNKNOWN-DISCRIMINATOR-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-UNKNOWN-DISCRIMINATOR-01.json"
+    },
+    {
+      "id": "WV-NEG-UNKNOWN-IDS-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-UNKNOWN-IDS-01.json"
+    },
+    {
+      "id": "WV-NEG-UNKNOWN-TYPE-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-UNKNOWN-TYPE-01.json"
     }
   ],
   "pending": [
