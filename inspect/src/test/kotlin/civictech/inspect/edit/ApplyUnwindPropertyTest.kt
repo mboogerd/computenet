@@ -15,6 +15,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
+import civictech.inspect.ErrorSnapshot
 import civictech.inspect.InspectorServer
 import civictech.inspect.TopologySnapshot
 import civictech.testkit.HttpProbe
@@ -23,6 +24,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -42,17 +44,17 @@ import java.util.UUID
  *   STAGE failure and compared as parsed JSON with `seq` removed — `seq` is
  *   the delta sequence the model advances on every publish/link event, the
  *   one field that legitimately moves.
- *   **`GET /errors` is deliberately excluded**: a STAGE step the host refuses
- *   inside `spawn` is dead-lettered there (`[15-APPLY-01]`,
- *   `ManagedHost.spawnBound`'s catch, `GraphSpecRemoteApplyTest`), so the
- *   route legitimately changes after such a failed apply; the record cites the
- *   same failure as a `Failed` step. **Observed limit of the planned
- *   cross-check:** this test's injection is a *factory* throw, and
- *   `spawnBound` calls `factory.create` before its dead-lettering `try`, so
- *   no row is written for it (awaited 10 s over `/errors` during
- *   computenet-e1ojt.2: none arrived) — the row-exists assertion the bead
- *   proposed would be false here, and is not made. The record's
- *   `Failed("injected")` step is the citation that is asserted.
+ *   **`GET /errors` is deliberately excluded from that before/after
+ *   comparison**: a STAGE step the host refuses is dead-lettered there
+ *   (`[15-APPLY-01]`, `ManagedHost.spawnBound`'s catch,
+ *   `GraphSpecRemoteApplyTest`), so the route legitimately changes after
+ *   such a failed apply; the record cites the same failure as a `Failed`
+ *   step. Since computenet-hfmht widened `spawnBound`'s dead-lettering `try`
+ *   to also cover `factory.create`, this test's *factory*-throw injection
+ *   produces exactly that row too, and the test asserts it directly
+ *   (`spawnBound rejected` plus the injected cause, awaited over `/errors`
+ *   since delivery is async) in addition to the record's `Failed("injected")`
+ *   step.
  * - **The seeded apply/unwind property** (B18, e1ojt-D10) is a fixed-seed
  *   `java.util.Random` loop over seeds 1..[SEEDS] (`kotest-property` is not on
  *   this module's classpath). Each seed builds a fresh fixed-seed
@@ -139,8 +141,17 @@ class ApplyUnwindPropertyTest {
         registry.localRefs() shouldBe refsBefore
         registry.all() shouldBe linksBefore
 
-        // GET /errors is excluded from identity — see the class KDoc for why, and
-        // for why this particular injection leaves no row there to assert on.
+        // GET /errors is excluded from the identity comparison above (see the
+        // class KDoc for why) but is asserted directly here: since
+        // computenet-hfmht, this factory-throw STAGE failure dead-letters on
+        // the target host through the same spawnBound path GraphSpecRemoteApplyTest
+        // covers, so a row now arrives — delivery is async, hence the await.
+        awaitUntil("the factory-throw STAGE failure surfaces as an /errors dead letter") {
+            json.decodeFromString<ErrorSnapshot>(p.state(InspectorServer.ERRORS_PATH)).deadLetters.isNotEmpty()
+        }
+        val errorRow = json.decodeFromString<ErrorSnapshot>(p.state(InspectorServer.ERRORS_PATH)).deadLetters.single()
+        errorRow.description shouldContain "spawnBound rejected"
+        errorRow.description shouldContain "injected"
     }
 
     // ---- [WKB2-60] — B18 seeded property -----------------------------------------
