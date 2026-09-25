@@ -126,11 +126,21 @@ echo "case 6d: a bare -C with no directory is refused, not silently ignored"
 out=$(BODY_CHARS=100 bash "$SCRIPT" -C 2>&1); rc=$?
 [ $rc -ne 0 ] && ok "exit $rc" || bad "exit 0 on a bare -C -- $out"
 
-echo "case 6e: a trailing -C past the filter is REFUSED, not silently dropped —"
-echo "         dropped, it fails as an empty rc=1, the ambiguity -C exists to remove"
-out=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.status' -C /some/checkout 2>&1); rc=$?
-[ $rc -eq 2 ] && ok "exit 2" || bad "exit $rc -- $out"
-grep -q 'unexpected argument' <<<"$out" && ok "says which argument" || bad "silent -- $out"
+echo "case 6e: flags in ANY position — a trailing -C, and -r first, both reach"
+echo "         bd/jq (computenet-7ejdv: '-r -C <dir> <id>' was a jq compile error)"
+for args in "known -r .status -C /some/checkout" "-r -C /some/checkout known .status"; do
+  out=$(BODY_CHARS=100 bash "$SCRIPT" $args 2>&1); rc=$?
+  [ $rc -eq 0 ] && [ "$out" = open ] && ok "$args" || bad "$args: exit $rc -- $out"
+  [ "$(cat "$SEEN_C")" = /some/checkout ] && ok "bd saw -C" || bad "bd saw '$(cat "$SEEN_C")'"
+done
+for args in "-C /some/checkout known -r" "-r -C /some/checkout known"; do
+  out=$(BODY_CHARS=100 bash "$SCRIPT" $args 2>&1); rc=$?
+  [ $rc -eq 0 ] && grep -q '"id": "known"' <<<"$out" && ok "-r, no filter ($args) prints the bead" \
+    || bad "-r, no filter ($args): exit $rc -- $out"
+done
+out=$(BODY_CHARS=100 bash "$SCRIPT" known .status extra 2>&1); rc=$?
+[ $rc -eq 2 ] && grep -q 'unexpected argument' <<<"$out" && ok "a third word is refused" \
+  || bad "extra word: exit $rc -- $out"
 
 echo "case 6f: the spill branch still works with -C (its dir is a separate name)"
 out=$(BODY_CHARS=40000 bash "$SCRIPT" -C /some/checkout known 2>&1); rc=$?
