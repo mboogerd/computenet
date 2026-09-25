@@ -1244,6 +1244,21 @@ class GcSafetySweepTest {
 
     @Test
     fun `compaction at the local delivered frontier resurrects a removed element_BS13`() {
+        // computenet-tp47y review: one discarded, UNPINNED warm-up run BEFORE the pin. The first
+        // rig run in a JVM initialises `FanOutlet`, whose static initialiser mints a `PortRef`
+        // (a UUID) on this thread; under the pin that one extra draw shifted seed 1's stream, so
+        // seed 1's trace differed between a cold JVM (this method run alone) and a warm one (after
+        // the other arms, as on CI) — measured sha256:8b5aee25ab6d77c7 vs 5bad62eb6bc01d1d. After
+        // the warm-up every seed consumes the same stream whatever ran earlier in the fork. The
+        // counters it feeds are reset on the next line.
+        MeshConvergences.observing {
+            DstRun(
+                GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
+                GcSafetySweep.plan(SEEDS.first),
+                BUDGET,
+                checks.getValue(GcSafetySweep.Trigger.LOCAL),
+            ).execute()
+        }
         GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.LOCAL).reset()
         val startedAt = System.nanoTime()
         // computenet-tp47y: THIS arm runs on a PINNED UUID draw, and only this arm. See
