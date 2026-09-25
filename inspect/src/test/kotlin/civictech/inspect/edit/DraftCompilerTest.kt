@@ -3,6 +3,7 @@ package civictech.inspect.edit
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.data.SetCell
+import civictech.cell.data.op.FilterCell
 import civictech.cell.graph.BoundaryLink
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.Direction
@@ -400,6 +401,42 @@ class DraftCompilerTest {
          * links, plus every lifecycle transition, are the public witnesses.
          */
         fun footprint() = Pair(registry.all(), registry.localRefs())
+    }
+
+    /**
+     * Feature seam (task 4 -> task 2 -> task 1): a draft naming the three
+     * [KernelEntries] the demos register compiles, and every lowered factory
+     * constructs its cell through `(id, params)` and the handed-in ref alone
+     * (va0c4.4's risk-3 criterion). The kernel ids carry no test prefix, so
+     * they are removed afterwards only if this test was the one to add them.
+     */
+    @Test
+    fun `a draft over the demos' KernelEntries compiles and every lowered factory constructs its cell`() {
+        val ids = listOf(KernelEntries.SET_STRING, KernelEntries.FILTER_STRING_PREFIX, KernelEntries.TRAFFIC_LIGHT_STRING)
+        val added = ids.filter { Catalogue.entry(it) == null }
+        KernelEntries.register()
+        try {
+            val compiled = ok(
+                DraftDto(
+                    nodes = listOf(
+                        DraftNodeDto("s", KernelEntries.SET_STRING),
+                        DraftNodeDto("f", KernelEntries.FILTER_STRING_PREFIX, params = buildJsonObject { put("prefix", "ab") }),
+                        DraftNodeDto("t", KernelEntries.TRAFFIC_LIGHT_STRING),
+                    ),
+                ),
+            )
+            val spawns = compiled.spec.steps.map { it.shouldBeInstanceOf<SpawnStep>() }
+            spawns.map { it.handle } shouldBe listOf("s", "f", "t")
+            spawns[1].factory shouldBe CatalogueFactory(KernelEntries.FILTER_STRING_PREFIX, mapOf("prefix" to ParamValue.Str("ab")))
+
+            val built = spawns.map { step ->
+                val ref = CellRef(UUID.randomUUID())
+                step.factory.create(ref).also { it.ref shouldBe ref }
+            }
+            built.map { it::class } shouldBe listOf(SetCell::class, FilterCell::class, TrafficLightCell::class)
+        } finally {
+            added.forEach { Catalogue.unregister(it) }
+        }
     }
 
     @Test
