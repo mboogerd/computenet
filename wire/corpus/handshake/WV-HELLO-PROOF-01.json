@@ -1,0 +1,20 @@
+{
+  "id": "WV-HELLO-PROOF-01",
+  "title": "PROOF line carrying a signature",
+  "category": "handshake",
+  "kind": "handshake-text",
+  "covers": ["WIR1-C07", "WIR1-I12", "DSC1 9.1"],
+  "codecVersion": 2,
+  "messageKind": "text",
+  "decoded": {
+    "type": "PROOF",
+    "fields": {
+      "signature": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr_AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3w"
+    }
+  },
+  "encoded": {
+    "utf8": "PROOF oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr_AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3w",
+    "base64": "UFJPT0Ygb0tHaW82U2xwcWVvcWFxcnJLMnVyN0N4c3JPMHRiYTN1TG02dTd5OXZyX0F3Y0xEeE1YR3g4akp5c3ZNemM3UDBOSFMwOVRWMXRmWTJkcmIzTjNlM3c="
+  },
+  "notes": "One WebSocket TEXT message, no terminator (SCHEMA.md §Kinds handshake-text). Pins only the PROOF TEXT GRAMMAR ([DSC1-HELLO-*], decision ncz.5-D1: cryptographic binding is out of scope here) — that encodeProof renders one base64url token after the PROOF prefix and that parseProof of the line round-trips to the same Proof signature. Signature validity is DSC1's own concern (HelloProtocolTest, WsAuthenticatedHelloTest), not this vector's. The signature is a synthetic constant, not a real signature's (decision ncz.5-D6): bytes 0xA0..0xDF (64 bytes, an Ed25519 signature's length). The base64url token is unpadded per RFC 4648 §5, matching what encodeProof emits."
+}
