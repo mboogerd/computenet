@@ -127,6 +127,8 @@ class LocationRegistryLocationPrecedenceTest {
         registry.location(cell.ref).shouldBeInstanceOf<LocationRegistry.Remote>()
         registry.locate(cell.ref) shouldBe null
         registry.localRefs().shouldBeEmpty()
+        // computenet-rfbt: the overwrite is now counted, exactly once
+        registry.localOverwrittenByRemote shouldBe 1L
 
         api.provide(2)
         controller.runToIdle()
@@ -169,6 +171,8 @@ class LocationRegistryLocationPrecedenceTest {
 
         cell.received shouldBe listOf(1)
         formerHost.delivered.shouldBeEmpty()
+        // computenet-rfbt: Remote -> Local is not a collision, and is not counted
+        registry.localOverwrittenByRemote shouldBe 0L
     }
 
     // ---------------------------------------------------------------- Remote -> Remote
@@ -197,6 +201,31 @@ class LocationRegistryLocationPrecedenceTest {
 
         freshConnection.delivered.size shouldBe 1
         staleConnection.delivered.shouldBeEmpty()
+        // computenet-rfbt: Remote -> Remote is the ordinary reconnect catch-up, not counted
+        registry.localOverwrittenByRemote shouldBe 0L
+    }
+
+    // ---------------------------------------------------------------- fresh install, no prior binding
+
+    /**
+     * The fourth transition the counter must ignore: a first-ever [install]
+     * for a ref, local or remote, has no prior binding at all — there is
+     * nothing to overwrite (computenet-rfbt). Only a *held* [Local] binding
+     * being replaced by a [Remote] one counts.
+     */
+    @Test
+    fun `a fresh publish with no prior binding is not counted, local or remote`() {
+        val controller = SimulationController(0L)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+
+        val cell = CollectorCell()
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+
+        registry.publish(CellRef(UUID.randomUUID()), RecordingSink("fresh"))
+
+        registry.localOverwrittenByRemote shouldBe 0L
     }
 
     // ---------------------------------------------------------------- announceTo's scope
