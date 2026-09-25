@@ -3,6 +3,7 @@ package civictech.inspect.edit
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.graph.CellFactory
 import civictech.cell.link.LinkPolicy
@@ -10,6 +11,12 @@ import civictech.cell.link.LinkResult
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.registerPort
+import civictech.nature.ContractDescriptor
+import civictech.nature.ContractModule
+import civictech.nature.ContractRegistry
+import civictech.nature.MethodDescriptor
+import civictech.nature.ModuleId
+import civictech.nature.StableHash
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -79,5 +86,77 @@ class RejectingInlet(override val ref: CellRef = CellRef(UUID.randomUUID())) : C
 class ThrowingDeactivateCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
     override fun onDeactivate(ctx: CellContext) {
         throw IllegalStateException("injected: onDeactivate")
+    }
+}
+
+/**
+ * A data contract whose one method takes an exclusive [Owned] payload — the
+ * shape `[WKB2-26]`'s `OWNED_INTAKE` precheck refusal and e1ojt-D11's
+ * `OwnedConsumed` residue are about.
+ *
+ * `:inspect` runs no KSP, and no exclusive contract under `kernel/src/main`
+ * is reachable from here (the ones under `kernel/src/test` are not on this
+ * module's classpath), so the generated descriptor is supplied by hand:
+ * [OwnedIntakeDescriptor.ensureRegistered] registers the one
+ * `ContractDescriptor` the processor would have emitted, with
+ * `exclusive = true` on [accept]. Both witnesses read it —
+ * `FanOutlet`'s SPSC bit (at port construction, so register first) and
+ * `Precheck.carriesExclusive` / the applier's `exclusiveResidue`.
+ */
+interface OwnedIntake {
+    fun accept(value: Owned<String>)
+}
+
+/** The hand-built descriptor for [OwnedIntake]; idempotent, JVM-global. */
+object OwnedIntakeDescriptor {
+    private val registered by lazy {
+        val fqn = OwnedIntake::class.java.name.replace('$', '.')
+        val jvm = "(L${Owned::class.java.name.replace('.', '/')};)V"
+        val method = MethodDescriptor(
+            methodId = StableHash.of("$fqn#accept$jvm"),
+            name = "accept",
+            jvmDescriptor = jvm,
+            exclusive = true,
+        )
+        val module = object : ContractModule {
+            override val contracts = listOf(
+                ContractDescriptor(StableHash.of(fqn), fqn, management = false, methods = listOf(method)),
+            )
+        }
+        ContractRegistry.register(module, ModuleId("inspect-test:failure-injection"))
+        true
+    }
+
+    fun ensureRegistered() {
+        check(registered)
+    }
+}
+
+/** A live producer of [OwnedIntake] payloads; [emit] sends one fresh [Owned]. */
+class OwnedProducerCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    val outlet = run {
+        OwnedIntakeDescriptor.ensureRegistered()
+        registerPort("outlet", FanOutlet.create<OwnedIntake>())
+    }
+
+    fun emit(value: String) = outlet.call.accept(Owned(value))
+}
+
+/** A consumer that takes every [Owned] delivered to [inlet] — the effect UNWIND cannot undo. */
+class OwnedConsumerCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    val consumed = CopyOnWriteArrayList<String>()
+    val inlet = run {
+        OwnedIntakeDescriptor.ensureRegistered()
+        registerPort("inlet", FanInlet.create<OwnedIntake>())
+    }
+
+    init {
+        inlet.serve(
+            object : OwnedIntake {
+                override fun accept(value: Owned<String>) {
+                    consumed += value.take()
+                }
+            },
+        )
     }
 }
