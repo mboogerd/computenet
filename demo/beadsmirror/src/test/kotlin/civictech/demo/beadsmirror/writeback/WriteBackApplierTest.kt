@@ -581,7 +581,7 @@ class WriteBackApplierTest {
 
             report.importerInvocations shouldBe 0
             report.deferred shouldContainExactly listOf(id)
-            report.events.shouldBeEmpty()
+            report.events shouldContainExactly listOf(WriteBackEvent.Skipped(id, SkipReason.InFlight))
             doltHead(ws) shouldBe headBefore
             row(ws, id).json["priority"] shouldBe JsonPrimitive(1)
 
@@ -620,7 +620,10 @@ class WriteBackApplierTest {
                 export = { trace += "export"; export(ws) },
                 importer = { r -> trace += "import:${(r.getValue("id") as JsonPrimitive).content}"; real.importRow(r) },
                 winner = { winner },
-                onEvent = { e -> if (e is WriteBackEvent.PreFlight) trace += "preflight:${e.issueId}" },
+                onEvent = { e ->
+                    if (e is WriteBackEvent.PreFlight) trace += "preflight:${e.issueId}"
+                    if (e is WriteBackEvent.Skipped && e.reason == SkipReason.InFlight) trace += "skipped-inflight:${e.issueId}"
+                },
                 expectEcho = { issueId, _ -> trace += "expectEcho:$issueId" },
                 inFlight = { trace += "inFlight"; pending },
             )
@@ -635,6 +638,13 @@ class WriteBackApplierTest {
             trace shouldNotContain "preflight:$deferredId"
             trace shouldNotContain "expectEcho:$deferredId"
             trace shouldNotContain "import:$deferredId"
+            // computenet-ilimc: the deferral IS reported, once, through onEvent —
+            // and NOT for the bystander the same pass actually imposed.
+            first.events.filterIsInstance<WriteBackEvent.Skipped>()
+                .single { it.issueId == deferredId }.reason shouldBe SkipReason.InFlight
+            trace.count { it == "skipped-inflight:$deferredId" } shouldBe 1
+            first.events.filterIsInstance<WriteBackEvent.Skipped>()
+                .none { it.issueId == bystanderId } shouldBe true
             row(ws, deferredId).json["priority"] shouldBe JsonPrimitive(3)
             row(ws, bystanderId).json["priority"] shouldBe JsonPrimitive(1)
 

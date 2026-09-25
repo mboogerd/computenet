@@ -25,6 +25,20 @@ enum class SkipReason {
      * winner, not for another attempt at the old one.
      */
     PreviouslyFailed,
+
+    /**
+     * The destination's Dolt working set holds an uncommitted write to this
+     * issue at the moment of the import decision, so the applier left it
+     * alone this pass rather than impose over it (computenet-oagbm's guard;
+     * see [WriteBackApplier]'s "In-flight local writes are deferred").
+     * Emitted once per pass the row is deferred, so an operator watching
+     * [WriteBackEvent]s can see a row stuck here across many passes — the
+     * observable computenet-ilimc adds: deferral lasts until the working set
+     * is committed, not for a bounded number of passes, and a working set
+     * left dirty keeps producing this event on every pass until something
+     * commits it.
+     */
+    InFlight,
 }
 
 /**

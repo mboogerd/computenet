@@ -13,7 +13,11 @@ import java.util.UUID
 data class ApplyReport(
     /** Issues whose row landed and read back intact. */
     val imposed: Int,
-    /** Issues no import was run for — [SkipReason.Equal] or [SkipReason.PreviouslyFailed]. */
+    /**
+     * Issues no import was run for — [SkipReason.Equal], [SkipReason.PreviouslyFailed] or
+     * [SkipReason.InFlight]. An issue counted here for [SkipReason.InFlight] is also counted
+     * in [deferred].
+     */
     val skipped: Int,
     /** Issues that failed, for any [WriteBackFailure] reason. */
     val failed: Int,
@@ -33,9 +37,11 @@ data class ApplyReport(
      * Issues the plan said to impose but that were left alone this pass
      * because the destination's working set held an uncommitted write to them
      * at the moment of the import decision (computenet-oagbm; see
-     * [WriteBackApplier]'s "In-flight local writes are deferred"). No event,
-     * no pre-flight, no echo expectation and no import for them; the next
-     * pass re-plans them from a fresh export.
+     * [WriteBackApplier]'s "In-flight local writes are deferred"). Each one
+     * also carries a [WriteBackEvent.Skipped]`(InFlight)` in [events]
+     * (computenet-ilimc) so a deferral is visible to [onEvent] even though no
+     * pre-flight, echo expectation or import runs for it; the next pass
+     * re-plans them from a fresh export.
      */
     val deferred: List<String> = emptyList(),
 )
@@ -70,7 +76,7 @@ data class ApplyReport(
  * | [PlanOutcome.NoOp] | [WriteBackEvent.Skipped] `(Equal)` — no import (clause 5) |
  * | [PlanOutcome.Unrenderable] | [WriteBackEvent.Failed] `(Unrenderable)` — no import |
  * | [PlanOutcome.Impose], already in the failed set | [WriteBackEvent.Skipped] `(PreviouslyFailed)` — no import (clause 6) |
- * | [PlanOutcome.Impose], named by [inFlight] | added to [ApplyReport.deferred] — no event, no import (computenet-oagbm) |
+ * | [PlanOutcome.Impose], named by [inFlight] | [WriteBackEvent.Skipped] `(InFlight)`, added to [ApplyReport.deferred] — no pre-flight, no echo, no import (computenet-oagbm; the event is computenet-ilimc) |
  * | [PlanOutcome.Impose], otherwise | [WriteBackEvent.PreFlight], THEN exactly one [importer] call |
  *
  * A non-zero exit is [WriteBackFailure.ImportExited], recorded in the failed
@@ -113,8 +119,9 @@ data class ApplyReport(
  * committed. For each [PlanOutcome.Impose] that is not already
  * [SkipReason.PreviouslyFailed], the applier calls [inFlight] immediately
  * before the loss record and the import, strictly AFTER the pass-start
- * [export]; an issue it names is added to [ApplyReport.deferred] and nothing
- * else happens to it this pass.
+ * [export]; an issue it names is added to [ApplyReport.deferred], reported
+ * through [onEvent] as [WriteBackEvent.Skipped]`(InFlight)` (computenet-ilimc),
+ * and nothing else happens to it this pass.
  *
  * Why: bd 1.1.2 writes the shared working set and THEN commits the whole
  * working set, as two steps that are not atomic across processes. A `bd
@@ -124,10 +131,12 @@ data class ApplyReport(
  * fold-value plus a fresh `cn_echo` (classified ECHO), the update finds
  * nothing left to commit and exits 0, and no commit anywhere records the
  * edit -- it is lost to bd and to the mirror alike (measured on
- * computenet-oagbm: 2 of 32 raced iterations under reader load). A deferred
- * row costs one pass of latency and no data: once the writer commits, the
- * edit is an ordinary LOCAL commit the mirror ingests (epic computenet-6wc:
- * never-gossiped local edits survive; correctness outranks commit thrift).
+ * computenet-oagbm: 2 of 32 raced iterations under reader load). Deferral
+ * costs no data: once the writer commits, the edit is an ordinary LOCAL
+ * commit the mirror ingests (epic computenet-6wc: never-gossiped local edits
+ * survive; correctness outranks commit thrift). It does NOT cost a bounded
+ * "one pass" of latency -- see the last residual bullet below, and watch
+ * [WriteBackEvent.Skipped]`(InFlight)` for a row stuck here.
  *
  * Ordering matters: querying [inFlight] BEFORE [export] would let a write
  * land between the two, be seen by the export, and not be named as in
@@ -159,11 +168,17 @@ data class ApplyReport(
  * - The default [inFlight] names nothing, i.e. no guard. Only [forWorkspace]
  *   (the production wiring) supplies the real query; a caller constructing
  *   this class directly against a live workspace must supply it too.
- * - "One pass of latency" assumes the writer commits promptly, as bd's
- *   auto-commit does. A working set left dirty (a writer killed between its
- *   write and its commit) keeps the row deferred on every pass until some
- *   process commits it, and a deferral emits no [WriteBackEvent], so that
- *   stall is silent (computenet-ilimc).
+ * - A deferral does NOT cost a bounded "one pass" of latency; that was this
+ *   KDoc's earlier claim and it held only while the writer commits promptly,
+ *   as bd's auto-commit normally does within seconds. A working set left
+ *   dirty -- a writer killed between its write and its commit, or a
+ *   workspace run with a non-default `--dolt-auto-commit` policy (epic
+ *   computenet-6wc §4 excludes changing that policy here) -- keeps the row
+ *   deferred on every pass until some process commits the working set.
+ *   computenet-ilimc makes the stall observable rather than silent: every
+ *   pass a row is deferred emits [WriteBackEvent.Skipped]`(InFlight)`, so an
+ *   operator watching [onEvent] sees the same issue id recur pass after pass
+ *   instead of the deferral going unreported.
  */
 class WriteBackApplier(
     private val export: () -> List<ExportRow>,
@@ -224,6 +239,8 @@ class WriteBackApplier(
                     // pass-start export, immediately before the import -- per row.
                     if (imposition.issueId in inFlight()) {
                         deferred += imposition.issueId
+                        skipped++
+                        emit(WriteBackEvent.Skipped(imposition.issueId, SkipReason.InFlight))
                         continue
                     }
 
