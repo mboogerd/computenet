@@ -7,8 +7,11 @@ import civictech.cell.Owned
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.proxy.callback
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
+import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -298,8 +301,82 @@ class FanOutletObserveTest {
         stableObserver.get() shouldBe total + 1
     }
 
+    /**
+     * computenet-dn97t: `FanOutlet.tap(port)` with a null-ref [Use] — e.g. a
+     * hosted-proxy port from `ManagedHost.lookup(...).inlet`, which reports
+     * `ref = null` — used to take the unnegotiated path (`port as? Linked`
+     * fails for a proxy, so `negotiated` never applies), call `putTap` to
+     * install the tap, and only then construct the `PortLink` whose `to`
+     * parameter is non-null: `NullPointerException: Parameter specified as
+     * non-null is null: method civictech.cell.link.PortLink.<init>, parameter
+     * to`. The caller saw a thrown exception, but the tap was already live
+     * and kept receiving emissions.
+     *
+     * [nullRefUse] reproduces the same runtime shape a hosted-proxy port has
+     * — `.ref` reports null despite the interface's non-null Kotlin type —
+     * without needing a live `ManagedHost`: a `java.lang.reflect.Proxy`
+     * crosses the dynamic-proxy boundary [FanOutlet.keyOf]'s KDoc describes,
+     * which is exactly where Kotlin's compile-time null-safety stops
+     * applying.
+     */
+    @Test
+    fun `tap refuses a null-ref Use up front - no tap is installed and no NPE reaches the caller`() {
+        val outlet = FanOutlet.create<Consumer<String>>()
+        val received = mutableListOf<String>()
+        val port = nullRefUse(callback<Consumer<String>> { received += it.args[0] as String })
+
+        val refused = shouldThrow<IllegalStateException> { outlet.tap(port) }
+        refused.message shouldContain "null port ref"
+        refused.message shouldContain "Use.fixed"
+
+        // the refusal left no stray tap behind: an emission reaches nothing new
+        outlet.call.provide("after refusal")
+        received shouldBe emptyList()
+    }
+
+    @Test
+    fun `a second, distinct null-ref tap never silently replaces the first - both are refused loudly`() {
+        val outlet = FanOutlet.create<Consumer<String>>()
+        val receivedA = mutableListOf<String>()
+        val receivedB = mutableListOf<String>()
+
+        shouldThrow<IllegalStateException> {
+            outlet.tap(nullRefUse(callback<Consumer<String>> { receivedA += it.args[0] as String }))
+        }
+        shouldThrow<IllegalStateException> {
+            outlet.tap(nullRefUse(callback<Consumer<String>> { receivedB += it.args[0] as String }))
+        }
+
+        outlet.call.provide("x")
+        receivedA shouldBe emptyList()
+        receivedB shouldBe emptyList()
+    }
+
     private companion object {
         /** Hard cap on churn iterations, so a slow emitter cannot make the loop unbounded. */
         const val MAX_CHURN = 20_000
     }
 }
+
+/**
+ * computenet-dn97t: a [Use] whose [Use.ref] answers null at runtime despite
+ * [Use]'s non-null Kotlin type — the shape a `HostedCellProxy`-backed port
+ * has (`FanOutlet.keyOf`'s KDoc): the real ref lives on the remote side, and
+ * reading a property through a `java.lang.reflect.Proxy` dynamic-dispatch
+ * boundary is not checked the way passing that same value into a non-null
+ * constructor parameter is. Reproduces that boundary directly rather than
+ * standing up a `ManagedHost` pair.
+ */
+@Suppress("UNCHECKED_CAST")
+private fun nullRefUse(call: Consumer<String>): Use<Consumer<String>> =
+    Proxy.newProxyInstance(
+        Use::class.java.classLoader,
+        arrayOf(Use::class.java),
+    ) { _, method, _ ->
+        when (method.name) {
+            "getRef" -> null
+            "getCall" -> call
+            "at" -> call
+            else -> null
+        }
+    } as Use<Consumer<String>>

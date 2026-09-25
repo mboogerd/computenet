@@ -568,8 +568,14 @@ class FanOutlet<Api : Any>(
      * exclusive payloads via [civictech.cell.Owned.borrow] /
      * [civictech.cell.Leased.borrow], never [civictech.cell.Owned.take] /
      * [civictech.cell.Leased.release].
+     *
+     * computenet-dn97t: a null-ref [port] (e.g. a hosted-proxy port from
+     * `ManagedHost.lookup(...)`, whose real ref lives on the remote side) is
+     * refused up front, before either branch below runs — see
+     * [refuseNullRefTap].
      */
     fun tap(port: Use<Api>, negotiated: Boolean = true): LinkResult {
+        refuseNullRefTap(port)
         // PN-10: opt-in negotiation. When [negotiated] AND the target is a local
         // [Linked] port, the tap runs the same target-side handshake every Consume
         // link runs — policies + peer allowlist + nature reconcile + EdgeOpen —
@@ -594,6 +600,34 @@ class FanOutlet<Api : Any>(
         return LinkResult.Connected(
             PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { removeTap(keyOf(port.ref)) },
         )
+    }
+
+    /**
+     * computenet-dn97t: [tap]'s null-ref refusal, checked before anything is
+     * installed. `tap` returns a [PortLink] whose `to` field is a non-null
+     * [PortRef] — the removal key a later `unlink()` needs — but a null-ref
+     * [Use] (a hosted-proxy port; see [keyOf]) has no such key: every null-ref
+     * attachment collapses onto the one [NULL_PORT_REF] sentinel, exactly the
+     * shared-key collision [refuseSecondNullRef] closed for [consumers]. There
+     * [subscribe] never constructs a [PortLink] at all, so a *first* null-ref
+     * consumer could be admitted under the sentinel key; [tap] always returns
+     * one, so even a lone null-ref tap has no genuine removal key to give it —
+     * unlike consumers, refusal here is not only for the *second* attempt.
+     *
+     * Before this, the unnegotiated branch called [putTap] and only then
+     * constructed the [PortLink] — installing the tap before the non-null
+     * `to` parameter's Kotlin-generated null check threw, so a caller who saw
+     * the [NullPointerException] found the tap live and firing regardless
+     * (computenet-dn97t's repro). Checking first, before either branch, means
+     * neither the negotiated handshake's `install` nor the unnegotiated
+     * `putTap` ever runs for a null-ref port.
+     */
+    private fun refuseNullRefTap(port: Use<Api>) {
+        check(keyOf(port.ref) !== NULL_PORT_REF) {
+            "FanOutlet $ref (${clazz.name}): a null port ref cannot back a detachable tap (a hosted-proxy " +
+                "port reports ref = null) — tap() always returns a PortLink, and there is no ref to key its " +
+                "removal on. Give the target its own identity, e.g. Use.fixed(proxy.call, PortRef.generate())"
+        }
     }
 
     /**
