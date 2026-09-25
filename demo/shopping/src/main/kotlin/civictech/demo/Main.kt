@@ -26,6 +26,7 @@ import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
 import civictech.inspect.edit.Capability
+import civictech.inspect.edit.KernelEntries
 import civictech.inspect.edit.WritePlane
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
@@ -409,13 +410,18 @@ class DemoApp(
      *
      * [writePlane] is [WritePlane.Disabled] by default (`[WKB2-06]`): the write
      * plane is a per-process opt-in, decided by `main`'s `--inspect-write`
-     * flag, never by this method's own defaults changing.
+     * flag, never by this method's own defaults changing. WKB2 F12 (va0c4-D10):
+     * an [WritePlane.Enabled] plane also populates the named-factory catalogue
+     * ([KernelEntries.register]) before the server starts — the palette is
+     * part of the opt-in, not of the read-only instrument, so a disabled
+     * plane leaves the catalogue exactly as it found it.
      */
     fun startInspector(
         inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
         netName: String = this.netName ?: "local",
         writePlane: WritePlane = WritePlane.Disabled,
     ): civictech.inspect.InspectorServer {
+        if (writePlane is WritePlane.Enabled) KernelEntries.register()
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
         val peerShared = CellRef(SHARED_ID, sharedInstance(peerRole))
@@ -564,7 +570,10 @@ fun main(args: Array<String>) {
         announcePort("inspect", inspector.boundPort)
         println("  this JVM's network host: ${netName ?: "local"}")
         if (writePlane is WritePlane.Enabled) {
-            println("inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}")
+            println(
+                "inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}; " +
+                    "catalogue entries: ${civictech.inspect.edit.Catalogue.entries().size}",
+            )
         }
     }
 }
