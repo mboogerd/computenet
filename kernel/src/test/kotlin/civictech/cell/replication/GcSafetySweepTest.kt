@@ -140,6 +140,109 @@ internal object GcObservationRegistry {
     fun of(world: DstWorld): GcObservations = byWorld.getOrPut(world) { GcObservations() }
 }
 
+/**
+ * **The churn rig's ONLY source of run-to-run variation, pinned for one thread** (computenet-tp47y).
+ *
+ * ## Why this exists
+ *
+ * `doc/dst-rig.md` §"A peering that re-opens mid-run is outside the determinism contract" names
+ * the entropy: `Peering.Loopback.heal()` re-announces over `ConcurrentHashMap`s keyed by
+ * identities the kernel mints with `UUID.randomUUID()`, so the announcement ORDER is a fresh
+ * `SecureRandom` draw every run, not a function of `plan.seed`. Every [GcSafetySweep.plan] folds
+ * three `PartitionFault.park`s whose heal is exactly that `heal()`, so EVERY seed of this sweep
+ * consumes it — not only the churn plans that draw a `PARTITION_SUSPEND`.
+ *
+ * computenet-tp47y MEASURED that this is the whole of the variation, and that wall clock and
+ * thread scheduling contribute nothing (darwin/arm64 16-core, load1 7-13 with other agents'
+ * Gradle builds on the host, seeds 1..200, budget 40_000, LOCAL arm, 2026-09-25, at `13a83197`):
+ *
+ * ```
+ *   UUID entropy fresh (as shipped), 3 sweeps     trace digest identical on   4 of 200 seeds;
+ *                                                 fence-attributed [78,145,151] / [78,108,145] /
+ *                                                 [43,89,149,151,165]
+ *   UUID entropy pinned per seed, 3 sweeps        trace digest identical on 200 of 200 seeds;
+ *                                                 fence-attributed [43,181] all three times
+ *   pinned, different salt                        digests differ on 195 of 200, verdicts on 7
+ * ```
+ *
+ * So the harmed-seed set is a function of `(plan seed, UUID draw)`, and a pinned PLAN seed alone
+ * is not deterministic (which is why computenet-nwnl's dedicated per-seed pins scored 4/5 at best).
+ * Pinning the draw as well IS deterministic, under load, inside Gradle's test JVM.
+ *
+ * ## How
+ *
+ * `UUID.randomUUID()` reads `java.util.UUID$Holder.numberGenerator`. The static field itself is
+ * NOT replaced — it is `static final`, and C2 may constant-fold it once `randomUUID` is hot, which
+ * in a full `:kernel:test` fork it is. Instead the generator's own `secureRandomSpi` INSTANCE field
+ * (non-final, never folded) is swapped for [Spi], which answers from a seeded `java.util.Random`
+ * on the ONE owning thread and from a real `SecureRandom` on every other thread, so a stray
+ * thread left behind by an earlier test class neither perturbs the pinned stream nor receives
+ * UUIDs that could collide with it. The original SPI is restored in `finally`. Access is through
+ * `sun.misc.Unsafe` (`jdk.unsupported`), because `java.security` is not opened to the test
+ * module; this is supported on the repo's Java 21 toolchain and is deprecated for removal from
+ * JDK 23 on (JEP 471) — a toolchain bump past 21 must replace it, and [pinned] fails LOUDLY
+ * rather than silently unpinning when the pin does not take (its self-check below).
+ *
+ * TEST-ONLY by construction: nothing in `:kernel` main is touched, and the pin is scoped to the
+ * lambda it wraps.
+ */
+internal object PinnedUuidEntropy {
+
+    class Spi(private val owner: Thread) : java.security.SecureRandomSpi() {
+        @Volatile private var pinned: java.util.Random = java.util.Random(0)
+        private val real = java.security.SecureRandom()
+
+        fun reseed(value: Long) {
+            check(Thread.currentThread() === owner) { "reseed from a non-owning thread" }
+            pinned = java.util.Random(value)
+        }
+
+        override fun engineNextBytes(bytes: ByteArray) {
+            if (Thread.currentThread() === owner) pinned.nextBytes(bytes) else real.nextBytes(bytes)
+        }
+
+        override fun engineSetSeed(seed: ByteArray) = Unit
+        override fun engineGenerateSeed(numBytes: Int): ByteArray = real.generateSeed(numBytes)
+    }
+
+    @Synchronized
+    fun <T> pinned(block: (Spi) -> T): T {
+        java.util.UUID.randomUUID() // initialise UUID$Holder
+        val unsafeField = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null)
+        val u = unsafe.javaClass
+        val holder = Class.forName("java.util.UUID\$Holder").getDeclaredField("numberGenerator")
+        val base = u.getMethod("staticFieldBase", java.lang.reflect.Field::class.java).invoke(unsafe, holder)
+        val staticOffset = u.getMethod("staticFieldOffset", java.lang.reflect.Field::class.java)
+            .invoke(unsafe, holder) as Long
+        val getObject = u.getMethod("getObject", Any::class.java, Long::class.javaPrimitiveType)
+        val putObject = u.getMethod("putObject", Any::class.java, Long::class.javaPrimitiveType, Any::class.java)
+        val generator = getObject.invoke(unsafe, base, staticOffset) as java.security.SecureRandom
+        val spiOffset = u.getMethod("objectFieldOffset", java.lang.reflect.Field::class.java)
+            .invoke(unsafe, java.security.SecureRandom::class.java.getDeclaredField("secureRandomSpi")) as Long
+        val original = getObject.invoke(unsafe, generator, spiOffset)
+        val spi = Spi(Thread.currentThread())
+        putObject.invoke(unsafe, generator, spiOffset, spi)
+        try {
+            // The self-check: two draws under one seed must repeat. If the swap did not reach
+            // the generator `randomUUID()` actually reads, this fails here instead of letting the
+            // caller believe a fresh-entropy run is a pinned one.
+            spi.reseed(-1L)
+            val first = List(3) { java.util.UUID.randomUUID() }
+            spi.reseed(-1L)
+            check(first == List(3) { java.util.UUID.randomUUID() }) {
+                "PinnedUuidEntropy: the UUID stream did not repeat under one seed, so the pin is " +
+                    "not in effect (JDK internals moved?). Refusing to run a sweep that would " +
+                    "claim determinism it does not have."
+            }
+            return block(spi)
+        } finally {
+            putObject.invoke(unsafe, generator, spiOffset, original)
+        }
+    }
+}
+
 /** Sweep-wide non-vacuity counters for ONE trigger, absorbed from each quiesced run. */
 internal class GcTotals(val label: String) {
     var runs: Int = 0
@@ -1141,18 +1244,43 @@ class GcSafetySweepTest {
 
     @Test
     fun `compaction at the local delivered frontier resurrects a removed element_BS13`() {
+        // computenet-tp47y review: one discarded, UNPINNED warm-up run BEFORE the pin. The first
+        // rig run in a JVM initialises `FanOutlet`, whose static initialiser mints a `PortRef`
+        // (a UUID) on this thread; under the pin that one extra draw shifted seed 1's stream, so
+        // seed 1's trace differed between a cold JVM (this method run alone) and a warm one (after
+        // the other arms, as on CI) — measured sha256:8b5aee25ab6d77c7 vs 5bad62eb6bc01d1d. After
+        // the warm-up every seed consumes the same stream whatever ran earlier in the fork. The
+        // counters it feeds are reset on the next line.
+        MeshConvergences.observing {
+            DstRun(
+                GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
+                GcSafetySweep.plan(SEEDS.first),
+                BUDGET,
+                checks.getValue(GcSafetySweep.Trigger.LOCAL),
+            ).execute()
+        }
         GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.LOCAL).reset()
         val startedAt = System.nanoTime()
-        val sweep = MeshConvergences.observing {
-            dstSweep(
-                suite = "gc-safety-local",
-                seeds = SEEDS,
-                graph = GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
-                checkId = GcSafetySweep.Trigger.LOCAL.checkId,
-                budget = BUDGET,
-                artifactRoot = localRoot,
-                planFor = GcSafetySweep::plan,
-            )
+        // computenet-tp47y: THIS arm runs on a PINNED UUID draw, and only this arm. See
+        // [PinnedUuidEntropy] for the measurement and [BS13_PIN_RETIRED]'s computenet-tp47y
+        // section for why that is the honest fix and not a friendlier seed. The pin is reseeded
+        // from the plan seed inside `planFor`, which `dstSweep` calls immediately before building
+        // that seed's world, so each seed's run consumes the same UUID stream on every execution.
+        val sweep = PinnedUuidEntropy.pinned { entropy ->
+            MeshConvergences.observing {
+                dstSweep(
+                    suite = "gc-safety-local",
+                    seeds = SEEDS,
+                    graph = GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
+                    checkId = GcSafetySweep.Trigger.LOCAL.checkId,
+                    budget = BUDGET,
+                    artifactRoot = localRoot,
+                    planFor = { seed ->
+                        entropy.reseed(seed * BS13_ENTROPY_STRIDE)
+                        GcSafetySweep.plan(seed)
+                    },
+                )
+            }
         }
         val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
         val totals = GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.LOCAL)
@@ -1245,9 +1373,13 @@ class GcSafetySweepTest {
         assertTrue(
             fenceAttributed.isNotEmpty(),
             "[KE3-20]: no seed in $SEEDS produced a FENCE-ATTRIBUTED divergence under the LOCAL " +
-                "delivered frontier. The wrong seam is no longer observably harmful by this rig, " +
-                "so `[KE3-20]`'s witness is gone again — widen the adversary, never weaken the " +
-                "check, and re-derive the widening's provenance in [BS13_PIN_RETIRED]. " +
+                "delivered frontier. This arm runs on a PINNED UUID draw (computenet-tp47y), so " +
+                "this red is DETERMINISTIC and was caused by the change under test: either it " +
+                "removed the wrong seam's harm, or it changed how many UUIDs the kernel mints (or " +
+                "in what order) and so re-rolled the draw (an estimated ~1 % of draws have no witness; " +
+                "0 of 30 measured, see [BS13_PIN_RETIRED]). Do NOT pick another BS13_ENTROPY_STRIDE or " +
+                "narrow SEEDS until green: re-measure across several strides first and record the " +
+                "result in [BS13_PIN_RETIRED], or widen the adversary — never weaken the check. " +
                 "diverging=$diverging failures=${sweep.failures.map { it.seed to it.message }}",
         )
     }
@@ -1489,10 +1621,64 @@ class GcSafetySweepTest {
          *    K = 10, on the reasoning that per-seed chances are bounded by the remove count.
          *    Measured 6, 4, 3, 2 — no better, and it would have falsified the ordinal-parity
          *    prose several KDocs in this file still quote. Reverted.
+         *
+         * ## computenet-tp47y, 2026-09-25 — the THIRD intermittent red, and why widening again was
+         * not the fix
+         *
+         * CI run 35961292420 (ubuntu, PR #1057, which touches no `:kernel` file) went red here with
+         * `diverging=[76]` and no fence-attributed seed; a rerun on the same sha passed. Rather
+         * than widen once more, computenet-tp47y asked why a FIXED seed range gives a different
+         * count on every run. Answer, measured (full table on [PinnedUuidEntropy]): the only
+         * run-to-run variation in this rig is the `UUID.randomUUID()` draw that
+         * `Peering.Loopback.heal()`'s hash-ordered re-announcement consumes — not wall clock, not
+         * thread scheduling. With the UUID stream pinned per seed, three 200-seed sweeps under
+         * host load gave identical trace digests on 200 of 200 seeds; unpinned, on 4 of 200.
+         *
+         * The per-sweep count is therefore a sum of per-seed coin flips whose coins are the UUID
+         * draw. Distribution over 30 independent pinned draws (salts 0..29, same host and date):
+         * fence-attributed counts 2,3,4,4,6,5,3,4,5,1,5,6,3,2,6,4,4,4,2,2,3,3,3,2,5,3,2,3,6,6 —
+         * mean 3.7, minimum 1, zero on 0 of 30. Seed 145 carried the witness on 20 of 30 draws,
+         * 89 on 16, then 148 (9), 181 and 149 (8). Treating seeds as independent, the product
+         * of their observed miss rates puts a zero-witness draw at roughly 1 % — i.e. roughly one
+         * red per hundred `kernel-test` runs, which is what CI has been showing. That rate is a
+         * property of the DRAW, so it should not differ between darwin and the Linux runners
+         * (same JDK major, same hash-ordered maps); that is inference — the Linux per-seed counts
+         * of the failing run are not in its log and were not measured.
+         *
+         * Widening could only shrink that ~1 %, never remove it, and every earlier widening's
+         * "min 3 over N runs" was a small sample of the same distribution. So the acceptance's
+         * DETERMINISTIC arm was taken: the BS-13 arm now runs on a pinned draw
+         * ([BS13_ENTROPY_STRIDE]), under which the witness fires on every run.
+         *
+         * **What that does NOT weaken.** The assertions, [SEEDS], [BUDGET], [GcSafetySweep.K] and
+         * the adversary are byte-identical. BS-13's harm assertions are EXISTENTIAL ("some seed is
+         * harmed"), and a fixed, reproducible draw is the right witness for an existential claim:
+         * a fresh draw per run added no coverage to it, only a ~1 % coin. The UNIVERSAL assertions
+         * — BS-12's "STABLE resurrects nothing / fences nothing", the CONTROL arm's — are
+         * deliberately LEFT on fresh entropy, where each CI run samples a new draw and so adds
+         * coverage. The one universal check this arm also carries, `other.isEmpty()`, now sees one
+         * draw instead of a fresh one; the BS-12 and CONTROL arms still classify every failure on
+         * fresh draws.
+         *
+         * **What a future red means.** It is now reproducible locally and belongs to the change
+         * that caused it: either that change removed the wrong seam's harm (the finding [KE3-20]
+         * exists to catch), or it changed how many UUIDs the kernel mints or in what order, which
+         * re-rolls every seed's draw and lands on the ~1 % tail. In the second case do NOT scan
+         * strides for a green one: measure the witness over several strides, record them here,
+         * and only then choose — the same rule [PIN_RUNS] applied to plan seeds.
          */
         private const val BS13_PIN_RETIRED: String =
             "retired by computenet-nwnl; replaced by the BS-13 arm's sweep-level " +
                 "fence-attribution assertion — see this constant's KDoc for the provenance"
+
+        /**
+         * The BS-13 arm's UUID draw: seed `s` runs with `UUID.randomUUID()` answering from
+         * `java.util.Random(s * BS13_ENTROPY_STRIDE)` (see [PinnedUuidEntropy]). It is the FIRST
+         * derivation computenet-tp47y measured, taken as found and not chosen among alternatives;
+         * the 30-draw distribution it sits in is in [BS13_PIN_RETIRED]. Never changed to turn a
+         * red green without that record.
+         */
+        private const val BS13_ENTROPY_STRIDE: Long = 1_000_003L
 
         /**
          * The recorded STABLE (`[KE3-23]`, BS-12) seed. It was chosen as the branch-F-B witness
