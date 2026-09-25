@@ -170,5 +170,16 @@ class ActorIngress(
      * ambient [CurrentContext], so every hosted invocation it sends — including
      * one to an `Effectful` inlet — carries a frontier position.
      */
-    fun <R> drive(block: () -> R): R = CurrentContext.with(next(), block)
+    fun <R> drive(block: () -> R): R = driveStamped(block).second
+
+    /**
+     * [drive], also returning the wave [block]'s sends were stamped with — the
+     * position a writer hands to a
+     * [civictech.cell.observe.FrontierWitness.visibilityOf] handle (KE2 §5.5).
+     */
+    fun <R> driveStamped(block: () -> R): Pair<Timestamp, R> {
+        val ctx = next()
+        val result = CurrentContext.with(ctx, block)
+        return ctx.timestamp to result
+    }
 }
