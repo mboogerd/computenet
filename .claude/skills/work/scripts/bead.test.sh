@@ -133,9 +133,11 @@ for args in "known -r .status -C /some/checkout" "-r -C /some/checkout known .st
   [ $rc -eq 0 ] && [ "$out" = open ] && ok "$args" || bad "$args: exit $rc -- $out"
   [ "$(cat "$SEEN_C")" = /some/checkout ] && ok "bd saw -C" || bad "bd saw '$(cat "$SEEN_C")'"
 done
-out=$(BODY_CHARS=100 bash "$SCRIPT" -C /some/checkout known -r 2>&1); rc=$?
-[ $rc -eq 0 ] && grep -q '"id": "known"' <<<"$out" && ok "-r with no filter prints the bead" \
-  || bad "-r, no filter: exit $rc -- $out"
+for args in "-C /some/checkout known -r" "-r -C /some/checkout known"; do
+  out=$(BODY_CHARS=100 bash "$SCRIPT" $args 2>&1); rc=$?
+  [ $rc -eq 0 ] && grep -q '"id": "known"' <<<"$out" && ok "-r, no filter ($args) prints the bead" \
+    || bad "-r, no filter ($args): exit $rc -- $out"
+done
 out=$(BODY_CHARS=100 bash "$SCRIPT" known .status extra 2>&1); rc=$?
 [ $rc -eq 2 ] && grep -q 'unexpected argument' <<<"$out" && ok "a third word is refused" \
   || bad "extra word: exit $rc -- $out"
