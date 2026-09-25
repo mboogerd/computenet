@@ -142,7 +142,7 @@ sealed interface WriteBackEvent {
         val cnEcho: String,
     ) : WriteBackEvent
 
-    /** No import was run for this issue; [reason] says which of the two decided cases applied. */
+    /** No import was run for this issue; [reason] says which [SkipReason] applied. */
     data class Skipped(override val issueId: String, val reason: SkipReason) : WriteBackEvent
 
     /** This issue's write-back failed; the queue continues with the next issue (clause 6). */
