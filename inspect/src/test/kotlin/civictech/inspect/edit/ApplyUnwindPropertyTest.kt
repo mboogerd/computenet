@@ -130,13 +130,14 @@ class ApplyUnwindPropertyTest {
         record.steps.getValue("s3") shouldBe StepOutcome.Failed("injected")
         record.stagedRefs.size shouldBe 2
         stagedSeen shouldBe true // non-vacuous: the staged cells did reach the live registry
-        registry.localRefs() shouldBe refsBefore
-        registry.all() shouldBe linksBefore
         // the model's hooks fire synchronously on the registry thread; this is a bounded guard
         awaitUntil("topology node set back to its pre-apply value") {
             json.decodeFromString<TopologySnapshot>(p.state(InspectorServer.TOPOLOGY_PATH)).nodes.map { it.ref }.toSet() == nodesBefore
         }
         paths.forEach { path -> (path to p.read(path)) shouldBe (path to before.getValue(path)) }
+        // registry level too, after the routes, so a route-level miss is reported as one
+        registry.localRefs() shouldBe refsBefore
+        registry.all() shouldBe linksBefore
 
         // GET /errors is excluded from identity — see the class KDoc for why, and
         // for why this particular injection leaves no row there to assert on.
