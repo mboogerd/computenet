@@ -66,6 +66,17 @@ object RejectionClassifier {
         // JVM decoder DOES distinguish truncation from other malformed JSON by this substring (D8's
         // pinned-because-current fallback to `malformed` was not needed; `satisfies` still accepts either).
         Rule("truncated", SerializationException::class, "but had 'EOF' instead"),
+        // WV-NEG-UNKNOWN-ENVELOPE-KEY-01 ("telepathy" spliced into the envelope, computenet-ncz.5, ncz.5-D8):
+        // kotlinx.serialization.json.internal.JsonDecodingException (a SerializationException): "Encountered
+        // an unknown key 'telepathy' at offset 2 at path: $. Use 'ignoreUnknownKeys = true' in 'Json {}'
+        // builder or '@JsonIgnoreUnknownKeys' annotation to ignore unknown keys. JSON input: …" — measured by
+        // running the probe against the built codec, not assumed. `WireCodec.build` never sets
+        // `ignoreUnknownKeys`, so any envelope key outside `WireFrame`'s field list throws this. The substring
+        // is pinned-because-current (ncz.5-D8's anticipated slot for ncz.6-D8's catch-all comment): it does
+        // NOT match `WV-NEG-MALFORMED-01`'s "Trailing comma before the end of JSON object" message, nor
+        // `WV-NEG-TRUNCATED-01`'s "but had 'EOF' instead" — RejectionClassifierTest asserts the malformed
+        // probe still classifies `malformed` beside this row.
+        Rule("unknown-envelope-field", SerializationException::class, "Encountered an unknown key"),
         // WV-NEG-MALFORMED-01 (bytes = the literal `{"version":2,`): kotlinx.serialization.SerializationException
         // (JsonDecodingException): "Unexpected JSON token at offset 12: Trailing comma before the end of JSON
         // object at path: $.version". CATCH-ALL: any later SerializationException row (e.g. ncz.5's

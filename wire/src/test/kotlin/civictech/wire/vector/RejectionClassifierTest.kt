@@ -47,6 +47,12 @@ class RejectionClassifierTest {
         return probe
     }
 
+    /** The seed's bytes with an envelope key `WireFrame` does not declare spliced after the opening brace. */
+    private fun unknownEnvelopeKeyProbe(): String {
+        assertTrue(seedUtf8.startsWith("{"), "${seed.id}: encoded.utf8 is not a JSON object")
+        return "{\"telepathy\":true," + seedUtf8.substring(1)
+    }
+
     private fun thrownBy(utf8: String): Throwable =
         assertThrows<Throwable> { WireCodec.decodeFrame(utf8.toByteArray(Charsets.UTF_8)) }
 
@@ -58,6 +64,17 @@ class RejectionClassifierTest {
     @Test
     fun `an unregistered contract-method id pair classifies as unknown-ids`() {
         assertEquals("unknown-ids", RejectionClassifier.classify(thrownBy(unknownIdsProbe())))
+    }
+
+    @Test
+    fun `an unknown envelope key classifies as unknown-envelope-field, and the malformed probe still classifies as malformed`() {
+        assertEquals("unknown-envelope-field", RejectionClassifier.classify(thrownBy(unknownEnvelopeKeyProbe())))
+        val malformed = loader.documents().first { it.id == "WV-NEG-MALFORMED-01" }
+        val malformedBytes = checkNotNull(malformed.encoded) { "${malformed.id}: no `encoded`" }.bytes
+        assertEquals(
+            "malformed",
+            RejectionClassifier.classify(assertThrows<Throwable> { WireCodec.decodeFrame(malformedBytes) }),
+        )
     }
 
     @Test
@@ -107,6 +124,7 @@ class RejectionClassifierTest {
     fun `driver accepts a decode negative whose refusal classifies as expected`() {
         WireVectorConformanceTest.verify(negative("WV-NEG-PROBE-VERSION-01", "unsupported-version", "decode", versionProbe(), null))
         WireVectorConformanceTest.verify(negative("WV-NEG-PROBE-IDS-01", "unknown-ids", "decode", unknownIdsProbe(), null))
+        WireVectorConformanceTest.verify(negative("WV-NEG-PROBE-UNKNOWN-KEY-01", "unknown-envelope-field", "decode", unknownEnvelopeKeyProbe(), null))
     }
 
     @Test

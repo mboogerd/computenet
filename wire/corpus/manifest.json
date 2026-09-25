@@ -89,6 +89,24 @@
       "category": "negative",
       "kind": "negative",
       "file": "negative/WV-NEG-UNKNOWN-TYPE-01.json"
+    },
+    {
+      "id": "WV-NEG-UNKNOWN-ENVELOPE-KEY-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-UNKNOWN-ENVELOPE-KEY-01.json"
+    },
+    {
+      "id": "WV-NEG-VERSION-ABOVE-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-VERSION-ABOVE-01.json"
+    },
+    {
+      "id": "WV-NEG-VERSION-BELOW-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-VERSION-BELOW-01.json"
     }
   ],
   "pending": [
