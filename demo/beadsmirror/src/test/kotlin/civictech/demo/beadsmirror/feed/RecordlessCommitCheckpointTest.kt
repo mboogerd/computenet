@@ -47,11 +47,17 @@ class RecordlessCommitCheckpointTest {
     }
 
     @Test
-    fun `a tick already at head does not read the feed`(@TempDir runDir: Path) {
+    fun `a tick already at head does not read the feed, and costs exactly one dolt_log query`(
+        @TempDir runDir: Path,
+    ) {
+        val logQueries = AtomicInteger(0)
         val feed = DoltCommitFeed(
             DiffQuery { sql ->
                 when (sql) {
-                    DoltCommitFeed.LOG_QUERY -> log("c2", "c1")
+                    DoltCommitFeed.LOG_QUERY -> {
+                        logQueries.incrementAndGet()
+                        log("c2", "c1")
+                    }
                     else -> error("an idle tick must not query the diff tables: $sql")
                 }
             },
@@ -60,20 +66,21 @@ class RecordlessCommitCheckpointTest {
 
         DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { error("must not be called") }).pollOnce()
 
+        logQueries.get() shouldBe 1
         checkpoint.read() shouldBe "c2"
     }
 
     /**
-     * The soundness rule: only a head observed BEFORE the feed read may be
-     * persisted. Here c3 — which carries a record — lands after both of the
-     * tick's `dolt_log` reads. The tick stops at c2 and hands c3's record over
-     * on the next tick.
+     * The soundness rule: only a head from the read's own `dolt_log` may be
+     * persisted. Here c3 — which carries a record — lands after the tick's
+     * single `dolt_log` read (computenet-yspa5: one read per tick, not two).
+     * The tick stops at c2 and hands c3's record over on the next tick.
      */
     @Test
-    fun `a commit landing after the tick's reads is delivered next tick, never skipped`(@TempDir runDir: Path) {
+    fun `a commit landing after the tick's read is delivered next tick, never skipped`(@TempDir runDir: Path) {
         val logReads = AtomicInteger(0)
         val feed = feed(
-            log = { if (logReads.incrementAndGet() <= 2) listOf("c2", "c1") else listOf("c3", "c2", "c1") },
+            log = { if (logReads.incrementAndGet() <= 1) listOf("c2", "c1") else listOf("c3", "c2", "c1") },
             issueRows = listOf(row("diff_type" to "added", "to_commit" to "c3", "to_id" to "late")),
         )
         val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
@@ -90,30 +97,43 @@ class RecordlessCommitCheckpointTest {
     }
 
     /**
-     * The read-ordering half of the soundness rule, which the test above does
-     * not reach (its first two `dolt_log` reads agree, so either order passes
-     * it). Here c3 — which carries a record — becomes visible between the
-     * tick's first and second `dolt_log` reads. Head-then-feed sees c3 in the
-     * feed read and delivers it. Feed-then-head would read the feed without
-     * c3, then persist c3 as the head, and c3's record would never be
-     * delivered.
+     * The single-read shape's replacement for the two-read ordering test this
+     * used to be (computenet-yspa5, residual of computenet-btt30): with only
+     * one `dolt_log` call per tick, there is no longer a window between "read
+     * the head" and "read the feed" for a commit to land in — [DoltFeedPoller]
+     * now calls [DoltCommitFeed.readFromWithHead], which reads `dolt_log`
+     * exactly once and hands back both the records and the head that log's
+     * tail names, so the two can never disagree. This pins that there really
+     * is one `dolt_log` call per active tick, not two: a regression back to a
+     * separate `history()` read before the feed read — the shape that made
+     * the "landing between the two reads" race possible in the first place —
+     * would double this count.
      */
     @Test
-    fun `a commit landing between the head read and the feed read is delivered, never skipped`(@TempDir runDir: Path) {
-        val logReads = AtomicInteger(0)
-        val feed = feed(
-            log = { if (logReads.incrementAndGet() <= 1) listOf("c2", "c1") else listOf("c3", "c2", "c1") },
-            issueRows = listOf(row("diff_type" to "added", "to_commit" to "c3", "to_id" to "between")),
+    fun `an active tick issues exactly one dolt_log query`(@TempDir runDir: Path) {
+        val logQueries = AtomicInteger(0)
+        val feed = DoltCommitFeed(
+            DiffQuery { sql ->
+                when {
+                    sql == DoltCommitFeed.LOG_QUERY -> {
+                        logQueries.incrementAndGet()
+                        log("c2", "c1")
+                    }
+                    sql.startsWith(DoltCommitFeed.ISSUE_QUERY) ->
+                        listOf(row("diff_type" to "added", "to_commit" to "c2", "to_id" to "a"))
+                    sql.startsWith(DoltCommitFeed.EDGE_QUERY) -> emptyList()
+                    else -> error("unexpected query: $sql")
+                }
+            },
         )
         val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
         val batches = mutableListOf<ChangeRecord>()
-        val poller = DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it })
 
-        poller.pollOnce()
-        poller.pollOnce()
+        DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it }).pollOnce()
 
-        batches.map { it.issueId } shouldContainExactly listOf("between")
-        checkpoint.read() shouldBe "c3"
+        logQueries.get() shouldBe 1
+        batches.map { it.issueId } shouldContainExactly listOf("a")
+        checkpoint.read() shouldBe "c2"
     }
 
     private fun feed(log: () -> List<String>, issueRows: List<Map<String, JsonElement>>) = DoltCommitFeed(

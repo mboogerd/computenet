@@ -135,6 +135,28 @@ class DoltCommitFeed(private val sql: DiffQuery) {
     fun history(): List<String> = log().map { it.commitHash }
 
     /**
+     * [readFrom]'s records together with the head of the one `dolt_log` read
+     * that bounded them — [FeedRead.head] is the last entry of the single
+     * [log] call this makes, never a second, independent read. [readFrom]
+     * itself makes its own separate [log] call, so it and this method never
+     * share one; callers that need both the records and a sound head to
+     * persist must call this, not `readFrom` plus a prior `history()`.
+     *
+     * This exists so [DoltFeedPoller] can persist "every record up to this
+     * head has been delivered" without a separate `history()` call before the
+     * read (computenet-yspa5, residual of computenet-btt30): any commit in
+     * *this* log was covered by *this* pass — `wanted` and both diff queries
+     * are bounded to exactly it — so persisting this head is exactly as sound
+     * as persisting a head read beforehand, at the cost of one fewer
+     * `dolt_log` query per tick.
+     */
+    fun readFromWithHead(afterCommit: String? = null): FeedRead {
+        val entries = log()
+        val head = entries.lastOrNull()?.commitHash
+        return FeedRead(readFrom(afterCommit, entries), head)
+    }
+
+    /**
      * [LOG_QUERY]'s rows as [LogEntry]s, genesis-first — [history] plus each
      * commit's parents, which is what merge detection needs. Deliberately
      * *not* public and deliberately non-throwing on a multi-parent commit:
@@ -169,8 +191,14 @@ class DoltCommitFeed(private val sql: DiffQuery) {
      *   commits". [CheckpointNotInHistoryException] extends
      *   [IllegalArgumentException], so it is still catchable as one.
      */
-    fun readFrom(afterCommit: String? = null): List<ChangeRecord> {
-        val entries = log()
+    fun readFrom(afterCommit: String? = null): List<ChangeRecord> = readFrom(afterCommit, log())
+
+    /**
+     * [readFrom]'s body, parameterised over an already-read [entries] so
+     * [readFromWithHead] can supply the single [log] call it made itself
+     * rather than triggering a second one here.
+     */
+    private fun readFrom(afterCommit: String?, entries: List<LogEntry>): List<ChangeRecord> {
         val commits = entries.map { it.commitHash }
         val startIndex = when (afterCommit) {
             null -> 0
@@ -477,6 +505,15 @@ class DoltCommitFeed(private val sql: DiffQuery) {
  * merge — the condition [DoltCommitFeed.readFrom] refuses to walk past.
  */
 private data class LogEntry(val commitHash: String, val parents: List<String>)
+
+/**
+ * [DoltCommitFeed.readFromWithHead]'s result: [records] read after the
+ * caller's `afterCommit`, plus [head] — the last commit of the exact
+ * `dolt_log` that both bounded [records] and was checked for the walked
+ * range's [HistoryMergedException] condition. `null` only when the workspace
+ * has no commits at all (a `dolt_log` read of an empty history).
+ */
+data class FeedRead(val records: List<ChangeRecord>, val head: String?)
 
 /** One issue's whole change within one commit, before edge diffs are attached. */
 internal data class IssueDiff(
