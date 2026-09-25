@@ -1447,7 +1447,7 @@ the SOC1 row of `computenet-milestone-plan.md` (repo root) ("implement the
 SNB schema … — follows-as-interest, scatter-gather feed (PN-5),
 generator-driven load"), the interest/spawn half of that row rather than
 its "pulls triggers: keyed families, G-24 placement pressure" half (F-26
-above is where G-24's own trigger is evaluated).
+below is where G-24's own trigger is evaluated).
 
 **Observation**: epic `computenet-07k` §3.2 states the gap directly ("Honest
 statement of what does not exist"), and feature `computenet-4q9is` task
