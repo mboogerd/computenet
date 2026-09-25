@@ -60,6 +60,10 @@ class OwnershipBoundaryTest {
 
         val refused = assertThrows<IllegalArgumentException> { egress.deliver(seedWithArgs(lease)) }
 
+        // The classification, not the assertThrows type, is what tells the bridge's refusal from a codec
+        // accident: without the bridge's require, WireCodec.encode throws kotlinx's SerializationException
+        // ("Serializer for subclass 'Leased' is not found…"), which IS an IllegalArgumentException subclass
+        // (observed 2026-09-25) and classifies as unclassified(…).
         assertEquals("leased-at-encode", RejectionClassifier.classify(refused), "the refusal is spec 23's, not a codec accident")
         assertTrue(recorded.isEmpty(), "[WIR1-I16] B3.9: ${recorded.size} byte array(s) left the egress for a Leased send")
         // Nothing consumed or released the lease on the way to the refusal: the sender still owns the obligation.
