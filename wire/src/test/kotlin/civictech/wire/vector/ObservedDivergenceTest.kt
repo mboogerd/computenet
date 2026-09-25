@@ -174,6 +174,8 @@ class ObservedDivergenceTest {
     @Test
     fun `driver reds accepted-with-substitution when the invalid sequence is not inside portName`() {
         // 0x80 before the opening brace: no returned portName can carry the U+FFFD, so the arm must not go green.
+        // Note: the substituted text is not JSON, so decodeFrame THROWS and this reds via the "divergence has
+        // closed" path; it does not reach the portName-U+FFFD guard (task review: neutralising the guard left it green).
         val bytes = byteArrayOf(0x80.toByte()) + seedBytes
         val doc = parse(document("WV-NEG-PROBE-OBS-13", "decode", bytes, null, expect("invalid-utf8", "accepted-with-substitution")))
         assertThrows<AssertionError> { WireVectorConformanceTest.verify(doc) }
