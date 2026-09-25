@@ -486,19 +486,29 @@ class IrohNodeTest {
 
             val dial = fake.nextDial()
             fake.send(SidecarMessage.LinkUp(dial.link, peer, DIRECTION_OUTBOUND))
-            (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle within 30s")).getOrThrow()
-            assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello is its first frame")
+            val connection =
+                (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle within 30s")).getOrThrow()
+            // Without this, the connection's own re-dial loop (backoff 10ms)
+            // outlives this test: withNode closes the client and fake, not any
+            // configured connection, so an unclosed one spins on "client is
+            // closed" and prints a "re-dial attempt" line every 10ms for the
+            // rest of the :iroh:test JVM (computenet-raitp).
+            try {
+                assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello is its first frame")
 
-            val view = node.links(peer).single()
-            assertEquals(IrohNode.LinkSource.CONFIGURED, view.source)
-            assertEquals(LinkDirection.OUTBOUND, view.direction)
-            assertEquals(dial.link, view.linkId)
+                val view = node.links(peer).single()
+                assertEquals(IrohNode.LinkSource.CONFIGURED, view.source)
+                assertEquals(LinkDirection.OUTBOUND, view.direction)
+                assertEquals(dial.link, view.linkId)
 
-            // Unplanned: this one re-dials itself, unlike a discovered peering.
-            fake.send(SidecarMessage.LinkDown(dial.link, "transport drop"))
-            val redial = fake.nextDial()
-            assertTrue(redial.link != dial.link, "a re-dial is a new link id")
-            assertContentEquals(peer, redial.peerId)
+                // Unplanned: this one re-dials itself, unlike a discovered peering.
+                fake.send(SidecarMessage.LinkDown(dial.link, "transport drop"))
+                val redial = fake.nextDial()
+                assertTrue(redial.link != dial.link, "a re-dial is a new link id")
+                assertContentEquals(peer, redial.peerId)
+            } finally {
+                connection.close()
+            }
         }
     }
 
