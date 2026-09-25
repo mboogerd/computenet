@@ -6,12 +6,10 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryAnnounce
-import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * `computenet-f7h.2.3` — the **engine-level** peering examples of the
@@ -75,25 +73,7 @@ class LeaderMarkAnnounceTest {
     private val publishedId: Long = announceMethodId("published", CellRef::class.java)
     private val linkedId: Long = announceMethodId("linked", civictech.cell.host.TopologyLink::class.java)
 
-    /** One frame's identity, as the interposers record it. */
-    private data class FrameId(val contractId: Long, val methodId: Long)
-
-    /**
-     * Records every frame that crosses one direction, in order, and passes it
-     * through unchanged.
-     */
-    private open class Counting : Peering.FrameInterpose {
-        val frames = CopyOnWriteArrayList<FrameId>()
-
-        override fun apply(frame: ByteArray): List<ByteArray> {
-            val decoded = WireCodec.decodeFrame(frame).frame
-            frames += FrameId(decoded.contractId, decoded.methodId)
-            return listOf(frame)
-        }
-
-        fun count(methodId: Long): Int = frames.count { it.methodId == methodId }
-        fun reset() = frames.clear()
-    }
+    // Counting/FrameId are the shared fixture in CountingInterpose.kt.
 
     /**
      * Emits every `leaderMarked` frame twice once [armed].

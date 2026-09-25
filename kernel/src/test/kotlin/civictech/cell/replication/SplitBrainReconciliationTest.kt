@@ -12,7 +12,6 @@ import civictech.cell.port.Use
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryAnnounce
-import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -22,7 +21,6 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * `computenet-f7h.6.1` — the **reconciliation** half of F6 (epic
@@ -177,30 +175,7 @@ class SplitBrainReconciliationTest {
     private val leaderMarkedId: Long =
         ContractRegistry.idsOf(RegistryAnnounce::class.java.getMethod("leaderMarked", LeaderMark::class.java))!!.second
 
-    /** One frame's identity, as [Counting] records it. */
-    private data class FrameId(val contractId: Long, val methodId: Long)
-
-    /**
-     * Records every frame that crosses one direction and passes it through
-     * unchanged. Copied from [LeaderElectionTest], where it is private and in
-     * another task's claim.
-     */
-    private open class Counting : Peering.FrameInterpose {
-        protected val frames = CopyOnWriteArrayList<FrameId>()
-
-        override fun apply(frame: ByteArray): List<ByteArray> {
-            record(frame)
-            return listOf(frame)
-        }
-
-        protected fun record(frame: ByteArray) {
-            val decoded = WireCodec.decodeFrame(frame).frame
-            frames += FrameId(decoded.contractId, decoded.methodId)
-        }
-
-        fun count(methodId: Long): Int = frames.count { it.methodId == methodId }
-        fun reset() = frames.clear()
-    }
+    // Counting/FrameId are the shared fixture in CountingInterpose.kt.
 
     /**
      * A one-direction DROP that can be toggled between connection instances.

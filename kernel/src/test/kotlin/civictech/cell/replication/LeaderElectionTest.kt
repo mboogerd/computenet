@@ -11,7 +11,6 @@ import civictech.cell.repro.ExpectedFailure
 import civictech.cell.repro.withSignature
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryAnnounce
-import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
 import civictech.testkit.forEachSeed
 import io.kotest.assertions.withClue
@@ -1204,26 +1203,7 @@ class LeaderElectionTest {
     private val leaderMarkedId: Long =
         ContractRegistry.idsOf(RegistryAnnounce::class.java.getMethod("leaderMarked", LeaderMark::class.java))!!.second
 
-    /** One frame's identity, as [Counting] records it. */
-    private data class FrameId(val contractId: Long, val methodId: Long)
-
-    /**
-     * Records every frame that crosses one direction and passes it through
-     * unchanged. Copied from [LeaderMarkAnnounceTest], where it is private and
-     * in another task's claim.
-     */
-    private class Counting : Peering.FrameInterpose {
-        private val frames = CopyOnWriteArrayList<FrameId>()
-
-        override fun apply(frame: ByteArray): List<ByteArray> {
-            val decoded = WireCodec.decodeFrame(frame).frame
-            frames += FrameId(decoded.contractId, decoded.methodId)
-            return listOf(frame)
-        }
-
-        fun count(methodId: Long): Int = frames.count { it.methodId == methodId }
-        fun reset() = frames.clear()
-    }
+    // Counting/FrameId are the shared fixture in CountingInterpose.kt.
 
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile

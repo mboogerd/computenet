@@ -16,14 +16,12 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryAnnounce
-import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * `computenet-f7h.4.3` — the **refusal** half of automatic leader election
@@ -219,25 +217,7 @@ class LeaderElectionRefusalTest {
 
     private val leaderMarkedId: Long = announceMethodId("leaderMarked", LeaderMark::class.java)
 
-    private data class FrameId(val contractId: Long, val methodId: Long)
-
-    /**
-     * Records every frame that crosses one direction, in order, and passes it
-     * through unchanged. Copied from [LeaderMarkAnnounceTest], where it is
-     * private and in another file's claim.
-     */
-    private open class Counting : Peering.FrameInterpose {
-        val frames = CopyOnWriteArrayList<FrameId>()
-
-        override fun apply(frame: ByteArray): List<ByteArray> {
-            val decoded = WireCodec.decodeFrame(frame).frame
-            frames += FrameId(decoded.contractId, decoded.methodId)
-            return listOf(frame)
-        }
-
-        fun count(methodId: Long): Int = frames.count { it.methodId == methodId }
-        fun reset() = frames.clear()
-    }
+    // Counting/FrameId are the shared fixture in CountingInterpose.kt.
 
     /** Collects every [DeadLetter] a host emits. */
     private fun collectDeadLetters(host: ManagedHost): MutableList<DeadLetter> {
