@@ -1307,6 +1307,58 @@ route `:demo:social` serves that is routed through `GlitchFreeCell` /
 `Consume`-linked `GlitchFreeCell` *wedges* under plain ingress) or F7
 (`computenet-v10ou`, the instrument that could check the journal consequence).
 
+**Re-decided 2026-09-25 (`computenet-w52fa`, main `af8c1a00`): still three
+waves.** The F7 arm fired: `[SOC1-DUR-03]`'s recovery equality is
+`SocialCrashRestartTest`, and recovery is `SocialRecovery`
+(`ManagedHost.recoverFrom`). The glitch-free arm did not fire. The only
+`GlitchFreeCell` mentions in `demo/social/src/main` are `SnbPipeline.kt` KDoc,
+and no source file there names `WaveFrontier`. Of the four reasons above, one
+fell and three still hold:
+
+- **"It cannot be verified" no longer holds, and the adopt arm passes when
+  measured.** `SocialCrashRestartTest`'s "computenet-w52fa F-22 adopt arm
+  measured" test drives each update-stream event, and the removal, through one
+  `ActorIngress.drive`. The wrapping is test-side only; `SocialApp` is
+  unchanged. First it makes adoption's journal consequence visible. Under
+  plain ingress the WAL holds only root frames, with no `MessageContext`.
+  Under `drive` every event's frames are journaled carrying the actor's
+  context, one lane position per event, and replay stamps each one as a
+  catch-up baseline (PN-2). The recovered graph still equals both the
+  pre-drop snapshot and an undriven fresh replay of the same prefix. The
+  removal is not resurrected, and nothing is dead-lettered. So for this
+  demo's `SetCell`s the journal consequence does not change recovery. Limit:
+  in-process `SimulationController`, seed 42, one actor id for the whole
+  prefix, darwin/arm64. No cell is `Effectful`, so the `[24-DUR-05]`
+  processed-frontier is not exercised.
+- **The other three reasons still hold at `af8c1a00`.** `Effectful` appears
+  nowhere in `demo/social/src`, so `[24-DUR-06]` does not bind. No served read
+  is glitch-free-routed: the F6 `/feed` that has since landed reads through
+  `BoundedReader`, which is wave-neutral by `[SOC1-FEED-07]`. There is still
+  no principal to derive an `actorId` from. `SocialApp`'s HTTP ingress has no
+  auth, and CON1 (`computenet-3f4`) is open. Adopting now would mean choosing
+  the process-scoped id the `ActorIngress` KDoc warns against choosing "by
+  accident", with nothing observable in return.
+- **The three questions this bead set, answered.** (1) *Where the `actorId`
+  comes from*: nowhere yet. The process-scoped lane would cost one new lane
+  per process start, kept only where a frontier is kept, and in this demo
+  that is nowhere today. So the objection is about what the id means, not
+  what it costs. (2) *The `[24-DUR-05]` same-position edge* is narrower than
+  the bullet above says. A self-reply (a comment on one's own post) writes
+  `authored(creator)`, `message(m.id)` and `message(replyOfId)`, which are
+  three distinct cells. No well-formed `SocialGraph` write sends two frames to
+  one inlet. The only one that does is `addComment` with `replyOfId == m.id`,
+  and `requireMessage` admits that only for an existing id: a re-submitted
+  self-referencing comment, which nothing refuses today. (3) *OR-set tag
+  identity* is unchanged by adoption, as the correction above says. The
+  measurement agrees, since recovery equality holds with the driven stamps in
+  the WAL.
+
+**Next trigger**, tracked as `computenet-3ylve` (it replaces
+`computenet-w52fa`): whichever comes first of (a) a served read routed through
+`GlitchFreeCell`/`WaveFrontier`, (b) a principal-bearing ingress for
+`:demo:social` (CON1, or authenticated `SocialApp` principals), or (c) an
+`Effectful` cell in `demo/social/src/main`.
+
 **Honest limit of this entry**: everything above is measured on the in-process
 `SimulationController` host with `journalDir = null`, on darwin/arm64. It says
 nothing about the same graph under journal recovery, across a wire boundary, or

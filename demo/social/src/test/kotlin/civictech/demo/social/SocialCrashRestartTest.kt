@@ -6,12 +6,17 @@ import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
+import civictech.cell.host.ActorIngress
+import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.HostScheduler
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.wire.WireCodec
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitSseData
 import org.junit.jupiter.api.Test
@@ -60,21 +65,25 @@ class SocialCrashRestartTest {
      * slice, applies N = half the update stream, removes one live `knows`
      * edge, settles, snapshots, asserts [SOC1-DUR-01]'s on-disk layout, and
      * then drops the app — no `stop()`, no checkpoint.
+     *
+     * [ingress] wraps each update-stream event and the removal, one call per
+     * event; the default is no wrapper — today's contextless app-thread writes
+     * (F-22's three-wave shape). The bulk [SocialLoader.load] is never wrapped.
      */
-    private fun crashAfterPrefix(dir: File): Crashed {
+    private fun crashAfterPrefix(dir: File, ingress: (() -> Unit) -> Unit = { it() }): Crashed {
         val c1 = SimulationController(42)
         val app1 = SocialApp(port = 0, journalDir = dir, scheduler = c1.scheduler())
         SocialLoader.load(SOURCE, app1.graph)
         val stream1 = UpdateStream(SOURCE, app1.graph)
         val n = stream1.remaining / 2
         assertTrue(n >= 1, "the seed-42 stream must have at least two events, had ${stream1.remaining}")
-        stream1.step(n)
+        repeat(n) { ingress { assertTrue(stream1.step(), "event ${stream1.applied} of the prefix applied") } }
         c1.runToIdle()
 
         val (a, edge) = BatchModel.observe(app1.graph).knows.entries
             .first { it.value.isNotEmpty() }
             .let { (a, edges) -> a to edges.first() }
-        app1.graph.removeKnows(a, edge.otherId, edge.creationDate)
+        ingress { app1.graph.removeKnows(a, edge.otherId, edge.creationDate) }
         c1.runToIdle()
 
         val snap1 = BatchModel.observe(app1.graph)
@@ -150,6 +159,91 @@ class SocialCrashRestartTest {
         assertNotResurrected(crashed, snap2)
         assertStaticsAndNoDeadLetters(crashed, app2)
         assertEquals(app3.staticSets(), app2.staticSets(), "recovered static sets != fresh replay's")
+    }
+
+    /** App 2: recover [dir] on a [SimulationController] and complete recovery. */
+    private fun recover(dir: File): SocialApp {
+        val c2 = SimulationController(42)
+        val app2 = SocialApp(port = 0, journalDir = dir, scheduler = c2.scheduler())
+        c2.runToIdle()
+        app2.completeRecovery()
+        return app2
+    }
+
+    /** App 3: a fresh, ephemeral, UNDRIVEN app fed [crashed]'s prefix and removal. */
+    private fun freshReplay(crashed: Crashed): SocialApp {
+        val c3 = SimulationController(42)
+        val app3 = SocialApp(port = 0, scheduler = c3.scheduler())
+        SocialLoader.load(SOURCE, app3.graph)
+        UpdateStream(SOURCE, app3.graph).step(crashed.n)
+        app3.graph.removeKnows(crashed.a, crashed.b, crashed.date)
+        c3.runToIdle()
+        return app3
+    }
+
+    /** Every hosted frame in [dir]'s root WAL, decoded (checkpoint/frontier records skipped). */
+    private fun walFrames(dir: File): List<HostedPortInvocation> =
+        KeyedCells.hostJournal(dir)!!.replay()
+            .map(JournalRecords::decode)
+            .filterIsInstance<DecodedJournalRecord.Frame>()
+            .map { WireCodec.decode(it.payload) }
+
+    /**
+     * `computenet-w52fa`: F-22's **adopt** arm measured against this file's
+     * [SOC1-DUR-03] instrument — a measurement, NOT an adoption. `SocialApp`
+     * and [SocialGraph] still write contextless (three waves per `addPost`,
+     * F-22); here only the test wraps each update-stream event and the removal
+     * in [ActorIngress.drive], exactly the boundary the adopt arm would put in
+     * the app, and asks whether the journal consequence breaks recovery.
+     *
+     * What adoption changes in the journal, made observable first (so the
+     * equality below is not vacuous): under `drive` the stream's frames are
+     * journaled CARRYING the actor's `MessageContext` — one lane position per
+     * event — where today's plain run journals every frame with no context at
+     * all (a root frame, replayed verbatim). Replay then stamps each carried
+     * context as a catch-up baseline (`HostDurability.recoverFrom`, PN-2).
+     *
+     * Observed: the recovered graph still equals the pre-drop snapshot AND an
+     * undriven fresh replay of the same prefix, with the removal not
+     * resurrected and no dead letter. So the adopt arm's journal consequence is
+     * recovery-neutral for this demo's `SetCell`s. **Limit, stated here:** in-process
+     * `SimulationController`, seed 42, one actor id for the whole prefix; no
+     * cell here is `Effectful`, so the `[24-DUR-05]` processed-frontier (and
+     * its same-position suppression) is not exercised — this says nothing
+     * about a connector egress.
+     */
+    @Test
+    fun `computenet-w52fa F-22 adopt arm measured - an ActorIngress-driven prefix recovers to the same graph`(@TempDir dir: File) {
+        // --- today's shape: no journaled frame carries a context ------------
+        val plainDir = File(dir, "plain").apply { mkdirs() }
+        crashAfterPrefix(plainDir)
+        val plainFrames = walFrames(plainDir)
+        assertTrue(plainFrames.isNotEmpty(), "the plain prefix journaled frames")
+        assertEquals(
+            0,
+            plainFrames.count { it.invocation.context != null },
+            "today's contextless ingress journals root frames only",
+        )
+
+        // --- the adopt arm, test-side: every event under one actor's lane ---
+        val drivenDir = File(dir, "driven").apply { mkdirs() }
+        val actor = ActorIngress(UUID.randomUUID())
+        val crashed = crashAfterPrefix(drivenDir) { block -> actor.drive(block) }
+        val stamped = walFrames(drivenDir).mapNotNull { it.invocation.context?.timestamp }
+            .filter { it.sourceId == actor.actorId }
+        assertEquals(
+            (1L..actor.position).toSet(),
+            stamped.map { it.counter }.toSet(),
+            "every driven event (${crashed.n} stream events + the removal) journaled at its own lane position",
+        )
+
+        val app2 = recover(drivenDir)
+        val snap2 = BatchModel.observe(app2.graph)
+        val app3 = freshReplay(crashed)
+        assertRelations(crashed.snapshot, snap2, "pre-drop snapshot (driven prefix)")
+        assertRelations(BatchModel.observe(app3.graph), snap2, "undriven fresh replay of the prefix")
+        assertNotResurrected(crashed, snap2)
+        assertStaticsAndNoDeadLetters(crashed, app2)
     }
 
     /**
