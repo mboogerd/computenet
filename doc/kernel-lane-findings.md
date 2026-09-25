@@ -2334,6 +2334,9 @@ discarded the del-dot; per-seed chances are bounded by the remove count.
 
 ### Update (`computenet-tp47y`, 2026-09-25): the "widen, never pin" reading above is superseded — the LOCAL/BS-13 witness is now pinned, deterministically, on a UUID-entropy pin rather than a further adversary widening
 
+Landed on `main` in PR #1072 (merge `9af805b2`), plus the reviewer's
+warm-up-run repair below (`38e1d1b4`).
+
 CI run 35961292420 (ubuntu, PR #1057, a PR touching no `:kernel` file) went red
 on this arm's `fenceAttributed.isNotEmpty()` assertion with `diverging=[76]`
 and no fence-attributed seed; a rerun on the same sha passed. That is the ~1 %
