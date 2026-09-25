@@ -107,3 +107,27 @@ nothing to tolerate yet), and the bead or disposition that owns resolving it.
   `WireCodec.decodeFrame` build a `LinkedHashMap` from the JSON entries in
   document order (ncz.2.1-D1) and the encoder walks that same map. No entry
   was added to the Nondeterminism table above; it stays `_(none yet)_`.
+
+- **`WV-NEG-INVALID-UTF8-01` — the JVM codec accepts invalid UTF-8, against
+  `[WIR1-I07]`.** Requirement: bytes that are not valid UTF-8 SHALL be rejected
+  (`expect.reject: invalid-utf8`). Mechanism: `WireCodec.decodeFrame`
+  (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:619`) calls
+  `bytes.decodeToString()`, which is `String(bytes, UTF_8)`: it REPLACES each
+  invalid sequence with U+FFFD and never throws. Observed 2026-09-25 through the
+  full codec (task computenet-ncz.6.2), not only the stdlib call: the seed
+  `WV-PORT-API-STALL-SUSPENDED-01` with a lone 0x80 inserted at byte offset 135,
+  inside the `portName` value, decodes without error to a frame whose
+  `portName` is `in\uFFFDlet`. What the corpus checks instead: the vector
+  carries `expect.observed: accepted-with-substitution` (SCHEMA.md §Observed
+  divergence), and the JVM driver asserts the OBSERVED outcome — `decodeFrame`
+  returns, with `portName` equal to the bytes' own U+FFFD-substituted text — so
+  the divergence stays pinned; `expect.reject` stays the normative word for
+  every other driver. Owned by bug **`computenet-ezw1d`** (a production change:
+  `decodeToString(throwOnInvalidSequence = true)` or a REPORTing
+  `CharsetDecoder`, plus a `RejectionClassifier` row `invalid-utf8` ←
+  `CharacterCodingException`; out of WIR1's scope). Check that restores the
+  requirement: once the codec throws, the driver fails this vector with "the
+  divergence has closed"; then drop `observed` from its `expect`, so the plain
+  decode-negative arm asserts a throw classified `invalid-utf8`, and mark this
+  entry resolved. Not a Nondeterminism-table row: the bytes are fixed, only the
+  outcome diverges.
