@@ -293,12 +293,29 @@ class SocialApp(
      * `shutdown`, since a pending `admit()` running past `stop()` would race
      * a graph this method just closed. `ExecutorService.shutdownNow` is
      * itself idempotent.
+     *
+     * computenet-cpybp: returns only after every observe-cell dispatcher
+     * thread this app caused has terminated, waiting at most
+     * [STOP_DISPATCHER_BOUND_MS] ([SocialGraph.awaitDispatchers] says how the
+     * threads are found, and the one case it does not cover). Only
+     * [SocialGraph]'s sinks can have minted one: the four static-set sinks
+     * never get a listener, and `ObserveCell` mints its dispatcher only to run
+     * a listener. Every other step runs first, so a bound overrun still leaves
+     * the app fully stopped.
+     *
+     * @throws IllegalStateException naming the survivors, if any dispatcher is
+     *   still alive after [STOP_DISPATCHER_BOUND_MS].
      */
     fun stop() {
         shell?.stop()
         graph.close()
         listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
         spawnExecutor?.shutdownNow()
+        val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS)
+        check(survivors.isEmpty()) {
+            "SocialApp.stop: ${survivors.size} observe-cell dispatcher(s) still alive " +
+                "${STOP_DISPATCHER_BOUND_MS}ms after stop: $survivors"
+        }
     }
 
     /** A no-op until [start] built the shell. */
@@ -740,6 +757,16 @@ class SocialApp(
 
         /** Hang backstop for [awaitQuiescence] (v10ou-D3: 30 s, as `DialogueRuntime`). */
         const val QUIESCENCE_TIMEOUT_MS = 30_000L
+
+        /**
+         * Bound on [stop]'s wait for its observe-cell dispatchers
+         * (computenet-cpybp). A hang backstop, not a measured budget: once
+         * [SocialGraph.close] has made every queued listener a no-op, the only
+         * work that can hold a dispatcher is one `/state` broadcast already in
+         * flight. Locally (darwin/arm64) the whole wait takes milliseconds;
+         * no number here was measured on CI.
+         */
+        const val STOP_DISPATCHER_BOUND_MS = 10_000L
 
         /**
          * Bounds a short read's future at the HTTP boundary (rx8om-D8).
