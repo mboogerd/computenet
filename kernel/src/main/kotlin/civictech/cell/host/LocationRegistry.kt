@@ -71,6 +71,32 @@ class LocationRegistry {
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
 
     /**
+     * How many times [install] has replaced this registry's own [Local]
+     * binding for a ref with a peer-announced [Remote] one (computenet-rfbt),
+     * following the `RegistryMirrorCell.refusedAnnouncements` precedent
+     * (computenet-dqy.40) — a counter plus one diagnostic line, nothing reads
+     * it to decide anything, and the overwrite itself is unchanged
+     * (computenet-mx6p, [install]'s KDoc). Checked before copying: that
+     * precedent's own `refuse()` turned out to be counter-only, with no
+     * `System.err` line anywhere near it — the `System.err` half of the
+     * shape belongs to *other* silent-drop sites on that same path
+     * (`WsTransport.Session`'s pre-hello frame drop, per
+     * `RegistryMirrorCell.refusedAnnouncements`'s own KDoc), not to the
+     * counter itself. This property follows computenet-rfbt's acceptance
+     * criteria, which asks for both.
+     *
+     * Deliberately **not** incremented for `Remote -> Local` (inbound
+     * mobility) or `Remote -> Remote` (reconnect catch-up): both are the
+     * *expected*, non-colliding transitions [install]'s KDoc documents as
+     * depended upon, not identity collisions. Only `Local -> Remote` is a
+     * `CellRef` uniqueness violation (G-8, gap G-57) with no legitimate
+     * in-tree producer, which is what makes it a clean diagnostic.
+     */
+    val localOverwrittenByRemote: Long get() = localOverwrittenByRemoteCount.get()
+
+    private val localOverwrittenByRemoteCount = java.util.concurrent.atomic.AtomicLong()
+
+    /**
      * Port names whose invocations are command-forwarded to another instance
      * of the same logical id (single-writer writes, f7h.5-D2). Written by
      * `forwardWrites` (`civictech.cell.replication.SingleWriterReplication`),
@@ -513,10 +539,9 @@ class LocationRegistry {
      * `Peering.Side` still gets. It is recorded, never consulted by routing:
      * [deliver] resolves through [Remote.sink] alone, as before.
      *
-     * **This overrides an existing [Local] binding for the same ref**, silently
-     * and by design — see [install]'s location-precedence note (computenet-mx6p)
-     * for why, and for the one thing about it that is still open
-     * (computenet-rfbt: the overwrite is not counted).
+     * **This overrides an existing [Local] binding for the same ref**,
+     * by design — see [install]'s location-precedence note (computenet-mx6p)
+     * for why.
      */
     fun publish(ref: CellRef, sink: InvocationSink, peer: PeerId? = null) {
         install(ref, Remote(sink, peer))
@@ -672,15 +697,23 @@ class LocationRegistry {
      * Spec 42 models registry state as an "eventually-consistent local fold of
      * announcements"; last-writer-wins is what makes that fold converge.
      *
-     * What the incident did expose and this note does not fix is the
-     * **silence**: the overwrite is neither logged nor counted, which is what
-     * made it expensive to diagnose. Making it observable — the
-     * `RegistryMirrorCell.refusedAnnouncements` treatment — is computenet-rfbt,
-     * open.
+     * What the incident did expose is now fixed by computenet-rfbt: a
+     * `Local -> Remote` replacement is counted
+     * ([localOverwrittenByRemote]) and printed to `System.err`, naming the
+     * ref, so "never arrived, and stderr was silent" can no longer hide which
+     * ref lost its local binding. The overwrite itself — including the
+     * `Remote -> Local` and `Remote -> Remote` transitions above, neither of
+     * which is counted (see [localOverwrittenByRemote]'s KDoc) — is
+     * unchanged.
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         synchronized(queue) {
+            val previous = locations[ref]
+            if (previous is Local && location is Remote) {
+                localOverwrittenByRemoteCount.incrementAndGet()
+                System.err.println("[LocationRegistry] peer announcement overwrote local binding for $ref")
+            }
             // Deliberately does NOT consult [holds]: unlike deliver/replay, a
             // publish during an active flip window drains the parked queue into
             // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
