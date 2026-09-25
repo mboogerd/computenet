@@ -11,6 +11,7 @@ import civictech.cell.proxy.InvocationSink
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.bridgeTo
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.UUID
@@ -155,10 +156,82 @@ class ListenerIsolationTest {
         outlet.linking.onUnlinkListeners += { throw Boom() }
         outlet.linking.onUnlinkListeners += { notified += it }
 
-        // re-streaming to the same `at` supersedes `first`, evicting and
-        // notifying about it before registering the replacement.
+        // re-streaming to the same `at` supersedes `first`, evicting it before
+        // registering the replacement and notifying about it after the
+        // replacement's announcement (computenet-xicmn).
         assertThrows<Boom> { outlet.streamTo(target, at = at, negotiated = false) }
 
         notified shouldBe listOf(first)
+    }
+
+    @Test
+    fun `streamTo's supersession site still registers and announces the replacement when onUnlinkListeners throws`() {
+        // computenet-xicmn: before this fix the supersession site ran the
+        // superseded-record eviction-and-notify loop BEFORE
+        // `linking.register`/`fireLinked`, so a throwing `onUnlinkListeners`
+        // subscriber aborted the loop and skipped registration and
+        // announcement of the replacement entirely — diverging from the
+        // primary handshake's Connected branch (computenet-1rvt/dmkp), which
+        // registers and announces the replacement BEFORE the deferred
+        // superseded-retraction multicast, all under one
+        // `NotificationFailures`.
+        val outlet = FanOutlet.create<Consumer<String>>()
+        val at = PortRef.generate()
+        val target = object : Consumer<String> {
+            override fun provide(input: String) {}
+        }
+        val first = outlet.streamTo(target, at = at, negotiated = false)
+
+        val onLinkedNotified = mutableListOf<Link>()
+        outlet.linking.onLinkedListeners += { onLinkedNotified += it }
+        outlet.linking.onUnlinkListeners += { throw Boom() }
+
+        val error = assertThrows<Boom> { outlet.streamTo(target, at = at, negotiated = false) }
+
+        // the failure propagated, undiluted by suppressed siblings (only one
+        // onUnlinkListeners subscriber, and it is the one that threw).
+        error.suppressed.size shouldBe 0
+        // `linking.links` holds exactly the replacement: registration ran
+        // despite the later throw, and the superseded record was evicted.
+        val replacement = outlet.linking.links.single()
+        replacement shouldNotBe first
+        // the replacement's onLinkedListeners fired before the throwing
+        // superseded-retraction notification ran.
+        onLinkedNotified shouldBe listOf(replacement)
+    }
+
+    @Test
+    fun `streamTo's supersession site notifies every superseded record, after the announcement, when onUnlinkListeners throws`() {
+        // computenet-xicmn, the "still notify every superseded record" clause:
+        // the supersession filter matches EVERY record over `at`, so a throw
+        // while retracting one must not skip the retraction of the next. A
+        // second record over the same `at` is registered directly to give the
+        // filter two matches.
+        val outlet = FanOutlet.create<Consumer<String>>()
+        val at = PortRef.generate()
+        val target = object : Consumer<String> {
+            override fun provide(input: String) {}
+        }
+        val first = outlet.streamTo(target, at = at, negotiated = false)
+        val second = PortLink(outlet.ref, at) {}
+        outlet.linking.register(second)
+
+        val events = mutableListOf<String>()
+        outlet.linking.onUnlinkListeners += { throw Boom() }
+        outlet.linking.onUnlinkListeners += { events += "unlink:${it.id}" }
+        outlet.linking.onLinkedListeners += { events += "linked:${it.id}" }
+
+        val error = assertThrows<Boom> { outlet.streamTo(target, at = at, negotiated = false) }
+
+        val replacement = outlet.linking.links.single()
+        // the replacement is announced first (the primary handshake's
+        // Connected-branch order, computenet-dmkp), then both superseded
+        // records are retracted despite the throw on each.
+        events.first() shouldBe "linked:${replacement.id}"
+        events.drop(1).toSet() shouldBe setOf("unlink:${first.id}", "unlink:${second.id}")
+        events.size shouldBe 3
+        // one NotificationFailures across the whole site: the throw for the
+        // second superseded record rides as a suppressed on the first.
+        error.suppressed.size shouldBe 1
     }
 }

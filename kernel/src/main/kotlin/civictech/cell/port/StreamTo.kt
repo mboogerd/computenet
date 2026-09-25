@@ -4,6 +4,7 @@ import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
+import civictech.cell.link.NotificationFailures
 import civictech.cell.link.PortLink
 import civictech.cell.link.handshake
 import civictech.cell.link.notifyAll
@@ -137,14 +138,32 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     // close would be false. And the teardown site's mechanical one: there is no
     // `toPort` to deliver `EdgeClose` to on this path anyway. The multicast is
     // what `Link.id`-keyed state needs, and that id genuinely dies here.
-    linking.links.filter { it.to == at }.forEach { superseded ->
-        linking.remove(superseded)
-        // computenet-7u22s: same policy as the teardown lambda above.
-        notifyAll(linking.onUnlinkListeners, superseded)
-    }
+    //
+    // computenet-xicmn: evict-then-register-then-announce-then-retract, under
+    // ONE `NotificationFailures`, matching the primary handshake's Connected
+    // branch (computenet-1rvt/dmkp) — not the evict-and-notify-inline order
+    // this site used before. A throwing `onUnlinkListeners` subscriber for one
+    // superseded record used to abort the loop outright, leaving the
+    // replacement unregistered (`linking.register`/`fireLinked` never ran, so
+    // no `LinkSupport` record, no `onLinked`/`onLinkedListeners`) and any
+    // later superseded record un-notified. Now: remove every superseded
+    // record first (`linking.links` already matches the single attachment
+    // `subscribe` installed above), register and announce the replacement
+    // under `failures.guard` so a throwing `onLinkedListeners` subscriber
+    // can't stop the retraction multicast that follows, then notify every
+    // superseded record — each isolated from its siblings and from the
+    // announcement — and rethrow only the first failure, last.
+    val superseded = linking.links.filter { it.to == at }.onEach { linking.remove(it) }
     linking.register(link)
-    // PN-9: fire the full on-link multicast (catch-up moved to onLinkedListeners),
-    // not just the single onLinked slot, so a streamTo'd link still catches up.
-    linking.fireLinked(link)
+    val failures = NotificationFailures()
+    failures.guard {
+        // PN-9: fire the full on-link multicast (catch-up moved to
+        // onLinkedListeners), not just the single onLinked slot, so a
+        // streamTo'd link still catches up.
+        linking.onLinked(link)
+        failures.multicast(linking.onLinkedListeners, link)
+    }
+    superseded.forEach { record -> failures.multicast(linking.onUnlinkListeners, record) }
+    failures.rethrow()
     return link
 }
