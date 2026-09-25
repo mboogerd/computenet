@@ -232,6 +232,11 @@ class SocialCrashRestartTest {
         val stamped = walFrames(drivenDir).mapNotNull { it.invocation.context?.timestamp }
             .filter { it.sourceId == actor.actorId }
         assertEquals(
+            crashed.n + 1L,
+            actor.position,
+            "the driven run went through the actor: one lane position per event (${crashed.n} stream events + the removal)",
+        )
+        assertEquals(
             (1L..actor.position).toSet(),
             stamped.map { it.counter }.toSet(),
             "every driven event (${crashed.n} stream events + the removal) journaled at its own lane position",
