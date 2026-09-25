@@ -2332,6 +2332,58 @@ STABLE divergence rose to 9 of 200. The returns diminish because once K is well
 under the gossip latency the first compaction point past a remove has already
 discarded the del-dot; per-seed chances are bounded by the remove count.
 
+### Update (`computenet-tp47y`, 2026-09-25): the "widen, never pin" reading above is superseded — the LOCAL/BS-13 witness is now pinned, deterministically, on a UUID-entropy pin rather than a further adversary widening
+
+Landed on `main` in PR #1072 (merge `9af805b2`), plus the reviewer's
+warm-up-run repair below (`38e1d1b4`).
+
+CI run 35961292420 (ubuntu, PR #1057, a PR touching no `:kernel` file) went red
+on this arm's `fenceAttributed.isNotEmpty()` assertion with `diverging=[76]`
+and no fence-attributed seed; a rerun on the same sha passed. That is the ~1 %
+per-sweep zero this update explains and closes, not a new instance of the K=25
+margin question the entries above measured.
+
+**The per-sweep count is a sum of per-seed coin flips, and the coin is the
+`UUID.randomUUID()` draw `Peering.Loopback.heal()`'s hash-ordered
+re-announcement consumes on every seed** (`doc/dst-rig.md` §4, restated by this
+same bead's `computenet-427u3`), **not wall clock or thread scheduling.**
+MEASURED (darwin/arm64, LOCAL arm, seeds 1..200, budget 40_000, three sweeps
+each, base `13a83197`): with the UUID stream left as shipped (fresh entropy),
+trace digests matched on 4 of 200 seeds across three sweeps; with the stream
+pinned per seed (`GcSafetySweepTest.PinnedUuidEntropy`, a test-only
+`sun.misc.Unsafe` swap of `UUID$Holder`'s SPI instance — see that object's
+KDoc), digests matched on 200 of 200, all three sweeps, fence-attributed
+`[43,181]` every time. Distribution over 30 independent pinned draws
+(different reseed salts, same host and date): fence-attributed counts ranged
+1-6, mean 3.7, zero on 0 of 30 — consistent with the ~1 % zero-rate CI's
+occasional red matches. Feature review (independent re-derivation, same date)
+reproduced the fresh/pinned split under concurrent foreign-thread UUID
+minting and CPU load (fresh: digests matched on 4-7 of 200 across further
+sweeps; pinned: `[43,181]` on every sweep, 5 JVMs, with one pinned digest
+mismatch traced to a `FanOutlet.<clinit>` UUID mint on the first rig run in a
+fresh JVM and closed by an added warm-up run, `38e1d1b4`).
+
+**Disposition: the deterministic arm was taken instead of a fifth adversary
+widening.** The entries above (`## KE3-20`'s widenings, all four rejected
+alternatives, `K = 5`) all tried to raise the per-sweep MINIMUM; none of them,
+including the accepted `K = 10`, could reach zero probability of a
+zero-witness sweep, because the source of the zero was never the adversary's
+strength — it was which UUID draw a fixed, otherwise-deterministic plan
+happened to get. Pinning the draw removes that ~1 % floor entirely rather than
+narrowing it. `SEEDS`, `BUDGET`, `GcSafetySweep.K` (still 10) and the
+adversary are unchanged by this update; only the BS-13/LOCAL arm's entropy
+source moved, and BS-12, CONTROL and the arm's own `other.isEmpty()` check on
+fresh draws are untouched. Full provenance, the per-salt distribution and the
+toolchain caveat (`sun.misc.Unsafe` deprecated for removal, JEP 471) are in
+`GcSafetySweepTest`'s `BS13_PIN_RETIRED` and `PinnedUuidEntropy` KDocs, not
+duplicated here.
+
+**Residual, inference only.** The ~1 % rate is a property of the draw, which
+this measurement did not distinguish from a property of the host or JDK
+build — Linux's per-seed counts for the failing CI run were not captured and
+are not in its log, so "Linux sees the same distribution" is inference, not a
+second measurement.
+
 ## KE3-23-DWKPRATE — the BS-12 `stableFenceAttributed` class is GONE at current `main`: 0 of 50 sweeps (30 at `K = 10` + 20 at `K = 25`), against a same-host, same-session pre-fix control of 6 of 15 at `K = 25`
 
 Recorded by: `computenet-dwkp` (bug, epic `computenet-9sm`). Base commit:
