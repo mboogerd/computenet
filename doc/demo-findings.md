@@ -1307,6 +1307,16 @@ route `:demo:social` serves that is routed through `GlitchFreeCell` /
 `Consume`-linked `GlitchFreeCell` *wedges* under plain ingress) or F7
 (`computenet-v10ou`, the instrument that could check the journal consequence).
 
+**Honest limit of this entry**: everything above is measured on the in-process
+`SimulationController` host with `journalDir = null`, on darwin/arm64. It says
+nothing about the same graph under journal recovery, across a wire boundary, or
+under `SocialApp`'s real HTTP ingress; and the `GlitchFreeCell` behaviour is
+measured with three arms on one inlet of one test-side cell, not with any
+downstream fold. No kernel path is touched by the change that produced it — the
+deliverable is this entry plus `SocialAtomicityTest` and one `SnbPipeline.kt`
+KDoc paragraph. No concord scenario was bound: B11 stays a candidate, because
+no honest 20-series requirement id states the divergence this test asserts.
+
 **Re-decided 2026-09-25 (`computenet-w52fa`, main `af8c1a00`): still three
 waves.** The F7 arm fired: `[SOC1-DUR-03]`'s recovery equality is
 `SocialCrashRestartTest`, and recovery is `SocialRecovery`
@@ -1358,16 +1368,6 @@ fell and three still hold:
 `GlitchFreeCell`/`WaveFrontier`, (b) a principal-bearing ingress for
 `:demo:social` (CON1, or authenticated `SocialApp` principals), or (c) an
 `Effectful` cell in `demo/social/src/main`.
-
-**Honest limit of this entry**: everything above is measured on the in-process
-`SimulationController` host with `journalDir = null`, on darwin/arm64. It says
-nothing about the same graph under journal recovery, across a wire boundary, or
-under `SocialApp`'s real HTTP ingress; and the `GlitchFreeCell` behaviour is
-measured with three arms on one inlet of one test-side cell, not with any
-downstream fold. No kernel path is touched by the change that produced it — the
-deliverable is this entry plus `SocialAtomicityTest` and one `SnbPipeline.kt`
-KDoc paragraph. No concord scenario was bound: B11 stays a candidate, because
-no honest 20-series requirement id states the divergence this test asserts.
 
 ## F-23 — KAGG-R: SOC1's complex reads order and limit demo-side; what a cross-cell ordered top-K, an ordered key-range scan and count-distinct would each have bought
 
