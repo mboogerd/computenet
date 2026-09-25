@@ -71,6 +71,12 @@ class VectorDocument(
     val direction: VectorDirection,
     val messageKind: String?,
     val deprecated: String?,
+    /**
+     * `expect.observed` (SCHEMA.md §Observed divergence): how the reference JVM
+     * codec at [codecVersion] diverges from [reject] on this vector, or null
+     * when it does not. Only ever set on a `negative` `direction: decode` vector.
+     */
+    val observed: String? = null,
 ) {
     override fun toString(): String = "VectorDocument($id, $kind, $file)"
 
@@ -91,6 +97,12 @@ class VectorDocument(
             "missing-required-field", "unknown-ids", "unsupported-version", "unknown-envelope-field",
             "leased-at-encode",
         )
+
+        /**
+         * `SCHEMA.md` §Observed divergence — the closed set of `expect.observed`
+         * words. Adding one is a schema change (§Seam rule).
+         */
+        val OBSERVATIONS: Set<String> = setOf("accepted-with-substitution")
 
         /** Parses [file] (which must lie under [corpusRoot]) and enforces SCHEMA.md. */
         fun parse(file: Path, corpusRoot: Path): VectorDocument {
@@ -229,6 +241,7 @@ class VectorDocument(
 
             val direction: VectorDirection
             val reject: String?
+            val observed: String?
             if (kind.positive) {
                 if (decoded == null) refuse("kind `${kind.word}` requires `decoded` (SCHEMA.md §Kinds)")
                 if (encodedEl == null) refuse("kind `${kind.word}` requires `encoded` (SCHEMA.md §Kinds)")
@@ -243,6 +256,7 @@ class VectorDocument(
                     )
                 }
                 reject = null
+                observed = null
             } else {
                 if (directionWord == null) {
                     refuse("kind `negative` requires `direction` (decode | encode) (SCHEMA.md §Kinds)")
@@ -266,11 +280,33 @@ class VectorDocument(
                 }
                 val expect = expectEl as? JsonObject
                     ?: refuse("kind `negative` requires `expect` as {\"reject\": <classification>} (SCHEMA.md §Document fields)")
-                if (expect.keys != setOf("reject")) refuse("`expect` must carry exactly the key `reject`, found ${expect.keys}")
+                if (expect.keys != setOf("reject") && expect.keys != setOf("reject", "observed")) {
+                    refuse(
+                        "`expect` must carry `reject` and at most `observed`, found ${expect.keys} " +
+                            "(SCHEMA.md §Document fields, §Observed divergence)",
+                    )
+                }
                 val r = (expect["reject"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                     ?: refuse("`expect.reject` must be a string")
                 if (r !in REJECTIONS) refuse("`expect.reject` \"$r\" is not in the rejection vocabulary $REJECTIONS")
                 reject = r
+                observed = expect["observed"]?.let { el ->
+                    val o = (el as? JsonPrimitive)?.takeIf { it.isString }?.content
+                        ?: refuse("`expect.observed` must be a string (SCHEMA.md §Observed divergence)")
+                    if (o !in OBSERVATIONS) {
+                        refuse(
+                            "`expect.observed` \"$o\" is not in the closed observation vocabulary $OBSERVATIONS " +
+                                "(SCHEMA.md §Observed divergence; adding a word is a schema change, §Seam rule)",
+                        )
+                    }
+                    if (direction != VectorDirection.DECODE) {
+                        refuse(
+                            "`expect.observed` is allowed only on a negative with `direction: decode`, " +
+                                "not `${direction.word}` (SCHEMA.md §Observed divergence)",
+                        )
+                    }
+                    o
+                }
             }
 
             // --- encoded block / messageKind ----------------------------------
@@ -331,6 +367,7 @@ class VectorDocument(
                 direction = direction,
                 messageKind = messageKind,
                 deprecated = deprecated,
+                observed = observed,
             )
         }
     }
