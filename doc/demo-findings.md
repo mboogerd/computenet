@@ -1049,6 +1049,9 @@ must then be measured again rather than re-pinned without checking.
 
 ## F-21 — `BoundedReader` is the KRD stand-in: seven SNB short reads over `ManagedHost.readState`, and what the public primitive still lacks
 
+G-id: none — this is the KRD row of `computenet-milestone-plan.md` (repo
+root) ("Request/response bounded read").
+
 **Observation**: SOC1 F3 (`computenet-rx8om`) answers LDBC SNB's interactive
 short reads IS1-IS7 in `:demo:social` through a one-method seam,
 `demo/social/src/main/kotlin/civictech/demo/social/BoundedReader.kt`
@@ -1316,6 +1319,9 @@ no honest 20-series requirement id states the divergence this test asserts.
 
 ## F-23 — KAGG-R: SOC1's complex reads order and limit demo-side; what a cross-cell ordered top-K, an ordered key-range scan and count-distinct would each have bought
 
+G-id: none — this is the KAGG-R row of `computenet-milestone-plan.md` (repo
+root) ("Aggregate/scan residuals audit + fill").
+
 **Observation**: `:demo:social`'s served complex reads answer their
 ordering/limit clause entirely in Kotlin, over rows already pulled through the
 [SOC1-CREAD-04] bounded-read seam, never inside a kernel operator:
@@ -1432,6 +1438,16 @@ whatever lands. This entry does not implement IC5, IC6, IC12, `topKBy`,
 (`[SOC1-FIND-01]`).
 
 ## F-24 — the kernel joins `Interest` to no spawn path: `InterestDrivenFamily` is the demo-layer join, and it has to run off the host's own thread to do it
+
+G-id: none — read against G-24 (`doc/spec/90-roadmap/91-gap-analysis.md:58`,
+trigger "placement pressure on one instance"), this entry is about
+instantiation timing and threading, not about load pressure forcing
+partitioning of an overloaded instance, so it does not cite G-24. This is
+the SOC1 row of `computenet-milestone-plan.md` (repo root) ("implement the
+SNB schema … — follows-as-interest, scatter-gather feed (PN-5),
+generator-driven load"), the interest/spawn half of that row rather than
+its "pulls triggers: keyed families, G-24 placement pressure" half (F-26
+above is where G-24's own trigger is evaluated).
 
 **Observation**: epic `computenet-07k` §3.2 states the gap directly ("Honest
 statement of what does not exist"), and feature `computenet-4q9is` task
@@ -1573,3 +1589,114 @@ standardise agora's `graph.jsonl` as its own convention (epic §9.1): the
 generalising it is I-7's job, not this CLI's. This is a finding, not a spec
 or gap-table edit; it implements no part of I-7 and edits no file under
 `doc/spec/`.
+
+## F-26 — G-24 trigger: placement pressure measured on the SOC1 per-person families
+
+**Observation**: `SocialScaleTest` (`computenet-74yvm.1`, gated by the
+`SOCIAL_SCALE` environment variable — `-D` system properties do not reach the
+forked test JVM, `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts` forwards
+none from the command line) loads `SnbGenerator(seed = 42, scale)` through the
+same rig as `SocialPipelineTest.Rig`, runs it to idle, and reports cell
+counts, used heap, heap per cell, and load wall time as one JSON line, per
+`74yvm-D3`. Invocation, one scale at a time:
+
+```
+SOCIAL_SCALE=<s> ./gradlew :demo:social:test --tests 'civictech.demo.social.SocialScaleTest' --rerun
+```
+
+Budget: 2 g max heap (`maxHeapSize`, `kotlin-jvm.gradle.kts:95`), 5 min
+default per-method JUnit timeout (`:442`) — both from the ordinary convention
+plugin, no `slow` tag arm added (`74yvm-D1`, epic non-goal). Platform:
+darwin/arm64. Seed: 42 throughout. Sweep: 0.05, 0.2, 0.5, 1.0, 2.0, 5.0
+(`74yvm-D4`), stopping at the first scale that fails the budget. Every report
+line, quoted verbatim from `computenet-74yvm.1`'s bead comment:
+
+```
+SOCIAL_SCALE_REPORT {"scale":0.05,"seed":42,"persons":40,"authored":40,"forums":8,"messages":209,"totalCells":297,"usedHeapBytes":10493560,"heapPerCellBytes":35331,"largestAuthoredCellElements":16,"largestAuthoredCellPages":1,"loadWallMs":178}
+SOCIAL_SCALE_REPORT {"scale":0.2,"seed":42,"persons":160,"authored":154,"forums":25,"messages":721,"totalCells":1060,"usedHeapBytes":20365792,"heapPerCellBytes":19213,"largestAuthoredCellElements":26,"largestAuthoredCellPages":1,"loadWallMs":493}
+SOCIAL_SCALE_REPORT {"scale":0.5,"seed":42,"persons":400,"authored":396,"forums":85,"messages":2540,"totalCells":3421,"usedHeapBytes":50610056,"heapPerCellBytes":14793,"largestAuthoredCellElements":115,"largestAuthoredCellPages":1,"loadWallMs":2700}
+SOCIAL_SCALE_REPORT {"scale":1.0,"seed":42,"persons":800,"authored":790,"forums":167,"messages":4689,"totalCells":6446,"usedHeapBytes":89855008,"heapPerCellBytes":13939,"largestAuthoredCellElements":200,"largestAuthoredCellPages":1,"loadWallMs":9191}
+SOCIAL_SCALE_REPORT {"scale":2.0,"seed":42,"persons":1600,"authored":1574,"forums":328,"messages":8925,"totalCells":12427,"usedHeapBytes":167475256,"heapPerCellBytes":13476,"largestAuthoredCellElements":208,"largestAuthoredCellPages":2,"loadWallMs":36351}
+```
+
+`scale=5.0` produced no report line: it failed the 5-minute per-method JUnit
+timeout before the 2 g heap bound was reached, first diagnostic
+`java.util.concurrent.TimeoutException: SOC1-PLC-01 gated scale load reports
+cell count and per-cell footprint() timed out after 5 minutes`.
+
+**Why it's a gap**: G-24 (`doc/spec/90-roadmap/91-gap-analysis.md:58`) is
+deferred with the trigger "placement pressure on one instance"; this task
+applies `74yvm-D4`'s three-part pressure criterion to every scale to check
+whether the trigger has fired yet on a single, unpartitioned instance. All
+three criteria evaluated per completed scale, arithmetic shown (2 GiB =
+2,147,483,648 bytes; `totalCells` at the next scale step approximated by
+doubling the current value, matching the roughly-linear cell growth the
+sweep itself shows — e.g. scale 1.0→2.0 nearly exactly doubles `totalCells`,
+6446→12427):
+
+| scale | (a) heapPerCellBytes × totalCells at scale×2 | (b) largest family (persons/authored/forums) | (c) loadWallMs |
+|---|---|---|---|
+| 0.05 | 35331 × 594 ≈ 21.0 MB (≪ 2 GiB) | 40 (≪ 100 000) | 178 ms (≪ 60 000) |
+| 0.2 | 19213 × 2120 ≈ 40.7 MB | 160 | 493 ms |
+| 0.5 | 14793 × 6842 ≈ 101.2 MB | 400 | 2700 ms |
+| 1.0 | 13939 × 12892 ≈ 179.7 MB | 800 | 9191 ms |
+| 2.0 | 13476 × 24854 ≈ 334.9 MB | 1600 | 36351 ms |
+
+None of criteria (a), (b) or (c) trip at any completed scale. `loadWallMs`
+grows worse-than-linearly across the sweep (178 → 493 → 2700 → 9191 → 36351
+ms across a ~5.7x cell-count range, per the sibling comment), and the jump
+from scale 2.0 to scale 5.0 (2.5x scale) is what crosses the 5-minute wall —
+but that crossing produced a timeout, not a measured `loadWallMs`.
+
+**On the scale=5.0 timeout and criterion (c) — two readings, this entry takes
+the broader one**: criterion (c) as stated in `74yvm-D4` is "`loadWallMs` >
+60,000". Read narrowly, (c) requires a *completed* run's reported
+`loadWallMs`; scale 5.0 produced no report line, so under this reading (c)
+cannot be evaluated there at all, and the only evidence available is that
+0.05–2.0 all fall short. Read broadly, the JUnit `TimeoutException` fired
+after the full 5-minute (300,000 ms) per-method budget elapsed without the
+load finishing — so the load's wall-clock time necessarily exceeded 300,000
+ms, which is itself far past the 60,000 ms threshold, independent of any
+printed report. This entry takes the broad reading: a run that has not
+finished after 300 s has already spent more than 60 s loading, and there is
+no principled reason to discard that fact merely because the harness's own
+timeout, not the test's own measurement, is what surfaced it.
+
+**Verdict**: trigger pulled at scale 5.0, under criterion (c) (`74yvm-D4`
+(c), load wall time > 60 s) — G-24. The largest scale that completed inside
+the 2 g / 5 min budget and produced a measurement is 2.0 (`loadWallMs =
+36351`, itself the entry's high-water mark for a *measured* value and still
+under the 60 s line); the next sweep step, 5.0, is where the budget itself
+first fails, on the JUnit per-method timeout rather than on the 2 g heap
+bound. Under the narrower reading of (c) above, the trigger is not pulled by
+any scale that produced a report, and the honest statement is: "trigger not
+pulled at scale 2.0 on this budget; the next step (5.0) fails on the 5-minute
+per-method timeout, not on heap." Both readings are recorded here because the
+distinction matters for anyone re-running this sweep with a longer timeout to
+get an actual scale-5.0 `loadWallMs` number.
+
+**Proposed shape**: G-24's realization (per `91-gap-analysis.md:58`) is the
+kernel-lane chunk already named there — `PartitionedCell` as a composite cell
+plus key-routing proxy, realized as CP-D2 (`Interest` filter on the linker),
+CP-D3 (shards on the substrate) and CP-D4 (repartition). This task adds no
+partitioning, shard placement or placement policy: `git diff --stat
+origin/main -- demo/social/src/main` from this task's own change is empty
+(only `doc/demo-findings.md` changed).
+
+**Observations (not resolved here)**: two risk-6 spec-staleness items,
+recorded as observations only —
+
+- `doc/spec/20-dataflow-semantics/24-data-cells.md:566` carries an
+  `⚠ EARS-GAP` marker saying the "nothing is built… kernel untouched" status
+  claim for §PN-4's `PartitionedCell` design looks stale, because
+  `kernel/.../cell/data/PartitionedCell.kt` and its test suite
+  (`PartitionedCellTest`, `PartitionedPromotionTest`, `PartitionedPullTest`,
+  `PartitionedPullScopeWireTest`) already exist on this branch (re-verified
+  present at `grep -n EARS-GAP doc/spec/20-dataflow-semantics/24-data-cells.md`
+  → line 566, same line the epic risk names).
+- `doc/spec/40-distribution/42-replication.md:3` (and again at `:179`) still
+  describes keyed/partitioned structures as "design decided, code deferred
+  with the G-24 trigger" — the same staleness question as above, since the
+  files just named suggest some of that code exists. Neither claim is
+  resolved by this task; both are handed off as observations per the epic's
+  risk 6.
