@@ -101,9 +101,18 @@ class HandshakeSessionBehaviourTest {
         }
     }
 
-    /** The mirror ref a hello line offers (the token after `"HELLO "`). */
+    /**
+     * The mirror ref a hello line offers. Found by UUID shape rather than by
+     * splitting on the prefix, so a line whose grammar is wrong (a doubled
+     * space, say) still yields its ref and fails at the grammar assertions of
+     * B2.1/B2.2 — not here.
+     */
     private fun mirrorOffered(hello: String): UUID =
-        UUID.fromString(hello.removePrefix("HELLO ").substringBefore(" "))
+        UUID.fromString(checkNotNull(UUID_SHAPE.find(hello)) { "no mirror ref in '$hello'" }.value)
+
+    private companion object {
+        val UUID_SHAPE = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+    }
 
     private val loader = VectorLoader.locate()
 
@@ -242,9 +251,11 @@ class HandshakeSessionBehaviourTest {
         rig.session.onText("HELLO ${UUID.randomUUID()} mallory")
         rig.controller.runToIdle()
 
+        // the hook count first, so an admission regression reports as the
+        // announcer it would install, not only as the auth level
+        assertEquals(0, rig.framesForOnePublish().size, "a refused peer must have no announcement hook")
         assertNull(rig.session.achievedAuthLevel)
         assertEquals(1, rig.refusals, "the refused hello closes the connection once")
-        assertEquals(0, rig.framesForOnePublish().size, "a refused peer must have no announcement hook")
 
         val ref = CellRef(UUID.randomUUID())
         rig.session.onFrame(Peer().announces(ref, toMirror = offered))
@@ -297,7 +308,10 @@ class HandshakeSessionBehaviourTest {
      * `[WIR1-I15]`, B2.5 — the same on a kept socket with no `onClose` between
      * the hellos: `hello()`/`bindAndAnnounce` supersede by themselves
      * (`announcement?.close()` before the new `Peering.announceTo`); `onClose`
-     * is not required for the old hook to go.
+     * is not required for the old hook to go. This variant is the one that
+     * discriminates `bindAndAnnounce`'s `announcement?.close()`: in the
+     * after-close variant `onClose` also closes the announcer, so deleting that
+     * one line leaves the after-close variant green and this one red.
      */
     @Test
     fun `B2_5 a re-hello on a kept session without close also leaves exactly one announcer`() =
