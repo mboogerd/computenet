@@ -54,9 +54,6 @@ import java.util.UUID
  * never learn the ref moved, because it would refuse the only announcement that
  * could tell it): see [LocationRegistry.install]'s KDoc, which states both.
  *
- * The overwrite's *silence* is a real residual and is filed as computenet-rfbt,
- * open — it is not fixed here.
- *
  * The last test states the other half of the mechanism: `Peering.announceTo`'s
  * catch-up sweep announces *every* `Local` ref, with no replication filter.
  */

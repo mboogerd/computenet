@@ -539,10 +539,9 @@ class LocationRegistry {
      * `Peering.Side` still gets. It is recorded, never consulted by routing:
      * [deliver] resolves through [Remote.sink] alone, as before.
      *
-     * **This overrides an existing [Local] binding for the same ref**, silently
-     * and by design — see [install]'s location-precedence note (computenet-mx6p)
-     * for why, and for the one thing about it that is still open
-     * (computenet-rfbt: the overwrite is not counted).
+     * **This overrides an existing [Local] binding for the same ref**,
+     * by design — see [install]'s location-precedence note (computenet-mx6p)
+     * for why.
      */
     fun publish(ref: CellRef, sink: InvocationSink, peer: PeerId? = null) {
         install(ref, Remote(sink, peer))
