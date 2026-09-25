@@ -55,7 +55,7 @@ Commented overview (not a parseable example — the worked documents below are):
   "direction":    "both",                            // positive: both (default) | decode; negative: decode | encode
   "decoded":      { ... },                           // neutral value grammar
   "encoded":      { "utf8": "...", "base64": "..." },// the exact bytes, twice
-  "expect":       { "reject": "malformed" },         // negative kind only
+  "expect":       { "reject": "malformed" },         // negative kind only; optional "observed" beside reject
   "notes":        "...",                             // why this vector exists; pinned-because-current when so
   "deprecated":   "..."                              // optional; present only on a retired vector
 }
@@ -105,7 +105,7 @@ A worked, complete `frame` vector — the bytes are `StallNoticeWireCompatTest`'
 | `notes` | every vector | string; why the vector exists, and — per `[WIR1-C16]` — the words `pinned-because-current` when it pins behaviour the spec does not require |
 | `decoded` | kind-dependent | the value in the [neutral grammar](#the-neutral-decoded-grammar) |
 | `encoded` | kind-dependent | `{"utf8", "base64"}` — [The `encoded` block](#the-encoded-block) |
-| `expect` | `negative` only | `{"reject": "<classification>"}`, one word from the [rejection vocabulary](#rejection-vocabulary) |
+| `expect` | `negative` only | `{"reject": "<classification>", "observed"?: "<observation>"}` — `reject` is one word from the [rejection vocabulary](#rejection-vocabulary); `observed` is optional, decode-direction only, one word from [Observed divergence](#observed-divergence) |
 | `direction` | kind-dependent | which conversion the vector asserts — [Kinds](#kinds) |
 | `messageKind` | whenever `encoded` is present | `binary` (frames) \| `text` (handshake lines) — the WebSocket message kind that carries the bytes |
 | `deprecated` | optional | string reason; see [Ids and categories](#ids-and-categories) |
@@ -538,6 +538,40 @@ JSON, and a driver whose decoder cannot tell the two apart satisfies a
 not hold. Every other classification is matched exactly. A vector whose notes
 call it pinned-because-current says so in `notes` too, per `[WIR1-C16]`.
 
+### Observed divergence
+
+`expect.observed` records that the **reference JVM codec** at the vector's
+`codecVersion` does not do what `expect.reject` requires, and how. It is
+optional, allowed only on `kind: negative` with `direction: decode`, and takes
+exactly one word from this closed table:
+
+| observation | meaning |
+|---|---|
+| `accepted-with-substitution` | the reference JVM codec at this `codecVersion` substitutes U+FFFD for each invalid sequence and delivers the frame; a conforming implementation SHALL still reject (`reject` is normative) |
+
+```json
+{"reject": "invalid-utf8", "observed": "accepted-with-substitution"}
+```
+
+- **`reject` stays normative.** It is what every conforming implementation SHALL
+  do; `observed` never weakens it, it annotates a known divergence of one
+  implementation.
+- **The reference driver asserts the observed outcome.** A driver for the
+  reference JVM implementation asserts what `observed` says — for
+  `accepted-with-substitution`: decoding returns, and the returned frame's
+  `portName` equals the text of the vector's bytes decoded with U+FFFD
+  replacement — so the divergence stays pinned and a codec fix turns the vector
+  red. That red is the signal to remove `observed` (and close the ledger entry
+  and bead below); it is never answered by editing the expectation to match.
+- **Every other driver ignores `observed`** and asserts `reject`.
+- **A vector carrying `observed` MUST have a `NONDETERMINISM.md` Findings
+  entry** naming the vector, the requirement it diverges from, and the bead that
+  owns the fix.
+
+Adding an observation word is a schema change ([Seam rule](#seam-rule)). The
+rejection vocabulary above is unchanged by this subsection: it is still the set
+of ten.
+
 ## Manifest
 
 `wire/corpus/manifest.json` is the machine-readable index (`[WIR1-C12]`). A
@@ -589,6 +623,7 @@ contract every driver implements — never a corpus-authoring convenience
 - adding, removing or redefining a vector kind or a `direction` value;
 - adding or removing a required document field, or changing a field's meaning;
 - adding, removing or redefining a rejection classification;
+- adding, removing or redefining an observation word ([Observed divergence](#observed-divergence));
 - changing the id form or the immutability rule.
 
 A vector that needs a shape this file does not define is filed as a bead against

@@ -35,6 +35,12 @@
       "category": "negative",
       "kind": "negative",
       "file": "negative/WV-NEG-LEASED-AT-ENCODE-01.json"
+    },
+    {
+      "id": "WV-NEG-INVALID-UTF8-01",
+      "category": "negative",
+      "kind": "negative",
+      "file": "negative/WV-NEG-INVALID-UTF8-01.json"
     }
   ],
   "pending": [
