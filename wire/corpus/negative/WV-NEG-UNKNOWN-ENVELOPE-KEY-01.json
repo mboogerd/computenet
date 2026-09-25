@@ -1,0 +1,23 @@
+{
+  "id": "WV-NEG-UNKNOWN-ENVELOPE-KEY-01",
+  "title": "envelope key \"telepathy\" outside WireFrame's field list is refused as unknown-envelope-field",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-C16",
+    "WIR1-I05",
+    "42 KE3-39"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"telepathy\":true,\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJ0ZWxlcGF0aHkiOnRydWUsImNvbnRyYWN0SWQiOi05OTY0MjYyMTU3MzQyMTYwNDAsIm1ldGhvZElkIjotMTM0MTc1ODI3NTM3NjE3OTAzLCJjZWxsUmVmIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIn0sInBvcnROYW1lIjoiaW5sZXQiLCJ0eXBlIjoiUE9SVF9BUEkiLCJhcmdzIjpbWyJTdGFsbCIseyJyZWFzb24iOiJTVVNQRU5ERUQifV1dfQ=="
+  },
+  "expect": {
+    "reject": "unknown-envelope-field"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: `{\"telepathy\":true,` spliced in right after the opening brace, before `\"contractId\"`. pinned-because-current ([WIR1-C16]): cite computenet-5zba and spec 42 §KE3-39 \"Decision: the constraint stays operational — no mechanism\"; additive compatibility runs one way only; the original [WIR1-I05] \"SHALL ignore\" described behaviour the codec never had (epic re-scope item 1). Observed kotlinx.serialization.json.internal.JsonDecodingException \"Encountered an unknown key 'telepathy' at offset 2 at path: $\". Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}
