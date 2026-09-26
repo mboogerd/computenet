@@ -6,6 +6,9 @@ import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
+import civictech.cell.consistency.GlitchFreeCell
+import civictech.cell.control.StallNotice
+import civictech.cell.control.StallReason
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
@@ -21,6 +24,8 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -81,8 +86,12 @@ class WriteVisibilityTest {
     }
 
     /** The two-view aligned sink of [AlignedObserveTest], `items` queued behind the fused `filtered`. */
-    private fun twoViewSink(graph: Graph, maxOutstandingHandles: Int = 1024): AlignedCompositeCell {
-        val sink = graph.host.observeAligned(maxOutstandingHandles) {
+    private fun twoViewSink(
+        graph: Graph,
+        maxOutstandingHandles: Int = 1024,
+        mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
+    ): AlignedCompositeCell {
+        val sink = graph.host.observeAligned(maxOutstandingHandles, mode = mode) {
             set("items", graph.source.ref)
             set("filtered", graph.filter.ref)
         }
@@ -369,6 +378,64 @@ class WriteVisibilityTest {
         dependentThreads.none { it === schedulerThread } shouldBe true
         heldLock shouldBe listOf(false, false)
         (threadsNamed("aligned-observe-") - dispatchersBefore).shouldBeEmpty()
+        sink.close()
+    }
+
+    // ---- [KE2-22]/[KE2-26] BS-12: a degraded publication completes VisibleDegraded --
+
+    @Test
+    fun `DEGRADE - a recoverable stall on the queued arm completes the handle VisibleDegraded, naming it`() {
+        val graph = Graph()
+        val sink = twoViewSink(graph, mode = GlitchFreeCell.WaveMode.DEGRADE)
+        val ingress = ActorIngress(UUID.randomUUID())
+        val ops = graph.ops
+        val itemsLink = sink.inlets.getValue("items").linking.links.single()
+        val composites = Collections.synchronizedList(mutableListOf<AlignedComposite>())
+        sink.onComposite { composites += it }
+
+        // Stamped, but nothing has propagated yet: `items` is still queued
+        // behind `filtered`, which settles synchronously once the controller
+        // runs — so suspending `items` first is what makes it the edge this
+        // wave releases without.
+        val (w, _) = ingress.driveStamped { ops.add(2) }
+        val h = sink.visibilityOf(w)
+        ProtocolSupport.of(sink.inlets.getValue("items"))
+            .deliver(Protocols.Suspension, itemsLink, StallNotice.Stall(StallReason.SUSPENDED))
+
+        graph.controller.runToIdle()
+
+        val dropped = setOf(DroppedEdge("items", itemsLink.id))
+        h.get(5, SECONDS) shouldBe VisibleDegraded(w, dropped)
+        sink.outstandingHandles shouldBe 0
+        // items is still suspended when the wave releases, so the composite
+        // published at that moment discloses it — even though a later
+        // straggler install (items' own delayed delta, arriving after the
+        // wave already retired without it) catches the edge's watermark up
+        // and clears the disclosure on `sink.composite()` by the time
+        // `runToIdle` returns.
+        composites.any { it.droppedEdges == dropped } shouldBe true
+        sink.close()
+    }
+
+    @Test
+    fun `WAIT - a terminal stall on the queued arm re-scopes the wave and completes the handle VisibleDegraded`() {
+        val graph = Graph()
+        val sink = twoViewSink(graph) // WAIT is the default
+        val ingress = ActorIngress(UUID.randomUUID())
+        val ops = graph.ops
+        val itemsLink = sink.inlets.getValue("items").linking.links.single()
+
+        val (w, _) = ingress.driveStamped { ops.add(2) }
+        val h = sink.visibilityOf(w)
+        ProtocolSupport.of(sink.inlets.getValue("items"))
+            .deliver(Protocols.Suspension, itemsLink, StallNotice.Stall(StallReason.DEAD_LETTERED, timestamp = w))
+
+        graph.controller.runToIdle()
+
+        val dropped = setOf(DroppedEdge("items", itemsLink.id))
+        h.get(5, SECONDS) shouldBe VisibleDegraded(w, dropped)
+        sink.outstandingHandles shouldBe 0
+        sink.violations shouldBe 1L
         sink.close()
     }
 
