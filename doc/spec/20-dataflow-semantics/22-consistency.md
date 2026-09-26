@@ -319,11 +319,19 @@ inlet per contributing view carries the per-name clause structurally; one
 completeness fold spanning **every** inlet's edges — `WaveFrontier`'s
 condition mirrored at cell scope, the `CoalescingCombineCell` precedent —
 carries the assembly clause, publishing one composite per settled wave in
-per-source counter order. It is the WAIT shape: no `DEGRADE` frontier
-shrinking, no RE-SCOPE, no replica-fed settlement, and the static-link-set
-residual (G-13, above) still applies — an arm that structurally never carries a
-source is a phantom expected edge for its waves until an ack, a later wave, or
-an `EdgeClose` shrinks the condition. Two boundaries of the shipped guarantee,
+per-source counter order. It mirrors `WaveFrontier`'s stall disposition:
+`GlitchFreeCell.WaveMode.WAIT` (the default) holds; `DEGRADE` excludes a
+recoverably stalled edge from the frontier until `Resume`; a terminal `Stall`
+re-scopes in every mode. A shrunken completeness condition is disclosed in the
+published `AlignedComposite.droppedEdges` — the DEGRADE correctness contract's
+disclosure half (G-40; its sufficiency half stays open) — and a dropped edge
+stays named there on every later composite until its own watermark catches up
+with the flushed frontier for its source or the edge closes, not only on the
+wave it was dropped from. Replica-fed settlement (E3.4) and pull-on-open
+remain unmirrored, and the static-link-set residual (G-13, above) still
+applies — an arm that structurally never carries a source is a phantom
+expected edge for its waves until an ack, a later wave, or an `EdgeClose`
+shrinks the condition. Two boundaries of the shipped guarantee,
 both inherited from `WaveFrontier.offer`: catch-up traffic (the `onLinked`
 state-as-delta, pull baselines) installs as arm state and is admitted to no
 completeness set, and an edge opened mid-stream floors below the waves already
