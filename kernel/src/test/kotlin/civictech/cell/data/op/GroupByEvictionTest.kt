@@ -390,17 +390,17 @@ class GroupByEvictionTest {
         val src = UUID(3, 3)
         underWave(src, 7) { cell.waterline.call.propagate(WaterlineDelta(20)) }
 
+        // [24-WL-05]: state == integrated output — A's fold equals a late joiner's catch-up.
+        // Asserted first: the B3 control (eviction emission dropped) reddens exactly here.
+        val foldA = mapFold(a.map { it.first })
+        lateJoinFold(cell) shouldBe foldA
+        foldA shouldBe mapOf(20L to 2L)
+
         // [24-WL-06]: exactly one MapDelta, removals {0, 10}, no puts, under (S, 7) ([24-OP-GROUPBY-03])
         val eviction = a.drop(1)
         eviction.size shouldBe 1
         eviction.single().first shouldBe MapDelta(emptyMap(), setOf(0L, 10L))
         eviction.single().second shouldBe Timestamp(src, 7)
-
-        // [24-WL-05]: state == integrated output — A's fold equals a late joiner's catch-up
-        // (control: dropping the eviction's emission leaves A holding {0, 10} and reddens this)
-        val foldA = mapFold(a.map { it.first })
-        foldA shouldBe mapOf(20L to 2L)
-        lateJoinFold(cell) shouldBe foldA
 
         // [24-WL-19] structural half: no window with keyTime <= floor remains (none refused here)
         groupKeys(cell).filter { (it as Long) + 10 <= 20 }.shouldBeEmpty()
