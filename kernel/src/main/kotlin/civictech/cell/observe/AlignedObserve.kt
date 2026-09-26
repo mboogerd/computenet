@@ -28,11 +28,14 @@ import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import java.io.Serializable
+import java.util.TreeMap
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The **wave-aligned** multi-view observation sink (spec 20/22 §The observation
@@ -163,13 +166,28 @@ import java.util.concurrent.TimeUnit
  * [onChange] takes the same [lock] that [flushReady] holds for the whole
  * apply-all-arms-then-publish sequence, so its catch-up snapshot is a composite
  * from before that wave or after it, never inside it.
+ *
+ * **Write-visibility handles run elsewhere.** A [visibilityOf] handle is
+ * registered and retired under [lock], but its completion is *submitted* to the
+ * JDK default async pool (`CompletableFuture.runAsync`), so the `complete` call
+ * and every plain `thenAccept`/`thenApply` dependent run on a pool thread —
+ * never on the host scheduler thread, never under [lock], and never on the
+ * listener dispatcher (which a handle-only sink therefore never mints). Handles
+ * carry no ordering guarantee relative to each other or to listener
+ * notifications.
  */
 class AlignedCompositeCell(
     views: Map<String, View<*, *>>,
     /** What each named view was registered as (T08 finding 2) — [get]'s checked-cast diagnostic. */
     @PublishedApi internal val registeredAs: Map<String, String> = emptyMap(),
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell, Stateful, ObservationSink<Map<String, Any?>> {
+    /** The bound on outstanding write-visibility handles (zvq3e-D7): a default, not a measurement. */
+    override val maxOutstandingHandles: Int = 1024,
+) : Cell, Stateful, ObservationSink<Map<String, Any?>>, FrontierWitness {
+
+    init {
+        require(maxOutstandingHandles > 0) { "maxOutstandingHandles must be positive (was $maxOutstandingHandles)" }
+    }
 
     /** One contributing view: its name, its fold, and the inlet that carries only its deltas. */
     private class Arm(val name: String, val view: View<Any, Any?>, val inlet: FanInlet<Propagate<Any>>)
@@ -263,6 +281,16 @@ class AlignedCompositeCell(
     @Volatile
     private var closed = false
 
+    // ---- write-visibility handles (FrontierWitness, KE2 §5.5) ----
+
+    /** Registered handles: source → counter → futures. Lock-guarded. */
+    private val handles = mutableMapOf<UUID, TreeMap<Long, MutableList<CompletableFuture<Visibility>>>>()
+
+    /** Registered-and-uncompleted handle count; an atomic so it is readable without [lock]. */
+    private val outstanding = AtomicInteger(0)
+
+    override val outstandingHandles: Int get() = outstanding.get()
+
     @Volatile
     private var latest: Map<String, Any?> = assemble()
 
@@ -318,6 +346,71 @@ class AlignedCompositeCell(
                 "(actual snapshot type ${value?.let { it::class.simpleName } ?: "null"}), " +
                 "requested ${T::class.simpleName ?: T::class}",
         )
+    }
+
+    /**
+     * Registration (zvq3e-D3), in order: a closed sink abandons with
+     * `SINK_CLOSED`; a wave at or behind the flushed frontier is already
+     * visible; past the bound, `BOUND_EXCEEDED` and nothing registered;
+     * otherwise the handle waits for [completeHandles].
+     */
+    override fun visibilityOf(wave: Timestamp): CompletableFuture<Visibility> {
+        synchronized(lock) {
+            if (closed) {
+                return CompletableFuture.failedFuture(VisibilityAbandoned(VisibilityAbandoned.Reason.SINK_CLOSED, wave))
+            }
+            val flushed = flushedHighWater[wave.sourceId]
+            if (flushed != null && wave.counter <= flushed) {
+                return CompletableFuture.completedFuture(Visible(Timestamp(wave.sourceId, flushed)))
+            }
+            if (outstanding.get() >= maxOutstandingHandles) {
+                return CompletableFuture.failedFuture(VisibilityAbandoned(VisibilityAbandoned.Reason.BOUND_EXCEEDED, wave))
+            }
+            val future = CompletableFuture<Visibility>()
+            handles.getOrPut(wave.sourceId) { TreeMap() }.getOrPut(wave.counter) { mutableListOf() } += future
+            outstanding.incrementAndGet()
+            return future
+        }
+    }
+
+    /**
+     * The single completion point (zvq3e-D4): every handle for
+     * `timestamp.sourceId` with counter ≤ `timestamp.counter`, completed with
+     * the one outcome this retirement earned. Called from [flushReady] after
+     * the wave's publish, so [latest] already reflects it. Completion is
+     * submitted to the default async pool (zvq3e-D5).
+     */
+    private fun completeHandles(timestamp: Timestamp, effective: Boolean, dropped: Set<DroppedEdge>) {
+        val bySource = handles[timestamp.sourceId] ?: return
+        val due = bySource.headMap(timestamp.counter, true)
+        if (due.isEmpty()) return
+        val futures = due.values.flatten()
+        due.clear()
+        if (bySource.isEmpty()) handles.remove(timestamp.sourceId)
+        outstanding.addAndGet(-futures.size)
+        val outcome: Visibility = when {
+            dropped.isNotEmpty() -> VisibleDegraded(timestamp, dropped)
+            effective -> Visible(timestamp)
+            else -> VisibleVacuously(timestamp)
+        }
+        futures.forEach { future -> CompletableFuture.runAsync { future.complete(outcome) } }
+    }
+
+    /** Removes every registered handle, paired with its wave, and zeroes the counter. Lock-guarded. */
+    private fun drainHandles(): List<Pair<Timestamp, CompletableFuture<Visibility>>> {
+        val drained = handles.flatMap { (sourceId, byCounter) ->
+            byCounter.flatMap { (counter, futures) -> futures.map { Timestamp(sourceId, counter) to it } }
+        }
+        handles.clear()
+        outstanding.set(0)
+        return drained
+    }
+
+    private fun abandon(handles: List<Pair<Timestamp, CompletableFuture<Visibility>>>, reason: VisibilityAbandoned.Reason) {
+        handles.forEach { (wave, future) ->
+            val cause = VisibilityAbandoned(reason, wave)
+            CompletableFuture.runAsync { future.completeExceptionally(cause) }
+        }
     }
 
     // ---- arrival: buffer the waved, install the unwaved ----
@@ -417,6 +510,7 @@ class AlignedCompositeCell(
             // arrival order within the wave; the wave itself is the alignment unit
             for (buffered in wave) if (buffered.arm.view.apply(buffered.delta)) effective = true
             if (effective) publish()
+            completeHandles(timestamp, effective, dropped = emptySet())
         }
     }
 
@@ -477,14 +571,19 @@ class AlignedCompositeCell(
      * Idempotent. Wired into [onDeactivate] (which the host calls on despawn),
      * so a despawned sink's dispatch thread does not outlive it; a caller that
      * never despawns the sink may call this directly at shutdown.
+     *
+     * Every outstanding write-visibility handle is abandoned with
+     * [VisibilityAbandoned.Reason.SINK_CLOSED] (zvq3e-D6); [onDeactivate]
+     * abandons them first with `HOST_SHUTDOWN`, so this finds none on that path.
      */
     fun close() {
-        val doomed = synchronized(lock) {
+        val (doomed, abandoned) = synchronized(lock) {
             if (closed) return
             closed = true
-            dispatcher
+            dispatcher to drainHandles()
         }
         doomed?.shutdown()
+        abandon(abandoned, VisibilityAbandoned.Reason.SINK_CLOSED)
     }
 
     /**
@@ -524,10 +623,16 @@ class AlignedCompositeCell(
      * RESTART re-enters by catch-up, not restore (93 I-18): the transient wave
      * buffer is dropped — a partially collected wave was never observed by the
      * app. Floors, watermarks and flushed high-water record what genuinely
-     * happened and stay valid.
+     * happened and stay valid. Write-visibility handles are transient too: each
+     * is abandoned with [VisibilityAbandoned.Reason.HOST_SHUTDOWN] before
+     * [close] runs, and [snapshot]/[restore] never carry them.
      */
     override fun onDeactivate(ctx: CellContext) {
-        synchronized(lock) { pending.clear() }
+        val abandoned = synchronized(lock) {
+            pending.clear()
+            drainHandles()
+        }
+        abandon(abandoned, VisibilityAbandoned.Reason.HOST_SHUTDOWN)
         close()
     }
 
@@ -631,11 +736,15 @@ class AlignedObserveBuilder internal constructor() {
  * [AlignedCompositeCell] is the WAIT shape and holds a wave until every arm
  * settles it (see its class doc for the phantom-expected-edge caveat).
  */
-fun Use<HostManagementApi>.observeAligned(block: AlignedObserveBuilder.() -> Unit): AlignedCompositeCell {
+fun Use<HostManagementApi>.observeAligned(
+    maxOutstandingHandles: Int = 1024,
+    block: AlignedObserveBuilder.() -> Unit,
+): AlignedCompositeCell {
     val builder = AlignedObserveBuilder().apply(block)
     val cell = AlignedCompositeCell(
         views = builder.specs.mapValues { it.value.view },
         registeredAs = builder.specs.mapValues { it.value.kind },
+        maxOutstandingHandles = maxOutstandingHandles,
     )
     call.spawn(cell)
     builder.specs.forEach { (name, spec) ->
@@ -649,5 +758,7 @@ fun Use<HostManagementApi>.observeAligned(block: AlignedObserveBuilder.() -> Uni
 }
 
 /** Convenience for the common case of observing cells on this [ManagedHost]. */
-fun ManagedHost.observeAligned(block: AlignedObserveBuilder.() -> Unit): AlignedCompositeCell =
-    managementInlet.observeAligned(block)
+fun ManagedHost.observeAligned(
+    maxOutstandingHandles: Int = 1024,
+    block: AlignedObserveBuilder.() -> Unit,
+): AlignedCompositeCell = managementInlet.observeAligned(maxOutstandingHandles, block)
