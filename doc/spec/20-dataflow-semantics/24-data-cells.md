@@ -600,9 +600,11 @@ per-peer recompute correct with no new machinery; an eviction that dropped
 state without emitting its retractions would leave a late-linking
 subscriber's fold diverging from an already-linked one's. `[24-WL-06]` WHEN a
 `WaterlineDelta` raising the floor arrives at an evicting cell, the cell SHALL
-evict at window granularity — every element of window key `k` exactly when
-`keyTime(k) <= floor`, `keyTime` being the window's end — and SHALL emit the
-resulting retractions as one delta under that `WaterlineDelta`'s wave id
+evict every unit the floor has passed — for a window-keyed cell
+(`GroupByCell`), at window granularity: every element of window key `k`
+exactly when `keyTime(k) <= floor`, `keyTime` being the window's end; for a
+member of the join family, at row granularity (`[24-WL-16]`) — and SHALL emit
+the resulting retractions as one delta under that `WaterlineDelta`'s wave id
 (`[24-OP-GROUPBY-03]`) (Event-driven). A window is never evicted piecemeal.
 
 **Late arrivals and the guards.** `[24-WL-07]` WHEN an add whose `timeFn(e)`
@@ -623,24 +625,34 @@ what the tag fold already does with a del whose target is gone.
 
 **The safety condition, in its implemented form.** `[24-WL-09]` IF evicting a
 piece of state would leave a subsequently admissible del unable to retract
-it, THEN the cell SHALL NOT evict that state; window-granularity eviction
-(`[24-WL-06]`) together with the liveness del guard (`[24-WL-08]`) SHALL be
-the implemented form of this condition (Unwanted behavior). Evicted state has
-no live tag, so every del that reaches it is a no-op by construction, while
-state a del can still reach has not been evicted. This is deliberately
-narrower than the general condition ("evict only what no admissible del can
-reference"), which has no clean formulation for arbitrary state — the join
-family's minted pairs in particular. The narrowing was anticipated when the
-design was scoped, and any state shape that does not fit it is not evicted
-rather than evicted under a broadened rule.
+it, THEN the cell SHALL NOT evict that state; the eviction units of
+`[24-WL-06]` — windows for a window-keyed cell, input rows at the late-drop
+threshold for the join family (`[24-WL-16]`) — together with the liveness del
+guard (`[24-WL-08]`) SHALL be the implemented form of this condition
+(Unwanted behavior). Evicted state has no live tag, so every del that reaches
+it is a no-op by construction, while state a del can still reach has not been
+evicted. This is deliberately narrower than the general condition ("evict
+only what no admissible del can reference"), which has no clean formulation
+for arbitrary state — the join family's minted pairs in particular, which is
+why they are never an eviction unit: a minted pair or entry leaves only as
+the ordinary fold's consequence of a support row's eviction (`[24-WL-16]`).
+The narrowing was anticipated when the design was scoped, and any state shape
+that does not fit it is not evicted rather than evicted under a broadened
+rule.
 
 **What equivalence survives.** `[24-WL-10]` WHILE a pipeline's waterline is
 derivable from a monotone (or near-monotone) event-time attribute, the
-post-quiescence state of every evicting cell, restricted to window keys `k`
-with `keyTime(k)` strictly above the final floor, SHALL equal a batch
-recompute over that cell's late-filtered input — its input with every
-`[24-WL-07]`-dropped add removed — restricted to the same keys: recompute in
-batch, then drop every window the final floor has passed (State-driven). The
+post-quiescence state of every evicting cell SHALL equal a batch recompute
+over that cell's late-filtered input — its input with every
+`[24-WL-07]`-dropped add removed — under the restriction matching its
+eviction unit (`[24-WL-06]`): for a window-keyed cell, both sides restricted
+to window keys `k` with `keyTime(k)` strictly above the final floor —
+recompute in batch, then drop every window the final floor has passed; for a
+member of the join family, the batch side recomputed over the late-filtered
+input with every row the cell evicted also removed — the rows of its
+lateness-declaring inlets whose `timeFn` lies strictly below the final floor,
+less any whose eviction `[24-WL-17]` refused — and compared with the whole
+post-quiescence state (State-driven). The
 condition is checked per pipeline, never assumed: it is Feldera's own
 correction of the refuted "lateness GC never changes outputs" (research `01`
 §5, 0-3), and it is an author's promise, not something the kernel verifies.
@@ -652,7 +664,15 @@ Feldera's equivalence needs no such restriction because its GC shrinks
 internal indexes without retracting outputs; eviction here retracts. For an
 evicted window, the equivalence says nothing beyond its
 absence: it is absent from both the cell's state and its integrated output
-(`[24-WL-05]`), and no batch comparison is made for it. `[24-WL-11]` WHILE no
+(`[24-WL-05]`), and no batch comparison is made for it. The join family has
+no window key, so its restriction is on the input rather than the output: its
+state is a function of its live input rows alone, and eviction removes rows
+by pushing their dels through the ordinary fold (`[24-WL-16]`), so the batch
+side removes the same rows and the two sides then need no further filter.
+Every output whose fold depended on an evicted row — a pair with an evicted
+support row, a semijoin row whose last live match was evicted — is absent
+from both; and for a negated `SemiJoinCell` a left row whose last match was
+evicted is present in both. `[24-WL-11]` WHILE no
 inlet of a pipeline declares lateness, that pipeline's behaviour SHALL be
 exactly the behaviour without this section: windows never close, late
 elements are ordinary adds, retractions flow (`[24-OP-WINDOW-02]`) — a
@@ -681,13 +701,31 @@ the manual escape hatch for the idle-source residual.
 **The join family.** `[24-WL-16]` WHERE a member of the join family
 (`JoinSetCell`, `SemiJoinCell`, `IntersectSetCell`) declares lateness, it
 SHALL evict through the same destructive-with-retraction rule as
-`GroupByCell` — both per-side row indexes and the minted pairs below the
-floor, with the minted pairs' exit tags emitted — and SHALL apply the same
+`GroupByCell`, at row granularity: its eviction unit SHALL be one input row
+of a lateness-declaring inlet, evicted — from that side's tag state and key
+index — exactly when that inlet's `timeFn(row)` lies strictly below the
+floor; the dels of the evicted rows SHALL pass through the cell's ordinary
+fold, so every minted pair or entry whose support that removes exits with
+its advertised exit tag; and it SHALL apply the same
 `[24-WL-07]`/`[24-WL-08]` guards on its lateness-declaring inlets (Optional
-feature). Evicting minted pairs without their exit tags would leave
+feature). Rows of an inlet that declares no lateness are never evicted.
+Evicting minted pairs without their exit tags would leave
 tombstone-folding consumers permanently holding dead pairs: the M11.2
 tag-hygiene rule (21 §Incremental vs complete, requirement 4) binds eviction
-as it binds every other retraction.
+as it binds every other retraction. The unit is the row, not a window,
+because the join family holds no window key — its state is per-side row
+indexes, and a windowed join's window is at most part of its join key — and
+because the eviction threshold is the late-drop threshold of `[24-WL-07]`,
+the rows evicted are exactly those whose re-add would now be late-dropped:
+an evicted row can be neither retracted (`[24-WL-08]`) nor re-admitted,
+which is `[24-WL-09]`'s condition in row form. Minted pairs are never an
+eviction unit of their own; they leave only as the fold's consequence, and
+since a later del of an evicted row is a no-op, a pair never exits twice. A
+window-keyed cell cannot evict per row, because a row below the floor may sit
+in a window still above it whose aggregate it is part of; the join family's
+output is a function of its set of live rows with no aggregate over a window,
+so removing a row changes exactly the outputs a batch recompute without that
+row also lacks (`[24-WL-10]`).
 
 **Exclusive payloads.** `[24-WL-17]` IF an element an eviction would remove
 carries an `Owned` or `Leased` payload, THEN the cell SHALL refuse that
