@@ -604,8 +604,10 @@ evict every unit the floor has passed — for a window-keyed cell
 (`GroupByCell`), at window granularity: every element of window key `k`
 exactly when `keyTime(k) <= floor`, `keyTime` being the window's end; for a
 member of the join family, at row granularity (`[24-WL-16]`) — and SHALL emit
-the resulting retractions as one delta under that `WaterlineDelta`'s wave id
-(`[24-OP-GROUPBY-03]`) (Event-driven). A window is never evicted piecemeal.
+the resulting delta — its retractions, and for a negated `SemiJoinCell` any
+entries the eviction admits (`[24-WL-16]`) — as one delta under that
+`WaterlineDelta`'s wave id (`[24-OP-GROUPBY-03]`) (Event-driven). A
+window-keyed cell never evicts a window piecemeal.
 
 **Late arrivals and the guards.** `[24-WL-07]` WHEN an add whose `timeFn(e)`
 is strictly below the current floor arrives at an inlet that declares
@@ -706,9 +708,14 @@ of a lateness-declaring inlet, evicted — from that side's tag state and key
 index — exactly when that inlet's `timeFn(row)` lies strictly below the
 floor; the dels of the evicted rows SHALL pass through the cell's ordinary
 fold, so every minted pair or entry whose support that removes exits with
-its advertised exit tag; and it SHALL apply the same
-`[24-WL-07]`/`[24-WL-08]` guards on its lateness-declaring inlets (Optional
-feature). Rows of an inlet that declares no lateness are never evicted.
+its advertised exit tag, and — for a negated `SemiJoinCell`, whose fold
+admits a left row when its last live match is removed — every entry that
+fold admits SHALL enter with a freshly minted tag, both in the one delta
+under the `WaterlineDelta`'s wave id (`[24-WL-06]`); and it SHALL apply the
+same `[24-WL-07]`/`[24-WL-08]` guards on its lateness-declaring inlets
+(Optional feature). Rows of an inlet that declares no lateness are never
+evicted. Row granularity means a windowed join's window can be evicted in
+part: a floor inside a window evicts only that window's rows below it.
 Evicting minted pairs without their exit tags would leave
 tombstone-folding consumers permanently holding dead pairs: the M11.2
 tag-hygiene rule (21 §Incremental vs complete, requirement 4) binds eviction
