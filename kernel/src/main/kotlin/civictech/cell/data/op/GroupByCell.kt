@@ -2,6 +2,7 @@ package civictech.cell.data.op
 
 import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
+import civictech.cell.ExclusiveEntry
 import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -114,8 +115,33 @@ interface GroupByApi<E, K, A> {
  * Api directly and could honour neither. So a cell reached through a
  * `GroupByApi` ref, or constructed without lateness, is exactly the
  * pre-lateness operator (`[24-WL-11]`); a `WaterlineDelta` on such a cell is a
- * structural error and throws. Eviction of passed windows on a floor rise is
- * computenet-nt17o.3's; this class so far only records the floor.
+ * structural error and throws.
+ *
+ * **Eviction on a floor rise (`[24-WL-05]`/`[24-WL-06]`).** The eviction unit
+ * is the window, never a piecemeal subset of it: a window `k` has passed once
+ * `keyTime(k) <= floor` (`keyTime` is the window's exclusive end, so `[t, t+w)`
+ * passes at `floor >= t+w`). Every passed window's live elements are killed
+ * through [WaterlineEviction.evict] and folded through the same
+ * membership-flip fold [onInlet] uses, so counts decrement, emptied groups die
+ * as `MapDelta` removals (`[24-OP-GROUPBY-02]`), and the whole eviction leaves
+ * as one `MapDelta` under the waterline delivery's wave (`[24-OP-GROUPBY-03]`)
+ * — the cell's state stays equal to its integrated output. A del arriving
+ * later for an evicted element finds no live tag and is a no-op (`[24-WL-09]`);
+ * an add for it is below the floor and late-dropped.
+ *
+ * **Per-window exclusive refusal (`[24-WL-17]`, nt17o-D3).** A passed window
+ * holding an `Owned`/`Leased` element is skipped: untouched, nothing emitted
+ * for it, the exclusive never taken, released or borrowed by this cell. It is
+ * recorded as an [ExclusiveEvictionRefused] in [refusedWindows] (replaced on
+ * every rise) and counted in [refusedEvictions]; the other passed windows are
+ * still evicted in the same delta. Its tags stay live, so an ordinary del still
+ * retracts its members (`[24-WL-08]`), and every later rise re-evaluates it.
+ * Only a top-level exclusive element is detected, not one nested inside a
+ * plain element (computenet-woto).
+ *
+ * **Single-instance only (`[24-WL-18]`).** The `Replicable` refusal lives in
+ * [WaterlineEviction.evict], where the host is a parameter: this class is
+ * final and not `Replicable`, so an in-class check would be vacuous.
  */
 class GroupByCell<E, K, A, ACC : Serializable>(
     ref: CellRef = CellRef(UUID.randomUUID()),
@@ -147,6 +173,19 @@ class GroupByCell<E, K, A, ACC : Serializable>(
      * paged by [readBounded].
      */
     var droppedBelowFloor: Long = 0
+        private set
+
+    private val refused = LinkedHashMap<K, ExclusiveEvictionRefused>()
+
+    /**
+     * The passed windows currently refused eviction because they hold an
+     * exclusive (`[24-WL-17]`), recomputed on every floor rise; a window leaves
+     * it when it is evicted or its last member is retracted. Not snapshotted.
+     */
+    fun refusedWindows(): Map<K, ExclusiveEvictionRefused> = LinkedHashMap(refused)
+
+    /** Cumulative count of per-window eviction refusals, one per refused window per rise. A counter, not state. */
+    var refusedEvictions: Long = 0
         private set
 
     /** The floor's inlet (`[24-WL-03]`): a value read here, never re-emitted (`[24-WL-04]`). */
@@ -184,10 +223,32 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         onFloorRaised(delta.floor)
     }
 
-    /** The eviction hook: computenet-nt17o.3 replaces this body with window eviction (`[24-WL-06]`). */
-    @Suppress("UNUSED_PARAMETER")
+    /**
+     * Evict every passed window (`keyTime(k) <= newFloor`) that holds no
+     * exclusive, as one retraction `MapDelta` under the current delivery's wave;
+     * record the rest as refused (`[24-WL-06]`, `[24-WL-17]`). Eviction never
+     * forwards on `late`.
+     */
     private fun onFloorRaised(newFloor: Long) {
-        outlet.absorbAck()
+        val keyTime = checkNotNull(keyTime)
+        val passed = state.elements.groupBy(keyFn).filterKeys { keyTime(it) <= newFloor }
+        refused.clear()
+        val evictees = mutableSetOf<E>()
+        passed.forEach { (k, members) ->
+            val exclusives = members.count { ExclusiveEntry.isExclusive(it) }
+            if (exclusives > 0) refused[k] = ExclusiveEvictionRefused(ref, k, exclusives)
+            else evictees += members
+        }
+        refusedEvictions += refused.size
+
+        // every evictee is live by construction: liveBefore == evictees
+        val killed = WaterlineEviction.evict(this, state) { it in evictees }
+        val delta = foldMembership(killed.dels.keys, evictees)
+        if (delta != null) {
+            outlet.call.propagate(delta)
+        } else {
+            outlet.absorbAck() // nothing passed, or every passed window refused
+        }
         late.absorbAck()
     }
 
@@ -227,7 +288,8 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     /**
      * Membership flips of [touched] (given which were live before the tag fold)
      * into [groups], and the effective-only `MapDelta` they produce — `null`
-     * when no group's value changed. The seam eviction (computenet-nt17o.3) reuses.
+     * when no group's value changed. Shared by [onInlet] and window eviction
+     * ([onFloorRaised]), so an eviction is an ordinary retraction.
      */
     private fun foldMembership(touched: Set<E>, liveBefore: Set<E>): MapDelta<K, A>? {
         // first-touch snapshot per affected group: emission compares
@@ -247,7 +309,10 @@ class GroupByCell<E, K, A, ACC : Serializable>(
                 val g = checkNotNull(groups[k]) { "retract for untracked group $k" }
                 g.count--
                 g.acc = aggregator.retract(g.acc, e)
-                if (g.count == 0) groups.remove(k)
+                if (g.count == 0) {
+                    groups.remove(k)
+                    refused.remove(k) // a refused window whose last member left is no longer refused
+                }
             }
         }
 
@@ -292,6 +357,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         val tags = parts[0] as Serializable
         val gs = parts[1] as Serializable
         floor = if (parts.size == 3) parts[2] as Long? else null
+        refused.clear()
         this.state.restore(tags)
         groups.clear()
         (gs as Map<K, List<Serializable>>).forEach { (k, g) ->
