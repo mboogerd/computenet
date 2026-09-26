@@ -692,9 +692,12 @@ than by stream length: once a floor rise has been processed
 passed other than one whose eviction `[24-WL-17]` refused (State-driven).
 The live windows are those whose end lies above the floor, and the floor
 trails the newest event time by the declared lateness plus the event-time lag
-among the contributing sources (`[24-WL-02]`); how many windows that span
-holds is set by the horizon and the window slide, never by how many elements
-the stream has carried. The bound is on windows, not elements: the size of
+among the contributing sources (`[24-WL-02]`); an admitted element's windows
+end up to one window size past its event time, so the span of live window
+ends runs from the floor to the newest event time plus the window size, and
+how many windows that span holds is roughly the horizon plus the window
+size, divided by the slide — never by how many elements the stream has
+carried. The bound is on windows, not elements: the size of
 one live window is the input's density per window, which this requirement
 does not bound. It is qualified three ways, each stated where it lives: an
 idle contributing source freezes the floor and suspends the bound until the
