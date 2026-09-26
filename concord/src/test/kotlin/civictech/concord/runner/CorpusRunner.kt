@@ -280,13 +280,17 @@ class CorpusRunner {
         val failuresByRun = LinkedHashMap<Int, List<CheckFailure>>()
         for (run in 0 until runs) {
             val driver = KernelDriver(run.toLong())
-            buildGraph(driver, scenario)
-            val record = runScript(driver, scenario)
-            driver.quiesce(QUIESCE_BUDGET)
-            val failures = evaluateChecks(
-                RunContext(driver, scenario, record.reads, record.emissionBaselines), scenario.checks,
-            )
-            if (failures.isNotEmpty()) failuresByRun[run] = failures
+            try {
+                buildGraph(driver, scenario)
+                val record = runScript(driver, scenario)
+                driver.quiesce(QUIESCE_BUDGET)
+                val failures = evaluateChecks(
+                    RunContext(driver, scenario, record.reads, record.emissionBaselines), scenario.checks,
+                )
+                if (failures.isNotEmpty()) failuresByRun[run] = failures
+            } finally {
+                driver.close()
+            }
         }
 
         when (scenario.kind) {
@@ -587,13 +591,17 @@ class CorpusRunner {
         for (i in 0 until instances) {
             val concrete = ScenarioGenerator.generate(scenario, i)
             val driver = KernelDriver(i.toLong())
-            buildGraph(driver, concrete)
-            val record = runScript(driver, concrete)
-            driver.quiesce(QUIESCE_BUDGET)
-            val failures = evaluateChecks(
-                RunContext(driver, concrete, record.reads, record.emissionBaselines), concrete.checks,
-            )
-            if (failures.isNotEmpty()) failuresByInstance[i] = failures
+            try {
+                buildGraph(driver, concrete)
+                val record = runScript(driver, concrete)
+                driver.quiesce(QUIESCE_BUDGET)
+                val failures = evaluateChecks(
+                    RunContext(driver, concrete, record.reads, record.emissionBaselines), concrete.checks,
+                )
+                if (failures.isNotEmpty()) failuresByInstance[i] = failures
+            } finally {
+                driver.close()
+            }
         }
 
         assertTrue(failuresByInstance.isEmpty()) {

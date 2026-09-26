@@ -1,0 +1,62 @@
+# Concord corpus scenario (computenet-5ubdv.3, KE2 §5.8). Canonical schema
+# shape — see concord/schema/scenario.md.
+#
+# `[22-OBS-02]` (22-consistency.md:302-314, State-driven) has two clauses,
+# both modeled by this one graph:
+#
+#   - BS-2, per-name inlets: `a` and `b` are two `aligned-view` members fed by
+#     the SAME outlet (`s`) through two separate links, each naming its own
+#     `inlet:`. They must be folded and reported as two distinct named
+#     members, not collapsed into one. `final-view`'s golden names both `a`
+#     and `b` with equal folds; `composite-whole-waves` (default `members:` —
+#     every declared view name) checks both arms jointly with `evens`.
+#   - BS-3, the absorb-ack rule (spec :202-249): the script's last op
+#     (`add 5`, odd) is dropped entirely by the `evens` arm's `filter fn:
+#     even` — that arm never forwards a delivery for this wave at all. Without
+#     an acknowledgement that the arm has settled the wave by absorption
+#     alone, the aligned composite for this wave could never assemble (it
+#     would wait forever on an arm that never delivers), and `a`/`b` would
+#     never show `5` at quiescence. `final-view`'s golden includes `5` in `a`
+#     and `b` — the check that discriminates whether the absorb-ack landed;
+#     `no-dead-letters` rules out the delivery being silently dropped instead
+#     of acknowledged.
+#
+# 5ubdv-D4: no corpus control scenario for this id either — see
+# 22-OBS-01.yaml's header for where the negative (a torn composite) is
+# modeled instead (ChecksTest fixture; AlignedObserveTest kernel control).
+id: 22-OBS-02
+title: Two members of an aligned composite share one outlet, and an absorbing arm still settles every wave
+covers: [22-OBS-02]
+profile: core
+kind: example
+narrative:
+  given: one set source observed twice under distinct aligned-view members a and b, plus a third member evens
+    fed by an even-filter arm off the same source
+  when: the source is repeatedly added to and removed from, ending on an odd add that the filter arm absorbs
+    without ever delivering
+  then: at quiescence a and b report equal folds under their own names, evens reports its filtered fold, and
+    the final wave — settled on the evens arm purely by acknowledgement — is still published, with the last
+    added value present in every arm's own log
+graph:
+  cells:
+    - {id: s, type: set-source, of: int}
+    - {id: f, type: filter, fn: even}
+    - {id: c, type: aligned-view, views: {a: set-view, b: set-view, evens: set-view}}
+  links:
+    - {from: s, to: c, inlet: a}
+    - {from: s, to: c, inlet: b}
+    - {from: s, to: f}
+    - {from: f, to: c, inlet: evens}
+script:
+  - {type: apply, on: s, op: add, value: 1}
+  - {type: apply, on: s, op: add, value: 2}
+  - {type: apply, on: s, op: add, value: 3}
+  - {type: apply, on: s, op: add, value: 4}
+  - {type: apply, on: s, op: remove, value: 2}
+  - {type: apply, on: s, op: add, value: 6}
+  - {type: apply, on: s, op: remove, value: 4}
+  - {type: apply, on: s, op: add, value: 5}
+checks:
+  - {type: final-view, view: c, equals: {a: [1, 3, 5, 6], b: [1, 3, 5, 6], evens: [6]}}
+  - {type: composite-whole-waves, view: c, source: s}
+  - {type: no-dead-letters}
