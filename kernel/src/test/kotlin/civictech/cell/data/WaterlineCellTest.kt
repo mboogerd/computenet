@@ -197,8 +197,10 @@ class WaterlineCellTest {
      * too, so the control would prove nothing. Later events are unconstrained
      * relative to other sources: they mostly rise but may fall back.
      */
-    private fun seededRun(seed: Long, combine: (Collection<Long>) -> Long) {
-        val cell = WaterlineCell(CellRef(UUID.randomUUID()), lateness, combine)
+    private fun seededRun(seed: Long, combine: ((Collection<Long>) -> Long)? = null) {
+        // null = the production constructor, so B8 checks the shipped combine, not a test copy of it
+        val cell = if (combine == null) WaterlineCell(lateness = lateness)
+        else WaterlineCell(CellRef(UUID.randomUUID()), lateness, combine)
         val rec = record(cell)
         val rnd = Random(seed)
         val sources = listOf(a, b, c)
@@ -233,7 +235,7 @@ class WaterlineCellTest {
 
     @Test
     fun `B8 - seeded 3-source interleavings keep a monotone floor at or below min over sources`() {
-        for (seed in 0L until 100L) seededRun(seed) { it.min() }
+        for (seed in 0L until 100L) seededRun(seed)
     }
 
     /** The `[KE4-33]` control: max-over-sources lets a fast source run the floor past a slow one. */
