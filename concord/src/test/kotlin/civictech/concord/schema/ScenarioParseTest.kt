@@ -163,6 +163,37 @@ class ScenarioParseTest {
         },
     )
 
+    @org.junit.jupiter.api.Test
+    fun `an aligned-view cell carries its typed views map and round-trips`() {
+        // computenet-5ubdv.1 (5ubdv-D5): `views:` is a typed field precisely because
+        // the lenient parser would otherwise drop it silently. Inline YAML — no
+        // corpus file carries an aligned-view yet (the corpus task adds them).
+        val yaml = """
+            id: FX-ALIGNED-01
+            title: aligned view fixture
+            covers: [22-OBS-01]
+            profile: core
+            kind: example
+            graph:
+              cells:
+                - {id: s, type: set-source, of: int}
+                - {id: c, type: aligned-view, views: {items: set-view, evens: set-view}}
+              links:
+                - {from: s, to: c, inlet: items}
+            checks:
+              - {type: composite-whole-waves, view: c, source: s, members: [items]}
+        """.trimIndent()
+        val decoded = ConcordYaml.instance.decodeFromString(Scenario.serializer(), yaml)
+        val c = decoded.graph!!.cells.single { it.id == "c" }
+        c.views shouldBe mapOf("items" to "set-view", "evens" to "set-view")
+        c.views!!.keys.toList() shouldContainExactly listOf("items", "evens")
+        decoded.graph!!.cells.single { it.id == "s" }.views shouldBe null
+        decoded.checks.single() shouldBe CompositeWholeWaves("c", "s", listOf("items"))
+
+        val reencoded = ConcordYaml.instance.encodeToString(Scenario.serializer(), decoded)
+        ConcordYaml.instance.decodeFromString(Scenario.serializer(), reencoded) shouldBe decoded
+    }
+
     private fun load(path: String): Scenario =
         ConcordYaml.instance.decodeFromString(Scenario.serializer(), File(path).readText())
 }

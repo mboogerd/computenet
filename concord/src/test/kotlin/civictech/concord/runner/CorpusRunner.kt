@@ -13,6 +13,7 @@ import civictech.concord.generator.ScenarioGenerator
 import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.CellSpec
 import civictech.concord.schema.Check
+import civictech.concord.schema.CompositeWholeWaves
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
@@ -391,6 +392,7 @@ class CorpusRunner {
         is ObservationsAllSatisfy -> "observations-all-satisfy"
         is ObservationsMonotone -> "observations-monotone"
         is ObservationsWholeWaves -> "observations-whole-waves"
+        is CompositeWholeWaves -> "composite-whole-waves"
         is ReplicasConverge -> "replicas-converge"
         NoDeadLetters -> "no-dead-letters"
         is EffectCount -> "effect-count"
@@ -740,6 +742,7 @@ class CorpusRunner {
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
         cell.interest?.let { put("interest", interestValue(it)) }
         cell.window?.let { put("window", windowValue(it)) }
+        cell.views?.let { put("views", Value.MapVal(it.mapValues { (_, id) -> Value.StrVal(id) })) }
     }
 
     /** Lower a scenario's `window:` descriptor to the neutral [Value] model (24-OP-WINDOW-01/02). */

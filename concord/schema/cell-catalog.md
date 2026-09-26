@@ -74,6 +74,7 @@ quantifies over".
 | `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value. |
 | `list-view` | Folds a positional list-delta stream (`list-source`) into an ordered list (W3-0). |
 | `tagged-map-view` | Folds a **tagged** map-delta stream (an `ormap-source` outlet) into the current `{key → exposed value}` map: a key is present while it holds at least one uncovered dot, and its exposed value is the one that dot order selects. Rendered like a `map-view`. |
+| `aligned-view` | The wave-aligned multi-view sink (`[22-OBS-01]`/`[22-OBS-02]`): several named member folds (`views: {name: set-view\|map-view\|count-view\|value-view, …}`), one per inlet named by the member, assembled into one composite only when every member has settled the wave; `readView` → `{name → member value}` (computenet-5ubdv). |
 
 ## Nature / ownership sinks (W4-A followup, `12-NEGOTIATE-01`/`23-SPSC-01`)
 
@@ -157,6 +158,10 @@ tagged source over the kernel's public `FanOutlet.originate`/`waveState`/
 `reBaseline` seams — the catalog twin of kernel `RestartReBaselineTest`'s
 `TaggedProducerCell`; the recovery itself is run by `ManagedHost`'s own
 supervision path, see note 2).
+
+**`aligned-view`** (computenet-5ubdv) binds to the kernel's `AlignedCompositeCell`
+with one per-name `FanInlet` per `views:` member; each member folds with the
+same `View` its standalone id binds.
 
 The `join` family binds over **set streams of pairs `[k, v]`** (matching the batch
 oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are keyed
