@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
+import civictech.cell.control.Progress
 import civictech.cell.control.absorbAck
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.MapDelta
@@ -17,7 +18,10 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import io.kotest.assertions.withClue
+import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -40,10 +44,18 @@ import java.util.UUID
  * (a synchronous `Progress` ack overtaking a queued delta on one edge) cannot
  * arise here.
  *
- * The invariants:
+ * The invariants, for every `FrontierGateable` cell covered here
+ * (`SemiJoinCell`, `CombineLatestCell`, and — KE2 §5.2, `computenet-0favn` —
+ * `JoinSetCell` and `IntersectSetCell`):
  *  - **gated**: exactly one delta per wave, carrying only the net enter/exit
- *    (`SemiJoinCell`) or the settled combined value (`CombineLatestCell`), with
- *    `MintedTags` hygiene preserved — no tombstone for a tag never advertised;
+ *    (`SemiJoinCell`, `JoinSetCell`, `IntersectSetCell`) or the settled combined
+ *    value (`CombineLatestCell`), with `MintedTags` hygiene preserved — no
+ *    tombstone for a tag never advertised;
+ *  - **ack accounting** (`[KE2-08]`): a gated wave whose net effect is empty
+ *    delivers exactly one `Progress(source, counter)` to a `linkTo`-attached
+ *    [AckProbe] and no delta, and a wave with a delta delivers no `Progress`
+ *    (absorb-acks fan over real links only, so a `subscribe`d observer never
+ *    sees one);
  *  - **ungated control**: the same seed range flickers / emits-then-retracts, so
  *    the harness demonstrably has teeth;
  *  - **liveness**: nothing stays buffered at `runToIdle`, including a wave one
@@ -131,6 +143,27 @@ class FrontierGatedEmissionTest {
 
     private data class Seen<D>(val timestamp: Timestamp, val delta: D)
 
+    /**
+     * The `[KE2-08]` ack probe (0favn-D3): attached by `outlet.linkTo(probe.inlet)`
+     * — **not** `subscribe` — because [absorbAck] fans over the outlet's real
+     * links only. It records both planes: data deltas (with their wave
+     * timestamp) and metadata-plane [Progress] absorb-acks, installed exactly as
+     * [WaveGate.track] installs its own handler.
+     */
+    private class AckProbe(
+        clazz: Class<Propagate<SetDelta<String>>>,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet(clazz))
+        val deltas = mutableListOf<Seen<SetDelta<String>>>()
+        val acks = mutableListOf<Progress>()
+
+        init {
+            inlet.onEach { deltas += Seen(CurrentContext.get()!!.timestamp, it) }
+            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message -> acks += message as Progress }
+        }
+    }
+
     // ------------------------------------------------- SemiJoinCell diamond
 
     /**
@@ -159,7 +192,12 @@ class FrontierGatedEmissionTest {
         return SetDelta(adds = adds)
     }
 
-    private fun runSemiJoinDiamond(seed: Long, waves: Int, gated: Boolean): List<Seen<SetDelta<String>>> {
+    private fun runSemiJoinDiamond(
+        seed: Long,
+        waves: Int,
+        gated: Boolean,
+        probe: AckProbe? = null,
+    ): List<Seen<SetDelta<String>>> {
         val controller = SimulationController(seed)
         val hostL = ManagedHost(scheduler = controller.scheduler())
         val hostR = ManagedHost(scheduler = controller.scheduler())
@@ -191,6 +229,12 @@ class FrontierGatedEmissionTest {
         @Suppress("UNCHECKED_CAST")
         rightArm.outlet.linkTo(join.right as LinkFrom<Propagate<SetDelta<String>>>)
         join.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+        if (probe != null) {
+            hostL.managementInlet.call.spawn(probe)
+
+            @Suppress("UNCHECKED_CAST")
+            join.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        }
         controller.runToIdle()
 
         val rnd = Random(seed)
@@ -268,6 +312,23 @@ class FrontierGatedEmissionTest {
         // if this fails the harness is too weak to detect the flicker — tune
         // interleaving. Measured 2026-07-31: 48 of these 50 seeds flicker.
         (flickered > 0).shouldBeTrue()
+    }
+
+    @Test
+    fun `calibration - a linkTo-attached AckProbe sees the gated SemiJoinCell diamond's one net-neutral wave as exactly one Progress`() {
+        // 0favn-D3 was reasoned, not run: this is the run. Wave 1 is the rig's
+        // documented net-neutral wave (Lw1 is matched on arrival), so the gated
+        // cell absorb-acks it once; every other wave emits and must not ack.
+        for (seed in 0L until 20L) {
+            val probe = AckProbe(setApi)
+            val seen = runSemiJoinDiamond(seed, waves = 20, gated = true, probe = probe)
+            val source = seen.first().timestamp.sourceId
+            withClue("seed $seed") {
+                probe.acks shouldBe listOf(Progress(source, 1L))
+                // the probe is a linked consumer too: it sees the same deltas as the observer
+                probe.deltas shouldBe seen
+            }
+        }
     }
 
     // -------------------------------------------- CombineLatestCell diamond
@@ -743,6 +804,344 @@ class FrontierGatedEmissionTest {
         withClue("wave 3 is now the one held: the right arm never carries it") {
             rig.combine.bufferedWaves shouldBe 1
         }
+    }
+
+    // ------------------------ JoinSetCell / IntersectSetCell (KE2 §5.2, 0favn)
+
+    /** The two set cells this section gates, behind one shape so the rigs are shared. */
+    private class SetCellUnderTest(
+        val cell: Cell,
+        val left: FanInlet<Propagate<SetDelta<String>>>,
+        val right: FanInlet<Propagate<SetDelta<String>>>,
+        val outlet: FanOutlet<Propagate<SetDelta<String>>>,
+        val bufferedWaves: () -> Int,
+    )
+
+    /** `JoinSetCell` on keys `w<n>`: `Lw<n>` joins `Rw<n>` as `"Lw<n>+Rw<n>"`. */
+    private fun joinSetUnderTest(gated: Boolean): SetCellUnderTest {
+        val cell = JoinSetCell<String, String, String, String>(
+            leftKey = { it.removePrefix("L") },
+            rightKey = { it.removePrefix("R") },
+            emitOnFrontier = gated,
+        ) { a, b -> "$a+$b" }
+        return SetCellUnderTest(cell, cell.left, cell.right, cell.outlet) { cell.bufferedWaves }
+    }
+
+    private fun intersectUnderTest(gated: Boolean): SetCellUnderTest {
+        val cell = IntersectSetCell<String>(emitOnFrontier = gated)
+        return SetCellUnderTest(cell, cell.left, cell.right, cell.outlet) { cell.bufferedWaves }
+    }
+
+    /**
+     * The **pre-announce** right image (the feature design's rig): an even wave
+     * `n` adds `<prefix>w<n>` and pre-announces `<prefix>w<n+1>`, both under wave
+     * `n`'s tags; an odd wave `n` deletes `<prefix>w<n>` under the tag it was
+     * pre-announced with (`Timestamp(src, n-1)`). So each odd wave's left add of
+     * `w<n>` meets the right's retraction of its partner in the SAME wave — the
+     * opposing pair that makes an ungated join/intersection flicker — while the
+     * net effect is fully determined: an entry on every even wave, nothing on
+     * any odd one (wave 1's delete names a row never announced and is a no-op).
+     */
+    private fun preAnnounceImage(prefix: String): (SetDelta<String>) -> SetDelta<String> = { delta ->
+        val adds = LinkedHashMap<String, Set<Timestamp>>()
+        val dels = LinkedHashMap<String, Set<Timestamp>>()
+        delta.adds.forEach { (element, tags) ->
+            val n = element.removePrefix("w").toInt()
+            if (n % 2 == 0) {
+                adds["${prefix}w$n"] = tags
+                adds["${prefix}w${n + 1}"] = tags
+            } else {
+                dels["${prefix}w$n"] = tags.map { Timestamp(it.sourceId, it.counter - 1) }.toSet()
+            }
+        }
+        SetDelta(adds, dels)
+    }
+
+    private class SetDiamondRun(val seen: List<Seen<SetDelta<String>>>, val probe: AckProbe)
+
+    /** [runSemiJoinDiamond]'s two-host seeded diamond, over any [SetCellUnderTest], with an [AckProbe] linked beside the observer. */
+    private fun runSetDiamond(
+        seed: Long,
+        waves: Int,
+        cell: SetCellUnderTest,
+        leftImage: (SetDelta<String>) -> SetDelta<String>,
+        rightImage: (SetDelta<String>) -> SetDelta<String>,
+    ): SetDiamondRun {
+        val controller = SimulationController(seed)
+        val hostL = ManagedHost(scheduler = controller.scheduler())
+        val hostR = ManagedHost(scheduler = controller.scheduler())
+
+        val source = SetSource()
+        val leftArm = SetArm(setApi) { d -> leftImage(d) }
+        val rightArm = SetArm(setApi) { d -> rightImage(d) }
+        val seen = mutableListOf<Seen<SetDelta<String>>>()
+        val observer = SetObserver(setApi, seen)
+        val probe = AckProbe(setApi)
+
+        listOf(source, leftArm, cell.cell, observer, probe).forEach { hostL.managementInlet.call.spawn(it) }
+        hostR.managementInlet.call.spawn(rightArm)
+
+        source.outlet.subscribe(Use.fixed(hostL.lookup<SetArmProxy>(leftArm.ref)!!.inlet.call, PortRef.generate()))
+        source.outlet.subscribe(Use.fixed(hostR.lookup<SetArmProxy>(rightArm.ref)!!.inlet.call, PortRef.generate()))
+
+        @Suppress("UNCHECKED_CAST")
+        leftArm.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<String>>>)
+
+        @Suppress("UNCHECKED_CAST")
+        rightArm.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<String>>>)
+        cell.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+
+        @Suppress("UNCHECKED_CAST")
+        cell.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        controller.runToIdle()
+
+        val rnd = Random(seed)
+        val tagSource = UUID.randomUUID()
+        for (n in 1..waves) {
+            source.send(SetDelta(adds = mapOf("w$n" to setOf(Timestamp(tagSource, n.toLong())))))
+            repeat(rnd.nextInt(4)) { controller.step() } // partial, seed-randomized draining
+        }
+        controller.runToIdle()
+
+        cell.bufferedWaves() shouldBe 0 // liveness: no wave left buffered at idle
+        return SetDiamondRun(seen, probe)
+    }
+
+    /**
+     * `[KE2-07]` + `[KE2-08]` for one gated set cell over seeds 0..199 × 20
+     * waves: one delta per wave at most, the exact even/odd net effect
+     * ([expectedAdd] on even waves, nothing on odd ones), no element both added
+     * and deleted in one delta, `MintedTags` hygiene, and per wave exactly one of
+     * {one delta on the observer, one `Progress(src, n)` on the probe}.
+     */
+    private fun assertGatedNetEffect(
+        build: (Boolean) -> SetCellUnderTest,
+        leftImage: (SetDelta<String>) -> SetDelta<String>,
+        rightImage: (SetDelta<String>) -> SetDelta<String>,
+        expectedAdd: (Int) -> String,
+    ) {
+        val waves = 20
+        for (seed in 0L until 200L) {
+            val run = runSetDiamond(seed, waves, build(true), leftImage, rightImage)
+            val seen = run.seen
+            withClue("seed $seed") {
+                seen.groupBy { it.timestamp }.forEach { (timestamp, group) ->
+                    group.size shouldBe 1 // coalesced to the wave's net effect
+                    val delta = group.single().delta
+                    withClue(timestamp) { (delta.adds.keys intersect delta.dels.keys).shouldBeEmpty() }
+                }
+
+                val byCounter = seen.associate { it.timestamp.counter to it.delta }
+                val source = seen.first().timestamp.sourceId
+                val acksByCounter = run.probe.acks.groupBy { it.thru }
+                run.probe.acks.all { it.sourceId == source }.shouldBeTrue()
+                for (n in 1..waves) {
+                    val delta = byCounter[n.toLong()]
+                    val acks = acksByCounter[n.toLong()].orEmpty()
+                    withClue("wave $n") {
+                        if (n % 2 == 0) {
+                            delta!!.adds.keys shouldBe setOf(expectedAdd(n))
+                            delta.dels.keys.shouldBeEmpty()
+                            acks.shouldBeEmpty() // a wave with a delta delivers no Progress
+                        } else {
+                            // the opposing pair cancelled inside the wave: no delta,
+                            // exactly one absorb-ack for it instead
+                            delta shouldBe null
+                            acks shouldBe listOf(Progress(source, n.toLong()))
+                        }
+                    }
+                }
+
+                // MintedTags hygiene: every retracted tag was advertised first
+                val advertised = mutableSetOf<Timestamp>()
+                seen.forEach { s ->
+                    s.delta.adds.values.forEach { advertised += it }
+                    s.delta.dels.values.flatten().forEach { tag -> (tag in advertised).shouldBeTrue() }
+                }
+            }
+        }
+    }
+
+    /** Counts, over seeds 0..49 ungated, the seeds on which some element enters and exits within one wave. */
+    private fun countUngatedFlickers(
+        build: (Boolean) -> SetCellUnderTest,
+        leftImage: (SetDelta<String>) -> SetDelta<String>,
+        rightImage: (SetDelta<String>) -> SetDelta<String>,
+    ): Int = (0L until 50L).count { seed ->
+        val run = runSetDiamond(seed, waves = 20, build(false), leftImage, rightImage)
+        run.seen.groupBy { it.timestamp }.any { (_, group) ->
+            val entered = mutableSetOf<String>()
+            var found = false
+            group.forEach { s ->
+                s.delta.dels.keys.forEach { if (it in entered) found = true }
+                entered += s.delta.adds.keys
+            }
+            found
+        }
+    }
+
+    private val joinLeftImage: (SetDelta<String>) -> SetDelta<String> =
+        { d -> SetDelta(adds = d.adds.mapKeys { (k, _) -> "L$k" }) }
+
+    private val identityImage: (SetDelta<String>) -> SetDelta<String> = { d -> SetDelta(adds = d.adds) }
+
+    @Test
+    fun `gated JoinSetCell emits one net delta per wave and never flickers, over 200 seeds`() {
+        assertGatedNetEffect(::joinSetUnderTest, joinLeftImage, preAnnounceImage("R")) { n -> "Lw$n+Rw$n" }
+    }
+
+    @Test
+    fun `control - the ungated JoinSetCell flickers within a wave on at least one seed`() {
+        val flickered = countUngatedFlickers(::joinSetUnderTest, joinLeftImage, preAnnounceImage("R"))
+        // if this fails the harness is too weak to detect the flicker — tune
+        // interleaving. Measured 2026-09-26: 36 of these 50 seeds flicker.
+        (flickered > 0).shouldBeTrue()
+    }
+
+    @Test
+    fun `gated IntersectSetCell emits one net delta per wave and never flickers, over 200 seeds`() {
+        assertGatedNetEffect(::intersectUnderTest, identityImage, preAnnounceImage("")) { n -> "w$n" }
+    }
+
+    @Test
+    fun `control - the ungated IntersectSetCell flickers within a wave on at least one seed`() {
+        val flickered = countUngatedFlickers(::intersectUnderTest, identityImage, preAnnounceImage(""))
+        // measured 2026-09-26: 36 of these 50 seeds flicker ungated
+        (flickered > 0).shouldBeTrue()
+    }
+
+    /**
+     * One real arm and one [FilterCell] `{ false }` arm that absorb-acks every
+     * wave (CP-A3), gated; wave 1 runs, then the absorbing arm's edge is
+     * unlinked (`EdgeClose` shrinks the completeness condition), then wave 2.
+     * With an empty side neither cell can emit, so each wave's arrival is
+     * witnessed by the probe's `Progress` — the [KE2-08] net-empty case.
+     */
+    private fun assertSettlesAfterAbsorbAndEdgeClose(build: (Boolean) -> SetCellUnderTest, leftImage: (SetDelta<String>) -> SetDelta<String>) {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val source = SetSource()
+        val leftArm = SetArm(setApi) { d -> leftImage(d) }
+        val rightArm = FilterCell<String> { false } // absorbs every wave and absorb-acks it — never a delta on this edge
+        val cell = build(true)
+        val seen = mutableListOf<Seen<SetDelta<String>>>()
+        val observer = SetObserver(setApi, seen)
+        val probe = AckProbe(setApi)
+        listOf(source, leftArm, rightArm, cell.cell, observer, probe).forEach { host.managementInlet.call.spawn(it) }
+
+        @Suppress("UNCHECKED_CAST")
+        source.outlet.linkTo(leftArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+
+        @Suppress("UNCHECKED_CAST")
+        source.outlet.linkTo(rightArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+
+        @Suppress("UNCHECKED_CAST")
+        leftArm.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<String>>>)
+
+        @Suppress("UNCHECKED_CAST")
+        rightArm.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<String>>>)
+        cell.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+
+        @Suppress("UNCHECKED_CAST")
+        cell.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        controller.runToIdle()
+
+        val tagSource = UUID.randomUUID()
+        source.send(SetDelta(adds = mapOf("w1" to setOf(Timestamp(tagSource, 1L)))))
+        controller.runToIdle()
+
+        withClue("the right arm's absorb-ack settled wave 1's right edge") {
+            cell.bufferedWaves() shouldBe 0
+            seen.shouldBeEmpty()
+            probe.acks.map { it.thru } shouldBe listOf(1L)
+        }
+
+        cell.right.linking.links.single().unlink()
+        controller.runToIdle()
+        source.send(SetDelta(adds = mapOf("w2" to setOf(Timestamp(tagSource, 2L)))))
+        controller.runToIdle()
+
+        withClue("after EdgeClose only the left edge is expected, so wave 2 is released") {
+            cell.bufferedWaves() shouldBe 0
+            seen.shouldBeEmpty()
+            probe.acks.map { it.thru } shouldBe listOf(1L, 2L)
+        }
+    }
+
+    @Test
+    fun `JoinSetCell settles a wave one arm absorbs entirely, and after that arm's edge closes`() {
+        assertSettlesAfterAbsorbAndEdgeClose(::joinSetUnderTest, joinLeftImage)
+    }
+
+    @Test
+    fun `IntersectSetCell settles a wave one arm absorbs entirely, and after that arm's edge closes`() {
+        assertSettlesAfterAbsorbAndEdgeClose(::intersectUnderTest, identityImage)
+    }
+
+    @Test
+    fun `gated JoinSetCell and IntersectSetCell retire a wave every arm absorbs with exactly one Progress`() {
+        for (build in listOf(::joinSetUnderTest, ::intersectUnderTest)) {
+            val controller = SimulationController()
+            val host = ManagedHost(scheduler = controller.scheduler())
+            val source = SetSource()
+            val leftArm = FilterCell<String> { false }
+            val rightArm = FilterCell<String> { false }
+            val cell = build(true)
+            val seen = mutableListOf<Seen<SetDelta<String>>>()
+            val observer = SetObserver(setApi, seen)
+            val probe = AckProbe(setApi)
+            listOf(source, leftArm, rightArm, cell.cell, observer, probe).forEach { host.managementInlet.call.spawn(it) }
+
+            @Suppress("UNCHECKED_CAST")
+            source.outlet.linkTo(leftArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+
+            @Suppress("UNCHECKED_CAST")
+            source.outlet.linkTo(rightArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+
+            @Suppress("UNCHECKED_CAST")
+            leftArm.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<String>>>)
+
+            @Suppress("UNCHECKED_CAST")
+            rightArm.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<String>>>)
+            cell.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+
+            @Suppress("UNCHECKED_CAST")
+            cell.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+            controller.runToIdle()
+
+            source.send(SetDelta(adds = mapOf("w1" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+            controller.runToIdle()
+
+            withClue(cell.cell::class.simpleName) {
+                cell.bufferedWaves() shouldBe 0
+                seen.shouldBeEmpty()
+                probe.deltas.shouldBeEmpty()
+                probe.acks.map { it.thru } shouldBe listOf(1L)
+            }
+        }
+    }
+
+    @Test
+    fun `the gated family cells report frontierGated iff constructed with emitOnFrontier`() {
+        for (gated in listOf(true, false)) {
+            val cells: List<Any> = listOf(
+                SemiJoinCell<String, String, String>(leftKey = { it }, rightKey = { it }, emitOnFrontier = gated),
+                CombineLatestCell<String, Int, Int, Int>(emitOnFrontier = gated) { _, v, _ -> v },
+                joinSetUnderTest(gated).cell,
+                intersectUnderTest(gated).cell,
+            )
+            cells.forEach { cell ->
+                withClue("${cell::class.simpleName} gated=$gated") {
+                    (cell is FrontierGateable).shouldBeTrue()
+                    (cell as FrontierGateable).frontierGated shouldBe gated
+                }
+            }
+        }
+        // the defaults stay ungated ([KE2-10])
+        IntersectSetCell<String>().frontierGated.shouldBeFalse()
+        JoinSetCell<String, String, String, String>(leftKey = { it }, rightKey = { it }) { a, _ -> a }
+            .frontierGated.shouldBeFalse()
     }
 
     private companion object {
