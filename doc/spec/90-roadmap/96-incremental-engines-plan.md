@@ -440,9 +440,9 @@ per-peer recompute correct with zero new machinery; late-below-waterline arrival
 dropped at the guarded inlet and side-channeled on a `late` outlet. Honest equivalence:
 governed by `[24-WL-10]` (20/24 §Lateness and waterlines) — see that clause for the exact
 restriction and domain rather than restating it here.
-Restriction: destructive eviction of `Replicable` state is forbidden until E3.7 exists (a
-replica evicting locally while a peer still gossips below the floor re-admits ghosts);
-single-instance cells (`GroupByCell`, the join family) evict freely.
+Restriction: governed by `[24-WL-18]` (20/24 §Lateness and waterlines) — destructive
+eviction of `Replicable` state is single-instance-state only; single-instance cells
+(`GroupByCell`, the join family) evict freely.
 
 ### E4.1 — Spec: lateness, waterline, and destructive eviction (gap 6, G-42 partial) — P2 · High · `spec`
 **Spec**: 20/24 new §Lateness and waterlines (replacing the deferred-trigger bullet in
@@ -461,7 +461,7 @@ ordinary retraction path** (dels flow, groups die, `MapDelta` removals emit), pr
 state = integrated output. (4) *Late arrivals below the waterline are dropped* at the
 guarded inlet and re-emitted verbatim on a `late` side-channel outlet; record the refuted
 Feldera claim (research 01 §5) and the conditional equivalence statement.
-(5) *Replication restriction*: no destructive eviction of `Replicable` state until E3.7.
+(5) *Replication restriction*: governed by `[24-WL-18]` — single-instance state only.
 **Implement**: spec text only; cite research 01 §5, 04 §1-2, 05 gap 6.
 **Unblocks** E4.2-E4.6.
 
@@ -488,7 +488,8 @@ destructively drops live tags of matching elements, returning the dels-delta.
 key lies entirely below the floor via the ordinary retraction fold — groups die,
 `MapDelta` removals emit under the waterline delta's wave. Main-inlet guard: an add with
 `timeFn(e) < floor` is dropped from the fold and forwarded **verbatim** (original tags)
-on a new `late` outlet; dels below floor are no-ops. Test: seeded windowed pipeline
+on a new `late` outlet; a del folds iff its target tag is live, whatever its event
+time (`[24-WL-08]`). Test: seeded windowed pipeline
 (writers → union → tumbling group-by) with shuffled event times; invariants: post-idle
 state satisfies `[24-WL-10]`'s equivalence on every seed; state bounded by the
 lateness horizon; `late` carries exactly the dropped elements; control:
