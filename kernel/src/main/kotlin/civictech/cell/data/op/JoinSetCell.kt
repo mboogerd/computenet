@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
 import civictech.cell.BoundedStateful
+import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -37,17 +40,49 @@ interface JoinSetApi<A, B, C> {
  * (`Pair` is not WireCodec-registered). This is the relational join over
  * convergent set streams; `JoinCell` remains the LWW dictionary join over
  * single-writer map streams.
+ *
+ * ### `emitOnFrontier` — the opt-in flicker gate (KE2 §5.2, `computenet-0favn`)
+ *
+ * The equi-join is non-monotone in the same way [SemiJoinCell] is: a pair
+ * enters when both rows are live and exits when either leaves, so in a
+ * shared-source diamond one arm's add and the other arm's opposing del of the
+ * same wave can make a pair enter and exit on two separate invocations. With
+ * `emitOnFrontier = true` the cell buffers each wave's input deltas across both
+ * inlets ([WaveGate]), folds them into state at wave completeness, and
+ * reconciles every touched pair **once** — the `[24-OP-SEMIJOIN-04]` shape,
+ * extended to this cell. A transient pair is never minted, so `MintedTags`
+ * hygiene holds (no tombstone for a tag never advertised), and a wave whose net
+ * effect is empty absorb-acks. Read [SemiJoinCell]'s `emitOnFrontier` section
+ * and [WaveGate]'s phantom-expected-edge and "One root is NOT sufficient"
+ * caveats before enabling it; the default stays ungated and byte-identical.
  */
 class JoinSetCell<A, B, K, C>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val leftKey: (A) -> K,
     private val rightKey: (B) -> K,
+    /**
+     * Opt-in frontier-gated emission (`[24-OP-SEMIJOIN-04]`'s shape, KE2 §5.2) —
+     * see the class KDoc. `false` (the default) is the shipped, ungated
+     * behavior, unchanged. It sits *before* [combine] so [combine] stays the
+     * last parameter and trailing-lambda construction keeps compiling.
+     */
+    emitOnFrontier: Boolean = false,
     private val combine: (A, B) -> C,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-) : JoinSetCellBase<A, B, C>(ref), Stateful, BoundedStateful {
+) : JoinSetCellBase<A, B, C>(ref), Stateful, BoundedStateful, FrontierGateable {
     private val join = KeyedBinarySetJoin<A, B, K>()
     private val ledger: JoinLedger<Pair<A, B>> = MintedLedger(ref, "join")
+
+    override val frontierGated: Boolean = emitOnFrontier
+
+    /** The `emitOnFrontier` fold, or null when the cell runs the ungated default. */
+    private val gate: WaveGate<Pair<A, B>>? =
+        if (!emitOnFrontier) null
+        else WaveGate(left, right) { timestamp, context, folds -> flush(timestamp, context, folds) }
+
+    /** Waves currently held by the gate; always 0 when ungated. Diagnostic only. */
+    val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
 
     init {
         // late-join catch-up (G-22): advertised pairs folded under combine
@@ -64,6 +99,12 @@ class JoinSetCell<A, B, K, C>(
     }
 
     override fun onLeft(value: SetDelta<A>) {
+        if (gate?.offerLeft(GatedFold { applyLeft(value) }) == true) return
+        // The ungated path below is the shipped handler verbatim — including its
+        // per-row interleaving of index-then-reconcile — so `emitOnFrontier =
+        // false` stays byte-identical. A gated cell also lands here for a delta
+        // the gate admits to no completeness set (catch-up, straggler, unmatched
+        // edge): applying and reconciling it immediately is exactly right.
         val effective = join.leftState.apply(value)
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
@@ -81,6 +122,8 @@ class JoinSetCell<A, B, K, C>(
     }
 
     override fun onRight(value: SetDelta<B>) {
+        if (gate?.offerRight(GatedFold { applyRight(value) }) == true) return
+        // ungated (or gate-exempt) — the shipped handler verbatim; see [onLeft].
         val effective = join.rightState.apply(value)
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
@@ -95,6 +138,79 @@ class JoinSetCell<A, B, K, C>(
             propagate = { outlet.call.propagate(it) },
             absorbAck = { outlet.absorbAck() }, // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
         )
+    }
+
+    // ---- the emitOnFrontier path: apply now, reconcile at completeness ----
+
+    /**
+     * Fold a left delta into membership and the key index **without**
+     * reconciling; returns the pairs the completed wave must reconcile — each
+     * touched row against every right row currently indexed under its key.
+     */
+    private fun applyLeft(value: SetDelta<A>): Set<Pair<A, B>> {
+        val effective = join.leftState.apply(value)
+        val pairs = LinkedHashSet<Pair<A, B>>()
+        (effective.adds.keys + effective.dels.keys).forEach { a ->
+            val k = leftKey(a)
+            join.index(join.leftIndex, k, a, live = a in join.leftState)
+            join.rightIndex[k]?.forEach { b -> pairs += a to b }
+        }
+        return pairs
+    }
+
+    /**
+     * Fold a right delta into membership and the key index **without**
+     * reconciling; the mirror image of [applyLeft].
+     *
+     * Either fold reads the opposite index as it stands *now*, so the other
+     * application order would collect a different set — but only pairs whose
+     * other row that other fold itself touched, which that fold collects. Both
+     * rows entering in one wave: the second fold sees the first's index entry.
+     * One row entering while its partner leaves: the pair was never in the
+     * ledger and is not wanted, so not collecting it is harmless (the
+     * [SemiJoinCell.applyRight] argument, [GatedFold]).
+     */
+    private fun applyRight(value: SetDelta<B>): Set<Pair<A, B>> {
+        val effective = join.rightState.apply(value)
+        val pairs = LinkedHashSet<Pair<A, B>>()
+        (effective.adds.keys + effective.dels.keys).forEach { b ->
+            val k = rightKey(b)
+            join.index(join.rightIndex, k, b, live = b in join.rightState)
+            join.leftIndex[k]?.forEach { a -> pairs += a to b }
+        }
+        return pairs
+    }
+
+    /**
+     * One completed wave (gated only): apply both sides' buffered deltas, then
+     * reconcile the union of their touched pairs once, against settled
+     * membership — so a transient enter-then-exit cancels before a tag is
+     * minted. Emitted inside the buffered context (or, for a wave known only
+     * from acks, one minted from the wave position), as [SemiJoinCell]'s flush.
+     */
+    private fun flush(timestamp: Timestamp, context: MessageContext?, folds: List<GatedFold<Pair<A, B>>>) {
+        val pairs = LinkedHashSet<Pair<A, B>>()
+        folds.forEach { pairs += it.applyAndTouch() }
+        val adds = mutableMapOf<C, MutableSet<Timestamp>>()
+        val dels = mutableMapOf<C, MutableSet<Timestamp>>()
+        pairs.forEach { (a, b) -> reconcile(a, b, adds, dels) }
+        CurrentContext.with(context ?: MessageContext(timestamp, outlet.ref)) {
+            join.emitOrAbsorb(
+                adds,
+                dels,
+                propagate = { outlet.call.propagate(it) },
+                absorbAck = { outlet.absorbAck() },
+            )
+        }
+    }
+
+    /**
+     * RESTART re-enters by catch-up, not restore (93 I-18): the gate's transient
+     * wave buffer is dropped — its deltas were never applied to either side's
+     * membership and never observed downstream.
+     */
+    override fun onDeactivate(ctx: CellContext) {
+        gate?.clear()
     }
 
     private fun reconcile(

@@ -89,9 +89,12 @@ class SemiJoinCell<A, B, K>(
     emitOnFrontier: Boolean = false,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-) : SemiJoinCellBase<A, B>(ref), Stateful, BoundedStateful {
+) : SemiJoinCellBase<A, B>(ref), Stateful, BoundedStateful, FrontierGateable {
     private val join = KeyedBinarySetJoin<A, B, K>()
     private val ledger: JoinLedger<A> = MintedLedger(ref, "semijoin")
+
+    /** [FrontierGateable]: `true` iff constructed with `emitOnFrontier = true`. */
+    override val frontierGated: Boolean = emitOnFrontier
 
     /** The `emitOnFrontier` fold, or null when the cell runs the ungated default. */
     private val gate: WaveGate<A>? =

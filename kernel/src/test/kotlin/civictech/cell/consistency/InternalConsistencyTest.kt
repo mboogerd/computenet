@@ -153,8 +153,10 @@ import java.util.UUID
  * `CoalescingCombineCell` D-COMBINE lesson (one delta per *arm* rather than per
  * *wave*) in a binary operator, sharpened by the ack.
  *
- * It is not a regression: E2.4 scoped `emitOnFrontier` to `SemiJoinCell` and
- * `CombineLatestCell`, and `JoinSetCell` never had it. But it is a real
+ * It is not a regression: the four remaining family cells, `JoinSetCell`
+ * included, gained the opt-in `emitOnFrontier` gate in KE2 §5.2
+ * (`computenet-0favn`), and the control below keeps the ungated `JoinSetCell`
+ * deliberately, because ungated is still the default. But it is a real
  * composition limit, so this suite states it executably rather than in prose —
  * `control - the ungated inner join`, below, swaps the gated semijoin for a
  * `JoinSetCell` and measures it: **50 of 50** seeds publish composites that

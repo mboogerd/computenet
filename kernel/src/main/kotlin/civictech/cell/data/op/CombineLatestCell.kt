@@ -97,10 +97,13 @@ class CombineLatestCell<K, V, W, R>(
     private val combine: (K, V?, W?) -> R?,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-) : CombineLatestCellBase<K, V, W, R>(ref), Stateful, BoundedStateful {
+) : CombineLatestCellBase<K, V, W, R>(ref), Stateful, BoundedStateful, FrontierGateable {
     private val leftMap = mutableMapOf<K, V>()
     private val rightMap = mutableMapOf<K, W>()
     private val publisher = MapDiffPublisher<K, R>() // last-published R per key (the combined map)
+
+    /** [FrontierGateable]: `true` iff constructed with `emitOnFrontier = true`. */
+    override val frontierGated: Boolean = emitOnFrontier
 
     /** The `emitOnFrontier` fold, or null when the cell runs the ungated default. */
     private val gate: WaveGate<K>? =
