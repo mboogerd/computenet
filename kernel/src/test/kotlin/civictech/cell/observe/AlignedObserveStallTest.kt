@@ -359,8 +359,9 @@ class AlignedObserveStallTest {
      * arm's link, more waves are driven, `Resume` lands, and the drive finishes.
      *
      * **Which arm stalls.** Even seeds stall `items` (the queued arm), odd seeds
-     * `filtered` (the fused arm, as the breakdown prescribed). Only the `items`
-     * stall can actually release a wave without its arm: the fused `filtered`
+     * `filtered` (the fused arm, as the breakdown prescribed), 50 of each, so
+     * the degrading `items` half alone meets `[KE2-14]`'s 50-schedule bar.
+     * Only the `items` stall can actually release a wave without its arm: the fused `filtered`
      * arm has always settled a wave (real delta or synchronous absorb-ack)
      * before the queued `items` delta arrives, so a `filtered` stall shrinks the
      * frontier without ever dropping anything — ordering is still exercised,
@@ -374,10 +375,10 @@ class AlignedObserveStallTest {
      * held to it, and to `items` being a prefix `1..k` of the writes.
      */
     @Test
-    fun `KE2-14 - stalled then resumed waves publish in per-source order, none lost, over 60 seeds`() {
+    fun `KE2-14 - stalled then resumed waves publish in per-source order, none lost, over 100 seeds`() {
         val waves = 30
         var degraded = 0
-        for (seed in 0L until 60L) {
+        for (seed in 0L until 100L) {
             val stalled = if (seed % 2 == 0L) "items" else "filtered"
             val graph = Graph(seed)
             val sink = graph.host.observeAligned(mode = WaveMode.DEGRADE) {
