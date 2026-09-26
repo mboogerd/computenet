@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
 import civictech.cell.BoundedStateful
+import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -80,24 +83,68 @@ interface IntersectSetApi<E> {
  * through [KeyedBinarySetJoin]'s per-side key index, which this operator has
  * no use for. It shares both [JoinLedger] and, since computenet-vvre, its
  * [MintedLedger] policy.
+ *
+ * ### `emitOnFrontier` — the opt-in flicker gate (KE2 §5.2, `computenet-0favn`)
+ *
+ * Intersection membership flips ON when the *other* side adds and OFF when
+ * either side deletes, so in a shared-source diamond one arm's add and the
+ * other arm's opposing del of the same element within one wave make it enter
+ * and exit on two separate invocations. With `emitOnFrontier = true` the cell
+ * buffers each wave's input deltas across both inlets ([WaveGate]), folds them
+ * into both [TagState]s at wave completeness, and reconciles every touched
+ * element **once** against both settled sides — the `[24-OP-SEMIJOIN-04]`
+ * shape, extended to this cell. A transient entry is never minted, so no tag
+ * that never reached the wire is tombstoned, and a wave whose net effect is
+ * empty absorb-acks. Read [SemiJoinCell]'s `emitOnFrontier` section and
+ * [WaveGate]'s phantom-expected-edge and "One root is NOT sufficient" caveats
+ * before enabling it; the default stays ungated and byte-identical.
  */
-class IntersectSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
+class IntersectSetCell<E>(
+    ref: CellRef = CellRef(UUID.randomUUID()),
+    /**
+     * Opt-in frontier-gated emission (`[24-OP-SEMIJOIN-04]`'s shape, KE2 §5.2) —
+     * see the class KDoc. `false` (the default) is the shipped, ungated
+     * behavior, unchanged.
+     */
+    emitOnFrontier: Boolean = false,
+) :
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-    IntersectSetCellBase<E>(ref), Stateful, BoundedStateful {
+    IntersectSetCellBase<E>(ref), Stateful, BoundedStateful, FrontierGateable {
     private val leftState = TagState<E>()
     private val rightState = TagState<E>()
     // minted, not advertised — see the tag-policy section on this class's KDoc
     private val ledger: JoinLedger<E> = MintedLedger(ref, "intersect")
+
+    override val frontierGated: Boolean = emitOnFrontier
+
+    /** The `emitOnFrontier` fold, or null when the cell runs the ungated default. */
+    private val gate: WaveGate<E>? =
+        if (!emitOnFrontier) null
+        else WaveGate(left, right) { timestamp, context, folds -> flush(timestamp, context, folds) }
+
+    /** Waves currently held by the gate; always 0 when ungated. Diagnostic only. */
+    val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
 
     init {
         // late-join catch-up (G-22): the advertised intersection as a delta-from-empty
         outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
     }
 
-    override fun onLeft(value: SetDelta<E>) = fold(leftState, value)
+    override fun onLeft(value: SetDelta<E>) {
+        if (gate?.offerLeft(GatedFold { applySide(leftState, value) }) == true) return
+        // The ungated path is the shipped handler verbatim, so `emitOnFrontier =
+        // false` stays byte-identical. A gated cell also lands here for a delta
+        // the gate admits to no completeness set (catch-up, straggler, unmatched
+        // edge): applying and reconciling it immediately is exactly right.
+        fold(leftState, value)
+    }
 
-    override fun onRight(value: SetDelta<E>) = fold(rightState, value)
+    override fun onRight(value: SetDelta<E>) {
+        if (gate?.offerRight(GatedFold { applySide(rightState, value) }) == true) return
+        // ungated (or gate-exempt) — the shipped handler verbatim; see [onLeft].
+        fold(rightState, value)
+    }
 
     private fun fold(side: TagState<E>, value: SetDelta<E>) {
         val effective = side.apply(value)
@@ -125,6 +172,56 @@ class IntersectSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             emit = { outlet.call.propagate(SetDelta(adds, dels)) },
             absorbAck = { outlet.absorbAck() },
         )
+    }
+
+    // ---- the emitOnFrontier path: apply now, reconcile at completeness ----
+
+    /**
+     * Fold one side's delta into its [TagState] **without** reconciling; returns
+     * the elements the completed wave must reconcile. Identity matching means
+     * the touched set is just the effective delta's elements, whichever order
+     * the wave's folds apply in.
+     */
+    private fun applySide(side: TagState<E>, value: SetDelta<E>): Set<E> {
+        val effective = side.apply(value)
+        return effective.adds.keys + effective.dels.keys
+    }
+
+    /**
+     * One completed wave (gated only): apply both sides' buffered deltas, then
+     * reconcile each touched element once against both settled sides — so a
+     * transient enter-then-exit cancels before a tag is minted. Emitted inside
+     * the buffered context (or, for a wave known only from acks, one minted
+     * from the wave position), as [SemiJoinCell]'s flush.
+     */
+    private fun flush(timestamp: Timestamp, context: MessageContext?, folds: List<GatedFold<E>>) {
+        val touched = LinkedHashSet<E>()
+        folds.forEach { touched += it.applyAndTouch() }
+        val adds = mutableMapOf<E, Set<Timestamp>>()
+        val dels = mutableMapOf<E, Set<Timestamp>>()
+        touched.forEach { element ->
+            if (element in leftState && element in rightState) {
+                ledger.enter(element) { emptySet() }?.let { adds[element] = it }
+            } else {
+                ledger.exit(element)?.let { dels[element] = it }
+            }
+        }
+        CurrentContext.with(context ?: MessageContext(timestamp, outlet.ref)) {
+            emitOrAbsorb(
+                adds.isEmpty() && dels.isEmpty(),
+                emit = { outlet.call.propagate(SetDelta(adds, dels)) },
+                absorbAck = { outlet.absorbAck() },
+            )
+        }
+    }
+
+    /**
+     * RESTART re-enters by catch-up, not restore (93 I-18): the gate's transient
+     * wave buffer is dropped — its deltas were never applied to either side's
+     * membership and never observed downstream.
+     */
+    override fun onDeactivate(ctx: CellContext) {
+        gate?.clear()
     }
 
     override fun snapshot(): Serializable =
