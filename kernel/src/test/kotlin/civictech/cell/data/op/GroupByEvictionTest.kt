@@ -528,6 +528,31 @@ class GroupByEvictionTest {
         owned.take() shouldBe 3L
     }
 
+    @Test
+    fun `B15 - a refused window leaves refusedWindows when its last member is retracted`() {
+        val owned = Owned(3L)
+        val timeOf: (Any) -> Long = { e -> if (e is Long) e else 3L }
+        val window = Windows.tumbling(10)
+        val cell = GroupByCell<Any, Long, Long, Long>(
+            keyFn = { e -> window(timeOf(e)) },
+            aggregator = Aggregators.count(),
+            lateness = Windows.Lateness(timeOf, 2),
+            keyTime = { k: Long -> k + 10 },
+        )
+        val out = collect(cell.outlet)
+        val ownedTag = setOf(tag(1))
+        cell.inlet.call.propagate(SetDelta(adds = mapOf<Any, Set<Timestamp>>(owned to ownedTag)))
+        cell.waterline.call.propagate(WaterlineDelta(10))
+        cell.refusedWindows().keys shouldBe setOf(0L)
+
+        // the window's only member is retracted by an ordinary del: the group dies, and so does the refusal
+        cell.inlet.call.propagate(SetDelta(dels = mapOf<Any, Set<Timestamp>>(owned to ownedTag)))
+        out.last() shouldBe MapDelta(emptyMap(), setOf(0L))
+        cell.refusedWindows() shouldBe emptyMap()
+        cell.refusedEvictions shouldBe 1L
+        owned.take() shouldBe 3L
+    }
+
     /** A minimal `Replicable` host with a `TagState` — the shape `[24-WL-18]` refuses at the seam. */
     private class ReplicaHost(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         Cell, Replicable<SetDelta<String>> {
