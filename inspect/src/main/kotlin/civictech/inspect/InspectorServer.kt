@@ -9,6 +9,7 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.beginSse
 import civictech.demo.shell.respond
 import civictech.demo.shell.sseFrame
+import civictech.inspect.edit.Catalogue
 import civictech.inspect.edit.WriteGate
 import civictech.inspect.edit.WritePlane
 import civictech.inspect.edit.respondRefusal
@@ -100,6 +101,12 @@ import java.util.concurrent.TimeUnit
  * - `GET /api/inspect/capabilities` — a [CapabilitiesDto] saying whether it did;
  * - `POST /api/inspect/apply/precheck` — a placeholder mutating route that
  *   exists to prove the gate, replaced by WKB2 F6.
+ *
+ * WKB2 F12 adds the named-factory catalogue a browser draft resolves against:
+ *
+ * - `GET /api/inspect/catalogue` — a [CatalogueDto] of every registered
+ *   [civictech.inspect.edit.CatalogueEntry], ungated (a read, like
+ *   [CapabilitiesDto]'s route).
  *
  * ### What it can and cannot see
  *
@@ -539,6 +546,16 @@ class InspectorServer internal constructor(
             }
             exchange.respond(200, inspectorJson.encodeToString(CapabilitiesDto.serializer(), capabilities()), JSON)
         }
+        // WKB2 F12 — the named-factory catalogue, ungated (a read). Neither a
+        // prefix nor a prefixee of any other route under BASE_PATH (`cell` is
+        // not a prefix of `catalogue`) — see [CATALOGUE_PATH].
+        shell.route(CATALOGUE_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            if (exchange.requestMethod != "GET") {
+                return@route exchange.respond(404, problem("expected GET /catalogue"), JSON)
+            }
+            exchange.respond(200, inspectorJson.encodeToString(CatalogueDto.serializer(), catalogueDto()), JSON)
+        }
         shell.route(APPLY_PATH) { exchange ->
             exchange.allowCrossOrigin()
             runCatching { serveApply(exchange) }
@@ -653,6 +670,29 @@ class InspectorServer internal constructor(
         WritePlane.Disabled -> CapabilitiesDto(writePlane = false)
         is WritePlane.Enabled -> CapabilitiesDto(writePlane = true, verbs = plane.verbs, identity = plane.identityLabel)
     }
+
+    /**
+     * `GET /catalogue`'s body (WKB2 F12, va0c4-D9): [Catalogue.entries] read
+     * live, at request time, and mapped exactly as [InspectorModel.nodeOf]
+     * maps a [civictech.nature.CellDescriptor] into a topology node's
+     * `color`/`manifests`/`ports` — every entry's descriptor is guaranteed
+     * present in [civictech.nature.ContractRegistry] by [Catalogue.register],
+     * so this never falls back to a null/empty descriptor the way a stale
+     * topology node can. Ungated: the write plane plays no part here.
+     */
+    private fun catalogueDto(): CatalogueDto = CatalogueDto(
+        entries = Catalogue.entries().map { entry ->
+            val descriptor = entry.descriptor()
+            CatalogueEntryDto(
+                id = entry.id,
+                fqn = descriptor.fqn,
+                color = descriptor.color.name,
+                manifests = descriptor.manifest.map { it.name }.sorted(),
+                ports = descriptor.ports.map { NodePort(it.name, it.direction.name, it.contractFqn) },
+                schema = entry.schema,
+            )
+        },
+    )
 
     /**
      * The `/apply/…` subtree — one route today, `POST .../precheck`, and a
@@ -1152,6 +1192,15 @@ class InspectorServer internal constructor(
         const val CAPABILITIES_PATH = "$BASE_PATH/capabilities"
 
         /**
+         * WKB2 F12 — the named-factory catalogue (va0c4-D9), a read like
+         * [CAPABILITIES_PATH]. Neither a prefix nor a prefixee of any other
+         * route under [BASE_PATH] (`cell` is not a prefix of `catalogue`), so
+         * it is exempt from the registration-order discipline [GRAPH_PATH]
+         * documents.
+         */
+        const val CATALOGUE_PATH = "$BASE_PATH/catalogue"
+
+        /**
          * WKB2 F5 — the write plane's mutating subtree, gated by [WriteGate];
          * today only the placeholder `POST $APPLY_PATH/precheck`. Neither a
          * prefix nor a prefixee of any existing route under [BASE_PATH]
@@ -1354,6 +1403,8 @@ private fun HttpExchange.noContent() {
  *   (`[WKB2-50]`): its own [WAKE_HEADER] gate is unchanged and narrower on
  *   purpose — a wake resumes what already exists, it builds nothing — and
  *   `observe` stays as described above. `GET CAPABILITIES_PATH` is a read.
+ * - `GET CATALOGUE_PATH` (WKB2 F12) is likewise a read: it passes through no
+ *   [WriteGate] and behaves identically whether the write plane is enabled.
  *
  * This stays one helper for all of them because the wildcard origin header
  * alone was never the problem on the wake route; the problem was treating "no

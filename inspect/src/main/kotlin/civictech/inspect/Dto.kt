@@ -1,5 +1,6 @@
 package civictech.inspect
 
+import civictech.inspect.edit.ParamSchema
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -941,4 +942,32 @@ data class CapabilitiesDto(
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     @OptIn(ExperimentalSerializationApi::class)
     val identity: String? = null,
+)
+
+/**
+ * `GET /api/inspect/catalogue` (WKB2 F12, va0c4-D9) — every registered
+ * [civictech.inspect.edit.CatalogueEntry] the process currently knows, sorted
+ * by id. Read live off [civictech.inspect.edit.Catalogue.entries] on every
+ * request — an entry registered after the server started appears on the next
+ * read — so an empty registry answers `{"entries":[]}`, never 404.
+ */
+@Serializable
+data class CatalogueDto(val entries: List<CatalogueEntryDto>)
+
+/**
+ * One catalogue entry's palette metadata, mapped from its live
+ * [civictech.nature.CellDescriptor] exactly as [InspectorModel.nodeOf] maps a
+ * topology node's ([color], [manifests], [ports]) — the two agree field for
+ * field on the same descriptor shape. [fqn] and [color]/[manifests]/[ports]
+ * are never cached on the entry itself; they are re-read from
+ * [civictech.nature.ContractRegistry] on every request (va0c4-D2).
+ */
+@Serializable
+data class CatalogueEntryDto(
+    val id: String,
+    val fqn: String,
+    val color: String? = null,
+    val manifests: List<String> = emptyList(),
+    val ports: List<NodePort> = emptyList(),
+    val schema: ParamSchema,
 )
