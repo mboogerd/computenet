@@ -30,10 +30,20 @@ data class Visible(override val wave: Timestamp) : Visibility
 data class VisibleVacuously(override val wave: Timestamp) : Visibility
 
 /**
- * The frontier reached the write only after [droppedEdges] were dropped from
- * the completeness condition (a DEGRADE-mode sink). The aligned sink is
- * WAIT-only today, so this variant is never produced with a non-empty set;
- * F4 (`computenet-4vmyx`) owns that case.
+ * The frontier reached the write only after [droppedEdges] were excluded from
+ * the wave's completeness condition — [AlignedCompositeCell] shrunk it, never
+ * dropped it silently. Produced when the wave that retired the write was
+ * released with a non-empty dropped set: a DEGRADE-mode suspension still in
+ * effect at release (including one still disclosed as "behind" because its
+ * edge has not yet caught its watermark up to the flushed high-water for its
+ * source, `[22-OBS-01]`), a terminal re-scope, or an edge closing while the
+ * wave was held. [droppedEdges] names every excluded edge — see
+ * [AlignedCompositeCell] and [AlignedComposite.droppedEdges] for how a wave's
+ * dropped set is assembled and disclosed.
+ *
+ * A handle for a wave published **before** the shrink is never retroactively
+ * degraded: it completed [Visible] or [VisibleVacuously] when its own
+ * (undropped) wave retired.
  */
 data class VisibleDegraded(override val wave: Timestamp, val droppedEdges: Set<DroppedEdge>) : Visibility
 

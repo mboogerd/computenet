@@ -121,6 +121,18 @@
 # imports civictech.cell.Owned/Leased), so this closes a cell <-> proxy 2-cycle
 # exactly as cell <-> link and cell <-> port already do, and G-63's single
 # non-leaf SCC is unchanged.
+#
+# computenet-4vmyx.1: observe -> consistency ADDED -- observe/AlignedObserve.kt
+# (the wave-aligned sink) now mirrors WaveFrontier's Suspension lane: WAIT /
+# DEGRADE on a recoverable stall, RE-SCOPE on a terminal one (spec 20/22
+# §Completeness over silent or stuck edges, KE2 §5.3). It takes its mode as
+# civictech.cell.consistency.GlitchFreeCell.WaveMode and reports a re-scope as
+# a civictech.cell.consistency.GlitchViolation -- reusing the frontier's own
+# vocabulary rather than minting a duplicate enum and exception in observe/,
+# which would let the two modes drift. The zero-edge alternative is exactly
+# that duplicate. No new cycle: nothing under civictech.cell.consistency
+# imports civictech.cell.observe (verified by grep), so the edge is one-way
+# and observe stays a sink package.
 cell -> link
 cell -> port
 cell -> proxy
@@ -181,6 +193,7 @@ nature -> consistency
 nature -> data
 nature -> partition
 observe -> cell
+observe -> consistency
 observe -> control
 observe -> data
 observe -> graph
