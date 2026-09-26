@@ -62,14 +62,13 @@ under an existing key retracts the previous element) or `GroupByCell` over map s
 > exactly the proposed idiom: `Use<HostManagementApi>.observeAligned` +
 > `AlignedCompositeCell`, a named-inlet mirror of `WaveFrontier`'s completeness
 > fold that delivers one composite snapshot per settled wave across N named
-> views. See `kernel/.../cell/observe/AlignedObserve.kt`. Decided for
-> `:demo:shopping` (feature `computenet-sozzn`, task `computenet-sozzn.1`, not
-> yet landed): the `{items, produce}` pair is to align through one
-> `observeAligned` sink; `votes`, `wanted` and `shared` stay on
-> point-consistent `host.observe` hubs because not every view shares a single
-> source root — see F-27 for why a sink spanning all four views is not a KE2
-> deliverable. `:demo:skillmatch` and `:demo:tiering` adoption remain open
-> follow-ups, not part of this finding's gap.
+> views. See `kernel/.../cell/observe/AlignedObserve.kt`. Adopted by
+> `:demo:shopping` (feature `computenet-sozzn`): the `{items, produce}` pair is
+> aligned through one `observeAligned` sink; `votes`, `wanted` and `shared`
+> stay on point-consistent `host.observe` hubs because not every view shares a
+> single source root — see F-27 for why a sink spanning all four views is not
+> a KE2 deliverable. `:demo:skillmatch` and `:demo:tiering` adoption remain
+> open follow-ups, not part of this finding's gap.
 
 **Observation**: `:demo:skillmatch`'s UI folds four independent outlets (matches,
 match-counts, required-counts, gap) into one state snapshot. The views update
@@ -1813,11 +1812,11 @@ being built (static links + absorb-acks + interest-scoped quorum + per-edge
 declared source sets are sufficient for every structure this system builds).
 So a sink over all four shopping views is not a missing mechanism waiting on
 a ticket; it is the spec-decided boundary of `AlignedCompositeCell` applied to
-a graph with more than one root. What shopping's decided design does instead
-(task `computenet-sozzn.1`, not yet landed): the `{items, produce}` pair (the
-one same-root sub-graph) is to align through a single `observeAligned` sink;
-`votes`, `wanted` and `shared` stay on point-consistent `host.observe` hubs,
-each individually satisfying `[22-OBS-01]`.
+a graph with more than one root. What shopping does instead: the
+`{items, produce}` pair (the one same-root sub-graph) is aligned through a
+single `observeAligned` sink; `votes`, `wanted` and `shared` stay on
+point-consistent `host.observe` hubs, each individually satisfying
+`[22-OBS-01]`.
 
 **Escape, explicitly unchosen**: a drop-all absorbing edge from `votesUnion`
 into the `items`/`produce` arm would emit a `Progress` absorb-ack for every
