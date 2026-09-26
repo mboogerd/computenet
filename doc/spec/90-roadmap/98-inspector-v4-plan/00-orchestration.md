@@ -1164,7 +1164,7 @@ holds too: these belong to whoever replans *engines*, not to this checkpoint.
   `observeAligned` composite, or the inlet of another gated operator.**
 
   > **Re-trued 2026-09-26.** Landed as `computenet-0favn` (PR #1089, commit
-  > `e3abe213`): `emitOnFrontier`/`WaveGate` now gates the whole binary-join
+  > `c9b741e5`): `emitOnFrontier`/`WaveGate` now gates the whole binary-join
   > family (`SemiJoinCell`, `CombineLatestCell`, `JoinSetCell`, `JoinCell`,
   > `IntersectSetCell`, `LookupJoinCell`); the default stays ungated, and the
   > "only `SemiJoinCell`/`CombineLatestCell` may feed" sentence above is
@@ -1201,7 +1201,7 @@ Six stops, in decreasing order of how close they came to a Go.
    `emitOnFrontier` extension.** Ticket-ready, but 96-plan §E2.4 scope; owned
    by the next engines replan, with a live tripwire in the meantime.
    **Re-trued 2026-09-26**: landed as `computenet-0favn` (PR #1089, commit
-   `e3abe213`) — all four cells now gate, default stays ungated; the
+   `c9b741e5`) — all four cells now gate, default stays ungated; the
    admission rule for an ungated cell in an aligned composite is KE2-F3 /
    `computenet-lw0mv` ([KE2-09]) (filed as `computenet-p4dbv`).
 4. **Paging a drained host's checkpoint blob.** Newly visible, well-defined,

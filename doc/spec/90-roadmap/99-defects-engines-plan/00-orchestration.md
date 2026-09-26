@@ -429,7 +429,7 @@ happens, so gating `JoinSetCell` will fail it and force this note to be
 re-trued rather than silently outlived.
 
 > **Re-trued 2026-09-26.** Landed as `computenet-0favn` (PR #1089,
-> commit `e3abe213`): the opt-in `emitOnFrontier`/`WaveGate` extension now
+> commit `c9b741e5`): the opt-in `emitOnFrontier`/`WaveGate` extension now
 > covers the whole binary-join family (`SemiJoinCell`, `CombineLatestCell`,
 > `JoinSetCell`, `JoinCell`, `IntersectSetCell`, `LookupJoinCell`). No
 > `[24-OP-…]` rows were minted for the individual cells — 0favn's own
