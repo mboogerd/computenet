@@ -211,8 +211,8 @@ candidate; all closed → add the missing edges and re-run with
 the epic of <id>` line on stderr means that row was not classified: resolve it
 with `epic-of.sh` first. Empty and nothing resumable:
 
-- Every child closed (at least one) → `bd close <epic>`; on success,
-  `bd update <epic> --remove-label=owner:$BEADS_ACTOR`.
+- Every child closed (at least one) → `bd close <epic>`. Keep its `owner:`
+  label; `check-dotted-ids.sh` reads it.
 - Children open, none ready → the blocked flag goes stale, so run
   `verify-ready.sh` on them. Any READY → work it. None → comment why, `bd defer <epic>`.
 
@@ -591,8 +591,8 @@ Uncertified → leave in draft; push what is committed. Running agents → do no
 wait; the next session resumes them. Report the main checkout's HEAD against
 `<scratch>/step1-head` if it moved.
 
-1. **Epic:** closed by someone else → remove only your `owner:` label. All
-   children closed (at least one) → close it, remove the label. Work remains →
+1. **Epic:** closed by someone else → leave it. All children closed (at least
+   one) → close it. Either way keep the `owner:` label. Work remains →
    `bd update <epic> --status=open --assignee="" --unset-metadata holder`.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
 3. **Friction:** step 7.
