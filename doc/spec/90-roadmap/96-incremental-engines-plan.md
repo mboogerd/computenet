@@ -438,8 +438,8 @@ made here: eviction is destructive **and emits ordinary retractions** — a cell
 remains equal to its integrated output, keeping catch-up, `Stateful` snapshots, and
 per-peer recompute correct with zero new machinery; late-below-waterline arrivals are
 dropped at the guarded inlet and side-channeled on a `late` outlet. Honest equivalence:
-**incremental == batch over the late-filtered input**, conditional on the waterline being
-derivable from a monotone event-time attribute — checked per pipeline, never assumed.
+governed by `[24-WL-10]` (20/24 §Lateness and waterlines) — see that clause for the exact
+restriction and domain rather than restating it here.
 Restriction: destructive eviction of `Replicable` state is forbidden until E3.7 exists (a
 replica evicting locally while a peer still gossips below the floor re-admits ghosts);
 single-instance cells (`GroupByCell`, the join family) evict freely.
@@ -490,7 +490,7 @@ key lies entirely below the floor via the ordinary retraction fold — groups di
 `timeFn(e) < floor` is dropped from the fold and forwarded **verbatim** (original tags)
 on a new `late` outlet; dels below floor are no-ops. Test: seeded windowed pipeline
 (writers → union → tumbling group-by) with shuffled event times; invariants: post-idle
-state equals batch recompute over late-filtered input on every seed; state bounded by the
+state satisfies `[24-WL-10]`'s equivalence on every seed; state bounded by the
 lateness horizon; `late` carries exactly the dropped elements; control:
 evict-without-retract leaves a late subscriber diverging from an old subscriber.
 **Depends**: E4.2.
@@ -516,7 +516,8 @@ source's promise.
 minted pairs below the floor (the DD reader-frontier analog scoped to the waterline: late
 input below the floor is inadmissible, so no reader can distinguish the dropped history —
 research 02 §4). Same destructive-with-retraction rule; same `late` guard on inlets
-declaring lateness. Test: windowed equi-join == batch over late-filtered inputs;
+declaring lateness. Test: windowed equi-join satisfies `[24-WL-10]`'s equivalence over the
+join-family domain (that clause governs; do not restate its restriction here);
 minted-tag count bounded; control: evicting minted pairs without exit-tag emission leaves
 tombstone-folding consumers dead (the M11.2 tag-hygiene control inverted).
 **Depends**: E4.3.
