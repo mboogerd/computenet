@@ -1,0 +1,65 @@
+# Concord corpus scenario (computenet-5ubdv.3, KE2 §5.8). Canonical schema
+# shape — see concord/schema/scenario.md.
+#
+# `[22-OBS-01]` (22-consistency.md:283-286, Ubiquitous): one aligned composite
+# is the point of internal consistency across every per-source frontier it
+# folds — an `aligned-view` publishes one composite per settled wave, never a
+# state where one member reflects a later wave than another. This scenario
+# models that with two arms over the same set source: `items` through an
+# identity map, `evens` through `filter fn: even` — both are `map`/`filter`
+# chains ending at `s`, the shape `composite-whole-waves` (5ubdv-D3,
+# concord/schema/Checks.kt) can model. `final-view` (5ubdv-D2) carries the
+# settled-state half of the clause (both members equal their batch fold at
+# quiescence); `composite-whole-waves` carries the never-torn half (every
+# observed composite on the stream is at one common source-prefix for every
+# checked member); `no-dead-letters` rules out a hidden failure channel.
+#
+# The negative side of this property — a harness that lets a torn composite
+# pass — is NOT modeled here as a corpus control (5ubdv-D4: no catalog
+# operator produces a point-consistent composite, so no graph here can produce
+# a genuinely torn one). It lives in two places instead:
+#   - `ChecksTest` (schema task, computenet-5ubdv.1): a fixture composite
+#     `{items: [1, 2], evens: []}` asserts the evaluator itself calls that
+#     torn (no common prefix), independent of any driver.
+#   - `AlignedObserveTest."control - the point-consistent composite mixes
+#     waves on at least one seed"` (kernel/src/test/kotlin/civictech/cell/
+#     observe/AlignedObserveTest.kt:220-232): a kernel-level fixture that
+#     deliberately publishes a torn composite and shows the cell's own
+#     invariant catches it.
+id: 22-OBS-01
+title: An aligned composite over two set arms never mixes waves
+covers: [22-OBS-01]
+profile: core
+kind: example
+narrative:
+  given: one set source forked into an identity arm and an even-filter arm, observed through an aligned-view
+    with members items and evens
+  when: the source is repeatedly added to and removed from
+  then: at quiescence the composite equals the batch fold of both arms, and every composite observed along
+    the way has items and evens at one common prefix of the source's script — never a torn half-updated state
+graph:
+  cells:
+    - {id: s, type: set-source, of: int}
+    - {id: l, type: map, fn: identity}
+    - {id: f, type: filter, fn: even}
+    - {id: c, type: aligned-view, views: {items: set-view, evens: set-view}}
+  links:
+    - {from: s, to: l}
+    - {from: s, to: f}
+    - {from: l, to: c, inlet: items}
+    - {from: f, to: c, inlet: evens}
+script:
+  - {type: apply, on: s, op: add, value: 1}
+  - {type: apply, on: s, op: add, value: 2}
+  - {type: apply, on: s, op: add, value: 3}
+  - {type: apply, on: s, op: add, value: 4}
+  - {type: apply, on: s, op: remove, value: 2}
+  - {type: apply, on: s, op: add, value: 5}
+  - {type: apply, on: s, op: add, value: 6}
+  - {type: apply, on: s, op: remove, value: 4}
+  - {type: apply, on: s, op: add, value: 7}
+  - {type: apply, on: s, op: add, value: 8}
+checks:
+  - {type: final-view, view: c, equals: {items: [1, 3, 5, 6, 7, 8], evens: [6, 8]}}
+  - {type: composite-whole-waves, view: c, source: s}
+  - {type: no-dead-letters}
