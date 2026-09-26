@@ -662,6 +662,9 @@ The restriction is what makes the equality satisfiable alongside
 `[24-WL-05]`/`[24-WL-06]`: the elements of an evicted window were admitted,
 not late-dropped, so they stay in the late-filtered input and an unrestricted
 batch recompute would contain the window, while the streaming state does not.
+A window whose eviction `[24-WL-17]` refused has `keyTime` at or below the
+final floor, so it too lies outside the comparison; it remains in the cell's
+state and integrated output, and nothing here asserts its absence.
 Feldera's equivalence needs no such restriction because its GC shrinks
 internal indexes without retracting outputs; eviction here retracts. For an
 evicted window, the equivalence says nothing beyond its
@@ -681,6 +684,31 @@ elements are ordinary adds, retractions flow (`[24-OP-WINDOW-02]`) — a
 `GroupByCell` constructed without a `waterline` inlet and `keyTime` does not
 participate in eviction at all (State-driven).
 
+**The memory bound.** `[24-WL-19]` WHILE every source contributing to its
+waterline keeps advancing its event time, the window-keyed state an evicting
+cell holds in steady state SHALL be bounded by the lateness horizon rather
+than by stream length: once a floor rise has been processed
+(`[24-WL-06]`), the cell SHALL hold no window whose `keyTime` the floor has
+passed other than one whose eviction `[24-WL-17]` refused (State-driven).
+The live windows are those whose end lies above the floor, and the floor
+trails the newest event time by the declared lateness plus the event-time lag
+among the contributing sources (`[24-WL-02]`); an admitted element's windows
+end up to one window size past its event time, so the span of live window
+ends runs from the floor to the newest event time plus the window size, and
+how many windows that span holds is roughly the horizon plus the window
+size, divided by the slide — never by how many elements the stream has
+carried. The bound is on windows, not elements: the size of
+one live window is the input's density per window, which this requirement
+does not bound. It is qualified three ways, each stated where it lives: an
+idle contributing source freezes the floor and suspends the bound until the
+source emits, closes or is retired (`[24-WL-14]`, the accepted residual);
+a window holding an `Owned` or `Leased` payload is retained past the floor
+for as long as it holds one (`[24-WL-17]`); and a cell holding `Replicable`
+state evicts nothing (`[24-WL-18]`), so no bound applies to it. The join
+family's rows of a lateness-declaring inlet obey the same horizon by
+`[24-WL-16]`, but an inlet declaring no lateness is never evicted, so this
+requirement claims no bound for a join cell's state as a whole.
+
 **Source retirement.** A source that stops contributing would pin the
 minimum forever, so the floor forgets sources explicitly. `[24-WL-12]` WHEN an
 `EdgeClose` fires for a contributing source's edge, the `WaterlineCell` SHALL
@@ -693,8 +721,8 @@ RESTART'd producer's stale pre-restart maximum never gates the floor
 (Event-driven). `[24-WL-14]` WHILE a contributing source is linked and open
 but idle, the floor SHALL NOT advance past that source's promise
 (State-driven). This is the accepted residual: frozen but correct — eviction
-stalls, and with it the memory bound, until the source emits, closes or is
-retired. What should retire or age an idle source without a wall clock is
+stalls, and with it the memory bound (`[24-WL-19]`), until the source emits,
+closes or is retired. What should retire or age an idle source without a wall clock is
 research ([95 §R15](../90-roadmap/95-research-plan.md)).
 `[24-WL-15]` WHERE a management operator invokes `retire(sourceId)` on a
 `WaterlineCell`, that source SHALL stop gating the floor (Optional feature) —
@@ -735,9 +763,22 @@ so removing a row changes exactly the outputs a batch recompute without that
 row also lacks (`[24-WL-10]`).
 
 **Exclusive payloads.** `[24-WL-17]` IF an element an eviction would remove
-carries an `Owned` or `Leased` payload, THEN the cell SHALL refuse that
-eviction with a named diagnostic and leave its state and outlets untouched,
-and SHALL NOT discharge the evictee (Unwanted behavior). 23 §Taps
+carries an `Owned` or `Leased` payload, THEN the cell SHALL refuse the
+eviction of that element's eviction unit (`[24-WL-06]`) — its whole window
+for a window-keyed cell, its row for the join family — with a named
+diagnostic, SHALL leave that unit's state untouched and emit nothing for it,
+SHALL NOT discharge the evictee, and SHALL still evict every other unit the
+floor has passed in the same one delta (Unwanted behavior). The refusal is
+per unit, never per `WaterlineDelta`: one exclusive does not block the
+eviction of the units beside it, nor of any unit a later floor rise passes.
+A refused unit stays in state with its tags live, so an ordinary del still
+retracts its elements (`[24-WL-08]`); every later floor rise re-evaluates it
+like any other passed unit, refusing it again, with the diagnostic, while
+it still holds an exclusive, and evicting it at the first floor rise after
+it no longer does. A floor that does not rise evicts nothing
+(`[24-WL-03]`), so a refused unit whose last exclusive is retracted waits
+for the next rise. Late-drop (`[24-WL-07]`) is unaffected: an add below the
+floor is dropped even when it falls in a refused window. 23 §Taps
 ("Discharging sinks") forbids silently dropping an exclusive, and eviction is
 a new state-destroying path that must not become the first to leak one; but
 discharging at eviction is not the answer either, because the retraction
