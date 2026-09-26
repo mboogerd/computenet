@@ -477,7 +477,9 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
  * frontier, `[22-OBS-01]`/`[22-OBS-02]`). This composite remains the right
  * choice when an arm may stall and a stale-but-prompt read beats a delayed
  * aligned one — the aligned sink is the WAIT shape and holds a wave until every
- * contributing view has settled it.
+ * contributing view has settled it. A point-consistent sink witnesses no
+ * per-source frontier, so it offers no write-visibility handle (it is not a
+ * [FrontierWitness]) — `[22-OBS-01]`'s frontier is the aligned sink's alone.
  *
  * T08 finding 4: routes its own listener dispatch through the same
  * dedicated-executor mechanism as [ObserveCell] (its own `dispatcher`, not a
