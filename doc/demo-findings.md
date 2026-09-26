@@ -62,9 +62,13 @@ under an existing key retracts the previous element) or `GroupByCell` over map s
 > exactly the proposed idiom: `Use<HostManagementApi>.observeAligned` +
 > `AlignedCompositeCell`, a named-inlet mirror of `WaveFrontier`'s completeness
 > fold that delivers one composite snapshot per settled wave across N named
-> views. See `kernel/.../cell/observe/AlignedObserve.kt`. Not yet adopted by
-> `:demo:skillmatch` itself — that adoption is a follow-up, not part of this
-> finding's gap.
+> views. See `kernel/.../cell/observe/AlignedObserve.kt`. Adopted by
+> `:demo:shopping` (feature `computenet-sozzn`): the `{items, produce}` pair is
+> aligned through one `observeAligned` sink; `votes`, `wanted` and `shared`
+> stay on point-consistent `host.observe` hubs because not every view shares a
+> single source root — see F-27 for why a sink spanning all four views is not
+> a KE2 deliverable. `:demo:skillmatch` and `:demo:tiering` adoption remain
+> open follow-ups, not part of this finding's gap.
 
 **Observation**: `:demo:skillmatch`'s UI folds four independent outlets (matches,
 match-counts, required-counts, gap) into one state snapshot. The views update
@@ -1757,3 +1761,72 @@ recorded as observations only —
   files just named suggest some of that code exists. Neither claim is
   resolved by this task; both are handed off as observations per the epic's
   risk 6.
+
+## F-27 — Independent-root composite cannot be wave-aligned (shopping `wanted`)
+
+**Observation**: 96-plan §E2.6 proposed one `observeAligned` sink spanning
+*all* of a demo's outlets; feature `computenet-sozzn` (E2.6 re-scoped) exists
+because that sink is not deliverable for `:demo:shopping`'s graph, for the
+reason this finding records. `:demo:shopping`'s graph
+(`demo/shopping/src/main/kotlin/civictech/demo/Main.kt`) has two independent
+roots, not one:
+
+```
+per-user item writers ──▶ itemsUnion ──┬──▶ "items" view
+                                        └──▶ FilterCell (a..m) ──▶ "produce" view
+per-user vote  writers ──▶ votesUnion ─────▶ "votes" view
+                itemsUnion ─┐
+                            ├──▶ IntersectSetCell ──▶ "wanted" view
+                votesUnion ─┘
+```
+
+`items` and `produce` descend only from `itemsUnion`; `votes` descends only
+from `votesUnion`; `wanted` is the only view with both as ancestors. A sink
+built over all four named inlets (`set("items"); set("produce"); set("votes");
+set("wanted")`) wedges on the first vote wave: `items` and `produce` are open
+`Consume` edges whose floor sits below that wave and which never carry a vote
+source, so they are expected edges for it under the static link set
+(`AlignedCompositeCell`'s `expectedEdges`,
+`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt:624`) and the
+wave is held — `bufferedWaves` grows — until an ack, a later wave on that arm,
+or an `EdgeClose` shrinks the condition. This is exactly the shape
+`AlignedObserveTest`'s `` `a view fed by an independent root holds waves until
+its edge closes` `` exercises: `bufferedWaves shouldBe 1` after one root
+fires, held at `current() == mapOf("a" to emptySet(), "b" to emptySet())`
+until the other arm's edge unlinks. The same wedge recurs for any sink pairing
+`wanted` with only one same-root sibling: `{items, wanted}` wedges on a vote
+wave (nothing on the `items` arm carries it), and `{votes, wanted}` wedges
+symmetrically on an item wave.
+
+**Why it's a boundary, not a gap**: `[22-LIVE-01]`
+(`doc/spec/20-dataflow-semantics/22-consistency.md:180`) forbids exactly the
+over-alignment a four-view sink would need — blocking `items`/`produce`
+updates from becoming observable while waiting on an unrelated vote root is
+"over-alignment across independent sources," which the requirement says
+"SHALL NOT" happen. The static-link-set frontier (G-13,
+`doc/spec/20-dataflow-semantics/22-consistency.md:175,331`) has no upstream
+traversal that would let an arm learn "I structurally never carry a vote
+source, so stop waiting for one" — and PN-16
+(`doc/spec/90-roadmap/95-research-plan.md:343`) decided that traversal is not
+being built (static links + absorb-acks + interest-scoped quorum + per-edge
+declared source sets are sufficient for every structure this system builds).
+So a sink over all four shopping views is not a missing mechanism waiting on
+a ticket; it is the spec-decided boundary of `AlignedCompositeCell` applied to
+a graph with more than one root. What shopping does instead: the
+`{items, produce}` pair (the one same-root sub-graph) is aligned through a
+single `observeAligned` sink; `votes`, `wanted` and `shared` stay on
+point-consistent `host.observe` hubs, each individually satisfying
+`[22-OBS-01]`.
+
+**Escape, explicitly unchosen**: a drop-all absorbing edge from `votesUnion`
+into the `items`/`produce` arm would emit a `Progress` absorb-ack for every
+vote wave and make a four-view sink "work" by construction. This is not
+proposed: F-15 already shows an absorbing-edge workaround is fragile — its
+ack is edge-local, consumed only by a cell that installs a frontier, and not
+relayed by a plain operator hop — and here it would exist solely to manufacture
+alignment `[22-LIVE-01]` says should not be forced, not to retire a genuinely
+silent arm.
+
+**Proposed shape**: none. Multi-root alignment is research-gated (PN-16 /
+G-13's frontier-traversal residual); this finding records the boundary, it
+does not propose closing it.
