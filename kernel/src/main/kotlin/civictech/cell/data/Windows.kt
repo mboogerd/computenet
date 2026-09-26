@@ -8,9 +8,10 @@ import java.io.Serializable
  * part of the group key. Tumbling = composite key via [tumbling]; sliding =
  * per-element expansion (`FlatMapSetCell`) into [sliding]'s windows, then
  * group. Windows never close: late elements are ordinary adds and
- * retractions flow (view semantics). Watermark-driven eviction is deferred
- * with trigger (24). Assigners are named serializable classes so they
- * survive graph-spec capture (51).
+ * retractions flow (view semantics). Watermark-driven eviction below the
+ * waterline floor is opt-in per inlet — declare it with [Windows.Lateness]
+ * (24 §Lateness and waterlines). Assigners are named serializable classes so
+ * they survive graph-spec capture (51).
  */
 object Windows {
     /** Event time → start of its tumbling window. */
