@@ -1,0 +1,32 @@
+{
+  "id": "WV-PAYLOAD-WATERLINEDELTA-01",
+  "title": "WaterlineDelta with a non-zero floor",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {
+          "type": "WaterlineDelta",
+          "fields": {
+            "floor": 15
+          }
+        }
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"WaterlineDelta\",{\"floor\":15}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siV2F0ZXJsaW5lRGVsdGEiLHsiZmxvb3IiOjE1fV1dfQ=="
+  },
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here, following WV-PAYLOAD-TAGGEDMAPDELTA-01's template. Non-zero floor (15) so a default-omission bug cannot pass by coincidence (`floor` carries no default). No NONDETERMINISM.md entry: a single `Long` field has no ordering or map-iteration nondeterminism to record. covers [WIR1-C05] (payload registration), [WIR1-I01]-[WIR1-I03] (round-trip: encode(frame)==encoded.utf8, decodeFrame(encoded)==frame, decodeFrame(encode(v))==v)."
+}

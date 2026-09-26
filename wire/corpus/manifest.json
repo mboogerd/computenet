@@ -31,6 +31,12 @@
       "file": "payloads/WV-PAYLOAD-TAGGEDMAPDELTA-01.json"
     },
     {
+      "id": "WV-PAYLOAD-WATERLINEDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-WATERLINEDELTA-01.json"
+    },
+    {
       "id": "WV-NEG-LEASED-AT-ENCODE-01",
       "category": "negative",
       "kind": "negative",
