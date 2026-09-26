@@ -252,6 +252,23 @@ import java.io.Serializable
  *   `WatermarkCellBoundedReadTest.kt`,
  *   `kernel/src/test/kotlin/civictech/cell/replication/DeliveredWatermarkTest.kt`), and by
  *   `civictech.cell.consistency.ReplicaQuorum`'s own tests where it is actually consumed.
+ *
+ * - **`WaterlineCell`.** (computenet-sjqat, KE4.2.) Verified against its own KDoc
+ *   (`kernel/src/main/kotlin/civictech/cell/data/Waterline.kt`): the event-time waterline of
+ *   spec 24 §Lateness and waterlines folds per-source maxima into a monotone floor, and the
+ *   *source* of each contribution is the arriving wave's `sourceId`, read from
+ *   `CurrentContext.get()?.timestamp` — a delivery under a null or baseline context contributes
+ *   nothing. Like `WatermarkCell` it has no `@Contract` and no application-facing `Use<Ops>`
+ *   inlet; its input is keyed by a live-wave signal with no expression in a [Script]/
+ *   [ScriptEvent] slice, so a batch script reference cannot say which source an event belongs
+ *   to, and the floor is a function of exactly that. **Excluded** as uncheckable by a batch
+ *   reference. It is also not named in epic computenet-4ru §3.1's operator inventory; it
+ *   postdates it.
+ *   *DISPUTES audit: no filing.* Its requirements (`[24-WL-02]`, `[24-WL-03]`, `[24-WL-04]`,
+ *   `[24-WL-15]`) are exercised by the kernel's own suite
+ *   (`kernel/src/test/kotlin/civictech/cell/data/WaterlineCellTest.kt`), which stamps each
+ *   delivery's wave context directly — the absence here is of a batch check, not of the
+ *   requirements' coverage.
  */
 
 /**

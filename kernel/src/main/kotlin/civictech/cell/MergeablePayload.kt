@@ -50,7 +50,8 @@ class NonIdempotentEmbeddedMerge(
  * - [MergeClass.NON_IDEMPOTENT] — `CounterDelta`, whose merge is plain
  *   `amount + amount` addition.
  * - [MergeClass.IDEMPOTENT] — `PnCounterDelta` (pointwise max), `SetDelta`
- *   (tag union), `WatermarkDelta` (pointwise max), `TaggedMapDelta` (dot union).
+ *   (tag union), `WatermarkDelta` (pointwise max), `TaggedMapDelta` (dot union),
+ *   `WaterlineDelta` (max).
  *
  * **The residual is real and is filed, not papered over.** [classify] returns
  * `null` for any [MergeablePayload] this table does not name — an
@@ -72,6 +73,7 @@ object EmbeddedMergeClass {
         "civictech.cell.data.delta.SetDelta",
         "civictech.cell.data.delta.WatermarkDelta",
         "civictech.cell.data.delta.TaggedMapDelta",
+        "civictech.cell.data.delta.WaterlineDelta",
     )
 
     /**
