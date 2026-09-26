@@ -21,7 +21,8 @@ object Fx {
         agg: String? = null,
         k: Int? = null,
         window: WindowSpec? = null,
-    ): CellSpec = CellSpec(id = id, type = type, fn = fn, agg = agg, k = k, window = window)
+        views: Map<String, String>? = null,
+    ): CellSpec = CellSpec(id = id, type = type, fn = fn, agg = agg, k = k, window = window, views = views)
 
     fun link(from: String, to: String, inlet: String? = null): LinkSpec =
         LinkSpec(from = from, to = to, inlet = inlet)
