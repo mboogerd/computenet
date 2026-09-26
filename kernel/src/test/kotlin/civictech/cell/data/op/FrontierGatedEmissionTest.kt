@@ -1475,6 +1475,141 @@ class FrontierGatedEmissionTest {
         }
     }
 
+    // ------------- retraction of a row an EARLIER wave emitted (the exit side)
+
+    /**
+     * [preAnnounceImage] plus, on odd wave `n >= 3`, the retraction of
+     * `<prefix>w<n-1>` — the row the previous even wave joined — under the tag
+     * it was added with. The opposing pair still cancels inside the wave, so an
+     * odd wave's whole net effect is one retraction of a row emitted in an
+     * earlier wave: the gated exit path the plain pre-announce rig never reaches
+     * (it only ever retracts rows that never joined).
+     */
+    private fun retractingImage(prefix: String): (SetDelta<String>) -> SetDelta<String> = { delta ->
+        val base = preAnnounceImage(prefix)(delta)
+        val dels = LinkedHashMap(base.dels)
+        delta.adds.forEach { (element, tags) ->
+            val n = element.removePrefix("w").toInt()
+            if (n % 2 == 1 && n >= 3) dels["${prefix}w${n - 1}"] = tags.map { Timestamp(it.sourceId, it.counter - 1) }.toSet()
+        }
+        SetDelta(base.adds, dels)
+    }
+
+    private fun assertGatedSetRetraction(
+        build: (Boolean) -> SetCellUnderTest,
+        leftImage: (SetDelta<String>) -> SetDelta<String>,
+        rightImage: (SetDelta<String>) -> SetDelta<String>,
+        expectedAdd: (Int) -> String,
+        expectedDel: (Int) -> String,
+    ) {
+        val waves = 20
+        for (seed in 0L until 200L) {
+            val run = runSetDiamond(seed, waves, build(true), leftImage, rightImage)
+            withClue("seed $seed") {
+                val source = run.seen.first().timestamp.sourceId
+                val byCounter = run.seen.groupBy { it.timestamp.counter }
+                val acksByCounter = run.probe.acks.groupBy { it.thru }
+                for (n in 1..waves) {
+                    val deltas = byCounter[n.toLong()].orEmpty().map { it.delta }
+                    val acks = acksByCounter[n.toLong()].orEmpty()
+                    withClue("wave $n") {
+                        when {
+                            n % 2 == 0 -> {
+                                deltas.single().adds.keys shouldBe setOf(expectedAdd(n))
+                                deltas.single().dels.keys.shouldBeEmpty()
+                                acks.shouldBeEmpty()
+                            }
+                            n == 1 -> {
+                                deltas.shouldBeEmpty()
+                                acks shouldBe listOf(Progress(source, 1L))
+                            }
+                            else -> {
+                                deltas.single().adds.keys.shouldBeEmpty()
+                                deltas.single().dels.keys shouldBe setOf(expectedDel(n))
+                                acks.shouldBeEmpty()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `gated JoinSetCell and IntersectSetCell retract a row an earlier wave emitted, over 200 seeds`() {
+        assertGatedSetRetraction(
+            ::joinSetUnderTest,
+            joinLeftImage,
+            retractingImage("R"),
+            expectedAdd = { n -> "Lw$n+Rw$n" },
+            expectedDel = { n -> "Lw${n - 1}+Rw${n - 1}" },
+        )
+        assertGatedSetRetraction(
+            ::intersectUnderTest,
+            identityImage,
+            retractingImage(""),
+            expectedAdd = { n -> "w$n" },
+            expectedDel = { n -> "w${n - 1}" },
+        )
+    }
+
+    /** [mapLeftImage] plus, on odd wave `n >= 3`, the removal of `<prefix><n-1>` — the key the previous even wave joined. */
+    private fun mapRetractingLeftImage(prefix: String): (MapDelta<String, Int>) -> MapDelta<String, Int> = { d ->
+        val n = d.puts.values.single()
+        MapDelta(mapOf("$prefix$n" to n), if (n % 2 == 1 && n >= 3) setOf("$prefix${n - 1}") else emptySet())
+    }
+
+    /** Per wave, the exact `(puts, removals)` the gated cell emits, or `null` for no delta and one `Progress`. */
+    private fun <R> assertGatedMapRetraction(
+        build: (Boolean) -> MapCellUnderTest<R>,
+        leftImage: (MapDelta<String, Int>) -> MapDelta<String, Int>,
+        rightImage: (MapDelta<String, Int>) -> MapDelta<String, Int>,
+        expected: (Int) -> Pair<Map<String, R>, Set<String>>?,
+    ) {
+        val waves = 20
+        for (seed in 0L until 200L) {
+            val probe = runMapDiamond(seed, waves, build(true), leftImage, rightImage)
+            withClue("seed $seed") {
+                val source = (probe.deltas.map { it.timestamp.sourceId } + probe.acks.map { it.sourceId }).distinct().single()
+                val byCounter = probe.deltas.groupBy { it.timestamp.counter }
+                val acksByCounter = probe.acks.groupBy { it.thru }
+                for (n in 1..waves) {
+                    val deltas = byCounter[n.toLong()].orEmpty().map { it.delta }
+                    val acks = acksByCounter[n.toLong()].orEmpty()
+                    val want = expected(n)
+                    withClue("wave $n") {
+                        if (want == null) {
+                            deltas.shouldBeEmpty()
+                            acks shouldBe listOf(Progress(source, n.toLong()))
+                        } else {
+                            deltas.single().puts shouldBe want.first
+                            deltas.single().removals shouldBe want.second
+                            acks.shouldBeEmpty()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `gated JoinCell and LookupJoinCell retract a key an earlier wave emitted, over 200 seeds`() {
+        assertGatedMapRetraction(::joinUnderTest, mapRetractingLeftImage("k"), mapPreAnnounceImage("k")) { n ->
+            when {
+                n % 2 == 0 -> mapOf("k$n" to (n to 10 * n)) to emptySet()
+                n == 1 -> null
+                else -> emptyMap<String, Pair<Int, Int>>() to setOf("k${n - 1}")
+            }
+        }
+        assertGatedMapRetraction(::lookupUnderTest, mapRetractingLeftImage("f"), mapPreAnnounceImage("d")) { n ->
+            when {
+                n % 2 == 0 -> mapOf("f$n" to 11 * n) to emptySet()
+                n == 1 -> mapOf("f1" to NULL_EXTENSION) to emptySet()
+                else -> mapOf("f$n" to NULL_EXTENSION) to setOf("f${n - 1}")
+            }
+        }
+    }
+
     @Test
     fun `the gated family cells report frontierGated iff constructed with emitOnFrontier`() {
         for (gated in listOf(true, false)) {
