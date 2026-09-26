@@ -636,12 +636,23 @@ rather than evicted under a broadened rule.
 
 **What equivalence survives.** `[24-WL-10]` WHILE a pipeline's waterline is
 derivable from a monotone (or near-monotone) event-time attribute, the
-post-quiescence state of every evicting cell SHALL equal a batch recompute
-over that cell's late-filtered input — its input with every
-`[24-WL-07]`-dropped add removed (State-driven). The condition is checked per
-pipeline, never assumed: it is Feldera's own correction of the refuted
-"lateness GC never changes outputs" (research `01` §5, 0-3), and it is an
-author's promise, not something the kernel verifies. `[24-WL-11]` WHILE no
+post-quiescence state of every evicting cell, restricted to window keys `k`
+with `keyTime(k)` strictly above the final floor, SHALL equal a batch
+recompute over that cell's late-filtered input — its input with every
+`[24-WL-07]`-dropped add removed — restricted to the same keys: recompute in
+batch, then drop every window the final floor has passed (State-driven). The
+condition is checked per pipeline, never assumed: it is Feldera's own
+correction of the refuted "lateness GC never changes outputs" (research `01`
+§5, 0-3), and it is an author's promise, not something the kernel verifies.
+The restriction is what makes the equality satisfiable alongside
+`[24-WL-05]`/`[24-WL-06]`: the elements of an evicted window were admitted,
+not late-dropped, so they stay in the late-filtered input and an unrestricted
+batch recompute would contain the window, while the streaming state does not.
+Feldera's equivalence needs no such restriction because its GC shrinks
+internal indexes without retracting outputs; eviction here retracts. For an
+evicted window, the equivalence says nothing beyond its
+absence: it is absent from both the cell's state and its integrated output
+(`[24-WL-05]`), and no batch comparison is made for it. `[24-WL-11]` WHILE no
 inlet of a pipeline declares lateness, that pipeline's behaviour SHALL be
 exactly the behaviour without this section: windows never close, late
 elements are ordinary adds, retractions flow (`[24-OP-WINDOW-02]`) — a
