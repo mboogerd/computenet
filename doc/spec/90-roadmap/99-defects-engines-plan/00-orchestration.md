@@ -428,6 +428,20 @@ suite's third control is the tripwire — it asserts the tearing still
 happens, so gating `JoinSetCell` will fail it and force this note to be
 re-trued rather than silently outlived.
 
+> **Re-trued 2026-09-26.** Landed as `computenet-0favn` (PR #1089,
+> commit `e3abe213`): the opt-in `emitOnFrontier`/`WaveGate` extension now
+> covers the whole binary-join family (`SemiJoinCell`, `CombineLatestCell`,
+> `JoinSetCell`, `JoinCell`, `IntersectSetCell`, `LookupJoinCell`). No
+> `[24-OP-…]` rows were minted for the individual cells — 0favn's own
+> non-goals. The default stays ungated, and the "only `SemiJoinCell`/
+> `CombineLatestCell` may feed" sentence above is superseded; the current
+> admission rule for an ungated cell in an aligned composite lives at
+> KE2-F3 / `computenet-lw0mv` ([KE2-09]), not restated here. `InternalConsistencyTest`
+> keeps E2-SUITE's third control (the tripwire named above) deliberately
+> ungated, so it never fired and this note would have silently outlived the
+> change without this pass (found by `computenet-0favn`'s feature review,
+> filed as `computenet-p4dbv`).
+
 **Checkpoint C-final — close the ledgers.** Trigger: last wave of all three
 tracks merged. Verify and update: DISPUTES.md (D-REPLAY/D-COMBINE/D-C12
 entries resolved or honestly re-filed), `doc/demo-findings.md` (F-5 if E2
