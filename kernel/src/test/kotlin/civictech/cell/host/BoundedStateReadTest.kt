@@ -329,6 +329,34 @@ class BoundedStateReadTest {
     }
 
     @Test
+    fun `a keyBound is refused KEY_BOUND_UNSUPPORTED on the caller's thread for every family that does not declare it`() {
+        val plain = PlainBoundedCell().also { host.managementInlet.call.spawn(it) }
+        val refusedPlain = host.readState(plain.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        refusedPlain.isDone.shouldBeTrue()
+        refusedPlain.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        controller.step().shouldBeFalse()
+        plain.reads shouldBe 0
+
+        val set = spawn(SetCell())
+        val refusedSet = host.readState(set.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        refusedSet.isDone.shouldBeTrue()
+        refusedSet.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        set.supportsKeyBound.shouldBeFalse()
+
+        val list = civictech.cell.data.ListCell<String>().also { host.managementInlet.call.spawn(it) }
+        val refusedList = host.readState(list.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        refusedList.isDone.shouldBeTrue()
+        refusedList.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        list.supportsKeyBound.shouldBeFalse()
+
+        // control: keyBound = null is served normally, on any of the above
+        val servedPlain = host.readState(plain.ref, StateRead(keyBound = null))
+        controller.runToIdle()
+        servedPlain.get().shouldBeInstanceOf<StateReadResult.Page>()
+        plain.reads shouldBe 1
+    }
+
+    @Test
     fun `the byte budget shortens pages without ever stalling a walk`() {
         val cell = populated(60)
 
@@ -399,7 +427,11 @@ class BoundedStateReadTest {
     private class PlainBoundedCell(
         override val ref: civictech.cell.CellRef = civictech.cell.CellRef(java.util.UUID.randomUUID()),
     ) : civictech.cell.Cell, civictech.cell.BoundedStateful {
-        override fun readBounded(request: StateRead) = StatePage(entries = emptyList())
+        var reads = 0
+        override fun readBounded(request: StateRead): StatePage {
+            reads++
+            return StatePage(entries = emptyList())
+        }
         override fun snapshot(): Serializable = 0
         override fun restore(state: Serializable) = Unit
     }
