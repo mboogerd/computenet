@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`))
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`); lateness/waterline eviction specified (§Lateness and waterlines), unbuilt (96 §E4))
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.leftJoin`/`rightJoin`/`fullJoin` (outer joins)
 
@@ -497,9 +497,10 @@ excluded (Ubiquitous).
   close** — late elements are ordinary adds, retractions flow (view
   semantics). `[24-OP-WINDOW-02]` Windows SHALL NOT close: a late element
   SHALL be an ordinary add and retractions SHALL flow as in any other view
-  (Ubiquitous). Deferred with triggers: watermark-driven eviction (an ordinary
-  watermark-as-data source feeding upstream dels; trigger: real
-  window-state memory pressure) and session windows (assignment is not a
+  (Ubiquitous). `[24-OP-WINDOW-02]` holds for every inlet that declares no
+  lateness; an inlet that declares one opts into eviction and a late-drop
+  exception — [§Lateness and waterlines](#lateness-and-waterlines),
+  `[24-WL-11]`. Deferred with trigger: session windows (assignment is not a
   per-element function; trigger: first proximity-session consumer).
   Wave/tick-based windows are rejected: contents would be
   placement-dependent, breaking P1 and batch equivalence.
@@ -539,6 +540,176 @@ protocol; a witness-set-superset unpark rule for SAFETY_PARK; an
 application-level reconciliation hook for fenced divergent writes; an
 optional ack-from-k durability tier; and per-shard leader routing when
 partitions replicate (93 I-25/I-2/I-3/I-8).
+
+### Lateness and waterlines
+
+> **Status**: Decided design (96 §E4), unbuilt. Retracts the eviction
+> trigger that used to trail `[24-OP-WINDOW-02]` (the session-windows
+> deferral stays there). Research: Feldera's lateness → waterline → GC
+> (`doc/research/incremental-engines/01-dbsp-feldera.md` §5), Flink's
+> completeness-coupled eviction and the Dataflow Model's decoupling
+> (`04-cross-cutting-watermarks-consistency.md` §1–2), gap 6
+> (`05-gap-mapping.md`, "Gap 6 — Compaction, GC, eviction").
+
+Windowing as key derivation keeps window-keyed state forever: nothing ever
+tells a `GroupByCell` that a window is finished. Lateness is the opt-in that
+does, without a wall clock and without coordination. An inlet declares how
+late its elements may arrive; an ordinary data cell folds those declarations
+and the observed event times into a **waterline floor**; cells downstream
+evict window state wholly below the floor and drop arrivals that come in under
+it. Eviction here is **not** a pure optimization — research `01` §5 refutes
+(0-3) the claim that lateness GC never changes outputs — so the rules below
+make it destructive *and* visible: evicted state leaves through ordinary
+retractions, late arrivals leave on their own outlet, and the equivalence
+that survives is stated with its condition.
+
+**Declaration.** `[24-WL-01]` A lateness declaration SHALL be a per-inlet
+value binding an event-time extractor `timeFn: (E) -> Long` to a
+non-negative `lateness: Long`, and SHALL be a named `Serializable` class —
+not a lambda or anonymous object — so it survives graph-spec capture, as the
+`Windows` assigners do under `[24-OP-WINDOW-01]` (Ubiquitous). Event time is
+an explicit element attribute read by `timeFn`, never a wall clock, a wave
+counter or an arrival tick: any of those would make window contents
+placement-dependent, the reason wave/tick-based windows are rejected above.
+
+**The floor.** `[24-WL-02]` The waterline floor SHALL be the minimum, over
+every contributing source, of (that source's maximum observed `timeFn(e)` −
+the declared lateness), where a source is the arriving wave's `sourceId`
+(`[22-SRC-01]`) — never a cell ref, host or link — and, before any source has
+contributed, the floor SHALL be the identity that admits every element: no
+eviction, no late-drop (Ubiquitous). The minimum, not the maximum, is the
+point: a max would let a fast source evict a slow source's still-admissible
+data. `[24-WL-03]` The floor SHALL be computed by an ordinary data cell inside
+the dataflow (`WaterlineCell`, emitting `WaterlineDelta`), using no wall clock
+and no cross-host coordination, and SHALL be monotone non-decreasing on every
+prefix of every execution (Ubiquitous). `WaterlineDelta` merges by maximum, so
+redelivery and reordering are fixpoints: a floor that does not rise evicts
+nothing and emits nothing. The waterline edge itself is the delay Feldera
+realises with a z⁻¹-delayed max (research `01` §5). `[24-WL-04]` The floor
+SHALL be a value, not a wave: it SHALL NOT be a wave position and SHALL NOT be
+a member of any completeness set or glitch-free frontier (Ubiquitous). How a
+`WaterlineDelta` emission nonetheless rides the wave plane is stated once, in
+22 §Interaction with other parts.
+
+**Eviction.** `[24-WL-05]` Evicted state SHALL leave through the ordinary
+retraction path — dels flow, groups whose last member is evicted die as a
+`MapDelta` removal (`[24-OP-GROUPBY-02]`) — so that after eviction a cell's
+state still equals its integrated output (Ubiquitous). That equality is what
+keeps late-join catch-up (`[21-CATCHUP-02]`), `Stateful` snapshots and
+per-peer recompute correct with no new machinery; an eviction that dropped
+state without emitting its retractions would leave a late-linking
+subscriber's fold diverging from an already-linked one's. `[24-WL-06]` WHEN a
+`WaterlineDelta` raising the floor arrives at an evicting cell, the cell SHALL
+evict at window granularity — every element of window key `k` exactly when
+`keyTime(k) <= floor`, `keyTime` being the window's end — and SHALL emit the
+resulting retractions as one delta under that `WaterlineDelta`'s wave id
+(`[24-OP-GROUPBY-03]`) (Event-driven). A window is never evicted piecemeal.
+
+**Late arrivals and the guards.** `[24-WL-07]` WHEN an add whose `timeFn(e)`
+is strictly below the current floor arrives at an inlet that declares
+lateness, the cell SHALL exclude it from the fold and forward it verbatim —
+original tags preserved — on a `late` outlet, SHALL NOT retract an
+already-live copy of the same element as a side effect, and SHALL exclude it
+and account for the exclusion even when `late` is unlinked (Event-driven).
+This is the one place "late elements are ordinary adds" does not hold, and it
+is opt-in per inlet (21 §Incremental vs complete). `[24-WL-08]` WHEN a del
+arrives at an inlet that declares lateness, the cell SHALL fold it iff its
+target tag is live in the cell's state and SHALL treat it as a no-op
+otherwise, whatever the del's event time (Event-driven). The del guard is
+**liveness, not time**: a time guard ("a del below the floor is a no-op")
+would leave an element in a not-yet-evicted window un-retractable once the
+floor passed its event time, breaking `[24-WL-05]`. Liveness is also exactly
+what the tag fold already does with a del whose target is gone.
+
+**The safety condition, in its implemented form.** `[24-WL-09]` IF evicting a
+piece of state would leave a subsequently admissible del unable to retract
+it, THEN the cell SHALL NOT evict that state; window-granularity eviction
+(`[24-WL-06]`) together with the liveness del guard (`[24-WL-08]`) SHALL be
+the implemented form of this condition (Unwanted behavior). Evicted state has
+no live tag, so every del that reaches it is a no-op by construction, while
+state a del can still reach has not been evicted. This is deliberately
+narrower than the general condition ("evict only what no admissible del can
+reference"), which has no clean formulation for arbitrary state — the join
+family's minted pairs in particular. The narrowing was anticipated when the
+design was scoped, and any state shape that does not fit it is not evicted
+rather than evicted under a broadened rule.
+
+**What equivalence survives.** `[24-WL-10]` WHILE a pipeline's waterline is
+derivable from a monotone (or near-monotone) event-time attribute, the
+post-quiescence state of every evicting cell, restricted to window keys `k`
+with `keyTime(k)` strictly above the final floor, SHALL equal a batch
+recompute over that cell's late-filtered input — its input with every
+`[24-WL-07]`-dropped add removed — restricted to the same keys: recompute in
+batch, then drop every window the final floor has passed (State-driven). The
+condition is checked per pipeline, never assumed: it is Feldera's own
+correction of the refuted "lateness GC never changes outputs" (research `01`
+§5, 0-3), and it is an author's promise, not something the kernel verifies.
+The restriction is what makes the equality satisfiable alongside
+`[24-WL-05]`/`[24-WL-06]`: the elements of an evicted window were admitted,
+not late-dropped, so they stay in the late-filtered input and an unrestricted
+batch recompute would contain the window, while the streaming state does not.
+Feldera's equivalence needs no such restriction because its GC shrinks
+internal indexes without retracting outputs; eviction here retracts. For an
+evicted window, the equivalence says nothing beyond its
+absence: it is absent from both the cell's state and its integrated output
+(`[24-WL-05]`), and no batch comparison is made for it. `[24-WL-11]` WHILE no
+inlet of a pipeline declares lateness, that pipeline's behaviour SHALL be
+exactly the behaviour without this section: windows never close, late
+elements are ordinary adds, retractions flow (`[24-OP-WINDOW-02]`) — a
+`GroupByCell` constructed without a `waterline` inlet and `keyTime` does not
+participate in eviction at all (State-driven).
+
+**Source retirement.** A source that stops contributing would pin the
+minimum forever, so the floor forgets sources explicitly. `[24-WL-12]` WHEN an
+`EdgeClose` fires for a contributing source's edge, the `WaterlineCell` SHALL
+retire that source's maximum from the minimum; the floor then resumes
+advancing and SHALL still never exceed any remaining live source's promise
+(Event-driven). `[24-WL-13]` WHEN a `ReBaselineNotice` supersedes a source
+(`[21-REBASE-01]`), the `WaterlineCell` SHALL retire the superseded source's
+maximum and let the fresh epoch's `sourceId` contribute from scratch, so a
+RESTART'd producer's stale pre-restart maximum never gates the floor
+(Event-driven). `[24-WL-14]` WHILE a contributing source is linked and open
+but idle, the floor SHALL NOT advance past that source's promise
+(State-driven). This is the accepted residual: frozen but correct — eviction
+stalls, and with it the memory bound, until the source emits, closes or is
+retired. What should retire or age an idle source without a wall clock is
+research ([95 §R15](../90-roadmap/95-research-plan.md)).
+`[24-WL-15]` WHERE a management operator invokes `retire(sourceId)` on a
+`WaterlineCell`, that source SHALL stop gating the floor (Optional feature) —
+the manual escape hatch for the idle-source residual.
+
+**The join family.** `[24-WL-16]` WHERE a member of the join family
+(`JoinSetCell`, `SemiJoinCell`, `IntersectSetCell`) declares lateness, it
+SHALL evict through the same destructive-with-retraction rule as
+`GroupByCell` — both per-side row indexes and the minted pairs below the
+floor, with the minted pairs' exit tags emitted — and SHALL apply the same
+`[24-WL-07]`/`[24-WL-08]` guards on its lateness-declaring inlets (Optional
+feature). Evicting minted pairs without their exit tags would leave
+tombstone-folding consumers permanently holding dead pairs: the M11.2
+tag-hygiene rule (21 §Incremental vs complete, requirement 4) binds eviction
+as it binds every other retraction.
+
+**Exclusive payloads.** `[24-WL-17]` IF an element an eviction would remove
+carries an `Owned` or `Leased` payload, THEN the cell SHALL refuse that
+eviction with a named diagnostic and leave its state and outlets untouched,
+and SHALL NOT discharge the evictee (Unwanted behavior). 23 §Taps
+("Discharging sinks") forbids silently dropping an exclusive, and eviction is
+a new state-destroying path that must not become the first to leak one; but
+discharging at eviction is not the answer either, because the retraction
+path re-references the element after eviction (a set delta's dels are keyed
+by element), so every downstream fold would be handed an already-discharged
+exclusive. Refusal is the kernel's precedent for a fold it cannot perform
+safely (`NonIdempotentEmbeddedMerge`, in `MergeablePayload.kt`).
+
+**Replicated state.** `[24-WL-18]` WHILE a cell holds `Replicable` state, the
+waterline path SHALL refuse destructive eviction of that state: it evicts
+single-instance state only (`GroupByCell`, the join family), and lifting the
+restriction ties the floor to the stable frontier
+(`Replication.stableFrontier`), a separate item (State-driven). A replica
+evicting locally while a peer still gossips below the floor would re-admit
+ghosts. Stability-scoped reclamation already exists (`StabilityReclaim`), but
+nothing relates a waterline floor to the stable frontier, so its existence
+does not by itself lift the restriction.
 
 ## Partitioned state
 

@@ -67,6 +67,18 @@ Normative requirements on a delta type:
    (computenet-vvre, computenet-s6l2); `JoinLedger`'s KDoc states the same two
    preconditions in code.
 
+**Late elements are ordinary adds — with one declared exception.** There is
+no wall clock and a delta carries no notion of "too late": an element whose
+event time trails elements already seen is an ordinary add, and retractions
+keep flowing (`[24-OP-WINDOW-02]`). The single exception is declared, opt-in
+and per inlet: an inlet that declares lateness (`[24-WL-01]`) drops an add
+whose event time lies strictly below the current waterline floor from its
+fold and forwards it verbatim on a `late` outlet (`[24-WL-07]`), while dels
+at that inlet stay guarded by liveness, not time (`[24-WL-08]`). Every inlet
+that declares no lateness behaves exactly as above (`[24-WL-11]`). The drop
+is consistent with effective-only emission (requirement 2): the excluded add
+changes no folded state, so the cell emits no data-outlet delta for it.
+
 ## Pull
 
 [21-PULL-01] ADR 1 requires on-demand reads and recomputation: WHEN a consumer
