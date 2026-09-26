@@ -205,13 +205,14 @@ class WaterlineCellTest {
         val rnd = Random(seed)
         val sources = listOf(a, b, c)
         val counters = LongArray(3)
-        val cursor = LongArray(3)
+        val cursor = LongArray(3) // per-source maximum sent so far (first draws are >= 0)
+        fun reference() = (0 until 3).filter { counters[it] > 0L }.map { cursor[it] }
         val steps = 60 + rnd.nextInt(61)
         for (step in 0 until steps) {
             val i = rnd.nextInt(3)
             val src = sources[i]
             val t = if (counters[i] == 0L) {
-                (cell.maxima().values.maxOrNull() ?: 0L) + rnd.nextInt(10)
+                (reference().maxOrNull() ?: 0L) + rnd.nextInt(10)
             } else if (rnd.nextInt(4) == 0) {
                 cursor[i] - rnd.nextInt(20) // falls back
             } else {
@@ -228,7 +229,8 @@ class WaterlineCellTest {
             }
             if (floors.lastOrNull() != cell.floor()) throw AssertionError("last emission != floor(): $where")
             val f = cell.floor() ?: continue
-            val bound = cell.maxima().values.min() - lateness.lateness
+            // the test's own per-source maxima, not cell.maxima(): the bound must not trust the cell's keying
+            val bound = reference().min() - lateness.lateness
             if (f > bound) throw AssertionError("floor $f > min(maxima)-lateness $bound: $where")
         }
     }
