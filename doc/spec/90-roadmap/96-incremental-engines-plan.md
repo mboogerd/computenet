@@ -525,8 +525,8 @@ tombstone-folding consumers dead (the M11.2 tag-hygiene control inverted).
 ### E4.6 — Generative lateness harness + demo adoption (gap 6; F-2 adjacent) — P3 · High · `data`
 **Spec**: 50/52 (new invariant rows); 20/24 §Lateness and waterlines.
 **Implement**: a seeded generative harness over the E4.2-E4.5 pipeline shapes with
-configurable disorder and lateness violations; promote "incremental == batch over
-late-filtered input" and "memory bounded by lateness horizon" to standing 52 invariants.
+configurable disorder and lateness violations; promote `[24-WL-10]`'s equivalence and
+"memory bounded by lateness horizon" to standing 52 invariants.
 Adopt in `:demo:slotfinder`'s `byDay` fold (its natural event-time window) as the first
 real consumer. Test: is the item — 100 seeds, with the E4.3/E4.5 controls kept
 red-capable.
