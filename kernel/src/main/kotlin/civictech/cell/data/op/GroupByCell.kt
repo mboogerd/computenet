@@ -6,6 +6,7 @@ import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
 import civictech.cell.Stateful
+import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
@@ -13,10 +14,15 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.Aggregator
+import civictech.cell.data.Windows
 import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
+import civictech.cell.data.delta.WaterlineDelta
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
 
 @CellBase
 interface GroupByApi<E, K, A> {
@@ -93,11 +99,32 @@ interface GroupByApi<E, K, A> {
  * through its own reflective `ValueEncoder`, not through `WireCodec`). The
  * catalog folds in `:concord`/`:oracle` are statically `Any?`-keyed but run
  * only in-process.
+ *
+ * ### Lateness: the `waterline` inlet and the `late` outlet (KE4.3)
+ *
+ * Constructed with a [Windows.Lateness] and a `keyTime` (both or neither), the
+ * cell tracks the event-time floor delivered on [waterline] and guards
+ * [inlet]: an add whose `timeFn(e)` is strictly below the floor is excluded
+ * from the fold, creates no group, retracts no live copy of the element, and
+ * leaves verbatim — tags preserved — on [late], counted in [droppedBelowFloor]
+ * whether or not `late` is linked (`[24-WL-07]`). Dels are never filtered by
+ * time: the tag fold's liveness check is the guard (`[24-WL-08]`). The two
+ * ports are registered on this class, always present and unlinked by default,
+ * and deliberately **not** on [GroupByApi]: `PartitionedCell` implements that
+ * Api directly and could honour neither. So a cell reached through a
+ * `GroupByApi` ref, or constructed without lateness, is exactly the
+ * pre-lateness operator (`[24-WL-11]`); a `WaterlineDelta` on such a cell is a
+ * structural error and throws. Eviction of passed windows on a floor rise is
+ * computenet-nt17o.3's; this class so far only records the floor.
  */
 class GroupByCell<E, K, A, ACC : Serializable>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val keyFn: (E) -> K,
     private val aggregator: Aggregator<E, A, ACC>,
+    /** The inlet's lateness declaration (`[24-WL-01]`); `null` = no guard, no floor (`[24-WL-11]`). */
+    private val lateness: Windows.Lateness<E>? = null,
+    /** A window key's end in event time — the eviction unit's clock (`[24-WL-06]`); given iff [lateness] is. */
+    private val keyTime: ((K) -> Long)? = null,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
 ) : GroupByCellBase<E, K, A>(ref), Stateful, BoundedStateful {
@@ -107,19 +134,102 @@ class GroupByCell<E, K, A, ACC : Serializable>(
 
     private val groups = mutableMapOf<K, Group<ACC>>()
 
+    /** The event-time floor (`[24-WL-02]`); `null` is the identity — nothing is below it. */
+    private var floor: Long? = null
+
+    /** The current waterline floor, or `null` before any raising [WaterlineDelta] (or without lateness). */
+    fun floor(): Long? = floor
+
+    /**
+     * Adds excluded by the late-drop guard, counted per dropped element (map
+     * entry). The observable half of the drop (`[24-WL-07]`): it moves even
+     * when [late] is unlinked. A counter, not state — neither snapshotted nor
+     * paged by [readBounded].
+     */
+    var droppedBelowFloor: Long = 0
+        private set
+
+    /** The floor's inlet (`[24-WL-03]`): a value read here, never re-emitted (`[24-WL-04]`). */
+    val waterline = registerPort("waterline", FanInlet.create<Propagate<WaterlineDelta>>())
+
+    /** Sub-floor adds, forwarded verbatim — original tags — under the delivery that carried them (`[24-WL-07]`). */
+    val late = registerPort("late", FanOutlet.create<Propagate<SetDelta<E>>>())
+
     init {
+        require((lateness == null) == (keyTime == null)) {
+            "GroupByCell needs both lateness and keyTime, or neither (lateness=$lateness, keyTime=$keyTime)"
+        }
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
         outlet.catchUpOnLinked {
             if (groups.isEmpty()) null
             else MapDelta(groups.mapValues { aggregator.value(it.value.acc) }, emptySet())
         }
+        waterline.serve(object : Propagate<WaterlineDelta> {
+            override fun propagate(value: WaterlineDelta) = onWaterline(value)
+        })
+    }
+
+    private fun onWaterline(delta: WaterlineDelta) {
+        checkNotNull(lateness) {
+            "GroupByCell $ref: waterline linked on a cell constructed without lateness/keyTime"
+        }
+        val current = floor
+        if (current != null && delta.floor <= current) {
+            // [24-WL-03] fixpoint: a non-raising floor changes nothing — ack the wave on both outlets
+            outlet.absorbAck()
+            late.absorbAck()
+            return
+        }
+        floor = delta.floor
+        onFloorRaised(delta.floor)
+    }
+
+    /** The eviction hook: computenet-nt17o.3 replaces this body with window eviction (`[24-WL-06]`). */
+    @Suppress("UNUSED_PARAMETER")
+    private fun onFloorRaised(newFloor: Long) {
+        outlet.absorbAck()
+        late.absorbAck()
     }
 
     override fun onInlet(value: SetDelta<E>) {
-        val touched = value.adds.keys + value.dels.keys
-        val liveBefore = touched.filterTo(mutableSetOf()) { it in state }
-        state.apply(value)
+        // [24-WL-07] late-drop guard; consulted only when lateness is declared and the floor is set
+        val lateness = lateness
+        val current = floor
+        var dropped: Map<E, Set<Timestamp>> = emptyMap()
+        val admitted = if (lateness != null && current != null) {
+            val (below, rest) = value.adds.entries.partition { lateness.timeFn(it.key) < current }
+            if (below.isEmpty()) value
+            else {
+                dropped = below.associate { it.key to it.value }
+                // dels are never filtered by time: TagState.apply's liveness is the guard ([24-WL-08])
+                SetDelta(rest.associate { it.key to it.value }, value.dels)
+            }
+        } else value
 
+        val touched = admitted.adds.keys + admitted.dels.keys
+        val liveBefore = touched.filterTo(mutableSetOf()) { it in state }
+        state.apply(admitted)
+
+        val delta = foldMembership(touched, liveBefore)
+        if (delta != null) {
+            outlet.call.propagate(delta)
+        } else {
+            outlet.absorbAck() // tag churn / value-equal fold — ack the swallowed wave (CP-A3)
+        }
+        if (dropped.isNotEmpty()) {
+            droppedBelowFloor += dropped.size
+            late.call.propagate(SetDelta(adds = dropped))
+        } else {
+            late.absorbAck()
+        }
+    }
+
+    /**
+     * Membership flips of [touched] (given which were live before the tag fold)
+     * into [groups], and the effective-only `MapDelta` they produce — `null`
+     * when no group's value changed. The seam eviction (computenet-nt17o.3) reuses.
+     */
+    private fun foldMembership(touched: Set<E>, liveBefore: Set<E>): MapDelta<K, A>? {
         // first-touch snapshot per affected group: emission compares
         // against the value before this delta, not mid-fold values
         val before = mutableMapOf<K, A?>()
@@ -150,11 +260,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
                 now != null && now != old -> puts[k] = now // effective-only: value-equals gates
             }
         }
-        if (puts.isNotEmpty() || removals.isNotEmpty()) {
-            outlet.call.propagate(MapDelta(puts, removals))
-        } else {
-            outlet.absorbAck() // tag churn / value-equal fold — ack the swallowed wave (CP-A3)
-        }
+        return if (puts.isNotEmpty() || removals.isNotEmpty()) MapDelta(puts, removals) else null
     }
 
     /**
@@ -169,14 +275,23 @@ class GroupByCell<E, K, A, ACC : Serializable>(
 
     // ponytail: acc is not deep-copied — every snapshot consumer (checkpoint,
     // migrate) serializes immediately; copy-on-snapshot if one ever retains it
-    override fun snapshot(): Serializable = arrayListOf(
+    //
+    // A lateness-declaring cell appends its floor as a third element (nt17o-D4,
+    // the floor half of [22-REC-01]) so a recovered cell keeps late-dropping; a
+    // cell without lateness keeps the two-element form byte-for-byte ([24-WL-11]).
+    override fun snapshot(): Serializable = arrayListOf<Serializable?>(
         state.snapshot(),
         HashMap(groups.mapValues { arrayListOf(it.value.count, it.value.acc) }),
-    )
+    ).apply { if (lateness != null) add(floor) }
 
+    /** Accepts the two-element form (no floor: `floor()` stays `null`) and the three-element form. */
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
-        val (tags, gs) = state as ArrayList<Serializable>
+        val parts = state as List<Serializable?>
+        require(parts.size == 2 || parts.size == 3) { "GroupByCell snapshot has ${parts.size} parts, want 2 or 3" }
+        val tags = parts[0] as Serializable
+        val gs = parts[1] as Serializable
+        floor = if (parts.size == 3) parts[2] as Long? else null
         this.state.restore(tags)
         groups.clear()
         (gs as Map<K, List<Serializable>>).forEach { (k, g) ->
