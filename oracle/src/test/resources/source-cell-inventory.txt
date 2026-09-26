@@ -30,6 +30,9 @@
 # per-source dot set written only by SetCell.compactBelow. It is neither a source cell nor an
 # operator, so it needs no OperatorCatalog registration and no HONEST-02 ledger entry — it is
 # listed here for the same reason PageBudget and KeyWalk are, because it is on the classpath.
+# WaterlineCell (added by computenet-sjqat, KE4.2) is a fourth ledger exclusion: its per-source
+# contribution is keyed on the arriving wave's sourceId, which no batch script can express — see
+# its HONEST-02 ledger entry.
 #
 # 42 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
 # isKotlinFileFacade, from a :kernel:compileKotlin build against commit 7b917c3b
@@ -85,6 +88,8 @@ SetCellBase
 SetCellPorts
 SetOps
 SortSpec
+WaterlineCell
+WaterlineCellPorts
 WatermarkCell
 WatermarkCellPorts
 Windows
