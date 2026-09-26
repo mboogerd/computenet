@@ -35,7 +35,7 @@ import java.util.UUID
  * ports, floor tracking and late-drop guard — spec 24 §Lateness and
  * waterlines `[24-WL-03]` (the consumer's fixpoint), `[24-WL-04]`,
  * `[24-WL-07]`, `[24-WL-08]`, `[24-WL-11]`, and the floor half of
- * `[22-REC-01]` (nt17o-D4). Eviction on a floor rise is computenet-nt17o.3's
+ * `[KE4-45]` (nt17o-D4). Eviction on a floor rise is computenet-nt17o.3's
  * and appends to this file.
  *
  * Fixture: elements are `Long` event times, tumbling windows of 10 keyed by

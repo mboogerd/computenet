@@ -277,7 +277,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     // migrate) serializes immediately; copy-on-snapshot if one ever retains it
     //
     // A lateness-declaring cell appends its floor as a third element (nt17o-D4,
-    // the floor half of [22-REC-01]) so a recovered cell keeps late-dropping; a
+    // the floor half of [KE4-45]) so a recovered cell keeps late-dropping; a
     // cell without lateness keeps the two-element form byte-for-byte ([24-WL-11]).
     override fun snapshot(): Serializable = arrayListOf<Serializable?>(
         state.snapshot(),
