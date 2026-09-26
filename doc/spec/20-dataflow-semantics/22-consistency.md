@@ -499,6 +499,17 @@ frame path (CP-A2, composition plan; see 40/41 point 4).
   delta invocations unchanged; tags and waves are separate uses of one clock
   shape — attention's per-emitter LWW `version` (93 I-4) is a third: a
   payload discriminator, never a wave.
+- **Waterline floor (24)**: the lateness floor (`[24-WL-02]`) is one more
+  non-wave use of the monotone-clock shape — a monotone event-time *value*
+  carried as payload, never a wave position and never a member of any
+  completeness set or glitch-free frontier (`[24-WL-04]`). Its carrier is not
+  outside the wave plane: a `WaterlineDelta` emission is an ordinary
+  transparent-flow emission (§MessageContext rule 2) riding the wave whose
+  data advanced the floor, and a wave that reaches the waterline cell without
+  moving the floor emits nothing and is absorb-acked (CP-A3), so a glitch-free
+  consumer downstream of both the data and the waterline settles that wave
+  normally. Evictions the floor drives emit under the `WaterlineDelta`'s wave
+  id (`[24-WL-06]`).
 - **Cycles (21)**: decided in 93 I-5, unimplemented. Every cycle declares at
   least one **cycle head**; the head's feedback→emission transition mints a
   fresh wave instead of preserving the incoming one — the single stated
