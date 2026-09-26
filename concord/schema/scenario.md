@@ -123,6 +123,7 @@ optional descriptor param the driver binds. The v1 named params:
 | `replica-of` | logical replica-group id (dist profile) |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
+| `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
 
 `agg`, `k`, and `window` are **additive** (W3-0 / R2-B): existing files deserialize
 unchanged (all optional; `window` absent on every non-`window` cell). The parser
@@ -189,6 +190,9 @@ ticket.
 
 `{from, to, inlet?, outlet?, role?}`. `role` selects consume vs observe
 (23-ownership). Endpoints are cell `id`s.
+
+A link into an `aligned-view` **must** name `inlet:` as one of that cell's
+`views:` names; there is no default inlet on it.
 
 ## `script` — the step verbs
 
@@ -650,6 +654,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
 | effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) — unkeyed, per key the script *fed* it (see below) |
 | observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
+| composite-whole-waves | `{type: composite-whole-waves, view: c, source: s, members?: [items, evens]}` | every composite on the `aligned-view` `c`'s stream has all checked members at their arm-derived folds of **one common** op prefix of `s` (see below) |
 | wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 | emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
@@ -880,6 +885,32 @@ count, so a driver that does not observe refusals at the named cell MUST fail
 loudly rather than answer `0` — see the next section — and the evaluator reports
 that as this check's failure. A negative reading fails for the same reason: a
 tally that only ascends cannot produce one, so it is not a count of refusals.
+
+### `composite-whole-waves`: one common prefix across members
+
+(`computenet-5ubdv`, spec 22 `[22-OBS-01]`/`[22-OBS-02]`.) An `aligned-view`
+observation is a composite `{name → member value}`. `observations-whole-waves`
+cannot assert its wave-completeness: it reads one set stream against one source
+and accepts any prefix, while a composite's property is the members' **joint**
+prefix — `{items: [1, 2], evens: []}` has each member at a valid prefix on its
+own and is still torn.
+
+The check passes iff every observation is a map in which, for one prefix length
+`p` of `source`'s accepted `add`/`remove` script (the same enumeration
+`observations-whole-waves` performs), every checked member equals that member's
+expected fold of prefix `p`, compared as a set. `members` defaults to every name
+of the view's `views:`. A member's expected fold is the prefix set passed
+through its **arm** — the cells from `source` to the link `{to: c, inlet:
+<member>}` — where each arm cell is `map` (`fn` absent or `identity`, a no-op)
+or `filter` (a catalog predicate), each with exactly one inbound link, applied
+in chain order.
+
+Anything the evaluator cannot model fails **loudly**, naming the member and the
+offending cell or id, and never passes: a member whose id is not `set-view`, an
+arm through any other cell type (`group-by`, `union`, …), a fan-in on the arm,
+an inlet with zero or several inbound links, an arm not ending at `source`, a
+`members:` name not in `views:`, or a source op other than `add`/`remove`. An
+empty observation stream fails as for the other `observations-*` checks.
 
 ### What a conforming driver must observe (the four checks that need one)
 

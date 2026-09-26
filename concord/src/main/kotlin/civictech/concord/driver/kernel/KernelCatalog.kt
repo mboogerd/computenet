@@ -25,11 +25,13 @@ import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.Windows
+import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.concord.value.Value
 import java.io.Serializable
+import java.util.Collections
 
 /**
  * The neutral cell-catalog → kernel-cell binding (W1-A/W3-0, CONCORD-PLAN §1.4
@@ -48,8 +50,13 @@ import java.io.Serializable
  */
 internal object KernelCatalog {
 
-    /** How a view cell's materialized value is folded back into a [Value]. */
-    enum class ViewKind { NONE, SET, VALUE, MAP, COUNT, LIST }
+    /**
+     * How a view cell's materialized value is folded back into a [Value].
+     * [COMPOSITE] is an `aligned-view`: its sink ([RecordedComposite]) has
+     * already rendered each member with the member's own kind, so the read is a
+     * `MapVal` of those renderings.
+     */
+    enum class ViewKind { NONE, SET, VALUE, MAP, COUNT, LIST, COMPOSITE }
 
     /** The outcome of building one catalog cell: the kernel [Cell] plus (for views) the sink to read. */
     data class Built(
@@ -221,6 +228,16 @@ internal object KernelCatalog {
             "tagged-map-view" -> observeCell(View.taggedMap<Any?, Any?>(), ViewKind.MAP, singleWriter)
             "count-view" -> observeCell(View.count<Any?>(), ViewKind.COUNT, singleWriter)
             "list-view" -> observeCell(listView(), ViewKind.LIST, singleWriter)
+            // `aligned-view` (KE2 §5.8, [22-OBS-01]/[22-OBS-02]): ONE kernel
+            // AlignedCompositeCell over the named member folds of `views:` (the
+            // runner lowers it to `params["views"] = MapVal(name -> StrVal(id))`).
+            // Each member name is also the cell's inlet port for that member, so a
+            // link into it must name `inlet:` (see [inletName]). Members bind the
+            // same folds their standalone ids do; the composite is published once
+            // per completed wave, so no read of it ever mixes waves. The
+            // observation stream is captured by [RecordedComposite] (listener +
+            // drain barrier), not at a fold — see its KDoc for why.
+            "aligned-view" -> alignedView(params)
 
             // ---- cycles -----------------------------------------------------
             // A CycleHead: its `feedbackInput` (a FeedbackInlet) is the only inlet a
@@ -345,6 +362,56 @@ internal object KernelCatalog {
     }
 
     /**
+     * Binds `aligned-view`: `params["views"]` must be a non-empty `MapVal` of
+     * view name -> member view id. Only the member ids whose standalone fold is
+     * a plain [View] bind here (`set-view`, `map-view`, `count-view`,
+     * `value-view`); anything else — `list-view`, `tagged-map-view`, a nested
+     * `aligned-view`, an unknown id — is refused by name rather than bound to a
+     * fold that does not mean what the scenario says.
+     *
+     * The cell is constructed by the `views =` named argument only, and the
+     * binding touches only `current()`, `onChange`, `inlets` and `close()`, so
+     * additive constructor params on [AlignedCompositeCell] do not reach it.
+     */
+    private fun alignedView(params: Map<String, Value>): Built {
+        val members = (params["views"] as? Value.MapVal)?.entries
+            ?: throw UnsupportedCatalogBinding(
+                "aligned-view requires a `views:` map of view name -> member view id " +
+                    "(set-view | map-view | count-view | value-view); got ${params["views"]}",
+            )
+        if (members.isEmpty()) {
+            throw UnsupportedCatalogBinding("aligned-view requires a non-empty `views:` map; got {}")
+        }
+        val folds = LinkedHashMap<String, View<*, *>>()
+        val kinds = LinkedHashMap<String, ViewKind>()
+        for ((name, idValue) in members) {
+            val id = (idValue as? Value.StrVal)?.value
+                ?: throw UnsupportedCatalogBinding(
+                    "aligned-view member '$name' must name a member view id as a string; got $idValue",
+                )
+            val (fold, kind) = when (id) {
+                "set-view" -> View.set<Any?>() to ViewKind.SET
+                "map-view" -> View.map<Any?, Any?>() to ViewKind.MAP
+                "count-view" -> View.count<Any?>() to ViewKind.COUNT
+                "value-view" -> scalarView() to ViewKind.VALUE
+                else -> throw UnsupportedCatalogBinding(
+                    "aligned-view member '$name' names '$id', which has no aligned-view binding — only " +
+                        "set-view, map-view, count-view and value-view fold into an aligned composite",
+                )
+            }
+            folds[name] = fold
+            kinds[name] = kind
+        }
+        val cell = AlignedCompositeCell(views = folds)
+        // Appended on the sink's dispatcher thread, read on the runner thread
+        // after [RecordedComposite.drain]: the drain latch's countDown/await is
+        // the happens-before edge; the synchronized list is belt and braces.
+        val log: MutableList<Value> = Collections.synchronizedList(mutableListOf())
+        val sink = RecordedComposite(cell, kinds, log)
+        return Built(cell, sink, ViewKind.COMPOSITE, observations = log)
+    }
+
+    /**
      * The kernel inlet port name a scenario link's [scenarioInlet] targets on a
      * cell of catalog [targetType]. The neutral `left`/`right` inlets of a
      * single-port fan-in (`union`/`intersect`/`quorum-set`) collapse to the
@@ -358,8 +425,17 @@ internal object KernelCatalog {
      * unrestricted fan-in like `quorum-set`, so *both* neutral arms collapse onto
      * its one `inlet` — each still its own link, hence its own expected edge in
      * the cell's completeness set.
+     *
+     * An `aligned-view` has one inlet per member view, named after it, and no
+     * port called `inlet`: a link into one must name its member, so a missing
+     * [scenarioInlet] is refused here rather than defaulted to a port that does
+     * not exist.
      */
     fun inletName(targetType: String, scenarioInlet: String?, waveAligned: Boolean = false): String = when {
+        targetType == "aligned-view" -> scenarioInlet ?: throw UnsupportedCatalogBinding(
+            "a link into an aligned-view names `inlet:` as one of its view names — the cell has one inlet " +
+                "per member view and no port called `inlet`",
+        )
         // union/quorum-set are single fan-in ports (one `inlet`, left/right merge on it);
         // intersect is NOT — IntersectSetCell exposes distinct `left`/`right` ports (its
         // contract has no `inlet` port), so it routes through the two-input branch.
@@ -517,6 +593,11 @@ internal object KernelCatalog {
         ViewKind.SET -> Value.ListVal((current as Set<*>).map { Value.of(it) }.sortedBy { it.toString() })
         ViewKind.LIST -> Value.ListVal((current as List<*>).map { Value.of(it) })
         ViewKind.MAP, ViewKind.COUNT -> Value.of(current)
+        // Already rendered member by member by RecordedComposite.current().
+        ViewKind.COMPOSITE -> {
+            @Suppress("UNCHECKED_CAST")
+            Value.MapVal(current as Map<String, Value>)
+        }
         ViewKind.NONE -> error("readView on a non-view cell")
     }
 }

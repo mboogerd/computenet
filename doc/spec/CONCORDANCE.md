@@ -78,8 +78,8 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 22-GF-02 | 22-GF-NESTED-01 | covered |
 | 22-GF-03 | — | gap |
 | 22-LIVE-01 | 22-LIVE-01 | covered |
-| 22-OBS-01 | — | gap |
-| 22-OBS-02 | — | gap |
+| 22-OBS-01 | 22-OBS-01 | covered |
+| 22-OBS-02 | 22-OBS-02 | covered |
 | 22-REC-01 | — | gap |
 | 22-SRC-01 | 22-SOURCE-ID-01 | covered |
 | 24-AGG-01 | 24-OP-GROUPBY-01, 24-OP-GROUPBY-02, 24-OP-GROUPBY-03 | covered |
@@ -211,8 +211,6 @@ None.
 - Coverage gap: requirement '21-CYCLE-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '21-PULL-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '22-GF-03' (20-dataflow-semantics/22-consistency.md) has no covering scenario
-- Coverage gap: requirement '22-OBS-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
-- Coverage gap: requirement '22-OBS-02' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '22-REC-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '24-DUR-09' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
