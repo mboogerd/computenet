@@ -8,7 +8,7 @@
 # models that with two arms over the same set source: `items` through an
 # identity map, `evens` through `filter fn: even` — both are `map`/`filter`
 # chains ending at `s`, the shape `composite-whole-waves` (5ubdv-D3,
-# concord/schema/Checks.kt) can model. `final-view` (5ubdv-D2) carries the
+# concord/src/main/kotlin/civictech/concord/check/Checks.kt) can model. `final-view` (5ubdv-D2) carries the
 # settled-state half of the clause (both members equal their batch fold at
 # quiescence); `composite-whole-waves` carries the never-torn half (every
 # observed composite on the stream is at one common source-prefix for every
