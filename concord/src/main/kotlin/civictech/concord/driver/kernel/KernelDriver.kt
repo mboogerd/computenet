@@ -39,6 +39,8 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.util.UUID
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Binding #1 of the Concord [Driver] SPI (CONCORD-PLAN §1.4, W1-A): the
@@ -285,14 +287,47 @@ class KernelDriver(seed: Long? = null) : Driver {
         bound.host.routerInlet.call.route(bound.ref, "inlet", invocation)
     }
 
+    /**
+     * How long [quiesce] waits for each aligned view's listener dispatcher to
+     * reach its drain barrier ([RecordedComposite.drain]) before failing loudly.
+     * A generous bound: an idle dispatcher reaches it in microseconds, so this
+     * only ever elapses for a wedged or badly starved listener. `internal var`
+     * so a test can shorten it.
+     */
+    internal var compositeDrainTimeout: Duration = 60.seconds
+
     override fun quiesce(budget: Int): QuiesceReport {
         var steps = 0
+        var settled = false
         while (steps < budget) {
-            if (!controller.step()) return QuiesceReport(settled = true, steps = steps)
+            if (!controller.step()) {
+                settled = true
+                break
+            }
             steps++
         }
-        // budget exhausted with work still pending: report unsettled (diagnostic, never a golden — P1)
-        return QuiesceReport(settled = false, steps = steps)
+        // Settled or not (budget exhausted is a diagnostic, never a golden — P1),
+        // every composite published so far must be in its log before a check reads it.
+        drainComposites()
+        return QuiesceReport(settled = settled, steps = steps)
+    }
+
+    /**
+     * The drain barrier for every aligned view (5ubdv-D1): each composite
+     * published before this call is in its observation log on return, or this
+     * throws. Single-view logs need no barrier — they are recorded at the fold.
+     */
+    private fun drainComposites() {
+        cells.values.mapNotNull { it.sink as? RecordedComposite }.forEach { it.drain(compositeDrainTimeout) }
+    }
+
+    /**
+     * Shut every aligned view's listener dispatcher thread (one daemon thread
+     * per aligned sink per run). Idempotent. The runner calls it once per run,
+     * after its checks have read the logs.
+     */
+    fun close() {
+        cells.values.mapNotNull { it.sink as? RecordedComposite }.forEach { it.close() }
     }
 
     override fun readView(cellId: CellId): Value {
@@ -302,6 +337,12 @@ class KernelDriver(seed: Long? = null) : Driver {
         return KernelCatalog.readView(bound.viewKind, sink.current())
     }
 
+    /**
+     * The recorded observation stream. A single view's log is recorded at the
+     * fold and is whole at any quiescent point; an `aligned-view`'s composite
+     * log is recorded by its listener and is whole once [quiesce] has returned
+     * (its drain barrier), which is when the runner reads it.
+     */
     override fun observationLog(cellId: CellId): List<Value> =
         if (cellId in durCells) dur.observationLog(cellId) else cells.getValue(cellId).log.toList()
 
