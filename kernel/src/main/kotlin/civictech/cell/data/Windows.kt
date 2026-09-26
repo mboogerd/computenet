@@ -40,4 +40,23 @@ object Windows {
             return starts.reversed()
         }
     }
+
+    /**
+     * `[24-WL-01]` a per-inlet lateness declaration: [timeFn] reads the
+     * element's event-time attribute — never a wall clock, a wave counter or an
+     * arrival tick, any of which would make window contents placement-dependent
+     * (the reason wave/tick-based windows are rejected above) — and [lateness]
+     * bounds how far behind the waterline floor an element of this inlet may
+     * still arrive (`[KE4-37]`). A named `Serializable` class, not a lambda or
+     * anonymous object, so it survives graph-spec capture the same way the
+     * assigners above do (`[24-OP-WINDOW-01]`); construction is the API, there
+     * is no factory function. Callers pass a `Serializable` function value for
+     * [timeFn] (a named class or object, as [tumbling]/[sliding] are) — this
+     * class cannot enforce that, only declare it.
+     */
+    data class Lateness<E>(val timeFn: (E) -> Long, val lateness: Long) : Serializable {
+        init {
+            require(lateness >= 0) { "need lateness >= 0" }
+        }
+    }
 }
