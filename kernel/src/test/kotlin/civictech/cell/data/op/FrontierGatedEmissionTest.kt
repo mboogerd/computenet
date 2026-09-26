@@ -1342,6 +1342,21 @@ class FrontierGatedEmissionTest {
         (flickered > 0).shouldBeTrue()
     }
 
+    @Test
+    fun `gated LookupJoinCell re-publishes an existing fact when only its dimension row changes in a wave, over 200 seeds`() {
+        // The pre-announce rig never changes the dimension of a fact put in an
+        // EARLIER wave, so the dimension fold's byDim fan-out goes unexercised
+        // there. Here f1 lands once (wave 1) and every later wave carries only
+        // a new d1 row: the dimension fold is the sole thing touching f1.
+        assertGatedMapNetEffect(
+            ::lookupUnderTest,
+            leftImage = { d ->
+                if (d.puts.values.single() == 1) MapDelta(mapOf("f1" to 1), emptySet()) else MapDelta(emptyMap(), emptySet())
+            },
+            rightImage = { d -> MapDelta(mapOf("d1" to 100 * d.puts.values.single()), emptySet()) },
+        ) { n -> mapOf("f1" to 1 + 100 * n) }
+    }
+
     /**
      * One real left arm and one [MapFilterHead] `kind = "Z"` right arm that
      * absorb-acks every wave (CP-A3, no key carries a `Z`), gated; wave 1 runs,
