@@ -1787,7 +1787,7 @@ set("wanted")`) wedges on the first vote wave: `items` and `produce` are open
 `Consume` edges whose floor sits below that wave and which never carry a vote
 source, so they are expected edges for it under the static link set
 (`AlignedCompositeCell`'s `expectedEdges`,
-`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt:487`) and the
+`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt:624`) and the
 wave is held — `bufferedWaves` grows — until an ack, a later wave on that arm,
 or an `EdgeClose` shrinks the condition. This is exactly the shape
 `AlignedObserveTest`'s `` `a view fed by an independent root holds waves until
@@ -1804,7 +1804,7 @@ over-alignment a four-view sink would need — blocking `items`/`produce`
 updates from becoming observable while waiting on an unrelated vote root is
 "over-alignment across independent sources," which the requirement says
 "SHALL NOT" happen. The static-link-set frontier (G-13,
-`doc/spec/20-dataflow-semantics/22-consistency.md:175,324`) has no upstream
+`doc/spec/20-dataflow-semantics/22-consistency.md:175,331`) has no upstream
 traversal that would let an arm learn "I structurally never carry a vote
 source, so stop waiting for one" — and PN-16
 (`doc/spec/90-roadmap/95-research-plan.md:343`) decided that traversal is not
