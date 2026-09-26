@@ -649,8 +649,8 @@ The restriction is what makes the equality satisfiable alongside
 not late-dropped, so they stay in the late-filtered input and an unrestricted
 batch recompute would contain the window, while the streaming state does not.
 Feldera's equivalence needs no such restriction because its GC shrinks
-internal indexes without retracting outputs; eviction here retracts. For a
-window the final floor has passed, the equivalence says nothing beyond its
+internal indexes without retracting outputs; eviction here retracts. For an
+evicted window, the equivalence says nothing beyond its
 absence: it is absent from both the cell's state and its integrated output
 (`[24-WL-05]`), and no batch comparison is made for it. `[24-WL-11]` WHILE no
 inlet of a pipeline declares lateness, that pipeline's behaviour SHALL be
