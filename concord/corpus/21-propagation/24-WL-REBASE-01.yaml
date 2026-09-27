@@ -1,0 +1,89 @@
+# Concord corpus scenario (KE4.7, computenet-t4od7.6). Canonical schema shape
+# — see concord/schema/scenario.md.
+#
+# No `no-dead-letters` check, deliberately — copying `21-REBASE-01`'s reasoning
+# (see that file's header): a restart is a reported failure event, and spec
+# 30/31 rule 5 requires the failure to be reported observably under EVERY
+# supervision policy ("observability is not a policy"), so the one invocation
+# that triggers this restart is reported as a dead letter BY DESIGN. Asserting
+# zero dead letters here would assert the opposite of what the specification
+# requires. The reconciliation the restart produces is what this scenario is
+# about, and it is asserted positively below via the floor's own observations.
+#
+# Step order note (resolves a hand-arithmetic disagreement, computenet-t4od7.6):
+# the bead's sketch put the fresh epoch's below-floor add BEFORE the final
+# t-driven rise (retire -> below-floor add -> rise to 70). That order is not
+# reachable: once `s`'s fresh epoch contributes ANY value, it is back in the
+# waterline's min-over-sources computation, and — since `min` can never exceed
+# its smallest operand — a subsequent low contribution from `s` permanently
+# caps the candidate below whatever the floor already reached, so no further
+# rise is possible afterward without a second, higher `s` contribution. But
+# once `s` contributes anything above its ORIGINAL pre-restart maximum (30),
+# the un-retired (mutated) run reaches the exact same running max through
+# ordinary accumulation, and the two runs converge on the same final value —
+# so a golden built that way cannot discriminate "restart happened" from
+# "restart deleted", the opposite of this scenario's purpose. Below, `s`
+# makes its below-floor contribution LAST, after `t` alone has already driven
+# the floor to its final value: this still exercises every covered id (the
+# retirement rise, the floor tracking the surviving source, and [24-WL-20]'s
+# non-regression) and keeps the golden observation sequence the bead specified
+# (30, 50, 70), just reordered so it is actually reachable.
+id: 24-WL-REBASE-01
+title: A RESTART's superseding re-baseline retires a source's stale maximum at the waterline
+covers: [21-REBASE-01, 24-WL-13, 24-WL-20]
+profile: core
+kind: example
+narrative:
+  given: >-
+    a rebaseline-source and an ordinary set-source feeding one waterline (lateness 0),
+    its floor read through a value-view
+  when: >-
+    the rebaseline-source is restarted mid-stream, superseding its own pre-restart
+    epoch and reverting to a checkpoint holding none of its adds; the surviving
+    source then drives the floor further on its own before the restarted source's
+    fresh epoch makes its first, below-floor contribution
+  then: >-
+    the RESTART's superseding `ReBaselineNotice` retires the stale epoch's maximum so
+    it no longer gates the floor ([24-WL-13]) — the floor rises to the surviving
+    source's promise riding the notice's own wave, exactly the `21-REBASE-01` shape
+    extended to a waterline consumer — the floor keeps following that source's
+    further growth while the restarted source has not yet re-contributed, and the
+    fresh epoch's first, below-floor contribution leaves the floor unchanged rather
+    than regressing it ([24-WL-20]); a waterline that kept the stale epoch's maximum
+    would never leave the pre-restart floor of 30
+graph:
+  cells:
+    - {id: s, type: rebaseline-source}
+    - {id: t, type: set-source}
+    - {id: wl, type: waterline, lateness: 0}
+    - {id: v, type: value-view}
+  links:
+    - {from: s, to: wl}
+    - {from: t, to: wl}
+    - {from: wl, to: v}
+script:
+  # s contributes alone: candidate min(30) - 0 = 30, floor rises to 30 (first emission)
+  - {type: apply, on: s, op: add, value: [30, s1]}
+  - {type: quiesce}
+  # t joins at 50: candidate min(30, 50) - 0 = 30, unchanged (s is still the minimum)
+  - {type: apply, on: t, op: add, value: [50, t1]}
+  - {type: quiesce}
+  # s restarts: its pre-restart epoch is superseded and its maximum (30) retired from
+  # the waterline's bookkeeping ([24-WL-13]); the fresh epoch's empty catch-up delta
+  # contributes nothing, so s makes NO contribution until it adds again, and the
+  # candidate is t's own promise alone: min(50) - 0 = 50, one emission riding the
+  # notice's wave, 30 -> 50
+  - {type: restart, on: s}
+  - {type: quiesce}
+  # s still has not re-contributed: candidate is t alone. t advances to 70: min(70) - 0
+  # = 70, floor rises 50 -> 70 ([24-WL-13]'s retirement is what makes this reachable —
+  # without it s's un-retired 30 would still be the binding minimum here)
+  - {type: apply, on: t, op: add, value: [70, t2]}
+  - {type: quiesce}
+  # s's fresh epoch makes its first contribution, below the current floor: candidate
+  # min(20, 70) - 0 = 20 < 70 -> no regression, floor stays at 70 ([24-WL-20])
+  - {type: apply, on: s, op: add, value: [20, s2]}
+  - {type: quiesce}
+checks:
+  - {type: observations-monotone, view: v}
+  - {type: final-view, view: v, equals: 70}

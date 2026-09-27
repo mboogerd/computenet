@@ -1,0 +1,66 @@
+# Concord corpus scenario (KE4.7, computenet-t4od7.6). Canonical schema shape
+# — see concord/schema/scenario.md.
+#
+# Control this scenario is built to catch: an eviction that drops state
+# WITHOUT emitting the corresponding removals ([24-WL-05]'s state == integrated
+# output). If `GroupByCell.onFloorRaised` dropped evicted windows from its
+# internal map but skipped the removal delta, the always-linked view `v` would
+# still read the stale pre-eviction aggregate `{"0": 1, "10": 1, "20": 1}`
+# while `v2`'s catch-up link (which replays the cell's *current* state as a
+# delta-from-empty, G-22) would read the correct post-eviction `{"20": 1}` —
+# so `views-converge` would fail on exactly that divergence. That mutation
+# lives in `GroupByCell.onFloorRaised`, outside this task's `metadata.files`
+# claim: traced here, the reviewer runs it as the non-vacuity mutation.
+id: 24-WL-CATCHUP-01
+title: A late-linked count-view's catch-up fold equals an already-linked view's, across an eviction
+covers: [21-PROP-01, 24-WL-05]
+profile: core
+kind: example
+narrative:
+  given: >-
+    a set source of [event-time, value] pairs feeding a waterline (lateness 2) and a
+    tumbling window (size 10, count) guarded by that waterline's floor, observed
+    through a count-view linked from the start; a second count-view is declared but
+    not linked
+  when: >-
+    the source's adds raise the floor enough to evict two windows, the second view
+    then links mid-script (after the eviction), and a further add raises the floor
+    again while the newest window stays live
+  then: >-
+    the late-linked view's catch-up fold (the cell's current state replayed as a
+    delta-from-empty, G-22) equals the always-linked view's fold at every later
+    quiescence ([21-PROP-01]) — evicted state left through ordinary retractions, so
+    state IS the integrated output ([24-WL-05]), and a late linker sees exactly what
+    an early one accumulated
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: wl, type: waterline, lateness: 2}
+    - {id: w, type: window, agg: count, window: {kind: tumbling, size: 10}, lateness: 2}
+    - {id: v, type: count-view}
+    - {id: v2, type: count-view}
+  links:
+    - {from: a, to: wl}
+    - {from: a, to: w}
+    - {from: wl, to: w, inlet: waterline}
+    - {from: w, to: v}
+    # v2 is deliberately NOT linked here — it links mid-script via `connect`,
+    # after the eviction below, so its catch-up is the property under test.
+script:
+  - {type: apply, on: a, op: add, value: [3, x1]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [12, x2]}
+  - {type: quiesce}
+  # floor = 25 - 2 = 23: windows 0 (end 10) and 10 (end 20) evicted -> v {"20": 1}
+  - {type: apply, on: a, op: add, value: [25, x3]}
+  - {type: quiesce}
+  # v2 links after the eviction: its catch-up is the post-eviction aggregate only
+  - {type: connect, from: w, to: v2}
+  - {type: quiesce}
+  # floor = 31 - 2 = 29: window 20 (end 30 > 29) stays live -> both views {"20": 1, "30": 1}
+  - {type: apply, on: a, op: add, value: [31, n]}
+  - {type: quiesce}
+checks:
+  - {type: views-converge, views: [v, v2]}
+  - {type: final-view, view: v, equals: {"20": 1, "30": 1}}
+  - {type: no-dead-letters}
