@@ -1,0 +1,59 @@
+id: 24-WL-JOINLOW-01
+title: A low joiner never lowers the floor, is late-dropped, and gates the next rise ([24-WL-20])
+covers: [24-WL-20, 24-WL-02, 24-WL-07]
+profile: core
+kind: example
+narrative:
+  given: >-
+    two set-sources A and C feeding a waterline (lateness 5) whose floor also gates a
+    tumbling window (size 10, lateness 5) over the same two sources
+  when: >-
+    C first contributes below the floor A alone has already raised, then rises to
+    participate in the floor's next advance — the spec's [24-WL-20] worked example
+    (epic computenet-lxo DECISION 2026-09-27: monotone wins)
+  then: >-
+    the floor stays at 35 while C contributes below it, emitting nothing; C's below-floor
+    element is visibly late on the window's `late` outlet and absent from the window's
+    view; the floor rises to 40 only on C's first participating contribution, evicting the
+    window C's earlier low element could never have reached
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: c, type: set-source}
+    - {id: wl, type: waterline, lateness: 5}
+    - {id: f, type: value-view}
+    - {id: w, type: window, window: {kind: tumbling, size: 10}, lateness: 5}
+    - {id: v, type: count-view}
+    - {id: l, type: set-view}
+  links:
+    - {from: a, to: wl}
+    - {from: c, to: wl}
+    - {from: wl, to: f}
+    - {from: a, to: w}
+    - {from: c, to: w}
+    - {from: wl, to: w, inlet: waterline}
+    - {from: w, to: v}
+    - {from: w, to: l, outlet: late}
+script:
+  # A t=40: candidate min(40)-5 = 35, floor 35 (first rise)
+  - {type: apply, on: a, op: add, value: [40, a1]}
+  - {type: quiesce}
+  # C t=2: candidate min(40,2)-5 = -3, floor stays 35; at w, 2 < 35: late, onto l
+  - {type: apply, on: c, op: add, value: [2, c1]}
+  - {type: quiesce}
+  # A t=100: candidate min(100,2)-5 = -3 (C still holds the floor down); no rise
+  - {type: apply, on: a, op: add, value: [100, a2]}
+  - {type: quiesce}
+  # C t=38: candidate min(100,38)-5 = 33 < 35; no rise. At w, 38 >= 35: admitted into window 30 (end 40 > 35)
+  - {type: apply, on: c, op: add, value: [38, c2]}
+  - {type: quiesce}
+  # C t=45: candidate min(100,45)-5 = 40 > 35: the first rise C takes part in. At w,
+  # 45 >= floor: admitted into window 40 (with a1); floor 40 evicts window 30 (end 40 <= 40)
+  - {type: apply, on: c, op: add, value: [45, c3]}
+  - {type: quiesce}
+checks:
+  - {type: observations-monotone, view: f}
+  - {type: final-view, view: f, equals: 40}
+  - {type: final-view, view: v, equals: {"40": 2, "100": 1}}
+  - {type: final-view, view: l, equals: [[2, c1]]}
+  - {type: no-dead-letters}
