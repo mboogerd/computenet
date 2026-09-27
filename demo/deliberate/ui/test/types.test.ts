@@ -61,6 +61,7 @@ type ExpectedNodeDto = {
   proposer?: string;
   alsoProposedBy?: string[];
   merged?: boolean;
+  evidence?: string[];
   undercuts?: string;
   onLink?: string;
   plausibility?: number;
