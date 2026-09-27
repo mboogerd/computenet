@@ -35,7 +35,7 @@ class LiveSmokeTest {
     fun jev() {
         live()
         val jev = JevJudge()
-        val plaus = jev.plausibility(question, listOf(question), claim).also(::unit)
+        val plaus = jev.plausibility(question, claim).also(::unit)
         val strength = jev.relationStrength(question, question, claim, Polarity.SUPPORT).also(::unit)
         val assessed = jev.assess(question, listOf(question), claim, Polarity.SUPPORT)
         listOf(assessed.plausibility, assessed.strength, assessed.quality, assessed.relevance).forEach(::unit)

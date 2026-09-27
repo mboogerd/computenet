@@ -80,7 +80,7 @@ class JevJudgeTest {
     @Test
     fun `plausibility sends a five-level score and maps it to unit range`() {
         scoreReply("plausibility", 3.0)
-        assertEquals(0.75, judge.plausibility("Q?", listOf("Q?"), "Claim."), 1e-9)
+        assertEquals(0.75, judge.plausibility("Q?", "Claim."), 1e-9)
         val req = seen.single()
         assertEquals("Bearer test-key", req.auth)
         assertEquals("jev-latest", req.body["model"]!!.jsonPrimitive.content)
@@ -347,7 +347,7 @@ class JevJudgeTest {
     fun `every successful request reports its usage, retried ones do not`() {
         reply(429, """{"error":"rate limited"}""")
         scoreReply("plausibility", 3.0)
-        val (_, usage) = recording { judge(sleeper = {}).plausibility("Q?", emptyList(), "C.") }
+        val (_, usage) = recording { judge(sleeper = {}).plausibility("Q?", "C.") }
         assertEquals(listOf(CallUsage("jev", listOf("jev-1.13.0"), inputTokens = 300, outputTokens = 20)), usage)
     }
 
@@ -367,7 +367,7 @@ class JevJudgeTest {
     @Test
     fun `a response without usage still answers and reports nothing`() {
         routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":4.0}}}"""
-        val (p, usage) = recording { judge.plausibility("Q?", emptyList(), "C.") }
+        val (p, usage) = recording { judge.plausibility("Q?", "C.") }
         assertEquals(1.0, p, 1e-9)
         assertTrue(usage.isEmpty())
     }

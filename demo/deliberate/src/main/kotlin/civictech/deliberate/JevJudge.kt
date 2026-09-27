@@ -56,7 +56,7 @@ class JevJudge(
      * direction, which pulled the judgment towards the claim's role in the
      * argument (measured live; SPEC CRED-01).
      */
-    override fun plausibility(question: String, path: List<String>, claim: String): Double {
+    override fun plausibility(question: String, claim: String): Double {
         val state = buildJsonObject {
             put("root_question", question)
             put("claim", claim)
@@ -64,7 +64,8 @@ class JevJudge(
         return scoreOf(evaluate(state, mapOf("plausibility" to plausibilityQuestion())).getValue("plausibility"), PLAUSIBILITY_LEVELS.size)
     }
 
-    override fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
+    /** CRED-02 on its own: strength in [0,1] with which [child] bears on [parent] as [side]. Calibration-only; the engine uses [assess]. */
+    fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
         val state = buildJsonObject {
             put("root_question", question)
             put("parent_claim", parent)
@@ -74,7 +75,8 @@ class JevJudge(
         return scoreOf(evaluate(state, mapOf("strength" to strengthQuestion("child_claim", side))).getValue("strength"), STRENGTH_LEVELS.size)
     }
 
-    override fun quality(question: String, parent: String, child: String, side: Side): Double {
+    /** EXP-05 on its own: probability that [child] is a well-constructed argument bearing on [parent] as [side]. Calibration-only. */
+    fun quality(question: String, parent: String, child: String, side: Side): Double {
         val state = buildJsonObject {
             put("root_question", question)
             put("parent_claim", parent)
@@ -94,7 +96,7 @@ class JevJudge(
         // SPEC §12: the parallel request's usage belongs to the same question.
         val sink = Usage.current
         val plausibility = java.util.concurrent.CompletableFuture.supplyAsync(
-            { Usage.within(sink) { plausibility(question, path, child) } },
+            { Usage.within(sink) { plausibility(question, child) } },
             PARALLEL,
         )
         val state = buildJsonObject {
@@ -288,7 +290,8 @@ class JevJudge(
         return 1.0 - noulOf(evaluate(state, mapOf("missing" to q)).getValue("missing"))
     }
 
-    override fun relevance(ctx: ClaimContext): Double {
+    /** EXP-05 on its own: probability that analysing the claim further matters for the question. Calibration-only. */
+    fun relevance(ctx: ClaimContext): Double {
         val state = buildJsonObject {
             put("root_question", ctx.question)
             putStrings("path_from_root", ctx.path)

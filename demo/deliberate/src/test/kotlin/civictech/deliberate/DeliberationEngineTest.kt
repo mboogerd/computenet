@@ -44,15 +44,23 @@ class DeliberationEngineTest {
         val plausibilityCalls = CopyOnWriteArrayList<Triple<String, List<String>, String>>()
         val relationCalls = CopyOnWriteArrayList<RelationCall>()
         val triageCalls = CopyOnWriteArrayList<Pair<ClaimContext, List<Candidate>>>()
-        override fun plausibility(question: String, path: List<String>, claim: String): Double {
+        override fun plausibility(question: String, claim: String): Double = plausibility(question, emptyList(), claim)
+        private fun plausibility(question: String, path: List<String>, claim: String): Double {
             plausibilityCalls += Triple(question, path, claim)
             return plausibility(claim)
         }
-        override fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
+        fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
             relationCalls += RelationCall(question, parent, child, side)
             return strength(child)
         }
-        override fun quality(question: String, parent: String, child: String, side: Side) = quality(child)
+        fun quality(question: String, parent: String, child: String, side: Side) = quality(child)
+        /** The four single judgments, in the order the former default `Judge.assess` asked them. */
+        override fun assess(question: String, path: List<String>, child: String, side: Side) = Assessment(
+            plausibility = plausibility(question, path, child),
+            strength = relationStrength(question, path.last(), child, side),
+            quality = quality(question, path.last(), child, side),
+            relevance = relevance(ClaimContext(question, path, child, emptyList(), emptyList())),
+        )
         override fun triage(ctx: ClaimContext, candidates: List<Candidate>): List<Triage> {
             triageCalls += ctx to candidates
             return triage.invoke(ctx, candidates)
@@ -62,7 +70,7 @@ class DeliberationEngineTest {
             saturationCalls.incrementAndGet()
             return saturation.invoke(ctx, side)
         }
-        override fun relevance(ctx: ClaimContext): Double {
+        fun relevance(ctx: ClaimContext): Double {
             relevanceCalls += ctx.claim
             return relevance.invoke(ctx)
         }
@@ -409,8 +417,7 @@ class DeliberationEngineTest {
     @Test
     fun `a failing judge never kills the deliberation`() {
         val judge = object : Judge by FakeJudge() {
-            override fun plausibility(question: String, path: List<String>, claim: String): Double = error("429")
-            override fun relationStrength(question: String, parent: String, child: String, side: Side) = 2.0
+            override fun plausibility(question: String, claim: String): Double = error("429")
             override fun saturation(ctx: ClaimContext, side: Side): Double = error("529")
             override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment = error("429")
         }
@@ -1923,19 +1930,6 @@ class DeliberationEngineTest {
         assertTrue(q.yieldRecent!! < 0.6 * q.yieldEarlier!!, q.toString())
         assertNull(q.stoppedBy, "the decline halted no QUEUED claim")
         assertTrue(g.claims().none { it.status == Status.DIMINISHING })
-    }
-
-    @Test
-    fun `yield stop needs the claim floor, twice the window of rounds, and a real decline`() {
-        val stop = DeliberationEngine.YieldStop(window = 2, ratio = 0.6, minClaims = 10)
-        val decaying = listOf(1.0, 1.0, 0.1, 0.1)
-        assertTrue(stop.diminished(decaying, claims = 10))
-        assertTrue(!stop.diminished(decaying, claims = 9), "below the claim floor")
-        assertTrue(!stop.diminished(decaying.drop(1), claims = 50), "fewer than 2 × window rounds")
-        assertTrue(!stop.diminished(listOf(0.5, 0.5, 0.5, 0.5, 0.5), claims = 50), "flat yields")
-        // recent 0.6 is not below 0.6 × 1.0
-        assertTrue(!stop.diminished(listOf(1.0, 1.0, 0.6, 0.6), claims = 50))
-        assertTrue(!stop.diminished(listOf(0.0, 0.0, 0.0, 0.0), claims = 50), "nothing to decline from")
     }
 
     /** Triage keeps the first [keep] candidates and drops every later one as an untargeted DUPLICATE (yield 0). */

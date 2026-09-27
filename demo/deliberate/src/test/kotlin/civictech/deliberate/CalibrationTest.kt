@@ -94,7 +94,7 @@ class CalibrationTest {
 
     // ------------------------------------------------------------ material
 
-    private fun loadOrGenerate(jev: Judge): List<Material> {
+    private fun loadOrGenerate(jev: JevJudge): List<Material> {
         if (cache.isFile && System.getenv("DELIBERATE_CALIBRATE_REGEN") != "1") {
             return json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(Material.serializer()), cache.readText())
         }
@@ -111,7 +111,7 @@ class CalibrationTest {
         return material
     }
 
-    private fun chain(question: String, jev: Judge, proposers: List<Proposer>): Material {
+    private fun chain(question: String, jev: JevJudge, proposers: List<Proposer>): Material {
         val nodes = mutableListOf<Node>()
         var claim = question
         var path = emptyList<String>()
@@ -129,7 +129,7 @@ class CalibrationTest {
     }
 
     /** Rounds as the engine runs them, until both sides hold [PER_SIDE] arguments (≤ 4 rounds). */
-    private fun grow(question: String, depth: Int, path: List<String>, claim: String, jev: Judge, proposers: List<Proposer>): Node {
+    private fun grow(question: String, depth: Int, path: List<String>, claim: String, jev: JevJudge, proposers: List<Proposer>): Node {
         val pros = mutableListOf<Arg>()
         val cons = mutableListOf<Arg>()
         val calls = Executors.newVirtualThreadPerTaskExecutor()
@@ -167,7 +167,7 @@ class CalibrationTest {
 
     // ------------------------------------------------------------ measurement
 
-    private fun measure(jev: Judge, material: List<Material>, pool: java.util.concurrent.ExecutorService): Results {
+    private fun measure(jev: JevJudge, material: List<Material>, pool: java.util.concurrent.ExecutorService): Results {
         val sat = material.flatMapIndexed { qi, m ->
             m.chain.flatMap { node ->
                 listOf(Polarity.SUPPORT to node.pros, Polarity.ATTACK to node.cons).flatMap { (side, args) ->

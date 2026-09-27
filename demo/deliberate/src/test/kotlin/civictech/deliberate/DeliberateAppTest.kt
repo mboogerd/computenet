@@ -28,12 +28,11 @@ import kotlin.test.assertTrue
 class DeliberateAppTest {
 
     private class FixedJudge : Judge {
-        override fun plausibility(question: String, path: List<String>, claim: String) = 0.6
-        override fun relationStrength(question: String, parent: String, child: String, side: Side) = 0.7
-        override fun quality(question: String, parent: String, child: String, side: Side) = 0.9
+        override fun plausibility(question: String, claim: String) = 0.6
+        override fun assess(question: String, path: List<String>, child: String, side: Side) =
+            Assessment(plausibility = 0.6, strength = 0.7, quality = 0.9, relevance = 1.0)
         override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map { Triage(TriageAction.ADD) }
         override fun saturation(ctx: ClaimContext, side: Side) = 0.0
-        override fun relevance(ctx: ClaimContext) = 1.0
     }
 
     private class CountingProposer(override val id: String, val delayMs: Long = 0) : Proposer {
@@ -537,12 +536,11 @@ class DeliberateAppTest {
     /** Judgments that differ per claim, so every layer, the consensus and the spread carry distinct values. */
     private class VariedJudge : Judge {
         private fun h(text: String, salt: Int) = 0.1 + 0.8 * (((text.hashCode() * 31 + salt) and 0x7fffffff) % 1000) / 1000.0
-        override fun plausibility(question: String, path: List<String>, claim: String) = h(claim, 1)
-        override fun relationStrength(question: String, parent: String, child: String, side: Side) = h(child, 2)
-        override fun quality(question: String, parent: String, child: String, side: Side) = 1.0
+        override fun plausibility(question: String, claim: String) = h(claim, 1)
+        override fun assess(question: String, path: List<String>, child: String, side: Side) =
+            Assessment(plausibility = h(child, 1), strength = h(child, 2), quality = 1.0, relevance = 1.0)
         override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map { Triage(TriageAction.ADD) }
         override fun saturation(ctx: ClaimContext, side: Side) = 0.0
-        override fun relevance(ctx: ClaimContext) = 1.0
     }
 
     /** The graph once two reads 100 ms apart agree (propagation settles asynchronously). */

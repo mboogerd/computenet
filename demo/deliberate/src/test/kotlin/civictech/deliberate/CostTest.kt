@@ -138,13 +138,17 @@ class CostTest {
             calls.computeIfAbsent(question) { AtomicInteger() }.incrementAndGet()
             Usage.report(CallUsage(Pricing.JEV, listOf("jev-test"), inputTokens = 1_000_000, outputTokens = 3))
         }
-        override fun plausibility(question: String, path: List<String>, claim: String) = 0.5.also { bill(question) }
-        override fun relationStrength(question: String, parent: String, child: String, side: Side) = 0.8.also { bill(question) }
-        override fun quality(question: String, parent: String, child: String, side: Side) = 1.0.also { bill(question) }
+        override fun plausibility(question: String, claim: String) = 0.5.also { bill(question) }
+        /** Four single judgments (plausibility, strength, quality, relevance), each billed as its own request. */
+        override fun assess(question: String, path: List<String>, child: String, side: Side) = Assessment(
+            plausibility = plausibility(question, child),
+            strength = 0.8.also { bill(question) },
+            quality = 1.0.also { bill(question) },
+            relevance = 1.0.also { bill(question) },
+        )
         override fun triage(ctx: ClaimContext, candidates: List<Candidate>) =
             candidates.map { Triage(TriageAction.ADD) }.also { bill(ctx.question) }
         override fun saturation(ctx: ClaimContext, side: Side) = 0.0.also { bill(ctx.question) }
-        override fun relevance(ctx: ClaimContext) = 1.0.also { bill(ctx.question) }
     }
 
     private fun DeliberationEngine.idle() = assertTrue(awaitIdle(20.seconds), "engine did not go idle")

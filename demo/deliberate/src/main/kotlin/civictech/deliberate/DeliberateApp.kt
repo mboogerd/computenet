@@ -530,17 +530,12 @@ internal object SlowCallLog {
     }
 
     fun judge(j: Judge): Judge = object : Judge {
-        override fun plausibility(question: String, path: List<String>, claim: String) =
-            timed({ "jev plausibility" }) { j.plausibility(question, path, claim) }
-        override fun relationStrength(question: String, parent: String, child: String, side: Side) =
-            timed({ "jev relationStrength" }) { j.relationStrength(question, parent, child, side) }
-        override fun quality(question: String, parent: String, child: String, side: Side) =
-            timed({ "jev quality" }) { j.quality(question, parent, child, side) }
+        override fun plausibility(question: String, claim: String) =
+            timed({ "jev plausibility" }) { j.plausibility(question, claim) }
         override fun assess(question: String, path: List<String>, child: String, side: Side) =
             timed({ "jev assess" }) { j.assess(question, path, child, side) }
         override fun triage(ctx: ClaimContext, candidates: List<Candidate>) =
             timed({ "jev triage (${candidates.size})" }) { j.triage(ctx, candidates) }
         override fun saturation(ctx: ClaimContext, side: Side) = timed({ "jev saturation" }) { j.saturation(ctx, side) }
-        override fun relevance(ctx: ClaimContext) = timed({ "jev relevance" }) { j.relevance(ctx) }
     }
 }
