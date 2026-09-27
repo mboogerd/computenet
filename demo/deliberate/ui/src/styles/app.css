@@ -681,7 +681,6 @@ button {
 }
 
 .cost__projection,
-.cost__history,
 .cost__empty {
   margin-top: 2px !important;
   color: var(--text-3);
