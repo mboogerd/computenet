@@ -195,9 +195,15 @@ class GroupByEvictionGlitchFreeTest {
     ) : Cell {
         val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Long>>>())
 
+        /** The wave of every delivery the frontier's inlet arm RELEASED, in release order. */
+        val released = mutableListOf<Timestamp?>()
+
         init {
             inlet.serve(object : Propagate<SetDelta<Long>> {
-                override fun propagate(value: SetDelta<Long>) = gb.inlet.call.propagate(value)
+                override fun propagate(value: SetDelta<Long>) {
+                    released += CurrentContext.get()?.timestamp
+                    gb.inlet.call.propagate(value)
+                }
             })
         }
     }
@@ -316,6 +322,10 @@ class GroupByEvictionGlitchFreeTest {
         rig.src.add(25)
 
         seen.size shouldBe emittedBeforeWave3 // absorbed on both arms, nothing new
+        // the fold of wave 3 was released NOW, by WC's absorb-ack alone — not later,
+        // swept out by wave 4's monotone watermark advance (which would leave the
+        // assertions below green even with the absorb-ack removed)
+        rig.relay.released.size shouldBe 3
         rig.wc.floor() shouldBe 25L
         gb.floor() shouldBe 25L
 
