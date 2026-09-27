@@ -57,13 +57,7 @@ class JevJudge(
             putStrings("path_from_root", path)
             put("claim", claim)
         }
-        val q = score(
-            "How likely is `claim` to be true? Judge the claim on its own merits and your general knowledge. " +
-                "`root_question` and `path_from_root` (the chain of claims leading to it) are context for what " +
-                "the claim means only. If `claim` is phrased as a question, judge how likely its answer is yes.",
-            PLAUSIBILITY_LEVELS,
-        )
-        return scoreOf(evaluate(state, mapOf("plausibility" to q)).getValue("plausibility"), PLAUSIBILITY_LEVELS.size)
+        return scoreOf(evaluate(state, mapOf("plausibility" to plausibilityQuestion())).getValue("plausibility"), PLAUSIBILITY_LEVELS.size)
     }
 
     override fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
@@ -71,52 +65,125 @@ class JevJudge(
             put("root_question", question)
             put("parent_claim", parent)
             put("child_claim", child)
-            put("direction", if (side == Polarity.SUPPORT) "supports" else "attacks")
+            put("direction", side.verb)
         }
-        val q = score(
-            "`child_claim` is offered as an argument that ${side.verb} `parent_claim`. Assume `child_claim` is " +
-                "true. How strongly would it then bear on `parent_claim` in that direction (`direction`)? Rate only " +
-                "the strength of the connection, not whether `child_claim` is actually true. If it would bear in " +
-                "the opposite direction, or not at all, rate it irrelevant.",
-            STRENGTH_LEVELS,
-        )
-        return scoreOf(evaluate(state, mapOf("strength" to q)).getValue("strength"), STRENGTH_LEVELS.size)
+        return scoreOf(evaluate(state, mapOf("strength" to strengthQuestion("child_claim", side))).getValue("strength"), STRENGTH_LEVELS.size)
     }
 
-    override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>): List<Int?> {
-        if (candidates.isEmpty()) return emptyList()
-        if (existing.isEmpty()) return candidates.map { null }
+    override fun quality(question: String, parent: String, child: String, side: Side): Double {
         val state = buildJsonObject {
-            put("claim", claim)
-            put("side", "arguments ${side.preposition} the claim")
+            put("root_question", question)
+            put("parent_claim", parent)
+            put("child_claim", child)
+            put("direction", side.verb)
         }
-        val criteria = buildJsonObject {
-            put(NONE, "None of the existing arguments: the candidate makes a substantively new point.")
-            existing.forEachIndexed { i, text -> put(i.toString(), text) }
+        return noulOf(evaluate(state, mapOf("quality" to qualityQuestion("child_claim", side))).getValue("quality"))
+    }
+
+    /** CRED-01, CRED-02, EXP-05 in one request: four independent questions over one state. */
+    override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment {
+        val state = buildJsonObject {
+            put("root_question", question)
+            putStrings("path_from_root", path)
+            put("parent_claim", path.last())
+            put("claim", child)
+            put("direction", side.verb)
         }
-        val questions = candidates.withIndex().associate { (i, candidate) ->
-            "c$i" to buildJsonObject {
+        val answers = evaluate(
+            state,
+            mapOf(
+                "plausibility" to plausibilityQuestion(),
+                "strength" to strengthQuestion("claim", side),
+                "quality" to qualityQuestion("claim", side),
+                "relevant" to relevanceQuestion(),
+            ),
+        )
+        return Assessment(
+            plausibility = scoreOf(answers.getValue("plausibility"), PLAUSIBILITY_LEVELS.size),
+            strength = scoreOf(answers.getValue("strength"), STRENGTH_LEVELS.size),
+            quality = noulOf(answers.getValue("quality")),
+            relevance = noulOf(answers.getValue("relevant")),
+        )
+    }
+
+    /**
+     * EXP-03 in one request: per candidate an `a<i>` action Choice and, when
+     * there is anything to point at, an independent `t<i>` target Choice over
+     * the existing arguments (both sides) and the candidates before it.
+     */
+    override fun triage(ctx: ClaimContext, candidates: List<Candidate>): List<Triage> {
+        if (candidates.isEmpty()) return emptyList()
+        val state = buildJsonObject {
+            put("root_question", ctx.question)
+            putStrings("path_from_root", ctx.path)
+            put("claim", ctx.claim)
+            putStrings("existing_arguments_for", ctx.pros)
+            putStrings("existing_arguments_against", ctx.cons)
+        }
+        val labels = ctx.pros.map { "(existing argument for the claim) $it" } +
+            ctx.cons.map { "(existing argument against the claim) $it" } +
+            candidates.map { "(another new argument ${it.side.preposition} the claim) ${it.text}" }
+        val existing = ctx.pros.size + ctx.cons.size
+        val questions = LinkedHashMap<String, JsonObject>()
+        candidates.forEachIndexed { i, cand ->
+            val targets = existing + i
+            val earlier = candidates.take(i)
+            questions["a$i"] = buildJsonObject {
                 put("type", "choice")
                 putJsonObject("instructions") {
-                    put("candidate_argument", candidate)
+                    put("candidate_argument", cand.text)
+                    put("proposed_as", "an argument ${cand.side.preposition} the claim")
+                    putStrings("earlier_new_arguments", earlier.map { "(${it.side.preposition} the claim) ${it.text}" })
                     put(
                         "question",
-                        "`candidate_argument` is a new argument ${side.preposition} `claim` (in the state). Each " +
-                            "option other than `$NONE` is an existing argument on the same side. Which existing " +
-                            "argument makes essentially the same point as `candidate_argument` — the same reason, " +
-                            "possibly reworded, narrower or broader? Answer `$NONE` if `candidate_argument` adds a " +
-                            "substantively different reason.",
+                        "`candidate_argument` was just proposed as an argument ${cand.side.preposition} `claim` (in " +
+                            "the state). Compare it with the existing arguments on both sides and with " +
+                            "`earlier_new_arguments` (proposed in the same batch). What should be done with it?",
                     )
                 }
-                put("criteria", criteria)
+                putJsonObject("criteria") {
+                    val p = cand.side.preposition
+                    put("ADD", "Add it: a substantively new reason $p the claim that no existing or earlier new argument already makes.")
+                    if (targets > 0) {
+                        put("DUPLICATE", "Drop it as a duplicate: it makes essentially the same point as one existing or earlier new argument (possibly reworded, narrower or broader), adds nothing that argument lacks, and is not clearly better.")
+                        put("REPLACE", "Replace: it makes the same point as one existing or earlier new argument but is clearly stronger or clearer, so it should take that argument's place.")
+                        put("MERGE", "Merge: it and one existing or earlier new argument make overlapping points, each with something the other lacks, which are best stated together as one argument.")
+                        put("REFINE", "Refine: it is a specific instance, example or piece of evidence for one existing or earlier new argument, supporting that argument rather than giving a new reason of its own.")
+                    }
+                    put("OTHER_SIDE", "Move it: it actually argues ${cand.side.opposite.preposition} the claim, not $p it.")
+                    put("DROP", "Drop it: it is not a real argument about the claim — off-topic, incoherent, a question, or a mere restatement of the claim itself.")
+                }
+            }
+            if (targets > 0) questions["t$i"] = buildJsonObject {
+                put("type", "choice")
+                putJsonObject("instructions") {
+                    put("candidate_argument", cand.text)
+                    put(
+                        "question",
+                        "`candidate_argument` is a new argument about `claim` (in the state). Each option other " +
+                            "than `$NONE` is another argument about the same claim. Which option shares the most " +
+                            "with `candidate_argument`: the one it restates, overlaps with, improves on, or is a " +
+                            "specific instance of or evidence for? Answer `$NONE` only if it shares no point with " +
+                            "any option.",
+                    )
+                }
+                putJsonObject("criteria") {
+                    put(NONE, "None: `candidate_argument` shares no point with any option.")
+                    labels.take(targets).forEachIndexed { j, text -> put(j.toString(), text) }
+                }
             }
         }
         val answers = evaluate(state, questions)
         return candidates.indices.map { i ->
-            val choice = answers.getValue("c$i").jsonObject["choice"]?.jsonPrimitive?.content
-                ?: throw JevException(null, "choice answer without `choice`")
-            if (choice == NONE) null else choice.toIntOrNull()?.takeIf { it in existing.indices }
-                ?: throw JevException(null, "unknown duplicate option '$choice'")
+            val action = choiceOf(answers.getValue("a$i")).let { a ->
+                TriageAction.entries.firstOrNull { it.name == a } ?: throw JevException(null, "unknown triage action '$a'")
+            }
+            val needsTarget = action in TARGETED
+            val target = if (!needsTarget || "t$i" !in questions) null else choiceOf(answers.getValue("t$i")).let { t ->
+                if (t == NONE) null else t.toIntOrNull()?.takeIf { it in 0 until existing + i }
+                    ?: throw JevException(null, "unknown triage target '$t'")
+            }
+            Triage(action, target)
         }
     }
 
@@ -148,17 +215,7 @@ class JevJudge(
             putStrings("path_from_root", ctx.path)
             put("claim", ctx.claim)
         }
-        val q = noul(
-            "`claim` arose while deliberating `root_question`, via the chain of claims in `path_from_root`. Would " +
-                "analysing `claim` further — examining the arguments for and against it — materially change how " +
-                "`root_question` should be answered?",
-            yes = "Material: if examining arguments changed whether `claim` is believed, that change would alter at " +
-                "least one important reason for answering `root_question`.",
-            no = "Immaterial: even if examining arguments changed whether `claim` is believed, the answer to " +
-                "`root_question` would remain effectively the same because the claim is peripheral, redundant, or " +
-                "too remote.",
-        )
-        return noulOf(evaluate(state, mapOf("relevant" to q)).getValue("relevant"))
+        return noulOf(evaluate(state, mapOf("relevant" to relevanceQuestion())).getValue("relevant"))
     }
 
     /** POSTs one request and returns its `answers` map, retrying transient failures. */
@@ -199,6 +256,7 @@ class JevJudge(
 
     private companion object {
         const val NONE = "none"
+        val TARGETED = setOf(TriageAction.DUPLICATE, TriageAction.REPLACE, TriageAction.MERGE, TriageAction.REFINE)
 
         val PLAUSIBILITY_LEVELS = listOf(
             "Almost certainly false: available facts or well-established knowledge directly contradict the claim; " +
@@ -227,6 +285,46 @@ class JevJudge(
 
         val Side.preposition get() = if (this == Polarity.SUPPORT) "for" else "against"
         val Side.verb get() = if (this == Polarity.SUPPORT) "supports" else "attacks"
+        val Side.opposite get() = if (this == Polarity.SUPPORT) Polarity.ATTACK else Polarity.SUPPORT
+
+        fun plausibilityQuestion() = score(
+            "How likely is `claim` to be true? Judge the claim on its own merits and your general knowledge. " +
+                "`root_question` and `path_from_root` (the chain of claims leading to it) are context for what " +
+                "the claim means only. If `claim` is phrased as a question, judge how likely its answer is yes.",
+            PLAUSIBILITY_LEVELS,
+        )
+
+        fun strengthQuestion(child: String, side: Side) = score(
+            "`$child` is offered as an argument that ${side.verb} `parent_claim`. Assume `$child` is " +
+                "true. How strongly would it then bear on `parent_claim` in that direction (`direction`)? Rate only " +
+                "the strength of the connection, not whether `$child` is actually true. If it would bear in " +
+                "the opposite direction, or not at all, rate it irrelevant.",
+            STRENGTH_LEVELS,
+        )
+
+        fun qualityQuestion(child: String, side: Side) = noul(
+            "`$child` is offered as an argument that ${side.verb} `parent_claim`. Is it a well-constructed " +
+                "argument: a self-contained, coherent claim that actually bears on `parent_claim` in that direction " +
+                "(`direction`)? Judge the construction, not whether it is true.",
+            yes = "Well-constructed: a self-contained, coherent declarative claim that bears on `parent_claim` in the " +
+                "stated direction.",
+            no = "Poorly constructed: a restatement of `parent_claim`, off-topic, incoherent, not self-contained, a " +
+                "rhetorical question, or bearing in the opposite direction.",
+        )
+
+        fun relevanceQuestion() = noul(
+            "`claim` arose while deliberating `root_question`, via the chain of claims in `path_from_root`. Would " +
+                "analysing `claim` further — examining the arguments for and against it — materially change how " +
+                "`root_question` should be answered?",
+            yes = "Material: if examining arguments changed whether `claim` is believed, that change would alter at " +
+                "least one important reason for answering `root_question`.",
+            no = "Immaterial: even if examining arguments changed whether `claim` is believed, the answer to " +
+                "`root_question` would remain effectively the same because the claim is peripheral, redundant, or " +
+                "too remote.",
+        )
+
+        fun choiceOf(answer: JsonElement): String = answer.jsonObject["choice"]?.jsonPrimitive?.content
+            ?: throw JevException(null, "choice answer without `choice`")
 
         fun score(instructions: String, levels: List<String>) = buildJsonObject {
             put("type", "score")

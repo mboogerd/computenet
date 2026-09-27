@@ -23,13 +23,18 @@ type ExpectedNodeDto = {
   status?: Status;
   override?: Override;
   proposer?: string;
+  alsoProposedBy?: string[];
+  merged?: boolean;
   plausibility?: number;
   relevance?: number;
+  quality?: number;
+  contribution?: number;
   reach?: number;
   proSaturation?: number;
   conSaturation?: number;
   rounds?: number;
   duplicatesDropped?: number;
+  triage?: Record<string, number>;
   error?: string;
   polarity?: string;
   source?: string;

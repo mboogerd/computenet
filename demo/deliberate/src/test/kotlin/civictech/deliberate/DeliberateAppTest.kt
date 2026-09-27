@@ -29,8 +29,8 @@ class DeliberateAppTest {
     private class FixedJudge : Judge {
         override fun plausibility(question: String, path: List<String>, claim: String) = 0.6
         override fun relationStrength(question: String, parent: String, child: String, side: Side) = 0.7
-        override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>) =
-            candidates.map { null }
+        override fun quality(question: String, parent: String, child: String, side: Side) = 0.9
+        override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map { Triage(TriageAction.ADD) }
         override fun saturation(ctx: ClaimContext, side: Side) = 0.0
         override fun relevance(ctx: ClaimContext) = 1.0
     }
@@ -57,13 +57,17 @@ class DeliberateAppTest {
         config: DeliberationEngine.Config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40),
         delayMs: Long = 0,
         uiDir: File? = null,
+        judge: Judge = FixedJudge(),
+        proposers: List<Proposer> = listOf(CountingProposer("claude", delayMs), CountingProposer("codex", delayMs)),
+        merger: Merger? = null,
     ): Pair<DeliberateApp, HttpProbe> {
         val app = DeliberateApp(
             port = 0,
-            judge = FixedJudge(),
-            proposers = listOf(CountingProposer("claude", delayMs), CountingProposer("codex", delayMs)),
+            judge = judge,
+            proposers = proposers,
             config = config,
             uiDir = uiDir,
+            merger = merger,
         ).start()
         apps += app
         val probe = HttpProbe("http://localhost:${app.boundPort}")
@@ -109,6 +113,60 @@ class DeliberateAppTest {
         assertEquals(setOf("SUPPORT", "ATTACK"), edges.map { it.polarity }.toSet())
         assertTrue(edges.all { it.strength == 0.7 })
         assertTrue(claims.all { it.credence in 0.0..1.0 })
+    }
+
+    @Test
+    fun `graph exposes the rewritten text for REPLACE and MERGE`() {
+        val replaceProposer = object : Proposer {
+            override val id = "claude"
+            override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> = when {
+                side != civictech.agora.cell.Polarity.SUPPORT || ctx.path.isNotEmpty() -> emptyList()
+                ctx.pros.isEmpty() -> listOf("Original argument.")
+                else -> listOf("Clearer replacement argument.")
+            }
+        }
+        val replaceJudge = object : Judge by FixedJudge() {
+            override fun assess(question: String, path: List<String>, child: String, side: Side) =
+                Assessment(plausibility = 0.6, strength = 0.4, quality = 0.9, relevance = 1.0)
+            override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map {
+                if (it.text.startsWith("Clearer")) Triage(TriageAction.REPLACE, 0) else Triage(TriageAction.ADD)
+            }
+        }
+        val (_, replaceProbe) = app(
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0, workers = 1,
+            ),
+            judge = replaceJudge,
+            proposers = listOf(replaceProposer),
+        )
+        val replaceRoot = replaceProbe.ask("Replace?")
+        val replaced = replaceProbe.awaitGraph { it.idle(replaceRoot) }
+        val replacedTexts = replaced.nodes.filter { it.kind == "CLAIM" }.mapNotNull { it.text }
+        assertTrue("Clearer replacement argument." in replacedTexts, replacedTexts.toString())
+        assertTrue("Original argument." !in replacedTexts, replacedTexts.toString())
+
+        fun fixed(id: String, text: String) = object : Proposer {
+            override val id = id
+            override fun propose(ctx: ClaimContext, side: Side, max: Int) =
+                if (side == civictech.agora.cell.Polarity.SUPPORT && ctx.path.isEmpty()) listOf(text) else emptyList()
+        }
+        val mergeJudge = object : Judge by FixedJudge() {
+            override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.mapIndexed { i, _ ->
+                if (i == 1) Triage(TriageAction.MERGE, 0) else Triage(TriageAction.ADD)
+            }
+        }
+        val (_, mergeProbe) = app(
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, workers = 1),
+            judge = mergeJudge,
+            proposers = listOf(fixed("claude", "Argument A."), fixed("codex", "Argument B.")),
+            merger = { _, _, _, _ -> "Arguments A and B together." },
+        )
+        val mergeRoot = mergeProbe.ask("Merge?")
+        val merged = mergeProbe.awaitGraph { it.idle(mergeRoot) }
+        val mergedNode = merged.nodes.single { it.kind == "CLAIM" && it.depth == 1 }
+        assertEquals("Arguments A and B together.", mergedNode.text)
+        assertEquals(true, mergedNode.merged)
+        assertTrue(merged.nodes.none { it.text == "Argument A." || it.text == "Argument B." })
     }
 
     @Test
@@ -239,7 +297,7 @@ class DeliberateAppTest {
             arrayOf(
                 "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",
                 "--args-per-call", "3", "--max-processes", "2",
-                "--max-args-per-side", "5", "--saturation", "0.4", "--min-influence", "0.25",
+                "--max-args-per-side", "5", "--max-args-per-side-child", "2", "--saturation", "0.4", "--min-influence", "0.25",
             ),
         )
         assertEquals(9000, o.port)
@@ -249,6 +307,7 @@ class DeliberateAppTest {
         assertEquals(20, o.config.maxClaims)
         assertEquals(3, o.config.argsPerCall)
         assertEquals(5, o.config.maxArgsPerSide)
+        assertEquals(2, o.config.maxArgsPerSideChild)
         assertEquals(0.4, o.config.saturation)
         assertEquals(0.25, o.config.minInfluence)
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
@@ -256,6 +315,7 @@ class DeliberateAppTest {
         assertEquals(8, Options(emptyArray()).maxProcesses)
         assertEquals(1, Options(emptyArray()).config.argsPerCall)
         assertEquals(6, Options(emptyArray()).config.maxArgsPerSide)
+        assertEquals(3, Options(emptyArray()).config.maxArgsPerSideChild)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--relevance", "0.5")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }

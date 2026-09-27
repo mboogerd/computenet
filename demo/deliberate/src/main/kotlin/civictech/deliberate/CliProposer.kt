@@ -29,6 +29,69 @@ class ProcessGate(maxProcesses: Int = Options.DEFAULT_MAX_PROCESSES) {
 }
 
 /**
+ * EXP-03 MERGE through the same CLI machinery as [CliProposer] (process gate,
+ * empty temp dir, no tools, timeout): the CLI rewrites two overlapping
+ * arguments as one sentence, answered as a JSON string ([parseSentence]).
+ */
+class CliMerger(private val cli: CliProposer) : Merger {
+    override fun merge(claim: String, side: Side, a: String, b: String): String = parseSentence(cli.run(prompt(claim, side, a, b)))
+
+    companion object {
+        fun prompt(claim: String, side: Side, a: String, b: String): String {
+            val direction = if (side == Polarity.SUPPORT) "FOR (supporting)" else "AGAINST (attacking)"
+            return """
+                |You are helping map a deliberation. The two arguments below, both $direction the claim, make
+                |overlapping points. Rewrite them as ONE argument.
+                |
+                |Claim:
+                |  $claim
+                |
+                |Argument A:
+                |  $a
+                |
+                |Argument B:
+                |  $b
+                |
+                |Write a single declarative sentence that is self-contained, states the shared point once and keeps
+                |what each argument adds, and adds nothing new. Keep it concise: at most about 35 words, as short as
+                |either argument if you can. No numbering, labels or commentary.
+                |
+                |Output ONLY that sentence as one JSON string, e.g. "The merged argument.". No other text.
+            """.trimMargin()
+        }
+
+        /**
+         * The first non-blank JSON string literal in [text] (surrounding prose,
+         * code fences or an enclosing array are tolerated), trimmed. Throws
+         * [IllegalArgumentException] when there is none.
+         */
+        fun parseSentence(text: String): String {
+            var start = text.indexOf('"')
+            while (start >= 0) {
+                val end = closingQuote(text, start) ?: break
+                val s = runCatching { Json.parseToJsonElement(text.substring(start, end + 1)) }.getOrNull()
+                if (s is JsonPrimitive && s.isString && s.content.isNotBlank()) return s.content.trim()
+                // Resume after this literal, so the text between two literals is never read as one.
+                start = text.indexOf('"', end + 1)
+            }
+            throw IllegalArgumentException("no JSON string in output: ${text.take(300)}")
+        }
+
+        private fun closingQuote(text: String, start: Int): Int? {
+            var i = start + 1
+            while (i < text.length) {
+                when (text[i]) {
+                    '\\' -> i++
+                    '"' -> return i
+                }
+                i++
+            }
+            return null
+        }
+    }
+}
+
+/**
  * [Proposer] that shells out to an LLM CLI (EXP-09). Each call runs [command]'s
  * argv inside the [gate], in a fresh empty temp directory (deleted afterwards),
  * with stdin closed and a [timeout] after which the whole process tree is

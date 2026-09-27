@@ -48,24 +48,29 @@ export interface Verdict {
   label: string;
   /** -2 … 2: strongly against … strongly for; 0 is balanced. */
   lean: -2 | -1 | 0 | 1 | 2;
+  /** The rounded percentage the band was read from, e.g. 68. */
+  percent: number;
   /** "leaning yes · 68%". */
   text: string;
 }
 
-const QUESTION_WORDS = ['very likely no', 'leaning no', 'too close to call', 'leaning yes', 'very likely yes'] as const;
+const QUESTION_WORDS = ['strong no', 'leaning no', 'too close to call', 'leaning yes', 'strong yes'] as const;
 const CLAIM_WORDS = ['very unlikely', 'doubtful', 'uncertain', 'plausible', 'very likely'] as const;
 
 /**
- * One-line plain-language reading of a credence. Bands: < 20 %, < 40 %,
- * 40–60 % (inclusive), ≤ 80 %, above. `question` words speak yes/no (the root
- * is a question); claim words speak likelihood.
+ * One-line plain-language reading of a credence, banded on the rounded
+ * percentage the user sees: < 20 strong no, 20–39 leaning no, 40–60 too close
+ * to call, 61–80 leaning yes, > 80 strong yes (`lean` is non-zero, i.e. tinted
+ * pro/con, only outside 40–60). `question` words speak yes/no (the root is a
+ * question); claim words speak likelihood. Show the label next to the number
+ * it was computed from, or the two can disagree while a number animates.
  */
 export function verdict(credence: number, kind: 'question' | 'claim' = 'question'): Verdict {
   const c = clamp01(credence);
   const r = Math.round(c * 100);
   const band = r < 20 ? 0 : r < 40 ? 1 : r <= 60 ? 2 : r <= 80 ? 3 : 4;
   const label = (kind === 'question' ? QUESTION_WORDS : CLAIM_WORDS)[band];
-  return { label, lean: (band - 2) as Verdict['lean'], text: `${label} · ${r}%` };
+  return { label, lean: (band - 2) as Verdict['lean'], percent: r, text: `${label} · ${r}%` };
 }
 
 /** Plain word for a relation strength (CRED-02). */
@@ -118,4 +123,23 @@ export function questionProgress(nodes: readonly NodeDto[], root: string): Progr
   }
   const settled = total - active;
   return { total, settled, active, fraction: total === 0 ? 0 : settled / total };
+}
+
+const TRIAGE_WORDS: Record<string, string> = {
+  ADD: 'added',
+  DUPLICATE: 'repeats',
+  REPLACE: 'reworded',
+  MERGE: 'merged',
+  REFINE: 'nested as evidence',
+  OTHER_SIDE: 'moved sides',
+  DROP: 'dropped',
+};
+
+/** "3 added · 1 repeats · 1 merged" from the EXP-03 triage counts, in a fixed order. */
+export function triageText(t: Record<string, number> | undefined): string | undefined {
+  if (!t) return undefined;
+  const parts = Object.keys(TRIAGE_WORDS)
+    .filter((k) => (t[k] ?? 0) > 0)
+    .map((k) => `${t[k]} ${TRIAGE_WORDS[k]}`);
+  return parts.length ? parts.join(' · ') : undefined;
 }

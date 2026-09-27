@@ -37,6 +37,7 @@ class DeliberateApp(
     proposers: List<Proposer>,
     config: DeliberationEngine.Config = DeliberationEngine.Config(),
     private val uiDir: File? = defaultUiDir(),
+    merger: Merger? = null,
     private val flushIntervalMs: Long = 100,
 ) {
     // Bind before starting any scheduler/executor threads. A bind failure must
@@ -51,7 +52,7 @@ class DeliberateApp(
     )
     private val dirty = AtomicBoolean(false)
     private val service = AgoraService(host, registry, onCredence = { _, _ -> dirty.set(true) })
-    val engine = DeliberationEngine(service, judge, proposers, config) { dirty.set(true) }
+    val engine = DeliberationEngine(service, judge, proposers, config, merger) { dirty.set(true) }
 
     val boundPort: Int get() = shell.boundPort
 
@@ -258,8 +259,10 @@ internal class Options(args: Array<String>) {
             maxDepth = int("--max-depth") ?: d.maxDepth,
             maxClaims = int("--max-claims") ?: d.maxClaims,
             maxArgsPerSide = int("--max-args-per-side") ?: d.maxArgsPerSide,
+            maxArgsPerSideChild = int("--max-args-per-side-child") ?: d.maxArgsPerSideChild,
             saturation = double("--saturation") ?: d.saturation,
             minInfluence = double("--min-influence") ?: d.minInfluence,
+            roundDecay = double("--round-decay") ?: d.roundDecay,
         )
     }
 
@@ -272,7 +275,7 @@ internal class Options(args: Array<String>) {
         val FLAGS = setOf(
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
             "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
-            "--saturation", "--min-influence",
+            "--max-args-per-side-child", "--saturation", "--min-influence", "--round-decay",
         )
         private val D = DeliberationEngine.Config()
         val USAGE = """
@@ -285,9 +288,11 @@ internal class Options(args: Array<String>) {
               --max-rounds <n>            rounds per claim (${D.maxRounds})
               --max-depth <n>             deepest expanded level (${D.maxDepth})
               --max-claims <n>            claims per question (${D.maxClaims})
-              --max-args-per-side <n>     arguments per side of a claim before it is saturated (${D.maxArgsPerSide})
+              --max-args-per-side <n>     arguments per side of the root before it is saturated (${D.maxArgsPerSide})
+              --max-args-per-side-child <n>  the same cap for claims below the root (${D.maxArgsPerSideChild})
               --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
-              --min-influence <p>         expand a claim only if relevance x reach >= p (${D.minInfluence})
+              --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
+              --round-decay <f>           a claim's next round is queued at contribution x f^rounds (${D.roundDecay})
               --ui <dir>                  built UI directory (default ui/dist)
             requires TYPESAFE_API_KEY and logged-in `claude` / `codex` CLIs.
         """.trimIndent()
@@ -318,7 +323,9 @@ fun main(args: Array<String>) {
         }
     }
     val uiDir = opts.ui ?: DeliberateApp.defaultUiDir()
-    val app = DeliberateApp(opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir).start()
+    // EXP-03 MERGE always asks Claude, whichever CLIs propose.
+    val merger = CliMerger(proposers.filterIsInstance<CliProposer>().firstOrNull { it.id == "claude" } ?: CliProposer.claude(gate, opts.claudeModel))
+    val app = DeliberateApp(opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger).start()
     Runtime.getRuntime().addShutdownHook(Thread { app.stop() })
     announcePort("http", app.boundPort)
     println("deliberate: http://localhost:${app.boundPort}  (proposers: ${proposers.joinToString { it.id }}, ${opts.config})")
@@ -349,8 +356,12 @@ internal object SlowCallLog {
             timed({ "jev plausibility" }) { j.plausibility(question, path, claim) }
         override fun relationStrength(question: String, parent: String, child: String, side: Side) =
             timed({ "jev relationStrength" }) { j.relationStrength(question, parent, child, side) }
-        override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>) =
-            timed({ "jev duplicates" }) { j.duplicates(claim, side, existing, candidates) }
+        override fun quality(question: String, parent: String, child: String, side: Side) =
+            timed({ "jev quality" }) { j.quality(question, parent, child, side) }
+        override fun assess(question: String, path: List<String>, child: String, side: Side) =
+            timed({ "jev assess" }) { j.assess(question, path, child, side) }
+        override fun triage(ctx: ClaimContext, candidates: List<Candidate>) =
+            timed({ "jev triage (${candidates.size})" }) { j.triage(ctx, candidates) }
         override fun saturation(ctx: ClaimContext, side: Side) = timed({ "jev saturation" }) { j.saturation(ctx, side) }
         override fun relevance(ctx: ClaimContext) = timed({ "jev relevance" }) { j.relevance(ctx) }
     }

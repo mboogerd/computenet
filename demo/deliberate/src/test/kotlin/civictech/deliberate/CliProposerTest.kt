@@ -183,4 +183,28 @@ class CliProposerTest {
 
     private fun List<String>.hasPair(first: String, second: String): Boolean =
         windowed(2).any { it[0] == first && it[1] == second }
+
+    @Test
+    fun `merge sentence parsing tolerates prose, fences and an array`() {
+        assertEquals("One merged point.", CliMerger.parseSentence(""""One merged point.""""))
+        assertEquals("He said \"no\".", CliMerger.parseSentence("Sure:\n```json\n\"He said \\\"no\\\".\"\n```"))
+        assertEquals("In an array.", CliMerger.parseSentence("""["In an array."]"""))
+        assertEquals("Real.", CliMerger.parseSentence(""""  " then "Real.""""))
+        assertFailsWith<IllegalArgumentException> { CliMerger.parseSentence("no quotes at all") }
+    }
+
+    @Test
+    fun `merge prompt names both arguments, the side and the output format`() {
+        val p = CliMerger.prompt("Cities should ban cars.", Polarity.ATTACK, "First.", "Second.")
+        assertTrue("AGAINST" in p && "Cities should ban cars." in p && "First." in p && "Second." in p, p)
+        assertTrue("ONE argument" in p && "JSON string" in p, p)
+    }
+
+    @Test
+    fun `merger runs the CLI and parses its answer`() {
+        val cli = CliProposer("claude", { prompt, _ ->
+            listOf("sh", "-c", "case \"\$1\" in *'Argument B'*) echo '\"A and B.\"';; *) exit 4;; esac", "sh", prompt)
+        }, ProcessGate(1))
+        assertEquals("A and B.", CliMerger(cli).merge("C.", Polarity.SUPPORT, "A.", "B."))
+    }
 }
