@@ -155,7 +155,10 @@ names that model.)
     candidate's proposer in `alsoProposedBy`);
   - `REFINE` — a specific instance of / evidence for the target: attached as a
     `SUPPORT` argument under the target instead of under the claim;
-  - `OTHER_SIDE` — argues the opposite side: attached there;
+  - `OTHER_SIDE` — argues the opposite side: attached there. In a link round,
+    a genuine counter-argument is not attached to the link: it is attached as
+    an `ATTACK` on the link's parent claim (or `DROP`ped when it is not a real
+    counter-argument);
   - `UNDERCUT` — does not dispute the claim but denies that the target
     argument bears on it: attached as an undercutter — a con argument of the
     target's *link* (§3 "Links as claims"), an `ATTACK` edge targeting the
@@ -313,12 +316,19 @@ child rewords its link), and explores the link exactly like a claim:
   variant (`CliProposer.linkPrompt`, same canonical rules and examples): FOR
   asks why, if the argument is true, it really does count as a reason for/
   against the claim; AGAINST why, even if true, it does not — neither may
-  dispute the argument or argue the claim on other grounds.
+  dispute the argument or argue the claim on other grounds. Its prompt gives a
+  topic-neutral example distinguishing an undercutter from a counter-argument,
+  and link triage sends a genuine counter-argument to `OTHER_SIDE` against the
+  parent claim (or `DROP`) rather than attaching it to the link.
 - **LINK-06 Accounting.** A link is part of its question's work, not of its
   claims: its rounds count in `cost.rounds`, its calls are billed to the
   question (COST-01), an active link keeps the question `active` and counts in
   `cost.queued`, but `QuestionDto.claims` and the `maxClaims` budget count
-  claims only (the arguments a link gets are claims and count).
+  claims only (the arguments a link gets are claims and count). This remains
+  bounded even with `--yield-stop off`: every non-root claim has exactly one
+  link, so a question under `maxClaims` has at most `maxClaims − 1` links, and
+  the budget gate prevents another automatic link round once the claim ceiling
+  is reached. Human-forced CTL-02 rounds remain deliberately outside the cap.
 
 ## 4. Human control (requirements CTL-*)
 

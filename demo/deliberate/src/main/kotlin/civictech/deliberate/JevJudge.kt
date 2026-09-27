@@ -138,10 +138,22 @@ class JevJudge(
             put("claim", ctx.claim)
             putStrings("existing_arguments_for", ctx.pros)
             putStrings("existing_arguments_against", ctx.cons)
+            ctx.link?.let { link ->
+                put("link_argument", link.argument)
+                put("parent_claim", link.parent)
+                put("link_direction", link.side.verb)
+            }
         }
-        val labels = ctx.pros.map { "(existing argument for the claim) $it" } +
-            ctx.cons.map { "(existing argument against the claim) $it" } +
-            candidates.map { "(another new argument ${it.side.preposition} the claim) ${it.text}" }
+        val link = ctx.link
+        val labels = if (link == null) {
+            ctx.pros.map { "(existing argument for the claim) $it" } +
+                ctx.cons.map { "(existing argument against the claim) $it" } +
+                candidates.map { "(another new argument ${it.side.preposition} the claim) ${it.text}" }
+        } else {
+            ctx.pros.map { "(existing reason the link holds) $it" } +
+                ctx.cons.map { "(existing reason the link fails) $it" } +
+                candidates.map { "(another new reason the link ${if (it.side == Polarity.SUPPORT) "holds" else "fails"}) ${it.text}" }
+        }
         val existing = ctx.pros.size + ctx.cons.size
         val questions = LinkedHashMap<String, JsonObject>()
         candidates.forEachIndexed { i, cand ->
@@ -151,18 +163,44 @@ class JevJudge(
                 put("type", "choice")
                 putJsonObject("instructions") {
                     put("candidate_argument", cand.text)
-                    put("proposed_as", "an argument ${cand.side.preposition} the claim")
-                    putStrings("earlier_new_arguments", earlier.map { "(${it.side.preposition} the claim) ${it.text}" })
-                    put(
-                        "question",
-                        "`candidate_argument` was just proposed as an argument ${cand.side.preposition} `claim` (in " +
-                            "the state). Compare it with the existing arguments on both sides and with " +
-                            "`earlier_new_arguments` (proposed in the same batch). What should be done with it?",
-                    )
+                    if (link == null) {
+                        put("proposed_as", "an argument ${cand.side.preposition} the claim")
+                        putStrings("earlier_new_arguments", earlier.map { "(${it.side.preposition} the claim) ${it.text}" })
+                        put(
+                            "question",
+                            "`candidate_argument` was just proposed as an argument ${cand.side.preposition} `claim` (in " +
+                                "the state). Compare it with the existing arguments on both sides and with " +
+                                "`earlier_new_arguments` (proposed in the same batch). What should be done with it?",
+                        )
+                    } else {
+                        val holds = cand.side == Polarity.SUPPORT
+                        put("proposed_as", "a reason the link ${if (holds) "holds" else "fails"}")
+                        putStrings(
+                            "earlier_new_arguments",
+                            earlier.map { "(reason the link ${if (it.side == Polarity.SUPPORT) "holds" else "fails"}) ${it.text}" },
+                        )
+                        put(
+                            "question",
+                            "`candidate_argument` was proposed as a reason the link ${if (holds) "holds" else "fails"}. " +
+                                "A reason the link fails must assume `link_argument` is true and explain why it nevertheless " +
+                                "does not bear on `parent_claim`; merely outweighing or contradicting `parent_claim` is a " +
+                                "counter-argument, not an undercutter. Compare it with the link's existing reasons and " +
+                                "`earlier_new_arguments`. What should be done with it?",
+                        )
+                    }
                 }
                 putJsonObject("criteria") {
                     val p = cand.side.preposition
-                    put("ADD", "Add it: a substantively new reason $p the claim that no existing or earlier new argument already makes.")
+                    val relation = if (cand.side == Polarity.SUPPORT) "the link holds" else "the link fails"
+                    put(
+                        "ADD",
+                        if (link == null) {
+                            "Add it: a substantively new reason $p the claim that no existing or earlier new argument already makes."
+                        } else {
+                            "Add it: a substantively new reason $relation that no existing or earlier new reason already makes; " +
+                                "when the link fails, it assumes the link argument is true and identifies a gap in its bearing on the parent claim."
+                        },
+                    )
                     if (targets > 0) {
                         put("DUPLICATE", "Drop it as a duplicate: it makes essentially the same point as one existing or earlier new argument (possibly reworded, narrower or broader), adds nothing that argument lacks, and is not clearly better.")
                         put("REPLACE", "Replace: it makes the same point as one existing or earlier new argument but is clearly stronger or clearer, so it should take that argument's place.")
@@ -170,8 +208,23 @@ class JevJudge(
                         put("REFINE", "Refine: it is a specific instance, example or piece of evidence for one existing or earlier new argument, supporting that argument rather than giving a new reason of its own.")
                         put("UNDERCUT", "Undercut: it does not dispute the claim itself; it denies that one existing or earlier new argument actually bears on the claim — even if that argument is true, it does not show what it is offered to show.")
                     }
-                    put("OTHER_SIDE", "Move it: it actually argues ${cand.side.opposite.preposition} the claim, not $p it.")
-                    put("DROP", "Drop it: it is not a real argument about the claim — off-topic, incoherent, a question, or a mere restatement of the claim itself.")
+                    put(
+                        "OTHER_SIDE",
+                        if (link == null) {
+                            "Move it: it actually argues ${cand.side.opposite.preposition} the claim, not $p it."
+                        } else {
+                            "Move it to the parent claim: it is a genuine counter-argument against `parent_claim`, not a reason " +
+                                "about whether `link_argument` bears on `parent_claim`."
+                        },
+                    )
+                    put(
+                        "DROP",
+                        if (link == null) {
+                            "Drop it: it is not a real argument about the claim — off-topic, incoherent, a question, or a mere restatement of the claim itself."
+                        } else {
+                            "Drop it: it is neither a reason about whether the link holds nor a genuine counter-argument against the parent claim."
+                        },
+                    )
                 }
             }
             if (targets > 0) questions["t$i"] = buildJsonObject {
@@ -180,11 +233,17 @@ class JevJudge(
                     put("candidate_argument", cand.text)
                     put(
                         "question",
-                        "`candidate_argument` is a new argument about `claim` (in the state). Each option other " +
-                            "than `$NONE` is another argument about the same claim. Which option shares the most " +
-                            "with `candidate_argument`: the one it restates, overlaps with, improves on, is a " +
-                            "specific instance of or evidence for, or denies the relevance of? Answer `$NONE` only " +
-                            "if it shares no point with any option.",
+                        if (link == null) {
+                            "`candidate_argument` is a new argument about `claim` (in the state). Each option other " +
+                                "than `$NONE` is another argument about the same claim. Which option shares the most " +
+                                "with `candidate_argument`: the one it restates, overlaps with, improves on, is a " +
+                                "specific instance of or evidence for, or denies the relevance of? Answer `$NONE` only " +
+                                "if it shares no point with any option."
+                        } else {
+                            "`candidate_argument` is a new reason about the link in `claim`. Each option other than " +
+                                "`$NONE` is another reason about that link. Which option it restates, overlaps with, " +
+                                "improves on, refines, or undercuts? Answer `$NONE` only if none fits."
+                        },
                     )
                 }
                 putJsonObject("criteria") {

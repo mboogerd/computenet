@@ -159,6 +159,31 @@ class JevJudgeTest {
     }
 
     @Test
+    fun `link triage distinguishes an undercutter from a counter-argument against the parent`() {
+        reply(200, """{"model":"jev-1.13.0","answers":{${choice("a0", "OTHER_SIDE")}}}""")
+        val link = LinkContext("The path is wet.", "It rained.", Polarity.SUPPORT)
+        val out = judge.triage(
+            ClaimContext(
+                "Why is the path wet?", listOf("Why is the path wet?"),
+                "“The path is wet.” is a reason for “It rained.”", emptyList(), emptyList(), link,
+            ),
+            listOf(Candidate("The forecast predicted dry weather.", Polarity.ATTACK)),
+        )
+        assertEquals(listOf(Triage(TriageAction.OTHER_SIDE)), out)
+        val body = seen.single().body
+        val state = body["state"]!!.jsonObject
+        assertEquals("The path is wet.", state["link_argument"]!!.jsonPrimitive.content)
+        assertEquals("It rained.", state["parent_claim"]!!.jsonPrimitive.content)
+        val action = question(body, "a0")
+        val instructions = action["instructions"]!!.jsonObject["question"]!!.jsonPrimitive.content
+        val criteria = action["criteria"]!!.jsonObject
+        assertTrue("assume `link_argument` is true" in instructions, instructions)
+        assertTrue("counter-argument, not an undercutter" in instructions, instructions)
+        assertTrue("Move it to the parent claim" in criteria["OTHER_SIDE"]!!.jsonPrimitive.content)
+        assertTrue("genuine counter-argument" in criteria["DROP"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `a first candidate with nothing to compare against gets no target question`() {
         reply(
             200,

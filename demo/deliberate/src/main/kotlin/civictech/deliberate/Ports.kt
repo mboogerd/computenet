@@ -53,7 +53,11 @@ enum class TriageAction {
     MERGE,
     /** A specific instance of / evidence for its target: attached as SUPPORT under the target. */
     REFINE,
-    /** Argues the opposite side from the one it was proposed for: attached there. */
+    /**
+     * Argues the opposite side from the one it was proposed for: attached there.
+     * In a link round, a genuine counter-argument is attached against the
+     * link's parent claim instead of being mistaken for an argument about the link.
+     */
     OTHER_SIDE,
     /**
      * Does not dispute the claim but denies that its target argument bears on it

@@ -477,7 +477,7 @@ export function Facts(props: {
       {row('Sides covered', sides(), 'How complete Jev judges each side of the argument')}
       {row('Rounds', c().rounds?.toString(), props.link ? 'Proposal rounds run on this link' : 'Proposal rounds run on this claim')}
       {row('Duplicates dropped', c().duplicatesDropped?.toString(), 'Proposed arguments Jev recognised as repeats')}
-      {row('Sorted proposals', triageText(c().triage), 'What Jev did with each argument proposed for this claim')}
+      {row('Sorted proposals', triageText(c().triage, props.link), 'What Jev did with each argument proposed for this claim')}
       <Show when={c().proposer}>{row('Proposed by', c().proposer!, 'The model that wrote this claim')}</Show>
       {row('Also proposed by', c().alsoProposedBy?.join(', '), 'Other models that made the same point')}
       <Show when={c().merged}>{row('Merged', 'yes', 'Rewritten as one argument together with an overlapping one')}</Show>

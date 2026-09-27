@@ -1279,9 +1279,82 @@ class DeliberationEngineTest {
         assertEquals(Status.DEPTH_LIMIT, holds.status)
         assertEquals(even.text, judge.relationCalls.single { it.child == "Even holds" }.parent)
         assertEquals(mapOf("ADD" to 2), even.triage)
+        // Link rounds are non-root work and therefore participate in the
+        // question's diminishing-return yield series (EXP-10).
+        assertEquals(3, g.questions.single().yieldRounds)
         // A link's arguments are claims of the question; links themselves are not.
         assertEquals(5, g.questions.single().claims)
         assertTrue(g.childrenOf(root).none { it.source == holds.ref })
+    }
+
+    @Test
+    fun `a counter-argument found in link triage attacks the parent claim instead of the link`() {
+        val p = linkProposer(rootPros = listOf("The path is wet.")) { link, side, _ ->
+            if (link.argument == "The path is wet." && side == Polarity.ATTACK) {
+                listOf("The forecast predicted dry weather.")
+            } else {
+                emptyList()
+            }
+        }
+        val judge = FakeJudge(
+            strength = { if (it == "The path is wet.") 0.5 else 0.8 },
+            triage = { ctx, cands ->
+                cands.map {
+                    if (ctx.link != null && it.text == "The forecast predicted dry weather.") {
+                        Triage(TriageAction.OTHER_SIDE)
+                    } else {
+                        Triage(TriageAction.ADD)
+                    }
+                }
+            },
+        )
+        val e = engine(
+            judge = judge, proposers = listOf(p),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, workers = 1),
+        )
+        val root = e.ask("It rained.")
+        e.idle()
+        val g = e.snapshot()
+        val argument = g.text("The path is wet.")
+        val link = g.linkOf(argument)
+        val counter = g.text("The forecast predicted dry weather.")
+        val counterEdge = g.linkOf(counter)
+
+        assertEquals(root.id.toString(), counterEdge.target)
+        assertEquals("ATTACK", counterEdge.polarity)
+        assertNull(counter.onLink)
+        assertNull(counter.undercuts)
+        assertTrue(g.childrenOf(g.ref(link)).isEmpty(), "counter-argument must not become a link argument")
+        assertEquals(mapOf("OTHER_SIDE" to 1), link.triage)
+        assertEquals(setOf(argument.ref, counter.ref), g.childrenOf(root).mapNotNull { it.source }.toSet())
+    }
+
+    @Test
+    fun `maxClaims also bounds automatic link exploration although links do not consume the budget`() {
+        val p = linkProposer(rootPros = listOf("P")) { _, side, _ ->
+            if (side == Polarity.SUPPORT) listOf("L") else emptyList()
+        }
+        val e = engine(
+            judge = FakeJudge(strength = { 0.5 }), proposers = listOf(p),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 3, maxDepth = 8, maxClaims = 3,
+                minInfluence = 0.0, workers = 1, yieldStop = null,
+            ),
+        )
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        val links = g.edges()
+
+        // Every non-root claim creates exactly one link, so the claim ceiling
+        // is also a structural ceiling on links. Disabling EXP-10 still cannot
+        // produce an unbounded chain.
+        assertEquals(3, q.claims)
+        assertEquals(q.claims - 1, links.size)
+        assertEquals(1, links.sumOf { it.rounds ?: 0 })
+        assertTrue(links.any { it.status == Status.BUDGET }, "$links")
+        assertTrue(g.nodes.none { it.status in setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING) })
     }
 
     @Test

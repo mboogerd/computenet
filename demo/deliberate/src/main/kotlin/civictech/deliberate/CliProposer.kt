@@ -376,7 +376,7 @@ class CliProposer internal constructor(
                     "count as $relation the claim (a principle, mechanism or fact that ties the two together)."
             } else {
                 "Give at most $max new reasons why the connection FAILS: why, even if the argument is true, it does not " +
-                    "count as $relation the claim (a gap, a confounder, a different scope, an exception, or a reason it points the other way)."
+                    "bear on the claim in that way (a gap, confounder, different scope, or exception in the inference)."
             }
             val path = if (ctx.path.isEmpty()) "  (the claim is the question itself)"
             else ctx.path.mapIndexed { i, c -> "  ${i + 1}. $c" }.joinToString("\n")
@@ -403,6 +403,8 @@ class CliProposer internal constructor(
                 |${bullets(ctx.cons)}
                 |
                 |$ask Assume the argument is true; do not dispute it, and do not argue about the claim on other grounds.
+                |For example, if "The path is wet" is offered to show "It rained", "A sprinkler also wets the path"
+                |undercuts that link; "The forecast says it will stay dry" is a counter-argument, not an undercutter.
                 |Each must be substantively new, not a rewording of an existing reason above.
                 |
                 |$CANONICAL_RULES

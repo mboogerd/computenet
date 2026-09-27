@@ -238,6 +238,9 @@ class CliProposerTest {
         }
         assertTrue("why the connection HOLDS" in holds && "a reason FOR" in holds, holds)
         assertTrue("why the connection FAILS" in fails && "at most 2" in fails, fails)
+        assertTrue("even if the argument is true" in fails && "does not bear on the claim" in fails, fails)
+        assertTrue("undercuts that link" in fails && "counter-argument, not an undercutter" in fails, fails)
+        assertTrue("reason it points the other way" !in fails, fails)
     }
 
     @Test

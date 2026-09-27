@@ -795,9 +795,22 @@ class DeliberationEngine(
                 // meanwhile (CTL-03). Survivors past the cap are not attached.
                 when (action) {
                     TriageAction.ADD, TriageAction.OTHER_SIDE -> {
-                        val side = if (action == TriageAction.ADD) f.side else f.side.opposite
-                        if (room.getValue(side) > 0) {
-                            resolved[i] = add(c, side, f)?.also { room[side] = room.getValue(side) - 1 }
+                        if (action == TriageAction.OTHER_SIDE && c.isLink) {
+                            // A counter-argument generated while probing a link is not evidence that
+                            // the link holds or fails. Preserve it, but put it where it belongs:
+                            // against the parent claim (live-run correction to EXP-03/LINK-05).
+                            val parent = c.parent!!
+                            val fits = synchronized(lock) { forced || countOf(parent, Polarity.ATTACK) < capOf(parent) }
+                            if (fits && room.getValue(f.side) > 0) {
+                                resolved[i] = add(parent, Polarity.ATTACK, f)?.also {
+                                    room[f.side] = room.getValue(f.side) - 1
+                                }
+                            }
+                        } else {
+                            val side = if (action == TriageAction.ADD) f.side else f.side.opposite
+                            if (room.getValue(side) > 0) {
+                                resolved[i] = add(c, side, f)?.also { room[side] = room.getValue(side) - 1 }
+                            }
                         }
                     }
                     TriageAction.DUPLICATE -> {

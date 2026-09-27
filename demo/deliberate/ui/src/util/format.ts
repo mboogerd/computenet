@@ -159,11 +159,11 @@ const TRIAGE_WORDS: Record<string, string> = {
 };
 
 /** "3 added · 1 repeats · 1 merged" from the EXP-03 triage counts, in a fixed order. */
-export function triageText(t: Record<string, number> | undefined): string | undefined {
+export function triageText(t: Record<string, number> | undefined, link = false): string | undefined {
   if (!t) return undefined;
   const parts = Object.keys(TRIAGE_WORDS)
     .filter((k) => (t[k] ?? 0) > 0)
-    .map((k) => `${t[k]} ${TRIAGE_WORDS[k]}`);
+    .map((k) => `${t[k]} ${link && k === 'OTHER_SIDE' ? 'moved to parent' : TRIAGE_WORDS[k]}`);
   return parts.length ? parts.join(' · ') : undefined;
 }
 
