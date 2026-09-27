@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`); lateness/waterline eviction built for `GroupByCell` and the join family, with source retirement, the generative lateness harness and `:demo:slotfinder` adoption (§Lateness and waterlines; 96 §E4.1-E4.6, E4.6 = `computenet-fh1fo`); concord corpus coverage of `[24-WL-*]` in progress (`computenet-t4od7`))
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`); lateness/waterline eviction built for `GroupByCell` and the join family, with source retirement, the generative lateness harness and `:demo:slotfinder` adoption (§Lateness and waterlines; 96 §E4.1-E4.6, E4.6 = `computenet-fh1fo`); concord corpus coverage of `[24-WL-*]` landed (`computenet-t4od7`), every id covered except `[24-WL-04]`/`[24-WL-15]`/`[24-WL-17]`/`[24-WL-18]`, filed in `concord/corpus/DISPUTES.md`)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.leftJoin`/`rightJoin`/`fullJoin` (outer joins)
 
@@ -549,8 +549,10 @@ partitions replicate (93 I-25/I-2/I-3/I-8).
 > `computenet-g37bz`/`computenet-sjqat`/`computenet-nt17o`/
 > `computenet-6gkou`/`computenet-3vd7k`), and so did the generative lateness
 > harness and `:demo:slotfinder` adoption (96 §E4.6, `computenet-fh1fo`).
-> Concord corpus coverage of the `[24-WL-*]` ids remains open
-> (`computenet-t4od7`). Retracts the eviction
+> Concord corpus coverage of the `[24-WL-*]` ids landed too (96 §E4,
+> `computenet-t4od7`): every id is covered except `[24-WL-04]`,
+> `[24-WL-15]`, `[24-WL-17]` and `[24-WL-18]`, whose reasons are filed in
+> `concord/corpus/DISPUTES.md`. Retracts the eviction
 > trigger that used to trail `[24-OP-WINDOW-02]` (the session-windows
 > deferral stays there). Research: Feldera's lateness → waterline → GC
 > (`doc/research/incremental-engines/01-dbsp-feldera.md` §5), Flink's

@@ -4324,7 +4324,10 @@ established rather than re-deriving it. Test names are as landed at the base
 with this entry**: its concord corpus feature `computenet-t4od7` (KE4.7) is in
 progress — `t4od7.1` merged on its own branch, PR #1112 draft, `.2`-`.9` open
 — and every `[24-WL-01]`..`[24-WL-20]` row of `doc/spec/CONCORDANCE.md` still
-reads `gap` at the base. Nothing below claims corpus coverage.
+reads `gap` at the base. Nothing below claimed corpus coverage at the base;
+`computenet-t4od7.9` (the t4od7 close-out) later brought the B table's Corpus
+column and the t4od7 bullets under "Not resolved by KE4" up to what t4od7
+landed, over `feature/computenet-t4od7` at `15fd3e46`.
 
 ### Corrected premises
 
@@ -4444,29 +4447,30 @@ SlotFinderPipelineTest.
 No `[KE4-nn]` is NOT COVERED by a test except `[KE4-04]` and `[KE4-12]`,
 which are structural/spec statements with no behaviour to exercise.
 
-Behaviour specifications. "Corpus" is KE4.7's plan (t4od7 breakdown,
-2026-09-27 04:40), **none landed**: every B row's corpus column reads
-"t4od7, in flight".
+Behaviour specifications. "Corpus" is what KE4.7 (`computenet-t4od7`)
+landed: the scenario that carries the row, with its directory when it is not
+`24-data-cells/`, or the `concord/corpus/DISPUTES.md` entry that says why no
+scenario carries it.
 
 | B | Named test(s) | Corpus |
 |---|---|---|
-| B1 | GBE `B1 - ...`; SFP late case | t4od7.3 (LATE-01) |
-| B2 | GBE `an add at or above the floor, or under a null floor, is an ordinary add and late stays silent` (as amended, #10) | t4od7.3 (LATE-01) |
-| B3 | GBE `B3 - ...`; LHT `B3 control - ...`; GBG late-linked catch-up test | t4od7.6 (CATCHUP-01) |
-| B4 | GBE `B4 - ...` | t4od7.3 (DEL-01) |
-| B5 | JFE/SJE/IE `B5 - ...` | none planned; `[24-WL-09]` normative, no DISPUTES (3vd7k-D8) |
-| B6 | LHT four `B6` tests; SFP seeded test; `SlotFinderQueryAgreementTest` `hand-wired SlotPipeline agrees with the compiled query's BatchEvaluator reference on every seed` | t4od7.2 (oracle, covers 24-WL-10) |
-| B7 | LHT `B7 - ...`, `B7 join - ...` | none, by the epic (soak, not semantics) |
-| B8 | WCT B8 + two controls | t4od7.4 (FLOOR-01, JOINLOW-01) |
-| B9 | WDT fold test; WCT redelivery; GBE redelivered waterline | t4od7.4 (DUP-01) |
-| B10 | WCh four `B10 -` + `B10 hosted` | t4od7.5 (CLOSE-01/02) |
-| B11 | WCh `B11 hosted`, two `B11 direct` | t4od7.6 (REBASE-01) |
-| B12 | WCh two `B12 -` | t4od7.5 (IDLE-01) |
-| B13 | GBR `B13 - ...` + control | t4od7.8 (REC-01, DISPUTES fallback stated) |
-| B14 | JFE `B14 - ...`, `advancing the floor window by window keeps the minted ledger bounded by the rows above it`; LHT `B6 join`, `B7 join`, `B14 control` | t4od7.7 (JOIN-01) |
-| B15 | GBE two `B15 -`; JFE/SJE/IE per-row Owned + gated-flush tests | none; 23 carries no `[23-*]` ids |
-| B16 | GBG `B16 - ...` + eager-delivery control | t4od7.9 (DISPUTES entry, t4od7-D6) |
-| B17 | GBE `B17 - ...`; JFE `B17 - ...`; IE `the grown seam still refuses a Replicable host ...` | none, by the epic (scaffolding) |
+| B1 | GBE `B1 - ...`; SFP late case | `24-WL-LATE-01` (t4od7.3) |
+| B2 | GBE `an add at or above the floor, or under a null floor, is an ordinary add and late stays silent` (as amended, #10) | `24-WL-LATE-01` (t4od7.3) |
+| B3 | GBE `B3 - ...`; LHT `B3 control - ...`; GBG late-linked catch-up test | `21-propagation/24-WL-CATCHUP-01` (t4od7.6) |
+| B4 | GBE `B4 - ...` | `24-WL-DEL-01` (t4od7.3) |
+| B5 | JFE/SJE/IE `B5 - ...` | join form only: `24-WL-JOIN-01` (t4od7.7) dels an evicted row as a no-op; no semi-join/intersect scenario, no DISPUTES (3vd7k-D8) |
+| B6 | LHT four `B6` tests; SFP seeded test; `SlotFinderQueryAgreementTest` `hand-wired SlotPipeline agrees with the compiled query's BatchEvaluator reference on every seed` | `incremental-equals-batch` over the `BatchOracle` lateness model (t4od7.2) on `24-WL-LATE-01`, `-DEL-01`, `-BOUND-01`, `-JOIN-01`; `[24-WL-10]` covered by LATE-01 and JOIN-01 |
+| B7 | LHT `B7 - ...`, `B7 join - ...` | none, by the epic (soak, not semantics); `24-WL-BOUND-01` (t4od7.3) states `[24-WL-19]`'s bound at example scale |
+| B8 | WCT B8 + two controls | `24-WL-FLOOR-01`, `24-WL-JOINLOW-01` (t4od7.4) |
+| B9 | WDT fold test; WCT redelivery; GBE redelivered waterline | `24-WL-DUP-01` (t4od7.4; core, three waterlines on one inlet, t4od7-D5) |
+| B10 | WCh four `B10 -` + `B10 hosted` | `24-WL-CLOSE-01`, `24-WL-CLOSE-02` (t4od7.5, via `disconnect`) |
+| B11 | WCh `B11 hosted`, two `B11 direct` | `21-propagation/24-WL-REBASE-01` (t4od7.6; step order changed from the sketch so the restart discriminates) |
+| B12 | WCh two `B12 -` | frozen half: `24-WL-IDLE-01` (t4od7.5); `retire` half: DISPUTES `24-WL-15` |
+| B13 | GBR `B13 - ...` + control | `15-durability/24-WL-REC-01` (t4od7.8, `dur`; covers `[22-REC-01]`, DISPUTES fallback not needed) |
+| B14 | JFE `B14 - ...`, `advancing the floor window by window keeps the minted ledger bounded by the rows above it`; LHT `B6 join`, `B7 join`, `B14 control` | `24-WL-JOIN-01` (t4od7.7) |
+| B15 | GBE two `B15 -`; JFE/SJE/IE per-row Owned + gated-flush tests | none; DISPUTES `24-WL-17` (t4od7.9); 23 carries no `[23-*]` ids |
+| B16 | GBG `B16 - ...` + eager-delivery control | none; DISPUTES `24-WL-GF-01` (t4od7.9, t4od7-D6) |
+| B17 | GBE `B17 - ...`; JFE `B17 - ...`; IE `the grown seam still refuses a Replicable host ...` | none, by the epic (scaffolding); DISPUTES `24-WL-18` (t4od7.9) |
 
 ### Controls demonstrated red
 
@@ -4526,10 +4530,15 @@ Behaviour specifications. "Corpus" is KE4.7's plan (t4od7 breakdown,
 
 ### Not resolved by KE4
 
-- **`computenet-t4od7` (KE4.7, concord corpus)** — in progress; every
-  `[24-WL-*]` id is a CONCORDANCE `gap` until it lands. The epic's
-  "covered by a named test or concord scenario" is met by the tests above;
-  corpus coverage is not.
+- **`computenet-t4od7` (KE4.7, concord corpus)** — landed. Every
+  `[24-WL-nn]` row of `doc/spec/CONCORDANCE.md` reads `covered` except
+  `[24-WL-04]`, `[24-WL-15]`, `[24-WL-17]` and `[24-WL-18]`, and `[22-REC-01]`
+  is covered by `24-WL-REC-01`. The four stay `gap` rows, each with a
+  `concord/corpus/DISPUTES.md` entry, and B16 has one too (`24-WL-GF-01`,
+  not authored). `[24-WL-04]`'s dispute rests on a corrected premise:
+  `aligned-view` does accept a waterline arm, so its settlement consequence
+  is checkable, and an uncommitted probe passed. That scenario is
+  `computenet-tcovt`; only the "not a wave position" half stays disputed.
 - `WaterlineCell`'s `EdgeClose` retirement relies on `sourcePort ==
   link.from`, established in-process only; `:wire` is unverified (its KDoc).
 - Nested exclusives inside a plain element are not detected by `[24-WL-17]`
@@ -4541,7 +4550,8 @@ Behaviour specifications. "Corpus" is KE4.7's plan (t4od7 breakdown,
   `[24-WL-02]`/`[24-WL-20]`; not edited here.
 - The 24 `> **Status**` lines and 96 §E4 headings were stale after KE4.2-4.5;
   `computenet-lxo.2` (#1111) caught them up and this task marks E4.6 landed
-  with t4od7 named open. They flip to fully landed only when t4od7 closes.
+  with t4od7 named open. `computenet-t4od7.9` flipped them to landed, naming
+  the four disputed ids, with t4od7's corpus.
 - `computenet-7y4sm` (gated join-family flush diagnostic) is **resolved**
   (#1109) and is listed here only because the breakdown expected it open.
 - G-42 is marked realized for its event-time share only; its epoch-hygiene
