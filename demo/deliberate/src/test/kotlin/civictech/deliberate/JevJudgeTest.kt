@@ -196,18 +196,18 @@ class JevJudgeTest {
         routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":3.0}}}"""
         routed["strength"] = """{"model":"jev-1.13.0","answers":{
                "strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},
-               "canonical":{"type":"noul","noul":0.5},"relevant":{"type":"noul","noul":0.4}},
+               "relevant":{"type":"noul","noul":0.4}},
                "usage":{"input_tokens":1,"output_tokens":1}}"""
         val a = judge.assess("Q?", listOf("Q?", "Parent."), "Child.", Polarity.ATTACK)
-        // quality is the product of the construction and canonical-form Nouls (0.9 × 0.5)
-        assertEquals(Assessment(plausibility = 0.75, strength = 0.5, quality = 0.45, relevance = 0.4), a)
+        // quality is the construction Noul alone: canonical form is not scored (iteration 5)
+        assertEquals(Assessment(plausibility = 0.75, strength = 0.5, quality = 0.9, relevance = 0.4), a)
         assertEquals(2, seen.size)
         val plaus = seen.single { "plausibility" in it.body["questions"]!!.jsonObject }.body
         // CRED-01: plausibility sees the claim and the question only
         assertEquals(setOf("root_question", "claim"), plaus["state"]!!.jsonObject.keys)
         assertEquals("Child.", plaus["state"]!!.jsonObject["claim"]!!.jsonPrimitive.content)
         val body = seen.single { "strength" in it.body["questions"]!!.jsonObject }.body
-        assertEquals(setOf("strength", "quality", "canonical", "relevant"), body["questions"]!!.jsonObject.keys)
+        assertEquals(setOf("strength", "quality", "relevant"), body["questions"]!!.jsonObject.keys)
         val state = body["state"]!!.jsonObject
         assertEquals("Parent.", state["parent_claim"]!!.jsonPrimitive.content)
         assertEquals("Child.", state["claim"]!!.jsonPrimitive.content)
@@ -215,7 +215,6 @@ class JevJudgeTest {
         assertTrue("today" !in state.keys)
         assertEquals("noul", question(body, "quality")["type"]!!.jsonPrimitive.content)
         assertTrue("well-constructed" in question(body, "quality")["instructions"]!!.jsonPrimitive.content)
-        assertTrue("canonical claim" in question(body, "canonical")["instructions"]!!.jsonPrimitive.content)
         assertTrue("`claim`" in question(body, "strength")["instructions"]!!.jsonPrimitive.content)
     }
 

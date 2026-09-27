@@ -8,10 +8,19 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ?
   : false;
 
 type ExpectedGraphDto = { questions: QuestionDto[]; nodes: NodeDto[]; consensusMembers?: string[] };
-type ExpectedQuestionDto = { root: string; text: string; claims: number; active: boolean };
+type ExpectedQuestionDto = {
+  root: string;
+  text: string;
+  claims: number;
+  active: boolean;
+  yieldRounds?: number;
+  yieldRecent?: number;
+  yieldEarlier?: number;
+  stoppedBy?: 'budget' | 'diminishing';
+};
 type ExpectedStatus =
   | 'QUEUED' | 'JUDGING' | 'EXPLORING' | 'SATURATED' | 'ROUND_LIMIT'
-  | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'STOPPED' | 'FAILED';
+  | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING' | 'STOPPED' | 'FAILED';
 type ExpectedOverride = 'AUTO' | 'EXPAND' | 'STOP';
 type ExpectedNodeDto = {
   ref: string;

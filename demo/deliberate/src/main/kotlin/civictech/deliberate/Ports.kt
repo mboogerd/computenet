@@ -75,6 +75,7 @@ data class Triage(val action: TriageAction, val target: Int? = null)
 data class Assessment(
     val plausibility: Double,
     val strength: Double,
+    /** EXP-05: the construction Noul alone — canonical form is asked of the proposers, never scored. */
     val quality: Double,
     val relevance: Double,
 )

@@ -81,14 +81,13 @@ class JevJudge(
             put("child_claim", child)
             put("direction", side.verb)
         }
-        val answers = evaluate(state, mapOf("quality" to qualityQuestion("child_claim", side), "canonical" to canonicalQuestion("child_claim")))
-        return noulOf(answers.getValue("quality")) * noulOf(answers.getValue("canonical"))
+        return noulOf(evaluate(state, mapOf("quality" to qualityQuestion("child_claim", side))).getValue("quality"))
     }
 
     /**
      * CRED-01, CRED-02, EXP-05 in two parallel requests: plausibility on its
-     * own minimal state ([plausibility]), and strength, quality (with its
-     * canonical-form factor) and relevance as independent questions over the
+     * own minimal state ([plausibility]), and strength, quality (the
+     * construction Noul alone) and relevance as independent questions over the
      * argument's full state.
      */
     override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment {
@@ -105,7 +104,6 @@ class JevJudge(
             mapOf(
                 "strength" to strengthQuestion("claim", side),
                 "quality" to qualityQuestion("claim", side),
-                "canonical" to canonicalQuestion("claim"),
                 "relevant" to relevanceQuestion(),
             ),
         )
@@ -117,7 +115,7 @@ class JevJudge(
         return Assessment(
             plausibility = p,
             strength = scoreOf(answers.getValue("strength"), STRENGTH_LEVELS.size),
-            quality = noulOf(answers.getValue("quality")) * noulOf(answers.getValue("canonical")),
+            quality = noulOf(answers.getValue("quality")),
             relevance = noulOf(answers.getValue("relevant")),
         )
     }
@@ -313,17 +311,6 @@ class JevJudge(
                 "penalise `claim` for which answer to `root_question` it favours, and do not assume any other " +
                 "claim is true or false. If `claim` is phrased as a question, judge how likely its answer is yes.",
             PLAUSIBILITY_LEVELS,
-        )
-
-        /** EXP-05 quality, second factor: is the argument stated in canonical form? */
-        fun canonicalQuestion(child: String) = noul(
-            "Is `$child` a precise, canonical claim: one self-contained proposition with an explicit subject (no " +
-                "pronoun or 'this/these/such' pointing outside the sentence), explicit scope or quantity, no hedging " +
-                "words (can, may, might, often, suggests), and dated if it is time-sensitive?",
-            yes = "Canonical: one self-contained proposition with an explicit subject and scope, no hedging, dated " +
-                "if time-sensitive.",
-            no = "Not canonical: several propositions, a pronoun or reference pointing outside the sentence, vague " +
-                "scope, hedging words, or an undated time-sensitive assertion.",
         )
 
         fun strengthQuestion(child: String, side: Side) = score(

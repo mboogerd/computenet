@@ -326,6 +326,14 @@ class DeliberateAppTest {
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-processes", "0")) }
+        // EXP-10 knobs
+        assertEquals(DeliberationEngine.YieldStop(), Options(emptyArray()).config.yieldStop)
+        assertEquals(null, Options(arrayOf("--yield-stop", "off")).config.yieldStop)
+        assertEquals(
+            DeliberationEngine.YieldStop(window = 5, ratio = 0.5, minClaims = 30),
+            Options(arrayOf("--yield-window", "5", "--yield-ratio", "0.5", "--yield-min-claims", "30")).config.yieldStop,
+        )
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--yield-stop", "maybe")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--proposers", "other")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("9000", "9001")) }
     }

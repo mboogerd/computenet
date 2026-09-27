@@ -480,6 +480,12 @@ button {
   color: var(--text-3);
 }
 
+/* EXP-06/EXP-10: why the tree stopped growing early — informative, not alarming */
+.hero__stopped {
+  font-style: italic;
+  cursor: help;
+}
+
 .hero .facts {
   margin-top: 12px;
 }

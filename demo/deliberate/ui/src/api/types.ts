@@ -16,7 +16,19 @@ export interface QuestionDto {
   claims: number;
   /** true while any claim in the tree is QUEUED, JUDGING or EXPLORING. */
   active: boolean;
+  // EXP-10. yieldRounds has a Kotlin default and is always sent; optional so
+  // hand-written fixtures without it stay valid.
+  /** Rounds whose yield was recorded (rounds that asked for at least one proposal). */
+  yieldRounds?: number;
+  /** Mean yield of the last `yieldWindow` recorded rounds (all of them while there are fewer). */
+  yieldRecent?: number;
+  /** Mean yield of every recorded round before those; absent until there are more than `yieldWindow`. */
+  yieldEarlier?: number;
+  /** Why the tree stopped growing early: the claim budget (EXP-06) or diminishing returns (EXP-10). */
+  stoppedBy?: StoppedBy;
 }
+
+export type StoppedBy = 'budget' | 'diminishing';
 
 export type Status =
   | 'QUEUED'
@@ -27,6 +39,7 @@ export type Status =
   | 'PRUNED'
   | 'DEPTH_LIMIT'
   | 'BUDGET'
+  | 'DIMINISHING'
   | 'STOPPED'
   | 'FAILED';
 
@@ -71,7 +84,7 @@ export interface NodeDto {
   plausibility?: number;
   /** Jev relevance probability (EXP-05), judged when the argument was attached. */
   relevance?: number;
-  /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent. */
+  /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
   quality?: number;
   /** SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1). */
   contribution?: number;

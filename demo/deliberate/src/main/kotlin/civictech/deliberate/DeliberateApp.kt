@@ -395,6 +395,17 @@ internal class Options(args: Array<String>) {
             saturation = double("--saturation") ?: d.saturation,
             minInfluence = double("--min-influence") ?: d.minInfluence,
             roundDecay = double("--round-decay") ?: d.roundDecay,
+            yieldStop = when (val mode = values["--yield-stop"]?.trim()?.lowercase()) {
+                null, "on" -> (d.yieldStop ?: DeliberationEngine.YieldStop()).let { y ->
+                    DeliberationEngine.YieldStop(
+                        window = int("--yield-window") ?: y.window,
+                        ratio = double("--yield-ratio") ?: y.ratio,
+                        minClaims = int("--yield-min-claims") ?: y.minClaims,
+                    )
+                }
+                "off" -> null
+                else -> throw IllegalArgumentException("--yield-stop must be on or off: $mode")
+            },
         )
     }
 
@@ -428,10 +439,12 @@ internal class Options(args: Array<String>) {
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
             "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
             "--max-args-per-side-child", "--saturation", "--min-influence", "--round-decay",
+            "--yield-stop", "--yield-window", "--yield-ratio", "--yield-min-claims",
             "--data", "--semantics", "--semantics-layers", "--consensus",
             "--wlo-alpha", "--wlo-k", "--wlo-p", "--wlo-gamma",
         )
         private val D = DeliberationEngine.Config()
+        private val Y = DeliberationEngine.YieldStop()
         val USAGE = """
             usage: deliberate [port] [options]            (port default 8091, or ${'$'}PORT)
               --proposers claude,codex    which CLIs propose arguments
@@ -447,6 +460,10 @@ internal class Options(args: Array<String>) {
               --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
               --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
               --round-decay <f>           a claim's next round is queued at contribution x f^rounds (${D.roundDecay})
+              --yield-stop on|off         stop a question once its returns diminish (on)
+              --yield-window <n>          ...when the mean yield of its last n rounds (${Y.window})
+              --yield-ratio <f>           ...falls below f x the mean of its earlier rounds (${Y.ratio})
+              --yield-min-claims <n>      ...and it holds at least n claims (${Y.minClaims})
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)
               --semantics <id>            the layer shown as a node's credence (${SemanticsCatalog.DEFAULT_PRIMARY})
               --semantics-layers <ids>    credence layers to propagate (${SemanticsCatalog.IDS.joinToString(",")}); dfquad always runs

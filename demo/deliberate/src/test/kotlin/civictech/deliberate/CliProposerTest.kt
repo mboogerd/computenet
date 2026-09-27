@@ -216,6 +216,26 @@ class CliProposerTest {
     }
 
     @Test
+    fun `proposer and merger prompts carry no topic from the demo runs`() {
+        // The examples teach the form only: no real person, political figure or contested topic
+        // may leak from the prompt into a deliberation (computenet-dq2fy.12).
+        val prompts = listOf(
+            CliProposer.prompt(ClaimContext("Q?", emptyList(), "C.", emptyList(), emptyList()), Polarity.SUPPORT, 1),
+            CliProposer.prompt(ClaimContext("Q?", listOf("Q?"), "C.", listOf("A."), listOf("B.")), Polarity.ATTACK, 2),
+            CliMerger.prompt("C.", Polarity.ATTACK, "A.", "B."),
+        )
+        val deny = Regex(
+            "\\b(trump|donald|god|gods|divine|religio\\w*|mystical|collagen|cars?|pedestrian\\w*|animals?|language|" +
+                "coffee|diabetes|elections?|president\\w*|politic\\w*|paris|madrid|oslo)\\b",
+            RegexOption.IGNORE_CASE,
+        )
+        for (p in prompts) {
+            val hits = deny.findAll(p).map { it.value }.toList()
+            assertTrue(hits.isEmpty(), "prompt mentions demo-run topics $hits")
+        }
+    }
+
+    @Test
     fun `merger runs the CLI and parses its answer`() {
         val cli = CliProposer("claude", { prompt, _ ->
             listOf("sh", "-c", "case \"\$1\" in *'Argument B'*) echo '\"A and B.\"';; *) exit 4;; esac", "sh", prompt)

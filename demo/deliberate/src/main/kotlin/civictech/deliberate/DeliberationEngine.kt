@@ -75,6 +75,8 @@ class DeliberationEngine(
         val maxDepth: Int = 3,
         val maxClaims: Int = 180,
         val workers: Int = 8,
+        /** EXP-10: the per-question diminishing-returns stop; null disables it (yields are still recorded). */
+        val yieldStop: YieldStop? = YieldStop(),
     ) {
         init {
             require(workers > 0) { "workers must be positive" }
@@ -85,8 +87,8 @@ class DeliberationEngine(
 
         companion object {
             const val DEFAULT_SATURATION = 0.22
-            /** Iteration 4: 0.35 × the median canonical-form factor now folded into quality (CALIBRATION.md). */
-            const val DEFAULT_MIN_INFLUENCE = 0.15
+            /** Iteration 5: quality is the construction Noul alone; 0.10 balances tree sizes across questions (CALIBRATION.md). */
+            const val DEFAULT_MIN_INFLUENCE = 0.10
             /**
              * EXP-05: reach assumes this edge strength when the CRED-02 judgment
              * failed — middling, so one failure neither prunes nor frees a subtree.
@@ -96,6 +98,27 @@ class DeliberationEngine(
             const val BUDGET_EXHAUSTED = "budget exhausted"
             /** CTL-02: a claim the human forced to expand is queued ahead of every contribution (≤ 1). */
             const val FORCED_PRIORITY = 2.0
+        }
+    }
+
+    /**
+     * EXP-10: a question stops when, once it holds at least [minClaims] claims
+     * and 2 × [window] recorded round yields, the mean yield of its last
+     * [window] rounds falls below [ratio] × the mean of all its earlier ones.
+     */
+    data class YieldStop(val window: Int = 8, val ratio: Double = 0.6, val minClaims: Int = 40) {
+        init {
+            require(window > 0) { "yield window must be positive" }
+            require(ratio > 0.0) { "yield ratio must be positive" }
+            require(minClaims >= 0) { "yield min claims must not be negative" }
+        }
+
+        /** Whether [yields] (in completion order) have diminished, for a tree of [claims] claims. */
+        fun diminished(yields: List<Double>, claims: Int): Boolean {
+            if (claims < minClaims || yields.size < 2 * window) return false
+            val recent = yields.takeLast(window).average()
+            val earlier = yields.dropLast(window).average()
+            return recent < ratio * earlier
         }
     }
 
@@ -174,6 +197,10 @@ class DeliberationEngine(
     private val edges = LinkedHashMap<CellRef, Edge>()
     private val questions = LinkedHashMap<CellRef, String>()
     private val treeSize = HashMap<CellRef, Int>()
+    /** EXP-10: per question, the yield of every recorded round in completion order. */
+    private val yields = HashMap<CellRef, MutableList<Double>>()
+    /** EXP-10: questions stopped because their returns diminished. */
+    private val diminished = HashSet<CellRef>()
 
     private val pending = AtomicInteger()
     private val idle = Object()
@@ -194,7 +221,7 @@ class DeliberationEngine(
     private companion object {
         val FINISHED = setOf(
             Status.SATURATED, Status.ROUND_LIMIT, Status.PRUNED, Status.DEPTH_LIMIT,
-            Status.BUDGET, Status.STOPPED, Status.FAILED,
+            Status.BUDGET, Status.DIMINISHING, Status.STOPPED, Status.FAILED,
         )
         val ACTIVE = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
         val SIDES = listOf(Polarity.SUPPORT, Polarity.ATTACK)
@@ -202,6 +229,8 @@ class DeliberationEngine(
         fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?', ';')
         val RECORDS = Json { encodeDefaults = false; ignoreUnknownKeys = true }
         const val CLAIM_KEY = "c:"
+        /** EXP-10: one record per question holding its round yields and whether they diminished. */
+        const val QUESTION_KEY = "q:"
         const val JEV = "jev"
         /** A node's credence before its first emission reached the hub. */
         const val NEUTRAL = 0.5
@@ -337,9 +366,17 @@ class DeliberationEngine(
                     )
                 }
             }
+            val window = config.yieldStop?.window ?: YieldStop().window
             val qs = questions.map { (root, text) ->
                 val tree = claims.values.filter { it.root == root }
-                QuestionDto(root.id.toString(), text, tree.size, tree.any { it.status in ACTIVE })
+                val ys = yields[root].orEmpty()
+                QuestionDto(
+                    root.id.toString(), text, tree.size, tree.any { it.status in ACTIVE },
+                    yieldRounds = ys.size,
+                    yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
+                    yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
+                    stoppedBy = stoppedBy(root),
+                )
             }
             GraphDto(qs, nodes, layers.members)
         }
@@ -366,7 +403,10 @@ class DeliberationEngine(
     @Synchronized
     fun persistNow() {
         val s = store ?: return
-        val current = synchronized(lock) { claims.values.map { c -> CLAIM_KEY + c.ref.id to fieldsOf(recordOf(c)) } }
+        val current = synchronized(lock) {
+            claims.values.map { c -> CLAIM_KEY + c.ref.id to fieldsOf(recordOf(c)) } +
+                questions.keys.map { q -> QUESTION_KEY + q.id to questionFieldsOf(q) }
+        }
         for ((key, fields) in current) {
             val old = persisted[key].orEmpty()
             val delta = LinkedHashMap<String, String?>()
@@ -437,7 +477,8 @@ class DeliberationEngine(
      * Queues a QUEUED claim for its first round unless a gate that needs no
      * judgment ends it first (EXP-05; CTL-02 skips them): beyond `maxDepth` it
      * is DEPTH_LIMIT, below the `minInfluence` floor it is PRUNED — so an
-     * irrelevant or poorly constructed argument is never explored.
+     * irrelevant or poorly constructed argument is never explored — and in a
+     * question whose returns diminished (EXP-10) it is DIMINISHING.
      */
     private fun schedule(c: Claim) {
         val gate = synchronized(lock) {
@@ -446,6 +487,7 @@ class DeliberationEngine(
             else when {
                 c.depth > config.maxDepth -> Status.DEPTH_LIMIT
                 contributionOf(c) < config.minInfluence -> Status.PRUNED
+                c.root in diminished -> Status.DIMINISHING
                 else -> null
             }
         }
@@ -520,6 +562,8 @@ class DeliberationEngine(
         }
         // EXP-06 after EXP-05 (schedule()): BUDGET means "would have been expanded".
         if (!synchronized(lock) { c.forceRound } && budgetExhausted(c)) return finish(c, Status.BUDGET)
+        // EXP-10: the question stopped while this claim was being judged.
+        if (synchronized(lock) { !c.forceRound && c.root in diminished }) return finish(c, Status.DIMINISHING)
         update { c.status = Status.EXPLORING }
         return step(c)
     }
@@ -566,6 +610,7 @@ class DeliberationEngine(
             nextSides.isEmpty() -> Status.SATURATED
             !forcedRound && c.rounds >= c.roundLimit -> Status.ROUND_LIMIT
             !forcedRound && treeSize.getValue(c.root) >= config.maxClaims -> Status.BUDGET
+            !forcedRound && c.root in diminished -> Status.DIMINISHING
             else -> null
         }
     }
@@ -597,6 +642,8 @@ class DeliberationEngine(
         val replaced = mutableListOf<Claim>()
         var budgetHit = false
         var asked = 0
+        /** EXP-10: arguments asked for this round (the yield's denominator). */
+        var requested = 0
         var failures = 0
         // CTL-02: a forced round's own allowance, shared by its turns.
         val allowance = SIDES.associateWith { capOf(c) }.toMutableMap()
@@ -634,6 +681,7 @@ class DeliberationEngine(
                 side to calls.submit<List<String>> { p.propose(ctx, side, ask).take(ask) }
             }
             asked += futures.size
+            requested += turnSides.sumOf { minOf(config.argsPerCall, room.getValue(it)) }
             val proposals = futures.mapNotNull { (side, f) ->
                 try {
                     side to f.get()
@@ -751,6 +799,7 @@ class DeliberationEngine(
                 if (queueNow) schedule(n)
             }
         }
+        recordYield(c, attached, counts, requested)
 
         // EXP-04: saturation per side, judged once every proposer had its turn
         // (a forced round's sides are re-judged too). A side at its cap needs no Jev call.
@@ -768,6 +817,58 @@ class DeliberationEngine(
             allProposersFailed && noProposerHasEverSucceeded -> Status.FAILED
             else -> null
         }
+    }
+
+    /**
+     * EXP-10: records the yield of [c]'s round that attached [attached] out of
+     * [requested] asked-for arguments, triaged as [counts]: Σ (strength ×
+     * relevance × quality) over the attached arguments × the share of triaged
+     * proposals that were neither DUPLICATE nor DROP, per argument asked for.
+     * A round that asked for nothing records no yield. When the question's
+     * yields have diminished ([YieldStop.diminished]) it stops: no new round
+     * starts in it; its queued claims end DIMINISHING (a round in flight
+     * finishes and attaches what it found, but records no further yield).
+     */
+    private fun recordYield(c: Claim, attached: List<Claim>, counts: Map<TriageAction, Int>, requested: Int) {
+        if (requested == 0) return
+        val halted = update {
+            // The series is frozen at the stop, so it shows why the question stopped;
+            // rounds that were in flight then still attach what they found.
+            if (c.root in diminished) return@update emptyList()
+            val value = attached.sumOf { n ->
+                (n.edge?.strength ?: Config.FALLBACK_STRENGTH) * (n.relevance ?: 1.0) * (n.quality ?: 1.0)
+            }
+            val triaged = counts.values.sum()
+            val novelty = if (triaged == 0) 1.0
+            else 1.0 - ((counts[TriageAction.DUPLICATE] ?: 0) + (counts[TriageAction.DROP] ?: 0)).toDouble() / triaged
+            val ys = yields.getOrPut(c.root) { mutableListOf() }
+            ys += value * novelty / requested
+            val stop = config.yieldStop ?: return@update emptyList()
+            val size = treeSize.getValue(c.root)
+            if (size >= config.maxClaims || !stop.diminished(ys, size)) return@update emptyList()
+            diminished += c.root
+            claims.values.filter { n ->
+                n.root == c.root && !n.forceRound && n.override != Override.EXPAND && !n.rewriteInFlight &&
+                    (n.status == Status.QUEUED || (n.status == Status.EXPLORING && n.waiting))
+            }.onEach { n ->
+                n.waiting = false
+                n.queueGeneration++ // its queued task, if any, falls through
+                n.status = if (n.override == Override.STOP) Status.STOPPED else Status.DIMINISHING
+            }
+        }
+        if (halted.isNotEmpty()) {
+            System.err.println(
+                "deliberate: question ${c.root.id} stopped, returns diminished " +
+                    "(${yields[c.root]?.size} rounds, ${halted.size} claims left unexplored)",
+            )
+        }
+    }
+
+    /** Caller holds [lock]. Why [root]'s tree stopped growing early, if it did (QuestionDto.stoppedBy). */
+    private fun stoppedBy(root: CellRef): String? = when {
+        root in diminished -> "diminishing"
+        (treeSize[root] ?: 0) >= config.maxClaims -> "budget"
+        else -> null
     }
 
     /**
@@ -1030,6 +1131,17 @@ class DeliberationEngine(
         anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
     )
 
+    /** EXP-10: a question's record — its round yields in completion order and whether they diminished. */
+    @Serializable
+    private data class QuestionRecord(val yields: List<Double> = emptyList(), val diminished: Boolean = false)
+
+    /** Caller holds [lock]. */
+    private fun questionFieldsOf(q: CellRef): Map<String, String> =
+        RECORDS.encodeToJsonElement(
+            QuestionRecord.serializer(),
+            QuestionRecord(yields[q].orEmpty().toList(), q in diminished),
+        ).jsonObject.mapValues { it.value.toString() }
+
     private fun fieldsOf(r: ClaimRecord): Map<String, String> =
         RECORDS.encodeToJsonElement(ClaimRecord.serializer(), r).jsonObject.mapValues { it.value.toString() }
 
@@ -1050,6 +1162,12 @@ class DeliberationEngine(
     private fun restore(meta: Map<String, Map<String, String>>) {
         val records = meta.filterKeys { it.startsWith(CLAIM_KEY) }.entries.associate { (k, v) ->
             CellRef(UUID.fromString(k.removePrefix(CLAIM_KEY))) to recordFrom(v)
+        }
+        val questionRecords = meta.filterKeys { it.startsWith(QUESTION_KEY) }.entries.associate { (k, v) ->
+            CellRef(UUID.fromString(k.removePrefix(QUESTION_KEY))) to RECORDS.decodeFromJsonElement(
+                QuestionRecord.serializer(),
+                JsonObject(v.mapValues { RECORDS.parseToJsonElement(it.value) }),
+            )
         }
         val graph = service.graph()
         val attaching = graph.filter { it.info.kind == CredenceGraph.Kind.EDGE }.groupBy { it.info.source }
@@ -1080,6 +1198,11 @@ class DeliberationEngine(
                 rec?.let { r -> apply(claim, r) }
                 claims[n.ref] = claim
                 treeSize.merge(claim.root, 1, Int::plus)
+            }
+            for ((q, r) in questionRecords) {
+                if (q !in questions) continue
+                yields[q] = r.yields.toMutableList()
+                if (r.diminished) diminished += q
             }
         }
         val stances = synchronized(lock) {
