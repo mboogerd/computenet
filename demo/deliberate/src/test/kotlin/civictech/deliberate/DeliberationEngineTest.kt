@@ -125,7 +125,7 @@ class DeliberationEngineTest {
         assertEquals(6, config.maxArgsPerSide)
         assertEquals(3, config.maxArgsPerSideChild)
         assertEquals(0.22, config.saturation)
-        assertEquals(0.35, config.minInfluence)
+        assertEquals(0.15, config.minInfluence)
     }
 
     @Test
@@ -769,7 +769,7 @@ class DeliberationEngineTest {
             judge = judge,
             proposers = listOf(p),
             config = DeliberationEngine.Config(
-                argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25,
+                argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25, minInfluence = 0.35,
                 maxArgsPerSide = 4, maxArgsPerSideChild = 3, roundDecay = 0.5, workers = 1,
             ),
         )

@@ -1,6 +1,7 @@
 package civictech.deliberate
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.awaitUntil
 import civictech.testkit.awaitSseData
 import civictech.testkit.boundedHttpClient
 import kotlinx.serialization.json.Json
@@ -400,9 +401,10 @@ class DeliberateAppTest {
         try {
             val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40)
             val semantics = DeliberateApp.SemanticsConfig(layers = listOf("dfquad", "wlo"), consensus = listOf("wlo"))
-            val target = "claude support argument 1."
+            // Claude's one pro argument of the root (its number depends on which side's call ran first).
+            fun isTarget(text: String?) = text != null && text.startsWith("claude support argument")
             fun gated(gate: java.util.concurrent.CountDownLatch, blocked: java.util.concurrent.CountDownLatch) =
-                listOf("claude", "codex").map { GatedProposer(it, { ctx -> ctx.claim == target }, gate, blocked) }
+                listOf("claude", "codex").map { GatedProposer(it, { ctx -> ctx.path.size == 1 && isTarget(ctx.claim) }, gate, blocked) }
 
             val gate1 = java.util.concurrent.CountDownLatch(1)
             val blocked1 = java.util.concurrent.CountDownLatch(1)
@@ -410,9 +412,16 @@ class DeliberateAppTest {
             val root = probe1.ask("Durable?")
             assertTrue(blocked1.await(20, TimeUnit.SECONDS))
             val active = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
-            val before = probe1.awaitGraph { g ->
+            probe1.awaitGraph { g ->
                 val claims = g.nodes.filter { it.kind == "CLAIM" }
                 claims.size == 1 + 4 + 3 * 4 && claims.count { it.status in active } == 1
+            }
+            // Credence propagation settles asynchronously: take the graph once two reads agree.
+            var before = probe1.graph()
+            awaitUntil("credences settle before the restart") {
+                Thread.sleep(100)
+                val next = probe1.graph()
+                (next == before).also { before = next }
             }
             first.stop() // persists, then interrupts the blocked round; a kill at this instant
             apps.remove(first)
@@ -437,7 +446,7 @@ class DeliberateAppTest {
             }
             // Exploration resumes where it stopped.
             gate2.countDown()
-            val resumed = before.nodes.single { it.text == target }.ref
+            val resumed = before.nodes.single { it.kind == "CLAIM" && it.depth == 1 && isTarget(it.text) }.ref
             val done = probe2.awaitGraph { g -> g.idle(root) }
             assertEquals(Status.ROUND_LIMIT, done.nodes.single { it.ref == resumed }.status)
             val kids = done.nodes.filter { it.kind == "EDGE" && it.target == resumed }

@@ -59,8 +59,26 @@ With the defaults of two proposers × `argsPerCall` 1, each round offers up to t
 ## Iteration 4: judgments changed after this calibration
 
 Plausibility no longer sees the path from the question (its state is only the
-question and the claim), quality now includes a canonical-form factor, and
-proposers write canonical arguments. The `saturation` and `minInfluence`
-defaults above were calibrated under the old judgments and prompts; a
-recalibration under the new ones is residual unless a live run shows the gates
-misbehaving (see README, *Cost and time*, for the iteration-4 run).
+question and the claim), quality is now the construction Noul **times** a
+canonical-form Noul, and proposers write canonical arguments. The thresholds
+above were calibrated under the old judgments and prompts.
+
+The first live run under the new ones (2026-09-27, "Should cities ban private
+cars from their centres?", defaults with `minInfluence` 0.35) showed the gate
+misbehaving: all 9 depth-1 arguments ended `PRUNED` (contributions 0.09–0.32),
+so nothing below the root was ever explored. Re-asking Jev for the two factors
+of those 9 arguments separately:
+
+| factor | values (9 root arguments) | median |
+|---|---|---|
+| construction Noul | 0.77–0.94 | 0.91 |
+| canonical-form Noul | 0.25–0.77 | 0.43 |
+
+The construction Noul is where it was; the canonical factor alone roughly
+halves every contribution, even for arguments written to the canonical rules
+(Jev mostly faults missing dates and vague scope). **`minInfluence` = 0.15**
+keeps the old gate's meaning under the new quality: 0.35 × the median
+canonical factor 0.43 ≈ 0.15. On that run it would expand 8 of the 9 depth-1
+arguments (the old calibration expanded ~72%). This rescaling rests on 9
+samples; a full recalibration of `minInfluence` and `saturation` under the new
+judgments is residual.

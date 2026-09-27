@@ -84,7 +84,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--max-args-per-side-child <n>` | 3 | the same cap for every claim below the root |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
-| `--min-influence <p>` | 0.35 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
+| `--min-influence <p>` | 0.15 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
 | `--round-decay <f>` | 0.5 | a claim's next round is queued at contribution × f^(rounds run) |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
 | `--semantics-layers <ids>` | all seven | credence layers to propagate (`dfquad` always runs) |
@@ -136,6 +136,19 @@ hit `DEPTH_LIMIT`. With best-first exploration and triage (defaults, both CLIs,
 about 1.5 minutes on 2026-09-27: every depth-1 claim was explored, 6 of 38
 depth-2 claims were `BUDGET`, and Jev's triage merged 8 and nested 10
 proposals as evidence. Jev calls slower than 20 s are logged to stderr.
+
+Iteration 4 (turns, balance, canonical prompts, seven credence layers,
+`--data`), measured on 2026-09-27 with the defaults on "Should cities ban
+private cars from their centres?": 140 claims in about 3.5 minutes, when the
+tree stopped growing by itself (below the 180-claim budget). The root ended
+6 pro / 5 con after 3 rounds; 11 of the 140 claims were explored at depth 1–3,
+most depth-2 and depth-3 claims ended `PRUNED`, and 27 claims sit at depth 4–5
+(`DEPTH_LIMIT`). Jev's triage over 149 proposals: 92 added, 39 nested as
+evidence, 9 undercuts, 3 duplicates, 2 moved sides, 4 dropped. With the
+proposers taking turns, **no** root argument was a cross-proposer duplicate
+(0 of 11), where before about half of Claude/Codex same-round pairs at the root
+were. The data directory holds about 38 MB after three trees (263 claims) and
+three restarts, most of it host journal.
 
 ## Durability
 

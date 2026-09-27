@@ -92,7 +92,8 @@ class DeliberationEngine(
 
         companion object {
             const val DEFAULT_SATURATION = 0.22
-            const val DEFAULT_MIN_INFLUENCE = 0.35
+            /** Iteration 4: 0.35 × the median canonical-form factor now folded into quality (CALIBRATION.md). */
+            const val DEFAULT_MIN_INFLUENCE = 0.15
             /**
              * EXP-05: reach assumes this edge strength when the CRED-02 judgment
              * failed — middling, so one failure neither prunes nor frees a subtree.

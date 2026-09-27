@@ -172,7 +172,8 @@ credences. The human can override the explorer's depth decisions per claim.
   — it passed 3% of old-style and 64% of canonical arguments). Its
   **contribution** is `reach × relevance × quality`. An undercutter's reach is
   `reach(parent) × strength(its edge) × strength(the undercut edge)`. A non-root claim whose contribution is below
-  `minInfluence` (default 0.35, calibrated in §10 on relevance × reach) is
+  `minInfluence` (default 0.15: calibrated at 0.35 in §10 on relevance × reach,
+  then scaled by the median canonical-form factor of iteration 4's quality) is
   `PRUNED` without being explored — an irrelevant or poorly constructed
   argument never is. If the assessment fails, strength 0.5 is used and
   relevance and quality count as 1. The root is always expanded. Beyond
@@ -293,8 +294,10 @@ stop because Jev's saturation signal is shallow.
 
 Iteration 4 changed plausibility's state (CRED-01) and added the canonical
 factor to quality (EXP-05) after this calibration, so `saturation` and
-`minInfluence` were calibrated under the old judgments; recalibrating them is
-residual (see `CALIBRATION.md`).
+`minInfluence` were calibrated under the old judgments. The first live run
+under the new ones showed the influence gate misbehaving (every depth-1
+argument `PRUNED`), so `minInfluence` was rescaled to 0.15; a full
+recalibration of both is residual (see `CALIBRATION.md`).
 
 ## 11. Durability (requirements DUR-*)
 
