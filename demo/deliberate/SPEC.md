@@ -21,8 +21,9 @@ credences. The human can override the explorer's depth decisions per claim.
   arguments on the unsaturated sides, triage the proposals, attach survivors,
   assess them, re-judge saturation.
 - **Expansion** — running rounds on a claim until it is saturated or its round
-  limit is hit, then enqueuing its children. Each round is one task in the
-  exploration queue (§3 "Exploration order").
+  limit is hit. Each round is one task in the exploration queue; an attached
+  argument joins that queue as soon as its attach-time assessment completes
+  (§3 "Exploration order").
 - **Contribution** — how much exploring a claim is worth: reach × relevance ×
   quality (EXP-05); 1 for the root.
 - **Override** — the human's per-claim setting: `AUTO` (Jev decides),
@@ -133,8 +134,10 @@ one claim. A claim's first round is queued at its contribution (the root at
 1); after each round a claim that is not finished goes back into the queue at
 `contribution × roundDecay^rounds` (`roundDecay` default 0.5), so a strong
 claim's second round competes fairly with a weaker sibling's first. Ties go
-first-in, first-out. Children are queued only when their parent finishes. A
-claim the human forces with `EXPAND` is queued ahead of all contributions.
+first-in, first-out. An argument is queued, at its contribution priority, as
+soon as its attach-time assessment completes; it does not wait for its parent
+to finish later rounds. A claim the human forces with `EXPAND` is queued ahead
+of all contributions.
 
 ## 4. Human control (requirements CTL-*)
 

@@ -773,6 +773,32 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `a strong child runs before its still-exploring parent's decayed next round`() {
+        val calls = CopyOnWriteArrayList<String>()
+        val p = FakeProposer("claude") { ctx, side, _ ->
+            if (side == Polarity.ATTACK) emptyList()
+            else {
+                calls += ctx.claim
+                if (ctx.claim == "Q?" && ctx.pros.isEmpty()) listOf("strong child") else emptyList()
+            }
+        }
+        val e = engine(
+            judge = FakeJudge(strength = { if (it == "strong child") 0.9 else 0.8 }),
+            proposers = listOf(p),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0,
+                maxArgsPerSide = 10, maxArgsPerSideChild = 10, roundDecay = 0.5, workers = 1,
+            ),
+        )
+        e.ask("Q?")
+        e.idle()
+
+        // The child (0.9) joins the queue after assessment and beats the
+        // still-exploring root's second round (1.0 × 0.5).
+        assertEquals(listOf("Q?", "strong child", "Q?"), calls.take(3))
+    }
+
+    @Test
     fun `triage adds, merges duplicates, drops, moves sides, replaces and refines`() {
         val claude = FakeProposer("claude") { ctx, side, _ ->
             when {
@@ -799,11 +825,18 @@ class DeliberationEngineTest {
             "P1 better" to Triage(TriageAction.REPLACE, 0),
             "C1" to Triage(TriageAction.ADD),
         )
-        val judge = FakeJudge(triage = { _, cands -> cands.map { verdicts.getValue(it.text) } })
+        val judge = FakeJudge(
+            strength = { 0.4 },
+            triage = { _, cands -> cands.map { verdicts.getValue(it.text) } },
+        )
         val e = engine(
             judge = judge,
             proposers = listOf(claude, codex),
-            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 2, maxDepth = 0),
+            // Root round two (priority 0.5) reaches P1 before the queued 0.4
+            // child, keeping it eligible for REPLACE/REFINE.
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0, workers = 1,
+            ),
         )
         val root = e.ask("Q?")
         e.idle()
@@ -875,24 +908,83 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `REPLACE of an argument that is already explored only merges it as a duplicate`() {
+    fun `failed reassessment clears judgments made about replaced wording`() {
         val p = FakeProposer("claude") { ctx, side, _ ->
-            if (side == Polarity.ATTACK || ctx.path.isNotEmpty()) emptyList() else if (ctx.pros.isEmpty()) listOf("A") else listOf("A, better")
+            if (side == Polarity.ATTACK || ctx.path.isNotEmpty()) emptyList()
+            else if (ctx.pros.isEmpty()) listOf("A") else listOf("A, better")
         }
-        val judge = FakeJudge(triage = { _, cands -> cands.map { if (it.text == "A, better") Triage(TriageAction.REPLACE, 0) else Triage(TriageAction.ADD) } })
-        val merges = AtomicInteger()
-        val e = engine(judge = judge, proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1),
-            merger = { _, _, _, _ -> merges.incrementAndGet(); "never" })
+        val base = FakeJudge(
+            plausibility = { if (it == "A") 0.9 else 0.6 },
+            strength = { 0.4 },
+            quality = { 0.7 },
+            relevance = { 0.8 },
+            triage = { _, cands -> cands.map { if (it.text == "A, better") Triage(TriageAction.REPLACE, 0) else Triage(TriageAction.ADD) } },
+        )
+        val judge = object : Judge by base {
+            override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment {
+                if (child == "A, better") error("assessment unavailable")
+                return base.assess(question, path, child, side)
+            }
+        }
+        val e = engine(
+            judge = judge,
+            proposers = listOf(p),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0, workers = 1,
+            ),
+        )
         val root = e.ask("Q?")
         e.idle()
-        val a = e.snapshot().claims().single { it.text == "A" }
-        assertEquals(Status.ROUND_LIMIT, a.status)
-        // CTL-02 re-runs the finished root; A has been explored meanwhile, so it keeps its text.
-        e.setOverride(root, Override.EXPAND)
-        e.idle()
         val g = e.snapshot()
-        assertEquals(listOf("A"), g.childrenOf(root).map { g.claim(it.source!!).text })
-        assertEquals(mapOf("ADD" to 1, "DUPLICATE" to 1), g.node(root).triage)
+        val rewritten = g.childrenOf(root).map { g.claim(it.source!!) }.single()
+        assertEquals("A, better", rewritten.text)
+        assertEquals(0.6, rewritten.plausibility) // retried when its expansion starts
+        assertNull(rewritten.relevance)
+        assertNull(rewritten.quality)
+        assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, rewritten.reach)
+        assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, rewritten.contribution)
+        assertNull(g.edges().single { it.source == rewritten.ref }.strength)
+        assertTrue(rewritten.error!!.contains("assessment unavailable"), rewritten.error)
+    }
+
+    @Test
+    fun `REPLACE and MERGE cannot rewrite an argument that has children`() {
+        for (action in listOf(TriageAction.REPLACE, TriageAction.MERGE)) {
+            val original = "A-$action"
+            val better = "$original, better"
+            val p = FakeProposer("claude") { ctx, side, _ ->
+                if (side == Polarity.ATTACK) emptyList()
+                else when {
+                    ctx.path.isEmpty() && ctx.pros.isEmpty() -> listOf(original)
+                    ctx.path.isEmpty() -> listOf(better)
+                    ctx.claim == original && ctx.pros.isEmpty() -> listOf("evidence-$action")
+                    else -> emptyList()
+                }
+            }
+            val judge = FakeJudge(triage = { _, cands ->
+                cands.map { if (it.text == better) Triage(action, 0) else Triage(TriageAction.ADD) }
+            })
+            val merges = AtomicInteger()
+            val e = engine(
+                judge = judge,
+                proposers = listOf(p),
+                config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 2),
+                merger = { _, _, _, _ -> merges.incrementAndGet(); "never" },
+            )
+            val root = e.ask("Q-$action?")
+            e.idle()
+            val before = e.snapshot()
+            val target = before.claims().single { it.text == original }
+            assertTrue(before.childrenOf(CellRef(java.util.UUID.fromString(target.ref))).isNotEmpty())
+
+            // CTL-02 re-runs the root, but a target with children is immutable.
+            e.setOverride(root, Override.EXPAND)
+            e.idle()
+            val g = e.snapshot()
+            assertEquals(listOf(original), g.childrenOf(root).map { g.claim(it.source!!).text })
+            assertEquals(mapOf("ADD" to 1, "DUPLICATE" to 1), g.node(root).triage)
+            assertEquals(0, merges.get())
+        }
     }
 
     @Test
@@ -916,36 +1008,56 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `STOP on a claim waiting for its next round stops it at once and releases its children`() {
-        val q2Asked = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val blocked = CountDownLatch(1)
-        val p = FakeProposer("claude") { ctx, _, _ ->
-            if (ctx.claim == "Q1?") {
-                if (ctx.pros.isEmpty()) q2Asked.await(10, TimeUnit.SECONDS)
-                else { blocked.countDown(); release.await(10, TimeUnit.SECONDS) }
+    fun `STOP on a parent does not cancel its already queued child`() {
+        val q1Entered = CountDownLatch(1)
+        val allowQ1 = CountDownLatch(1)
+        val q2Entered = CountDownLatch(1)
+        val allowQ2 = CountDownLatch(1)
+        val childExplored = CountDownLatch(1)
+        val p = FakeProposer("claude") { ctx, side, _ ->
+            if (side == Polarity.ATTACK) emptyList()
+            else when (ctx.claim) {
+                "Q1?" -> if (ctx.pros.isEmpty()) {
+                    q1Entered.countDown()
+                    allowQ1.await(10, TimeUnit.SECONDS)
+                    listOf("Q1 child")
+                } else emptyList()
+                "Q2?" -> {
+                    q2Entered.countDown()
+                    allowQ2.await(10, TimeUnit.SECONDS)
+                    emptyList()
+                }
+                "Q1 child" -> emptyList<String>().also { childExplored.countDown() }
+                else -> emptyList()
             }
-            null
         }
         val e = engine(
+            judge = FakeJudge(strength = { 0.9 }),
             proposers = listOf(p),
-            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, workers = 1),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0,
+                maxArgsPerSide = 10, maxArgsPerSideChild = 10, workers = 1,
+            ),
         )
-        e.ask("Q1?")
-        val q2 = e.ask("Q2?")
-        q2Asked.countDown()
-        // Queue: Q1 round 1, Q2 round 1, then Q1's round 2 blocks the only worker with Q2 waiting.
-        assertTrue(blocked.await(10, TimeUnit.SECONDS))
-        assertEquals(1, e.snapshot().node(q2).rounds)
-        assertEquals(Status.EXPLORING, e.snapshot().node(q2).status)
-        e.setOverride(q2, Override.STOP)
-        assertEquals(Status.STOPPED, e.snapshot().node(q2).status)
-        release.countDown()
+        val q1 = e.ask("Q1?")
+        assertTrue(q1Entered.await(10, TimeUnit.SECONDS))
+        e.ask("Q2?")
+        allowQ1.countDown()
+        // Q2 (priority 1) occupies the only worker while Q1's assessed child
+        // (0.9) and Q1's next round (0.5) wait in the queue.
+        assertTrue(q2Entered.await(10, TimeUnit.SECONDS))
+        val queued = e.snapshot()
+        val child = queued.childrenOf(q1).map { queued.claim(it.source!!) }.single()
+        assertEquals(Status.QUEUED, child.status)
+        assertEquals(Status.EXPLORING, queued.node(q1).status)
+
+        e.setOverride(q1, Override.STOP)
+        assertEquals(Status.STOPPED, e.snapshot().node(q1).status)
+        allowQ2.countDown()
         e.idle()
         val g = e.snapshot()
-        assertEquals(1, g.node(q2).rounds)
-        val kids = g.childrenOf(q2).map { g.claim(it.source!!) }
-        assertEquals(2, kids.size)
-        assertTrue(kids.all { it.status == Status.DEPTH_LIMIT }, kids.toString())
+        assertEquals(1, g.node(q1).rounds)
+        assertEquals(Status.ROUND_LIMIT, g.claim(child.ref).status)
+        assertEquals(0L, childExplored.count)
     }
 }

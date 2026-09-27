@@ -7,6 +7,7 @@ import { Legend } from '../src/components/Legend';
 import { QuestionInput } from '../src/components/QuestionInput';
 import { ThemeToggle } from '../src/components/ThemeToggle';
 import { TreeView } from '../src/components/TreeView';
+import { Facts } from '../src/components/ClaimCard';
 
 vi.mock('../src/sync/store', () => ({
   source: {
@@ -24,7 +25,10 @@ const graph: GraphDto = {
     },
     {
       ref: 'a', kind: 'CLAIM', credence: 0.75, root: 'q', text: 'It would help.', depth: 1,
-      status: 'SATURATED', override: 'EXPAND', proposer: 'claude', reach: 0.8,
+      status: 'SATURATED', override: 'EXPAND', proposer: 'claude', alsoProposedBy: ['codex'], merged: true,
+      plausibility: 0.7, reach: 0.8, relevance: 0.8, quality: 0.9, contribution: 0.576,
+      proSaturation: 0.8, conSaturation: 0.6, rounds: 2, duplicatesDropped: 1,
+      triage: { ADD: 2, MERGE: 1 },
     },
     {
       ref: 'a-q', kind: 'EDGE', credence: 0.8, root: 'q', polarity: 'SUPPORT',
@@ -95,6 +99,20 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('aria-label="Hide arguments for It would help."');
     expect(html.match(/aria-label="Exploration override"/g)).toHaveLength(3);
     expect(html).toContain('aria-pressed="true"');
+  });
+
+  it('shows the Jev, contribution, provenance and triage facts for an open argument', () => {
+    const claim = graph.nodes.find((n) => n.ref === 'a')!;
+    const edge = graph.nodes.find((n) => n.ref === 'a-q')!;
+    const html = renderToString(() => <Facts id="facts-a" claim={claim} edge={edge} />);
+    for (const label of [
+      'Credence', 'Plausible on its own', 'Link strength', 'Reach', 'Relevance', 'Quality',
+      'Contribution', 'Sides covered', 'Rounds', 'Duplicates dropped', 'Sorted proposals',
+      'Proposed by', 'Also proposed by', 'Merged', 'Ref',
+    ]) expect(html).toContain(label);
+    expect(html).toContain('2 added · 1 merged');
+    expect(html).toContain('codex');
+    expect(html).toContain('58%');
   });
 
   it('uses native or labelled controls for help and theme disclosure', () => {

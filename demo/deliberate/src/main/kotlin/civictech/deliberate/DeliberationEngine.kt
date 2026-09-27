@@ -21,9 +21,9 @@ import kotlin.time.Duration
  * a task's priority is the claim's contribution (reach × relevance × quality,
  * judged by Jev when the argument was attached; the root is 1) times
  * `roundDecay` per round the claim already ran, so a claim with rounds left
- * re-enters the queue behind stronger fresh work. Children are queued only
- * once their parent finishes. Each round fans its proposer calls and the
- * assessments of its new arguments out on a separate call executor. The
+ * re-enters the queue behind stronger fresh work. An argument enters the queue
+ * as soon as its attach-time assessment completes. Each round fans its proposer
+ * calls and the assessments of its new arguments out on a separate call executor. The
  * app-wide bound on concurrent CLI processes (EXP-07) is not the engine's: it
  * is the one [ProcessGate] the CLI proposers share. All engine metadata sits
  * behind [lock], held only for short reads/writes and never across a
@@ -115,11 +115,15 @@ class DeliberationEngine(
         var roundInFlight = false
         /** EXPLORING with rounds left; its next round is queued. */
         var waiting = false
+        /** Invalidates stale priority-queue entries when a queued claim is reprioritized. */
+        var queueGeneration = 0L
+        /** Keeps a queued target from starting while REPLACE/MERGE and re-assessment are in progress. */
+        var rewriteInFlight = false
+        /** Whether the first rewrite reservation invalidated an already queued task. */
+        var rewriteWasQueued = false
         var anyCallSucceeded = false
         var edge: Edge? = null
         val children = mutableListOf<Claim>()
-        /** Children attached so far; queued when this claim finishes (SPEC §1 "Expansion"). */
-        val pendingChildren = mutableListOf<Claim>()
     }
 
     private class Edge(val ref: CellRef, val root: CellRef, val source: CellRef, val target: CellRef, val side: Side) {
@@ -131,7 +135,9 @@ class DeliberationEngine(
         val also = mutableListOf<String>()
     }
 
-    private class Task(val claim: Claim, val priority: Double, val seq: Long)
+    private class Task(val claim: Claim, val priority: Double, val seq: Long, val generation: Long)
+
+    private data class RewriteReservation(val created: Boolean, val wasQueued: Boolean)
 
     private val lock = Any()
     private val serviceLock = Any()
@@ -184,13 +190,12 @@ class DeliberationEngine(
             val c = requireNotNull(claims[ref]) { "unknown claim ${ref.id}" }
             c.override = mode
             when (mode) {
-                // CTL-03: queued work is cancelled at once (including a claim waiting for its next
-                // round, whose children are released now); a running claim stops at its next round boundary.
+                // CTL-03: queued work is cancelled at once; a running claim stops at its next round boundary.
                 Override.STOP -> when {
                     c.status == Status.EXPLORING && c.waiting -> {
                         c.waiting = false
                         c.status = Status.STOPPED
-                        drainChildren(c)
+                        emptyList()
                     }
                     c.status !in setOf(Status.JUDGING, Status.EXPLORING) -> {
                         c.status = Status.STOPPED
@@ -213,7 +218,7 @@ class DeliberationEngine(
                     }
                     c.status == Status.QUEUED -> {
                         // Jump the queue: the stale task finds the claim taken and falls through.
-                        if (claimQueued(c)) enqueueAgain = c
+                        enqueueAgain = c
                         emptyList()
                     }
                     c.status == Status.JUDGING || c.status == Status.EXPLORING -> {
@@ -294,15 +299,12 @@ class DeliberationEngine(
                 return
             }
             try {
-                process(task.claim)
+                process(task)
             } finally {
                 done()
             }
         }
     }
-
-    /** Caller holds [lock]. Whether [c] was released to the queue (a root always is). */
-    private fun claimQueued(c: Claim) = c.parent?.pendingChildren?.contains(c) != true
 
     /** Caller holds [lock]. SPEC §3 "Exploration order": the queue priority of [c]'s next round. */
     private fun priorityOf(c: Claim): Double =
@@ -314,9 +316,12 @@ class DeliberationEngine(
 
     private fun enqueue(c: Claim) {
         if (closed) return
-        val priority = synchronized(lock) { priorityOf(c) }
+        val (priority, generation) = synchronized(lock) {
+            c.queueGeneration++
+            priorityOf(c) to c.queueGeneration
+        }
         pending.incrementAndGet()
-        queue.add(Task(c, priority, seq.getAndIncrement()))
+        queue.add(Task(c, priority, seq.getAndIncrement(), generation))
     }
 
     /**
@@ -327,7 +332,8 @@ class DeliberationEngine(
      */
     private fun schedule(c: Claim) {
         val gate = synchronized(lock) {
-            if (c.status != Status.QUEUED || c.parent == null || c.override == Override.EXPAND) null
+            if (c.status != Status.QUEUED) return
+            if (c.parent == null || c.override == Override.EXPAND) null
             else when {
                 c.depth > config.maxDepth -> Status.DEPTH_LIMIT
                 contributionOf(c) < config.minInfluence -> Status.PRUNED
@@ -347,11 +353,13 @@ class DeliberationEngine(
         return r
     }
 
-    private fun process(c: Claim) {
+    private fun process(task: Task) {
+        val c = task.claim
         // Claim ownership: a QUEUED claim is started; a waiting EXPLORING claim continues with
         // its next round. Stale/cancelled tasks (e.g. a STOP while waiting) fall through.
         val continuing = synchronized(lock) {
             when {
+                task.generation != c.queueGeneration || c.rewriteInFlight -> null
                 c.status == Status.QUEUED -> false.also { c.status = Status.JUDGING }
                 c.status == Status.EXPLORING && c.waiting -> true.also { c.waiting = false }
                 else -> null
@@ -531,12 +539,15 @@ class DeliberationEngine(
             val v = verdicts[i]
             val target = v.target?.let { t -> if (t < existing.size) existing.getOrNull(t) else resolved.getOrNull(t - existing.size) }
             val action = when (v.action) {
-                TriageAction.REPLACE, TriageAction.MERGE -> when {
+                TriageAction.REPLACE -> when {
                     target == null -> TriageAction.ADD
-                    // Only an argument nobody explored yet may change its wording.
-                    !synchronized(lock) { replaceable(target) } -> TriageAction.DUPLICATE
-                    v.action == TriageAction.MERGE && !merge(c, target, f) -> TriageAction.DUPLICATE
-                    else -> v.action
+                    replace(target, f) -> TriageAction.REPLACE
+                    else -> TriageAction.DUPLICATE
+                }
+                TriageAction.MERGE -> when {
+                    target == null -> TriageAction.ADD
+                    merge(c, target, f) -> TriageAction.MERGE
+                    else -> TriageAction.DUPLICATE
                 }
                 TriageAction.REFINE -> if (target == null) TriageAction.ADD else TriageAction.REFINE
                 else -> v.action
@@ -557,8 +568,7 @@ class DeliberationEngine(
                     resolved[i] = target
                 }
                 TriageAction.REPLACE -> {
-                    replace(target!!, f)
-                    replaced += target
+                    replaced += target!!
                     resolved[i] = target
                 }
                 TriageAction.MERGE -> {
@@ -580,12 +590,27 @@ class DeliberationEngine(
         }
 
         // CRED-01, CRED-02, EXP-05: every new (or reworded: REPLACE, MERGE) argument is assessed at once.
-        assess((replaced + attached).distinct())
-        // A refinement under an argument that already finished is queued now, not with its parent.
-        val release = synchronized(lock) {
-            attached.filter { it.parent !== c && it.parent!!.status in FINISHED && it.parent.pendingChildren.remove(it) }
+        val rewritten = replaced.distinct()
+        val ready = (rewritten + attached).distinct()
+        try {
+            rewritten.forEach(::clearAssessment)
+            assess(ready)
+        } finally {
+            // SPEC §3 "Exploration order": arguments compete with their parent's next
+            // round immediately after assessment. Rewrite reservations are released
+            // only now, so a stale task cannot explore wording with old judgments.
+            // The finally also prevents an infrastructure failure from stranding a target.
+            ready.forEach { n ->
+                val queueNow = update {
+                    if (n.rewriteInFlight) {
+                        n.rewriteInFlight = false
+                        n.rewriteWasQueued = false
+                    }
+                    n.status == Status.QUEUED
+                }
+                if (queueNow) schedule(n)
+            }
         }
-        release.forEach(::schedule)
 
         // EXP-04: saturation per side (a forced round's sides are re-judged too).
         val after = context(c)
@@ -658,13 +683,34 @@ class DeliberationEngine(
             claims[childRef] = child
             edges[edgeRef] = edge
             parent.children += child
-            parent.pendingChildren += child
         }
         return child
     }
 
     /** Caller holds [lock]. EXP-03 REPLACE only rewords an argument nobody has explored yet. */
     private fun replaceable(t: Claim) = t.parent != null && t.status == Status.QUEUED && t.children.isEmpty() && t.rounds == 0
+
+    /** Reserve an unexplored queued target and invalidate any task carrying its old priority/text. */
+    private fun beginRewrite(t: Claim): RewriteReservation? = update {
+        if (!replaceable(t)) return@update null
+        if (t.rewriteInFlight) return@update RewriteReservation(created = false, wasQueued = t.rewriteWasQueued)
+        val wasQueued = t.queueGeneration > 0
+        t.rewriteInFlight = true
+        t.rewriteWasQueued = wasQueued
+        t.queueGeneration++
+        RewriteReservation(created = true, wasQueued = wasQueued)
+    }
+
+    /** Undo a failed first rewrite reservation and restore the target's invalidated queue entry. */
+    private fun cancelRewrite(t: Claim, reservation: RewriteReservation) {
+        if (!reservation.created) return
+        val resume = update {
+            t.rewriteInFlight = false
+            t.rewriteWasQueued = false
+            reservation.wasQueued && t.status == Status.QUEUED
+        }
+        if (resume) enqueue(t)
+    }
 
     /**
      * EXP-03 MERGE: rewrites [t] and the candidate as one sentence via the
@@ -674,15 +720,17 @@ class DeliberationEngine(
      */
     private fun merge(c: Claim, t: Claim, f: Fresh): Boolean {
         val m = merger ?: return false
+        val reservation = beginRewrite(t) ?: return false
         val (claim, current) = synchronized(lock) { c.text to t.text }
         val merged = try {
             m.merge(claim, t.side!!, current, f.text)
         } catch (e: Exception) {
             update { c.error = "merge: $e" }
+            cancelRewrite(t, reservation)
             return false
         }
         return update {
-            replaceable(t).also { ok ->
+            (t.rewriteInFlight && replaceable(t)).also { ok ->
                 if (ok) {
                     t.text = merged
                     t.merged = true
@@ -690,16 +738,41 @@ class DeliberationEngine(
                         .forEach { t.alsoProposedBy += it }
                 }
             }
-        }
+        }.also { if (!it) cancelRewrite(t, reservation) }
     }
 
     /** EXP-03 REPLACE: [t] takes the candidate's text and provenance; its old proposer is kept as `also`. */
-    private fun replace(t: Claim, f: Fresh) = update {
-        val others = (listOf(t.proposer) + t.alsoProposedBy + f.also).filter { it != f.proposer }.distinct()
-        t.alsoProposedBy.clear()
-        t.alsoProposedBy += others
-        t.proposer = f.proposer
-        t.text = f.text
+    private fun replace(t: Claim, f: Fresh): Boolean {
+        val reservation = beginRewrite(t) ?: return false
+        return update {
+            (t.rewriteInFlight && replaceable(t)).also { ok ->
+                if (ok) {
+                    val others = (listOf(t.proposer) + t.alsoProposedBy + f.also).filter { it != f.proposer }.distinct()
+                    t.alsoProposedBy.clear()
+                    t.alsoProposedBy += others
+                    t.proposer = f.proposer
+                    t.text = f.text
+                }
+            }
+        }.also { if (!it) cancelRewrite(t, reservation) }
+    }
+
+    /** A rewritten sentence must never retain judgments made about its previous wording. */
+    private fun clearAssessment(n: Claim) {
+        val edge = synchronized(lock) { n.edge!! }
+        update {
+            n.plausibility = null
+            n.relevance = null
+            n.quality = null
+            edge.strength = null
+            val reach = (n.parent!!.reach ?: 1.0) * Config.FALLBACK_STRENGTH
+            n.reach = reach
+            n.contribution = reach
+        }
+        synchronized(serviceLock) {
+            service.setStance(n.ref, "jev", null)
+            service.setStance(edge.ref, "jev", null)
+        }
     }
 
     /** EXP-03 DUPLICATE: record the extra proposers on the argument that already makes the point. */
@@ -708,7 +781,8 @@ class DeliberationEngine(
     }
 
     /**
-     * Ends [c]'s expansion with [status] and returns its children to queue.
+     * Ends [c]'s expansion with [status]. Children have already joined the
+     * queue after their attach-time assessments.
      * EXP-06: a claim that already ran a round and then meets the budget ends
      * ROUND_LIMIT with error [Config.BUDGET_EXHAUSTED]; BUDGET is kept for a
      * claim that would have expanded but never did.
@@ -722,11 +796,8 @@ class DeliberationEngine(
             else -> status
         }
         if (error != null) c.error = error
-        drainChildren(c)
+        emptyList()
     }
-
-    /** Caller holds [lock]. */
-    private fun drainChildren(c: Claim): List<Claim> = c.pendingChildren.toList().also { c.pendingChildren.clear() }
 
     // ---------------------------------------------------------------- helpers
 
