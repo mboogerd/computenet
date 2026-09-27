@@ -1,0 +1,140 @@
+# B13 (computenet-t4od7.8, t4od7-D8): an EVICTING window recovered across a
+# crash taken after eviction. The corpus form of kernel
+# `GroupByEvictionRecoveryTest` (which owns `[KE4-45]`/`[22-REC-01]` for an
+# evicting group-by on every seed); this file drives the same property through
+# the `dur` driver's real checkpoint / crash / `recoverFrom` path.
+#
+# WHICH HALF OF [22-REC-01] THIS ASSERTS. Observers converge to the pre-crash
+# fold: the recovered count view equals the post-eviction fold at the
+# checkpoint plus the journal tail and the post-recovery traffic. And the
+# late-drop continues from the RESTORED floor ([24-WL-07] across recovery,
+# [24-WL-05]'s "state = integrated output keeps Stateful snapshots correct"):
+# a post-recovery add below that floor leaves on `late` and the evicted window
+# it would belong to is not re-created. It does NOT assert [22-REC-01]'s
+# no-torn-wave half (the replayed emissions installed as baselines under no
+# wave) — no neutral check observes wave membership here; that half is pinned
+# by `GroupByEvictionRecoveryTest` in the kernel.
+#
+# ELEMENTS ARE BARE EVENT TIMES, not the `[at, value]` pairs the core
+# lateness scenarios use (computenet-t4od7.8). A journaled cell's accepted
+# invocations are written to the WAL through the kernel `WireCodec`, which has
+# no polymorphic registration for a list element: a `journal-set-source` add
+# of `[3, x]` fails at `HostDurability.journalFrame` with "Serializer for
+# subclass 'ArrayList' is not found". A bare integer is its own head, so
+# `EventTimeOfPair` reads it as the event time and the window/waterline
+# arithmetic is unchanged; each element below is named by its time.
+#
+# WHAT DISCRIMINATES (measured, computenet-t4od7.8, 20 of 20 runs each).
+# (1) `journal-window` made volatile in `KernelDriverDur` (its checkpoint
+# restore lost; the checkpoint itself still taken, on `s`): the window is
+# rebuilt empty and refilled only by the source's replayed tail 28, its floor
+# is gone, so the rebuilt waterline's first live floor (3) admits 5 into a
+# re-created window 0 and window 20 ends as {28, 29}: `jv` reads
+# `{"20": 2, "30": 1}` and `l` reads `[]`. Both checks redden.
+# (2) The `snapshot` step deleted (no checkpoint, the whole WAL replays): `jv`
+# still reads `{"20": 3, "30": 1}` — the window's own full journal
+# reconstructs its state and floor — which is recovery by replay alone, not
+# the checkpoint-restore this file is about. `l` reddens, reading
+# `[12, 25, 3, 5]`: the source's full-history re-emission reaches the window
+# after its replayed floor is back at 26, so the historical 3, 12 and 25 are
+# late-dropped as duplicates onto `late`.
+#
+# Two corrections to the breakdown's sketch, both measured. The CHECKPOINT
+# is taken `on: s`, not `on: jw`: `snapshot` of a journaled cell is a
+# host-wide checkpoint whichever journaled cell it names, but naming `jw`
+# makes mutation (1) also silently drop the checkpoint (a volatile cell's
+# `snapshot` is a raw round-trip), so the mutant replayed the full history
+# and `jv` matched its golden (only `l` reddened, reading `[]`; measured
+# 20 of 20 runs in task review). And the post-recovery add 29 is in the script:
+# without an add INTO window 20 after recovery, `jv` never re-reads that
+# window's recovered count — its own replayed tail re-installs `20 -> 2`
+# whatever the rebuilt window holds — so only `l` could discriminate.
+#
+# WHY THE FLOOR AFTER RECOVERY IS THE WINDOW'S, NOT THE WATERLINE'S. `wl` is
+# volatile: the crash re-mints it empty, and the journaled source's replayed
+# re-emission of 28 reaches it stamped as a BASELINE, which a `WaterlineCell`
+# ignores (no wave position, sjqat-D1). So after recovery `wl` has no floor
+# until live traffic arrives, and its first live floor (5 - 2 = 3) is below the
+# window's. The window's own floor was restored from the checkpoint (23) and
+# raised by its replayed journal tail (the WaterlineDelta(26) frame that
+# reached it through the intake before the crash): 26. 5 is below it.
+# (The breakdown's sketch said the rebuilt `wl` "re-reads m -> floor 26"; the
+# goldens are unchanged by the correction, only the reason.)
+#
+# Ordering (see 24-WL-LATE-01's header): the data path s -> jw is one hop and
+# the floor path s -> wl -> jw two, so every floor-raising add is followed by a
+# quiesce before any add whose fate depends on it.
+id: 24-WL-REC-01
+title: An evicting window checkpointed after eviction recovers across a crash to the pre-crash fold and keeps late-dropping from its restored floor
+covers: [22-REC-01, 24-WL-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a journaled set source of event times
+    feeding a volatile waterline (lateness 2) and a journaled tumbling window
+    (size 10, count, lateness 2) guarded by that waterline's floor, the window's
+    output folded by a journaled count view and its late outlet by a volatile
+    set view, plus a journal controller
+  when: >
+    adds raise the floor to 23 so windows 0 and 10 are evicted, the journaled
+    cells are checkpointed, a further add is applied as the journal tail, the
+    host crashes and recovers from its journal, then a post-recovery add lands
+    below the restored floor and two land above it, one into the recovered
+    live window
+  then: >
+    the count view equals the post-eviction fold at the checkpoint plus the
+    tail and the post-recovery above-floor adds, the below-floor add is on the
+    late set view and absent from the count view (window 0 is not re-created),
+    and nothing was dead-lettered
+graph:
+  cells:
+    - {id: s, type: journal-set-source, host: dur}
+    # volatile: rebuilt empty on the crash, recomputes from live traffic only
+    - {id: wl, type: waterline, lateness: 2, host: dur}
+    # journaled: its checkpoint carries the window state AND the floor
+    - {id: jw, type: journal-window, agg: count, window: {kind: tumbling, size: 10}, lateness: 2, host: dur}
+    # journaled: its fold is read back from its checkpoint plus the journal tail
+    - {id: jv, type: journal-count-view, host: dur}
+    # volatile: receives only post-recovery late adds
+    - {id: l, type: set-view, host: dur}
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: s, to: wl}
+    - {from: s, to: jw}
+    - {from: wl, to: jw, inlet: waterline}
+    - {from: jw, to: jv}
+    - {from: jw, to: l, outlet: late}
+script:
+  # floor = max event time - 2 (one source).
+  - {type: apply, on: s, op: add, value: 3}     # floor 1 -> jv {"0": 1}
+  - {type: quiesce}
+  - {type: apply, on: s, op: add, value: 12}    # floor 10: window 0 (end 10) evicted -> jv {"10": 1}
+  - {type: quiesce}
+  - {type: apply, on: s, op: add, value: 25}    # floor 23: window 10 (end 20) evicted -> jv {"20": 1}
+  - {type: quiesce}
+  # CHECKPOINT: host-wide over every journaled cell (s, jw, jv) whichever one the step
+  # names — jw's state {20: [25]} + floor 23, jv {"20": 1}; the WAL compacts
+  - {type: snapshot, on: s, as: ck}
+  # JOURNAL TAIL: floor 26, window 20 (end 30 > 26) stays live -> jv {"20": 2}
+  - {type: apply, on: s, op: add, value: 28}
+  - {type: quiesce}
+  # CRASH + recover: jw and jv restore their checkpoints and replay their tails
+  # (jw: 28 and the floor 26; jv: the {"20": 2} update); wl comes back empty
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  # 5 < the restored-and-replayed floor 26: late, window 0 is not re-created
+  - {type: apply, on: s, op: add, value: 5}
+  - {type: quiesce}
+  # wl's live max 29 -> candidate 27, the window's floor 26 -> 27: window 20
+  # (end 30 > 27) stays live and folds 29 onto the RESTORED 25 and replayed 28 -> jv {"20": 3}
+  - {type: apply, on: s, op: add, value: 29}
+  - {type: quiesce}
+  # floor 29: window 20 (end 30 > 29) stays live, 31 opens window 30 -> jv {"20": 3, "30": 1}
+  - {type: apply, on: s, op: add, value: 31}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: jv, equals: {"20": 3, "30": 1}}
+  - {type: final-view, view: l, equals: [5]}
+  # a crash + recovery is not a dead letter (DUR-REPLAY-01 asserts the same)
+  - {type: no-dead-letters}
