@@ -135,6 +135,13 @@ internal class Relay<D : Any>(
  * Subscriber A is linked (through a [Relay], identity unless the control is
  * selected) before the first wave; the late joiner links at idle and folds its
  * catch-up (`[21-CATCHUP-02]`).
+ *
+ * **The join shape (computenet-fh1fo.2)** — see `JoinRig`: the same writers
+ * split between `JoinSetCell.left`/`.right` over one shared waterline; B6 under
+ * `[24-WL-10]`'s join-family domain (whole state, rows `t < finalFloor`
+ * removed, no output filter), B7's row-horizon half (`[24-WL-19]`'s last
+ * sentence: no whole-state bound for a join), and the B14 exit-without-tags
+ * control made red-capable (`[KE4-32]`).
  */
 class LatenessHarnessTest {
 

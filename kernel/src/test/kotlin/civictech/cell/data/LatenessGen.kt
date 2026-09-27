@@ -8,7 +8,9 @@ import java.util.UUID
 /**
  * KE4.6 (computenet-fh1fo.1): the seeded lateness generator and its
  * cell-independent oracle, shared by `LatenessHarnessTest`'s B6 (batch
- * equivalence, `[24-WL-10]`) and B7 (window-count bound, `[24-WL-19]`) arms.
+ * equivalence, `[24-WL-10]`) and B7 (window-count bound, `[24-WL-19]`) arms,
+ * and — computenet-fh1fo.2 — the join-family domain those arms use for the
+ * `JoinSetCell` shape (`LatenessOracle.remaining`/`joinBatch`, [OracleJoinKey]).
  *
  * **Independence (fh1fo-D3).** Nothing here imports a `civictech.cell.data.op`
  * type: the oracle's floor, late set and batch are re-derived from spec 24
