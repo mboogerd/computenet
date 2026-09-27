@@ -11,7 +11,9 @@ import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.EdgeClose
 import java.io.Serializable
 import java.util.*
 
@@ -39,7 +41,37 @@ import java.util.*
  *   context or a catch-up baseline context (`MessageContext.baseline != null`)
  *   carries no wave's `sourceId` and contributes nothing. A missed
  *   contribution only holds the floor back — the safe direction.
- * - **Retire** (`[24-WL-15]`): [retire] drops a source's maximum.
+ * - **Retirement** — three routes, each dropping a source's maximum from the
+ *   minimum; the floor is never lowered by it (the candidate can only rise as
+ *   the set shrinks, and an emptied set leaves the floor as it is):
+ *   - `EdgeClose` (`[24-WL-12]`, `[KE4-22]`): when an inlet link closes, every
+ *     `sourceId` whose deliveries arrived with `MessageContext.sourcePort ==
+ *     link.from` is retired in one step, with at most one emission. The
+ *     link→source mapping relies on the emitting outlet stamping itself as
+ *     `sourcePort`, which holds for **in-process** links (`FanOutlet`'s call
+ *     proxy); whether a `:wire` bridge preserves `sourcePort == link.from` is
+ *     not established here, so retirement-on-close is claimed for in-process
+ *     links only. Registered through [FanInlet.onEdgeEvent] so it composes
+ *     with a glitch-free policy on the same inlet.
+ *   - `ReBaselineNotice` (`[24-WL-13]`, `[KE4-23]`): a delivery whose notice
+ *     has `supersede = true` retires every superseded `sourceId` before its own
+ *     adds fold under the fresh epoch's `sourceId`, one candidate evaluation
+ *     riding that wave; `supersede = false` retires nothing.
+ *   - Manual [retire] (`[24-WL-15]`): the management escape hatch.
+ *
+ *   A retirement raised by `EdgeClose` or [retire] is emitted **detached**: it
+ *   runs under a null context, so the outlet mints a fresh wave under its own
+ *   `sourceId` (the [WatermarkCell] republish shape) — an ordinary single-source
+ *   wave, not a baseline. A retired source that contributes again is a fresh
+ *   contributor under `[24-WL-20]`: below the floor it leaves the floor, emits
+ *   nothing, and gates every later rise.
+ * - **Idle-source residual** (`[24-WL-14]`): an open, linked source that stops
+ *   emitting holds the floor at its promise (max − lateness) — and one that
+ *   joined below the floor holds it where it is, with no advance at all —
+ *   until it emits, its link closes, or it is retired. Frozen but correct;
+ *   eviction and the memory bound stall meanwhile. Aging an idle source
+ *   without a wall clock is research: `doc/spec/90-roadmap/95-research-plan.md`
+ *   §R15.
  *
  * Delta-only (no `@Contract`, nothing through gen/), like [WatermarkCell].
  * [Stateful], not `BoundedStateful` (sjqat-D2): state is O(sources).
@@ -63,6 +95,9 @@ class WaterlineCell<E> internal constructor(
     private val maxima: MutableMap<UUID, Long> = mutableMapOf()
     private var floor: Long? = null
 
+    /** 6gkou.1-D1: which sources arrived over which upstream outlet — the key an `EdgeClose`'s `link.from` names. */
+    private val sourcesByPort: MutableMap<PortRef, MutableSet<UUID>> = mutableMapOf()
+
     /** The current floor, or `null` while no source has contributed (`[24-WL-02]`'s identity). */
     fun floor(): Long? = floor
 
@@ -73,6 +108,10 @@ class WaterlineCell<E> internal constructor(
         inlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) = onDelta(value)
         })
+        // [24-WL-12]: retire what a closing link carried. EdgeOpen needs nothing.
+        inlet.onEdgeEvent { link, event ->
+            if (event == EdgeClose) retireAll(sourcesByPort.remove(link.from).orEmpty())
+        }
         // [KE4-24]: a late consumer receives the current floor as its baseline.
         outlet.catchUpOnLinked { floor?.let { WaterlineDelta(it) } }
     }
@@ -80,6 +119,9 @@ class WaterlineCell<E> internal constructor(
     private fun onDelta(delta: SetDelta<E>) {
         val ctx = CurrentContext.get()
         if (ctx == null || ctx.baseline != null) return // sjqat-D1: no wave position
+        // [24-WL-13]: a superseding re-baseline retires the dead epochs first;
+        // the combined step is one candidate evaluation riding this wave.
+        ctx.reBaseline?.takeIf { it.supersede }?.supersedes?.forEach(::forget)
         val src = ctx.timestamp.sourceId
         // dels are ignored: a retraction never lowers an observed maximum.
         for (e in delta.adds.keys) {
@@ -87,7 +129,26 @@ class WaterlineCell<E> internal constructor(
             val prev = maxima[src]
             if (prev == null || t > prev) maxima[src] = t
         }
+        if (src in maxima) sourcesByPort.getOrPut(ctx.sourcePort) { mutableSetOf() } += src
         if (!raiseTo(candidate())) outlet.absorbAck()
+    }
+
+    /** Drop [sourceId]'s maximum and its link bookkeeping; true iff it was contributing. */
+    private fun forget(sourceId: UUID): Boolean {
+        val it = sourcesByPort.values.iterator()
+        while (it.hasNext()) {
+            val set = it.next()
+            set -= sourceId
+            if (set.isEmpty()) it.remove()
+        }
+        return maxima.remove(sourceId) != null
+    }
+
+    /** Retire [sourceIds] in one step: one candidate evaluation, at most one detached emission (6gkou.1-D3). */
+    private fun retireAll(sourceIds: Collection<UUID>) {
+        var any = false
+        for (id in sourceIds.toList()) any = forget(id) || any
+        if (any) CurrentContext.with(null) { raiseTo(candidate()) }
     }
 
     private fun candidate(): Long? =
@@ -104,19 +165,23 @@ class WaterlineCell<E> internal constructor(
     }
 
     /**
-     * Retire [sourceId] (`[24-WL-15]`, sjqat-D4): drop its maximum and emit iff
-     * the floor strictly rises; the floor is never lowered, and an emptied
-     * source set leaves it as it is. Called outside any wave, the outlet mints
-     * a fresh one. Callers (EdgeClose, ReBaselineNotice) and churn semantics
-     * are KE4.4's (computenet-6gkou).
+     * Retire [sourceId] (`[24-WL-15]`, sjqat-D4): the manual route. Drop its
+     * maximum and emit iff the floor strictly rises; the floor is never
+     * lowered, and an emptied source set leaves it as it is. The emission is
+     * detached — a fresh wave minted by the outlet, whatever context the
+     * caller holds (6gkou.1-D3). The automatic routes (`EdgeClose`,
+     * `ReBaselineNotice`) are described on the class.
      */
-    fun retire(sourceId: UUID) {
-        if (maxima.remove(sourceId) == null) return
-        raiseTo(candidate())
-    }
+    fun retire(sourceId: UUID) = retireAll(listOf(sourceId))
 
     override fun snapshot(): Serializable =
-        HashMap(mapOf<String, Serializable?>("maxima" to HashMap(maxima), "floor" to floor))
+        HashMap(
+            mapOf<String, Serializable?>(
+                "maxima" to HashMap(maxima),
+                "floor" to floor,
+                "sourcesByPort" to HashMap(sourcesByPort.mapValues { HashSet(it.value) }),
+            )
+        )
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
@@ -124,5 +189,9 @@ class WaterlineCell<E> internal constructor(
         maxima.clear()
         maxima.putAll(map.getValue("maxima") as Map<UUID, Long>)
         floor = map["floor"] as Long?
+        sourcesByPort.clear()
+        (map["sourcesByPort"] as Map<PortRef, Set<UUID>>?)?.forEach { (port, ids) ->
+            sourcesByPort[port] = ids.toMutableSet()
+        }
     }
 }
