@@ -462,7 +462,9 @@ they were stopped. A full recalibration of
   null until the question completed 3 rounds) and `cost`: per backend its
   calls, tokens by kind, USD, the rate applied, its source and date, whether
   it is assumed, and its caveat, plus the rounds, queued claims and cost per
-  round behind the projection.
+  round behind the projection. A question restored from a durable record made
+  before cost tracking is marked incomplete: it has no projection, and any
+  newly tracked spend is only a lower bound.
 - **COST-04** The cost is durable (DUR-02): per question and backend one
   aggregate counter set (calls, token sums, USD, unpriced calls, models) —
   never a per-call log — stored in the question's record as one field per
@@ -474,4 +476,7 @@ they were stopped. A full recalibration of
   cost, the price with its source and date (marked *assumed* where it is),
   the projection ("≈$2.10 if the 9 queued claims are explored") and the
   Claude subscription caveat — that closes on Escape or a click outside.
+  A restored pre-cost question shows `—` and “cost not tracked for this
+  question (created before cost tracking)”; after new tracked calls it shows
+  “at least $X (earlier rounds not tracked)”.
   `?mock` shows plausible figures. The legend says what the figure means.

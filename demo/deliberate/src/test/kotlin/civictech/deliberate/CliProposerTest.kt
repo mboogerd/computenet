@@ -305,6 +305,17 @@ class CliProposerTest {
     }
 
     @Test
+    fun `claude diagnostics around its envelope cannot expose envelope arrays to argument parsing`() {
+        val noisy = "diagnostic: credential helper was slow\n" + claudeEnvelope.replace("\n", " ") + "\ndiagnostic: done"
+        val (text, usage) = recording { CliProposer.CLAUDE_JSON.read(noisy, null) }
+        assertEquals(
+            listOf("The Model K2 kettle boils water in three minutes.", "Second."),
+            CliProposer.parseArguments(text, 5),
+        )
+        assertEquals(0.0323, usage.single().reportedUsd)
+    }
+
+    @Test
     fun `codex usage sums every completed turn and the answer comes from the out file`() {
         val u = assertNotNull(CliProposer.codexUsage(codexEvents, "gpt-5.6-sol"))
         assertEquals(CallUsage("codex", listOf("gpt-5.6-sol"), 312_608, 9_448, 500, 27, 13, longestPromptTokens = 300_000), u)

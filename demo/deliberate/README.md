@@ -193,6 +193,9 @@ claims × the mean cost per completed round, once 3 rounds have run). Caveats:
   tokens is a third-party listing.
 - The projection assumes one more round per queued claim at the question's
   mean so far; new arguments those rounds add are not in it.
+- Questions restored from data written before cost tracking show `—`. If they
+  run more rounds, the new spend is shown as an “at least” lower bound; their
+  earlier spend and a whole-question projection remain unknown.
 
 `DELIBERATE_LOG_USAGE=1` logs each call's raw usage to stderr (Claude's
 `total_cost_usd`, Codex's `turn.completed` lines, Jev's `usage`), to check

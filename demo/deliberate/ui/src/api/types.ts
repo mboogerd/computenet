@@ -38,6 +38,8 @@ export interface QuestionDto {
 
 /** SPEC §12: the details behind a question's cost figure. */
 export interface CostDto {
+  /** False when this question predates cost tracking, so the counters are only a lower bound. */
+  complete?: boolean;
   /** One entry per backend that made at least one call for the question, in claude, codex, jev order. */
   backends: BackendCostDto[];
   /** Rounds completed in the question (over all its claims). */

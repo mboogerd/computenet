@@ -232,7 +232,7 @@ class CliProposer internal constructor(
          * not a JSON object is taken as the answer itself (no usage).
          */
         val CLAUDE_JSON = CliReader { stdout, _ ->
-            val envelope = runCatching { Json.parseToJsonElement(stdout.trim()) }.getOrNull() as? JsonObject
+            val envelope = claudeEnvelope(stdout)
                 ?: return@CliReader stdout
             val result = (envelope["result"] as? JsonPrimitive)?.takeIf { it.isString }?.content
             val isError = (envelope["is_error"] as? JsonPrimitive)?.booleanOrNull == true
@@ -242,6 +242,18 @@ class CliProposer internal constructor(
                 "claude reported an error: ${(result ?: envelope["subtype"]?.toString() ?: "no result").take(300)}"
             }
             result
+        }
+
+        /**
+         * Claude normally emits one JSON object. Tolerate non-JSON diagnostic
+         * lines around that object without handing the envelope's own arrays
+         * to [parseArguments] as though they were the answer.
+         */
+        private fun claudeEnvelope(stdout: String): JsonObject? {
+            fun parse(text: String) = runCatching { Json.parseToJsonElement(text.trim()) as? JsonObject }.getOrNull()
+            fun JsonObject.isEnvelope() = string("type") == "result" || "result" in this || "is_error" in this
+            return parse(stdout)?.takeIf { it.isEnvelope() }
+                ?: stdout.lineSequence().mapNotNull(::parse).firstOrNull { it.isEnvelope() }
         }
 
         /**

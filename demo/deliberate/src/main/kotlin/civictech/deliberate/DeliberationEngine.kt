@@ -210,6 +210,8 @@ class DeliberationEngine(
     private val diminished = HashSet<CellRef>()
     /** SPEC §12: per question, per backend, the usage of every call made for it. */
     private val costs = HashMap<CellRef, MutableMap<String, BackendTally>>()
+    /** Questions whose complete lifetime is covered by [costs]; absent for records created before cost tracking. */
+    private val completeCosts = HashSet<CellRef>()
 
     private val pending = AtomicInteger()
     private val idle = Object()
@@ -278,6 +280,7 @@ class DeliberationEngine(
             claims[ref] = root
             questions[ref] = question
             treeSize[ref] = 1
+            completeCosts += ref
         }
         onChange()
         enqueue(root)
@@ -908,10 +911,12 @@ class DeliberationEngine(
         val rounds = tree.sumOf { it.rounds }
         val spent = tallies.values.sumOf { it.usd }
         return CostDto(
+            complete = root in completeCosts,
             backends = backends,
             rounds = rounds,
             queued = tree.count { it.status in ACTIVE },
-            perRoundUsd = if (rounds >= PROJECTION_MIN_ROUNDS) spent / rounds else null,
+            // A legacy question's earlier spend and cost-per-round denominator are unknown.
+            perRoundUsd = if (root in completeCosts && rounds >= PROJECTION_MIN_ROUNDS) spent / rounds else null,
         )
     }
 
@@ -1208,13 +1213,15 @@ class DeliberationEngine(
         /** Required so a question with no non-root round yet still has its one durable record (DUR-03). */
         val yields: List<Double>,
         val diminished: Boolean = false,
+        /** Missing/false identifies a record written before cost tracking existed. */
+        val costComplete: Boolean = false,
     )
 
     /** Caller holds [lock]. */
     private fun questionFieldsOf(q: CellRef): Map<String, String> =
         RECORDS.encodeToJsonElement(
             QuestionRecord.serializer(),
-            QuestionRecord(yields[q].orEmpty().toList(), q in diminished),
+            QuestionRecord(yields[q].orEmpty().toList(), q in diminished, q in completeCosts),
         ).jsonObject.mapValues { it.value.toString() } +
             // SPEC §12: one field per backend, so a call rewrites only its backend's counters.
             costs[q].orEmpty().map { (b, t) -> COST_FIELD + b to RECORDS.encodeToString(BackendTally.serializer(), t) }
@@ -1286,6 +1293,7 @@ class DeliberationEngine(
                 if (q !in questions) continue
                 yields[q] = r.yields.toMutableList()
                 if (r.diminished) diminished += q
+                if (r.costComplete) completeCosts += q
             }
             for ((q, tallies) in costRecords) {
                 if (q in questions && tallies.isNotEmpty()) costs[q] = LinkedHashMap(tallies)

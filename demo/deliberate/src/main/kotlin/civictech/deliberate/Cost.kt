@@ -230,10 +230,11 @@ data class Pricing(
             if (anyCodexFlag) {
                 val base = CODEX_DEFAULT.takeIf { model == DEFAULT_CODEX_MODEL }
                 val input = codexInput ?: base?.inputPerM
+                val cached = codexCached ?: base?.cachedInputPerM
                 val output = codexOutput ?: base?.outputPerM
-                codex = if (input == null || output == null) null else Rate(
+                codex = if (input == null || cached == null || output == null) null else Rate(
                     inputPerM = input,
-                    cachedInputPerM = codexCached ?: base?.cachedInputPerM ?: input,
+                    cachedInputPerM = cached,
                     outputPerM = output,
                     cacheWriteMultiplier = 1.25,
                     longPromptTokens = base?.longPromptTokens,

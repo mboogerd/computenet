@@ -21,7 +21,7 @@ type ExpectedQuestionDto = {
   projectedUsd?: number;
   cost?: CostDto;
 };
-type ExpectedCostDto = { backends: BackendCostDto[]; rounds: number; queued: number; perRoundUsd?: number };
+type ExpectedCostDto = { complete?: boolean; backends: BackendCostDto[]; rounds: number; queued: number; perRoundUsd?: number };
 type ExpectedBackendCostDto = {
   backend: string;
   models: string[];

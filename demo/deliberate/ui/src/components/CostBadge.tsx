@@ -1,6 +1,13 @@
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import type { BackendCostDto, QuestionDto } from '../api/types';
-import { BACKEND_NAMES, projectionText, tokens, usd } from '../util/format';
+import { BACKEND_NAMES, costHistoryText, costLabel, projectionText, tokens, usd } from '../util/format';
+
+export type CostPopoverAction = 'toggle' | 'outside' | 'escape';
+
+/** Kept explicit so all three close/toggle paths have deterministic unit coverage. */
+export function nextCostPopoverState(open: boolean, action: CostPopoverAction): boolean {
+  return action === 'toggle' ? !open : false;
+}
 
 /**
  * SPEC §12: the question's spend as one quiet dollar figure; the button opens
@@ -13,11 +20,11 @@ export function CostBadge(props: { question: QuestionDto; initiallyOpen?: boolea
   const id = () => `cost-${props.question.root}`;
   onMount(() => {
     const onClick = (e: MouseEvent) => {
-      if (open() && !el.contains(e.target as Node)) setOpen(false);
+      if (open() && !el.contains(e.target as Node)) setOpen(nextCostPopoverState(open(), 'outside'));
     };
     const onKey = (e: KeyboardEvent) => {
       if (open() && e.key === 'Escape') {
-        setOpen(false);
+        setOpen(nextCostPopoverState(open(), 'escape'));
         button.focus();
       }
     };
@@ -38,9 +45,9 @@ export function CostBadge(props: { question: QuestionDto; initiallyOpen?: boolea
         aria-expanded={open()}
         aria-controls={id()}
         title="Estimated cost of this question so far — click for details"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen((o) => nextCostPopoverState(o, 'toggle'))}
       >
-        {usd(props.question.costUsd ?? 0)}
+        {costLabel(props.question)}
       </button>
       <Show when={open()}>
         <CostPanel id={id()} question={props.question} />
@@ -57,10 +64,11 @@ export function CostPanel(props: { id: string; question: QuestionDto }) {
     <div class="cost__panel" id={props.id} role="dialog" aria-label="Estimated cost">
       <p class="cost__total">
         <span>Estimated cost</span>
-        <strong>{usd(props.question.costUsd ?? 0)}</strong>
+        <strong>{costLabel(props.question)}</strong>
       </p>
+      <Show when={costHistoryText(props.question)}>{(history) => <p class="cost__history">{history()}</p>}</Show>
       <p class="cost__projection">{projectionText(props.question)}</p>
-      <Show when={backends().length > 0} fallback={<p class="cost__empty">No calls yet.</p>}>
+      <Show when={backends().length > 0} fallback={<p class="cost__empty">No tracked calls yet.</p>}>
         <ul class="cost__list">
           <For each={backends()}>{(b) => <BackendRow b={b} />}</For>
         </ul>
