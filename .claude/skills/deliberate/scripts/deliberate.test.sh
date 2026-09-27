@@ -15,4 +15,6 @@ check "every prompt kept"        "[ \$(ls '$t/agree'/*.prompt.md | wc -l) -ge 7 
 DELIBERATE_DRY_SPLIT=1 "$here/deliberate.py" --brief "$t/brief.md" --out "$t/split" --dry-run >/dev/null 2>&1
 check "split vote is no-consensus" "head -1 '$t/split/verdict.md' | grep -q '^NO-CONSENSUS'"
 check "no-consensus has no choice" "jq -e '.choice==null' '$t/split/verdict.json' >/dev/null"
+DELIBERATE_DRY_MISKEY=1 "$here/deliberate.py" --brief "$t/brief.md" --out "$t/miskey" --dry-run >/dev/null 2>&1; st=$?
+check "option without a case aborts" "[ $st -ne 0 ] && [ ! -e '$t/miskey/verdict.md' ]"
 rm -rf "$t"; exit $fail

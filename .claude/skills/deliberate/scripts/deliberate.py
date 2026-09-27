@@ -157,8 +157,13 @@ def run(brief, out):
             return got
         for m, got in both(go).items():
             for o in options:
-                if o["id"] in got:
+                if isinstance(got, dict) and o["id"] in got:
                     o[kind] = got[o["id"]]
+        # A reply keyed by title or "Option A" would otherwise send an option to
+        # the vote with no case (or no attack), and Jev would never see it.
+        missing = [o["id"] for o in options if not o.get(kind)]
+        if missing:
+            raise RuntimeError(f"{kind} phase: no {kind} for option(s) {missing}; see the replies in {out}")
     phase("case", lambda o: o["advocate"])
     phase("attack", lambda o: other[o["advocate"]])
 
@@ -212,6 +217,8 @@ def dry_reply(tag):
     if tag.startswith("1-merge"):
         return json.dumps([{"id": "A", "title": "Keep", "summary": "Change nothing.", "proposed_by": ["opus", "sol"]},
                            {"id": "B", "title": "Change", "summary": "Change it.", "proposed_by": ["sol"]}])
+    if tag.startswith("2-case") and os.environ.get("DELIBERATE_DRY_MISKEY"):
+        return '{"Option A": "text A", "B": "text B"}'
     if tag.startswith("2-case") or tag.startswith("3-attack"):
         return 'Here: {"A": "text A", "B": "text B"}'
     if tag.startswith("4-vote.sol") and os.environ.get("DELIBERATE_DRY_SPLIT"):
