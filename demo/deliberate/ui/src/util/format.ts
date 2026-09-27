@@ -201,6 +201,19 @@ export function agreementText(n: NodeDto, leaf = false): string {
   return `rules disagree: ${lo}–${hi}%`;
 }
 
+/** The caption under the question's gauge: "rules: 51–66%", or "rules agree: 58%" when they coincide. */
+export function bandCaption(n: NodeDto): string {
+  const { low, high } = spreadOf(n);
+  const lo = Math.round(clamp01(low) * 100);
+  const hi = Math.round(clamp01(high) * 100);
+  return lo === hi ? `rules agree: ${lo}%` : `rules: ${lo}–${hi}%`;
+}
+
+/** `?debug`: show internals (claim refs) that mean nothing to a reader. */
+export function isDebug(): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
+}
+
 // ---------- SPEC §3 "Links as claims" ----------
 
 /** A link's claim split into its ends: “argument” is a reason for|against “parent”. */

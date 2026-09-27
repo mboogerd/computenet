@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, on } from 'solid-js';
 import { source } from '../sync/store';
+import { failed, toast } from '../sync/toasts';
 
 export const PAUSE_HINT = {
   pause: 'Pause this question: rounds in flight finish, no new round starts (Expand on a claim still runs it)',
@@ -9,7 +10,7 @@ export const PAUSE_HINT = {
 /**
  * CTL-05: pauses or resumes the question. A native button (Tab, Space/Enter)
  * whose text names the action it takes; optimistic until the next frame
- * reports the server's value.
+ * reports the server's value, and a failure reverts it and says so in a toast.
  */
 export function PauseControl(props: { root: string; paused: boolean }) {
   const [pending, setPending] = createSignal<boolean>();
@@ -23,8 +24,8 @@ export function PauseControl(props: { root: string; paused: boolean }) {
     try {
       await source.pause(props.root, next);
     } catch (err) {
-      console.warn('deliberate: pause failed', err);
       setPending(undefined);
+      toast(failed(`${next ? 'pause' : 'resume'} this question`, err));
     }
   };
 

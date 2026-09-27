@@ -5,6 +5,7 @@ import {
   ACTIVITY_VERB,
   activityOf,
   agreementText,
+  bandCaption,
   clip,
   linkParts,
   questionProgress,
@@ -72,6 +73,8 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
         // A paused question with queued claims is waiting, not working (CTL-05).
         const busy = () => progress().active > 0 && !paused();
         const override = () => claim().override ?? 'AUTO';
+        // No arguments yet: no verdict to give, only the first impression.
+        const unargued = () => e().node.children.length === 0;
 
         return (
           <>
@@ -80,25 +83,53 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
 
               <div
                 class="gauge"
-                title={`Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim(), e().node.children.length === 0)})`}
+                classList={{ 'is-empty': unargued() }}
+                title={
+                  unargued()
+                    ? 'No arguments yet: the credence appears once the first arguments are weighed'
+                    : `Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())}). The band is the range from the lowest to the highest rule.`
+                }
               >
                 <span class="gauge__con" aria-hidden="true">no</span>
                 <span class="gauge__track" aria-hidden="true">
-                  <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
-                  <SpreadBand node={claim()} class="gauge__band" />
+                  <Show when={!unargued()}>
+                    <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
+                    <SpreadBand node={claim()} class="gauge__band" />
+                    <span class="gauge__mark" style={{ left: `${shown(claim()) * 100}%` }} />
+                  </Show>
                   <span class="gauge__mid" />
                 </span>
                 <span class="gauge__pro" aria-hidden="true">yes</span>
+                <Show when={!unargued()}>
+                  <p class="gauge__caption">{bandCaption(claim())}</p>
+                </Show>
               </div>
 
               <div class="hero__row">
-                <p class={`verdict verdict--${v().lean}`} aria-live="polite">
-                  <span class="verdict__label">{v().label}</span>
-                  <span class="verdict__sep" aria-hidden="true">·</span>
-                  <span class="verdict__num">
-                    {`${v().percent}%`}
-                  </span>
-                </p>
+                <Show
+                  when={!unargued()}
+                  fallback={
+                    <p class="verdict verdict--none" aria-live="polite">
+                      <span class="verdict__label">no arguments yet</span>
+                    </p>
+                  }
+                >
+                  <p class={`verdict verdict--${v().lean}`} aria-live="polite">
+                    <span class="verdict__label">{v().label}</span>
+                    <span class="verdict__sep" aria-hidden="true">·</span>
+                    <span class="verdict__num">{`${v().percent}%`}</span>
+                  </p>
+                </Show>
+                <Show when={paused() && question()}>
+                  {(q) => (
+                    <span class="hero__pausedbox">
+                      <span class="hero__paused" title="Paused: no new round starts until you resume this question">
+                        paused
+                      </span>
+                      <PauseControl root={q().root} paused />
+                    </span>
+                  )}
+                </Show>
                 <button
                   type="button"
                   class="more"
@@ -132,11 +163,6 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                       ? `deliberating · ${progress().settled} of ${progress().total} claims settled`
                       : `settled · ${progress().total} claims`}
                 </span>
-                <Show when={paused()}>
-                  <span class="hero__paused" title="Paused: no new round starts until you resume this question">
-                    paused
-                  </span>
-                </Show>
                 <Show when={stoppedText(question())}>
                   {(text) => (
                     <span class="hero__stopped" title={stoppedHint(question())}>
@@ -151,7 +177,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                 </Show>
                 <span class="card__spacer" />
                 <Show when={question()}>{(q) => <CostBadge question={q()} />}</Show>
-                <Show when={question()}>{(q) => <PauseControl root={q().root} paused={q().paused === true} />}</Show>
+                <Show when={question()?.active && !paused() && question()}>{(q) => <PauseControl root={q().root} paused={false} />}</Show>
                 <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
                   <OverrideControl id={claim().ref} value={override()} />
                 </span>
@@ -187,14 +213,15 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
 /** A link's argument, for the "now" line: the link text without "is a reason for …". */
 const linkArgumentOf = (text: string) => linkParts(text)?.argument ?? text;
 
-/** How many things the "now" line names before it says "+N more". */
-const NOW_SHOWN = 3;
+/** How many things the "now" line names before it says "+N more": one, so the line never wraps. */
+const NOW_SHOWN = 1;
 
 /**
  * "Now: gathering arguments on “…” · weighing link “…”": what the question's
  * deliberation is doing this moment — the claims and links being explored or
- * judged (SPEC §3 "Links as claims", NodeDto.activity). Not a live region: it
- * changes several times a second while busy.
+ * judged (SPEC §3 "Links as claims", NodeDto.activity). One line of fixed
+ * height, so the tree below never shifts; the rest is counted ("+2 more") and
+ * listed in its tooltip. Not a live region: it changes several times a second.
  */
 function NowLine(props: { graph: () => GraphDto; root: string }) {
   const items = createMemo(() => activityOf(props.graph().nodes, props.root));
@@ -224,7 +251,15 @@ function NowLine(props: { graph: () => GraphDto; root: string }) {
           )}
         </For>
         <Show when={items().length > NOW_SHOWN}>
-          <span class="now__more">+{items().length - NOW_SHOWN} more</span>
+          <span
+            class="now__more"
+            title={items()
+              .slice(NOW_SHOWN)
+              .map((it) => `${ACTIVITY_VERB[it.activity]} ${it.kind === 'link' ? 'link ' : ''}“${it.kind === 'link' ? linkArgumentOf(it.text) : it.text}”`)
+              .join('\n')}
+          >
+            +{items().length - NOW_SHOWN} more
+          </span>
         </Show>
       </Show>
     </p>

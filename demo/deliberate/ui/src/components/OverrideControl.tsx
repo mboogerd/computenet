@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, on } from 'solid-js';
 import type { Override } from '../api/types';
 import { source } from '../sync/store';
+import { failed, toast } from '../sync/toasts';
 
 const MODES: Override[] = ['AUTO', 'EXPAND', 'STOP'];
 const MODE_LABEL: Record<Override, string> = { AUTO: 'Auto', EXPAND: 'Expand', STOP: 'Stop' };
@@ -32,8 +33,8 @@ export function OverrideControl(props: { id: string; value: Override; what?: 'cl
     try {
       await source.override(props.id, mode);
     } catch (err) {
-      console.warn('deliberate: override failed', err);
       setPending(undefined);
+      toast(failed(`set ${MODE_LABEL[mode]} on this ${props.what ?? 'claim'}`, err));
     }
   };
 

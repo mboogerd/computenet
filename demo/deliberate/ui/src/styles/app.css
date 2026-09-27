@@ -46,11 +46,11 @@ button {
 }
 
 .pro-text {
-  color: var(--pro);
+  color: var(--pro-text);
 }
 
 .con-text {
-  color: var(--con);
+  color: var(--con-text);
 }
 
 /* ---------- layout ---------- */
@@ -174,6 +174,8 @@ button {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow);
+  max-height: 70vh;
+  overflow-y: auto;
   font-size: var(--text-sm);
   color: var(--text-2);
   animation: enter 220ms var(--ease) both;
@@ -195,6 +197,73 @@ button {
 
 .legend__panel dd {
   margin: 2px 0 0;
+}
+
+/* Inline samples of the marks the legend explains. */
+.glyph {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.glyph--bar {
+  width: 30px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+}
+
+.glyph__fill {
+  position: absolute;
+  inset: 0 40% 0 0;
+  border-radius: 3px;
+  background: var(--fill-soft);
+}
+
+.glyph__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 38%;
+  width: 36%;
+  background: var(--band);
+}
+
+.glyph__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 60%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--credence);
+}
+
+.glyph--stripe {
+  width: 3px;
+  height: 13px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+.glyph--pro {
+  background: var(--pro);
+}
+
+.glyph--con {
+  background: var(--con);
+}
+
+.glyph--dashed {
+  background: repeating-linear-gradient(to bottom, var(--pro) 0 3px, transparent 3px 6px);
+}
+
+.glyph--link {
+  width: 22px;
+  height: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
 }
 
 .legend__tip {
@@ -265,7 +334,7 @@ button {
 
 .ask__error {
   margin: 8px 18px 0;
-  color: var(--con);
+  color: var(--con-text);
   font-size: var(--text-sm);
 }
 
@@ -347,42 +416,67 @@ button {
 }
 
 .gauge {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
   font-size: var(--text-xs);
   color: var(--text-3);
 }
 
 .gauge__track {
   position: relative;
-  flex: 1;
-  height: 6px;
-  border-radius: 3px;
+  height: 8px;
+  border-radius: 4px;
   background: var(--track);
   overflow: hidden;
 }
 
+/* Soft fill up to the consensus; the band and the marker sit above it. */
 .gauge__fill {
   position: absolute;
   inset: 0;
-  background: var(--credence);
+  background: var(--fill-soft);
   transform-origin: left;
   transition: transform 700ms var(--ease);
 }
 
 .gauge__band {
   position: absolute;
+  z-index: 1;
   top: 0;
   bottom: 0;
-  background: var(--text-2);
-  opacity: 0.22;
-  border-radius: 3px;
+  background: var(--band);
+  border-radius: 2px;
   transition: left 700ms var(--ease), width 700ms var(--ease);
+}
+
+.gauge__mark {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 1.5px;
+  background: var(--credence);
+  transition: left 700ms var(--ease);
+}
+
+.gauge__caption {
+  grid-column: 2;
+  margin: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge.is-empty .gauge__track {
+  background: repeating-linear-gradient(90deg, var(--track) 0 6px, transparent 6px 10px);
 }
 
 .gauge__mid {
   position: absolute;
+  z-index: 3;
   left: 50%;
   top: 0;
   bottom: 0;
@@ -412,12 +506,12 @@ button {
 
 .verdict--1 .verdict__label,
 .verdict--2 .verdict__label {
-  color: var(--pro);
+  color: var(--pro-text);
 }
 
 .verdict---1 .verdict__label,
 .verdict---2 .verdict__label {
-  color: var(--con);
+  color: var(--con-text);
 }
 
 .verdict__sep {
@@ -489,10 +583,27 @@ button {
   cursor: help;
 }
 
-/* CTL-05: a paused question — a plain word, the control beside the cost */
+/* CTL-05: a paused question says so beside the verdict, with Resume right there. */
+.hero__pausedbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  font-size: var(--text-xs);
+}
+
 .hero__paused {
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
   color: var(--text-2);
   font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.verdict--none .verdict__label {
+  color: var(--text-2);
+  font-weight: 500;
 }
 
 .pause {
@@ -538,6 +649,8 @@ button {
 
 .cost__panel {
   position: absolute;
+  max-height: 70vh;
+  overflow-y: auto;
   z-index: 10;
   right: 0;
   top: calc(100% + 6px);
@@ -585,14 +698,50 @@ button {
 }
 
 .cost__row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+}
+
+.cost__calls {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.cost__details {
+  margin-top: 10px;
+}
+
+.cost__details > summary {
+  width: max-content;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.cost__details > summary:hover,
+.cost__details[open] > summary {
+  color: var(--text);
+}
+
+.cost__details .cost__list {
+  margin-top: 6px;
+}
+
+.cost__detail {
   padding: 8px 0;
   border-top: 1px solid var(--line);
 }
 
 .cost__head {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0 6px;
   color: var(--text);
 }
 
@@ -714,10 +863,14 @@ button {
   cursor: pointer;
 }
 
+/* Low reach recedes by colour (never below --text-2, ≥ 4.5:1) and size, not by opacity. */
 .card__text {
-  opacity: var(--w, 1);
   text-wrap: pretty;
-  transition: opacity 500ms var(--ease);
+  transition: color 500ms var(--ease);
+}
+
+.reach--low > .card .card__text {
+  color: var(--text-2);
 }
 
 .reach--high > .card .card__text {
@@ -731,7 +884,7 @@ button {
 .card:hover .card__text,
 .card.is-open .card__text,
 .card:focus-within .card__text {
-  opacity: 1;
+  color: var(--text);
 }
 
 .card__cred {
@@ -739,7 +892,11 @@ button {
   justify-items: end;
   gap: 4px;
   padding-top: 2px;
-  opacity: max(var(--w, 1), 0.7);
+}
+
+/* Reach may fade the graphic, never the number beside it. */
+.card__cred .bar {
+  opacity: max(var(--w, 1), 0.6);
 }
 
 .card__num {
@@ -752,28 +909,28 @@ button {
 .bar {
   position: relative;
   width: 36px;
-  height: 3px;
+  height: 4px;
   border-radius: 2px;
   background: var(--track);
-  overflow: hidden;
 }
 
 .bar__fill {
   position: absolute;
   inset: 0;
-  background: var(--credence);
+  border-radius: 2px;
+  background: var(--fill-soft);
   transform-origin: left;
   transition: transform 700ms var(--ease);
 }
 
-/* Where the credence rules disagree: a thin translucent band over the bar. */
+/* Where the credence rules disagree: drawn above the fill, so all of it shows. */
 .bar__band {
   position: absolute;
-  top: -1px;
-  bottom: -1px;
+  top: 0;
+  bottom: 0;
   z-index: 1;
-  background: var(--text-2);
-  opacity: 0.3;
+  border-radius: 1px;
+  background: var(--band);
   transition: left 700ms var(--ease), width 700ms var(--ease);
 }
 
@@ -803,7 +960,7 @@ button {
 }
 
 .branch--con > .card .side__word {
-  color: var(--con);
+  color: var(--con-text);
 }
 
 /* EXP-03 UNDERCUT: attacks the link above, not a claim — a dashed con stripe. */
@@ -812,17 +969,16 @@ button {
 }
 
 .branch--undercut > .card .side__word {
-  color: var(--con);
+  color: var(--con-text);
   font-style: italic;
 }
 
 .branch--pro > .card .side__word {
-  color: var(--pro);
+  color: var(--pro-text);
 }
 
 .side__num {
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
 }
 
 /* ---------- links as claims (SPEC §3): the connector is interactive ---------- */
@@ -833,7 +989,7 @@ button {
 }
 
 .branch--holds > .card .side__word {
-  color: var(--pro);
+  color: var(--pro-text);
   font-style: italic;
 }
 
@@ -886,7 +1042,7 @@ button {
   position: absolute;
   inset: 0;
   background: var(--text-3);
-  transform: scaleX(var(--s, 0));
+  transform: scaleX(var(--h, 0));
   transform-origin: left;
   transition: transform 500ms var(--ease);
 }
@@ -905,17 +1061,7 @@ button {
   animation: breathe 1.8s ease-in-out infinite;
 }
 
-.linkchip__count {
-  display: inline-flex;
-  gap: 4px;
-  margin-left: 7px;
-  padding-left: 7px;
-  border-left: 1px dashed var(--line-strong);
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-
-/* Hover/focus preview of the link as a claim; hidden once the link is open. */
+/* Preview of the link as a claim: rendered only while the chip is hovered or focused. */
 .linkchip__peek {
   position: absolute;
   z-index: 20;
@@ -933,23 +1079,8 @@ button {
   color: var(--text-2);
   font-size: var(--text-xs);
   line-height: 1.45;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(3px);
   pointer-events: none;
-  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease), visibility 0s linear var(--dur);
-}
-
-.linkchip:hover + .linkchip__peek,
-.linkchip:focus-visible + .linkchip__peek {
-  opacity: 1;
-  visibility: visible;
-  transform: none;
-  transition-delay: 250ms, 250ms, 0s;
-}
-
-.linkchip.is-open + .linkchip__peek {
-  display: none;
+  animation: enter var(--dur) var(--ease) 250ms both;
 }
 
 .linkchip__peek-tag,
@@ -1067,11 +1198,11 @@ button {
 }
 
 .linkcol--holds .linkcol__title {
-  color: var(--pro);
+  color: var(--pro-text);
 }
 
 .linkcol--fails .linkcol__title {
-  color: var(--con);
+  color: var(--con-text);
 }
 
 .linkcol__empty {
@@ -1087,32 +1218,43 @@ button {
   border-left: 0;
 }
 
-/* A leaf's rules coincide: a tick marks the single value instead of a band. */
-.bar--leaf {
-  overflow: visible;
-}
-
+/* The consensus marker; a leaf (rules coincide, no band) gets a taller one. */
 .bar__tick {
   position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  z-index: 2;
+  border-radius: 1px;
+  background: var(--credence);
+  transition: left 700ms var(--ease);
+}
+
+.bar--leaf .bar__tick {
   top: -2px;
   bottom: -2px;
-  width: 1.5px;
-  margin-left: -0.75px;
-  z-index: 2;
-  background: var(--text-2);
-  opacity: 0.55;
 }
 
 /* "now": what the deliberation is doing this moment. */
+/* One line of fixed height whatever is in flight, so the tree below never shifts. */
 .now {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
-  gap: 2px 14px;
+  gap: 0 12px;
   margin: 6px 0 0;
-  min-height: 20px;
+  height: 20px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: var(--text-xs);
   color: var(--text-3);
+}
+
+.now__label,
+.now__more {
+  flex: none;
 }
 
 .now__label {
@@ -1124,10 +1266,11 @@ button {
 
 .now__item {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: baseline;
   gap: 5px;
   min-width: 0;
-  max-width: 100%;
+  overflow: hidden;
   animation: enter 300ms var(--ease) both;
 }
 
@@ -1136,6 +1279,7 @@ button {
 }
 
 .now__text {
+  min-width: 0;
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1167,7 +1311,7 @@ button {
 }
 
 .status--failed {
-  color: var(--con);
+  color: var(--con-text);
 }
 
 .status--active {
@@ -1285,8 +1429,48 @@ button {
 }
 
 .facts__error {
-  color: var(--con) !important;
+  color: var(--con-text) !important;
   word-break: break-word;
+}
+
+/* ---------- toasts: a command that did not go through ---------- */
+
+.toasts {
+  position: fixed;
+  z-index: 100;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--toast);
+  color: var(--toast-text);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  animation: enter 220ms var(--ease) both;
+}
+
+.toast__close {
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 /* ---------- empty states ---------- */
@@ -1474,9 +1658,6 @@ button {
   }
   .linkchip__peek {
     display: none;
-  }
-  .now__text {
-    white-space: normal;
   }
   .facts {
     grid-template-columns: 1fr auto;

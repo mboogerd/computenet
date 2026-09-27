@@ -56,10 +56,15 @@ export function CostBadge(props: { question: QuestionDto; initiallyOpen?: boolea
   );
 }
 
-/** The popover body: total, projection, one block per backend, and the price caveats. */
+/**
+ * The popover body: the total, the projection, and one line per backend
+ * (dollars and calls). Tokens, rates, sources and caveats sit behind a
+ * "pricing details" disclosure; anything left out of the total says so up front.
+ */
 export function CostPanel(props: { id: string; question: QuestionDto }) {
   const backends = () => props.question.cost?.backends ?? [];
   const excluded = () => backends().filter((b) => b.unpricedCalls > 0);
+  const name = (b: BackendCostDto) => BACKEND_NAMES[b.backend] ?? b.backend;
   return (
     <div class="cost__panel" id={props.id} role="dialog" aria-label="Estimated cost">
       <p class="cost__total">
@@ -70,24 +75,42 @@ export function CostPanel(props: { id: string; question: QuestionDto }) {
       <p class="cost__projection">{projectionText(props.question)}</p>
       <Show when={backends().length > 0} fallback={<p class="cost__empty">No tracked calls yet.</p>}>
         <ul class="cost__list">
-          <For each={backends()}>{(b) => <BackendRow b={b} />}</For>
+          <For each={backends()}>
+            {(b) => (
+              <li class="cost__row">
+                <span class="cost__name">{name(b)}</span>
+                <span class="cost__calls">
+                  {b.calls} call{b.calls === 1 ? '' : 's'}
+                </span>
+                <span class="cost__usd">{b.usd === undefined ? 'rate unknown' : usd(b.usd)}</span>
+              </li>
+            )}
+          </For>
         </ul>
       </Show>
       <Show when={excluded().length > 0}>
         <p class="cost__warn">
-          Not in the total: {excluded().map((b) => `${b.unpricedCalls} ${BACKEND_NAMES[b.backend] ?? b.backend} call${b.unpricedCalls === 1 ? '' : 's'}`).join(', ')} (no price known).
+          Not in the total: {excluded().map((b) => `${b.unpricedCalls} ${name(b)} call${b.unpricedCalls === 1 ? '' : 's'}`).join(', ')} (no price known).
         </p>
       </Show>
-      <Show when={props.question.cost?.perRoundUsd !== undefined}>
-        <p class="cost__foot">
-          {usd(props.question.cost!.perRoundUsd)} per round over {props.question.cost!.rounds} rounds.
-        </p>
+      <Show when={backends().length > 0}>
+        <details class="cost__details">
+          <summary>pricing details</summary>
+          <ul class="cost__list">
+            <For each={backends()}>{(b) => <BackendDetails b={b} />}</For>
+          </ul>
+          <Show when={props.question.cost?.perRoundUsd !== undefined}>
+            <p class="cost__foot">
+              {usd(props.question.cost!.perRoundUsd)} per round over {props.question.cost!.rounds} rounds.
+            </p>
+          </Show>
+        </details>
       </Show>
     </div>
   );
 }
 
-function BackendRow(props: { b: BackendCostDto }) {
+function BackendDetails(props: { b: BackendCostDto }) {
   const b = () => props.b;
   const tokenLine = () => {
     const parts = [`${tokens(b().inputTokens)} in`];
@@ -98,19 +121,14 @@ function BackendRow(props: { b: BackendCostDto }) {
     return parts.join(' · ');
   };
   return (
-    <li class="cost__row">
+    <li class="cost__detail">
       <p class="cost__head">
-        <span class="cost__name">
-          {BACKEND_NAMES[b().backend] ?? b().backend}
-          <Show when={b().models.length > 0}>
-            <span class="cost__model"> {b().models.join(', ')}</span>
-          </Show>
-        </span>
-        <span class="cost__usd">{b().usd === undefined ? 'rate unknown' : usd(b().usd)}</span>
+        <span class="cost__name">{BACKEND_NAMES[b().backend] ?? b().backend}</span>
+        <Show when={b().models.length > 0}>
+          <span class="cost__model"> {b().models.join(', ')}</span>
+        </Show>
       </p>
-      <p class="cost__line">
-        {b().calls} call{b().calls === 1 ? '' : 's'} · {tokenLine()}
-      </p>
+      <p class="cost__line">{tokenLine()}</p>
       <p class="cost__line cost__rate">
         <Show when={b().assumed}>
           <span class="cost__tag">assumed</span>{' '}

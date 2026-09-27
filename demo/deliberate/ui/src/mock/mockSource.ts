@@ -36,7 +36,7 @@ export function flatLayers(n: NodeDto): Pick<NodeDto, 'credences' | 'consensus' 
 /** `?mock`: a scripted deliberation that grows over ~20 s, so the UI can be
  *  developed and eyeballed without the backend. `?mock=empty` starts with no
  *  questions (the welcome screen); asking anything then runs the script with
- *  that text. Overrides are applied locally so the control visibly works. */
+ *  that text and topic-neutral claims (the built-in example's claims fit only it). Overrides are applied locally so the control visibly works. */
 export class MockSource implements GraphSource {
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private nodes = new Map<string, NodeDto>();
@@ -285,11 +285,57 @@ function seedFinished(m: MockSource): void {
   m.set(m.link('w3', 'w1'), { status: 'DEPTH_LIMIT' });
 }
 
+/** The scripted claims, by ref: the built-in example question's, and a topic-neutral set for any typed question. */
+type ScriptText = Record<'c1' | 'c2' | 'c3' | 'c4' | 'c5' | 'c1a' | 'c1b' | 'c1bu' | 'c1h' | 'c1f' | 'c3a' | 'c3a1' | 'c3a2' | 'c4a' | 'c4b', string>;
+
+/** `?mock`'s own example question, the only one its specific claims fit. */
+export const EXAMPLE_QUESTION = 'Should the Northfield library open on Sundays?';
+
+const EXAMPLE: ScriptText = {
+  c1: 'Weekend visitor counts at the Northfield library are the highest of the week.',
+  c2: 'Sunday opening would require paying the library staff a weekend wage premium.',
+  c3: 'Students without quiet space at home need somewhere to study on Sundays.',
+  c4: 'The volunteers who run the Northfield reading groups are unavailable on Sundays.',
+  c5: 'Libraries in neighbouring towns that open on Sundays report steady Sunday attendance.',
+  c1a: 'Most weekend visitors could come on Saturday instead.',
+  c1b: 'The Saturday reading room at the Northfield library is full by noon on most weekends.',
+  c1bu: 'The Saturday reading room lost half its seats to a renovation in the same months.',
+  c1h: 'Visitors who come on weekends are mostly unable to visit on weekdays.',
+  c1f: "Weekend visitor counts at the Northfield library are driven by Saturday children's events.",
+  c3a: 'The town hall study centre already opens on Sundays.',
+  c3a1: 'The town hall study centre has only twenty seats.',
+  c3a2: 'The town hall study centre is rarely full on Sundays.',
+  c4a: 'Paid staff could run the reading groups on Sundays.',
+  c4b: 'The library budget does not cover paid reading-group staff.',
+};
+
+/** For a typed question: claims that read sensibly whatever was asked (and name no topic). */
+export const GENERIC: ScriptText = {
+  c1: 'The people most affected would clearly benefit.',
+  c2: 'The cost is high compared with the likely gain.',
+  c3: 'Similar changes elsewhere have mostly worked out well.',
+  c4: 'It depends on people and resources that may not be available.',
+  c5: 'It would be easy to reverse if it does not work out.',
+  c1a: 'The same benefit could be had in a cheaper way.',
+  c1b: 'Demand for that benefit already exceeds what is on offer.',
+  c1bu: 'That demand was measured during an unusual period.',
+  c1h: 'The benefit falls on exactly the people the question is about.',
+  c1f: 'The benefit comes from a factor the change does not touch.',
+  c3a: 'The places where it worked differ in important ways.',
+  c3a1: 'Those differences are small in practice.',
+  c3a2: 'Those differences were never measured carefully.',
+  c4a: 'Others could step in to provide what is missing.',
+  c4b: 'There is no budget to pay others to step in.',
+};
+
 function script(
   source: MockSource,
   sequence: number,
-  text = 'Should the Northfield library open on Sundays?',
+  asked?: string,
 ): { root: string; steps: Array<() => void> } {
+  // A typed question gets the topic-neutral claims; only the built-in example gets its own.
+  const T = asked === undefined ? EXAMPLE : GENERIC;
+  const text = asked ?? EXAMPLE_QUESTION;
   const root = `q${sequence}`;
   const scoped = (ref: string) => (ref === 'q0' ? root : `${root}-${ref}`);
   const m = {
@@ -319,11 +365,11 @@ function script(
     () => m.claim(q, q, text, 0, 'question'),
     () => m.set(q, { status: 'JUDGING' }),
     () => m.set(q, { status: 'EXPLORING', plausibility: 0.5 }),
-    () => m.arg('c1', q, q, 'SUPPORT', 'Weekend visitor counts at the Northfield library are the highest of the week.', 'claude'),
-    () => m.arg('c2', q, q, 'ATTACK', 'Sunday opening would require paying the library staff a weekend wage premium.', 'codex'),
-    () => m.arg('c3', q, q, 'SUPPORT', 'Students without quiet space at home need somewhere to study on Sundays.', 'codex'),
+    () => m.arg('c1', q, q, 'SUPPORT', T.c1, 'claude'),
+    () => m.arg('c2', q, q, 'ATTACK', T.c2, 'codex'),
+    () => m.arg('c3', q, q, 'SUPPORT', T.c3, 'codex'),
     () => {
-      m.arg('c4', q, q, 'ATTACK', 'The volunteers who run the Northfield reading groups are unavailable on Sundays.', 'claude');
+      m.arg('c4', q, q, 'ATTACK', T.c4, 'claude');
       m.edge('c1', q, 0.78);
     },
     () => {
@@ -336,16 +382,16 @@ function script(
       m.set(q, { credence: 0.54, rounds: 1, proSaturation: 0.42, conSaturation: 0.51, duplicatesDropped: 1 });
       m.set('c1', { plausibility: 0.75, credence: 0.74 });
     },
-    () => m.arg('c5', q, q, 'SUPPORT', 'Libraries in neighbouring towns that open on Sundays report steady Sunday attendance.', 'claude'),
+    () => m.arg('c5', q, q, 'SUPPORT', T.c5, 'claude'),
     () => {
       m.edge('c5', q, 0.66);
       m.set(q, { status: 'SATURATED', rounds: 2, proSaturation: 0.83, conSaturation: 0.76, credence: 0.6 });
       m.set('c1', { status: 'JUDGING' });
     },
     () => m.set('c1', { status: 'EXPLORING', relevance: 0.81 }),
-    () => m.arg('c1a', q, 'c1', 'ATTACK', 'Most weekend visitors could come on Saturday instead.', 'codex'),
+    () => m.arg('c1a', q, 'c1', 'ATTACK', T.c1a, 'codex'),
     () => {
-      m.arg('c1b', q, 'c1', 'SUPPORT', 'The Saturday reading room at the Northfield library is full by noon on most weekends.', 'claude');
+      m.arg('c1b', q, 'c1', 'SUPPORT', T.c1b, 'claude');
       m.edge('c1a', 'c1', 0.58);
       m.set('c2', { status: 'JUDGING' });
     },
@@ -353,7 +399,7 @@ function script(
       m.edge('c1b', 'c1', 0.8);
       m.set('c1', { credence: 0.69 });
       // EXP-03 UNDERCUT, re-targeted by triage: it attacks the link c1b → c1.
-      onLink('c1bu', 'c1b', 'c1', 'ATTACK', 'The Saturday reading room lost half its seats to a renovation in the same months.', 'codex', {
+      onLink('c1bu', 'c1b', 'c1', 'ATTACK', T.c1bu, 'codex', {
         status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.72,
       });
       m.set('c2', { status: 'PRUNED', relevance: 0.34, plausibility: 0.5, credence: 0.47 });
@@ -367,8 +413,8 @@ function script(
     },
     () => setLink('c1', q, { status: 'EXPLORING' }),
     () => {
-      onLink('c1h', 'c1', q, 'SUPPORT', 'Visitors who come on weekends are mostly unable to visit on weekdays.', 'claude');
-      onLink('c1f', 'c1', q, 'ATTACK', 'Weekend visitor counts at the Northfield library are driven by Saturday children\'s events.', 'codex');
+      onLink('c1h', 'c1', q, 'SUPPORT', T.c1h, 'claude');
+      onLink('c1f', 'c1', q, 'ATTACK', T.c1f, 'codex');
     },
     () => {
       edgeOnLink('c1h', 'c1', q, 0.7);
@@ -378,7 +424,7 @@ function script(
     () => m.set('c3', { status: 'JUDGING' }),
     () => m.set('c3', { status: 'EXPLORING', relevance: 0.66, plausibility: 0.75 }),
     () => {
-      m.arg('c3a', q, 'c3', 'ATTACK', 'The town hall study centre already opens on Sundays.', 'codex');
+      m.arg('c3a', q, 'c3', 'ATTACK', T.c3a, 'codex');
       m.set('c1', { status: 'SATURATED', rounds: 1, proSaturation: 0.77, conSaturation: 0.72 });
     },
     () => {
@@ -388,7 +434,7 @@ function script(
     },
     () => m.set('c3a', { status: 'JUDGING' }),
     () => m.set('c3a', { status: 'EXPLORING', relevance: 0.59, plausibility: 0.5 }),
-    () => m.arg('c3a1', q, 'c3a', 'ATTACK', 'The town hall study centre has only twenty seats.', 'claude', { status: 'DEPTH_LIMIT' }),
+    () => m.arg('c3a1', q, 'c3a', 'ATTACK', T.c3a1, 'claude', { status: 'DEPTH_LIMIT' }),
     () => {
       m.edge('c3a1', 'c3a', 0.52);
       m.set('c3a', { status: 'SATURATED', rounds: 1, proSaturation: 0.71, conSaturation: 0.7, credence: 0.49 });
@@ -397,12 +443,12 @@ function script(
     },
     () => m.set('c4', { status: 'EXPLORING', relevance: 0.72, plausibility: 0.75, credence: 0.7 }),
     () => {
-      m.arg('c4a', q, 'c4', 'ATTACK', 'Paid staff could run the reading groups on Sundays.', 'codex');
+      m.arg('c4a', q, 'c4', 'ATTACK', T.c4a, 'codex');
       m.set('c1a', { status: 'JUDGING' });
     },
     () => {
-      m.arg('c3a2', q, 'c3a', 'SUPPORT', 'The town hall study centre is rarely full on Sundays.', 'codex', { status: 'QUEUED' });
-      m.arg('c4b', q, 'c4', 'SUPPORT', 'The library budget does not cover paid reading-group staff.', 'codex', { status: 'FAILED', error: 'claude: exit 1; codex: timed out after 120 s' });
+      m.arg('c3a2', q, 'c3a', 'SUPPORT', T.c3a2, 'codex', { status: 'QUEUED' });
+      m.arg('c4b', q, 'c4', 'SUPPORT', T.c4b, 'codex', { status: 'FAILED', error: 'claude: exit 1; codex: timed out after 120 s' });
     },
     () => {
       m.edge('c3a2', 'c3a', 0.3);

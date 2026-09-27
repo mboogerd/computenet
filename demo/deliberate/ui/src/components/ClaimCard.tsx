@@ -3,6 +3,7 @@ import type { NodeDto } from '../api/types';
 import type { ArgumentNode, TreeNode } from '../tree/buildTree';
 import {
   agreementText,
+  isDebug,
   layerLines,
   LEAF_AGREEMENT,
   linkParts,
@@ -72,7 +73,11 @@ export function SpreadBand(props: { node: NodeDto; class: string }) {
   );
 }
 
-/** A small credence bar: fill, the rules' band — or, with no arguments yet, a tick saying why there is no band. */
+/**
+ * A small credence bar: a soft fill to the consensus, the rules' band drawn
+ * above it (so all of the band shows), and a marker at the consensus — taller
+ * on a leaf, whose rules coincide and so have no band.
+ */
 function CredenceBar(props: { node: NodeDto; leaf: boolean }) {
   const flat = () => {
     const s = spreadOf(props.node);
@@ -80,11 +85,9 @@ function CredenceBar(props: { node: NodeDto; leaf: boolean }) {
   };
   return (
     <span class="bar" classList={{ 'bar--leaf': flat() }} aria-hidden="true">
-      <SpreadBand node={props.node} class="bar__band" />
       <span class="bar__fill" style={{ transform: `scaleX(${shown(props.node)})` }} />
-      <Show when={flat()}>
-        <span class="bar__tick" style={{ left: `${shown(props.node) * 100}%` }} />
-      </Show>
+      <SpreadBand node={props.node} class="bar__band" />
+      <span class="bar__tick" style={{ left: `${shown(props.node) * 100}%` }} />
     </span>
   );
 }
@@ -216,11 +219,22 @@ function linkArgCounts(args: ArgumentNode[]): { holds: number; fails: number } {
   return { holds, fails: args.length - holds };
 }
 
+/** What a link chip leads with: the link's own credence ("holds 65%"), the value that counts. */
+export function linkHoldsText(edge: NodeDto): string {
+  return edge.strength === undefined ? 'link pending' : `holds ${pct(shown(edge))}`;
+}
+
+/** Jev's first impression of a link, for its tooltip: "strong link 72%". */
+export function firstImpressionText(edge: NodeDto): string | undefined {
+  return edge.strength === undefined ? undefined : `${strengthWord(edge.strength)} ${pct(edge.strength)}`;
+}
+
 /**
  * The connector between a claim and its argument, made interactive (SPEC §3
- * "Links as claims"): it reads as the argument's side and link strength;
- * hovering or focusing it previews the link as a claim, and pressing it opens
- * the link — its credence, status, arguments and override.
+ * "Links as claims"): it reads as the argument's side and how far the link
+ * holds; hovering or focusing it previews the link as a claim (with Jev's
+ * first impression), and pressing it opens the link — its credence, status,
+ * arguments and override. The preview is rendered only while it shows.
  */
 function LinkChip(props: {
   edge: NodeDto;
@@ -232,16 +246,30 @@ function LinkChip(props: {
   const counts = () => linkArgCounts(props.args);
   const peekId = () => `peek-${props.edge.ref}`;
   const active = () => props.edge.activity !== undefined;
+  const [peek, setPeek] = createSignal(false);
+  const peeking = () => peek() && !props.open;
+  const first = () => firstImpressionText(props.edge);
   return (
     <span class="linkchip-wrap">
       <button
         type="button"
         class="linkchip"
-        classList={{ 'is-open': props.open, 'is-busy': active(), 'has-args': props.args.length > 0 }}
+        classList={{ 'is-open': props.open, 'is-busy': active() }}
+        style={{ '--h': String(props.edge.strength === undefined ? 0 : shown(props.edge)) }}
         aria-expanded={props.open}
         aria-controls={`link-${props.edge.ref}`}
-        aria-describedby={peekId()}
-        aria-label={`${SIDE_WORD[props.side]}, ${strengthWord(props.edge.strength)}. ${props.open ? 'Hide' : 'Open'} this link as a claim`}
+        aria-describedby={peeking() ? peekId() : undefined}
+        aria-label={`${SIDE_WORD[props.side]}, ${linkHoldsText(props.edge)}${first() ? ` (Jev's first impression: ${first()})` : ''}. ${props.open ? 'Hide' : 'Open'} this link as a claim`}
+        onMouseEnter={() => setPeek(true)}
+        onMouseLeave={() => setPeek(false)}
+        onFocus={() => setPeek(true)}
+        onBlur={() => setPeek(false)}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Escape' && peeking()) {
+            ev.stopPropagation();
+            setPeek(false);
+          }
+        }}
         onClick={(ev) => {
           ev.stopPropagation();
           props.onToggle();
@@ -251,35 +279,26 @@ function LinkChip(props: {
         <span class="side__word">{SIDE_WORD[props.side]}</span>
         <span class="side__strength">
           {'\u00a0· '}
-          {strengthWord(props.edge.strength)}
-          <Show when={props.edge.strength !== undefined}>
-            {' '}
-            <span class="side__num">{pct(props.edge.strength)}</span>
-          </Show>
+          <span class="side__num">{linkHoldsText(props.edge)}</span>
         </span>
-        <Show when={props.args.length > 0}>
-          <span class="linkchip__count" aria-hidden="true">
-            <Show when={counts().holds > 0}>
-              <span class="pro-text">+{counts().holds}</span>
-            </Show>
-            <Show when={counts().fails > 0}>
-              <span class="con-text">−{counts().fails}</span>
+      </button>
+      <Show when={peeking()}>
+        <span class="linkchip__peek" role="tooltip" id={peekId()}>
+          <span class="linkchip__peek-tag">link</span>
+          <LinkSentence text={props.edge.text} />
+          <span class="linkchip__peek-meta">
+            {linkHoldsText(props.edge)}
+            <Show when={props.edge.status}>{(st) => <> · {STATUS_LABEL[st()]}</>}</Show>
+            <Show when={props.args.length > 0}>
+              {' · '}
+              {counts().holds} for · {counts().fails} against
             </Show>
           </span>
-        </Show>
-      </button>
-      <span class="linkchip__peek" role="tooltip" id={peekId()}>
-        <span class="linkchip__peek-tag">link</span>
-        <LinkSentence text={props.edge.text} />
-        <span class="linkchip__peek-meta">
-          holds {pct(shown(props.edge))}
-          <Show when={props.edge.status}>{(s) => <> · {STATUS_LABEL[s()]}</>}</Show>
-          <Show when={props.args.length > 0}>
-            {' · '}
-            {counts().holds} for · {counts().fails} against
+          <Show when={first()}>
+            {(f) => <span class="linkchip__peek-meta">Jev's first impression: {f()}</span>}
           </Show>
         </span>
-      </span>
+      </Show>
     </span>
   );
 }
@@ -478,15 +497,17 @@ export function Facts(props: {
       {row('Rounds', c().rounds?.toString(), props.link ? 'Proposal rounds run on this link' : 'Proposal rounds run on this claim')}
       {row('Duplicates dropped', c().duplicatesDropped?.toString(), 'Proposed arguments Jev recognised as repeats')}
       {row('Sorted proposals', triageText(c().triage, props.link), 'What Jev did with each argument proposed for this claim')}
-      <Show when={c().proposer}>{row('Proposed by', c().proposer!, 'The model that wrote this claim')}</Show>
+      <Show when={c().proposer && c().proposer !== 'question'}>{row('Proposed by', c().proposer!, 'The model that wrote this claim')}</Show>
       {row('Also proposed by', c().alsoProposedBy?.join(', '), 'Other models that made the same point')}
       <Show when={c().merged}>{row('Merged', 'yes', 'Rewritten as one argument together with an overlapping one')}</Show>
       <Show when={c().error}>
         <dt>Error</dt>
         <dd class="facts__error">{c().error}</dd>
       </Show>
-      <dt>Ref</dt>
-      <dd class="mono">{c().ref}</dd>
+      <Show when={isDebug()}>
+        <dt>Ref</dt>
+        <dd class="mono">{c().ref}</dd>
+      </Show>
     </dl>
   );
 }

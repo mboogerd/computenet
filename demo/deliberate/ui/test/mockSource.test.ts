@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GraphDto } from '../src/api/types';
-import { MockSource } from '../src/mock/mockSource';
+import { EXAMPLE_QUESTION, GENERIC, MockSource } from '../src/mock/mockSource';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -13,6 +13,33 @@ afterEach(() => {
 });
 
 describe('MockSource', () => {
+  // A typed question gets topic-neutral claims: nothing from the built-in example leaks into it.
+  const DENYLIST = /northfield|library|libraries|sunday|saturday|weekend|reading|volunteer|staff|visitor|student|town hall|study centre/i;
+
+  it('?mock=empty: a typed question runs a topic-neutral script, not the built-in example', async () => {
+    const frames: GraphDto[] = [];
+    const source = new MockSource(10, true);
+    source.start((graph) => frames.push(graph), () => undefined);
+    const root = await source.ask('Should we switch to the new process?');
+    await vi.advanceTimersByTimeAsync(10 * 60);
+    const texts = frames.at(-1)!.nodes.filter((n) => n.root === root && n.kind === 'CLAIM' && n.depth !== 0).map((n) => n.text ?? '');
+    expect(texts.length).toBe(Object.keys(GENERIC).length);
+    for (const t of texts) expect(t).not.toMatch(DENYLIST);
+    for (const t of Object.values(GENERIC)) expect(t).not.toMatch(DENYLIST);
+    source.stop();
+  });
+
+  it('?mock: the built-in example keeps its own claims', async () => {
+    const frames: GraphDto[] = [];
+    const source = new MockSource(10);
+    source.start((graph) => frames.push(graph), () => undefined);
+    await vi.advanceTimersByTimeAsync(10 * 60);
+    const g = frames.at(-1)!;
+    const example = g.questions.find((q) => q.text === EXAMPLE_QUESTION)!;
+    expect(g.nodes.some((n) => n.root === example.root && DENYLIST.test(n.text ?? '') && n.depth !== 0)).toBe(true);
+    source.stop();
+  });
+
   it('accepts multiple questions while earlier trees are still growing', async () => {
     const frames: GraphDto[] = [];
     const source = new MockSource(10, true);
