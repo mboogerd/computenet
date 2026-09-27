@@ -17,7 +17,12 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.control.absorbAck
+import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.WaterlineDelta
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
 
 @CellBase
 interface JoinSetApi<A, B, C> {
@@ -55,6 +60,59 @@ interface JoinSetApi<A, B, C> {
  * effect is empty absorb-acks. Read [SemiJoinCell]'s `emitOnFrontier` section
  * and [WaveGate]'s phantom-expected-edge and "One root is NOT sufficient"
  * caveats before enabling it; the default stays ungated and byte-identical.
+ *
+ * ### Lateness: the `waterline` inlet and the `lateLeft`/`lateRight` outlets (KE4.5)
+ *
+ * Constructed with a [Windows.Lateness] on either or both sides, the cell
+ * tracks one event-time floor delivered on [waterline] and guards each
+ * declaring inlet at **arrival**, before the [WaveGate] offer on the gated
+ * path as on the ungated one: an add whose `timeFn(row)` is strictly below the
+ * floor is excluded from the fold and leaves verbatim — tags preserved — on
+ * that side's late outlet ([lateLeft]/[lateRight]), counted in
+ * [droppedBelowFloorLeft]/[droppedBelowFloorRight] whether or not the outlet is
+ * linked (`[24-WL-07]`). Dels are never filtered by time: the tag fold's
+ * liveness check is the guard (`[24-WL-08]`). An inlet declaring no lateness
+ * is never guarded and never evicted. Every delivery on either inlet (and on
+ * [waterline]) emits on or absorb-acks **both** late outlets, so a consumer
+ * linked to one of them sees every wave the cell sees and its frontier
+ * advances.
+ *
+ * The three ports are registered on this class, always present and unlinked
+ * by default, and deliberately **not** on [JoinSetApi] (as [GroupByCell]'s):
+ * the Api is consumed as a `TypedRef` elsewhere (demo/skillmatch,
+ * demo/dialogue), so a cell reached through it — or constructed without
+ * lateness — is exactly the pre-lateness operator (`[24-WL-11]`): its
+ * snapshot keeps the three-part shape, and a `WaterlineDelta` on it is a
+ * structural error and throws.
+ *
+ * **Eviction on a floor rise (`[24-WL-06]`/`[24-WL-16]`).** The unit is one
+ * input **row** of a declaring side, evicted exactly when that side's
+ * `timeFn(row) < floor` — the late-drop threshold, so an evicted row can be
+ * neither re-admitted nor retracted (`[24-WL-09]` in row form; see
+ * [WaterlineEviction]). A windowed join's window is therefore evicted in
+ * part when the floor falls inside it. The killed rows' dels run through the
+ * same index-then-reconcile fold [onLeft]/[onRight] use, so they leave the key
+ * index too and every minted pair on them exits **with its minted tag**
+ * (`[KE4-25]`/`[KE4-32]`) — a tombstone-folding consumer drops it. Pairs are
+ * never a unit of their own; a later del of an evicted row is a no-op, so no
+ * pair exits twice. Both sides' eviction leaves as one `SetDelta` under the
+ * waterline delivery's wave; eviction never forwards on the late outlets.
+ *
+ * **Per-row exclusive refusal (`[24-WL-17]`).** A passed row that is itself
+ * `Owned`/`Leased` is left live, untouched and undischarged, recorded as an
+ * [ExclusiveEvictionRefused] (unit `"row"`) in [refusedRows] (replaced on every
+ * rise) and counted in [refusedEvictions]; every other passed row still
+ * evicts in the same delta, and every later rise re-evaluates it. Only a
+ * top-level exclusive row is detected (computenet-woto).
+ *
+ * **The waterline is not gated (3vd7k-D9).** With `emitOnFrontier = true` the
+ * eviction is still applied and emitted on the `WaterlineDelta`'s own
+ * delivery, while buffered data waves stay buffered. Residual: a data wave
+ * buffered **before** a floor rise is late-split against the floor it
+ * *arrived* under, so its sub-(new-)floor adds land at flush and are evicted
+ * only by the next rise.
+ *
+ * **Single-instance only (`[24-WL-18]`)**, checked in [WaterlineEviction.evict].
  */
 class JoinSetCell<A, B, K, C>(
     ref: CellRef = CellRef(UUID.randomUUID()),
@@ -67,6 +125,10 @@ class JoinSetCell<A, B, K, C>(
      * last parameter and trailing-lambda construction keeps compiling.
      */
     emitOnFrontier: Boolean = false,
+    /** The left inlet's lateness declaration (`[24-WL-01]`); `null` = never guarded, never evicted (`[24-WL-16]`). */
+    private val leftLateness: Windows.Lateness<A>? = null,
+    /** The right inlet's lateness declaration; `null` = never guarded, never evicted. */
+    private val rightLateness: Windows.Lateness<B>? = null,
     private val combine: (A, B) -> C,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
@@ -84,6 +146,38 @@ class JoinSetCell<A, B, K, C>(
     /** Waves currently held by the gate; always 0 when ungated. Diagnostic only. */
     val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
 
+    /** The event-time floor (`[24-WL-02]`); `null` is the identity — nothing is below it. */
+    private var floor: Long? = null
+
+    /** The current waterline floor, or `null` before any raising [WaterlineDelta] (or without lateness). */
+    fun floor(): Long? = floor
+
+    /** Left adds excluded by the late-drop guard, per dropped row (`[24-WL-07]`); moves even when [lateLeft] is unlinked. A counter, not state. */
+    var droppedBelowFloorLeft: Long = 0
+        private set
+
+    /** Right adds excluded by the late-drop guard, per dropped row; the mirror of [droppedBelowFloorLeft]. */
+    var droppedBelowFloorRight: Long = 0
+        private set
+
+    private var refused: List<ExclusiveEvictionRefused> = emptyList()
+
+    /** The passed rows refused eviction on the latest rise because they are exclusive (`[24-WL-17]`). Not snapshotted. */
+    fun refusedRows(): List<ExclusiveEvictionRefused> = refused
+
+    /** Cumulative count of per-row eviction refusals, one per refused row per rise. A counter, not state. */
+    var refusedEvictions: Long = 0
+        private set
+
+    /** The floor's inlet (`[24-WL-03]`): a value read here, never re-emitted (`[24-WL-04]`). */
+    val waterline = registerPort("waterline", FanInlet.create<Propagate<WaterlineDelta>>())
+
+    /** Sub-floor left adds, forwarded verbatim under the delivery that carried them (`[24-WL-07]`). */
+    val lateLeft = registerPort("lateLeft", FanOutlet.create<Propagate<SetDelta<A>>>())
+
+    /** Sub-floor right adds, forwarded verbatim under the delivery that carried them (`[24-WL-07]`). */
+    val lateRight = registerPort("lateRight", FanOutlet.create<Propagate<SetDelta<B>>>())
+
     init {
         // late-join catch-up (G-22): advertised pairs folded under combine
         outlet.catchUpOnLinked {
@@ -96,23 +190,24 @@ class JoinSetCell<A, B, K, C>(
                 SetDelta(adds = adds)
             }
         }
+        waterline.serve(object : Propagate<WaterlineDelta> {
+            override fun propagate(value: WaterlineDelta) = onWaterline(value)
+        })
     }
 
     override fun onLeft(value: SetDelta<A>) {
-        if (gate?.offerLeft(GatedFold { applyLeft(value) }) == true) return
+        // [24-WL-07] guard at arrival, before the gate offer (3vd7k-D4)
+        val admitted = guardLeft(value)
+        lateRight.absorbAck() // every delivery acks both late outlets, so a linked consumer's frontier advances
+        if (gate?.offerLeft(GatedFold { applyLeft(admitted) }) == true) return
         // The ungated path below is the shipped handler verbatim — including its
         // per-row interleaving of index-then-reconcile — so `emitOnFrontier =
         // false` stays byte-identical. A gated cell also lands here for a delta
         // the gate admits to no completeness set (catch-up, straggler, unmatched
         // edge): applying and reconciling it immediately is exactly right.
-        val effective = join.leftState.apply(value)
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
-        (effective.adds.keys + effective.dels.keys).forEach { a ->
-            val k = leftKey(a)
-            join.index(join.leftIndex, k, a, live = a in join.leftState)
-            join.rightIndex[k]?.forEach { b -> reconcile(a, b, adds, dels) }
-        }
+        foldLeft(join.leftState.apply(admitted), adds, dels)
         join.emitOrAbsorb(
             adds,
             dels,
@@ -122,22 +217,144 @@ class JoinSetCell<A, B, K, C>(
     }
 
     override fun onRight(value: SetDelta<B>) {
-        if (gate?.offerRight(GatedFold { applyRight(value) }) == true) return
+        val admitted = guardRight(value)
+        lateLeft.absorbAck()
+        if (gate?.offerRight(GatedFold { applyRight(admitted) }) == true) return
         // ungated (or gate-exempt) — the shipped handler verbatim; see [onLeft].
-        val effective = join.rightState.apply(value)
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
-        (effective.adds.keys + effective.dels.keys).forEach { b ->
-            val k = rightKey(b)
-            join.index(join.rightIndex, k, b, live = b in join.rightState)
-            join.leftIndex[k]?.forEach { a -> reconcile(a, b, adds, dels) }
-        }
+        foldRight(join.rightState.apply(admitted), adds, dels)
         join.emitOrAbsorb(
             adds,
             dels,
             propagate = { outlet.call.propagate(it) },
             absorbAck = { outlet.absorbAck() }, // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
         )
+    }
+
+    /**
+     * The ungated per-row fold of an already-applied left delta: index each
+     * touched row, then reconcile it against every right row under its key.
+     * Shared by [onLeft] and eviction ([onFloorRaised]), so an eviction is an
+     * ordinary retraction — the row leaves [KeyedBinarySetJoin.leftIndex] and
+     * each of its pairs exits with its minted tag.
+     */
+    private fun foldLeft(
+        effective: SetDelta<A>,
+        adds: MutableMap<C, MutableSet<Timestamp>>,
+        dels: MutableMap<C, MutableSet<Timestamp>>,
+    ) {
+        (effective.adds.keys + effective.dels.keys).forEach { a ->
+            val k = leftKey(a)
+            join.index(join.leftIndex, k, a, live = a in join.leftState)
+            join.rightIndex[k]?.forEach { b -> reconcile(a, b, adds, dels) }
+        }
+    }
+
+    /** The mirror image of [foldLeft]. */
+    private fun foldRight(
+        effective: SetDelta<B>,
+        adds: MutableMap<C, MutableSet<Timestamp>>,
+        dels: MutableMap<C, MutableSet<Timestamp>>,
+    ) {
+        (effective.adds.keys + effective.dels.keys).forEach { b ->
+            val k = rightKey(b)
+            join.index(join.rightIndex, k, b, live = b in join.rightState)
+            join.leftIndex[k]?.forEach { a -> reconcile(a, b, adds, dels) }
+        }
+    }
+
+    // ---- lateness (KE4.5): arrival guard, waterline, eviction ----
+
+    /**
+     * `[24-WL-07]` on the left inlet: forward the sub-floor adds on [lateLeft]
+     * (else absorb-ack it) and return the admitted remainder. Without a left
+     * declaration or a floor this is the identity and [lateLeft] just acks.
+     */
+    private fun guardLeft(value: SetDelta<A>): SetDelta<A> {
+        val lateness = leftLateness
+        val current = floor
+        if (lateness == null || current == null) {
+            lateLeft.absorbAck()
+            return value
+        }
+        val (admitted, dropped) = WaterlineEviction.lateSplit(lateness, current, value)
+        if (dropped.isNotEmpty()) {
+            droppedBelowFloorLeft += dropped.size
+            lateLeft.call.propagate(SetDelta(adds = dropped))
+        } else {
+            lateLeft.absorbAck()
+        }
+        return admitted
+    }
+
+    /** The mirror image of [guardLeft] on the right inlet and [lateRight]. */
+    private fun guardRight(value: SetDelta<B>): SetDelta<B> {
+        val lateness = rightLateness
+        val current = floor
+        if (lateness == null || current == null) {
+            lateRight.absorbAck()
+            return value
+        }
+        val (admitted, dropped) = WaterlineEviction.lateSplit(lateness, current, value)
+        if (dropped.isNotEmpty()) {
+            droppedBelowFloorRight += dropped.size
+            lateRight.call.propagate(SetDelta(adds = dropped))
+        } else {
+            lateRight.absorbAck()
+        }
+        return admitted
+    }
+
+    private fun onWaterline(delta: WaterlineDelta) {
+        checkNotNull(leftLateness ?: rightLateness) {
+            "JoinSetCell $ref: waterline linked on a cell constructed without lateness"
+        }
+        val current = floor
+        if (current != null && delta.floor <= current) {
+            // [24-WL-03] fixpoint: a non-raising floor changes nothing — ack the wave on all three outlets
+            outlet.absorbAck()
+            lateLeft.absorbAck()
+            lateRight.absorbAck()
+            return
+        }
+        floor = delta.floor
+        onFloorRaised(delta.floor)
+    }
+
+    /**
+     * Evict every passed, non-exclusive row of each declaring side
+     * (`timeFn(row) < newFloor`) through [foldLeft]/[foldRight], both sides into
+     * one accumulator, emitted once under the current (waterline) delivery;
+     * record the exclusive rows as refused (`[24-WL-16]`, `[24-WL-17]`). Not
+     * gated (3vd7k-D9); never forwards on the late outlets.
+     */
+    private fun onFloorRaised(newFloor: Long) {
+        val adds = mutableMapOf<C, MutableSet<Timestamp>>()
+        val dels = mutableMapOf<C, MutableSet<Timestamp>>()
+        val refusedNow = mutableListOf<ExclusiveEvictionRefused>()
+        leftLateness?.let { lateness ->
+            val (evictees, refusedRows) = WaterlineEviction.passedRows(join.leftState, lateness, newFloor)
+            refusedRows.mapTo(refusedNow) { ExclusiveEvictionRefused(ref, it, 1, unit = "row") }
+            val killed = WaterlineEviction.evict(this, join.leftState) { it in evictees }
+            foldLeft(killed, adds, dels)
+        }
+        rightLateness?.let { lateness ->
+            val (evictees, refusedRows) = WaterlineEviction.passedRows(join.rightState, lateness, newFloor)
+            refusedRows.mapTo(refusedNow) { ExclusiveEvictionRefused(ref, it, 1, unit = "row") }
+            val killed = WaterlineEviction.evict(this, join.rightState) { it in evictees }
+            foldRight(killed, adds, dels)
+        }
+        refusedEvictions += refusedNow.size
+        refused = refusedNow
+        join.emitOrAbsorb(
+            adds,
+            dels,
+            propagate = { outlet.call.propagate(it) },
+            absorbAck = { outlet.absorbAck() }, // nothing passed, or every passed row refused / pairless
+        )
+        lateLeft.absorbAck()
+        lateRight.absorbAck()
     }
 
     // ---- the emitOnFrontier path: apply now, reconcile at completeness ----
@@ -227,14 +444,23 @@ class JoinSetCell<A, B, K, C>(
         }
     }
 
+    // A lateness-declaring cell appends its floor as a fourth element (3vd7k-D7,
+    // nt17o-D4's pattern) so a recovered cell keeps late-dropping; a cell
+    // without lateness keeps the three-element form byte-for-byte ([24-WL-11]).
     override fun snapshot(): Serializable =
-        arrayListOf(join.leftState.snapshot(), join.rightState.snapshot(), ledger.snapshot())
+        arrayListOf<Serializable?>(join.leftState.snapshot(), join.rightState.snapshot(), ledger.snapshot())
+            .apply { if (leftLateness != null || rightLateness != null) add(floor) }
 
+    /** Accepts the three-element form (no floor: `floor()` stays `null`) and the four-element form. */
+    @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
-        val (l, r, m) = state as ArrayList<Serializable>
-        join.leftState.restore(l)
-        join.rightState.restore(r)
-        ledger.restore(m)
+        val parts = state as List<Serializable?>
+        require(parts.size == 3 || parts.size == 4) { "JoinSetCell snapshot has ${parts.size} parts, want 3 or 4" }
+        join.leftState.restore(parts[0] as Serializable)
+        join.rightState.restore(parts[1] as Serializable)
+        ledger.restore(parts[2] as Serializable)
+        floor = if (parts.size == 4) parts[3] as Long? else null
+        refused = emptyList()
         join.rebuildIndexes(leftKey, rightKey)
     }
 

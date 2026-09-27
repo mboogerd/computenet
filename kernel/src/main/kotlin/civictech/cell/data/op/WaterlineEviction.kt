@@ -2,7 +2,10 @@ package civictech.cell.data.op
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.ExclusiveEntry
+import civictech.cell.Timestamp
 import civictech.cell.data.Replicable
+import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
 
@@ -19,9 +22,30 @@ import civictech.cell.data.delta.TagState
  * lxo-D3), which is a separate item. Until then the seam serves single-instance
  * state only and throws for anything else, leaving the state untouched.
  *
- * Deliberately minimal: [GroupByCell] is today's only caller. KE4.5
- * (`computenet-3vd7k`) is this seam's next owner and grows it into the join
- * family's eviction path.
+ * **Callers and their units.** [GroupByCell] evicts by *window*
+ * (`[24-WL-06]`): a window passes once `keyTime(k) <= floor`, and a window is
+ * never evicted piecemeal. The join family — [JoinSetCell] today (KE4.5,
+ * `computenet-3vd7k`), [SemiJoinCell] and [IntersectSetCell] on the same
+ * pattern — evicts by *row* (`[24-WL-16]`), using [lateSplit] for the
+ * arrival guard and [passedRows] to pick the unit.
+ *
+ * **The row rule — `[24-WL-09]` in row form.** A row of a lateness-declaring
+ * inlet is evicted iff that inlet's `timeFn(row)` lies strictly below the
+ * floor: exactly the `[24-WL-07]` late-drop threshold. So an evicted row can
+ * be neither re-admitted (its re-add is late-dropped by [lateSplit]) nor
+ * retracted (its later del finds no live tag and is a no-op, `[24-WL-08]`) —
+ * the state no admissible del can reach is exactly the state removed. A row
+ * of an inlet declaring no lateness is never evicted, and a windowed join's
+ * window may be evicted in part. Minted pairs/entries are **never** a unit:
+ * the evicted rows' dels (this function's result) go through the caller's
+ * ordinary fold, and a pair/entry leaves only as that fold's consequence,
+ * with its advertised exit tag (M11.2 tag hygiene). Since a later del of an
+ * evicted row is a no-op, a pair never exits twice.
+ *
+ * **Exclusives (`[24-WL-17]`).** A unit holding an `Owned`/`Leased` element is
+ * refused — per window for [GroupByCell], per row for the join family
+ * ([passedRows]'s second half) — and recorded as [ExclusiveEvictionRefused],
+ * never thrown and never discharged.
  */
 internal object WaterlineEviction {
     /**
@@ -38,17 +62,55 @@ internal object WaterlineEviction {
         }
         return state.evictBelow(evictee)
     }
+
+    /**
+     * The `[24-WL-07]` arrival guard for one inlet, row form: split [value]'s
+     * adds at `lateness.timeFn(e) < floor` (strict — an add *at* the floor is
+     * admitted). Returns the admitted delta — the remaining adds and **every**
+     * del untouched, since dels are never filtered by time (`[24-WL-08]`) — and
+     * the dropped adds, tags verbatim, for the caller's late outlet. Returns
+     * [value] itself when nothing is dropped.
+     */
+    fun <E> lateSplit(
+        lateness: Windows.Lateness<E>,
+        floor: Long,
+        value: SetDelta<E>,
+    ): Pair<SetDelta<E>, Map<E, Set<Timestamp>>> {
+        val (below, rest) = value.adds.entries.partition { lateness.timeFn(it.key) < floor }
+        if (below.isEmpty()) return value to emptyMap()
+        return SetDelta(rest.associate { it.key to it.value }, value.dels) to below.associate { it.key to it.value }
+    }
+
+    /**
+     * The row-form eviction units of [state] at [floor] (`[24-WL-16]`): every
+     * live row whose `lateness.timeFn(row)` is strictly below [floor], split
+     * into the evictees (to hand to [evict]) and the rows refused because they
+     * are themselves `Owned`/`Leased` (`[24-WL-17]`, detected by
+     * [ExclusiveEntry.isExclusive] without borrowing or taking them).
+     */
+    fun <E> passedRows(state: TagState<E>, lateness: Windows.Lateness<E>, floor: Long): Pair<Set<E>, List<E>> {
+        val evictees = LinkedHashSet<E>()
+        val refused = mutableListOf<E>()
+        state.elements.forEach { row ->
+            if (lateness.timeFn(row) >= floor) return@forEach
+            if (ExclusiveEntry.isExclusive(row)) refused += row else evictees += row
+        }
+        return evictees to refused
+    }
 }
 
 /**
- * `[24-WL-17]` per eviction unit: a passed window of [cellRef] keyed [windowKey]
- * holds [exclusiveCount] `Owned`/`Leased` element(s), so the cell refused to
- * evict it — the window is left untouched, nothing is emitted for it, and the
+ * `[24-WL-17]` per eviction unit: a passed unit of [cellRef] — a window keyed
+ * [windowKey] for [GroupByCell] ([unit] `"window"`), or for the join family
+ * the row itself ([unit] `"row"`, [windowKey] the row) — holds
+ * [exclusiveCount] `Owned`/`Leased` element(s), so the cell refused to evict
+ * it — the unit is left untouched, nothing is emitted for it, and the
  * exclusives are never taken, released or borrowed by the cell. Every other
- * passed window is still evicted in the same delta.
+ * passed unit is still evicted in the same delta.
  *
- * Recorded as cell accounting (`GroupByCell.refusedWindows()` and
- * `refusedEvictions`), **not thrown**: the refusal is per unit, not per
+ * Recorded as cell accounting (`GroupByCell.refusedWindows()`,
+ * `JoinSetCell.refusedRows()`, and each cell's `refusedEvictions`), **not
+ * thrown**: the refusal is per unit, not per
  * `WaterlineDelta`. It is an [IllegalStateException] so a caller that wants to
  * escalate a refusal can throw it as-is. Not routed to an error outlet, which
  * would need a `data -> host` package edge (nt17o-D3).
@@ -62,8 +124,10 @@ class ExclusiveEvictionRefused(
     val cellRef: CellRef,
     val windowKey: Any?,
     val exclusiveCount: Int,
+    /** The eviction unit's name in the message only: `"window"` (default, [GroupByCell]) or `"row"` (join family). */
+    val unit: String = "window",
 ) : IllegalStateException(
-    "Cell $cellRef: eviction of passed window $windowKey refused ([24-WL-17]): it holds " +
+    "Cell $cellRef: eviction of passed $unit $windowKey refused ([24-WL-17]): it holds " +
         "$exclusiveCount Owned/Leased element(s) whose obligation the cell may not discharge; " +
-        "the window stays live until its exclusives are retracted",
+        "the $unit stays live until its exclusives are retracted",
 )
