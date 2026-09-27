@@ -9,10 +9,16 @@ import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
+import civictech.cell.data.Aggregator
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.data.WaterlineCell
+import civictech.cell.data.Windows
+import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.WaterlineDelta
+import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
@@ -42,6 +48,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
+import java.io.Serializable
 import java.util.UUID
 
 /**
@@ -126,7 +133,21 @@ import java.util.UUID
  *                           With `glitch-free: true` it additionally carries the
  *                           core profile's wave-alignment wrapper (`DUR-GF-01`,
  *                           see [glitchFreeDelegate]).
+ *  - `journal-window`     — a journaled tumbling `GroupByCell` (`window: {kind: tumbling,
+ *                           size}`, `agg`, `lateness?` — the core `window` binding under
+ *                           the recorded ref); its checkpoint carries its state and its
+ *                           waterline floor, so a recovered window neither re-creates an
+ *                           evicted window nor re-admits a below-floor add (`[22-REC-01]`,
+ *                           `[24-WL-05]`/`[24-WL-07]`, `24-WL-REC-01`). `sliding` is refused.
+ *  - `journal-count-view` — the count twin of `journal-set-view` (recovers checkpoint+tail).
+ *  - `waterline`          — the core profile's floor cell, **volatile** on `dur`: rebuilt
+ *                           empty on crash, recomputing from live traffic (a replayed
+ *                           baseline contributes nothing to it). Params as core.
  *  - `journal`            — the crash/recover controller (no kernel cell).
+ *
+ * Links honour the scenario's `inlet:`/`outlet:` names (t4od7-D8): e.g.
+ * `{from: wl, to: jw, inlet: waterline}` and `{from: jw, to: l, outlet: late}`.
+ * See [wire] for which edges are real links and which ride the intake.
  *
  * A `snapshot` of a journaled cell lowers to `host.checkpoint(journal)` (state +
  * frontier compaction); a `snapshot`/`restore` of a volatile durable cell is the
@@ -142,7 +163,9 @@ internal class KernelDriverDur(
     /** The reserved host id a scenario places its durable subgraph on. */
     companion object {
         const val DUR_HOST: HostId = "dur"
-        private val JOURNALED_TYPES = setOf("journal-set-source", "journal-set-view", "effect-sink")
+        private val JOURNALED_TYPES = setOf(
+            "journal-set-source", "journal-set-view", "effect-sink", "journal-window", "journal-count-view",
+        )
 
         /** The lane-counting SET fan-in: its edges are real links, not intake subscriptions (see `linkEdge`). */
         private const val LANE_FAN_IN = "quorum-set"
@@ -152,6 +175,15 @@ internal class KernelDriverDur(
 
         /** The delta port name every durable sink registers ([DeltaSink]); `retransmit`'s default inlet. */
         private const val DEFAULT_INLET = "inlet"
+
+        /** The volatile event-time floor cell (t4od7-D8): its inbound edges are real links, see [wire]. */
+        private const val WATERLINE = "waterline"
+
+        /** The journaled evicting tumbling window (t4od7-D8); its `outlet` carries a `MapDelta`. */
+        private const val JOURNAL_WINDOW = "journal-window"
+
+        /** An evicting operator's floor inlet (`[24-WL-06]`), reached through the intake by [WaterlineSink]. */
+        private const val WATERLINE_INLET = "waterline"
     }
 
     /** One surviving write-ahead journal, shared across crashes (it *is* "the disk"). */
@@ -368,7 +400,96 @@ internal class KernelDriverDur(
             Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
         }
 
+        // `waterline` (t4od7-D8): the core binding's WaterlineCell, but built under the
+        // RECORDED ref so a rebuild re-mints it at the same identity. VOLATILE — never
+        // journaled: a crash re-mints it empty, and it recomputes its floor from the
+        // live traffic that reaches it afterwards. A replayed re-emission reaches it
+        // stamped as a baseline and contributes nothing (`WaterlineCell`, sjqat-D1),
+        // so it is the evicting cell's own restored floor, not this one, that keeps
+        // late-dropping across the crash (`[24-WL-07]`, nt17o-D4).
+        WATERLINE -> {
+            val l = durLateness(spec)
+                ?: throw UnsupportedCatalogBinding(
+                    "waterline requires a `lateness: <non-negative int>` param (spec 24 [24-WL-01])",
+                )
+            val cell = WaterlineCell<Any?>(spec.ref, Windows.Lateness(EventTimeOfPair, l))
+            Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
+        }
+
+        // `journal-window` (t4od7-D8): the JOURNALED twin of the core `window` binding
+        // with `kind: tumbling` — the same `GroupByCell`, `Windows.Lateness(EventTimeOfPair,
+        // L)` and `keyTime = start + size` ([WindowEnd]) KernelCatalog builds, constructed
+        // here only because the dur driver must pass the RECORDED ref (GroupByCell's first
+        // parameter) and KernelCatalog mints a random one. Being journaled, a checkpoint
+        // snapshots its state AND its floor (GroupByCell's third snapshot part), so a
+        // recovered window neither re-creates an evicted window nor re-admits a
+        // below-floor add (`[KE4-45]`, kernel `GroupByEvictionRecoveryTest`).
+        JOURNAL_WINDOW -> Bound(
+            spec.ref,
+            spec.type,
+            journalWindow(spec, KernelFunctions.aggregator((spec.params["agg"] as? Value.StrVal)?.value ?: "count")),
+            null,
+            KernelCatalog.ViewKind.NONE,
+        )
+
+        // `journal-count-view` (t4od7-D8): the count twin of `journal-set-view` — a
+        // journaled ObserveCell count fold, so a recovered view's fold is READ from its
+        // checkpoint plus the journal tail rather than reconstructed by re-emission.
+        "journal-count-view" -> {
+            val log = logs.getOrPut(spec.cellId) { mutableListOf() }
+            val cell = ObserveCell(RecordedView(View.count<Any?>(), KernelCatalog.ViewKind.COUNT, log), spec.ref)
+            Bound(spec.ref, spec.type, cell, cell, KernelCatalog.ViewKind.COUNT)
+        }
+
         else -> throw UnsupportedCatalogBinding("no durable kernel binding for catalog type '${spec.type}'")
+    }
+
+    /**
+     * The validated `lateness` param of a durable cell, or `null` when absent —
+     * the same reading `KernelCatalog` gives it (an integer, non-negative).
+     */
+    private fun durLateness(spec: Spec): Long? {
+        val raw = spec.params["lateness"] ?: return null
+        val l = (raw as? Value.IntVal)?.value
+            ?: throw UnsupportedCatalogBinding("`lateness` on '${spec.type}' must be an integer; got $raw")
+        if (l < 0) throw UnsupportedCatalogBinding("`lateness` on '${spec.type}' must be non-negative; got $l")
+        return l
+    }
+
+    /**
+     * Binds `journal-window`: `window: {kind: tumbling, size}`, `agg`, optional
+     * `lateness`, over `[at, value]` elements. `kind: sliding` is refused — with
+     * or without `lateness` — because its core binding is the two-cell
+     * `WindowSlidingCell` composition, which has no `waterline` inlet or `late`
+     * outlet (t4od7-D4) and no single journaled cell to checkpoint.
+     */
+    private fun <ACC : Serializable> journalWindow(spec: Spec, a: Aggregator<Any?, Long, ACC>): Cell {
+        val descriptor = (spec.params["window"] as? Value.MapVal)?.entries
+            ?: throw UnsupportedCatalogBinding("journal-window requires a `window: {kind, size}` descriptor")
+        val kind = (descriptor["kind"] as? Value.StrVal)?.value
+            ?: throw UnsupportedCatalogBinding("journal-window descriptor needs a string `kind` (tumbling)")
+        if (kind != "tumbling") {
+            throw UnsupportedCatalogBinding(
+                "journal-window kind '$kind' is unbound — only 'tumbling' binds durably; 'sliding' binds to " +
+                    "WindowSlidingCell, which has no `waterline` inlet and no `late` outlet (t4od7-D4)",
+            )
+        }
+        val size = (descriptor["size"] as? Value.IntVal)?.value
+            ?: throw UnsupportedCatalogBinding("journal-window descriptor needs an integer `size`")
+        val bucket = Windows.tumbling(size)
+        val keyFn = { e: Any? -> bucket(EventTimeOfPair(e)) }
+        val lateness = durLateness(spec)
+        return if (lateness == null) {
+            GroupByCell(ref = spec.ref, keyFn = keyFn, aggregator = a)
+        } else {
+            GroupByCell(
+                ref = spec.ref,
+                keyFn = keyFn,
+                aggregator = a,
+                lateness = Windows.Lateness(EventTimeOfPair, lateness),
+                keyTime = WindowEnd(size),
+            )
+        }
     }
 
     /**
@@ -383,23 +504,66 @@ internal class KernelDriverDur(
      * [LinkResult.Rejected] arises here.
      */
     fun connect(from: CellId, to: CellId, inlet: String?, outlet: String?, role: String?): LinkResult {
-        wire(cells.getValue(from), cells.getValue(to))
+        wire(cells.getValue(from), cells.getValue(to), inlet, outlet)
         linkRecs += LinkRec(from, to, inlet, outlet, role)
         return LinkResult.Connected("dur:$from->$to")
     }
 
     /**
-     * Subscribe [src]'s outlet to an intake-routed proxy of [dst]'s inlet — the
-     * durable default. The one exception, an edge incident to a lane-counting
-     * fan-in, is [linkEdge].
+     * Subscribe [src]'s named outlet to an intake-routed proxy of [dst]'s named
+     * inlet — the durable default. The link's `inlet:`/`outlet:` names are
+     * honoured (t4od7-D8), defaulting to `inlet`/`outlet` exactly as
+     * [KernelCatalog.inletName]/[KernelCatalog.outletName] do on the core
+     * profile; a name the cell does not register is refused rather than
+     * silently re-routed to the default port.
+     *
+     * Routing is decided by the DESTINATION, because both of the intake funnel's
+     * guarantees (the WAL tee, the `Effectful` frontier) are about it:
+     *
+     *  - an edge into a lane-counting fan-in, or out of one, is a real link
+     *    ([linkEdge]) — the fan-in's lanes open on `EdgeOpen`;
+     *  - an edge into a `waterline` is a real link too: `WaterlineCell` keys
+     *    each contribution by the delivering wave's `sourceId` and retires a
+     *    source on its link's `EdgeClose` (`[24-WL-12]`), so it needs a
+     *    context-bearing link delivery, and being volatile it has no WAL tail
+     *    the intake would have to tee;
+     *  - every other edge rides the intake, so a journaled destination
+     *    (`journal-window`, `journal-count-view`, …) journals its tail. The
+     *    proxy interface is chosen by the destination port and payload:
+     *    [DeltaSink] (`inlet`, a `SetDelta`), [MapDeltaSink] (`inlet`, a
+     *    `MapDelta` out of a `journal-window`), [WaterlineSink] (`waterline`, a
+     *    `WaterlineDelta`). A frame on this path carries the producing outlet's
+     *    wave context: [HostedCellProxy] stamps `CurrentContext.get()` into the
+     *    invocation it enqueues, and the outlet has installed its wave's context
+     *    around each subscriber call.
      */
-    private fun wire(src: Bound, dst: Bound) {
-        // An edge incident to a lane-counting fan-in must be a REAL link, not an
-        // intake subscription — see [linkEdge].
-        if (src.type == LANE_FAN_IN || dst.type == LANE_FAN_IN) return linkEdge(src, dst)
-        val sinkInlet = (HostedCellProxy.create(dst.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
+    private fun wire(src: Bound, dst: Bound, inlet: String?, outlet: String?) {
+        if (src.type == LANE_FAN_IN || dst.type == LANE_FAN_IN || dst.type == WATERLINE) {
+            return linkEdge(src, dst, inlet, outlet)
+        }
+        val outletName = KernelCatalog.outletName(src.type, outlet)
+        val inletName = KernelCatalog.inletName(dst.type, inlet)
+        if (PortRegistry.of(dst.cell)[inletName] == null) {
+            throw UnsupportedCatalogBinding("durable link into '${dst.type}' names inlet '$inletName', which it does not register")
+        }
         @Suppress("UNCHECKED_CAST")
-        (src.cell as SetApi<Any?>).outlet.subscribe(Use.fixed(sinkInlet, PortRef.generate()))
+        val producer = PortRegistry.of(src.cell)[outletName] as? FanOutlet<Propagate<Any?>>
+            ?: throw UnsupportedCatalogBinding(
+                "durable link out of '${src.type}' names outlet '$outletName', which it does not register as a FanOutlet",
+            )
+        @Suppress("UNCHECKED_CAST")
+        val sinkInlet: Propagate<Any?> = when {
+            inletName == WATERLINE_INLET ->
+                (HostedCellProxy.create(dst.ref, host, WaterlineSink::class.java) as WaterlineSink).waterline.call
+            inletName != DEFAULT_INLET -> throw UnsupportedCatalogBinding(
+                "durable link into '${dst.type}' names inlet '$inletName'; the intake binds only " +
+                    "'$DEFAULT_INLET' and '$WATERLINE_INLET'",
+            )
+            src.type == JOURNAL_WINDOW && outletName == "outlet" ->
+                (HostedCellProxy.create(dst.ref, host, MapDeltaSink::class.java) as MapDeltaSink).inlet.call
+            else -> (HostedCellProxy.create(dst.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
+        } as Propagate<Any?>
+        producer.subscribe(Use.fixed(sinkInlet, PortRef.generate()))
     }
 
     /**
@@ -425,11 +589,16 @@ internal class KernelDriverDur(
      * the root→journaled-relay edge goes through the host queue while both
      * fan-in arms are ordinary `linkTo` links.
      */
-    private fun linkEdge(src: Bound, dst: Bound) {
+    private fun linkEdge(src: Bound, dst: Bound, inlet: String?, outlet: String?) {
         // A wave-aligned fan-in publishes on its [GlitchFreeCell] wrapper's outlet, so
         // the consumer reads the aligned stream rather than the operator's raw output.
         val srcRef = src.outletDelegate ?: src.ref
-        val result = host.managementInlet.call.connect(srcRef, "outlet", dst.ref, "inlet")
+        val result = host.managementInlet.call.connect(
+            srcRef,
+            KernelCatalog.outletName(src.type, outlet),
+            dst.ref,
+            KernelCatalog.inletName(dst.type, inlet),
+        )
         check(result is civictech.cell.link.LinkResult.Connected) {
             "durable link ${src.type} -> ${dst.type} was not admitted: $result"
         }
@@ -852,7 +1021,7 @@ internal class KernelDriverDur(
         // Rebuild the graph (spawn the same cells with the same refs), then re-link —
         // recovery replays onto a wired graph so a source's restored deltas reach its view.
         specs.values.forEach { instantiate(it) }
-        linkRecs.toList().forEach { l -> wire(cells.getValue(l.from), cells.getValue(l.to)) }
+        linkRecs.toList().forEach { l -> wire(cells.getValue(l.from), cells.getValue(l.to), l.inlet, l.outlet) }
         host.recoverFrom(journal)
         drain()
     }
@@ -875,6 +1044,24 @@ private const val CTRL_MARKER: Byte = 2
  */
 private interface DeltaSink {
     val inlet: Use<Propagate<SetDelta<Any?>>>
+}
+
+/**
+ * Proxy view of a durable sink's `inlet` fed a `MapDelta` — the `journal-window`
+ * → `journal-count-view` edge (t4od7-D8). Same port name as [DeltaSink]; a
+ * separate shape so the proxy states the payload it carries.
+ */
+private interface MapDeltaSink {
+    val inlet: Use<Propagate<MapDelta<Any?, Any?>>>
+}
+
+/**
+ * Proxy view of an evicting operator's `waterline` inlet (`[24-WL-06]`): a
+ * `waterline` cell's floor reaching a journaled `journal-window` through the
+ * host intake, so the floor frames join that window's WAL tail.
+ */
+private interface WaterlineSink {
+    val waterline: Use<Propagate<WaterlineDelta>>
 }
 
 /**

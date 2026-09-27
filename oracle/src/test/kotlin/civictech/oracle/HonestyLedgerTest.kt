@@ -335,6 +335,7 @@ class HonestyLedgerTest {
         "Window close / eviction",
         "`CoalescingCombineCell`",
         "`WatermarkCell`",
+        "`WaterlineCell`",
     )
 
     @Test

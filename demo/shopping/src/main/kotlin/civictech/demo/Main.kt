@@ -16,6 +16,8 @@ import civictech.cell.link.PeerId
 import civictech.cell.observe.View
 import civictech.cell.host.link
 import civictech.cell.observe.observe
+import civictech.cell.observe.AlignedCompositeCell
+import civictech.cell.observe.observeAligned
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.replication.Replication
@@ -164,6 +166,18 @@ class DemoApp(
     private var produceRef: CellRef? = null
     private var wantedRef: CellRef? = null
 
+    /**
+     * The wave-aligned `{items, produce}` sink (`[22-OBS-01]`/`[22-OBS-02]`):
+     * both descend from [itemsUnion], so folding them through one
+     * [AlignedCompositeCell] instead of two independent `host.observe` hubs is
+     * what makes one SSE frame carry both fields' change together — see the
+     * comment above [broadcast].
+     */
+    private lateinit var aligned: AlignedCompositeCell
+
+    /** Diagnostic (G-13): 0 at idle: no wave held awaiting a stalled or phantom arm. */
+    internal val alignedBufferedWaves: Int get() = aligned.bufferedWaves
+
     private var inspector: civictech.inspect.InspectorServer? = null
 
     /** The `--listen` listener, kept so [boundWsPort] can report what it actually bound. */
@@ -206,9 +220,23 @@ class DemoApp(
         wantedRef = wantedCell.ref
         manage.link(itemsUnion.outlet, produceCell.cell.inlet)
 
-        host.observe(itemsUnion.ref, View.set<String>()) { synchronized(state) { items = it }; broadcast() }
+        // items+produce share itemsUnion as their common Consume root, so one
+        // AlignedCompositeCell settles one shared frontier over both arms and
+        // publishes one composite per settled wave — see the comment above
+        // [broadcast] for the boundary against the point-consistent hubs below.
+        aligned = host.observeAligned {
+            set("items", itemsUnion.ref)
+            set("produce", produceCell.ref)
+        }
+        aligned.onChange { snap ->
+            @Suppress("UNCHECKED_CAST")
+            synchronized(state) {
+                items = snap["items"] as Set<String>
+                produce = snap["produce"] as Set<String>
+            }
+            broadcast()
+        }
         host.observe(votesUnion.ref, View.set<String>()) { synchronized(state) { votes = it }; broadcast() }
-        host.observe(produceCell.ref, View.set<String>()) { synchronized(state) { produce = it }; broadcast() }
 
         // Derived view: items ∩ votes — "still wanted" is the incremental
         // intersection of two independently-mutating streams (the binary
@@ -365,10 +393,20 @@ class DemoApp(
         exchange.respond(200, "ok")
     }
 
-    // ponytail: fires once per hub update, so a single op can push a few frames
-    // whose four views are momentarily out of step (e.g. the filtered aisle
-    // updates one frame before the master list) before converging. Fine for the
-    // full-state SSE transport; coalescing to one frame per wave is M6+ material.
+    // ponytail: `items`/`produce` are the aligned pair — they share itemsUnion
+    // as their Consume root, so `aligned` (an AlignedCompositeCell) settles one
+    // shared wave frontier over both arms and calls broadcast() once per
+    // settled wave with both fields already written together (`[22-OBS-01]`):
+    // no frame can show a `produce` element absent from `items`. `votes`,
+    // `wanted` and `shared` stay separate host.observe hubs and are only
+    // point-consistent: each may lead or trail the aligned pair's frame by a
+    // beat before converging. `wanted` in particular descends from two
+    // independent roots (itemsUnion and votesUnion) and cannot be folded into
+    // the aligned pair without over-alignment across independent sources
+    // (`[22-LIVE-01]`, G-13's phantom-expected-edge) — see the demo-findings
+    // entry "Independent-root composite cannot be wave-aligned (shopping
+    // `wanted`)". Fine for the full-state SSE transport either way; coalescing
+    // every view into one frame per wave is M6+ material.
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String = synchronized(state) {
@@ -424,6 +462,7 @@ class DemoApp(
             put(votesUnion.ref, "votes")
             produceRef?.let { put(it, "produce") }
             wantedRef?.let { put(it, "wanted") }
+            put(aligned.ref, "ui-aligned")
             if (wire != null) {
                 put(peerItems, "items@$peerRole")
                 put(peerVotes, "votes@$peerRole")

@@ -319,11 +319,19 @@ inlet per contributing view carries the per-name clause structurally; one
 completeness fold spanning **every** inlet's edges — `WaveFrontier`'s
 condition mirrored at cell scope, the `CoalescingCombineCell` precedent —
 carries the assembly clause, publishing one composite per settled wave in
-per-source counter order. It is the WAIT shape: no `DEGRADE` frontier
-shrinking, no RE-SCOPE, no replica-fed settlement, and the static-link-set
-residual (G-13, above) still applies — an arm that structurally never carries a
-source is a phantom expected edge for its waves until an ack, a later wave, or
-an `EdgeClose` shrinks the condition. Two boundaries of the shipped guarantee,
+per-source counter order. It mirrors `WaveFrontier`'s stall disposition:
+`GlitchFreeCell.WaveMode.WAIT` (the default) holds; `DEGRADE` excludes a
+recoverably stalled edge from the frontier until `Resume`; a terminal `Stall`
+re-scopes in every mode. A shrunken completeness condition is disclosed in the
+published `AlignedComposite.droppedEdges` — the DEGRADE correctness contract's
+disclosure half (G-40; its sufficiency half stays open) — and a dropped edge
+stays named there on every later composite until its own watermark catches up
+with the flushed frontier for its source or the edge closes, not only on the
+wave it was dropped from. Replica-fed settlement (E3.4) and pull-on-open
+remain unmirrored, and the static-link-set residual (G-13, above) still
+applies — an arm that structurally never carries a source is a phantom
+expected edge for its waves until an ack, a later wave, or an `EdgeClose`
+shrinks the condition. Two boundaries of the shipped guarantee,
 both inherited from `WaveFrontier.offer`: catch-up traffic (the `onLinked`
 state-as-delta, pull baselines) installs as arm state and is admitted to no
 completeness set, and an edge opened mid-stream floors below the waves already
@@ -499,6 +507,17 @@ frame path (CP-A2, composition plan; see 40/41 point 4).
   delta invocations unchanged; tags and waves are separate uses of one clock
   shape — attention's per-emitter LWW `version` (93 I-4) is a third: a
   payload discriminator, never a wave.
+- **Waterline floor (24)**: the lateness floor (`[24-WL-02]`) is one more
+  non-wave use of the monotone-clock shape — a monotone event-time *value*
+  carried as payload, never a wave position and never a member of any
+  completeness set or glitch-free frontier (`[24-WL-04]`). Its carrier is not
+  outside the wave plane: a `WaterlineDelta` emission is an ordinary
+  transparent-flow emission (§MessageContext rule 2) riding the wave whose
+  data advanced the floor, and a wave that reaches the waterline cell without
+  moving the floor emits nothing and is absorb-acked (CP-A3), so a glitch-free
+  consumer downstream of both the data and the waterline settles that wave
+  normally. Evictions the floor drives emit under the `WaterlineDelta`'s wave
+  id (`[24-WL-06]`).
 - **Cycles (21)**: decided in 93 I-5, unimplemented. Every cycle declares at
   least one **cycle head**; the head's feedback→emission transition mints a
   fresh wave instead of preserving the incoming one — the single stated

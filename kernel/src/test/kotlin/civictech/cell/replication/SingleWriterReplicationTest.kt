@@ -635,24 +635,7 @@ class SingleWriterReplicationTest {
     // f7h.6.3 — §5.5 RESTART of an ELECTED leader is not an election
     // ------------------------------------------------------------------
 
-    /**
-     * Records every frame that crosses one direction, in order, and passes it
-     * through unchanged. Copied from [LeaderElectionRefusalTest], where it is
-     * private and in another file's claim (the same reason that file copied it
-     * from [LeaderMarkAnnounceTest]).
-     */
-    private open class Counting : Peering.FrameInterpose {
-        val frames = java.util.concurrent.CopyOnWriteArrayList<Pair<Long, Long>>()
-
-        override fun apply(frame: ByteArray): List<ByteArray> {
-            val decoded = civictech.cell.wire.WireCodec.decodeFrame(frame).frame
-            frames += decoded.contractId to decoded.methodId
-            return listOf(frame)
-        }
-
-        fun count(methodId: Long): Int = frames.count { it.second == methodId }
-        fun reset() = frames.clear()
-    }
+    // Counting/FrameId are the shared fixture in CountingInterpose.kt.
 
     private val leaderMarkedId: Long =
         civictech.nature.ContractRegistry.idsOf(

@@ -1,0 +1,13 @@
+{
+  "id": "WV-NEG-INVALID-UTF8-01",
+  "title": "Bytes with a lone UTF-8 continuation byte inside portName must be refused as invalid-utf8",
+  "category": "negative",
+  "kind": "negative",
+  "covers": ["WIR1-C08", "WIR1-C16", "WIR1-I07"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {"base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlugGxldCIsInR5cGUiOiJQT1JUX0FQSSIsImFyZ3MiOltbIlN0YWxsIix7InJlYXNvbiI6IlNVU1BFTkRFRCJ9XV19"},
+  "expect": {"reject": "invalid-utf8", "observed": "accepted-with-substitution"},
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: one lone continuation byte 0x80 inserted at byte offset 135 (0-based), between `in` and `let` of the portName value — `\"in` 0x80 `let\"` — giving 201 bytes that are not valid UTF-8; no `encoded.utf8` because the bytes are not text. Every other byte is the seed's, so after U+FFFD substitution the text is still a well-formed frame with the seed's known ids: the only thing standing between these bytes and a returned invocation is UTF-8 validation, which isolates [WIR1-I07]'s UTF-8 clause from its malformed-JSON clause (ncz.6-D5). Normative: [WIR1-I07] says such bytes SHALL be rejected, so `expect.reject` is `invalid-utf8` for every conforming implementation. The reference JVM codec at codecVersion 2 does NOT reject: WireCodec.decodeFrame calls bytes.decodeToString() (= String(bytes, UTF_8)), which substitutes U+FFFD and returns an invocation whose portName is `in\\uFFFDlet` (observed 2026-09-25 through the full codec). `expect.observed: accepted-with-substitution` records that divergence and the JVM driver asserts it, pinned-because-current ([WIR1-C16]) — a codec fix turns this vector red, the signal to drop `observed`. Ledger: wire/corpus/NONDETERMINISM.md §Findings. Fix owned by bug computenet-ezw1d."
+}

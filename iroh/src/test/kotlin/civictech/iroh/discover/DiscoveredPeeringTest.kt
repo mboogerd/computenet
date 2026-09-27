@@ -823,14 +823,22 @@ class DiscoveredPeeringTest {
             rig.fake.send(SidecarMessage.PeerAdded(key))
             val dial = rig.nextDial()
             rig.fake.send(SidecarMessage.LinkUp(dial.link, key, DIRECTION_OUTBOUND))
-            connected()
-            assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the dialler's hello is its first frame")
-            await("the configured link to reach the table") { rig.viewOf(key) != null }
-            assertEquals("CONFIGURED", assertNotNull(rig.viewOf(key)).source)
+            val connection = connected()
+            // Rig.close() closes peering, client and fake, but never a
+            // connectConfigured connection: without this the loop (backoff
+            // 10ms) outlives this test, spinning on "client is closed" for the
+            // rest of the :iroh:test JVM (computenet-raitp).
+            try {
+                assertIs<HostMessage.Data>(rig.fake.nextHostMessage(), "the dialler's hello is its first frame")
+                await("the configured link to reach the table") { rig.viewOf(key) != null }
+                assertEquals("CONFIGURED", assertNotNull(rig.viewOf(key)).source)
 
-            rig.discover(key)
-            await("the sighting to be suppressed") { rig.peering.counters.duplicatesSuppressed.count == 1L }
-            assertEquals(1L, quiesced { rig.fake.dials.get() }, "[DSC2-DIAL-07]: the configured dial is the only one")
+                rig.discover(key)
+                await("the sighting to be suppressed") { rig.peering.counters.duplicatesSuppressed.count == 1L }
+                assertEquals(1L, quiesced { rig.fake.dials.get() }, "[DSC2-DIAL-07]: the configured dial is the only one")
+            } finally {
+                connection.close()
+            }
         }
     }
 
@@ -913,15 +921,23 @@ class DiscoveredPeeringTest {
             rig.fake.send(SidecarMessage.PeerAdded(key))
             val dial = assertIs<HostMessage.Dial>(nextControl())
             rig.fake.send(SidecarMessage.LinkUp(dial.link, key, DIRECTION_OUTBOUND))
-            connected()
-            assertIs<HostMessage.Data>(nextControl(), "the dialler's hello is its first frame")
-            await("both directions to be up") { rig.node.links(key).map { it.direction }.toSet().size == 2 }
+            val connection = connected()
+            // Rig.close() closes peering, client and fake, but never a
+            // connectConfigured connection: without this the loop (backoff
+            // 10ms) outlives this test, spinning on "client is closed" for the
+            // rest of the :iroh:test JVM (computenet-raitp).
+            try {
+                assertIs<HostMessage.Data>(nextControl(), "the dialler's hello is its first frame")
+                await("both directions to be up") { rig.node.links(key).map { it.direction }.toSet().size == 2 }
 
-            rig.fake.send(SidecarMessage.LinkDown(INBOUND_LINK, "the winner dropped"))
-            await("the inbound link's down to reach the node") { rig.node.links(key).map { it.linkId } == listOf(dial.link) }
-            rig.drained()
+                rig.fake.send(SidecarMessage.LinkDown(INBOUND_LINK, "the winner dropped"))
+                await("the inbound link's down to reach the node") { rig.node.links(key).map { it.linkId } == listOf(dial.link) }
+                rig.drained()
 
-            assertEquals(0L, rig.peering.counters.tieBreakClosed.count, "the winning direction's drop is not a tie-break close")
+                assertEquals(0L, rig.peering.counters.tieBreakClosed.count, "the winning direction's drop is not a tie-break close")
+            } finally {
+                connection.close()
+            }
         }
     }
 

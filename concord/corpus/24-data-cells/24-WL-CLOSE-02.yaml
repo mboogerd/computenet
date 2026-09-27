@@ -1,0 +1,61 @@
+id: 24-WL-CLOSE-02
+title: A source reaching the waterline over two relays is retired only when the last relay's edge closes (the diamond rule)
+covers: [24-WL-12]
+profile: core
+kind: example
+narrative:
+  given: >-
+    one set-source (b) reaching a waterline (lateness 0) over two identity-map relays,
+    a second set-source (a) feeding the waterline directly, the floor read through a value view
+  when: the two relay edges are disconnected one at a time
+  then: >-
+    b's `sourceId` rides both relays unchanged (a transparent-flow hop rewrites only
+    `sourcePort`, never `sourceId`), so closing the first relay's edge leaves b still
+    arriving over the second and the floor does not move; only when the LAST edge
+    carrying b closes is b retired and the floor released to a's promise ([24-WL-12]'s
+    diamond rule). `final-view`/`observations-monotone` see this OUTCOME — b retired,
+    floor at a's promise — but not the TIMING: a link-keyed waterline that wrongly
+    retired b at the first disconnect would reach the same final value and a monotone
+    stream too (one step early, at 50 instead of 20, which no check here observes). The
+    no-rise-at-the-first-close half is pinned at the kernel level by
+    `civictech.cell.data.WaterlineChurnTest`'s
+    `B10 - EdgeClose of one diamond arm keeps a source the other arm still carries`;
+    this scenario asserts the outcome half of the diamond sentence in `[24-WL-12]`.
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: r1, type: map, fn: identity}
+    - {id: r2, type: map, fn: identity}
+    - {id: wl, type: waterline, lateness: 0}
+    - {id: v, type: value-view}
+  links:
+    - {from: b, to: r1}
+    - {from: b, to: r2}
+    - {from: r1, to: wl}
+    - {from: r2, to: wl}
+    - {from: a, to: wl}
+    - {from: wl, to: v}
+script:
+  # b t=20 arrives at wl twice, once via r1 and once via r2, under b's one sourceId:
+  # the first delivery raises candidate min(20)-0 = 20 -> floor 20; the second is a
+  # duplicate maximum (20 == prev), no rise, absorb-acked.
+  - {type: apply, on: b, op: add, value: [20, b1]}
+  - {type: quiesce}
+  # a t=50: candidate min(20,50)-0 = 20 (b still the minimum); no rise
+  - {type: apply, on: a, op: add, value: [50, a1]}
+  - {type: quiesce}
+  # r1's edge closes: b is still carried by r2, so nothing is retired; floor stays 20
+  - {type: disconnect, from: r1, to: wl}
+  - {type: quiesce}
+  # r2's edge closes: the last link carrying b, so b is retired; candidate min(50)-0 = 50,
+  # floor rises 20 -> 50
+  - {type: disconnect, from: r2, to: wl}
+  - {type: quiesce}
+  # a t=60: candidate min(60)-0 = 60, floor rises 50 -> 60
+  - {type: apply, on: a, op: add, value: [60, a2]}
+  - {type: quiesce}
+checks:
+  - {type: observations-monotone, view: v}
+  - {type: final-view, view: v, equals: 60}
+  - {type: no-dead-letters}

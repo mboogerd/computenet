@@ -9,6 +9,7 @@ import civictech.concord.oracle.OracleUnsupported
 import civictech.concord.oracle.Values
 import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.Check
+import civictech.concord.schema.CompositeWholeWaves
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
@@ -58,6 +59,7 @@ object Checks {
         is ObservationsAllSatisfy -> observationsAllSatisfy(check, ctx)
         is ObservationsMonotone -> observationsMonotone(check, ctx)
         is ObservationsWholeWaves -> observationsWholeWaves(check, ctx)
+        is CompositeWholeWaves -> compositeWholeWaves(check, ctx)
         is ReplicasConverge -> replicasConverge(check, ctx)
         is NoDeadLetters -> noDeadLetters(ctx)
         is EffectCount -> effectCount(check, ctx)
@@ -114,11 +116,20 @@ object Checks {
      * View equals the harness-side batch oracle over the accepted-op multiset.
      *
      * **`view: '*'` must resolve to at least one target** (computenet-2ee6c). It
-     * expands to [BatchOracle.allViewValues]'s keys — the graph's view cells —
-     * and a graph with none makes that set empty, so the comparison loop never
-     * ran and the check returned `Passed` having compared nothing: the same
-     * vacuous-coverage shape `replicas-converge` was closed for. Fails instead,
-     * naming that nothing was resolved to compare.
+     * expands to [viewCells] — the graph's view cells, identified without
+     * folding — and a graph with none makes that set empty, so the comparison
+     * loop never ran and the check returned `Passed` having compared nothing:
+     * the same vacuous-coverage shape `replicas-converge` was closed for.
+     * Fails instead, naming that nothing was resolved to compare.
+     *
+     * **Resolved without [BatchOracle.allViewValues]** (computenet-vu274):
+     * that method folds every view immediately and throws [OracleUnsupported]
+     * outside any per-view arm when one view is unmodelled, so a single
+     * refused view (e.g. a lateness view this oracle cannot fold) would throw
+     * instead of reporting `Failed` for that view. Resolving ids via
+     * [viewCells] instead defers each view's fold to the per-view loop below,
+     * whose `catch (e: OracleUnsupported)` already turns a refusal into a
+     * named `Failed`.
      */
     fun incrementalEqualsBatch(check: IncrementalEqualsBatch, ctx: CheckContext): CheckResult {
         val oracle = try {
@@ -126,7 +137,7 @@ object Checks {
         } catch (e: OracleUnsupported) {
             return CheckResult.Failed("incremental-equals-batch: oracle cannot model this scenario — ${e.message}")
         }
-        val targets = if (check.view == "*") oracle.allViewValues().keys.toList() else listOf(check.view)
+        val targets = if (check.view == "*") viewCells(ctx.scenario) else listOf(check.view)
         if (targets.isEmpty()) {
             return CheckResult.Failed(
                 "incremental-equals-batch(*): no view cell in the graph to compare — nothing observed",
@@ -236,24 +247,9 @@ object Checks {
      * check had nothing to look at" must never read as "the property held".
      */
     fun observationsWholeWaves(check: ObservationsWholeWaves, ctx: CheckContext): CheckResult {
-        val ops = ctx.scenario.script.filterIsInstance<ApplyStep>().filter { it.on == check.source }
-        val prefixes = LinkedHashSet<Set<Value>>()
-        val running = LinkedHashSet<Value>()
-        prefixes += LinkedHashSet(running)
-        for (op in ops) repeat(op.times ?: 1) {
-            when (op.op) {
-                "add" -> running.add(
-                    op.value ?: return CheckResult.Failed(
-                        "observations-whole-waves(${check.view}): '${check.source}' add with no value",
-                    ),
-                )
-                "remove" -> running.remove(op.value)
-                else -> return CheckResult.Failed(
-                    "observations-whole-waves(${check.view}): '${check.source}' op '${op.op}' is not " +
-                        "add/remove (only a set-source's own vocabulary is modeled)",
-                )
-            }
-            prefixes += LinkedHashSet(running)
+        val prefixes = when (val p = sourcePrefixes("observations-whole-waves(${check.view})", check.source, ctx.scenario)) {
+            is Prefixes.Folds -> p.sets.toSet()
+            is Prefixes.Refused -> return p.failure
         }
         val log = ctx.driver.observationLog(check.view)
         nothingObserved("observations-whole-waves(${check.view})", check.view, log)?.let { return it }
@@ -266,6 +262,141 @@ object Checks {
             "observations-whole-waves(${check.view}): event #${offending.index} ${Values.render(offending.value)} " +
                 "is not a whole-prefix state of '${check.source}' — a torn fork-join delivery",
         )
+    }
+
+    /** The outcome of [sourcePrefixes]: the per-prefix folds, or the check failure that refused them. */
+    private sealed interface Prefixes {
+        data class Folds(val sets: List<Set<Value>>) : Prefixes
+        data class Refused(val failure: CheckResult.Failed) : Prefixes
+    }
+
+    /**
+     * [source]'s fold after each whole prefix 0..N of its accepted `add`/`remove`
+     * script (script order, `times` expanded), shared by `observations-whole-waves`
+     * and `composite-whole-waves`. Index p is the fold after p ops. [where] prefixes
+     * the refusal messages (a value-less add, an op that is not add/remove).
+     */
+    private fun sourcePrefixes(where: String, source: String, scenario: Scenario): Prefixes {
+        val ops = scenario.script.filterIsInstance<ApplyStep>().filter { it.on == source }
+        val prefixes = ArrayList<Set<Value>>()
+        val running = LinkedHashSet<Value>()
+        prefixes += LinkedHashSet(running)
+        for (op in ops) repeat(op.times ?: 1) {
+            when (op.op) {
+                "add" -> running.add(
+                    op.value ?: return Prefixes.Refused(
+                        CheckResult.Failed("$where: '$source' add with no value"),
+                    ),
+                )
+                "remove" -> running.remove(op.value)
+                else -> return Prefixes.Refused(
+                    CheckResult.Failed(
+                        "$where: '$source' op '${op.op}' is not " +
+                            "add/remove (only a set-source's own vocabulary is modeled)",
+                    ),
+                )
+            }
+            prefixes += LinkedHashSet(running)
+        }
+        return Prefixes.Folds(prefixes)
+    }
+
+    /**
+     * `composite-whole-waves` (spec 22 `[22-OBS-01]`/`[22-OBS-02]`, 5ubdv-D3): every
+     * composite on the `aligned-view` [check]'s view stream has all checked members
+     * equal to their arm-derived folds at **one common** prefix of the source script.
+     *
+     * Each member's arm is walked backwards from its `{to: view, inlet: member}`
+     * link to the source; only `map` (`fn` absent or `identity`) and `filter`
+     * (a catalog predicate) cells with exactly one inbound link are modelled, and
+     * the arm's predicates are applied to the prefix set in chain order. Anything
+     * the evaluator cannot model fails loudly naming the member and the cell or id —
+     * a check that could not derive an expectation must never read as a pass.
+     */
+    fun compositeWholeWaves(check: CompositeWholeWaves, ctx: CheckContext): CheckResult {
+        val where = "composite-whole-waves(${check.view})"
+        fun fail(msg: String) = CheckResult.Failed("$where: $msg")
+        val graph = ctx.scenario.graph ?: return fail("the scenario has no graph")
+        val cells = graph.cells.associateBy { it.id }
+        val view = cells[check.view] ?: return fail("no cell '${check.view}' in the graph")
+        if (view.type != Values.ALIGNED_VIEW) {
+            return fail("'${check.view}' is a '${view.type}', not an aligned-view")
+        }
+        val views = view.views
+        if (views.isNullOrEmpty()) return fail("aligned-view '${check.view}' declares no views:")
+        val members = check.members ?: views.keys.toList()
+        if (members.isEmpty()) return fail("members: names no member")
+
+        // Per member: the arm's predicates, in chain order from the source towards the view.
+        val arms = LinkedHashMap<String, List<(Value) -> Boolean>>()
+        for (member in members) {
+            val id = views[member]
+                ?: return fail("member '$member' is not one of the view's names ${views.keys}")
+            if (id != "set-view") {
+                return fail("member '$member' is a '$id' — not modelable: only set-view members are checked")
+            }
+            val into = graph.links.filter { it.to == check.view && it.inlet == member }
+            if (into.size != 1) {
+                return fail("member '$member' has ${into.size} inbound links to inlet '$member' (exactly one is modelable)")
+            }
+            val predicates = ArrayList<(Value) -> Boolean>()
+            val visited = HashSet<String>()
+            var at = into.single().from
+            while (at != check.source) {
+                if (!visited.add(at)) return fail("member '$member' arm cycles through '$at'")
+                val cell = cells[at] ?: return fail("member '$member' arm names unknown cell '$at'")
+                when {
+                    cell.type == "map" && (cell.fn == null || cell.fn == "identity") -> Unit
+                    cell.type == "filter" && cell.fn != null -> predicates += try {
+                        Functions.predicate(cell.fn)
+                    } catch (e: IllegalStateException) {
+                        return fail("member '$member' arm cell '$at' (filter) has fn '${cell.fn}', not a catalog predicate")
+                    }
+                    else -> return fail(
+                        "member '$member' arm passes through cell '$at' of type '${cell.type}'" +
+                            (cell.fn?.let { " (fn $it)" } ?: "") +
+                            " — not modelable: only map identity / filter arms are checked",
+                    )
+                }
+                val inbound = graph.links.filter { it.to == at }
+                if (inbound.size != 1) {
+                    return fail("member '$member' arm cell '$at' has ${inbound.size} inbound links — not modelable (fan-in or dangling)")
+                }
+                at = inbound.single().from
+            }
+            predicates.reverse() // walked view → source; apply source → view
+            arms[member] = predicates
+        }
+
+        val prefixes = when (val p = sourcePrefixes(where, check.source, ctx.scenario)) {
+            is Prefixes.Folds -> p.sets
+            is Prefixes.Refused -> return p.failure
+        }
+        // expected[p][member] = prefix p's set through the member's arm.
+        val expected: List<Map<String, Set<Value>>> = prefixes.map { set ->
+            arms.mapValues { (_, preds) -> set.filterTo(LinkedHashSet()) { x -> preds.all { it(x) } } }
+        }
+
+        val log = ctx.driver.observationLog(check.view)
+        nothingObserved(where, check.view, log)?.let { return it }
+        for ((index, obs) in log.withIndex()) {
+            val composite = obs as? Value.MapVal
+                ?: return fail("event #$index ${Values.render(obs)} is not a composite (MapVal)")
+            val observed = HashMap<String, Set<Value>>()
+            for (member in members) {
+                val m = composite.entries[member]
+                    ?: return fail("event #$index ${Values.render(obs)} has no member '$member'")
+                observed[member] = (m as? Value.ListVal)?.items?.toSet()
+                    ?: return fail("event #$index member '$member' ${Values.render(m)} is not set-shaped")
+            }
+            if (expected.none { atP -> members.all { observed[it] == atP[it] } }) {
+                return fail(
+                    "event #$index ${Values.render(obs)} has no common op prefix of '${check.source}' " +
+                        "across members $members — a composite mixing waves",
+                )
+            }
+        }
+        return CheckResult.Passed
     }
 
     /**

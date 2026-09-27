@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-UNKNOWN-IDS-01",
+  "title": "contractId/methodId 1/2 name no local descriptor",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I06"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"contractId\":1,\"methodId\":2,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJjb250cmFjdElkIjoxLCJtZXRob2RJZCI6MiwiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU3RhbGwiLHsicmVhc29uIjoiU1VTUEVOREVEIn1dXX0="
+  },
+  "expect": {
+    "reject": "unknown-ids"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: `contractId`/`methodId` rewritten from the seed's Propagate::propagate hashes to `1`/`2`, a pair `ContractRegistry` has no descriptor for. normative ([WIR1-I06]): observed java.lang.IllegalStateException \"unknown contract/method ids 1/2 — no local descriptor\", naming both ids as the vocabulary entry requires. Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

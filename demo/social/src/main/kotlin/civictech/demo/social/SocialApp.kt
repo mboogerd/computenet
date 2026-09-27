@@ -252,6 +252,18 @@ class SocialApp(
         if (recovery?.completed == false) {
             awaitQuiescence()
             completeRecovery()
+        } else if (stream != null) {
+            // computenet-l3msn: the source load's writes may still be folding
+            // into their sinks. [SocialGraph.onChange] below skips each
+            // pre-existing sink's catch-up, but a fold that lands AFTER it
+            // registers is a real change and broadcasts — so without this
+            // fence the startup broadcast count would again grow with how
+            // much of an N-sink load is still queued on a slow host. After
+            // it, every preloaded fold precedes the listeners, and the
+            // startup count is independent of N. Reached only with a
+            // `source`; no SimulationController test starts one (see
+            // [awaitQuiescence]).
+            awaitQuiescence()
         }
         val s = DemoShell(port)
         // flfkm-D8 404 guard: DemoShell.route is server.createContext(path), and
@@ -293,17 +305,120 @@ class SocialApp(
      * `shutdown`, since a pending `admit()` running past `stop()` would race
      * a graph this method just closed. `ExecutorService.shutdownNow` is
      * itself idempotent.
+     *
+     * computenet-cpybp: returns only after every observe-cell dispatcher
+     * thread this app caused has terminated, waiting at most
+     * [STOP_DISPATCHER_BOUND_MS] ([SocialGraph.awaitDispatchers] says how the
+     * threads are found, and the one case it does not cover). Only
+     * [SocialGraph]'s sinks can have minted one: the four static-set sinks
+     * never get a listener, and `ObserveCell` mints its dispatcher only to run
+     * a listener. Every other step runs first, so a bound overrun still leaves
+     * the app fully stopped.
+     *
+     * @throws IllegalStateException naming the survivors, if any dispatcher is
+     *   still alive after [STOP_DISPATCHER_BOUND_MS].
      */
     fun stop() {
         shell?.stop()
         graph.close()
         listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
         spawnExecutor?.shutdownNow()
+        val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS)
+        check(survivors.isEmpty()) {
+            "SocialApp.stop: ${survivors.size} observe-cell dispatcher(s) still alive " +
+                "${STOP_DISPATCHER_BOUND_MS}ms after stop: $survivors"
+        }
     }
+
+    // computenet-1uf0s / computenet-l3msn: how many `/state` computations a
+    // burst of change notifications costs.
+    //
+    // The startup burst is gone at its source, not coalesced: start() fences
+    // the source load, and [SocialGraph.onChange]'s bulk attach drops each
+    // preloaded sink's late-join catch-up (see its KDoc for the ordering that
+    // makes that drop exact). A preloaded app therefore makes no startup
+    // broadcast per sink; the count no longer depends on N at all.
+    //
+    // What remains is [broadcast]'s single-flight worker, kept for live
+    // bursts (one /op writes up to three cells, each a separate sink firing
+    // on its own dispatcher thread): a call that lands while a broadcast is
+    // computing/sending only marks [broadcastQueued], and the worker runs once
+    // more afterward — one extra computation that reflects every call queued
+    // behind it. Calls that arrive while no broadcast is in flight each start
+    // their own, so this bounds calls *overlapping one in-flight broadcast*
+    // at one re-run; it does not bound a burst spread out in time (that was
+    // the 1uf0s over-claim: measured, a spread-out startup burst cost ~7% of
+    // N, and 101-233 of 297 on CI). No call is ever dropped without a later
+    // computation that post-dates it, so a live change is never lost.
+    //
+    // Both branches check/mutate [broadcastInFlight]/[broadcastQueued] under
+    // the same [broadcastLock], including the loop's own exit check — closing
+    // the lost-wakeup window a naive pair of `AtomicBoolean`s would leave
+    // between "the loop decides nothing more is queued" and "the flag is
+    // actually cleared": a caller arriving in exactly that window sees
+    // `broadcastInFlight` still true under the lock and marks
+    // `broadcastQueued` instead of returning without effect.
+    //
+    // A throw from stateJson() or DemoShell.broadcast (computenet-l3msn)
+    // resets both flags in the `finally` and propagates: that frame, and any
+    // re-run queued behind it, are lost — as a throw cost one frame before
+    // the worker existed — but the next call broadcasts normally. Without the
+    // reset `broadcastInFlight` stayed true forever and every later change
+    // frame was silently dropped.
+    private val broadcastLock = Any()
+    private var broadcastInFlight = false
+    private var broadcastQueued = false
+
+    /** Test-only (computenet-1uf0s): total stateJson() computations [broadcast] has made. */
+    internal val broadcastCount = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * Test-only (computenet-l3msn): when set, run inside each broadcast's
+     * frame computation just before `stateJson()`, so a test can make a
+     * broadcast throw. Null in every production path.
+     */
+    @Volatile
+    internal var frameFault: (() -> Unit)? = null
 
     /** A no-op until [start] built the shell. */
     private fun broadcast() {
-        shell?.broadcast { stateJson() }
+        val s = shell ?: return
+        synchronized(broadcastLock) {
+            if (broadcastInFlight) {
+                broadcastQueued = true
+                return
+            }
+            broadcastInFlight = true
+        }
+        // True once the loop has cleared broadcastInFlight itself, under the
+        // lock; after that another worker may own the flags, so the `finally`
+        // must not touch them.
+        var released = false
+        try {
+            while (true) {
+                broadcastCount.incrementAndGet()
+                s.broadcast {
+                    frameFault?.invoke()
+                    stateJson()
+                }
+                synchronized(broadcastLock) {
+                    if (broadcastQueued) {
+                        broadcastQueued = false
+                    } else {
+                        broadcastInFlight = false
+                        released = true
+                    }
+                }
+                if (released) return
+            }
+        } finally {
+            if (!released) {
+                synchronized(broadcastLock) {
+                    broadcastInFlight = false
+                    broadcastQueued = false
+                }
+            }
+        }
     }
 
     /**
@@ -321,7 +436,7 @@ class SocialApp(
         val drained = CountDownLatch(1)
         hostScheduler.submit(Int.MAX_VALUE) { drained.countDown() }
         check(drained.await(QUIESCENCE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            "SocialApp.start: host queue never drained within ${QUIESCENCE_TIMEOUT_MS}ms of staging recovery"
+            "SocialApp.start: host queue never drained within ${QUIESCENCE_TIMEOUT_MS}ms of staging recovery or loading the source"
         }
     }
 
@@ -740,6 +855,18 @@ class SocialApp(
 
         /** Hang backstop for [awaitQuiescence] (v10ou-D3: 30 s, as `DialogueRuntime`). */
         const val QUIESCENCE_TIMEOUT_MS = 30_000L
+
+        /**
+         * Bound on [stop]'s wait for its observe-cell dispatchers
+         * (computenet-cpybp). A hang backstop, not a measured budget: once
+         * [SocialGraph.close] has made every queued listener a no-op, the only
+         * work that can hold a dispatcher is the [broadcast] worker already
+         * running on it — its in-flight `/state` computation plus at most one
+         * re-run queued behind it ([broadcastQueued]); every other dispatcher
+         * returns at once from [broadcast]. Locally (darwin/arm64) the whole wait takes milliseconds;
+         * no number here was measured on CI.
+         */
+        const val STOP_DISPATCHER_BOUND_MS = 10_000L
 
         /**
          * Bounds a short read's future at the HTTP boundary (rx8om-D8).

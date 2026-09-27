@@ -1,12 +1,12 @@
 id: 24-OP-WINDOW-01
-title: Tumbling window folds event time into a composite group key (windows never close)
-covers: [24-OP-WINDOW-01, 24-OP-WINDOW-02]
+title: Tumbling window folds event time into a composite group key (windows never close without a lateness declaration)
+covers: [24-OP-WINDOW-01, 24-OP-WINDOW-02, 24-WL-11]
 profile: core
 kind: example
 narrative:
   given: a set source of [event-time, value] pairs windowed into 10-wide tumbling buckets, summed per bucket, observed through a count view
   when: a late element arrives after its later-time neighbour, and one earlier element is later retracted
-  then: the window is a pure function of event time alone (no wall clock, M11.6) — a late element is an ordinary add and a retraction flows into the window aggregate, exactly as any other group-by view
+  then: the window is a pure function of event time alone (no wall clock, M11.6) — a late element is an ordinary add and a retraction flows into the window aggregate, exactly as any other group-by view; this cell declares no lateness, so it is exactly the pre-lateness operator with no waterline inlet and no late outlet ([24-WL-11])
 graph:
   cells:
     - {id: a, type: set-source}
