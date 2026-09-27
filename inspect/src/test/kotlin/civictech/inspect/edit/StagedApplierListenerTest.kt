@@ -218,6 +218,30 @@ class StagedApplierListenerTest {
         applier.stagedApplyOf(a.ref).shouldBeNull()
     }
 
+    @Test
+    fun `stagedApplyOf answers null once the in-flight apply has entered RETIRE`() {
+        val f = Fixture(seed = 68)
+        val a = f.live(SinkCell())
+        lateinit var applier: StagedApplier
+        val atRetire = CopyOnWriteArrayList<String?>()
+        val listener = object : ApplyListener {
+            override fun onPhase(record: ApplyRecord) {
+                if (record.phase == ApplyPhase.RETIRE) {
+                    record.stagedRefs.mapTo(atRetire) { applier.stagedApplyOf(InspectorServer.decodeRef(it)!!) }
+                }
+            }
+            override fun onStep(applyId: String, event: StepEvent) = Unit
+            override fun onStaged(applyId: String, ref: CellRef) = Unit
+            override fun onDone(record: ApplyRecord) = Unit
+        }
+        applier = f.applier(listener)
+
+        applier.apply(committable(a.ref), applyId = "r-1", identity = "operator", baseTopologyVersion = 1)
+            .outcome shouldBe ApplyOutcome.Committed
+
+        atRetire shouldContainExactly listOf(null, null)
+    }
+
     // ---- plan ----------------------------------------------------------------
 
     @Test
@@ -257,6 +281,8 @@ class StagedApplierListenerTest {
         shouldThrow<IllegalArgumentException> {
             applier.plan(Draft(HOST, spec(), promotions = listOf(PromotionRequest())))
         }
+        val live = f.live(SinkCell()).ref
+        shouldThrow<IllegalArgumentException> { applier.plan(Draft(HOST, spec(), despawns = listOf(live, live))) }
     }
 
     // ---- register before lock -----------------------------------------------
