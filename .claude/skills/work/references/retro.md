@@ -50,6 +50,7 @@ retrospective will look at promoting that word to a tag.
 | `surprise` | the repo, a bead or a doc contradicted what you were told |
 | `reporting-miss` | something you or an agent reported wrongly or incompletely |
 | `slow` | a step cost far more time than it should have |
+| `optimization` | nothing went wrong, but you saw a cheaper, faster or simpler way |
 | `none` | the only line when there were no issues |
 
 Record small issues too. A one-off hiccup that is not worth a friction item

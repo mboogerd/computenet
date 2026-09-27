@@ -28,7 +28,7 @@ for h in '## Summary' '## Outcomes' '## Issues' '## Judgment calls' '## Time' '#
 done
 # Every issue line carries a tag from the vocabulary, or other:<word>.
 bad=$(awk '/^## Issues$/{f=1;next} /^## /{f=0} f && /^- /' "$file" \
-  | grep -vE '^- \[(deviation|refusal|flake|misleading-instruction|tooling|unverified|surprise|reporting-miss|slow|none|other:[a-z0-9-]+)\] ')
+  | grep -vE '^- \[(deviation|refusal|flake|misleading-instruction|tooling|unverified|surprise|reporting-miss|slow|optimization|none|other:[a-z0-9-]+)\] ')
 [ -z "$bad" ] || { echo "file-retro: issue lines need a [tag] from references/retro.md:" >&2; echo "$bad" >&2; exit 2; }
 
 # The custom type lives in the Dolt config and syncs, but a machine that has

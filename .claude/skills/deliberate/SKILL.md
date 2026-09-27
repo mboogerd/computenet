@@ -57,8 +57,8 @@ bias every member shares.
 .claude/skills/deliberate/scripts/deliberate.py --brief <dir>/brief.md --out <dir>/council
 ```
 
-A run makes about nine model calls and takes 10–25 minutes, so run it in the
-background. Opus runs through the newest `claude` CLI bundled with the desktop
+A run makes ten model calls and took 2.5 minutes on its first real decision;
+allow up to 20, and run it in the background. Opus runs through the newest `claude` CLI bundled with the desktop
 app, because Opus 5.5 needs CLI 2.1.280 or later. Sol runs through `codex exec`
 and Jev through the TypeSafe API (`TYPESAFE_API_KEY`). A member that fails
 aborts the run: report the error and do not treat a partial run as a verdict.

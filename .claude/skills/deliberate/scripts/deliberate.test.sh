@@ -17,4 +17,6 @@ check "split vote is no-consensus" "head -1 '$t/split/verdict.md' | grep -q '^NO
 check "no-consensus has no choice" "jq -e '.choice==null' '$t/split/verdict.json' >/dev/null"
 DELIBERATE_DRY_MISKEY=1 "$here/deliberate.py" --brief "$t/brief.md" --out "$t/miskey" --dry-run >/dev/null 2>&1; st=$?
 check "option without a case aborts" "[ $st -ne 0 ] && [ ! -e '$t/miskey/verdict.md' ]"
+DELIBERATE_DRY_MESSY=1 "$here/deliberate.py" --brief "$t/brief.md" --out "$t/messy" --dry-run >/dev/null 2>&1
+check "'Option a' / '80%' normalise to A / 80" "head -1 '$t/messy/verdict.md' | grep -q '^DECIDED: A'"
 rm -rf "$t"; exit $fail

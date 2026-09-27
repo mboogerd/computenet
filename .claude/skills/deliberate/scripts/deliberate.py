@@ -178,6 +178,13 @@ def run(brief, out):
     fut = {m: pool.submit(ask_json, m, vote, out, f"4-vote.{m}") for m in ("opus", "sol")}
     fut["jev"] = pool.submit(jev_vote, brief, options, out)
     votes = {m: f.result() for m, f in fut.items()}
+    ids = [o["id"] for o in options]
+    for m, x in votes.items():  # "a", "A ", "Option A" all mean A; "80%" means 80
+        c = str(x["choice"]).strip()
+        hit = [i for i in ids if c.upper() == i.upper()] or \
+              [i for i in ids if re.search(rf"\b{re.escape(i)}\b", c, re.I)]
+        x["choice"] = hit[0] if len(hit) == 1 else c
+        x["confidence"] = float(re.sub(r"[^\d.]", "", str(x["confidence"])) or 0)
 
     # 5 verdict
     choices = {v["choice"] for v in votes.values()}
@@ -221,6 +228,8 @@ def dry_reply(tag):
         return '{"Option A": "text A", "B": "text B"}'
     if tag.startswith("2-case") or tag.startswith("3-attack"):
         return 'Here: {"A": "text A", "B": "text B"}'
+    if tag.startswith("4-vote.sol") and os.environ.get("DELIBERATE_DRY_MESSY"):
+        return '{"choice": "Option a", "confidence": "80%", "reason": "r", "deciding_factors": ["m"]}'
     if tag.startswith("4-vote.sol") and os.environ.get("DELIBERATE_DRY_SPLIT"):
         return '{"choice": "B", "confidence": 90, "reason": "r", "deciding_factors": ["g"]}'
     if tag.startswith("4-vote"):

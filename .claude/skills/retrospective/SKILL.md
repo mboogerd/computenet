@@ -18,7 +18,9 @@ never edits a skill itself.
 ## 1. Gather the week
 
 Take the window from the last retrospective's summary bead (see §6), or seven
-days if there is none. Run every bd call in the main checkout, and start with
+days if there is none:
+`bd list --type=retro --status=closed --limit 0 --json`, keep
+`metadata.retro_skill == "retrospective"`, and take the newest `ended`. Run every bd call in the main checkout, and start with
 `bd dolt pull`.
 
 ```bash
