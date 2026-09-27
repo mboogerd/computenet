@@ -24,11 +24,23 @@
 # `EventTimeOfPair` reads it as the event time and the window/waterline
 # arithmetic is unchanged; each element below is named by its time.
 #
-# WHAT DISCRIMINATES. A window rebuilt EMPTY (its checkpoint restore lost)
-# would read `jv == {"20": 1, "30": 1}` — only the replayed tail's 28 and the
-# post-recovery 31 — and would admit 5 into a re-created window 0 (its floor
-# gone, the rebuilt waterline's first live floor is 3), so `l` would be empty
-# and window 0 would be evicted again by 31. Both goldens below differ.
+# WHAT DISCRIMINATES (measured, computenet-t4od7.8). With `journal-window`
+# made volatile (its checkpoint restore lost) the window is rebuilt empty and
+# refilled only by the journaled source's replayed tail (28): its floor is
+# gone, so the rebuilt waterline's first live floor (3) admits 5 into a
+# re-created window 0 — `l` reads `[]` — and window 20 holds {28, 29}, so the
+# `jv` fold reads `{"20": 2, "30": 1}`. Both checks redden, on 20 of 20 runs.
+#
+# Why the post-recovery add 29 is in the script (a correction to the
+# breakdown's sketch, which ended on `jv == {"20": 2, "30": 1}` and predicted
+# the restore-lost mutant would read `{"20": 1, "30": 1}`): measured, that
+# mutant read `{"20": 2, "30": 1}` — the golden itself — because `jv` is
+# journaled too, and its own replayed tail frame (`20 -> 2`) re-installs the
+# pre-crash count for window 20 whatever the rebuilt window emitted. Without
+# a post-recovery add INTO window 20, `jv` never reads that window's
+# recovered state at all, and only `l` discriminated. 29 makes the window
+# re-emit its count for 20 from its recovered state: 3 when {25, 28} were
+# restored and replayed, 2 when only the replayed 28 survived.
 #
 # WHY THE FLOOR AFTER RECOVERY IS THE WINDOW'S, NOT THE WATERLINE'S. `wl` is
 # volatile: the crash re-mints it empty, and the journaled source's replayed
@@ -60,10 +72,11 @@ narrative:
     adds raise the floor to 23 so windows 0 and 10 are evicted, the journaled
     cells are checkpointed, a further add is applied as the journal tail, the
     host crashes and recovers from its journal, then a post-recovery add lands
-    below the restored floor and another lands above it
+    below the restored floor and two land above it, one into the recovered
+    live window
   then: >
     the count view equals the post-eviction fold at the checkpoint plus the
-    tail and the post-recovery above-floor add, the below-floor add is on the
+    tail and the post-recovery above-floor adds, the below-floor add is on the
     late set view and absent from the count view (window 0 is not re-created),
     and nothing was dead-lettered
 graph:
@@ -104,11 +117,15 @@ script:
   # 5 < the restored-and-replayed floor 26: late, window 0 is not re-created
   - {type: apply, on: s, op: add, value: 5}
   - {type: quiesce}
-  # floor 29: window 20 (end 30 > 29) stays live, 31 opens window 30 -> jv {"20": 2, "30": 1}
+  # wl's live max 29 -> candidate 27, the window's floor 26 -> 27: window 20
+  # (end 30 > 27) stays live and folds 29 onto the RESTORED 25 and replayed 28 -> jv {"20": 3}
+  - {type: apply, on: s, op: add, value: 29}
+  - {type: quiesce}
+  # floor 29: window 20 (end 30 > 29) stays live, 31 opens window 30 -> jv {"20": 3, "30": 1}
   - {type: apply, on: s, op: add, value: 31}
   - {type: quiesce}
 checks:
-  - {type: final-view, view: jv, equals: {"20": 2, "30": 1}}
+  - {type: final-view, view: jv, equals: {"20": 3, "30": 1}}
   - {type: final-view, view: l, equals: [5]}
   # a crash + recovery is not a dead letter (DUR-REPLAY-01 asserts the same)
   - {type: no-dead-letters}
