@@ -154,8 +154,24 @@ fi
 # repository share refs, and the local ref carries the reviewer's `review:`
 # repair commits — a fetched merge silently dropped a certified repair
 # (observed 2026-08-17 on computenet-7em.2.3).
-git -C "$FWT" merge --no-ff "$tbr" -m "Merge $task" \
-  || { echo "merge-task: merge FAILED — resolve or abort in $FWT; task NOT closed" >&2; exit 1; }
+#
+# One conflict is not a claims overlap: doc/spec/CONCORDANCE.md is generated,
+# every parallel corpus task commits it, so every merge after the first
+# conflicts there (computenet-5sasu). When it is the ONLY conflicted path,
+# take either side (so the tree compiles), regenerate, and finish the merge.
+# MERGE_TASK_REGEN overrides ./gradlew so the test suite can stub it.
+CONC=doc/spec/CONCORDANCE.md
+if ! git -C "$FWT" merge --no-ff "$tbr" -m "Merge $task"; then
+  conflicted=$(git -C "$FWT" diff --name-only --diff-filter=U)
+  [ "$conflicted" = "$CONC" ] \
+    || { echo "merge-task: merge FAILED — resolve or abort in $FWT; task NOT closed" >&2; exit 1; }
+  echo "conflict confined to generated $CONC — regenerating it"
+  { git -C "$FWT" checkout --theirs -- "$CONC" \
+    && (cd "$FWT" && "${MERGE_TASK_REGEN:-./gradlew}" :concord:concordance) \
+    && git -C "$FWT" add -- "$CONC" \
+    && git -C "$FWT" commit --no-edit --quiet; } \
+    || { echo "merge-task: regenerating $CONC FAILED — merge left in progress in $FWT; task NOT closed" >&2; exit 1; }
+fi
 git -C "$FWT" push \
   || { echo "merge-task: push FAILED — the merge exists only locally; task NOT closed" >&2; exit 1; }
 

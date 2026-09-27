@@ -464,9 +464,9 @@ proof → do not close; retry. A parked task with a commit worth keeping → `--
 
 Task branches exist only on this machine, so merge passes this session. Comments
 describing commits this machine lacks mean the work lives elsewhere; say so in
-the next dispatch. A merge conflict means claims overlapped: resolve, fix both
-claims, and name the merge sha in the feature review's prompt. Then return to
-5b: `next-batch.py` again until its verdict routes to 5e. Once the PR exists,
+the next dispatch. A conflict only on generated `doc/spec/CONCORDANCE.md` the
+script regenerates; any other means claims overlapped: resolve, fix both claims,
+and name the merge sha in the feature review's prompt. Then return to 5b: `next-batch.py` again until its verdict routes to 5e. Once the PR exists,
 glance at `gh pr checks <pr>` output on each return; a red check on touched code
 becomes a task under the feature, carrying the log excerpt.
 
