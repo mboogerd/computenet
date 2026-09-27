@@ -198,6 +198,21 @@ class CliProposerTest {
         val p = CliMerger.prompt("Cities should ban cars.", Polarity.ATTACK, "First.", "Second.")
         assertTrue("AGAINST" in p && "Cities should ban cars." in p && "First." in p && "Second." in p, p)
         assertTrue("ONE argument" in p && "JSON string" in p, p)
+        assertTrue("ONE proposition" in p && "EXPLICIT SUBJECT" in p && "at most 25 words" in p, p)
+    }
+
+    @Test
+    fun `proposal prompt requires the canonical claim form`() {
+        val p = CliProposer.prompt(
+            ClaimContext("Should cities ban cars?", emptyList(), "Cities should ban cars.", emptyList(), emptyList()),
+            Polarity.SUPPORT,
+            1,
+        )
+        assertTrue("ONE proposition" in p, p)
+        assertTrue("State the REASON, not its bearing on the claim" in p, p)
+        assertTrue("EXPLICIT SUBJECT" in p && "EXPLICIT SCOPE" in p && "NO HEDGES" in p, p)
+        assertTrue("DATED ONLY WHEN IT MATTERS" in p && "never invent studies" in p && "at most 25 words" in p, p)
+        assertTrue("bad → canonical" in p, p)
     }
 
     @Test

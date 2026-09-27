@@ -25,10 +25,18 @@ export function Legend() {
         <dl>
           <dt>Credence</dt>
           <dd>How likely a claim is true — for the question, how likely the answer is yes — after weighing all its arguments.</dd>
+          <dt>Consensus and band</dt>
+          <dd>
+            Several rules for weighing arguments run side by side; the number is their consensus (an average in log-odds
+            of the rules that pass our sanity checks), and the faint band shows the range from the lowest to the highest
+            rule — a wide band means the rules disagree.
+          </dd>
           <dt>
             <span class="pro-text">Pro</span> / <span class="con-text">Con</span>
           </dt>
           <dd>An argument for or against the claim directly above it.</dd>
+          <dt>Undercuts the link</dt>
+          <dd>Does not dispute the claim above; it denies that the argument above actually supports or attacks it.</dd>
           <dt>Link strength</dt>
           <dd>If the argument were true, how much it would move the claim above.</dd>
           <dt>Reach</dt>
@@ -40,7 +48,7 @@ export function Legend() {
           <dt>Jev</dt>
           <dd>
             The AI judge. It scores every claim and link, sorts new arguments (added, repeat, reworded, merged, nested as
-            evidence, moved sides, dropped), and decides what is worth exploring.
+            evidence, moved sides, undercut a link, dropped), and decides what is worth exploring.
           </dd>
           <dt>Status</dt>
           <dd>

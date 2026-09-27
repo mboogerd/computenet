@@ -44,6 +44,11 @@ enum class TriageAction {
     REFINE,
     /** Argues the opposite side from the one it was proposed for: attached there. */
     OTHER_SIDE,
+    /**
+     * Does not dispute the claim but denies that its target argument bears on it
+     * ("this does not show X"): attached as an ATTACK on the target's edge.
+     */
+    UNDERCUT,
     /** Not a real argument about the claim (off-topic, incoherent, a question, restates the claim). */
     DROP,
 }

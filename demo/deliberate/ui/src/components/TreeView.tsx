@@ -1,9 +1,9 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
-import type { GraphDto } from '../api/types';
+import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildTree } from '../tree/buildTree';
-import { questionProgress, STATUS_HINT, STATUS_LABEL, verdict } from '../util/format';
+import { agreementText, questionProgress, shown, STATUS_HINT, STATUS_LABEL, verdict } from '../util/format';
 import { createTween } from '../util/tween';
-import { ClaimCard, Facts, indexTree, sideCounts, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
+import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
 import { OverrideControl } from './OverrideControl';
 
 export function TreeView(props: { graph: GraphDto; root: string }) {
@@ -17,6 +17,7 @@ export function TreeView(props: { graph: GraphDto; root: string }) {
   const sel: Selection = {
     selected,
     toggle: (ref) => setSelected((cur) => (cur === ref ? undefined : ref)),
+    members: () => props.graph.consensusMembers ?? DEFAULT_CONSENSUS,
   };
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -46,8 +47,9 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
       {(e) => {
         const claim = () => e().node.claim;
         // Label and number come from the same (animated) value, so they never disagree mid-glide.
-        const shown = createTween(() => claim().credence);
-        const v = () => verdict(shown(), 'question');
+        // The headline is the consensus of the credence rules; the band behind it is their spread.
+        const tweened = createTween(() => shown(claim()));
+        const v = () => verdict(tweened(), 'question');
         const counts = () => sideCounts(e().node);
         const open = () => props.sel.selected() === claim().ref;
         const busy = () => progress().active > 0;
@@ -58,10 +60,14 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
             <section class="hero" classList={{ 'is-open': open(), 'is-busy': busy() }} aria-label="Question">
               <h2 class="hero__q">{claim().text}</h2>
 
-              <div class="gauge" title="Credence: how likely the answer is yes, after weighing every argument">
+              <div
+                class="gauge"
+                title={`Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())})`}
+              >
                 <span class="gauge__con" aria-hidden="true">no</span>
                 <span class="gauge__track" aria-hidden="true">
-                  <span class="gauge__fill" style={{ transform: `scaleX(${claim().credence})` }} />
+                  <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
+                  <SpreadBand node={claim()} class="gauge__band" />
                   <span class="gauge__mid" />
                 </span>
                 <span class="gauge__pro" aria-hidden="true">yes</span>
@@ -118,7 +124,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
               </p>
 
               <Show when={open()}>
-                <Facts id={`facts-${claim().ref}`} claim={claim()} />
+                <Facts id={`facts-${claim().ref}`} claim={claim()} members={props.sel.members?.()} />
               </Show>
             </section>
 

@@ -24,10 +24,16 @@ class JevJudgeTest {
 
     private val seen = ConcurrentLinkedQueue<Seen>()
     private val replies = ArrayDeque<Pair<Int, String>>()
+    private val routed = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
         createContext("/v1/systemone") { ex ->
-            seen += Seen(ex.requestHeaders.getFirst("Authorization"), Json.parseToJsonElement(ex.requestBody.readAllBytes().decodeToString()).jsonObject)
-            val (status, body) = synchronized(replies) { replies.removeFirst() }
+            val request = Json.parseToJsonElement(ex.requestBody.readAllBytes().decodeToString()).jsonObject
+            seen += Seen(ex.requestHeaders.getFirst("Authorization"), request)
+            // Parallel requests (assess) are answered by their question keys, the rest in FIFO order.
+            val keys = request["questions"]!!.jsonObject.keys
+            val (status, body) = synchronized(replies) {
+                routed.keys.firstOrNull { it in keys }?.let { 200 to routed.getValue(it) } ?: replies.removeFirst()
+            }
             val bytes = body.toByteArray()
             ex.sendResponseHeaders(status, bytes.size.toLong())
             ex.responseBody.use { it.write(bytes) }
@@ -79,10 +85,12 @@ class JevJudgeTest {
         assertEquals("Bearer test-key", req.auth)
         assertEquals("jev-latest", req.body["model"]!!.jsonPrimitive.content)
         val state = req.body["state"]!!.jsonObject
-        assertEquals(setOf("root_question", "path_from_root", "claim"), state.keys)
+        // CRED-01: no path — it pulled the judgment towards the claim's role in the argument
+        assertEquals(setOf("root_question", "claim"), state.keys)
         assertEquals("Q?", state["root_question"]!!.jsonPrimitive.content)
         assertEquals("Claim.", state["claim"]!!.jsonPrimitive.content)
         val q = question(req.body, "plausibility")
+        assertTrue("Judge only what `claim` itself asserts" in q["instructions"]!!.jsonPrimitive.content)
         assertEquals("score", q["type"]!!.jsonPrimitive.content)
         val criteria = (q["criteria"] as JsonArray).map { it.jsonPrimitive.content }
         assertEquals(5, criteria.size)
@@ -142,6 +150,15 @@ class JevJudgeTest {
     }
 
     @Test
+    fun `UNDERCUT is offered against existing arguments and carries its target`() {
+        reply(200, """{"model":"jev-1.13.0","answers":{${choice("a0", "UNDERCUT")},${choice("t0", "1")}}}""")
+        val out = judge.triage(ctx, listOf(Candidate("c1 does not show that cars pollute", Polarity.ATTACK)))
+        assertEquals(listOf(Triage(TriageAction.UNDERCUT, 1)), out)
+        val a0 = question(seen.single().body, "a0")["criteria"]!!.jsonObject
+        assertTrue("does not show what it is offered to show" in a0["UNDERCUT"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `a first candidate with nothing to compare against gets no target question`() {
         reply(
             200,
@@ -175,24 +192,30 @@ class JevJudgeTest {
     }
 
     @Test
-    fun `assess asks plausibility, strength, quality and relevance in one request`() {
-        reply(
-            200,
-            """{"model":"jev-1.13.0","answers":{
-               "plausibility":{"type":"score","score":3.0},"strength":{"type":"score","score":2.0},
-               "quality":{"type":"noul","noul":0.9},"relevant":{"type":"noul","noul":0.4}},
-               "usage":{"input_tokens":1,"output_tokens":1}}""",
-        )
+    fun `assess asks plausibility alone and strength, quality and relevance together`() {
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":3.0}}}"""
+        routed["strength"] = """{"model":"jev-1.13.0","answers":{
+               "strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},
+               "canonical":{"type":"noul","noul":0.5},"relevant":{"type":"noul","noul":0.4}},
+               "usage":{"input_tokens":1,"output_tokens":1}}"""
         val a = judge.assess("Q?", listOf("Q?", "Parent."), "Child.", Polarity.ATTACK)
-        assertEquals(Assessment(plausibility = 0.75, strength = 0.5, quality = 0.9, relevance = 0.4), a)
-        val body = seen.single().body
-        assertEquals(setOf("plausibility", "strength", "quality", "relevant"), body["questions"]!!.jsonObject.keys)
+        // quality is the product of the construction and canonical-form Nouls (0.9 × 0.5)
+        assertEquals(Assessment(plausibility = 0.75, strength = 0.5, quality = 0.45, relevance = 0.4), a)
+        assertEquals(2, seen.size)
+        val plaus = seen.single { "plausibility" in it.body["questions"]!!.jsonObject }.body
+        // CRED-01: plausibility sees the claim and the question only
+        assertEquals(setOf("root_question", "claim"), plaus["state"]!!.jsonObject.keys)
+        assertEquals("Child.", plaus["state"]!!.jsonObject["claim"]!!.jsonPrimitive.content)
+        val body = seen.single { "strength" in it.body["questions"]!!.jsonObject }.body
+        assertEquals(setOf("strength", "quality", "canonical", "relevant"), body["questions"]!!.jsonObject.keys)
         val state = body["state"]!!.jsonObject
         assertEquals("Parent.", state["parent_claim"]!!.jsonPrimitive.content)
         assertEquals("Child.", state["claim"]!!.jsonPrimitive.content)
         assertEquals("attacks", state["direction"]!!.jsonPrimitive.content)
+        assertTrue("today" !in state.keys)
         assertEquals("noul", question(body, "quality")["type"]!!.jsonPrimitive.content)
         assertTrue("well-constructed" in question(body, "quality")["instructions"]!!.jsonPrimitive.content)
+        assertTrue("canonical claim" in question(body, "canonical")["instructions"]!!.jsonPrimitive.content)
         assertTrue("`claim`" in question(body, "strength")["instructions"]!!.jsonPrimitive.content)
     }
 

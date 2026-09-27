@@ -55,3 +55,30 @@ In the "cross estimate" column, each depth-1 strength (36 claims) is paired with
 **`minInfluence` = 0.35.** Relevance alone barely decays with depth (median 0.70 → 0.62 → 0.60), which is why a relevance-only gate never pruned. Reach supplies the decay: 0.64 → 0.51 → 0.32. At 0.35 the gate expands about 72% of depth-1 claims, pruning the weakly connected ones (strength ≤ ~0.5). It expands only 12–25% of depth-2 claims and no depth-3 claim. Most depth-2 claims therefore end `PRUNED`, and `DEPTH_LIMIT` (depth > 3) is practically unreachable, which meets §10(b).
 
 With the defaults of two proposers × `argsPerCall` 1, each round offers up to two new arguments per side. Jev's saturation judgment is therefore consulted at 2 and 4 arguments per side, before the dependable `maxArgsPerSide` cap of 6 ends a side that Jev has not already saturated.
+
+## Iteration 4: judgments changed after this calibration
+
+Plausibility no longer sees the path from the question (its state is only the
+question and the claim), quality is now the construction Noul **times** a
+canonical-form Noul, and proposers write canonical arguments. The thresholds
+above were calibrated under the old judgments and prompts.
+
+The first live run under the new ones (2026-09-27, "Should cities ban private
+cars from their centres?", defaults with `minInfluence` 0.35) showed the gate
+misbehaving: all 9 depth-1 arguments ended `PRUNED` (contributions 0.09–0.32),
+so nothing below the root was ever explored. Re-asking Jev for the two factors
+of those 9 arguments separately:
+
+| factor | values (9 root arguments) | median |
+|---|---|---|
+| construction Noul | 0.77–0.94 | 0.91 |
+| canonical-form Noul | 0.25–0.77 | 0.43 |
+
+The construction Noul is where it was; the canonical factor alone roughly
+halves every contribution, even for arguments written to the canonical rules
+(Jev mostly faults missing dates and vague scope). **`minInfluence` = 0.15**
+keeps the old gate's meaning under the new quality: 0.35 × the median
+canonical factor 0.43 ≈ 0.15. On that run it would expand 8 of the 9 depth-1
+arguments (the old calibration expanded ~72%). This rescaling rests on 9
+samples; a full recalibration of `minInfluence` and `saturation` under the new
+judgments is residual.

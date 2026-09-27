@@ -52,9 +52,10 @@ class CliMerger(private val cli: CliProposer) : Merger {
                 |Argument B:
                 |  $b
                 |
-                |Write a single declarative sentence that is self-contained, states the shared point once and keeps
-                |what each argument adds, and adds nothing new. Keep it concise: at most about 35 words, as short as
-                |either argument if you can. No numbering, labels or commentary.
+                |Write a single argument that states the shared point once, keeps what each argument adds, and adds
+                |nothing new. No numbering, labels or commentary.
+                |
+                |${CliProposer.CANONICAL_RULES}
                 |
                 |Output ONLY that sentence as one JSON string, e.g. "The merged argument.". No other text.
             """.trimMargin()
@@ -222,14 +223,40 @@ class CliProposer internal constructor(
                 |Existing arguments against the claim:
                 |${bullets(ctx.cons)}
                 |
-                |Give at most $max new arguments $direction the claim. Each must be:
-                |- a single declarative sentence that is self-contained and understandable without the claim or the question;
-                |- a substantively new reason, not a rewording of any existing argument above;
-                |- without numbering, labels or commentary.
+                |Give at most $max new arguments $direction the claim, each a substantively new reason, not a rewording of an existing argument above.
                 |
-                |Output ONLY a JSON array of at most $max strings, e.g. ["First argument.", "Second argument."]. No other text.
+                |$CANONICAL_RULES
+                |
+                |$CANONICAL_EXAMPLES
+                |
+                |Output ONLY a JSON array of at most $max strings, e.g. ["First argument.", "Second argument."]. No numbering, labels or other text.
             """.trimMargin()
         }
+
+        /**
+         * The canonical form every argument is asked for (proposals and merges
+         * alike): one checkable proposition, the reason rather than its bearing
+         * on the claim — how strongly it bears is Jev's strength judgment.
+         */
+        val CANONICAL_RULES = """
+            |Write each argument in canonical form, so that it can be judged true or false on its own:
+            |1. ONE proposition: a single subject-predicate assertion. No second clause that draws a conclusion ("…, which shows…", "…, suggesting…", "…, so…", "…, making…", "because…"), and no list of separate reasons joined by "and".
+            |2. State the REASON, not its bearing on the claim. Give the fact, finding or principle itself; never add that it supports, undermines, is evidence for, or is best explained by the claim's thesis. How strongly it bears on the claim is judged separately.
+            |3. EXPLICIT SUBJECT: name every person, place, group and thing ("Donald Trump", "Paris", "women over 45"). No pronouns or references to things outside the sentence ("he", "this", "these trials", "such bans").
+            |4. EXPLICIT SCOPE: say how many, how often, where, for whom ("most", "in at least five cities", "in trials of women aged 40–65"). Do not overgeneralise ("all", "always", "never") unless that is literally true.
+            |5. NO HEDGES: no "can", "may", "might", "could", "often", "tends to", "suggests", "some evidence". If uncertainty or frequency is the point, state it as a quantity or proportion ("in 3 of 11 trials", "in roughly a third of cases").
+            |6. DATED ONLY WHEN IT MATTERS: for an event or a state that changes over time (elections, office-holders, prices, current policies, the latest research), name the year or period ("in the 2024 election", "as of 2025"). Do not date timeless facts.
+            |7. ACCURATE AND CHECKABLE: prefer established, checkable facts; never invent studies, numbers or quotes. Give precise numbers or citations only when they are widely known. If unsure of a detail, drop the detail rather than guess.
+            |8. SHORT: at most 25 words. Do not restate the claim's own wording.
+        """.trimMargin()
+
+        val CANONICAL_EXAMPLES = """
+            |Examples (bad → canonical):
+            |- "Trump won the presidency twice against experienced opponents, which required shrewd strategic instincts." → "Donald Trump won the 2016 and 2024 US presidential elections against opponents with decades of political experience."
+            |- "He has made many factual errors, suggesting a limited grasp of policy." → "Donald Trump repeatedly said in 2018–2019 that China pays US tariffs, which US importers actually pay."  (a fact about what he said, not the conclusion)
+            |- "Car bans can harm local businesses." → "Retail footfall rose after pedestrianisation in most before-and-after studies of European city-centre shopping streets."  (the general finding with its scope; a specific figure only if it is widely known)
+            |- "Religious experiences are best explained by encounters with a real divine being." → "Reports of mystical experiences with similar features appear in most documented religious traditions."  (the observation; whether God best explains it is a separate step)
+        """.trimMargin()
 
         /**
          * The first well-formed JSON array of strings in [text] (surrounding prose and

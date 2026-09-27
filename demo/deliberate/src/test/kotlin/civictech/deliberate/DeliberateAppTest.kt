@@ -1,6 +1,7 @@
 package civictech.deliberate
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.awaitUntil
 import civictech.testkit.awaitSseData
 import civictech.testkit.boundedHttpClient
 import kotlinx.serialization.json.Json
@@ -60,6 +61,8 @@ class DeliberateAppTest {
         judge: Judge = FixedJudge(),
         proposers: List<Proposer> = listOf(CountingProposer("claude", delayMs), CountingProposer("codex", delayMs)),
         merger: Merger? = null,
+        dataDir: File? = null,
+        semantics: DeliberateApp.SemanticsConfig = DeliberateApp.SemanticsConfig(),
     ): Pair<DeliberateApp, HttpProbe> {
         val app = DeliberateApp(
             port = 0,
@@ -68,6 +71,8 @@ class DeliberateAppTest {
             config = config,
             uiDir = uiDir,
             merger = merger,
+            dataDir = dataDir,
+            semantics = semantics,
         ).start()
         apps += app
         val probe = HttpProbe("http://localhost:${app.boundPort}")
@@ -151,8 +156,9 @@ class DeliberateAppTest {
                 if (side == civictech.agora.cell.Polarity.SUPPORT && ctx.path.isEmpty()) listOf(text) else emptyList()
         }
         val mergeJudge = object : Judge by FixedJudge() {
-            override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.mapIndexed { i, _ ->
-                if (i == 1) Triage(TriageAction.MERGE, 0) else Triage(TriageAction.ADD)
+            // Codex proposes after Claude (EXP-02), so B meets A as existing argument 0.
+            override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map {
+                if (it.text == "Argument B.") Triage(TriageAction.MERGE, 0) else Triage(TriageAction.ADD)
             }
         }
         val (_, mergeProbe) = app(
@@ -330,5 +336,125 @@ class DeliberateAppTest {
         running.stop()
         apps.remove(running)
         assertTrue(running.flusherTerminated)
+    }
+
+    @Test
+    fun `command line parses the durability and semantics flags`() {
+        val o = Options(
+            arrayOf(
+                "--data", "/tmp/deliberate-x", "--semantics", "wlo", "--semantics-layers", "wlo,jnb", "--consensus", "wlo",
+                "--wlo-k", "3", "--wlo-p", "1", "--wlo-gamma", "1.1", "--wlo-alpha", "0.9",
+            ),
+        )
+        assertEquals(File("/tmp/deliberate-x"), o.data)
+        assertEquals("wlo", o.semantics.headline)
+        assertEquals(listOf("dfquad", "wlo", "jnb"), o.semantics.running) // dfquad always runs
+        assertEquals(listOf("wlo"), o.semantics.consensus)
+        assertEquals(listOf(0.9, 3.0, 1.0, 1.1), o.semantics.wlo.let { listOf(it.alpha, it.k, it.p, it.gamma) })
+        val d = Options(emptyArray())
+        assertNull(d.data)
+        assertEquals(180, d.config.maxClaims)
+        assertEquals(SemanticsCatalog.IDS, d.semantics.running)
+        assertEquals("dfquad", d.semantics.headline)
+        assertEquals(listOf("wlo", "jnb", "woe"), d.semantics.consensus)
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics", "nope")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics-layers", "wlo", "--semantics", "jnb")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics-layers", "wlo", "--consensus", "mlp")) }
+    }
+
+    @Test
+    fun `graph carries every layer's credence, the consensus and the spread`() {
+        val (_, probe) = app(config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0))
+        val root = probe.ask("Layers?")
+        val g = probe.awaitGraph { g -> g.idle(root) && g.nodes.all { it.credences.keys == SemanticsCatalog.IDS.toSet() } }
+        g.nodes.forEach { n ->
+            assertEquals(n.credences.getValue("dfquad"), n.credence)
+            assertEquals(Consensus.of(n.credences, Consensus.DEFAULT_MEMBERS), n.consensus, 1e-12)
+            assertEquals(n.credences.values.min(), n.spreadLow)
+            assertEquals(n.credences.values.max(), n.spreadHigh)
+        }
+    }
+
+    /** Proposer whose round on [blockOn] waits for [gate]; every other call answers like [CountingProposer]. */
+    private class GatedProposer(
+        override val id: String,
+        private val blockOn: (ClaimContext) -> Boolean,
+        private val gate: java.util.concurrent.CountDownLatch,
+        private val blocked: java.util.concurrent.CountDownLatch,
+    ) : Proposer {
+        private val inner = CountingProposer(id)
+        override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> {
+            if (!blockOn(ctx)) return inner.propose(ctx, side, max)
+            blocked.countDown()
+            try {
+                gate.await(20, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
+                return emptyList()
+            }
+            return inner.propose(ctx, side, max).map { "resumed $it" }
+        }
+    }
+
+    @Test
+    fun `a deliberation survives a restart on the same data directory and resumes`() {
+        val dir = Files.createTempDirectory("deliberate-data").toFile()
+        try {
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40)
+            val semantics = DeliberateApp.SemanticsConfig(layers = listOf("dfquad", "wlo"), consensus = listOf("wlo"))
+            // Claude's one pro argument of the root (its number depends on which side's call ran first).
+            fun isTarget(text: String?) = text != null && text.startsWith("claude support argument")
+            fun gated(gate: java.util.concurrent.CountDownLatch, blocked: java.util.concurrent.CountDownLatch) =
+                listOf("claude", "codex").map { GatedProposer(it, { ctx -> ctx.path.size == 1 && isTarget(ctx.claim) }, gate, blocked) }
+
+            val gate1 = java.util.concurrent.CountDownLatch(1)
+            val blocked1 = java.util.concurrent.CountDownLatch(1)
+            val (first, probe1) = app(config = config, proposers = gated(gate1, blocked1), dataDir = dir, semantics = semantics)
+            val root = probe1.ask("Durable?")
+            assertTrue(blocked1.await(20, TimeUnit.SECONDS))
+            val active = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
+            probe1.awaitGraph { g ->
+                val claims = g.nodes.filter { it.kind == "CLAIM" }
+                claims.size == 1 + 4 + 3 * 4 && claims.count { it.status in active } == 1
+            }
+            // Credence propagation settles asynchronously: take the graph once two reads agree.
+            var before = probe1.graph()
+            awaitUntil("credences settle before the restart") {
+                Thread.sleep(100)
+                val next = probe1.graph()
+                (next == before).also { before = next }
+            }
+            first.stop() // persists, then interrupts the blocked round; a kill at this instant
+            apps.remove(first)
+
+            val gate2 = java.util.concurrent.CountDownLatch(1)
+            val blocked2 = java.util.concurrent.CountDownLatch(1)
+            val (_, probe2) = app(config = config, proposers = gated(gate2, blocked2), dataDir = dir, semantics = semantics)
+            fun key(n: NodeDto) = listOf(n.ref, n.kind, n.root, n.text, n.depth, n.proposer, n.source, n.target, n.polarity,
+                n.strength, n.plausibility, n.reach, n.contribution, n.rounds, n.triage, n.override)
+            // The resumed claim is blocked again, so the rebuilt graph can be compared as it was.
+            assertTrue(blocked2.await(20, TimeUnit.SECONDS))
+            val after = probe2.awaitGraph { g ->
+                g.nodes.size == before.nodes.size && g.nodes.zip(before.nodes).all { (a, b) ->
+                    kotlin.math.abs(a.credence - b.credence) < 1e-9 &&
+                        b.credences.all { (id, c) -> kotlin.math.abs(a.credences.getValue(id) - c) < 1e-9 }
+                }
+            }
+            assertEquals(before.questions.map { it.root to it.text }, after.questions.map { it.root to it.text })
+            assertEquals(before.nodes.map(::key), after.nodes.map(::key))
+            before.nodes.filter { it.kind == "CLAIM" }.zip(after.nodes.filter { it.kind == "CLAIM" }).forEach { (b, a) ->
+                if (b.status in active) assertTrue(a.status in active, "$b -> $a") else assertEquals(b.status, a.status)
+            }
+            // Exploration resumes where it stopped.
+            gate2.countDown()
+            val resumed = before.nodes.single { it.kind == "CLAIM" && it.depth == 1 && isTarget(it.text) }.ref
+            val done = probe2.awaitGraph { g -> g.idle(root) }
+            assertEquals(Status.ROUND_LIMIT, done.nodes.single { it.ref == resumed }.status)
+            val kids = done.nodes.filter { it.kind == "EDGE" && it.target == resumed }
+            assertEquals(4, kids.size)
+            assertTrue(kids.all { k -> done.nodes.single { it.ref == k.source }.text!!.startsWith("resumed") })
+            gate1.countDown()
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

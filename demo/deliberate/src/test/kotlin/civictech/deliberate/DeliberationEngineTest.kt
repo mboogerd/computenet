@@ -81,6 +81,18 @@ class DeliberationEngineTest {
         }
     }
 
+    private class RecordingMetaStore(initial: Map<String, String> = emptyMap()) : MetaStore {
+        private val records = java.util.concurrent.ConcurrentHashMap(initial)
+        val writes = AtomicInteger()
+
+        override fun load(): Map<String, String> = HashMap(records)
+
+        override fun put(key: String, value: String) {
+            records[key] = value
+            writes.incrementAndGet()
+        }
+    }
+
     private val scheduler = VirtualThreadScheduler("deliberate-test")
     private val registry = LocationRegistry()
     private val host = ManagedHost(
@@ -125,7 +137,7 @@ class DeliberationEngineTest {
         assertEquals(6, config.maxArgsPerSide)
         assertEquals(3, config.maxArgsPerSideChild)
         assertEquals(0.22, config.saturation)
-        assertEquals(0.35, config.minInfluence)
+        assertEquals(0.15, config.minInfluence)
     }
 
     @Test
@@ -195,18 +207,20 @@ class DeliberationEngineTest {
 
     @Test
     fun `saturation stops one side early and both sides end the expansion`() {
-        val conSaturated = FakeJudge(saturation = { _, side -> if (side == Polarity.ATTACK) 0.9 else 0.1 })
-        val e = engine(judge = conSaturated, config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
+        // Jev calls the pro side saturated from the start; the con side never.
+        val proSaturated = FakeJudge(saturation = { _, side -> if (side == Polarity.SUPPORT) 0.9 else 0.1 })
+        val e = engine(judge = proSaturated, config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
         val r = g.node(root)
         assertEquals(Status.ROUND_LIMIT, r.status)
         assertEquals(3, r.rounds)
-        assertEquals(0.9, r.conSaturation)
-        assertEquals(0.1, r.proSaturation)
-        assertEquals(4, g.childrenOf(root).count { it.polarity == "ATTACK" }) // round 1 only
-        assertEquals(12, g.childrenOf(root).count { it.polarity == "SUPPORT" }) // all three rounds
+        assertEquals(0.1, r.conSaturation)
+        // round 1: 4 pro / 4 con, pro saturated. Round 2 asks con only (8 con). Pro is now
+        // behind, so it is no longer saturated (EXP-04 balance) and round 3 asks both.
+        assertEquals(8, g.childrenOf(root).count { it.polarity == "SUPPORT" })
+        assertEquals(12, g.childrenOf(root).count { it.polarity == "ATTACK" })
 
         val both = engine(judge = FakeJudge(saturation = { _, _ -> 0.7 }), config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0))
         val r2 = both.ask("Q2?")
@@ -217,15 +231,41 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `a side behind the other is never saturated by Jev alone`() {
+        // Claude offers two pros but only one con per call; Jev calls both sides saturated at once.
+        val asked = CopyOnWriteArrayList<Side>()
+        val lopsided = FakeProposer("claude") { ctx, side, _ ->
+            asked += side
+            if (side == Polarity.SUPPORT) listOf("pro-${ctx.pros.size}-a", "pro-${ctx.pros.size}-b") else listOf("con-${ctx.cons.size}")
+        }
+        val e = engine(
+            judge = FakeJudge(saturation = { _, _ -> 1.0 }),
+            proposers = listOf(lopsided),
+            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 10, maxDepth = 0, maxArgsPerSide = 6),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        // Round 1: 2 pro / 1 con. The con side is behind, so it stays open although Jev
+        // judged it saturated (EXP-04); round 2 asks it alone and the sides end level.
+        assertEquals(2, g.node(root).rounds)
+        assertEquals(mapOf(Polarity.SUPPORT to 1, Polarity.ATTACK to 2), asked.groupingBy { it }.eachCount())
+        assertEquals(2, g.childrenOf(root).count { it.polarity == "SUPPORT" })
+        assertEquals(2, g.childrenOf(root).count { it.polarity == "ATTACK" })
+        assertEquals(Status.SATURATED, g.node(root).status)
+    }
+
+    @Test
     fun `duplicates are dropped within a round and against existing siblings`() {
         val a = FakeProposer("claude") { ctx, side, _ ->
             if (side == Polarity.ATTACK) emptyList()
             else if (ctx.pros.isEmpty()) listOf("Cars pollute.", "Streets get safer")
             else listOf("dup of cars", "Noise drops")
         }
+        // Codex proposes after Claude (EXP-02), seeing Claude's arguments of the same round.
         val b = FakeProposer("codex") { ctx, side, _ ->
             if (side == Polarity.ATTACK) emptyList()
-            else if (ctx.pros.isEmpty()) listOf("  cars   POLLUTE ") // intra-round duplicate of claude's
+            else if (ctx.pros.size == 2) listOf("  cars   POLLUTE ") // exact duplicate of claude's
             else listOf("Land is freed")
         }
         val judge = FakeJudge(triage = { _, cands ->
@@ -444,7 +484,7 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `EXPAND on a SATURATED claim runs exactly one extra round ignoring saturation and the cap`() {
+    fun `EXPAND on a SATURATED claim runs exactly one extra round with its own per-side allowance`() {
         val config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 3)
         val e = engine(judge = FakeJudge(saturation = { _, _ -> 1.0 }), config = config)
         val root = e.ask("Q?")
@@ -741,7 +781,7 @@ class DeliberationEngineTest {
             judge = judge,
             proposers = listOf(p),
             config = DeliberationEngine.Config(
-                argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25,
+                argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25, minInfluence = 0.35,
                 maxArgsPerSide = 4, maxArgsPerSideChild = 3, roundDecay = 0.5, workers = 1,
             ),
         )
@@ -800,6 +840,7 @@ class DeliberationEngineTest {
 
     @Test
     fun `triage adds, merges duplicates, drops, moves sides, replaces and refines`() {
+        // Proposers alternate (EXP-02): each turn sees the arguments attached by the turn before.
         val claude = FakeProposer("claude") { ctx, side, _ ->
             when {
                 ctx.path.isNotEmpty() -> emptyList()
@@ -810,12 +851,12 @@ class DeliberationEngineTest {
         val codex = FakeProposer("codex") { ctx, side, _ ->
             when {
                 ctx.path.isNotEmpty() -> emptyList()
-                ctx.pros.isEmpty() -> if (side == Polarity.SUPPORT) listOf("P1 again") else listOf("Really pro")
+                ctx.pros == listOf("P1") -> if (side == Polarity.SUPPORT) listOf("P1 again") else listOf("Really pro")
                 else -> if (side == Polarity.SUPPORT) listOf("P1 example") else emptyList()
             }
         }
-        // Round 1 candidates: P1, P1 again, Off topic, Really pro (no existing: candidate j is index j).
-        // Round 2: existing pros [P1, Really pro], cons [] ; candidates P1 better, P1 example, C1.
+        // Round 1: claude's turn triages P1, Off topic; codex's turn (existing pros [P1]) P1 again, Really pro.
+        // Round 2: claude's turn (pros [P1, Really pro]) P1 better, C1; codex's turn P1 example (target 0 = P1 better).
         val verdicts = mapOf(
             "P1" to Triage(TriageAction.ADD),
             "P1 again" to Triage(TriageAction.DUPLICATE, 0),
@@ -858,7 +899,7 @@ class DeliberationEngineTest {
             g.node(root).triage,
         )
         assertEquals(1, g.node(root).duplicatesDropped)
-        assertEquals(2, judge.triageCalls.size) // one request per round
+        assertEquals(4, judge.triageCalls.size) // one request per proposer turn
     }
 
     /** Round 1: claude "A", codex "B" (B MERGEs into candidate 0 = A); ATTACK side empty. */
@@ -1059,5 +1100,306 @@ class DeliberationEngineTest {
         assertEquals(1, g.node(q1).rounds)
         assertEquals(Status.ROUND_LIMIT, g.claim(child.ref).status)
         assertEquals(0L, childExplored.count)
+    }
+
+    // ------------------------------------------------------------ iteration 4
+
+    @Test
+    fun `proposers take turns and the second sees what the first contributed`() {
+        val order = CopyOnWriteArrayList<String>()
+        val claude = FakeProposer("claude") { _, side, _ -> order += "claude"; listOf("claude-${side.name}") }
+        val codex = FakeProposer("codex") { _, side, _ -> order += "codex"; listOf("codex-${side.name}") }
+        val judge = FakeJudge()
+        val e = engine(
+            judge = judge,
+            proposers = listOf(claude, codex),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0),
+        )
+        e.ask("Q?")
+        e.idle()
+        assertEquals(listOf("claude", "claude", "codex", "codex"), order.toList())
+        // Codex's context holds Claude's arguments of the same round (after triage).
+        assertTrue(codex.contexts.all { it.pros == listOf("claude-SUPPORT") && it.cons == listOf("claude-ATTACK") }, codex.contexts.toString())
+        // One triage per turn, but saturation only once per side, after both turns.
+        assertEquals(2, judge.triageCalls.size)
+        assertEquals(listOf("claude-SUPPORT", "claude-ATTACK"), judge.triageCalls[1].first.let { it.pros + it.cons })
+        assertEquals(2, judge.saturationCalls.get())
+    }
+
+    @Test
+    fun `EXPAND explores a claim even when the tree is at maxClaims, BUDGET claims included`() {
+        val e = engine(config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 3, maxClaims = 5))
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(5, g.claims().size)
+        val budget = g.claims().first { it.status == Status.BUDGET }
+        val ref = g.ref(budget)
+
+        e.setOverride(ref, Override.EXPAND)
+        e.idle()
+        val g2 = e.snapshot()
+        assertEquals(1, g2.node(ref).rounds)
+        assertEquals(Status.ROUND_LIMIT, g2.node(ref).status)
+        // Its own allowance: 2 proposers x 1 per side, within the child cap of 3 per side.
+        assertEquals(4, g2.childrenOf(ref).size)
+        assertEquals(9, g2.claims().size)
+        // The new arguments meet the exhausted budget like any other claim.
+        assertTrue(g2.childrenOf(ref).all { g2.claim(it.source!!).status == Status.BUDGET })
+
+        // The root (ROUND_LIMIT, budget exhausted) also gets its forced round.
+        e.setOverride(root, Override.EXPAND)
+        e.idle()
+        val g3 = e.snapshot()
+        assertEquals(2, g3.node(root).rounds)
+        assertEquals(8, g3.childrenOf(root).size)
+    }
+
+    @Test
+    fun `an UNDERCUT attacks the argument's edge and is explored like a claim`() {
+        val claude = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.claim == "Q?" && side == Polarity.SUPPORT -> listOf("P")
+                ctx.claim == "U" && side == Polarity.SUPPORT -> listOf("U holds")
+                else -> emptyList()
+            }
+        }
+        val codex = FakeProposer("codex") { ctx, side, _ ->
+            if (ctx.claim == "Q?" && side == Polarity.ATTACK) listOf("U") else emptyList()
+        }
+        val judge = FakeJudge(
+            plausibility = { if (it == "U") 0.9 else 0.5 },
+            strength = { if (it == "U") 0.6 else 0.8 },
+            triage = { _, cands -> cands.map { if (it.text == "U") Triage(TriageAction.UNDERCUT, 0) else Triage(TriageAction.ADD) } },
+        )
+        val e = engine(
+            judge = judge,
+            proposers = listOf(claude, codex),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val p = g.claims().single { it.text == "P" }
+        val u = g.claims().single { it.text == "U" }
+        val pEdge = g.edges().single { it.source == p.ref }
+        val uEdge = g.edges().single { it.source == u.ref }
+        // U attacks P's edge, not the root: the root holds one argument.
+        assertEquals(pEdge.ref, uEdge.target)
+        assertEquals("ATTACK", uEdge.polarity)
+        assertEquals(pEdge.ref, u.undercuts)
+        assertEquals(listOf(p.ref), g.childrenOf(root).map { it.source })
+        assertEquals(1, u.depth)
+        assertEquals(mapOf("ADD" to 1, "UNDERCUT" to 1), g.node(root).triage)
+        // reach(root) x strength(U's edge) x strength(P's edge)
+        assertEquals(0.6 * 0.8, u.reach!!, 1e-9)
+        // Judged against the link it denies, not against the root claim.
+        val call = judge.relationCalls.single { it.child == "U" }
+        assertTrue(call.parent.contains("\"P\"") && call.parent.contains("\"Q?\""), call.parent)
+        // Explored like any claim: its own argument attaches to it, with the root question as its path.
+        assertEquals(Status.ROUND_LIMIT, u.status)
+        assertEquals(listOf("U holds"), g.childrenOf(g.ref(u)).map { g.claim(it.source!!).text })
+        assertEquals(listOf("Q?"), claude.contexts.first { it.claim == "U" }.path)
+        // The undercut lowers the link's credence below its own strength stance.
+        awaitUntil("the undercut edge loses credence") { e.snapshot().nodes.single { it.ref == pEdge.ref }.credence < 0.8 - 1e-6 }
+    }
+
+    @Test
+    fun `every semantics layer propagates the same stances and the consensus is their log-odds mean`() {
+        val ids = listOf("wlo", "jnb", "woe", "mlp")
+        val mirrors = ids.associateWith { id ->
+            AgoraService(host, registry, semantics = SemanticsCatalog.of(id), hubRef = AgoraLayers.hubRef(id))
+        }
+        val layers = AgoraLayers("dfquad", service, mirrors, consensusMembers = listOf("wlo", "jnb", "woe"))
+        val e = DeliberationEngine(
+            layers,
+            FakeJudge(plausibility = { if (it == "Q?") 0.7 else 0.9 }, strength = { if (it.contains("support")) 0.9 else 0.3 }),
+            listOf(FakeProposer("claude")),
+            DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 0),
+        ).also { engines += it }
+        val root = e.ask("Q?")
+        e.idle()
+        awaitUntil("every layer has propagated the root") {
+            e.snapshot().node(root).credences.let { c -> c.keys == setOf("dfquad") + ids && c.values.all { it != 0.5 } }
+        }
+        awaitUntil("the layers have settled on the root") {
+            val n = e.snapshot().node(root)
+            // mlp is additive: 2 x (0.9 x 0.9) support vs 2 x (0.3 x 0.9) attack from base 0.7
+            val z = kotlin.math.ln(0.7 / 0.3) + 2 * 0.81 - 2 * 0.27
+            kotlin.math.abs(n.credences.getValue("mlp") - 1 / (1 + kotlin.math.exp(-z))) < 1e-9
+        }
+        val n = e.snapshot().node(root)
+        assertEquals(n.credences.getValue("dfquad"), n.credence)
+        assertEquals(Consensus.of(n.credences, listOf("wlo", "jnb", "woe")), n.consensus, 1e-12)
+        assertEquals(n.credences.values.min(), n.spreadLow)
+        assertEquals(n.credences.values.max(), n.spreadHigh)
+        assertTrue(n.spreadHigh > n.spreadLow, "the semantics disagree on this tree: $n")
+        e.snapshot().nodes.forEach { assertEquals(setOf("dfquad") + ids, it.credences.keys) }
+    }
+
+    @Test
+    fun `a new engine over the same structure and metadata rebuilds the trees and resumes active claims`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-restore").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val store = InMemoryMetaStore()
+        val gate = CountDownLatch(1)
+        val blocked = CountDownLatch(1)
+        fun proposer(id: String, gated: Boolean) = FakeProposer(id) { ctx, side, _ ->
+            when {
+                ctx.path.isEmpty() -> listOf("$id-${side.name}")
+                ctx.claim == "claude-SUPPORT" && gated -> {
+                    blocked.countDown()
+                    gate.await(20, TimeUnit.SECONDS)
+                    emptyList()
+                }
+                else -> emptyList()
+            }
+        }
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0)
+        val judge = FakeJudge(
+            strength = { if (it == "claude-SUPPORT") 0.9 else 0.8 },
+            triage = { _, cands -> cands.map { if (it.text == "codex-ATTACK") Triage(TriageAction.UNDERCUT, 0) else Triage(TriageAction.ADD) } },
+        )
+        val first = AgoraService(host, registry, structureLog = log, hubRef = AgoraLayers.hubRef("first"))
+        // e1 writes to a store of its own; the test copies it at the "kill" instant and leaves e1
+        // blocked, standing in for the killed process.
+        val store1 = InMemoryMetaStore()
+        val e1 = DeliberationEngine(AgoraLayers("dfquad", first), judge,
+            listOf(proposer("claude", gated = true), proposer("codex", gated = true)), config, store = store1)
+            .also { engines += it }
+        val root = e1.ask("Q?")
+        assertTrue(blocked.await(20, TimeUnit.SECONDS))
+        awaitUntil("the other depth-1 claims settle") {
+            e1.snapshot().claims().count { it.status !in setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING) } >= 4
+        }
+        e1.persistNow()
+        val before = e1.snapshot()
+        store1.load().forEach { (k, v) -> store.put(k, v) }
+
+        val scheduler2 = VirtualThreadScheduler("deliberate-test-2")
+        try {
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val second = AgoraService(host2, registry2, structureLog = log)
+            val e2 = DeliberationEngine(AgoraLayers("dfquad", second), judge,
+                listOf(proposer("claude", gated = false), proposer("codex", gated = false)), config, store = store)
+                .also { engines += it }
+            val after = e2.snapshot()
+            fun key(n: NodeDto) = listOf(n.ref, n.kind, n.text, n.depth, n.proposer, n.source, n.target, n.polarity, n.strength,
+                n.plausibility, n.reach, n.contribution, n.undercuts, n.triage, n.rounds)
+            assertEquals(before.nodes.map(::key), after.nodes.map(::key))
+            assertEquals(before.questions.map { it.root to it.text }, after.questions.map { it.root to it.text })
+            val active = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
+            before.claims().forEach { b ->
+                val a = after.claim(b.ref)
+                if (b.status in active) assertTrue(a.status in active, "$b -> $a") else assertEquals(b.status, a.status)
+            }
+            val resumed = before.claims().single { it.text == "claude-SUPPORT" }
+            assertTrue(resumed.status in active)
+            e2.idle()
+            val done = e2.snapshot()
+            assertEquals(Status.ROUND_LIMIT, done.claim(resumed.ref).status)
+            assertEquals(1, done.claim(resumed.ref).rounds)
+            assertEquals(root.id.toString(), done.questions.single().root)
+            // The undercutter was rebuilt as one.
+            val u = done.claims().single { it.text == "codex-ATTACK" }
+            assertEquals(done.edges().single { it.source == done.claims().single { c -> c.text == "claude-SUPPORT" }.ref }.ref, u.undercuts)
+        } finally {
+            gate.countDown()
+            scheduler2.shutdown()
+        }
+    }
+
+    @Test
+    fun `metadata write-behind flushes on close and a quiet restart rewrites nothing`() {
+        val store = RecordingMetaStore()
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0)
+        val first = DeliberationEngine(
+            AgoraLayers("dfquad", service), FakeJudge(), listOf(FakeProposer("claude")), config,
+            store = store, persistEveryMs = 60_000,
+        ).also { engines += it }
+        first.ask("Durable?")
+        first.idle()
+        // The periodic writer cannot have run; close() must flush the question
+        // and its root record before interrupting the worker.
+        first.close()
+        val saved = store.load()
+        assertTrue(saved.keys.any { it.startsWith("q:") }, saved.keys.toString())
+        assertTrue(saved.keys.any { it.startsWith("c:") }, saved.keys.toString())
+
+        val writesBeforeRestart = store.writes.get()
+        val second = DeliberationEngine(
+            AgoraLayers("dfquad", service), FakeJudge(), listOf(FakeProposer("claude")), config,
+            store = store, persistEveryMs = 60_000,
+        ).also { engines += it }
+        second.persistNow()
+        assertEquals(writesBeforeRestart, store.writes.get(), "unchanged restored records must not be appended again")
+    }
+
+    @Test
+    fun `restart rebuilds missing metadata, omits an unplaced claim, and does not attach a duplicate`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-torn-restore").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val root = service.createClaim("Q?")
+        val placed = service.createClaim("P")
+        service.createEdge(placed, root, Polarity.SUPPORT)
+        val orphan = service.createClaim("orphan") // crash before its placing edge was written
+        val store = RecordingMetaStore(mapOf("q:${root.id}" to "Q?")) // neither claim record reached the journal
+
+        val scheduler2 = VirtualThreadScheduler("deliberate-torn-restore-2")
+        try {
+            // Copy the existing primary structure into the log in creation order.
+            val registryLog = LocationRegistry()
+            val schedulerLog = VirtualThreadScheduler("deliberate-torn-restore-log")
+            try {
+                val logService = AgoraService(ManagedHost(scheduler = schedulerLog, registry = registryLog), registryLog, structureLog = log)
+                val loggedRoot = logService.createClaim("Q?", root)
+                val loggedPlaced = logService.createClaim("P", placed)
+                logService.createEdge(loggedPlaced, loggedRoot, Polarity.SUPPORT)
+                logService.createClaim("orphan", orphan)
+            } finally {
+                schedulerLog.shutdown()
+            }
+
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2)
+            val restoredService = AgoraService(host2, registry2, structureLog = log)
+            val proposer = FakeProposer("claude") { ctx, side, _ ->
+                if (ctx.claim == "Q?" && side == Polarity.SUPPORT) listOf("P") else emptyList()
+            }
+            val restored = DeliberationEngine(
+                AgoraLayers("dfquad", restoredService), FakeJudge(), listOf(proposer),
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0),
+                store = store,
+            ).also { engines += it }
+            restored.idle()
+            val graph = restored.snapshot()
+            assertEquals(listOf("Q?", "P"), graph.claims().map { it.text })
+            assertEquals(1, graph.edges().size)
+            assertEquals(1, graph.node(root).duplicatesDropped)
+            assertTrue(graph.nodes.none { it.ref == orphan.id.toString() })
+            assertEquals(Status.DEPTH_LIMIT, graph.node(placed).status)
+        } finally {
+            scheduler2.shutdown()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `reconcile completes a semantics layer whose structure log lost its tail`() {
+        val root = service.createClaim("Q?")
+        val child = service.createClaim("P")
+        val edge = service.createEdge(child, root, Polarity.SUPPORT)
+        val mirror = AgoraService(host, registry, semantics = SemanticsCatalog.of("wlo"), hubRef = AgoraLayers.hubRef("repair-wlo"))
+        val layers = AgoraLayers("dfquad", service, mapOf("wlo" to mirror))
+
+        layers.reconcile(mapOf(root to 0.6, child to 0.7, edge to 0.8))
+
+        for (ref in listOf(root, child, edge)) {
+            assertNotNull(mirror.nodeInfo(layers.refIn("wlo", ref)), "missing mirror node for $ref")
+        }
+        awaitUntil("re-applied stances propagate in the repaired layer") {
+            layers.credences(root).getValue("wlo") != 0.5 && layers.credences(child).getValue("wlo") != 0.5
+        }
     }
 }

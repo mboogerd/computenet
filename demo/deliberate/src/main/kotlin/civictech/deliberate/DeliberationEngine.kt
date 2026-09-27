@@ -3,42 +3,67 @@ package civictech.deliberate
 import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.time.Duration
 
 /**
- * Grows one deliberation tree per question (SPEC §3–§5) on top of an
- * [AgoraService]: proposers generate arguments, the [judge] steers the
- * exploration and supplies the `jev` stances, agora propagates credence.
+ * Grows one deliberation tree per question (SPEC §3–§5) on top of
+ * [AgoraLayers] (one agora graph per semantics): proposers generate
+ * arguments, the [judge] steers the exploration and supplies the `jev`
+ * stances, agora propagates credence.
  *
  * Threading: claims are expanded by `config.workers` threads pulling from one
  * priority queue (SPEC §3 "Exploration order"). One queue task runs one round:
  * a task's priority is the claim's contribution (reach × relevance × quality,
  * judged by Jev when the argument was attached; the root is 1) times
  * `roundDecay` per round the claim already ran, so a claim with rounds left
- * re-enters the queue behind stronger fresh work. An argument enters the queue
- * as soon as its attach-time assessment completes. Each round fans its proposer
- * calls and the assessments of its new arguments out on a separate call executor. The
- * app-wide bound on concurrent CLI processes (EXP-07) is not the engine's: it
- * is the one [ProcessGate] the CLI proposers share. All engine metadata sits
- * behind [lock], held only for short reads/writes and never across a
- * Judge/Proposer call. Agora mutations go through [serviceLock], preserving
- * the service's single-writer mutation model while worker threads expand.
+ * re-enters the queue behind stronger fresh work. Within a round the
+ * proposers take turns (EXP-02); a turn fans its per-side calls out on a
+ * separate call executor, and so does the assessment of the round's new
+ * arguments, after which each joins the queue. The app-wide bound on
+ * concurrent CLI processes (EXP-07) is not the engine's: it is the one
+ * [ProcessGate] the CLI proposers share. All engine metadata sits behind
+ * [lock], held only for short reads/writes and never across a Judge/Proposer
+ * call. Agora mutations go through [serviceLock], preserving the service's
+ * single-writer mutation model while worker threads expand.
+ *
+ * Durability (SPEC §11): with a [store], every claim's metadata is written to
+ * it as one record per claim (only records that changed, every
+ * [persistEveryMs] and on [close]); a new engine over a [store] that holds
+ * records rebuilds its trees from the agora structure plus those records
+ * and re-queues whatever was still active ([restore]).
  */
 class DeliberationEngine(
-    private val service: AgoraService,
+    private val service: AgoraLayers,
     private val judge: Judge,
     private val proposers: List<Proposer>,
     private val config: Config = Config(),
     /** EXP-03 MERGE; without one, a MERGE verdict is handled as DUPLICATE. */
     private val merger: Merger? = null,
+    private val store: MetaStore? = null,
+    private val persistEveryMs: Long = 100,
     private val onChange: () -> Unit = {},
 ) : AutoCloseable {
+
+    /** One agora graph under agora's default semantics (DF-QuAD), no durability. */
+    constructor(
+        service: AgoraService,
+        judge: Judge,
+        proposers: List<Proposer>,
+        config: Config = Config(),
+        merger: Merger? = null,
+        onChange: () -> Unit = {},
+    ) : this(AgoraLayers(SemanticsCatalog.DEFAULT_PRIMARY, service), judge, proposers, config, merger, null, 100, onChange)
 
     /** Knobs of SPEC §3; the Jev thresholds' defaults come from `CALIBRATION.md` (SPEC §10). */
     data class Config(
@@ -55,7 +80,7 @@ class DeliberationEngine(
         /** SPEC §3 "Exploration order": a claim's next round is queued at contribution × roundDecay^(rounds run). */
         val roundDecay: Double = 0.5,
         val maxDepth: Int = 3,
-        val maxClaims: Int = 60,
+        val maxClaims: Int = 180,
         val workers: Int = 8,
     ) {
         init {
@@ -67,7 +92,8 @@ class DeliberationEngine(
 
         companion object {
             const val DEFAULT_SATURATION = 0.22
-            const val DEFAULT_MIN_INFLUENCE = 0.35
+            /** Iteration 4: 0.35 × the median canonical-form factor now folded into quality (CALIBRATION.md). */
+            const val DEFAULT_MIN_INFLUENCE = 0.15
             /**
              * EXP-05: reach assumes this edge strength when the CRED-02 judgment
              * failed — middling, so one failure neither prunes nor frees a subtree.
@@ -83,13 +109,17 @@ class DeliberationEngine(
     private class Claim(
         val ref: CellRef,
         val root: CellRef,
+        /** The claim this one argues about: its edge's target, or for an undercutter the undercut edge's target. */
         val parent: Claim?,
+        /** The polarity of the edge attaching it (ATTACK for an undercutter). */
         val side: Side?,
         /** EXP-03 REPLACE may swap it while the claim is still unexplored (agora's text is immutable). */
         var text: String,
         val depth: Int,
         var proposer: String,
         var roundLimit: Int,
+        /** EXP-03 UNDERCUT: the argument whose link to [parent] this claim attacks; null for an ordinary argument. */
+        val undercuts: Claim? = null,
     ) {
         var status = Status.QUEUED
         var override = Override.AUTO
@@ -109,8 +139,9 @@ class DeliberationEngine(
         /** EXP-03 MERGE rewrote this argument together with an overlapping one. */
         var merged = false
         var error: String? = null
+        /** EXP-04: the sides Jev last judged saturated (the cap and the balance rule apply on top, see saturatedSides). */
         val saturated = mutableSetOf<Side>()
-        /** CTL-02: the next round ignores saturation (a forced re-run). */
+        /** CTL-02: the next round is forced (saturation, depth, contribution and budget ignored). */
         var forceRound = false
         var roundInFlight = false
         /** EXPLORING with rounds left; its next round is queued. */
@@ -123,7 +154,10 @@ class DeliberationEngine(
         var rewriteWasQueued = false
         var anyCallSucceeded = false
         var edge: Edge? = null
+        /** Its pro and con arguments (never its undercutters). */
         val children = mutableListOf<Claim>()
+        /** EXP-03 UNDERCUT: claims attacking this argument's edge. */
+        val undercutters = mutableListOf<Claim>()
     }
 
     private class Edge(val ref: CellRef, val root: CellRef, val source: CellRef, val target: CellRef, val side: Side) {
@@ -156,6 +190,12 @@ class DeliberationEngine(
         Thread.ofPlatform().daemon().name("deliberate-worker-$i").start(::work)
     }
 
+    /** What [persistNow] last wrote, by key. */
+    private val persisted = HashMap<String, String>()
+    private val persister: ScheduledExecutorService? = store?.let {
+        Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "deliberate-persist").apply { isDaemon = true } }
+    }
+
     private companion object {
         val FINISHED = setOf(
             Status.SATURATED, Status.ROUND_LIMIT, Status.PRUNED, Status.DEPTH_LIMIT,
@@ -165,6 +205,27 @@ class DeliberationEngine(
         val SIDES = listOf(Polarity.SUPPORT, Polarity.ATTACK)
         val Side.opposite get() = if (this == Polarity.SUPPORT) Polarity.ATTACK else Polarity.SUPPORT
         fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?', ';')
+        val RECORDS = Json { encodeDefaults = false; ignoreUnknownKeys = true }
+        const val QUESTION_KEY = "q:"
+        const val CLAIM_KEY = "c:"
+    }
+
+    init {
+        if (store != null) {
+            val restored = store.load()
+            // DUR-02 writes only changed records. Seed the write-behind cache
+            // from the fold we just restored, so a quiet restart does not
+            // append every question and claim to the host journal again.
+            persisted.putAll(restored)
+            restore(restored)
+            persister!!.scheduleWithFixedDelay({
+                try {
+                    persistNow()
+                } catch (e: Exception) {
+                    System.err.println("deliberate: persisting metadata failed: $e")
+                }
+            }, persistEveryMs, persistEveryMs, TimeUnit.MILLISECONDS)
+        }
     }
 
     // ---------------------------------------------------------------- API
@@ -208,28 +269,29 @@ class DeliberationEngine(
                     c.status = Status.QUEUED
                     listOf(c)
                 } else emptyList()
-                // CTL-02: a finished claim runs again with one extra round, saturation ignored for it.
+                // CTL-02: the claim's next round is forced — whatever its status, budget included.
                 Override.EXPAND -> when {
-                    c.status in FINISHED && c.status != Status.BUDGET -> {
+                    c.status in FINISHED -> {
                         c.roundLimit = maxOf(c.roundLimit, c.rounds + 1)
                         c.forceRound = true
                         c.status = Status.QUEUED
                         listOf(c)
                     }
                     c.status == Status.QUEUED -> {
+                        c.roundLimit = maxOf(c.roundLimit, c.rounds + 1)
+                        c.forceRound = true
                         // Jump the queue: the stale task finds the claim taken and falls through.
                         enqueueAgain = c
                         emptyList()
                     }
-                    c.status == Status.JUDGING || c.status == Status.EXPLORING -> {
-                        // If a round is already in flight, the override belongs to the next round;
-                        // do not let completion of this one consume the human's request.
+                    else -> {
+                        // JUDGING or EXPLORING. If a round is already in flight, the override belongs
+                        // to the next round; do not let completion of this one consume the request.
                         c.roundLimit = maxOf(c.roundLimit, c.rounds + if (c.roundInFlight) 2 else 1)
                         c.forceRound = true
                         if (c.waiting) enqueueAgain = c
                         emptyList()
                     }
-                    else -> emptyList()
                 }
             }
         }
@@ -242,9 +304,15 @@ class DeliberationEngine(
         val graph = service.graph()
         return synchronized(lock) {
             val nodes = graph.mapNotNull { n ->
+                val layers = service.credences(n.ref)
+                val credence = layers[service.headlineId] ?: n.credence
+                val consensus = Consensus.of(layers, service.consensusMembers)
+                val low = layers.values.minOrNull() ?: credence
+                val high = layers.values.maxOrNull() ?: credence
                 claims[n.ref]?.let { c ->
                     NodeDto(
-                        ref = c.ref.id.toString(), kind = "CLAIM", credence = n.credence, root = c.root.id.toString(),
+                        ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
+                        credences = layers, consensus = consensus, spreadLow = low, spreadHigh = high,
                         text = c.text, depth = c.depth, status = c.status, override = c.override,
                         proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
                         quality = c.quality, contribution = c.contribution,
@@ -253,10 +321,12 @@ class DeliberationEngine(
                         alsoProposedBy = c.alsoProposedBy.toList().ifEmpty { null },
                         merged = c.merged.takeIf { it },
                         triage = c.triage.mapKeys { it.key.name }.ifEmpty { null },
+                        undercuts = c.undercuts?.edge?.ref?.id?.toString(),
                     )
                 } ?: edges[n.ref]?.let { e ->
                     NodeDto(
-                        ref = e.ref.id.toString(), kind = "EDGE", credence = n.credence, root = e.root.id.toString(),
+                        ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
+                        credences = layers, consensus = consensus, spreadLow = low, spreadHigh = high,
                         polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
                         strength = e.strength,
                     )
@@ -266,7 +336,7 @@ class DeliberationEngine(
                 val tree = claims.values.filter { it.root == root }
                 QuestionDto(root.id.toString(), text, tree.size, tree.any { it.status in ACTIVE })
             }
-            GraphDto(qs, nodes)
+            GraphDto(qs, nodes, service.consensusMembers.filter { it in service.ids }.ifEmpty { service.ids })
         }
     }
 
@@ -283,8 +353,37 @@ class DeliberationEngine(
         return true
     }
 
+    /** SPEC §11: writes every claim record and question that changed since the last call to the [store]. */
+    @Synchronized
+    fun persistNow() {
+        val s = store ?: return
+        val current = synchronized(lock) {
+            questions.map { (ref, text) -> QUESTION_KEY + ref.id to text } +
+                claims.values.map { c -> CLAIM_KEY + c.ref.id to RECORDS.encodeToString(ClaimRecord.serializer(), recordOf(c)) }
+        }
+        for ((key, value) in current) {
+            if (persisted[key] != value) {
+                s.put(key, value)
+                persisted[key] = value
+            }
+        }
+    }
+
+    /**
+     * Stops exploring. The metadata is persisted once more *before* the workers
+     * are interrupted, so a close is no different from a kill at that instant:
+     * a round cut short is re-run by the next engine over the same store.
+     */
     override fun close() {
         closed = true
+        // Never interrupt a write in progress: an interrupted journal channel closes for good.
+        persister?.shutdown()
+        persister?.awaitTermination(5, TimeUnit.SECONDS)
+        try {
+            persistNow()
+        } catch (e: Exception) {
+            System.err.println("deliberate: final metadata persist failed: $e")
+        }
         workerThreads.forEach(Thread::interrupt)
         calls.shutdownNow()
     }
@@ -333,14 +432,14 @@ class DeliberationEngine(
     private fun schedule(c: Claim) {
         val gate = synchronized(lock) {
             if (c.status != Status.QUEUED) return
-            if (c.parent == null || c.override == Override.EXPAND) null
+            if (c.parent == null || c.override == Override.EXPAND || c.forceRound) null
             else when {
                 c.depth > config.maxDepth -> Status.DEPTH_LIMIT
                 contributionOf(c) < config.minInfluence -> Status.PRUNED
                 else -> null
             }
         }
-        if (gate == null) enqueue(c) else finish(c, gate).forEach(::schedule)
+        if (gate == null) enqueue(c) else finish(c, gate)
     }
 
     private fun done() {
@@ -366,23 +465,23 @@ class DeliberationEngine(
             }
         } ?: return
         if (!continuing) onChange()
-        val children = try {
+        val finished = try {
             if (continuing) step(c) else start(c)
         } catch (t: Throwable) {
             // EXP-08: never let an exception kill a worker or leave a claim stuck.
             finish(c, Status.FAILED, error = t.toString())
+            true
         }
-        if (children == null) {
+        if (!finished) {
             // SPEC §3 "Exploration order": rounds left, so back into the queue at the decayed priority.
             enqueue(c)
             return
         }
-        children.forEach(::schedule)
         // An EXPAND racing the terminal transition either queued itself in
         // setOverride(), or left forceRound behind while this invocation was
         // still active. The latter must not be lost at the finish boundary.
         val forcedRequeue = synchronized(lock) {
-            (c.override == Override.EXPAND && c.forceRound && c.status in FINISHED && c.status != Status.BUDGET)
+            (c.override == Override.EXPAND && c.forceRound && c.status in FINISHED)
                 .also { if (it) c.status = Status.QUEUED }
         }
         if (forcedRequeue) {
@@ -393,38 +492,38 @@ class DeliberationEngine(
 
     /**
      * Judges plausibility if it is still missing (the root, or a failed
-     * assessment), applies the budget gate and runs the first round. Returns
-     * the children to queue once the claim finished, or null when it has
-     * rounds left.
+     * assessment), applies the budget gate (not to a forced round, CTL-02) and
+     * runs the first round. Returns true once the claim finished, false when
+     * it has rounds left.
      */
-    private fun start(c: Claim): List<Claim>? {
+    private fun start(c: Claim): Boolean {
         // CRED-01
         if (synchronized(lock) { c.plausibility } == null) {
             val (path, text) = synchronized(lock) { pathOf(c) to c.text }
             attempt(c, "plausibility") {
                 val p = judge.plausibility(questionOf(c), path, text)
-                synchronized(serviceLock) { service.setStance(c.ref, "jev", p) }
+                synchronized(serviceLock) { service.setStance(c.ref, AgoraLayers.JEV, p) }
                 p
             }?.let { p ->
                 update { c.plausibility = p }
             }
         }
         // EXP-06 after EXP-05 (schedule()): BUDGET means "would have been expanded".
-        if (budgetExhausted(c)) return finish(c, Status.BUDGET)
+        if (!synchronized(lock) { c.forceRound } && budgetExhausted(c)) return finish(c, Status.BUDGET)
         update { c.status = Status.EXPLORING }
         return step(c)
     }
 
     /**
-     * Runs one round of [c] if it has one left. Returns the children to
-     * queue once the claim finished, or null when it has rounds left (the
-     * caller re-queues it, marked [Claim.waiting]).
+     * Runs one round of [c] if it has one left. Returns true once the claim
+     * finished, false when it has rounds left (the caller re-queues it,
+     * marked [Claim.waiting]).
      */
-    private fun step(c: Claim): List<Claim>? {
+    private fun step(c: Claim): Boolean {
         val (sides, forcedRound, terminal) = synchronized(lock) {
             val forcedRound = c.forceRound
             val nextStatus = terminalStatus(c)
-            val nextSides = if (forcedRound) SIDES else SIDES - c.saturated
+            val nextSides = if (forcedRound) SIDES else SIDES - saturatedSides(c)
             if (nextStatus == null) {
                 if (forcedRound) c.saturated.clear()
                 c.forceRound = false
@@ -439,149 +538,178 @@ class DeliberationEngine(
             synchronized(lock) { c.roundInFlight = false }
         }
         if (outcome != null) return finish(c, outcome)
-        // Finish now if nothing is left, so a done claim releases its children without a queue trip.
+        // Finish now if nothing is left, so a done claim needs no queue trip.
         val next = synchronized(lock) { terminalStatus(c).also { if (it == null) c.waiting = true } }
-        return if (next != null) finish(c, next) else null
+        return if (next != null) finish(c, next) else false
     }
 
     /**
      * Caller holds [lock]. The status that ends [c]'s expansion before its next
-     * round, or null if it gets one. EXP-04: a side at its cap is marked
-     * saturated here too, so a re-queued claim whose side filled up earlier asks
-     * no proposer for it.
+     * round, or null if it gets one. A forced round (CTL-02) ignores the round
+     * limit, saturation and the budget.
      */
     private fun terminalStatus(c: Claim): Status? {
         val forcedRound = c.forceRound
-        if (!forcedRound) SIDES.filter { atCap(c, it) }.forEach { c.saturated += it }
-        val nextSides = if (forcedRound) SIDES else SIDES - c.saturated
+        val nextSides = if (forcedRound) SIDES else SIDES - saturatedSides(c)
         return when {
             c.override == Override.STOP -> Status.STOPPED
             nextSides.isEmpty() -> Status.SATURATED
             !forcedRound && c.rounds >= c.roundLimit -> Status.ROUND_LIMIT
-            treeSize.getValue(c.root) >= config.maxClaims -> Status.BUDGET
+            !forcedRound && treeSize.getValue(c.root) >= config.maxClaims -> Status.BUDGET
             else -> null
         }
     }
 
     /**
-     * One round (EXP-02..05). Returns a terminal status when the round ends
-     * the expansion early (all calls failed, budget), else null. A [forced]
-     * round (CTL-02) ignores saturation, including the per-side cap.
+     * Caller holds [lock]. EXP-04: a side is saturated when it holds its cap,
+     * or when Jev last judged it saturated **and** it holds at least as many
+     * arguments as the other side — a side that is behind is never saturated
+     * by Jev alone.
+     */
+    private fun saturatedSides(c: Claim): Set<Side> = SIDES.filter { side ->
+        atCap(c, side) || (side in c.saturated && countOf(c, side) >= countOf(c, side.opposite))
+    }.toSet()
+
+    /**
+     * One round (EXP-02..05). The proposers take turns in their configured
+     * order; each turn sees the claim's arguments as they stand after the
+     * previous turn's triage, so a later proposer is asked for what is still
+     * missing. Returns a terminal status when the round ends the expansion
+     * early (all calls failed, budget), else null. A [forced] round (CTL-02)
+     * ignores saturation and the budget; its new arguments are bounded by an
+     * allowance of one per-side cap per side instead.
      */
     private fun round(c: Claim, sides: List<Side>, forced: Boolean): Status? {
-        val (ctx, existing) = synchronized(lock) {
-            val pros = c.children.filter { it.side == Polarity.SUPPORT }
-            val cons = c.children.filter { it.side == Polarity.ATTACK }
-            ClaimContext(questions.getValue(c.root), pathOf(c), c.text, pros.map { it.text }, cons.map { it.text }) to
-                (pros + cons)
-        }
-        // EXP-04: never attach beyond the cap within a round. Both sides, since OTHER_SIDE
-        // may move an argument onto a side that was not asked this round.
-        val room = SIDES.associateWith { side ->
-            if (forced) Int.MAX_VALUE else capOf(c) - existing.count { it.side == side }
-        }.toMutableMap()
-        // EXP-02: every proposer × side, concurrently.
-        val futures = sides.flatMap { side ->
-            val ask = minOf(config.argsPerCall, room.getValue(side))
-            proposers.map { p ->
-                Triple(side, p, calls.submit<List<String>> { p.propose(ctx, side, ask).take(ask) })
-            }
-        }
-        var failures = 0
-        val proposals = futures.mapNotNull { (side, p, f) ->
-            try {
-                Triple(side, p.id, f.get())
-            } catch (e: Exception) {
-                failures++
-                val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
-                update { c.error = "${p.id}: $cause" }
-                null
-            }
-        }
-        val allProposersFailed = failures == futures.size && futures.isNotEmpty()
-        val noProposerHasEverSucceeded = synchronized(lock) {
-            if (!allProposersFailed) c.anyCallSucceeded = true
-            !c.anyCallSucceeded
-        }
-
-        // EXP-03 step 1: exact-text duplicates (of an existing argument or of an earlier proposal).
         val counts = sortedMapOf<TriageAction, Int>()
         fun count(a: TriageAction) = counts.merge(a, 1, Int::plus)
         var dropped = 0
-        val byText = HashMap<String, Any>()
-        existing.forEach { byText[normalize(it.text)] = it }
-        val fresh = mutableListOf<Fresh>()
-        for ((side, pid, texts) in proposals) {
-            for (t in texts.map(String::trim).filter(String::isNotEmpty)) {
-                when (val hit = byText[normalize(t)]) {
-                    is Claim -> { mergeProposers(hit, listOf(pid)); dropped++; count(TriageAction.DUPLICATE) }
-                    is Fresh -> { if (pid != hit.proposer && pid !in hit.also) hit.also += pid; dropped++; count(TriageAction.DUPLICATE) }
-                    else -> Fresh(t, side, pid).also { fresh += it; byText[normalize(t)] = it }
-                }
-            }
-        }
-
-        // EXP-03 step 2: one Jev triage request for every remaining candidate of the round.
-        val verdicts = if (fresh.isEmpty()) emptyList() else
-            attempt(c, "triage") { judge.triage(ctx, fresh.map { Candidate(it.text, it.side) }) }
-                ?.takeIf { it.size == fresh.size }
-                ?: fresh.map { Triage(TriageAction.ADD) }
-        val resolved = arrayOfNulls<Claim>(fresh.size)
         val attached = mutableListOf<Claim>()
         val replaced = mutableListOf<Claim>()
         var budgetHit = false
+        var asked = 0
+        var failures = 0
+        // CTL-02: a forced round's own allowance, shared by its turns.
+        val allowance = SIDES.associateWith { capOf(c) }.toMutableMap()
+
         fun add(parent: Claim, side: Side, f: Fresh): Claim? {
             if (budgetHit) return null
-            if (!reserve(c.root)) { budgetHit = true; return null }
+            if (!reserve(c.root, forced)) { budgetHit = true; return null }
             return attach(parent, side, f).also { attached += it }
         }
-        for ((i, f) in fresh.withIndex()) {
-            val v = verdicts[i]
-            val target = v.target?.let { t -> if (t < existing.size) existing.getOrNull(t) else resolved.getOrNull(t - existing.size) }
-            val action = when (v.action) {
-                TriageAction.REPLACE -> when {
-                    target == null -> TriageAction.ADD
-                    replace(target, f) -> TriageAction.REPLACE
-                    else -> TriageAction.DUPLICATE
-                }
-                TriageAction.MERGE -> when {
-                    target == null -> TriageAction.ADD
-                    merge(c, target, f) -> TriageAction.MERGE
-                    else -> TriageAction.DUPLICATE
-                }
-                TriageAction.REFINE -> if (target == null) TriageAction.ADD else TriageAction.REFINE
-                else -> v.action
+
+        fun undercut(target: Claim, f: Fresh): Claim? {
+            if (budgetHit) return null
+            if (!reserve(c.root, forced)) { budgetHit = true; return null }
+            return attachUndercut(target, f).also { attached += it }
+        }
+
+        for (p in proposers) {
+            if (budgetHit) break
+            val (ctx, existing) = synchronized(lock) {
+                val pros = c.children.filter { it.side == Polarity.SUPPORT }
+                val cons = c.children.filter { it.side == Polarity.ATTACK }
+                ClaimContext(questions.getValue(c.root), pathOf(c), c.text, pros.map { it.text }, cons.map { it.text }) to
+                    (pros + cons)
             }
-            count(action)
-            // Attach every survivor that fits the budget and the cap — even if STOP arrived
-            // meanwhile (CTL-03). Survivors past the cap are not attached.
-            when (action) {
-                TriageAction.ADD, TriageAction.OTHER_SIDE -> {
-                    val side = if (action == TriageAction.ADD) f.side else f.side.opposite
-                    if (room.getValue(side) > 0) {
-                        resolved[i] = add(c, side, f)?.also { room[side] = room.getValue(side) - 1 }
+            // EXP-04: never attach beyond the cap within a round. Both sides, since OTHER_SIDE
+            // may move an argument onto a side that was not asked this round.
+            val room: MutableMap<Side, Int> = if (forced) allowance else SIDES.associateWith { side ->
+                capOf(c) - existing.count { it.side == side }
+            }.toMutableMap()
+            val turnSides = sides.filter { room.getValue(it) > 0 }
+            if (turnSides.isEmpty()) continue
+            // EXP-02: this proposer, every side it is asked about concurrently.
+            val futures = turnSides.map { side ->
+                val ask = minOf(config.argsPerCall, room.getValue(side))
+                side to calls.submit<List<String>> { p.propose(ctx, side, ask).take(ask) }
+            }
+            asked += futures.size
+            val proposals = futures.mapNotNull { (side, f) ->
+                try {
+                    side to f.get()
+                } catch (e: Exception) {
+                    failures++
+                    val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
+                    update { c.error = "${p.id}: $cause" }
+                    null
+                }
+            }
+
+            // EXP-03 step 1: exact-text duplicates (of an existing argument or of an earlier proposal).
+            val byText = HashMap<String, Any>()
+            existing.forEach { byText[normalize(it.text)] = it }
+            val fresh = mutableListOf<Fresh>()
+            for ((side, texts) in proposals) {
+                for (t in texts.map(String::trim).filter(String::isNotEmpty)) {
+                    when (val hit = byText[normalize(t)]) {
+                        is Claim -> { mergeProposers(hit, listOf(p.id)); dropped++; count(TriageAction.DUPLICATE) }
+                        is Fresh -> { dropped++; count(TriageAction.DUPLICATE) }
+                        else -> Fresh(t, side, p.id).also { fresh += it; byText[normalize(t)] = it }
                     }
                 }
-                TriageAction.DUPLICATE -> {
-                    dropped++
-                    if (target != null) mergeProposers(target, listOf(f.proposer) + f.also)
-                    resolved[i] = target
-                }
-                TriageAction.REPLACE -> {
-                    replaced += target!!
-                    resolved[i] = target
-                }
-                TriageAction.MERGE -> {
-                    // merge() already rewrote the target
-                    replaced += target!!
-                    resolved[i] = target
-                }
-                TriageAction.REFINE -> {
-                    val fits = synchronized(lock) { forced || target!!.children.count { it.side == Polarity.SUPPORT } < capOf(target) }
-                    resolved[i] = if (fits) add(target!!, Polarity.SUPPORT, f) else target
-                }
-                TriageAction.DROP -> Unit
             }
+            if (fresh.isEmpty()) continue
+
+            // EXP-03 step 2: one Jev triage request for this turn's remaining candidates.
+            val verdicts = attempt(c, "triage") { judge.triage(ctx, fresh.map { Candidate(it.text, it.side) }) }
+                ?.takeIf { it.size == fresh.size }
+                ?: fresh.map { Triage(TriageAction.ADD) }
+            val resolved = arrayOfNulls<Claim>(fresh.size)
+            for ((i, f) in fresh.withIndex()) {
+                val v = verdicts[i]
+                val target = v.target?.let { t -> if (t < existing.size) existing.getOrNull(t) else resolved.getOrNull(t - existing.size) }
+                val action = when (v.action) {
+                    TriageAction.REPLACE -> when {
+                        target == null -> TriageAction.ADD
+                        replace(target, f) -> TriageAction.REPLACE
+                        else -> TriageAction.DUPLICATE
+                    }
+                    TriageAction.MERGE -> when {
+                        target == null -> TriageAction.ADD
+                        merge(c, target, f) -> TriageAction.MERGE
+                        else -> TriageAction.DUPLICATE
+                    }
+                    TriageAction.REFINE -> if (target == null) TriageAction.ADD else TriageAction.REFINE
+                    // Only an argument (a claim with an edge) has a link to undercut.
+                    TriageAction.UNDERCUT -> if (target?.edge == null) TriageAction.ADD else TriageAction.UNDERCUT
+                    else -> v.action
+                }
+                count(action)
+                // Attach every survivor that fits the budget and the cap — even if STOP arrived
+                // meanwhile (CTL-03). Survivors past the cap are not attached.
+                when (action) {
+                    TriageAction.ADD, TriageAction.OTHER_SIDE -> {
+                        val side = if (action == TriageAction.ADD) f.side else f.side.opposite
+                        if (room.getValue(side) > 0) {
+                            resolved[i] = add(c, side, f)?.also { room[side] = room.getValue(side) - 1 }
+                        }
+                    }
+                    TriageAction.DUPLICATE -> {
+                        dropped++
+                        if (target != null) mergeProposers(target, listOf(f.proposer) + f.also)
+                        resolved[i] = target
+                    }
+                    TriageAction.REPLACE, TriageAction.MERGE -> {
+                        // replace()/merge() already rewrote the target
+                        replaced += target!!
+                        resolved[i] = target
+                    }
+                    TriageAction.REFINE -> {
+                        val fits = synchronized(lock) { forced || countOf(target!!, Polarity.SUPPORT) < capOf(target) }
+                        resolved[i] = if (fits) add(target!!, Polarity.SUPPORT, f) else target
+                    }
+                    TriageAction.UNDERCUT -> {
+                        val fits = synchronized(lock) { forced || target!!.undercutters.size < capOf(target) }
+                        resolved[i] = if (fits) undercut(target!!, f) else target
+                    }
+                    TriageAction.DROP -> Unit
+                }
+            }
+        }
+        val allProposersFailed = failures == asked && asked > 0
+        val noProposerHasEverSucceeded = synchronized(lock) {
+            if (!allProposersFailed && asked > 0) c.anyCallSucceeded = true
+            !c.anyCallSucceeded
         }
         update {
             c.rounds++
@@ -590,6 +718,8 @@ class DeliberationEngine(
         }
 
         // CRED-01, CRED-02, EXP-05: every new (or reworded: REPLACE, MERGE) argument is assessed at once.
+        // A rewrite may hit an argument attached in an earlier turn of this round, so assessment waits
+        // for the last turn: an assessment of superseded wording must never land.
         val rewritten = replaced.distinct()
         val ready = (rewritten + attached).distinct()
         try {
@@ -612,17 +742,15 @@ class DeliberationEngine(
             }
         }
 
-        // EXP-04: saturation per side (a forced round's sides are re-judged too).
+        // EXP-04: saturation per side, judged once every proposer had its turn
+        // (a forced round's sides are re-judged too). A side at its cap needs no Jev call.
         val after = context(c)
         for (side in sides) {
-            if (synchronized(lock) { atCap(c, side) }) {
-                update { c.saturated += side } // the cap decides; no Jev call needed
-                continue
-            }
+            if (synchronized(lock) { atCap(c, side) }) continue
             val p = attempt(c, "saturation") { judge.saturation(after, side) } ?: continue
             update {
                 if (side == Polarity.SUPPORT) c.proSaturation = p else c.conSaturation = p
-                if (p >= config.saturation) c.saturated += side
+                if (p >= config.saturation) c.saturated += side else c.saturated -= side
             }
         }
         return when {
@@ -638,9 +766,12 @@ class DeliberationEngine(
      * argument refining another one attached in the same round sees its reach.
      */
     private fun assess(nodes: List<Claim>) {
-        val question = nodes.firstOrNull()?.let(::questionOf) ?: return
         val futures = nodes.map { n ->
-            val (path, text) = synchronized(lock) { pathOf(n) to n.text }
+            val (question, path, text) = synchronized(lock) {
+                // EXP-03 UNDERCUT: an undercutter is judged against the link it attacks.
+                val p = pathOf(n).let { path -> n.undercuts?.let { path + linkOf(it) } ?: path }
+                Triple(questions.getValue(n.root), p, n.text)
+            }
             n to calls.submit<Assessment?> { attempt(n, "assess") { judge.assess(question, path, text, n.side!!) } }
         }
         for ((n, f) in futures) {
@@ -651,8 +782,8 @@ class DeliberationEngine(
             }
             val edge = synchronized(lock) { n.edge!! }
             if (a != null) synchronized(serviceLock) {
-                service.setStance(n.ref, "jev", a.plausibility)
-                service.setStance(edge.ref, "jev", a.strength)
+                service.setStance(n.ref, AgoraLayers.JEV, a.plausibility)
+                service.setStance(edge.ref, AgoraLayers.JEV, a.strength)
             }
             update {
                 if (a != null) {
@@ -661,13 +792,29 @@ class DeliberationEngine(
                     n.quality = a.quality
                     edge.strength = a.strength
                 }
-                // EXP-05: reach decays by the edge strength; a failed judgment assumes
-                // FALLBACK_STRENGTH and relevance/quality fall back to 1 (the upper bound).
-                val reach = (n.parent!!.reach ?: 1.0) * (edge.strength ?: Config.FALLBACK_STRENGTH).coerceIn(0.0, 1.0)
+                val reach = reachOf(n)
                 n.reach = reach
                 n.contribution = reach * (n.relevance ?: 1.0) * (n.quality ?: 1.0)
             }
         }
+    }
+
+    /**
+     * Caller holds [lock]. EXP-05: reach decays by the edge strength; a failed
+     * judgment assumes FALLBACK_STRENGTH. An undercutter's reach also decays by
+     * the strength of the link it attacks: reach(parent) × strength(its edge)
+     * × strength(the undercut edge).
+     */
+    private fun reachOf(n: Claim): Double {
+        fun strength(e: Edge?) = (e?.strength ?: Config.FALLBACK_STRENGTH).coerceIn(0.0, 1.0)
+        val base = (n.parent!!.reach ?: 1.0) * strength(n.edge)
+        return n.undercuts?.let { base * strength(it.edge) } ?: base
+    }
+
+    /** Caller holds [lock]. The statement an undercutter of [arg] denies: that [arg] bears on its parent. */
+    private fun linkOf(arg: Claim): String {
+        val direction = if (arg.side == Polarity.SUPPORT) "is a reason to accept" else "is a reason to reject"
+        return "The argument \"${arg.text}\" $direction the claim \"${arg.parent!!.text}\"."
     }
 
     private fun attach(parent: Claim, side: Side, f: Fresh): Claim {
@@ -687,8 +834,32 @@ class DeliberationEngine(
         return child
     }
 
-    /** Caller holds [lock]. EXP-03 REPLACE only rewords an argument nobody has explored yet. */
-    private fun replaceable(t: Claim) = t.parent != null && t.status == Status.QUEUED && t.children.isEmpty() && t.rounds == 0
+    /**
+     * EXP-03 UNDERCUT: [f] attacks the *edge* of argument [target], so it lowers
+     * the edge's credence and with it the argument's influence. For paths and
+     * context it is a claim about [target]'s parent, at [target]'s depth.
+     */
+    private fun attachUndercut(target: Claim, f: Fresh): Claim {
+        val (targetEdge, parent) = synchronized(lock) { target.edge!! to target.parent!! }
+        val (childRef, edgeRef) = synchronized(serviceLock) {
+            val child = service.createClaim(f.text)
+            child to service.createEdge(child, targetEdge.ref, Polarity.ATTACK)
+        }
+        val child = Claim(childRef, parent.root, parent, Polarity.ATTACK, f.text, parent.depth + 1, f.proposer, config.maxRounds, undercuts = target)
+        val edge = Edge(edgeRef, parent.root, childRef, targetEdge.ref, Polarity.ATTACK)
+        update {
+            child.edge = edge
+            child.alsoProposedBy += f.also
+            claims[childRef] = child
+            edges[edgeRef] = edge
+            target.undercutters += child
+        }
+        return child
+    }
+
+    /** Caller holds [lock]. EXP-03 REPLACE only rewords an argument nobody has explored or undercut yet. */
+    private fun replaceable(t: Claim) = t.parent != null && t.status == Status.QUEUED &&
+        t.children.isEmpty() && t.undercutters.isEmpty() && t.rounds == 0
 
     /** Reserve an unexplored queued target and invalidate any task carrying its old priority/text. */
     private fun beginRewrite(t: Claim): RewriteReservation? = update {
@@ -765,13 +936,13 @@ class DeliberationEngine(
             n.relevance = null
             n.quality = null
             edge.strength = null
-            val reach = (n.parent!!.reach ?: 1.0) * Config.FALLBACK_STRENGTH
+            val reach = reachOf(n)
             n.reach = reach
             n.contribution = reach
         }
         synchronized(serviceLock) {
-            service.setStance(n.ref, "jev", null)
-            service.setStance(edge.ref, "jev", null)
+            service.setStance(n.ref, AgoraLayers.JEV, null)
+            service.setStance(edge.ref, AgoraLayers.JEV, null)
         }
     }
 
@@ -781,13 +952,13 @@ class DeliberationEngine(
     }
 
     /**
-     * Ends [c]'s expansion with [status]. Children have already joined the
-     * queue after their attach-time assessments.
+     * Ends [c]'s expansion with [status] and returns true. Its arguments have
+     * already joined the queue after their attach-time assessments.
      * EXP-06: a claim that already ran a round and then meets the budget ends
      * ROUND_LIMIT with error [Config.BUDGET_EXHAUSTED]; BUDGET is kept for a
      * claim that would have expanded but never did.
      */
-    private fun finish(c: Claim, status: Status, error: String? = null): List<Claim> = update {
+    private fun finish(c: Claim, status: Status, error: String? = null): Boolean = update {
         c.waiting = false
         // A STOP that raced the last round boundary still wins (CTL-03).
         c.status = when {
@@ -796,7 +967,146 @@ class DeliberationEngine(
             else -> status
         }
         if (error != null) c.error = error
-        emptyList()
+        true
+    }
+
+    // ---------------------------------------------------------------- durability (SPEC §11)
+
+    /** One claim's engine metadata as the [store] keeps it. Agora keeps its text too, but not rewrites. */
+    @Serializable
+    private data class ClaimRecord(
+        val text: String,
+        val proposer: String,
+        val status: Status,
+        val override: Override = Override.AUTO,
+        val roundLimit: Int,
+        val rounds: Int = 0,
+        val forceRound: Boolean = false,
+        val plausibility: Double? = null,
+        val relevance: Double? = null,
+        val quality: Double? = null,
+        val reach: Double? = null,
+        val contribution: Double? = null,
+        val proSaturation: Double? = null,
+        val conSaturation: Double? = null,
+        val saturated: List<Side> = emptyList(),
+        val duplicatesDropped: Int = 0,
+        val triage: Map<String, Int> = emptyMap(),
+        val alsoProposedBy: List<String> = emptyList(),
+        val merged: Boolean = false,
+        val error: String? = null,
+        val anyCallSucceeded: Boolean = false,
+        val edgeStrength: Double? = null,
+    )
+
+    /** Caller holds [lock]. */
+    private fun recordOf(c: Claim) = ClaimRecord(
+        text = c.text, proposer = c.proposer, status = c.status, override = c.override,
+        roundLimit = c.roundLimit, rounds = c.rounds, forceRound = c.forceRound,
+        plausibility = c.plausibility, relevance = c.relevance, quality = c.quality,
+        reach = c.reach, contribution = c.contribution,
+        proSaturation = c.proSaturation, conSaturation = c.conSaturation, saturated = c.saturated.toList(),
+        duplicatesDropped = c.duplicatesDropped, triage = c.triage.mapKeys { it.key.name },
+        alsoProposedBy = c.alsoProposedBy.toList(), merged = c.merged, error = c.error,
+        anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
+    )
+
+    /**
+     * SPEC §11: rebuilds every tree from the agora structure (claims and the
+     * edges linking them, in creation order) and the [meta] records, then
+     * re-queues every claim that was still active — an interrupted round
+     * simply runs again. A claim whose record never reached the store is
+     * rebuilt from agora alone and queued afresh; a claim agora holds without
+     * the edge that would place it in a tree (the process died between the
+     * two writes) is left out. Arguments that were never assessed are
+     * assessed again before they are queued.
+     */
+    private fun restore(meta: Map<String, String>) {
+        val roots = meta.filterKeys { it.startsWith(QUESTION_KEY) }
+            .mapKeys { CellRef(UUID.fromString(it.key.removePrefix(QUESTION_KEY))) }
+        val records = meta.filterKeys { it.startsWith(CLAIM_KEY) }.entries.associate { (k, v) ->
+            CellRef(UUID.fromString(k.removePrefix(CLAIM_KEY))) to RECORDS.decodeFromString(ClaimRecord.serializer(), v)
+        }
+        val graph = service.graph()
+        val attaching = graph.filter { it.info.kind == AgoraService.Kind.EDGE }.groupBy { it.info.source }
+        synchronized(lock) {
+            for (n in graph) {
+                if (n.info.kind != AgoraService.Kind.CLAIM) continue
+                val rec = records[n.ref]
+                val claim = roots[n.ref]?.let { question ->
+                    questions[n.ref] = question
+                    Claim(n.ref, n.ref, null, null, rec?.text ?: question, 0, "question", config.maxRounds)
+                } ?: run {
+                    val e = attaching[n.ref]?.firstOrNull() ?: return@run null
+                    val target = e.info.target!!
+                    val undercut = edges[target]?.let { claims[it.source] }
+                    val parent = undercut?.parent ?: claims[target] ?: return@run null
+                    val side = e.info.polarity!!
+                    Claim(
+                        n.ref, parent.root, parent, side, rec?.text ?: n.info.text.orEmpty(), parent.depth + 1,
+                        rec?.proposer ?: "unknown", config.maxRounds, undercut,
+                    ).also { child ->
+                        val edge = Edge(e.ref, parent.root, n.ref, target, side)
+                        child.edge = edge
+                        edges[e.ref] = edge
+                        if (undercut != null) undercut.undercutters += child else parent.children += child
+                    }
+                } ?: continue
+                rec?.let { r -> apply(claim, r) }
+                claims[n.ref] = claim
+                treeSize.merge(claim.root, 1, Int::plus)
+            }
+        }
+        val stances = synchronized(lock) {
+            claims.values.mapNotNull { c -> c.plausibility?.let { c.ref to it } } +
+                edges.values.mapNotNull { e -> e.strength?.let { e.ref to it } }
+        }.toMap()
+        synchronized(serviceLock) { service.reconcile(stances) }
+        val (unassessed, queued) = synchronized(lock) {
+            claims.values.filter { it.status == Status.QUEUED }
+                .partition { it.parent != null && it.plausibility == null && it.edge?.strength == null }
+        }
+        queued.forEach(::schedule)
+        unassessed.groupBy { it.root }.values.forEach { group ->
+            pending.incrementAndGet()
+            calls.submit {
+                try {
+                    assess(group)
+                    group.forEach(::schedule)
+                } finally {
+                    done()
+                }
+            }
+        }
+        if (claims.isNotEmpty()) onChange()
+    }
+
+    /** Caller holds [lock]. */
+    private fun apply(c: Claim, r: ClaimRecord) {
+        c.proposer = r.proposer
+        // SPEC §11: whatever was still active re-enters the queue; an interrupted round re-runs.
+        c.status = if (r.status in ACTIVE) Status.QUEUED else r.status
+        c.override = r.override
+        c.roundLimit = r.roundLimit
+        c.rounds = r.rounds
+        c.forceRound = r.forceRound
+        c.plausibility = r.plausibility
+        c.relevance = r.relevance
+        c.quality = r.quality
+        if (c.parent != null) {
+            c.reach = r.reach
+            c.contribution = r.contribution
+        }
+        c.proSaturation = r.proSaturation
+        c.conSaturation = r.conSaturation
+        c.saturated += r.saturated
+        c.duplicatesDropped = r.duplicatesDropped
+        r.triage.forEach { (k, v) -> TriageAction.entries.firstOrNull { it.name == k }?.let { c.triage[it] = v } }
+        c.alsoProposedBy += r.alsoProposedBy
+        c.merged = r.merged
+        c.error = r.error
+        c.anyCallSucceeded = r.anyCallSucceeded
+        c.edge?.strength = r.edgeStrength
     }
 
     // ---------------------------------------------------------------- helpers
@@ -813,14 +1123,18 @@ class DeliberationEngine(
     /** EXP-04: the per-side cap — `maxArgsPerSide` for the root, `maxArgsPerSideChild` below it. */
     private fun capOf(c: Claim) = if (c.parent == null) config.maxArgsPerSide else config.maxArgsPerSideChild
 
+    /** Caller holds [lock]. How many arguments [c] holds on [side]. */
+    private fun countOf(c: Claim, side: Side) = c.children.count { it.side == side }
+
     /** Caller holds [lock]. EXP-04: [side] of [c] already holds its cap of arguments. */
-    private fun atCap(c: Claim, side: Side) = c.children.count { it.side == side } >= capOf(c)
+    private fun atCap(c: Claim, side: Side) = countOf(c, side) >= capOf(c)
 
     private fun budgetExhausted(c: Claim) = synchronized(lock) { treeSize.getValue(c.root) >= config.maxClaims }
 
-    private fun reserve(root: CellRef): Boolean = synchronized(lock) {
+    /** EXP-06: one claim of [root]'s budget; a forced round (CTL-02) always gets it. */
+    private fun reserve(root: CellRef, forced: Boolean): Boolean = synchronized(lock) {
         val n = treeSize.getValue(root)
-        (n < config.maxClaims).also { if (it) treeSize[root] = n + 1 }
+        (forced || n < config.maxClaims).also { if (it) treeSize[root] = n + 1 }
     }
 
     private fun questionOf(c: Claim) = synchronized(lock) { questions.getValue(c.root) }

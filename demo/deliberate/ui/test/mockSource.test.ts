@@ -70,4 +70,25 @@ describe('MockSource', () => {
 
     expect(frames).toHaveLength(countAtStop);
   });
+
+  it('generates credence layers, their consensus and spread, and an undercut', async () => {
+    const frames: GraphDto[] = [];
+    const source = new MockSource(1, true);
+    source.start((graph) => frames.push(graph), () => undefined);
+    await source.ask('Layers?');
+    await vi.advanceTimersByTimeAsync(200);
+    const g = frames.at(-1)!;
+    expect(g.consensusMembers).toEqual(['wlo', 'jnb', 'woe']);
+    for (const n of g.nodes) {
+      expect(Object.keys(n.credences!)).toHaveLength(7);
+      const values = Object.values(n.credences!);
+      expect(n.spreadLow).toBe(Math.min(...values));
+      expect(n.spreadHigh).toBe(Math.max(...values));
+      expect(n.consensus!).toBeGreaterThanOrEqual(n.spreadLow!);
+      expect(n.consensus!).toBeLessThanOrEqual(n.spreadHigh!);
+    }
+    const u = g.nodes.find((n) => n.undercuts !== undefined)!;
+    expect(g.nodes.find((n) => n.ref === u.undercuts)?.kind).toBe('EDGE');
+    source.stop();
+  });
 });

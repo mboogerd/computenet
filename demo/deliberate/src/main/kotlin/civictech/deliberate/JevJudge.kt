@@ -51,10 +51,14 @@ class JevJudge(
     private val endpoint = URI.create(baseUrl.trimEnd('/') + "/v1/systemone")
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
 
+    /**
+     * CRED-01: judged on `root_question` and `claim` alone — no path, parent or
+     * direction, which pulled the judgment towards the claim's role in the
+     * argument (measured live; SPEC CRED-01).
+     */
     override fun plausibility(question: String, path: List<String>, claim: String): Double {
         val state = buildJsonObject {
             put("root_question", question)
-            putStrings("path_from_root", path)
             put("claim", claim)
         }
         return scoreOf(evaluate(state, mapOf("plausibility" to plausibilityQuestion())).getValue("plausibility"), PLAUSIBILITY_LEVELS.size)
@@ -77,11 +81,18 @@ class JevJudge(
             put("child_claim", child)
             put("direction", side.verb)
         }
-        return noulOf(evaluate(state, mapOf("quality" to qualityQuestion("child_claim", side))).getValue("quality"))
+        val answers = evaluate(state, mapOf("quality" to qualityQuestion("child_claim", side), "canonical" to canonicalQuestion("child_claim")))
+        return noulOf(answers.getValue("quality")) * noulOf(answers.getValue("canonical"))
     }
 
-    /** CRED-01, CRED-02, EXP-05 in one request: four independent questions over one state. */
+    /**
+     * CRED-01, CRED-02, EXP-05 in two parallel requests: plausibility on its
+     * own minimal state ([plausibility]), and strength, quality (with its
+     * canonical-form factor) and relevance as independent questions over the
+     * argument's full state.
+     */
     override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment {
+        val plausibility = java.util.concurrent.CompletableFuture.supplyAsync({ plausibility(question, path, child) }, PARALLEL)
         val state = buildJsonObject {
             put("root_question", question)
             putStrings("path_from_root", path)
@@ -92,16 +103,21 @@ class JevJudge(
         val answers = evaluate(
             state,
             mapOf(
-                "plausibility" to plausibilityQuestion(),
                 "strength" to strengthQuestion("claim", side),
                 "quality" to qualityQuestion("claim", side),
+                "canonical" to canonicalQuestion("claim"),
                 "relevant" to relevanceQuestion(),
             ),
         )
+        val p = try {
+            plausibility.join()
+        } catch (e: java.util.concurrent.CompletionException) {
+            throw e.cause ?: e
+        }
         return Assessment(
-            plausibility = scoreOf(answers.getValue("plausibility"), PLAUSIBILITY_LEVELS.size),
+            plausibility = p,
             strength = scoreOf(answers.getValue("strength"), STRENGTH_LEVELS.size),
-            quality = noulOf(answers.getValue("quality")),
+            quality = noulOf(answers.getValue("quality")) * noulOf(answers.getValue("canonical")),
             relevance = noulOf(answers.getValue("relevant")),
         )
     }
@@ -149,6 +165,7 @@ class JevJudge(
                         put("REPLACE", "Replace: it makes the same point as one existing or earlier new argument but is clearly stronger or clearer, so it should take that argument's place.")
                         put("MERGE", "Merge: it and one existing or earlier new argument make overlapping points, each with something the other lacks, which are best stated together as one argument.")
                         put("REFINE", "Refine: it is a specific instance, example or piece of evidence for one existing or earlier new argument, supporting that argument rather than giving a new reason of its own.")
+                        put("UNDERCUT", "Undercut: it does not dispute the claim itself; it denies that one existing or earlier new argument actually bears on the claim — even if that argument is true, it does not show what it is offered to show.")
                     }
                     put("OTHER_SIDE", "Move it: it actually argues ${cand.side.opposite.preposition} the claim, not $p it.")
                     put("DROP", "Drop it: it is not a real argument about the claim — off-topic, incoherent, a question, or a mere restatement of the claim itself.")
@@ -162,9 +179,9 @@ class JevJudge(
                         "question",
                         "`candidate_argument` is a new argument about `claim` (in the state). Each option other " +
                             "than `$NONE` is another argument about the same claim. Which option shares the most " +
-                            "with `candidate_argument`: the one it restates, overlaps with, improves on, or is a " +
-                            "specific instance of or evidence for? Answer `$NONE` only if it shares no point with " +
-                            "any option.",
+                            "with `candidate_argument`: the one it restates, overlaps with, improves on, is a " +
+                            "specific instance of or evidence for, or denies the relevance of? Answer `$NONE` only " +
+                            "if it shares no point with any option.",
                     )
                 }
                 putJsonObject("criteria") {
@@ -256,7 +273,10 @@ class JevJudge(
 
     private companion object {
         const val NONE = "none"
-        val TARGETED = setOf(TriageAction.DUPLICATE, TriageAction.REPLACE, TriageAction.MERGE, TriageAction.REFINE)
+        val TARGETED = setOf(TriageAction.DUPLICATE, TriageAction.REPLACE, TriageAction.MERGE, TriageAction.REFINE, TriageAction.UNDERCUT)
+
+        /** [assess] runs its plausibility request beside the argument request. */
+        val PARALLEL: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
 
         val PLAUSIBILITY_LEVELS = listOf(
             "Almost certainly false: available facts or well-established knowledge directly contradict the claim; " +
@@ -288,10 +308,22 @@ class JevJudge(
         val Side.opposite get() = if (this == Polarity.SUPPORT) Polarity.ATTACK else Polarity.SUPPORT
 
         fun plausibilityQuestion() = score(
-            "How likely is `claim` to be true? Judge the claim on its own merits and your general knowledge. " +
-                "`root_question` and `path_from_root` (the chain of claims leading to it) are context for what " +
-                "the claim means only. If `claim` is phrased as a question, judge how likely its answer is yes.",
+            "How likely is `claim` to be true? Judge only what `claim` itself asserts, using your general " +
+                "knowledge. `root_question` only tells you what topic the claim is about: do not reward or " +
+                "penalise `claim` for which answer to `root_question` it favours, and do not assume any other " +
+                "claim is true or false. If `claim` is phrased as a question, judge how likely its answer is yes.",
             PLAUSIBILITY_LEVELS,
+        )
+
+        /** EXP-05 quality, second factor: is the argument stated in canonical form? */
+        fun canonicalQuestion(child: String) = noul(
+            "Is `$child` a precise, canonical claim: one self-contained proposition with an explicit subject (no " +
+                "pronoun or 'this/these/such' pointing outside the sentence), explicit scope or quantity, no hedging " +
+                "words (can, may, might, often, suggests), and dated if it is time-sensitive?",
+            yes = "Canonical: one self-contained proposition with an explicit subject and scope, no hedging, dated " +
+                "if time-sensitive.",
+            no = "Not canonical: several propositions, a pronoun or reference pointing outside the sentence, vague " +
+                "scope, hedging words, or an undated time-sensitive assertion.",
         )
 
         fun strengthQuestion(child: String, side: Side) = score(
