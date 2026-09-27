@@ -30,10 +30,14 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `GET /api/inspect/search?mode={name\|problems\|data}&q=` | M4 (name, problems), M5 (data) | `SearchResult`. `mode` defaults to `name` if omitted; an unrecognized `mode` is 400. A blank/whitespace `q` in `name` mode returns no hits (not everything) — safe to call on every keystroke. `data` mode is submit-triggered (not per-keystroke), bounded (50 cells / 2s deadline / cold components skipped), and always returns a non-null `cost` — including a zero-hit or blank-query result, since "this query cost N cell reads" is itself the answer |
 | `POST /api/inspect/graph/{id}/wake` | M5 | 202 `{ "graph": "g-…", "hosts": 2, "cells": 5 }` — resumes every suspended/drained cell and host in the component (a drained host's wake resumes *every* cell it holds, not only this component's — `hosts`/`cells` report the true blast radius). 404 for an unknown/evaporated id (unlike the read-only `?graph=`, naming nothing to wake is treated as an error, not a race) |
 | `GET /api/inspect/capabilities` | WKB2 F5 | Whether this inspector accepts graph edits. Write plane disabled (the default): exactly `{"writePlane": false}` — no `verbs`, no `identity` keys. Enabled: `{"writePlane": true, "verbs": ["spawn", "connect", "despawn"], "identity": "capability-holder"}` — `identity` is the label admitted edits are recorded under (defaults to `capability-holder`); `promote` joins `verbs` with WKB2 F9. A read, ungated, like every other `GET` |
-| `POST /api/inspect/apply/precheck` | WKB2 F5 placeholder — replaced by F6 | Gated by the write plane (below). Past the gate: a body that is not JSON is 400 `malformed body`, well-formed JSON is 501 `precheck not implemented`. Refusals, in order: 404 `write plane disabled`, 400 `missing required header: X-Inspector-Write`, 403 `capability rejected`. Any method but `POST` is 404 |
+| `POST /api/inspect/apply/precheck` | WKB2 F6 | Gated by the write plane (below). Body a `DraftDto` (F12, `DraftCompiler.kt`) — the same shape `GET /catalogue`'s consumer builds — with two additive fields: `host` (a key of this inspector's hosts; `null` resolves to the sole host, or 400 `draft.host is required: this inspector has N hosts` when there are several) and `despawns` (encoded live refs `"<uuid>:<instanceId>"`; an unresolvable one is 400 `despawns[N]: '<v>' is not an encoded cell ref ("<uuid>:<instanceId>")`). 200 `PlanDto {steps: [{key, handle, action, touches, refusal?}], appliable}` (below) — no side effect: no id, no record, no audit entry, no event; a precheck constructs each spawn cold and touches no host. Refusals: 400 `malformed body` (body not JSON); a `DraftException`'s own reason (a compiler-level fault, e.g. an edge naming both a handle and a ref); 400 `unknown host '<h>'`; or the planner's own `IllegalArgumentException` message (e.g. `a despawn target is listed more than once`) — a caller fault, never 500. Any method but `POST` is 404 `expected POST /apply/precheck, POST /apply, GET /apply/{id} or POST /apply/{id}/abort` |
+| `POST /api/inspect/apply` | WKB2 F6 | Gated. Body `ApplyRequestDto {draft: DraftDto, baseSeq: Long, confirmation?: String}` — `baseSeq` is required (a body without it is 400 `malformed body`) and is recorded verbatim as `ApplyRecord.baseTopologyVersion`; **it is not checked** until WKB2 F7 (`computenet-u3svi`) adds that comparison. `confirmation` is decoded and ignored until WKB2 F8 (`computenet-vbmf1`). Every `DraftDto`/host/despawn/plan refusal `POST /apply/precheck` can answer applies here identically (same 400s, same reasons). Once the draft resolves and its plan is appliable: mints `applyId`, starts the apply on its own thread, and answers `202 {"applyId": "<id>"}` only once that id's `ApplyRecord` already exists — `GET /apply/{id}` is guaranteed 200 from the moment the caller holds the 202. Not appliable: `422 {"reason":"refused-at-precheck","plan": PlanDto}` — no id, no record, no audit entry, nothing entered the applier (a refusal the applier's own PRECHECK finds later, because the graph moved between this plan and the apply, is instead a `refused-at-precheck` **record**, reachable the ordinary way). The `baseSeq` check, an in-flight conflict and the confirmation gate are WKB2 F7/F8's own refusal arms, not this feature's. Any method but `POST` is 404 (same shape as above) |
+| `GET /api/inspect/apply/{id}` | WKB2 F6 | The `ApplyRecord` itself — there is no separate `ApplyRecordDto` (wczst-D4): `applyId`, `identity` (the capability-holder label `GET /capabilities` reports, or whatever more specific label the gate admitted), `submittedDraft` (the request body's `draft`, verbatim), `baseTopologyVersion`, `steps` (a map keyed by the plan's step key — see the wire-stability note below — to a `StepOutcome`: `{"type":"applied"}` \| `{"type":"failed","reason":"…"}` \| `{"type":"unwound"}` \| `{"type":"not-run"}`), `submittedAtMs`, `completedAtMs` (null while in flight), `phase` (`"PRECHECK"`\|`"STAGE"`\|`"CUT_OVER"`\|`"UNWIND"`\|`"RETIRE"`), `outcome` (null while in flight; otherwise the six-name `ApplyOutcome` — see `apply.done` below, `unwound-with-residue` carries `residue` inside it), `plan` (the `PlanDto`, null before PRECHECK produced one), `stagedRefs` (encoded refs STAGE spawned, creation order; kept after an unwind as the audit of what was created and then despawned). Unknown id ⇒ 404 `unknown apply: <id>` |
+| `GET /api/inspect/applies` | WKB2 F6 | `AppliesDto {"entries": [ApplyRecord]}` from the audit ring — terminal records only, oldest first, bounded at 200 for the whole process (the `GET /activity` precedent above); `{"entries": []}` when there are none, never 404. An apply still in flight is reachable only by id (`GET /apply/{id}`), not listed here. Any method but `GET` is 404 `expected GET /applies` |
+| `POST /api/inspect/apply/{id}/abort` | WKB2 F6 | Gated. Unknown id ⇒ 404 `unknown apply: <id>`; the apply is not in STAGE ⇒ 409 `apply <id> is not in STAGE`; in STAGE ⇒ 202 with the *current* `ApplyRecord` (phase `STAGE`) — abort only sets a flag honoured at the post-STAGE pause, so the resulting outcome (`unwound-clean` or `unwound-with-residue`) is not yet known at the 202 and follows later on `apply.done` / a fresh `GET /apply/{id}` |
 | `GET /api/inspect/catalogue` | WKB2 F12 | `CatalogueDto`: every registered named cell constructor a browser draft can resolve, sorted by id, read live off the catalogue on every request (an entry registered after the server started appears on the next read). Each entry carries `id`, `fqn`, `color`, `manifests`, `ports` — mapped from its `CellDescriptor` exactly as a topology `Node` maps one — and its `schema` (a `ParamSchema`: the closed set of parameter kinds, `string`/`int`/`long`/`boolean`/`enum`/`ref`, a browser can render for that entry). An empty registry answers `{"entries":[]}`, never 404. Ungated, a read like every other `GET`: identical whether the write plane is enabled or disabled. Any method but `GET` is 404 |
 
-**Write plane (WKB2 F5).** Graph edits are off unless the embedding process constructs the inspector with an enabled write plane; `GET /capabilities` says which. Every write-plane route checks, in this order and before reading the request body: the plane is disabled ⇒ 404 `write plane disabled` (whatever headers are present); the `X-Inspector-Write` header is absent ⇒ 400 `missing required header: X-Inspector-Write`; its value is not the process capability (compared in constant time) ⇒ 403 `capability rejected`. Error bodies are `{"reason": "…"}`. The header is not CORS-safelisted and the server registers no `OPTIONS` handler, so a cross-origin browser request fails its preflight. Enabling the plane does not change the loopback bind. `POST /graph/{id}/wake` is **not** part of the write plane: it keeps its own `X-Inspector: 1` header requirement and does not take the capability.
+**Write plane (WKB2 F5, F6).** Graph edits are off unless the embedding process constructs the inspector with an enabled write plane; `GET /capabilities` says which. Every write-plane route checks, in this order and before reading the request body: the plane is disabled ⇒ 404 `write plane disabled` (whatever headers are present); the `X-Inspector-Write` header is absent ⇒ 400 `missing required header: X-Inspector-Write`; its value is not the process capability (compared in constant time) ⇒ 403 `capability rejected`. Error bodies are `{"reason": "…"}`. The header is not CORS-safelisted and the server registers no `OPTIONS` handler, so a cross-origin browser request fails its preflight. Enabling the plane does not change the loopback bind. `POST /graph/{id}/wake` is **not** part of the write plane: it keeps its own `X-Inspector: 1` header requirement and does not take the capability. The `/applies` route is registered **before** `/apply/…`'s (`apply` is a prefix of `applies`, so the wrong registration order would swallow every `/applies` request into the `/apply` handler) — the same discipline `/graphs` observes ahead of `/graph/{id}`. Applies do not queue in parallel: `StagedApplier` takes one internal lock per apply, so a second `POST /apply` submitted while one is already staging waits behind it — its own record is registered, and readable through `GET /apply/{id}`, before that wait begins. `ApplyRecord.identity` is always the capability-holder label `GET /capabilities` reports (`identity` there), never a caller-supplied value; there is no per-caller identity yet. **Wire-stability hazard**: a boundary link's plan/record step key is observed to be `"<from-handle>.<port>-><CellRef.toString()>.<port>"` — e.g. `"s.outlet->CellRef(id=5f3a…, instanceId=0).deltaInlet"` — a Kotlin data class's default `toString()`, not the `"<uuid>:<instanceId>"` encoding every other ref-bearing field on this contract uses. Treat it as an opaque, unstable key for correlating one apply's own step frames/record entries, never as a value to parse or to compare across process builds.
 
 ## DTOs
 
@@ -77,8 +81,16 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    // host (M5) — the vocabulary does not distinguish them; a component's
                                    // GraphList.lifecycle "cold" requires every member cell SUSPENDED
   "generation": 0,
-  "graph": "g-<id>"               // component id; never null from M4 on (an unlinked cell is
+  "graph": "g-<id>",              // component id; never null from M4 on (an unlinked cell is
                                    // its own singleton component). M0-M3 servers may still emit null.
+  "staged": null                  // WKB2 F6, [WKB2-09]/[WKB2-40]: {"applyId": "…"} while this cell
+                                   // belongs to an apply currently in STAGE/CUT_OVER/UNWIND — it is in
+                                   // its component but not a live member; null otherwise (including
+                                   // once that apply reaches RETIRE). Always present (encodeDefaults):
+                                   // a staged cell's first `topology.node added` carries `staged: null`
+                                   // (the registry's publish hook fires before the mark is set) and a
+                                   // later upsert of the same ref carries the mark once it is — the
+                                   // client's existing upsert-by-ref semantics are why this is safe.
 }
 
 // Edge
@@ -94,6 +106,46 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                     //   for any edge, since flow observation lands in M3).
                                     // NOT "co-hosted" — a tap sits upstream of the direct-call-vs-enqueue
                                     // decision, so co-hosted and cross-host edges are observed identically.
+}
+
+// PlanDto (WKB2 F6) — POST /apply/precheck's 200 body, and ApplyRecord.plan.
+// Illustrative, for a one-node draft with a boundary link to a live cell:
+{
+  "steps": [
+    { "key": "s", "handle": "s", "action": "SPAWN", "touches": [], "refusal": null },
+    { "key": "s.outlet->CellRef(id=5f3a…, instanceId=0).deltaInlet", // see the write-plane
+      "handle": null,                                                // paragraph's wire-stability note
+      "action": "LINK", "touches": ["5f3a…-…:0"], "refusal": null }
+  ],
+  "appliable": true
+}
+// "action" is one of SPAWN | LINK | UNLINK | DESPAWN | PROMOTE. "refusal", when set, is
+// {"code": "<RefusalCode name>", "reason": "…"} and "appliable" is false whenever any step
+// carries one.
+
+// ApplyRecord (WKB2 F6, wczst-D4) — the whole body of GET /apply/{id}, and each element of
+// GET /applies' "entries". Illustrative, for a committed apply:
+{
+  "applyId": "3f9c1a2e-…",
+  "identity": "capability-holder",
+  "submittedDraft": { "nodes": [ { "handle": "s", "catalogueId": "…" } ], "edges": [ /* … */ ] },
+  "baseTopologyVersion": 7,        // recorded verbatim; not checked until WKB2 F7
+  "steps": {
+    "s": { "type": "applied" },
+    "s.outlet->CellRef(id=5f3a…, instanceId=0).deltaInlet": { "type": "applied" }
+  },
+  "submittedAtMs": 1753600000000,
+  "completedAtMs": 1753600000420,  // null while the apply is in flight
+  "phase": "RETIRE",               // PRECHECK | STAGE | CUT_OVER | UNWIND | RETIRE
+  "outcome": { "type": "committed" },
+                                   // null while in flight; otherwise one of the six ApplyOutcome
+                                   // names (see the apply.done SSE row below) — "unwound-with-residue"
+                                   // is the one non-payload-free arm: {"type":"unwound-with-residue",
+                                   // "residue": [ { "type":"emitted-across-boundary", "edge": Edge } |
+                                   // { "type":"owned-consumed", "ref":"…", "port":"…" } |
+                                   // { "type":"leased-discharged", "ref":"…", "port":"…" } ]}
+  "plan": { "steps": [ /* PlanDto, above */ ], "appliable": true },
+  "stagedRefs": ["5f3a…-…:0"]      // creation order; kept after an unwind as the audit trail
 }
 
 // CellDetail (M1) — Node plus:
@@ -400,6 +452,10 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
     "id": "g-<stable-id>",         // heuristic: lexicographically-min cell uuid in the component
     "name": "skillmatch" | null,   // from an optional host-side annotation; null = unnamed
     "cells": 13, "hosts": 3, "nets": 1,
+    "staged": 0,                   // WKB2 F6 (wczst-D6): members currently marked Node.staged,
+                                   // excluded from "cells" — a staged cell is in the component
+                                   // (counts toward `hosts`/`nets`, keeps the same `id`), just not
+                                   // a live member
     "health": { "deadLetters": 2, "parked": 14, "restarts": 1 },
     "lifecycle": "hot" | "cold"    // cold iff every member cell reports Node.lifecycle SUSPENDED (M5)
                                    // — LOWERCASE, unlike Node.lifecycle's "HOT"/"SUSPENDED"
@@ -500,6 +556,9 @@ not replayed). Server sends `heartbeat` every 15 s.
 | `error.waveHealth` | V3-BE | one `WaveHealthRow`: `{ "id", "kind": "frontierLag"\|"stalledWave", "state": "open"\|"cleared", "ref", "edge", "wave": {...}\|null, "frontier": {...}\|null, "lagWaves": 7\|null, "heldMs", "atMs", "heuristic": true, "description" }`. `id` is `"<kind>:<edgeId>:<ref>"`, stable across the open row, its updates and its clear. `state: "cleared"` retires the open row with the same `id` and carries its last known field values — the same discipline `error.parked`'s `count: 0` already established. `wave`/`frontier` may be null; `lagWaves` is populated only when both stamps share a `source` (two different sources are incomparable and never subtracted). Paired with `ErrorSnapshot.waveHealth` (open rows only, a gauge like `parked`, never a history log) and `counters.waveHealth` (also a gauge, unlike its monotonic siblings). Bounded at 200 simultaneously open rows; an eviction forced by that cap emits the evicted row's `cleared` event. **This class is a heuristic diagnostic, not kernel-grade detection** — computed by the inspector from outside the graph by correlating a tapped outlet's last observed wave with an explicitly-observed cell's frontier stamp. Absorption, filtering and aggregation are legitimate and indistinguishable from a stall at this vantage point (spec 20/22, completeness over silent/stuck edges, **G-40**). Every row carries `heuristic: true` and its `description` opens with the word "heuristic"; no row asserts that a wave *is* lost, that a cell *is* stuck, or that glitch-freedom *is* violated |
 | `flow.rates` | M3 | `{ "window": 1000, "edges": [ { "id", "rate", "lastWave": {...}\|null, "hop": 2\|null } ] }` — 1 Hz batch; `rate` is messages/second (a Double; with `window: 1000` numerically equal to the raw count); edges with no traffic that window are omitted (not sent as `rate: 0`). Publishes every second while anything is tapped, even an all-empty window (so a client's decay logic can key off "window received" rather than off silence), then one trailing empty window after the last tap detaches, then nothing. Unlike every other feed in this table, `flow.rates` has no paired snapshot/`GET` endpoint — a client's only source of truth for flow is this stream |
 | `graphs.changed` | M4 | `{}` — refetch both `GraphList` **and** any held `TopologySnapshot` (filtered or not). Fires on any component membership change or a `nameGraph` rename, not only merge/split. Required, not optional: a cell is published (stamped with its own singleton `Node.graph`) *before* the link that merges it into an existing component, so a client applying deltas alone holds a stale `Node.graph` until it resyncs |
+| `apply.phase` | WKB2 F6 | `{ "applyId", "phase": "PRECHECK"\|"STAGE"\|"CUT_OVER"\|"UNWIND"\|"RETIRE" }` — one frame on every phase transition, including the initial `PRECHECK` frame issued when the apply begins (so a client attaching at the moment of submission sees it, not just later transitions). Rides the shared monotonic `seq` alongside every other event. On the `RETIRE` transition, this frame precedes the `topology.node` upserts that clear the staged marks (see `Node.staged` above) — a client sees the apply leave `STAGE` before the marks it caused disappear |
+| `apply.step` | WKB2 F6 | `{ "applyId", "index", "handle", "result": {"type":"applied"}\|{"type":"failed","reason":"…"} }` — one frame per STAGE step, `index` counting from 0 in plan order; `result` uses the same `StepOutcome` vocabulary the record's `steps` map carries (`ApplyRecord` above). A two-node draft with one internal link between them emits **three** step frames (both spawns and the link), not two — every planned step narrates, not only the boundary ones |
+| `apply.done` | WKB2 F6 | `{ "applyId", "outcome" }` — exactly once per apply, when its terminal `ApplyOutcome` is set; `outcome` is encoded exactly as `ApplyRecord.outcome` (`GET /apply/{id}`), so `"unwound-with-residue"` carries its `residue` array inside `outcome` here too — one shape for the event and the record. A client that misses `apply.phase`/`apply.step`/`apply.done` frames (a gap, a reconnect, or simply not having watched) still learns the outcome from `GET /apply/{id}`; these events narrate an apply in progress, they are not its record of truth |
 | `heartbeat` | M0 | `{}` |
 
 ## Fixture
