@@ -12,51 +12,66 @@ export class LiveSource implements GraphSource {
   private backoff = 1000;
   private stopped = false;
   private sawFrame = false;
+  private generation = 0;
 
   start(onGraph: (g: GraphDto) => void, onState: (s: ConnState) => void): void {
+    this.stop();
+    const generation = ++this.generation;
     this.stopped = false;
+    this.sawFrame = false;
+    this.backoff = 1000;
     void fetch('/graph')
       .then((r) => (r.ok ? (r.json() as Promise<GraphDto>) : undefined))
       .then((g) => {
-        if (g && !this.sawFrame) onGraph(g);
+        if (g && this.isCurrent(generation) && !this.sawFrame) onGraph(g);
       })
       .catch(() => {
         /* SSE will deliver the first frame */
       });
-    this.open(onGraph, onState);
+    this.open(generation, onGraph, onState);
   }
 
-  private open(onGraph: (g: GraphDto) => void, onState: (s: ConnState) => void): void {
-    if (this.stopped) return;
+  private open(generation: number, onGraph: (g: GraphDto) => void, onState: (s: ConnState) => void): void {
+    if (!this.isCurrent(generation)) return;
     onState(this.sawFrame ? 'reconnecting' : 'connecting');
     const es = new EventSource('/events');
     this.es = es;
     es.onopen = () => {
+      if (!this.isCurrent(generation) || this.es !== es) return;
       this.backoff = 1000;
       onState('live');
     };
     es.onmessage = (e) => {
-      this.sawFrame = true;
+      if (!this.isCurrent(generation) || this.es !== es) return;
       try {
-        onGraph(JSON.parse(e.data) as GraphDto);
+        const graph = JSON.parse(e.data) as GraphDto;
+        this.sawFrame = true;
+        onGraph(graph);
       } catch (err) {
         console.warn('deliberate: bad /events frame', err);
       }
     };
     es.onerror = () => {
+      if (!this.isCurrent(generation) || this.es !== es) return;
       onState('reconnecting');
       if (es.readyState === EventSource.CLOSED) {
         es.close();
         clearTimeout(this.retryTimer);
-        this.retryTimer = setTimeout(() => this.open(onGraph, onState), this.backoff);
+        this.retryTimer = setTimeout(() => this.open(generation, onGraph, onState), this.backoff);
         this.backoff = Math.min(this.backoff * 2, 15000);
       }
     };
   }
 
+  private isCurrent(generation: number): boolean {
+    return !this.stopped && generation === this.generation;
+  }
+
   stop(): void {
     this.stopped = true;
+    this.generation++;
     clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     this.es?.close();
     this.es = undefined;
   }

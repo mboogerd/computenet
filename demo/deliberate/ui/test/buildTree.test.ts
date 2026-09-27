@@ -62,6 +62,21 @@ describe('buildTree', () => {
     expect(countClaims(buildTree(deepGraph, 'a')!)).toBe(3);
   });
 
+  it('does not splice cross-question or incomplete edges into the selected tree', () => {
+    const g: GraphDto = {
+      questions: [],
+      nodes: [
+        { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q' },
+        { ref: 'own', kind: 'CLAIM', credence: 0.5, root: 'q' },
+        { ref: 'foreign', kind: 'CLAIM', credence: 0.5, root: 'other' },
+        { ref: 'own-q', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'SUPPORT', source: 'own', target: 'q' },
+        { ref: 'foreign-q', kind: 'EDGE', credence: 0.5, root: 'other', polarity: 'ATTACK', source: 'foreign', target: 'q' },
+        { ref: 'pending-q', kind: 'EDGE', credence: 0.5, root: 'q', source: 'foreign', target: 'q' },
+      ],
+    };
+    expect(buildTree(g, 'q')!.children.map((a) => a.node.claim.ref)).toEqual(['own']);
+  });
+
   it('terminates on a malformed cyclic snapshot', () => {
     const g: GraphDto = {
       questions: [],

@@ -30,12 +30,11 @@ export type Status =
 
 export type Override = 'AUTO' | 'EXPAND' | 'STOP';
 
-export type NodeKind = 'CLAIM' | 'EDGE';
 export type Polarity = 'SUPPORT' | 'ATTACK';
 
 export interface NodeDto {
   ref: string;
-  kind: NodeKind;
+  kind: string;
   /** Propagated agora credence, [0,1]. */
   credence: number;
   /** The question tree this node belongs to (its root claim ref). */
@@ -58,7 +57,7 @@ export interface NodeDto {
   duplicatesDropped?: number;
   error?: string;
   // --- EDGE only (child → parent) ---
-  polarity?: Polarity;
+  polarity?: string;
   source?: string;
   target?: string;
   /** Jev relation strength stance (CRED-02), once judged. */

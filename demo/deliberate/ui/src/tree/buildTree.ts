@@ -22,12 +22,24 @@ export interface ArgumentNode {
  * if one ever did. Returns undefined when the root claim is not present.
  */
 export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
+  const allClaims = new Map<string, NodeDto>();
+  for (const n of graph.nodes) {
+    if (n.kind === 'CLAIM') allClaims.set(n.ref, n);
+  }
+  const rootClaim = allClaims.get(root);
+  if (!rootClaim) return undefined;
+
+  // A snapshot contains every question. Scope both claims and edges to the
+  // selected claim's question before following refs, so malformed or stale
+  // cross-question edges cannot splice two trees together.
+  const treeRoot = rootClaim.root;
   const claims = new Map<string, NodeDto>();
   const edgesByTarget = new Map<string, NodeDto[]>();
   for (const n of graph.nodes) {
+    if (n.root !== treeRoot) continue;
     if (n.kind === 'CLAIM') {
       claims.set(n.ref, n);
-    } else if (n.kind === 'EDGE' && n.target !== undefined) {
+    } else if (n.kind === 'EDGE' && n.target !== undefined && (n.polarity === 'SUPPORT' || n.polarity === 'ATTACK')) {
       const list = edgesByTarget.get(n.target);
       if (list) list.push(n);
       else edgesByTarget.set(n.target, [n]);
@@ -40,7 +52,7 @@ export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
     const edges = edgesByTarget.get(claim.ref) ?? [];
     const ordered = [
       ...edges.filter((e) => e.polarity === 'SUPPORT'),
-      ...edges.filter((e) => e.polarity !== 'SUPPORT'),
+      ...edges.filter((e) => e.polarity === 'ATTACK'),
     ];
     const children: ArgumentNode[] = [];
     for (const edge of ordered) {
@@ -51,8 +63,7 @@ export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
     return { claim, children };
   };
 
-  const rootClaim = claims.get(root);
-  return rootClaim ? build(rootClaim) : undefined;
+  return build(rootClaim);
 }
 
 /** Number of claims in a tree, including its root. */

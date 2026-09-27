@@ -11,7 +11,9 @@ const route = { target: backend, changeOrigin: true };
 
 export default defineConfig({
   base: './',
-  plugins: [solid()],
+  // Vitest renders components through Solid's server renderer; production
+  // remains a normal hydrated browser build.
+  plugins: [solid({ ssr: process.env.VITEST === 'true' })],
   server: {
     proxy: {
       '/graph': route,
@@ -22,6 +24,6 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['test/**/*.test.ts'],
+    include: ['test/**/*.test.{ts,tsx}'],
   },
 });
