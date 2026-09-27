@@ -11,6 +11,7 @@ import civictech.cell.consistency.WaveFrontier
 import civictech.cell.proxy.Invocation
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.*
 
@@ -189,6 +190,35 @@ class InletPolicyStackTest {
         inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
         shouldThrow<IllegalArgumentException> {
             inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
+        }
+    }
+
+    @Test
+    fun `computenet-sdqq7 - a throwing attach during install leaves the inlet unchanged, so a later ALIGN install still succeeds`() {
+        val inletA = FanInlet(consumerPair)
+        val inletB = FanInlet(consumerPair)
+        val bare = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        inletA.install(bare)
+
+        // The bare frontier cannot silently span a second inlet (WaveFrontier.attach,
+        // mirrored by WaveFrontierMultiInletTest case 4) — this is the reachable
+        // attach-throw that the pre-fix install() ordering mishandled.
+        val error = shouldThrow<IllegalStateException> { inletB.install(bare) }
+        error.message!! shouldContain "arm()"
+
+        // Red under the old stages += stage / policy.attach / rewire() ordering:
+        // the rejected stage stayed in inletB's stage list even though attach
+        // threw, so this install used to fail "at most one ALIGN policy per
+        // inlet" instead of succeeding.
+        val fresh = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        inletB.install(fresh)
+        inletB.hasPolicy(PolicyTier.ALIGN) shouldBe true
+
+        // fresh genuinely occupies inletB's one ALIGN slot — not a leftover of
+        // the rejected bare frontier — so a further ALIGN install is rejected
+        // for the ordinary "at most one" reason, not the bug's leftover.
+        shouldThrow<IllegalArgumentException> {
+            inletB.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
         }
     }
 

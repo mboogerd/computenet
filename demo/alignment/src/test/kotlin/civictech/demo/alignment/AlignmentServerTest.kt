@@ -1110,6 +1110,65 @@ class AlignmentServerTest {
         assertTrue("zed" in probe.state() && "quinn" in probe.state())
     }
 
+    /** Topic `t` by `cat`: impact (w 2, value), sway (w 1, FACTOR); idea a. */
+    private fun seedValueFactor(probe: HttpProbe) {
+        val created = probe.postJson(
+            """{"creator":"cat","title":"T","dimensions":[{"name":"Impact","weight":2},""" +
+                """{"name":"Sway","direction":"factor"}]}""",
+            "/topics",
+        )
+        assertEquals(200, created.statusCode(), created.body())
+        assertEquals(200, probe.postJson("""{"participant":"cat","title":"A"}""", "/topics/t/ideas").statusCode())
+    }
+
+    /** Design contract 2026-09-22: a factor dimension's round trip through creation, rating and the wire. */
+    @Test
+    fun `factor dimensions multiply the score and round trip through the dimension, aggregate and state`() =
+        withApp { _, probe ->
+            seedValueFactor(probe)
+            val topics = probe.get("/topics").body()
+            assertTrue(
+                """{"id":"sway","name":"Sway","weight":1.0000,"direction":"factor","lowLabel":"","highLabel":""}""" in topics,
+                topics,
+            )
+
+            // value 8 (impact alone), g = (5-1)/8 = 0.5, one factor dim so factor = 0.5, score 8 × 0.5 = 4.0
+            rate(probe, "zed", "a", "impact", "8")
+            rate(probe, "zed", "a", "sway", "5")
+            var a = probe.awaitRow("a") { near(4.0, it.num("score")) }
+            assertTrue(near(8.0, a.num("value")), "$a")
+            assertTrue(near(0.5, a.num("factor")), "$a")
+            assertEquals(JsonNull, contribution(a, "sway"), "a factor dimension contributes no value share: $a")
+            assertEquals("1", a["byDim"]!!.jsonObject["sway"]!!.jsonObject["n"]!!.jsonPrimitive.content, "$a")
+
+            // sinking: sway rated 1 drives factor, and the score, to exactly zero — still ranked
+            rate(probe, "zed", "a", "sway", "1")
+            a = probe.awaitRow("a") { near(0.0, it.num("score")) }
+            assertTrue(near(0.0, a.num("factor")), "$a")
+            assertEquals("1", a["rank"]!!.jsonPrimitive.content, "a zero score is still ranked: $a")
+
+            // the dimension's direction round-trips through /state as well as /topics
+            val stateTopics = parse(probe.state())["topics"]!!.jsonArray
+            val swayInState = stateTopics.first { it.jsonObject["id"]!!.jsonPrimitive.content == "t" }
+                .jsonObject["dimensions"]!!.jsonArray.first { it.jsonObject["id"]!!.jsonPrimitive.content == "sway" }.jsonObject
+            assertEquals("factor", swayInState["direction"]!!.jsonPrimitive.content, "$swayInState")
+        }
+
+    @Test
+    fun `a journal with a factor dimension replays to byte-identical state`() {
+        val journal = tmpJournal()
+        lateinit var state: String
+        withApp(journal) { _, probe ->
+            seedValueFactor(probe)
+            rate(probe, "zed", "a", "impact", "8")
+            rate(probe, "zed", "a", "sway", "5")
+            probe.awaitRow("a") { near(4.0, it.num("score")) }
+            state = probe.state()
+        }
+        assertTrue(Files.readAllLines(journal).any { """"direction":"factor"""" in it }, "journal carries the factor direction")
+        withApp(journal) { _, probe -> assertEquals(state, probe.await { it == state }) }
+    }
+
     @Test
     fun `a literal v1 journal replays with the v1 defaults`() {
         val journal = tmpJournal()
@@ -1128,6 +1187,7 @@ class AlignmentServerTest {
         withApp(journal) { _, probe ->
             val a = probe.awaitRow("a") { near((2.0 * 8 + 1.0 * 3) / 3.0, it.num("score")) }
             assertEquals(JsonNull, a["cost"], "$a")
+            assertEquals(JsonNull, a["factor"], "$a")
             val topics = probe.get("/topics").body()
             assertTrue(""""ideas":"everyone","boardVisibility":"after-rating","revealed":false""" in topics, topics)
             for (dim in listOf("effort", "impact")) {

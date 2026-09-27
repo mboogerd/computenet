@@ -88,7 +88,7 @@ class AlignmentPipelineTest {
         assertEquals(
             mapOf(
                 a to Scored(
-                    score = 8.0, value = 8.0, cost = null,
+                    score = 8.0, value = 8.0, cost = null, factor = null,
                     contributions = mapOf("impact" to 8.0),
                     byDim = mapOf("impact" to DimStats(1, 8.0, 0.0)),
                     split = false,
@@ -314,6 +314,132 @@ class AlignmentPipelineTest {
         assertEquals(null, v.cost)
         assertEquals(mapOf("effort" to 4.0), v.contributions)
     }
+
+    // ── value × factor ÷ cost (design contract 2026-09-22) ──────────────
+
+    /** design contract's topic: impact (VALUE, 2), ease (VALUE, 1), sway (FACTOR, 1). */
+    private fun factorRig() = Rig().apply {
+        weight(t, "impact", 2.0); weight(t, "ease", 1.0); weight(t, "sway", 1.0, Direction.FACTOR)
+    }
+
+    @Test
+    fun `value times factor over cost - the worked example`() {
+        val r = factorRig()
+        r.weight(t, "effort", 1.0, Direction.COST)
+        r.rate(a, "impact", "ann", 8)
+        r.rate(a, "ease", "ann", 5)
+        r.rate(a, "sway", "ann", 5)
+        r.rate(a, "effort", "ann", 2)
+        val s = r.scored().getValue(a)
+        near(7.0, s.value, "value (16+5)/3")
+        near(0.5, s.factor, "g = (5-1)/8 = 0.5, one dim so factor = g")
+        near(2.0, s.cost, "cost")
+        near(1.75, s.score, "score 7 × 0.5 ÷ 2")
+        assertEquals(setOf("impact", "ease"), s.contributions.keys, "contributions are over value dims only")
+        near(s.score!!, s.contributions.values.sum(), "contributions sum to score")
+    }
+
+    @Test
+    fun `a factor dim rated 1 by everyone sinks the idea to exactly zero, still present`() {
+        val r = factorRig()
+        r.rate(a, "impact", "ann", 8)
+        r.rate(a, "sway", "ann", 1)
+        r.rate(a, "sway", "bob", 1)
+        val s = r.scored().getValue(a)
+        near(8.0, s.value, "value")
+        near(0.0, s.factor, "g = (1-1)/8 = 0, factor = 0^1 = 0")
+        assertEquals(0.0, s.score, "sunk to exactly zero, not null (Math.pow(0.0, positive) = 0.0)")
+        assertTrue(a in r.scored(), "still present: a null score would be a sentinel, this is a real zero")
+    }
+
+    @Test
+    fun `two factor dims combine as a weighted geometric mean`() {
+        val r = Rig().apply { weight(t, "f1", 1.0, Direction.FACTOR); weight(t, "f2", 3.0, Direction.FACTOR) }
+        r.rate(a, "f1", "ann", 3)
+        r.rate(a, "f2", "ann", 9)
+        val s = r.scored().getValue(a)
+        // g1 = (3-1)/8 = 0.25, g2 = (9-1)/8 = 1.0; factor = 0.25^(1/4) · 1.0^(3/4) = 0.25^0.25
+        near(Math.pow(0.25, 0.25), s.factor, "weighted geometric mean")
+        assertEquals(null, s.value, "no value dim rated: unscored")
+        assertEquals(null, s.score)
+    }
+
+    @Test
+    fun `a topic with a factor dim leaves an idea with no rated factor dim present but unscored`() {
+        val r = factorRig()
+        r.rate(a, "impact", "ann", 8)
+        r.rate(a, "ease", "ann", 5)
+        val s = r.scored().getValue(a)
+        assertEquals(null, s.score, "factor not rated yet: no score")
+        near(7.0, s.value, "value")
+        assertEquals(null, s.factor, "factor is the missing side")
+        assertTrue(s.contributions.isEmpty(), "no contributions without a score: ${s.contributions}")
+        assertEquals(setOf("impact", "ease"), s.byDim.keys, "sway is configured but unrated: no stats entry")
+    }
+
+    @Test
+    fun `flipping a topic's has-factor bit re-emits every idea of that topic with stats and no other`() {
+        val r = rig() // impact 2, effort 1, both VALUE
+        val u = TopicId("u")
+        r.weight(u, "impact", 1.0)
+        val b = IdeaKey(t, "b")      // impact only: never has stats on the new factor dim
+        val other = IdeaKey(u, "x")  // another topic
+        r.rate(b, "impact", "ann", 8)
+        r.rate(other, "impact", "ann", 6)
+        near(8.0, r.scored().getValue(b).score, "value only, no factor dim yet")
+        val emitted = r.out.size
+
+        // first FACTOR config in t, on a dim nobody has rated
+        r.weight(t, "sway", 1.0, Direction.FACTOR)
+        assertEquals(emitted + 1, r.out.size, "one emission for the flip")
+        val on = r.out.last()
+        assertEquals(setOf(b), on.puts.keys, "b re-emitted, x (topic u) untouched")
+        assertTrue(on.removals.isEmpty(), "present, not removed: $on")
+        assertEquals(null, on.puts.getValue(b).score, "now unscored: factor not rated yet")
+        near(8.0, on.puts.getValue(b).value, "value kept")
+
+        // a second FACTOR config does not flip the bit: nothing to re-emit
+        r.weight(t, "spin", 1.0, Direction.FACTOR)
+        assertEquals(emitted + 1, r.out.size, "no flip, no emission")
+        r.unconfigure(t, "spin")
+        assertEquals(emitted + 1, r.out.size, "still has a factor dim: no emission")
+
+        // the last FACTOR config redirected to VALUE flips it back
+        r.weight(t, "sway", 1.0, Direction.VALUE)
+        val off = r.out.last()
+        assertEquals(emitted + 2, r.out.size)
+        assertEquals(setOf(b), off.puts.keys, "b re-emitted again, x untouched")
+        near(8.0, off.puts.getValue(b).score, "scored again")
+
+        // and the last FACTOR config REMOVED flips it back too
+        r.weight(t, "sway", 1.0, Direction.FACTOR)
+        assertEquals(null, r.scored().getValue(b).score)
+        r.unconfigure(t, "sway")
+        val removed = r.out.last()
+        assertEquals(setOf(b), removed.puts.keys, "removal flip re-emits b, x untouched")
+        near(8.0, removed.puts.getValue(b).score, "scored after the removal")
+        near(6.0, r.scored().getValue(other).score, "x never moved")
+    }
+
+    @Test
+    fun `redirecting the last factor dim to value scores an idea rated only on it`() {
+        val r = rig() // impact 2, effort 1, both VALUE
+        r.weight(t, "sway", 1.0, Direction.FACTOR)
+        r.rate(a, "sway", "ann", 3)
+        r.rate(a, "sway", "bob", 5)
+        val c = r.scored().getValue(a)
+        assertEquals(null, c.score, "value not rated yet")
+        assertEquals(null, c.value)
+        near(0.375, c.factor, "mean 4, g = (4-1)/8 = 0.375, one dim so factor = g")
+
+        r.weight(t, "sway", 1.0, Direction.VALUE)
+        val v = assertNotNull(r.scored()[a], "present after the flip")
+        near(4.0, v.score, "its raw mean is the score: sway is a value dim now")
+        near(4.0, v.value, "value (untransformed, unlike factor's g)")
+        assertEquals(null, v.factor)
+        assertEquals(mapOf("sway" to 4.0), v.contributions)
+    }
+
     // ── continuous ratings (epic computenet-9y79n: floating point in [1, 9]) ──
 
     @Test

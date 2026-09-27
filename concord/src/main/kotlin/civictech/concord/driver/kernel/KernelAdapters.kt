@@ -16,7 +16,9 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.control.Magnitude
 import civictech.cell.data.delta.PnCounterDelta
+import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.Propagate
+import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
@@ -39,6 +41,9 @@ import civictech.nature.PortDescriptor
 import civictech.nature.PortDirection
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration
 
 /**
  * Driver-internal adapter cells and view folds (W1-A/W3-0). These live **only**
@@ -178,18 +183,126 @@ internal class RecordedView<D : Any, S>(
 }
 
 /**
+ * The observation capture for an `aligned-view` (5ubdv-D1): the rendered
+ * composite stream of one kernel [AlignedCompositeCell], complete and
+ * run-identical once [drain] has returned.
+ *
+ * **Why not at the fold, like [RecordedView].** The aligned sink publishes a
+ * composite *after* a completed wave has applied every arm's buffered deltas —
+ * `flushReady` applies the arms, then `publish` swaps `latest`, all under the
+ * cell lock. Wrapping the member [View]s would log per-arm intermediate states
+ * the cell never publishes (exactly the torn composites [22-OBS-01] forbids),
+ * and inferring publish-time from `assemble()` reading each arm couples the
+ * driver to a private call pattern. The only public publication surface is
+ * [AlignedCompositeCell.onChange], whose dispatch is asynchronous — the
+ * truncation `ObservationLogCaptureTest` documents (computenet-dqy.18).
+ *
+ * **Why the listener is nonetheless complete.** Every submission to the sink's
+ * listener dispatcher — each `publish`'s notification and each `onChange`
+ * registration's late-join catch-up — is made *under the cell lock* into one
+ * single-consumer executor, so submission order is delivery order. The kernel
+ * work that publishes runs on the thread stepping the
+ * [civictech.cell.host.SimulationController], which is the runner's thread, so
+ * by the time [drain] registers its one-shot barrier listener every composite
+ * of the quiesced run has already been submitted ahead of the barrier's
+ * catch-up. When the barrier fires, every earlier composite is in [log]. The
+ * wait is bounded and a timeout throws — never a partial log.
+ *
+ * **Thread-safety of [log].** It is appended on the dispatcher thread and read
+ * on the runner thread after [drain]; the latch's `countDown`/`await` pair is
+ * the happens-before edge, and the caller passes a synchronized list as belt
+ * and braces.
+ *
+ * **The first entry** is the composite as constructed (every member empty),
+ * appended synchronously here so it is present the moment the catalog returns —
+ * [RecordedView]'s constructor entry, for the composite. That is sound only
+ * because this adapter is built **before the cell is spawned**: nothing can
+ * publish yet, so the listener's own catch-up delivers that same composite and
+ * is skipped rather than logged twice.
+ */
+internal class RecordedComposite(
+    val cell: AlignedCompositeCell,
+    private val memberKinds: Map<String, KernelCatalog.ViewKind>,
+    val log: MutableList<Value>,
+) : ObservationSink<Map<String, Value>> {
+
+    @Volatile
+    private var closed = false
+
+    init {
+        log += Value.MapVal(render(cell.current()))
+        // Touched only on the dispatcher thread: the first delivery is this
+        // registration's catch-up (submitted before anything can publish).
+        var catchUpPending = true
+        cell.onChange { composite ->
+            if (catchUpPending) catchUpPending = false else log += Value.MapVal(render(composite))
+        }
+    }
+
+    override fun current(): Map<String, Value> = render(cell.current())
+
+    override fun onChange(listener: (Map<String, Value>) -> Unit) = cell.onChange { listener(render(it)) }
+
+    /** Each member rendered exactly as its standalone view kind renders it (a set member is a sorted `ListVal`). */
+    private fun render(composite: Map<String, Any?>): Map<String, Value> =
+        composite.entries.associateTo(LinkedHashMap()) { (name, value) ->
+            val kind = memberKinds[name] ?: error("aligned view ${cell.ref} published unknown member '$name'")
+            name to KernelCatalog.readView(kind, value)
+        }
+
+    /**
+     * The drain barrier: returns once every composite published before this
+     * call is in [log]. Throws [IllegalStateException] naming the cell and
+     * [timeout] when the dispatcher does not reach the barrier in time (a
+     * wedged or starved listener) — a truncated log reported as complete is the
+     * failure this exists to prevent.
+     */
+    fun drain(timeout: Duration) {
+        check(!closed) { "aligned view ${cell.ref} was closed; its observation log can no longer be drained" }
+        val barrier = CountDownLatch(1)
+        // A listener is never removed (the sink has no unregister), so later
+        // publishes call this again; counting down a released latch is a no-op.
+        cell.onChange { barrier.countDown() }
+        if (!barrier.await(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)) {
+            throw IllegalStateException(
+                "aligned view ${cell.ref}: its listener dispatcher did not reach the drain barrier within " +
+                    "$timeout, so its observation log may be missing composites — refusing to report " +
+                    "quiescence over a truncated log",
+            )
+        }
+    }
+
+    /** Shuts the sink's dispatcher thread. Idempotent. */
+    fun close() {
+        closed = true
+        cell.close()
+    }
+}
+
+/**
  * The scalar `value-view` fold the kernel's [View] companion is missing (it
  * ships only `set` / `map` / `count`). Folds a scalar delta stream into a single
  * running `Long`, dispatching on the payload type so **one** `value-view` binding
  * serves both `counter-source`/`combine-latest`/`feedback` ([CounterDelta], raw
- * addition) and `pn-counter` ([PnCounterDelta], per-source pointwise-max union).
+ * addition), `pn-counter` ([PnCounterDelta], per-source pointwise-max union)
+ * and `waterline` ([WaterlineDelta], max-merged floor — computenet-t4od7.1).
  * The inlet is erased ([civictech.cell.host.ObserveCell] serves `Propagate<Any>`),
  * so the same cell folds whichever scalar delta its producer emits.
+ *
+ * A waterline view reads the floor: the max over every `WaterlineDelta` it has
+ * received (the delta's own lattice merge, so a duplicate or out-of-order
+ * delivery never lowers it). Before any `WaterlineDelta` arrives — the
+ * waterline's `[24-WL-02]` identity, no source contributed yet — the view
+ * reads its zero, `0`, exactly as an untouched counter view does; a scenario
+ * that must tell "no floor" from "floor 0" observes the stream, not the final
+ * value. The terms are summed, but a view is fed one producer kind in
+ * practice, so exactly one term is ever non-zero.
  */
 fun scalarView(): View<Any, Long> = object : View<Any, Long> {
     private var counterTotal = 0L
     private val incs = HashMap<UUID, Long>()
     private val decs = HashMap<UUID, Long>()
+    private var waterline: WaterlineDelta? = null
 
     override fun apply(delta: Any): Boolean {
         val before = current()
@@ -199,14 +312,17 @@ fun scalarView(): View<Any, Long> = object : View<Any, Long> {
                 delta.incs.forEach { (s, t) -> incs[s] = maxOf(incs[s] ?: 0L, t) }
                 delta.decs.forEach { (s, t) -> decs[s] = maxOf(decs[s] ?: 0L, t) }
             }
+            is WaterlineDelta -> waterline = waterline?.merge(delta) ?: delta
             else -> return false
         }
         return current() != before
     }
 
-    override fun current(): Long = counterTotal + incs.values.sum() - decs.values.sum()
+    override fun current(): Long =
+        counterTotal + incs.values.sum() - decs.values.sum() + (waterline?.floor ?: 0L)
 
-    override fun snapshot(): Serializable = arrayListOf<Serializable>(counterTotal, HashMap(incs), HashMap(decs))
+    override fun snapshot(): Serializable =
+        arrayListOf<Serializable?>(counterTotal, HashMap(incs), HashMap(decs), waterline)
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
@@ -214,6 +330,8 @@ fun scalarView(): View<Any, Long> = object : View<Any, Long> {
         counterTotal = parts[0] as Long
         incs.clear(); incs.putAll(parts[1] as Map<UUID, Long>)
         decs.clear(); decs.putAll(parts[2] as Map<UUID, Long>)
+        // A pre-t4od7.1 snapshot has three parts and no waterline term.
+        waterline = parts.getOrNull(3) as WaterlineDelta?
     }
 }
 

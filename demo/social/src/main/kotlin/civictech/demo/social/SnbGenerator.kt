@@ -114,9 +114,14 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
         val tags = (1..10L).map {
             Tag(id = it, name = "Tag$it", tagClassId = tagClasses[((it - 1) % tagClasses.size).toInt()].id)
         }
-        val places = (1..5L).map { Place(id = it, name = "Place$it", type = "city", partOfId = null) }
+        val cities = (1..5L).map { Place(id = it, name = "Place$it", type = "city", partOfId = 6 + (it % 2)) }
+        val countries = listOf(
+            Place(id = 6, name = "Country6", type = "country", partOfId = null),
+            Place(id = 7, name = "Country7", type = "country", partOfId = null),
+        )
+        val places = cities + countries
         val organisations = (1..5L).map {
-            Organisation(id = it, name = "Org$it", type = "company", placeId = places[((it - 1) % places.size).toInt()].id)
+            Organisation(id = it, name = "Org$it", type = "company", placeId = cities[((it - 1) % cities.size).toInt()].id)
         }
 
         // --- knows: Zipf-ranked targets, wired by weighted-remaining-target draw ---
@@ -276,6 +281,7 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
                 content = "Post $messageId by $creatorId",
                 forumId = forumId,
                 replyOfId = null,
+                locationCountryId = 6 + (messageId % 2),
             )
             messagePool += message
             if (isDynamic(date)) dynamicPosts += IU6AddPost(message) else staticMessages += message
@@ -296,6 +302,7 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
                 content = "Forced dynamic post $creatorId",
                 forumId = forumId,
                 replyOfId = null,
+                locationCountryId = 6 + (messageId % 2),
             )
             messagePool += message
             dynamicPosts += IU6AddPost(message)
@@ -313,6 +320,7 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
                 content = "Comment $messageId by $creatorId",
                 forumId = null,
                 replyOfId = parent.id,
+                locationCountryId = 6 + (messageId % 2),
             )
             messagePool += message
             if (isDynamic(date)) dynamicComments += IU7AddComment(message) else staticMessages += message
@@ -321,13 +329,15 @@ class SnbGenerator(private val seed: Long, private val scaleFactor: Double) : Sn
             val creatorId = dynamicPersonIds.last()
             val parent = dynamicPosts.lastOrNull()?.message ?: messagePool.first()
             val date = after(personById.getValue(creatorId).creationDate, parent.creationDate)
+            val messageId = nextMessageId++
             val message = Message(
-                id = nextMessageId++,
+                id = messageId,
                 creatorId = creatorId,
                 creationDate = date,
                 content = "Forced dynamic comment $creatorId",
                 forumId = null,
                 replyOfId = parent.id,
+                locationCountryId = 6 + (messageId % 2),
             )
             messagePool += message
             dynamicComments += IU7AddComment(message)

@@ -98,6 +98,7 @@ class CorpusCrossCheckTest {
         "24-OP-FLATMAP-01",
         "24-OP-GROUPBY-01",
         "24-OP-GROUPBY-02",
+        "24-OP-GROUPBY-03",
         "24-OP-INTERSECT-01",
         "24-OP-JOIN-01",
         "24-OP-KEYEDSET-01",
@@ -118,6 +119,24 @@ class CorpusCrossCheckTest {
         "24-TMAP-PRESENCE-01",
         "24-TMAP-RESET-01",
     )
+
+    /**
+     * Why every `24-WL-*` scenario (KE4.7, computenet-t4od7) is out of vocabulary. Each one
+     * wires a `waterline` cell, whether it observes the floor directly or feeds it into a `window` or
+     * `join` `waterline` inlet (checked per file by computenet-t4od7.9). Declared before
+     * [OUT_OF_VOCABULARY], which reads it during initialisation.
+     */
+    private val WATERLINE_REASON: String =
+        "Wires a `waterline` cell (`WaterlineCell`), which the ORA1 §HONEST-02 ledger in " +
+            "MapCellModel.kt excludes: its floor is a function of the arriving wave's `sourceId`, " +
+            "read from the live wave context, and a Script/ScriptEvent slice has no way to express " +
+            "that. Where a scenario feeds the floor into an evicting operator, that operator's " +
+            "model (`GroupByModel`, `JoinSetModel`) has no lateness, late-drop or eviction " +
+            "either, so a transcription without the waterline would fold elements the kernel " +
+            "evicts. Four of them (LATE-01, DEL-01, BOUND-01, JOIN-01) already carry a batch " +
+            "differential: concord's own `incremental-equals-batch` over its `BatchOracle` " +
+            "lateness model (computenet-t4od7.2). That is a `:concord` class, and this module's " +
+            "ModuleDependencyTest bars a dependency on `:concord`."
 
     /**
      * Every `24-data-cells` yaml id NOT cross-checked, with a written reason it is outside
@@ -200,7 +219,18 @@ class CorpusCrossCheckTest {
                 "which drives DotModel over a multi-instance Script with stated deliveries — " +
                 "not this yaml-transcription file."
             ),
-    )
+    ) + listOf(
+        "24-WL-BOUND-01",
+        "24-WL-CLOSE-01",
+        "24-WL-CLOSE-02",
+        "24-WL-DEL-01",
+        "24-WL-DUP-01",
+        "24-WL-FLOOR-01",
+        "24-WL-IDLE-01",
+        "24-WL-JOIN-01",
+        "24-WL-JOINLOW-01",
+        "24-WL-LATE-01",
+    ).associateWith { WATERLINE_REASON }
 
     /** Walks up from the Gradle Test task's working directory (`:oracle`'s project dir) to the repo root. */
     private fun repoRoot(): File {
@@ -231,7 +261,7 @@ class CorpusCrossCheckTest {
             ?: error("listFiles returned null for $corpusDir — not a readable directory")
 
         withClue("non-vacuity: a broken directory listing would silently check nothing") {
-            ids.size shouldBe 33
+            ids.size shouldBe 44
         }
 
         val unaccounted = ids - CROSS_CHECKED - OUT_OF_VOCABULARY.keys
@@ -836,6 +866,38 @@ class CorpusCrossCheckTest {
         )
 
         model.eval(script) shouldBe mapOf("v" to ModelState.MapState(mapOf<Any?, Any?>("b" to 9L)))
+    }
+
+    /**
+     * concord/corpus/24-data-cells/24-OP-GROUPBY-03.yaml — elements are `[key, value, n]`
+     * triples; the yaml's `key-of` and the `max` selector read `x[0]`/`x[1]`
+     * (KernelFunctions.kt `keyOf`/`valueOf`), so two triples sharing key and value are
+     * distinct set elements selecting the same value.
+     */
+    @Test
+    fun `24-OP-GROUPBY-03_yaml - group-by with a max aggregator is unmoved by retracting one of two elements sharing the maximum`() {
+        val a = SourceId("a")
+        val firstOfTriple = ElementKey { element -> (element as Triple<*, *, *>).first }
+        val secondOfTripleAsLong = object : LongSelector {
+            override fun selectLong(element: Any?): Long = ((element as Triple<*, *, *>).second as Number).toLong()
+            override fun toString(): String = "secondOfTripleAsLong"
+        }
+        val model = ReferenceModel.terminal(
+            "v",
+            ModelNode.Operator(NodeId("g"), GroupByModel(firstOfTriple, Aggregates.maxOf(secondOfTripleAsLong)), NodeId("a")),
+            ModelNode.Source(NodeId("a"), a, SetSourceModel),
+        )
+        val adds = listOf("a", "b", "c").flatMap { k ->
+            listOf(Triple(k, 9, 1), Triple(k, 9, 2), Triple(k, 4, 3)).map { ScriptEvent.Add(writer, it) }
+        }
+        val removes = listOf(
+            Triple("a", 9, 1), Triple("b", 9, 1), Triple("c", 9, 1),
+            Triple("b", 9, 2), Triple("c", 9, 2),
+            Triple("c", 4, 3),
+        ).map { ScriptEvent.Remove(writer, it) }
+        val script = Script.of(a, *(adds + removes).toTypedArray())
+
+        model.eval(script) shouldBe mapOf("v" to ModelState.MapState(mapOf<Any?, Any?>("a" to 9L, "b" to 4L)))
     }
 
     /**

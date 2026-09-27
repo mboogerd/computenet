@@ -37,6 +37,10 @@ package civictech.demo.alignment
  * exists. Motion is a short fade, off under `prefers-reduced-motion: reduce`. No `$` anywhere, no
  * literal colour. Shared helper contract: the comment block at the top of the shell's script in
  * [AlignmentPage.kt].
+ *
+ * Factor dimensions (design contract 2026-09-22): `#drillDims` suffixes a factor dimension's
+ * button with a muted "factor" label (`.dfx`, alongside the existing split suffix `.dsx`), so the
+ * team can see which argument moves the ranking multiplicatively rather than by averaging.
  */
 internal const val DRILLDOWN_VIEW = """
 <style>
@@ -53,6 +57,7 @@ internal const val DRILLDOWN_VIEW = """
   #drillDims button[aria-pressed="true"] { color: var(--ink); border-color: currentColor; font-weight: 600; }
   #drillDims .sw { width: .6rem; height: .6rem; border-radius: 3px; flex: 0 0 auto; }
   #drillDims .dsx { color: var(--warn); font-weight: 600; }
+  #drillDims .dfx { color: var(--muted); font-weight: 600; }
   #drillPlot { margin: 1.5rem 0 .3rem; } /* room above the top lane for a dot's tooltip */
   #drillPlot .drill-empty { color: var(--muted); font-size: var(--fs-2); padding: 1rem 0; text-align: center; }
   #drillPlot .drill-inner { position: relative; margin: 0 12px; }
@@ -215,6 +220,11 @@ function drillRenderDims(t, row) {
       sw.className = 'sw'; sw.style.background = dimColour(t, d);
       b.appendChild(sw);
       b.appendChild(document.createTextNode(d.name));
+      if (d.direction === 'factor') {
+        const fx = document.createElement('span');
+        fx.className = 'dfx'; fx.textContent = 'factor';
+        b.appendChild(fx);
+      }
       if (splits.has(d.id)) {
         const sx = document.createElement('span');
         sx.className = 'dsx'; sx.textContent = 'split';

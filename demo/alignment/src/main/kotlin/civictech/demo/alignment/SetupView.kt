@@ -28,10 +28,16 @@ package civictech.demo.alignment
  * of several readers on the page; see the "Data access" entry in the shell contract at the top of
  * [AlignmentPage.kt]'s script for the full list. No `$` anywhere (a plain raw string, no template
  * literals); no literal colour — only `:root` tokens and `dimColour(t, d)`.
+ *
+ * Factor dimensions (design contract 2026-09-22): the new-dimension select and each dimension's
+ * segment control both offer `value | factor | cost` (in that order), a muted one-line hint under
+ * the Dimensions heading explains the three kinds, and a factor dimension's weight slider carries
+ * the title/`aria-label` "weight — how hard this factor bites" instead of the plain "weight".
  */
 internal const val SETUP_VIEW = """
 <style>
   #setup .card > h3 { margin: 0 0 .6rem; font-size: var(--fs-2); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  #setup .dim-hint { font-size: var(--fs-1); margin: -.3rem 0 .7rem; }
   #setup .setup-dim-row, #setup .setup-idea-row, #setup .setup-progress-row { padding: .4rem 0; border-bottom: 1px solid var(--line); }
   #setup .setup-dim-row:last-child, #setup .setup-idea-row:last-child, #setup .setup-progress-row:last-child { border-bottom: none; }
   #setup .setup-dim-row { display: grid; align-items: center; gap: .5rem;
@@ -93,11 +99,13 @@ function ensureSetupSkeleton() {
   const root = el('setup');
   root.innerHTML =
     '<h2>Setup</h2>' +
-    '<div class="card"><h3>Dimensions</h3><div id="setupDims"></div>' +
+    '<div class="card"><h3>Dimensions</h3>' +
+      '<p class="muted dim-hint">value dimensions average into the score, factor dimensions multiply it, cost dimensions divide it</p>' +
+      '<div id="setupDims"></div>' +
       '<div class="ntrow" id="setupAddDim">' +
         '<span class="sw" aria-hidden="true"></span>' +
         '<input id="setupDimName" maxlength="80" placeholder="dimension name" aria-label="new dimension name">' +
-        '<select id="setupDimDir" aria-label="new dimension direction"><option value="value">value</option><option value="cost">cost</option></select>' +
+        '<select id="setupDimDir" aria-label="new dimension direction"><option value="value">value</option><option value="factor">factor</option><option value="cost">cost</option></select>' +
         '<button type="button" id="setupDimAdd">add</button>' +
       '</div>' +
     '</div>' +
@@ -208,7 +216,7 @@ function paintDimensions(t) {
       row.innerHTML =
         '<span class="sw" aria-hidden="true"></span>' +
         '<span class="dim-name"></span>' +
-        '<div class="seg" role="group" aria-label="value or cost"><button type="button" data-dir="value">value</button><button type="button" data-dir="cost">cost</button></div>' +
+        '<div class="seg" role="group" aria-label="value, factor or cost"><button type="button" data-dir="value">value</button><button type="button" data-dir="factor">factor</button><button type="button" data-dir="cost">cost</button></div>' +
         '<input type="range" min="0.5" max="5" step="0.5" aria-label="weight">' +
         '<span class="dim-weight num"></span>' +
         '<input class="dim-low" maxlength="80" placeholder="1 means…" aria-label="low anchor label">' +
@@ -238,7 +246,11 @@ function paintDimensions(t) {
     row.querySelector('.sw').style.background = dimColour(t, d);
     row.querySelector('.dim-name').textContent = d.name;
     row.querySelectorAll('.seg button').forEach(b => b.classList.toggle('active', b.dataset.dir === (d.direction || 'value')));
-    row.querySelector('input[type=range]').value = String(d.weight || 1);
+    const weightLabel = d.direction === 'factor' ? 'weight — how hard this factor bites' : 'weight';
+    const slider = row.querySelector('input[type=range]');
+    slider.title = weightLabel;
+    slider.setAttribute('aria-label', weightLabel);
+    slider.value = String(d.weight || 1);
     row.querySelector('.dim-weight').textContent = String(d.weight || 1);
     row.querySelector('.dim-low').value = d.lowLabel || '';
     row.querySelector('.dim-high').value = d.highLabel || '';

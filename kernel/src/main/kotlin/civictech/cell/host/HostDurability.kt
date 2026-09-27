@@ -168,6 +168,79 @@ private data class CheckpointRecord(
 ) : Serializable
 
 /**
+ * One journal record, decoded by [JournalRecords.decode] — the read-side view of the five
+ * record types [HostDurability] writes (computenet-wzbww D2, `[TTD1-02]`). The variants
+ * carry the payload classes' fields copied out, never the payload classes themselves: those
+ * stay `private` because widening their visibility changes their JVM access flags and
+ * therefore their *computed* `serialVersionUID`, which would make every existing checkpoint
+ * blob (`prechange-journal.bin` included) fail `readObject`.
+ *
+ * Not a persisted shape: nothing here is written to a journal, so adding a variant is not a
+ * format change. What IS the format is the `RECORD_*` type byte and the payload classes.
+ */
+sealed interface DecodedJournalRecord {
+    /** A `RECORD_FRAME`: the bytes after the type byte, exactly as [WireCodec.encode] wrote them. */
+    data class Frame(val payload: ByteArray) : DecodedJournalRecord {
+        override fun equals(other: Any?): Boolean = other is Frame && payload.contentEquals(other.payload)
+        override fun hashCode(): Int = payload.contentHashCode()
+    }
+
+    /** A `RECORD_CHECKPOINT`: per-cell `Stateful` snapshots plus the processed-frontier. */
+    data class Checkpoint(
+        val state: Map<CellRef, Serializable>,
+        val frontier: Map<Pair<CellRef, String>, Map<UUID, Long>>,
+    ) : DecodedJournalRecord
+
+    /** A `RECORD_FRONTIER`: one `Effectful` inlet's processed-frontier advance. */
+    data class Frontier(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) : DecodedJournalRecord
+
+    /** A `RECORD_OUTLET_WAVE`: one outlet's emission epoch at checkpoint time. */
+    data class OutletWave(val cellRef: CellRef, val portName: String, val sourceId: UUID, val highWater: Long) :
+        DecodedJournalRecord
+
+    /** A `RECORD_BASELINE`: one discharged-baseline position at an `Effectful` inlet. */
+    data class BaselineDischarge(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) :
+        DecodedJournalRecord
+
+    /** A leading byte that is none of the landed record types. */
+    data class Unknown(val typeByte: Byte) : DecodedJournalRecord
+}
+
+/**
+ * The ONE definition of how a journal record's bytes map to a record type (`[TTD1-02]`):
+ * [HostDurability.recoverFrom] dispatches on [decode]'s result, and any out-of-kernel reader
+ * (`:timetravel`) calls the same function rather than re-reading the type byte itself.
+ */
+object JournalRecords {
+    /**
+     * Decode one record as [Journal.replay] returned it. Types 2..5 are deserialized with
+     * exactly the `ObjectInputStream.readObject` + cast recovery always used; whatever that
+     * throws propagates **unwrapped**, so [RecoveryIncomplete.cause] keeps its class.
+     *
+     * @throws IllegalArgumentException for an empty record, which has no type byte.
+     */
+    fun decode(record: ByteArray): DecodedJournalRecord {
+        require(record.isNotEmpty()) { "empty journal record" }
+        val type = record[0]
+        return when (type) {
+            RECORD_FRAME -> DecodedJournalRecord.Frame(record.copyOfRange(1, record.size))
+            RECORD_CHECKPOINT -> (readPayload(record) as CheckpointRecord)
+                .let { DecodedJournalRecord.Checkpoint(it.state, it.frontier) }
+            RECORD_FRONTIER -> (readPayload(record) as FrontierRecord)
+                .let { DecodedJournalRecord.Frontier(it.cellRef, it.portName, it.timestamp) }
+            RECORD_OUTLET_WAVE -> (readPayload(record) as OutletWaveRecord)
+                .let { DecodedJournalRecord.OutletWave(it.cellRef, it.portName, it.sourceId, it.highWater) }
+            RECORD_BASELINE -> (readPayload(record) as BaselineDischargeRecord)
+                .let { DecodedJournalRecord.BaselineDischarge(it.cellRef, it.portName, it.timestamp) }
+            else -> DecodedJournalRecord.Unknown(type)
+        }
+    }
+
+    private fun readPayload(record: ByteArray): Any? =
+        ObjectInputStream(ByteArrayInputStream(record, 1, record.size - 1)).readObject()
+}
+
+/**
  * The WAL/journal/checkpoint/frontier durability machinery, extracted from
  * [ManagedHost] (RS-8.2): write-ahead journaling of accepted invocations
  * (M10.1), checkpoint capture + compaction (M10.2), and the per-`(cellRef,
@@ -326,19 +399,21 @@ internal class HostDurability(
                     // the caller cannot mistake a partial replay for a
                     // complete one.
                     try {
-                        when (record[0]) {
-                            RECORD_FRAME -> submit(
-                                WireCodec.decode(record.copyOfRange(1, record.size)).let { frame ->
+                        when (val decoded = JournalRecords.decode(record)) {
+                            is DecodedJournalRecord.Frame -> submit(
+                                WireCodec.decode(decoded.payload).let { frame ->
                                     (if (scope == null) frame else frame.baselined(scope))
                                         .copy(replayFrontier = scope)
                                 }
                             )
 
-                            RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
-                            RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
-                            RECORD_BASELINE -> restoreBaselineDischarge(record.copyOfRange(1, record.size))
-                            RECORD_OUTLET_WAVE -> restoreOutletWave(record.copyOfRange(1, record.size))
-                            else -> error("unknown journal record type ${record[0]}")
+                            is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
+                            is DecodedJournalRecord.Frontier ->
+                                advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
+                            is DecodedJournalRecord.BaselineDischarge ->
+                                recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
+                            is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
+                            is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
                         }
                     } catch (e: Exception) {
                         deadLetter("journal replay: record $index of ${records.size} failed: $e")
@@ -485,8 +560,7 @@ internal class HostDurability(
         }
     }
 
-    private fun restoreCheckpoint(blob: ByteArray) {
-        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as CheckpointRecord
+    private fun restoreCheckpoint(record: DecodedJournalRecord.Checkpoint) {
         val cells = cellsView()
         record.state.forEach { (cellRef, snapshot) ->
             (cells[cellRef] as? Stateful)?.restore(snapshot)
@@ -504,24 +578,13 @@ internal class HostDurability(
      * (`[KFX-15]`): durable recovery is a preserved-epoch continuation, so it takes the
      * preserved-epoch mechanism rather than a parallel one.
      */
-    private fun restoreOutletWave(blob: ByteArray) {
-        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as OutletWaveRecord
+    private fun restoreOutletWave(record: DecodedJournalRecord.OutletWave) {
         val outlet = cellsView()[record.cellRef]?.let { PortRegistry.of(it)[record.portName] } as? FanOutlet<*>
             ?: return deadLetter(
                 "checkpoint outlet wave state for ${record.cellRef}.${record.portName} but no such " +
                     "FanOutlet — graph rebuilt differently?"
             )
         outlet.adoptWaveState(OutletWaveState(record.sourceId, record.highWater))
-    }
-
-    private fun restoreFrontier(blob: ByteArray) {
-        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as FrontierRecord
-        advanceFrontier(record.cellRef, record.portName, record.timestamp)
-    }
-
-    private fun restoreBaselineDischarge(blob: ByteArray) {
-        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as BaselineDischargeRecord
-        recordBaselineDischarge(record.cellRef, record.portName, record.timestamp)
     }
 
     /**
@@ -564,7 +627,7 @@ internal class HostDurability(
      * [DISCHARGED_BASELINE_CAP] on that inlet's set. Callers decide whether to also
      * journal it.
      *
-     * Eviction runs on the restore path too ([restoreBaselineDischarge]), and journal
+     * Eviction runs on the restore path too ([recoverFrom]), and journal
      * order is insertion order, so a recovered host holds exactly the set the crashed one
      * held — the bound does not make recovery diverge from the live run.
      */

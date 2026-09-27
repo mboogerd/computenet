@@ -72,8 +72,9 @@ class FanOutlet<Api : Any>(
      * `ConcurrentHashMap` forbids a null key, but a cross-host
      * [HostedCellProxy]-backed `Use.ref` genuinely reports null (the real
      * ref lives on the remote side) — [keyOf] substitutes a stable sentinel,
-     * preserving the prior plain map's "at most one null-ref entry, last
-     * write wins" behavior. [consumerOrder] tracks insertion order
+     * so there is at most one null-ref entry. That entry is no longer "last
+     * write wins": a second, distinct null-ref consumer is refused
+     * ([putConsumer], computenet-mt306). [consumerOrder] tracks insertion order
      * separately — `ConcurrentHashMap` (unlike the prior `LinkedHashMap`-
      * backed `mutableMapOf`) does not preserve it, and taps/consumers fire
      * in a documented order (spec 20/23 "taps-fire-first", emission order).
@@ -97,7 +98,33 @@ class FanOutlet<Api : Any>(
     private val tapOrder = CopyOnWriteArrayList<PortRef>()
 
     private fun putConsumer(key: PortRef, port: Use<Api>) {
+        if (key === NULL_PORT_REF) {
+            // computenet-mt306: every null-ref Use shares this one key, so a
+            // plain put would silently replace an earlier null-ref consumer —
+            // e.g. a second `linkTo(hostedProxy.inlet)`, whose `ref` is null.
+            // Atomic, so two racing null-ref subscribes cannot both pass.
+            val prior = consumers.putIfAbsent(key, port)
+            if (prior == null) consumerOrder += key else refuseSecondNullRef(prior === port)
+            return
+        }
         if (consumers.put(key, port) == null) consumerOrder += key
+    }
+
+    /**
+     * computenet-mt306: a second, *distinct* attachment whose [Use.ref] is null
+     * would overwrite the first on the shared [NULL_PORT_REF] key and silently
+     * lose its deliveries — which AGENTS.md's explicit-port-identity invariant
+     * forbids. Re-attaching the very same object is an idempotent no-op.
+     * Keying null-ref attachments by object identity instead would let both
+     * deliver but leave them undetachable ([unsubscribe] takes a [PortRef]),
+     * so the attachment is refused loudly and the caller names it.
+     */
+    private fun refuseSecondNullRef(sameObject: Boolean) {
+        check(sameObject) {
+            "FanOutlet $ref (${clazz.name}): a second attachment with a null port ref would silently " +
+                "replace the first (a hosted-proxy port reports ref = null). Give each target its own " +
+                "identity, e.g. Use.fixed(proxy.call, PortRef.generate())"
+        }
     }
 
     private fun removeConsumer(key: PortRef) {
@@ -541,8 +568,14 @@ class FanOutlet<Api : Any>(
      * exclusive payloads via [civictech.cell.Owned.borrow] /
      * [civictech.cell.Leased.borrow], never [civictech.cell.Owned.take] /
      * [civictech.cell.Leased.release].
+     *
+     * computenet-dn97t: a null-ref [port] (e.g. a hosted-proxy port from
+     * `ManagedHost.lookup(...)`, whose real ref lives on the remote side) is
+     * refused up front, before either branch below runs — see
+     * [refuseNullRefTap].
      */
     fun tap(port: Use<Api>, negotiated: Boolean = true): LinkResult {
+        refuseNullRefTap(port)
         // PN-10: opt-in negotiation. When [negotiated] AND the target is a local
         // [Linked] port, the tap runs the same target-side handshake every Consume
         // link runs — policies + peer allowlist + nature reconcile + EdgeOpen —
@@ -567,6 +600,34 @@ class FanOutlet<Api : Any>(
         return LinkResult.Connected(
             PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { removeTap(keyOf(port.ref)) },
         )
+    }
+
+    /**
+     * computenet-dn97t: [tap]'s null-ref refusal, checked before anything is
+     * installed. `tap` returns a [PortLink] whose `to` field is a non-null
+     * [PortRef] — the removal key a later `unlink()` needs — but a null-ref
+     * [Use] (a hosted-proxy port; see [keyOf]) has no such key: every null-ref
+     * attachment collapses onto the one [NULL_PORT_REF] sentinel, exactly the
+     * shared-key collision [refuseSecondNullRef] closed for [consumers]. There
+     * [subscribe] never constructs a [PortLink] at all, so a *first* null-ref
+     * consumer could be admitted under the sentinel key; [tap] always returns
+     * one, so even a lone null-ref tap has no genuine removal key to give it —
+     * unlike consumers, refusal here is not only for the *second* attempt.
+     *
+     * Before this, the unnegotiated branch called [putTap] and only then
+     * constructed the [PortLink] — installing the tap before the non-null
+     * `to` parameter's Kotlin-generated null check threw, so a caller who saw
+     * the [NullPointerException] found the tap live and firing regardless
+     * (computenet-dn97t's repro). Checking first, before either branch, means
+     * neither the negotiated handshake's `install` nor the unnegotiated
+     * `putTap` ever runs for a null-ref port.
+     */
+    private fun refuseNullRefTap(port: Use<Api>) {
+        check(keyOf(port.ref) !== NULL_PORT_REF) {
+            "FanOutlet $ref (${clazz.name}): a null port ref cannot back a detachable tap (a hosted-proxy " +
+                "port reports ref = null) — tap() always returns a PortLink, and there is no ref to key its " +
+                "removal on. Give the target its own identity, e.g. Use.fixed(proxy.call, PortRef.generate())"
+        }
     }
 
     /**

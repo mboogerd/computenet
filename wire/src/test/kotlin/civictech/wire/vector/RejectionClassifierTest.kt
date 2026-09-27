@@ -1,6 +1,7 @@
 package civictech.wire.vector
 
 import civictech.cell.wire.WireCodec
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -17,7 +18,7 @@ import org.junit.jupiter.api.assertThrows
 import java.util.Base64
 
 /**
- * [RejectionClassifier]'s two seeded rows and the driver's `negative` arm.
+ * [RejectionClassifier]'s rows and the driver's `negative` arm, both directions.
  *
  * No frame literal lives here: both probes are derived from a seed vector loaded
  * through [VectorLoader] — the same two alterations `WireCodecTest` makes at
@@ -46,6 +47,12 @@ class RejectionClassifierTest {
         return probe
     }
 
+    /** The seed's bytes with an envelope key `WireFrame` does not declare spliced after the opening brace. */
+    private fun unknownEnvelopeKeyProbe(): String {
+        assertTrue(seedUtf8.startsWith("{"), "${seed.id}: encoded.utf8 is not a JSON object")
+        return "{\"telepathy\":true," + seedUtf8.substring(1)
+    }
+
     private fun thrownBy(utf8: String): Throwable =
         assertThrows<Throwable> { WireCodec.decodeFrame(utf8.toByteArray(Charsets.UTF_8)) }
 
@@ -57,6 +64,17 @@ class RejectionClassifierTest {
     @Test
     fun `an unregistered contract-method id pair classifies as unknown-ids`() {
         assertEquals("unknown-ids", RejectionClassifier.classify(thrownBy(unknownIdsProbe())))
+    }
+
+    @Test
+    fun `an unknown envelope key classifies as unknown-envelope-field, and the malformed probe still classifies as malformed`() {
+        assertEquals("unknown-envelope-field", RejectionClassifier.classify(thrownBy(unknownEnvelopeKeyProbe())))
+        val malformed = loader.documents().first { it.id == "WV-NEG-MALFORMED-01" }
+        val malformedBytes = checkNotNull(malformed.encoded) { "${malformed.id}: no `encoded`" }.bytes
+        assertEquals(
+            "malformed",
+            RejectionClassifier.classify(assertThrows<Throwable> { WireCodec.decodeFrame(malformedBytes) }),
+        )
     }
 
     @Test
@@ -106,6 +124,7 @@ class RejectionClassifierTest {
     fun `driver accepts a decode negative whose refusal classifies as expected`() {
         WireVectorConformanceTest.verify(negative("WV-NEG-PROBE-VERSION-01", "unsupported-version", "decode", versionProbe(), null))
         WireVectorConformanceTest.verify(negative("WV-NEG-PROBE-IDS-01", "unknown-ids", "decode", unknownIdsProbe(), null))
+        WireVectorConformanceTest.verify(negative("WV-NEG-PROBE-UNKNOWN-KEY-01", "unknown-envelope-field", "decode", unknownEnvelopeKeyProbe(), null))
     }
 
     @Test
@@ -122,10 +141,57 @@ class RejectionClassifierTest {
         assertTrue(red.message!!.contains("returned one"), red.message)
     }
 
+    // --- the driver's encode arm (ncz.6-D7), on the seed with a lease wrapper ---
+
+    private fun leaseWrapper(value: JsonElement): JsonObject = buildJsonObject {
+        put("type", "Leased")
+        putJsonObject("fields") { put("value", value) }
+    }
+
+    /** The seed's `decoded` with `fields.args` replaced by [args]. */
+    private fun seedDecodedWithArgs(args: List<JsonElement>): JsonObject {
+        val decoded = checkNotNull(seed.decoded) as JsonObject
+        val fields = decoded.getValue("fields") as JsonObject
+        return JsonObject(decoded + ("fields" to JsonObject(fields + ("args" to JsonArray(args)))))
+    }
+
+    private val seedArg: JsonElement
+        get() = ((checkNotNull(seed.decoded) as JsonObject).getValue("fields") as JsonObject).getValue("args").let { (it as JsonArray).first() }
+
     @Test
-    fun `driver fails an encode negative loudly, naming computenet-ncz_6`() {
-        val doc = negative("WV-NEG-PROBE-LEASED-01", "leased-at-encode", "encode", null, checkNotNull(seed.decoded))
+    fun `the bridge's spec-23 refusal classifies as leased-at-encode`() {
+        val refusal = IllegalArgumentException("Leased payloads must not cross machine boundaries (spec 23) — freeze or copy first")
+        assertEquals("leased-at-encode", RejectionClassifier.classify(refusal))
+    }
+
+    @Test
+    fun `driver accepts an encode negative whose lease wrapper the egress refuses before any byte`() {
+        val doc = negative("WV-NEG-PROBE-LEASED-01", "leased-at-encode", "encode", null, seedDecodedWithArgs(listOf(leaseWrapper(seedArg))))
+        WireVectorConformanceTest.verify(doc)
+    }
+
+    @Test
+    fun `driver reds an encode negative expecting another word, naming leased-at-encode`() {
+        val doc = negative("WV-NEG-PROBE-LEASED-02", "malformed", "encode", null, seedDecodedWithArgs(listOf(leaseWrapper(seedArg))))
         val red = assertThrows<AssertionError> { WireVectorConformanceTest.verify(doc) }
-        assertTrue(red.message!!.contains("computenet-ncz.6"), red.message)
+        assertTrue(red.message!!.contains("leased-at-encode"), "the red must show the actual classification: ${red.message}")
+    }
+
+    @Test
+    fun `driver refuses as a schema violation a lease wrapper nested below a direct args element`() {
+        // Stall(reason = <lease wrapper>): the wrapper sits at $.fields.args[0].fields.reason, a position the
+        // bridge never inspects — the driver must not silently build and pass it through.
+        val stall = seedArg as JsonObject
+        val nested = JsonObject(stall + ("fields" to buildJsonObject { put("reason", leaseWrapper(JsonPrimitive("SUSPENDED"))) }))
+        val doc = negative("WV-NEG-PROBE-LEASED-03", "leased-at-encode", "encode", null, seedDecodedWithArgs(listOf(nested)))
+        val refused = assertThrows<VectorSchemaException> { WireVectorConformanceTest.verify(doc) }
+        assertTrue(refused.message!!.contains("$.fields.args[0].fields.reason"), "the refusal must name the position: ${refused.message}")
+    }
+
+    @Test
+    fun `driver refuses as a schema violation an encode negative carrying no lease wrapper`() {
+        val doc = negative("WV-NEG-PROBE-LEASED-04", "leased-at-encode", "encode", null, checkNotNull(seed.decoded))
+        val refused = assertThrows<VectorSchemaException> { WireVectorConformanceTest.verify(doc) }
+        assertTrue(refused.message!!.contains("no lease wrapper"), refused.message)
     }
 }

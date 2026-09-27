@@ -1,0 +1,42 @@
+id: 24-WL-FLOOR-01
+title: The waterline floor is the running max of the min-over-sources candidate, never max-over-sources
+covers: [24-WL-02, 24-WL-03]
+profile: core
+kind: example
+narrative:
+  given: two set-sources of event-time elements feeding one waterline cell, its floor read through a value view
+  when: the sources interleave contributions, neither ever joining below the current floor
+  then: >-
+    the floor rises only to the running maximum of (min over contributing sources of max
+    event time) minus lateness ([24-WL-02]) and never falls ([24-WL-03]) — the
+    max-over-sources control ([KE4-33]) would read 35 after the second step and 75 at the
+    end; this golden discriminates it
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: wl, type: waterline, lateness: 5}
+    - {id: v, type: value-view}
+  links:
+    - {from: a, to: wl}
+    - {from: b, to: wl}
+    - {from: wl, to: v}
+script:
+  - {type: apply, on: b, op: add, value: [20, b1]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [40, a1]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [60, a2]}
+  - {type: quiesce}
+  - {type: apply, on: b, op: add, value: [30, b2]}
+  - {type: quiesce}
+  - {type: apply, on: b, op: add, value: [50, b3]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [70, a3]}
+  - {type: quiesce}
+  - {type: apply, on: b, op: add, value: [80, b4]}
+  - {type: quiesce}
+checks:
+  - {type: observations-monotone, view: v}
+  - {type: final-view, view: v, equals: 65}
+  - {type: no-dead-letters}

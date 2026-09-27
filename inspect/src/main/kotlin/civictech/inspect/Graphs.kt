@@ -239,11 +239,12 @@ internal object Graphs {
             GraphSummary(
                 id = component.id,
                 name = component.name,
-                cells = component.nodes.size,
+                cells = component.nodes.count { it.staged == null },
                 hosts = component.nodes.mapNotNull { it.host }.distinct().size,
                 nets = component.nodes.map { it.net }.distinct().size,
                 health = health(component, errors),
                 lifecycle = component.lifecycle,
+                staged = component.nodes.count { it.staged != null },
             )
         },
     )

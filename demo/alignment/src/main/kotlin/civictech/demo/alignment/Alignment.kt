@@ -82,8 +82,15 @@ data class Rating(val key: RatingKey, val milli: Int) : Serializable
  */
 data class DimStats(val n: Long, val mean: Double, val stdev: Double) : Serializable
 
-/** Which way a dimension pulls an idea's score (computenet-k1d4g-D1): VALUE is higher-is-better, COST higher-is-worse. */
-enum class Direction { VALUE, COST }
+/**
+ * Which way a dimension pulls an idea's score (computenet-k1d4g-D1): VALUE is
+ * higher-is-better and averages into the score; COST is higher-is-worse and
+ * divides it. FACTOR is non-compensatory: it multiplies the score by the
+ * weighted GEOMETRIC mean of its normalised dimension means, a value in
+ * [0, 1] — a dimension rated exactly 1 sinks the score to zero regardless of
+ * every other dimension (factor dimensions, design contract 2026-09-22).
+ */
+enum class Direction { VALUE, COST, FACTOR }
 
 /**
  * A dimension's facilitator configuration (computenet-k1d4g-D1): its weight
@@ -94,16 +101,27 @@ enum class Direction { VALUE, COST }
 data class DimConfig(val weight: Double, val direction: Direction) : Serializable
 
 /**
- * An idea's value ÷ cost aggregate (computenet-k1d4g-D2, D3; computenet-sigl0-D2..D4).
+ * An idea's value × factor ÷ cost aggregate (computenet-k1d4g-D2, D3;
+ * computenet-sigl0-D2..D4; factor dimensions, design contract 2026-09-22).
  *
  * Over the idea's rated-and-configured dimensions, split by direction into V
- * (value) and C (cost): [value] is Σ_V w_d·mean_d / Σ_V w_d (null when V is
- * empty) and [cost] the same over C. When the TOPIC has any COST dimension
- * configured (rated or not), [score] is value / cost if both are non-null and
- * null otherwise; when it has none, [score] is [value] — the v1 weighted mean.
- * [contributions] holds each VALUE dimension's w_d·mean_d / Σ_V w_d ÷ (cost ?: 1),
- * so they sum to [score]; it is empty when [score] is null. Cost ratings are
- * 1..9, so cost ≥ 1 and the division is safe.
+ * (value), C (cost) and F (factor): [value] is Σ_V w_d·mean_d / Σ_V w_d (null
+ * when V is empty) and [cost] the same over C. [factor] is the weighted
+ * GEOMETRIC mean of F's normalised means, Π_F g_d ^ (w_d / Σ_F w_d) with
+ * g_d = (mean_d − 1) / 8 (null when F is empty); it lies in [0, 1], and a
+ * dimension mean of exactly 1.0 sinks it — and hence [score] — to exactly
+ * 0.0 (`Math.pow(0.0, positive)` needs no special casing).
+ *
+ * [value] is always required: [score] is null when it is. When the TOPIC has
+ * any FACTOR dimension configured (rated or not), the factor side is
+ * likewise required: [score] is null when [factor] is. Same rule for [cost]
+ * when the topic has any COST dimension. Otherwise [score] is [value] ×
+ * (factor, only when the topic has a factor dimension) ÷ (cost, only when the
+ * topic has a cost dimension) — the v1 weighted mean when the topic has
+ * neither. [contributions] holds each VALUE dimension's w_d·mean_d / Σ_V w_d
+ * × (factor ?: 1.0) / (cost ?: 1.0), so they sum to [score]; it is empty when
+ * [score] is null. FACTOR and COST dimensions have no contribution. Cost
+ * ratings are 1..9, so cost ≥ 1 and the division is safe.
  *
  * [byDim] holds every rated-and-configured dimension's statistics, whatever
  * its direction; [split] is true when any of them has n ≥ 2 and stdev ≥
@@ -115,6 +133,7 @@ data class Scored(
     val score: Double?,
     val value: Double?,
     val cost: Double?,
+    val factor: Double?,
     val contributions: Map<String, Double>,
     val byDim: Map<String, DimStats>,
     val split: Boolean,
@@ -130,17 +149,33 @@ object Alignment {
 
     /**
      * The batch reference: every idea's [Scored] recomputed from scratch from
-     * the write-side ratings and dimension configs. Written independently of
-     * the cell path on purpose (computenet-sigl0-D7) — it groups raw ratings
-     * and uses exact integer moment sums, where the dataflow folds
-     * insert/retract accumulators, and it derives a topic's has-cost bit by
-     * scanning [dims] where the cell keeps an index — so
-     * `AlignmentBatchAgreementTest` comparing the two is a check, not a
-     * tautology.
+     * the write-side ratings and dimension configs. What stays independent of
+     * the cell path (computenet-sigl0-D7) is the STATS DERIVATION — this
+     * groups raw ratings and folds exact integer moment sums, where
+     * [WeightedFusionCell] folds insert/retract accumulators — and the
+     * HAS-BIT DERIVATION — this scans [dims] for a topic's has-cost/has-factor
+     * bits, where the cell keeps a per-direction index maintained on every
+     * put/remove. The FORMULA itself (the `weightedMean`/`weightedFactor`
+     * blocks below) is, by contrast, a deliberate character-for-character
+     * mirror of [WeightedFusionCell.score]'s: both fold the same `Math.pow`
+     * product over dims in ascending name order (never `exp(Σ ln)`), so the
+     * two are bit-identical by construction, not by coincidence — see "Bit-
+     * identical batch/incremental agreement is mandatory" (factor dimensions,
+     * design contract 2026-09-22). Because the formula is mirrored rather than
+     * independent, `AlignmentBatchAgreementTest`'s comparison of the two is a
+     * churn/wiring check (does every insert/retract/reindex path reach the
+     * same state) rather than a check on the formula itself; the formula's
+     * independent oracle is the literal worked examples in
+     * `AlignmentPipelineTest` (e.g. value 7 × factor g=0.5 ÷ cost 2 = 1.75;
+     * two factor dims combining to 0.25^0.25; a factor dim rated 1 sinking the
+     * score to exact 0.0) — those expected numbers are computed by hand
+     * against the spec, not against this code.
+     *
+     * @param ratings values are thousandths ([Rating.milli]).
      */
-    /** [ratings] values are thousandths ([Rating.milli]). */
     fun rankBatch(ratings: Map<RatingKey, Int>, dims: Map<DimKey, DimConfig>): Map<IdeaKey, Scored> {
         val costTopics = dims.filterValues { it.direction == Direction.COST }.keys.map { it.topic }.toSet()
+        val factorTopics = dims.filterValues { it.direction == Direction.FACTOR }.keys.map { it.topic }.toSet()
         val byIdea = ratings.entries.groupBy { IdeaKey(it.key.topic, it.key.idea) }
         val out = HashMap<IdeaKey, Scored>()
         for ((idea, rows) in byIdea) {
@@ -160,24 +195,48 @@ object Alignment {
             fun weightedMean(dir: Direction): Double? {
                 val side = stats.filterKeys { config(it).direction == dir }
                 if (side.isEmpty()) return null
-                return side.entries.sumOf { (d, s) -> config(d).weight * s.mean } / side.keys.sumOf { config(it).weight }
+                val sumW = side.keys.sumOf { config(it).weight }
+                // zero-weight guard (unreachable via HTTP, which validates weight > 0, but a
+                // direct cell/batch user must get null, never NaN, design contract 2026-09-22)
+                if (sumW == 0.0) return null
+                return side.entries.sumOf { (d, s) -> config(d).weight * s.mean } / sumW
+            }
+            // weighted GEOMETRIC mean of the normalised factor means, ascending dim-name order (design contract 2026-09-22)
+            fun weightedFactor(): Double? {
+                val side = stats.filterKeys { config(it).direction == Direction.FACTOR }
+                if (side.isEmpty()) return null
+                val sumW = side.keys.sumOf { config(it).weight }
+                if (sumW == 0.0) return null // zero-weight guard, see weightedMean
+                var factor = 1.0
+                for ((d, s) in side) factor *= Math.pow((s.mean - 1.0) / 8.0, config(d).weight / sumW)
+                return factor
             }
             val value = weightedMean(Direction.VALUE)
             val cost = weightedMean(Direction.COST)
+            val factor = weightedFactor()
+            val hasFactor = idea.topic in factorTopics
+            val hasCost = idea.topic in costTopics
             val score = when {
-                idea.topic !in costTopics -> value
-                value != null && cost != null -> value / cost
-                else -> null
+                value == null -> null
+                hasFactor && factor == null -> null
+                hasCost && cost == null -> null
+                else -> {
+                    var s = value
+                    if (hasFactor) s *= factor!!
+                    if (hasCost) s /= cost!!
+                    s
+                }
             }
             val contributions = if (score == null) emptyMap() else {
                 val valueDims = stats.filterKeys { config(it).direction == Direction.VALUE }
                 val totalValueWeight = valueDims.keys.sumOf { config(it).weight }
-                valueDims.mapValues { (d, s) -> config(d).weight * s.mean / totalValueWeight / (cost ?: 1.0) }
+                valueDims.mapValues { (d, s) -> config(d).weight * s.mean / totalValueWeight * (factor ?: 1.0) / (cost ?: 1.0) }
             }
             out[idea] = Scored(
                 score = score,
                 value = value,
                 cost = cost,
+                factor = factor,
                 contributions = contributions,
                 byDim = stats,
                 split = stats.values.any { it.n >= 2 && it.stdev >= SPLIT_STDEV },

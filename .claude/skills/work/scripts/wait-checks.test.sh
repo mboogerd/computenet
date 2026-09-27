@@ -192,6 +192,14 @@ printf 'kernel-test 22\n' > "$CTRL/ages.out"
 out=$(run 2)
 has "$out" "STUCK" "a long-running required check is called stuck"
 
+# 5c. a required check already FAILED while another is pending: the reading
+#     must say RED above TIMEOUT-PENDING, not route to "wait again" (4zpht).
+fixture; printf '%s\n' "${ONE_PENDING/concord-full$'\t'pass$'\t'success/concord-full$'\t'fail$'\t'failure}" > "$CTRL/default.rest"
+out=$(run 2); rc=$?
+[ "$rc" -eq 4 ] && ok "red-while-pending still exits 4" || bad "exits $rc, wanted 4"
+[ "$(tail -1 <<<"$out")" = "TIMEOUT-PENDING" ] && ok "verdict token unchanged" || bad "final: $(tail -1 <<<"$out")"
+has "$(tail -3 <<<"$out")" "RED — required check(s) FAILED: concord-full" "the red row is named right above TIMEOUT-PENDING"
+
 # 6. timeout while never fully reporting folds into TIMEOUT-PENDING too
 echo
 echo "timeout while not-yet-reporting"

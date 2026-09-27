@@ -63,7 +63,7 @@ CLASSIFY='
   def first_line: (.text // .body // .content // "") | split("\n")[0];
   def kind: (first_line | ascii_downcase) as $l
     | if   ($l | test("^(question|parked|re-park)"))                             then "PARK"
-      elif ($l | test("^(answered|answer to |human answer|human clarification|human decision|maintainer|decided |decision |amendment to the decision|approved |human respond)")) then "ANSWER"
+      elif ($l | test("^(answered|answer to |council decision|human answer|human clarification|human decision|maintainer|decided |decision |amendment to the decision|approved |human respond)")) then "ANSWER"
       else "note" end;
   (if type=="array" then . else (.comments // []) end)
   | sort_by(.created_at // "")'

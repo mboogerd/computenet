@@ -1,5 +1,6 @@
 package civictech.inspect
 
+import civictech.inspect.edit.ParamSchema
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -60,6 +61,18 @@ data class Node(
      * is a component of one.
      */
     val graph: String? = null,
+    /**
+     * WKB2 F6 (wczst-D6) — set while this cell belongs to an in-flight apply
+     * in `STAGE`/`CUT_OVER`/`UNWIND` (`[WKB2-09]`, `[WKB2-40]`); `null` for
+     * every live member. Resolved at read time by `InspectorModel.stamped`
+     * from a supplier over the applier's own state — the same "world, not
+     * stored record" treatment [graph] and [lifecycle] get.
+     *
+     * Emitted as `null` on purpose, not omitted: [inspectorJson]'s
+     * `encodeDefaults = true` and the client's upsert semantics both depend
+     * on every field being present.
+     */
+    val staged: StagedMark? = null,
 ) {
     companion object {
         const val LOCAL_NET = "local"
@@ -75,6 +88,13 @@ data class Node(
         const val SUSPENDED = "SUSPENDED"
     }
 }
+
+/**
+ * WKB2 F6 (wczst-D6) — [Node.staged]: the in-flight apply a cell currently
+ * belongs to, while that apply is in `STAGE`/`CUT_OVER`/`UNWIND`.
+ */
+@Serializable
+data class StagedMark(val applyId: String)
 
 /** One declared port of a cell, straight off its generated `CellDescriptor`. */
 @Serializable
@@ -134,6 +154,8 @@ data class CellDetail(
     val lifecycle: String = Node.HOT,
     val generation: Long = 0,
     val graph: String? = null,
+    /** [Node.staged] (WKB2 F6, wczst-D6) — see there. */
+    val staged: StagedMark? = null,
     /**
      * The cell's current attention band, lowercased: `"none"` / `"low"` /
      * `"normal"` / `"high"` (`civictech.cell.control.AttentionBand`), or null.
@@ -536,6 +558,15 @@ data class Event(
         const val GRAPHS_CHANGED = "graphs.changed"
         const val HEARTBEAT = "heartbeat"
 
+        /** WKB2 F6 (wczst-D5) — `{"applyId", "phase": "<ApplyPhase name>"}`, on every `StagedApplier.ApplyListener.onPhase`. */
+        const val APPLY_PHASE = "apply.phase"
+
+        /** WKB2 F6 (wczst-D5) — `{"applyId", "index", "handle", "result": StepOutcome-JSON}`, on every `ApplyListener.onStep`. */
+        const val APPLY_STEP = "apply.step"
+
+        /** WKB2 F6 (wczst-D5) — `{"applyId", "outcome": ApplyOutcome-JSON}`, on `ApplyListener.onDone`. */
+        const val APPLY_DONE = "apply.done"
+
         const val ADDED = "added"
         const val REMOVED = "removed"
     }
@@ -843,6 +874,7 @@ data class GraphSummary(
     val id: String,
     /** A host-supplied annotation ([InspectorServer.nameGraph]); null = unnamed, and the UI renders [id]. */
     val name: String? = null,
+    /** Live (unstaged) members only — see [staged]. */
     val cells: Int,
     /** Distinct process-host (`ManagedHost`) names among the members. */
     val hosts: Int,
@@ -858,6 +890,12 @@ data class GraphSummary(
      * the predicate and [Heat] for what each parked state means.
      */
     val lifecycle: String = HOT,
+    /**
+     * WKB2 F6 (wczst-D6) — members currently marked [Node.staged], excluded
+     * from [cells]. Component membership (and hence [id]) is unchanged by
+     * staging: a staged cell is in the partition, just not a live member.
+     */
+    val staged: Int = 0,
 ) {
     companion object {
         const val HOT = "hot"
@@ -918,4 +956,55 @@ data class SearchCost(
     val cellsQueried: Int,
     /** Candidate cells skipped as not hot — suspended, or held mid-migration. */
     val coldSkipped: Int,
+)
+
+/**
+ * `GET /api/inspect/capabilities` (WKB2 F5, `[WKB2-06]`, `[WKB2-51]`) — whether
+ * this inspector accepts graph edits, and if so which verbs and under what
+ * identity. A client offers editing only when [writePlane] is true.
+ *
+ * Disabled, the body is **exactly** `{"writePlane":false}`: [verbs] and
+ * [identity] are `@EncodeDefault(NEVER)` against the module-wide
+ * `encodeDefaults = true` (see [inspectorJson]), because on a disabled plane
+ * they are not "null" — there is no verb list and no identity to report.
+ * Enabled, both are present:
+ * `{"writePlane":true,"verbs":["spawn","connect","despawn"],"identity":"capability-holder"}`.
+ */
+@Serializable
+data class CapabilitiesDto(
+    val writePlane: Boolean,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @OptIn(ExperimentalSerializationApi::class)
+    val verbs: List<String>? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @OptIn(ExperimentalSerializationApi::class)
+    val identity: String? = null,
+)
+
+/**
+ * `GET /api/inspect/catalogue` (WKB2 F12, va0c4-D9) — every registered
+ * [civictech.inspect.edit.CatalogueEntry] the process currently knows, sorted
+ * by id. Read live off [civictech.inspect.edit.Catalogue.entries] on every
+ * request — an entry registered after the server started appears on the next
+ * read — so an empty registry answers `{"entries":[]}`, never 404.
+ */
+@Serializable
+data class CatalogueDto(val entries: List<CatalogueEntryDto>)
+
+/**
+ * One catalogue entry's palette metadata, mapped from its live
+ * [civictech.nature.CellDescriptor] exactly as [InspectorModel.nodeOf] maps a
+ * topology node's ([color], [manifests], [ports]) — the two agree field for
+ * field on the same descriptor shape. [fqn] and [color]/[manifests]/[ports]
+ * are never cached on the entry itself; they are re-read from
+ * [civictech.nature.ContractRegistry] on every request (va0c4-D2).
+ */
+@Serializable
+data class CatalogueEntryDto(
+    val id: String,
+    val fqn: String,
+    val color: String? = null,
+    val manifests: List<String> = emptyList(),
+    val ports: List<NodePort> = emptyList(),
+    val schema: ParamSchema,
 )

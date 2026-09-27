@@ -42,7 +42,7 @@ is your own scratch directory ([agent.md](agent.md) "Scope").
 | Fewer comments than exist, or a body cut mid-word | Inline and default views truncate | `bd comments <id> --json > "<scratch>/c-<id>.json"`, then Read it. The JSON is a bare array. `bd comments` reads; `bd comment` writes. |
 | Stored comment or description is missing words, yet `bd` exited 0 | Backticks and `$(...)` inside a double-quoted argument ran as commands | Put any free text that quotes code in a file (quoted heredoc below) and pass the file: `bd comment <id> --file <path>`, `--body-file` on `bd create`/`bd update`. Write the file in its own Bash call. Re-read what landed. |
 | `bd search` finds nothing | It matches title and id substrings only, and excludes closed items by default | Use `bd show <id>` when you have an id; otherwise `bd list --parent=<epic> --all --json` to a file. Never treat an empty search as absence. |
-| Every read succeeds but returns nothing | `bd` opened an empty database (chosen by cwd or `-C`) | Before routing on emptiness, check `bd -C <main-checkout> stats` reports a non-zero `Total Issues`. |
+| Every read succeeds but returns nothing | `bd` opened an empty database (chosen by cwd or `-C`) | Before routing on emptiness, check `bd -C <main-checkout> stats` reports a non-zero `Total Issues`. To stop retyping `-C`, define a function, not a variable: `bd() { command bd -C "<main-checkout>" "$@"; }`. |
 | An epic looks like it has no ready work | `bd ready --parent` does not reliably reach grandchildren; `bd ready` hides in-progress, blocked and deferred items | Run `.claude/skills/work/scripts/ready-in-epic.sh <epic>`. Exit 3 means nothing was checked; a `could not resolve the epic of <id>` line on stderr means that row was not classified. |
 | An item parked for a human is missing from `bd blocked` | `bd blocked` lists dependency-blocked items only | Query by status: `bd list --status=blocked --json`. |
 | `bd list` misses closed items | `bd list` hides closed without `--all` | Add `--all` when closed items count. |
@@ -88,6 +88,7 @@ EOF
 | `git stash pop` restores someone else's changes | The stash is one stack shared by every worktree of the repository | Get before-and-after without stashing: commit, then compare with `git show <base>:<path> > "<scratch>/before"`. If you must stash: `git stash push -u -m "<unique-tag>"`, note its sha from `git stash list --format='%H %gs'`, and `git stash apply <sha>`, never `pop`. |
 | A commit in the main checkout contains files you did not stage | Sessions working in the main checkout share one index | Commit by pathspec, `git commit -m "<msg>" -- <paths>`; never `--amend` there; check `git show --stat HEAD`. |
 | `git grep` returns zero, or a revision path resolves wrong | Pathspec, regex and zsh-expansion hazards | See AGENTS.md "Implementation conventions". |
+| `fatal: cannot change to '<path>'` / a missing ref, on something an earlier step created | That step was piped into `head` or another early-exiting reader and died mid-write | The error is about the pipe, not the repository. See Shell, below. |
 | Every `git` call exits 69 with "You have not agreed to the Xcode license agreements" | A pending Xcode update on macOS | `export DEVELOPER_DIR=/Library/Developer/CommandLineTools` before any `git`, `gh` or script call. Until you do, `gh` resolves no head, `rev-parse HEAD` prints nothing, and `git checkout -- .` silently restores nothing — so comparisons against an empty string, and mutation restores, both fail open. |
 
 ## gh and CI
@@ -107,10 +108,13 @@ EOF
 
 ## Shell
 
-Sessions run zsh. The hazards where a correct-looking command silently runs
-something else are in AGENTS.md "Implementation conventions". Two more:
+Sessions run zsh; the hazards where a command silently runs something ELSE are
+in AGENTS.md "Implementation conventions". Here it runs and the output lies.
 
-- `${PIPESTATUS[n]}` is empty under zsh; the lowercase `pipestatus` array
-  holds the stage statuses. Prefer not piping a command whose status matters.
-- To avoid retyping `-C` on every `bd` call, define a function, not a
-  variable: `bd() { command bd -C "<main-checkout>" "$@"; }`.
+| Symptom | Cause | Do |
+|---|---|---|
+| `cmd 2>&1 >/dev/null` reports one stream's bytes as the other's | zsh MULTIOS TEES rather than re-points, so stdout lands in the pipe too | Never measure a stream through a merge: `cmd >"<scratch>/out" 2>"<scratch>/err"`, then read each file. |
+| A tool's `✓ …` banner sits beside output you redirected to a file | The transcript shows stderr unlabelled too; `> file` captured stdout alone | The file is the stdout contract, not the transcript. Read the file before reporting a stream defect. |
+| A trivial `grep`/`cat`/`mktemp` returns EMPTY at its nominal timeout | The harness backgrounded it under host load | Not a no-match and not a reading. Run it again; no return twice is a host fault, never an absence. |
+| A command fails on a missing directory or ref that an earlier step created | That step was piped into an early-exiting reader (`head`, `grep -q`, `sed 1q`) and took SIGPIPE mid-write | Never pipe a script that CHANGES something into one. Capture whole, then trim with `tail`. |
+| `${PIPESTATUS[n]}` is empty | zsh spells it lowercase, `pipestatus` | Read `pipestatus`; better, do not pipe a command whose status matters. |

@@ -8,11 +8,14 @@ import civictech.concord.driver.ReadPage
 import civictech.concord.driver.WavePlane
 import civictech.concord.oracle.Fx.apply
 import civictech.concord.oracle.Fx.cell
+import civictech.concord.oracle.Values
 import civictech.concord.oracle.Fx.i
 import civictech.concord.oracle.Fx.link
 import civictech.concord.oracle.Fx.list
+import civictech.concord.oracle.Fx.map
 import civictech.concord.oracle.Fx.s
 import civictech.concord.oracle.Fx.scenario
+import civictech.concord.schema.CompositeWholeWaves
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
@@ -217,6 +220,33 @@ class ChecksTest {
         fail(Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx))
     }
 
+    /**
+     * computenet-vu274: `view: '*'` previously resolved via
+     * `BatchOracle.allViewValues()`, which folds every view immediately and lets
+     * an [civictech.concord.oracle.OracleUnsupported] refusal from ANY view
+     * escape outside the per-view `try`/`catch` — so one refused view (here fed
+     * from a source type the oracle does not model) made the whole check throw
+     * instead of reporting a named `Failed`, even though the sibling view `v1`
+     * is fine and the per-view (`view: v2`) form already reports this refusal
+     * as `Failed`. Fixed by resolving `'*'` to the graph's view-cell ids without
+     * folding, deferring each fold to the per-view loop.
+     */
+    @Test
+    fun `incremental-equals-batch view star reports Failed, not a throw, when one view is refused`() {
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"), cell("v1", "set-view"),
+                cell("b", "mystery-source"), cell("v2", "set-view"),
+            ),
+            links = listOf(link("a", "v1"), link("b", "v2")),
+            script = listOf(apply("a", "add", s("apple"))),
+        )
+        val ctx = FakeContext(FakeDriver(views = mapOf("v1" to list(s("apple")), "v2" to list(s("whatever")))), sc)
+        val r = Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "v2"
+    }
+
     @Test
     fun `late-join-equals-early infers an early-late pair of journaled views`() {
         val sc = scenario(listOf(cell("early", "journal-set-view"), cell("late", "journal-set-view")), emptyList())
@@ -293,6 +323,161 @@ class ChecksTest {
             setViewScenario,
         )
         fail(Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx))
+    }
+
+    // --- composite-whole-waves (5ubdv-D3) --------------------------------------
+
+    /** s → items (identity map) and s → e (filter even) → evens, into one aligned view c. */
+    private fun alignedScenario(
+        evensArm: List<civictech.concord.schema.CellSpec> = listOf(cell("e", "filter", fn = "even")),
+        evensLinks: List<civictech.concord.schema.LinkSpec> = listOf(link("s", "e"), link("e", "c", inlet = "evens")),
+        views: Map<String, String> = mapOf("items" to "set-view", "evens" to "set-view"),
+        script: List<civictech.concord.schema.Step> = listOf(apply("s", "add", i(1)), apply("s", "add", i(2))),
+    ) = scenario(
+        cells = listOf(cell("s", "set-source"), cell("m", "map", fn = "identity")) + evensArm +
+            cell("c", "aligned-view", views = views),
+        links = listOf(link("s", "m"), link("m", "c", inlet = "items")) + evensLinks,
+        script = script,
+    )
+
+    private fun composite(items: List<Long>, evens: List<Long>): Value =
+        map("items" to list(*items.map(::i).toTypedArray()), "evens" to list(*evens.map(::i).toTypedArray()))
+
+    private fun composite(ctx: FakeContext, members: List<String>? = null) =
+        Checks.compositeWholeWaves(CompositeWholeWaves("c", "s", members), ctx)
+
+    @Test
+    fun `composite-whole-waves holds when every composite sits at one common prefix`() {
+        val ctx = FakeContext(
+            FakeDriver(
+                observations = mapOf(
+                    "c" to listOf(composite(listOf(), listOf()), composite(listOf(1), listOf()), composite(listOf(2, 1), listOf(2))),
+                ),
+            ),
+            alignedScenario(),
+        )
+        pass(composite(ctx))
+        // and the evaluate() dispatch reaches it
+        pass(Checks.evaluate(CompositeWholeWaves("c", "s"), ctx))
+    }
+
+    @Test
+    fun `composite-whole-waves fails a torn composite with no common op prefix`() {
+        // items = [1, 2] is prefix 2; evens = [] is prefix 0 or 1 — each member is
+        // a valid prefix on its own, and the composite is still torn.
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf()), composite(listOf(1, 2), listOf())))),
+            alignedScenario(),
+        )
+        val r = composite(ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "no common op prefix"
+        r.message shouldContain "event #1"
+        r.message shouldContain "'s'"
+    }
+
+    @Test
+    fun `composite-whole-waves folds a two-filter arm through both predicates in order`() {
+        val arm = listOf(cell("g", "filter", fn = "gt(1)"), cell("e", "filter", fn = "even"))
+        val links = listOf(link("s", "g"), link("g", "e"), link("e", "c", inlet = "evens"))
+        val script = (1L..4L).map { apply("s", "add", i(it)) }
+        // prefix 4: items [1..4], evens = {x > 1 and even} = [2, 4]
+        val ok = FakeContext(
+            FakeDriver(
+                observations = mapOf(
+                    "c" to listOf(
+                        composite(listOf(1), listOf()),
+                        composite(listOf(1, 2), listOf(2)),
+                        composite(listOf(1, 2, 3, 4), listOf(2, 4)),
+                    ),
+                ),
+            ),
+            alignedScenario(evensArm = arm, evensLinks = links, script = script),
+        )
+        pass(composite(ok))
+        // prefix 3's items with prefix 4's evens: torn
+        val torn = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(1, 2, 3), listOf(2, 4))))),
+            alignedScenario(evensArm = arm, evensLinks = links, script = script),
+        )
+        (composite(torn) as CheckResult.Failed).message shouldContain "no common op prefix"
+    }
+
+    @Test
+    fun `composite-whole-waves refuses a group-by arm rather than passing`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),
+            alignedScenario(evensArm = listOf(cell("e", "group-by", fn = "key-of"))),
+        )
+        val r = composite(ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "evens"
+        r.message shouldContain "group-by"
+    }
+
+    @Test
+    fun `composite-whole-waves refuses a map-view member rather than passing`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),
+            alignedScenario(views = mapOf("items" to "set-view", "evens" to "map-view")),
+        )
+        val r = composite(ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "evens"
+        r.message shouldContain "map-view"
+    }
+
+    @Test
+    fun `composite-whole-waves refuses an unknown member name`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),
+            alignedScenario(),
+        )
+        val r = composite(ctx, members = listOf("items", "odds"))
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "odds"
+    }
+
+    @Test
+    fun `composite-whole-waves refuses an inlet with zero or several inbound links`() {
+        val none = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),
+            alignedScenario(evensLinks = listOf(link("s", "e"))),
+        )
+        (composite(none) as CheckResult.Failed).message shouldContain "evens"
+        val two = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),
+            alignedScenario(evensLinks = listOf(link("s", "e"), link("e", "c", inlet = "evens"), link("s", "c", inlet = "evens"))),
+        )
+        (composite(two) as CheckResult.Failed).message shouldContain "evens"
+    }
+
+    @Test
+    fun `composite-whole-waves checks only the named members`() {
+        // evens torn relative to items, but only items is checked.
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(1, 2), listOf())))),
+            alignedScenario(evensArm = listOf(cell("e", "group-by", fn = "key-of"))),
+        )
+        pass(composite(ctx, members = listOf("items")))
+    }
+
+    @Test
+    fun `composite-whole-waves fails when the view observed nothing at all`() {
+        val ctx = FakeContext(FakeDriver(observations = mapOf("c" to emptyList())), alignedScenario())
+        val r = composite(ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "composite-whole-waves(c)"
+        r.message shouldContain "nothing was observed"
+    }
+
+    @Test
+    fun `an aligned-view composite compares its set members order-insensitively`() {
+        val a = map("items" to list(i(3), i(1)), "evens" to list(i(2)))
+        val b = map("items" to list(i(1), i(3)), "evens" to list(i(2)))
+        Values.equalForView(a, b, "aligned-view") shouldBe true
+        Values.equalForView(a, b, "list-view") shouldBe false
+        ("aligned-view" in Values.VIEW_TYPES) shouldBe false
     }
 
     // --- the empty observation log is never a pass (computenet-qaz) ----------

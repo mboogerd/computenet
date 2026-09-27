@@ -98,6 +98,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `twin-scan.py` | `<parent-id>` — children filed twice by a double breakdown |
 | `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim]` — the create path under a shared parent |
 | `breakdown-marker.sh` | `<subcommand> <epic-id>` — check, acquire (pull+push), or survivor (adjudicate) the epic's write-time breakdown marker |
+| `file-retro.sh` | `--skill S --file F [--skill-version <sha>] [--started T] [--model M]` — files the session's retro record (references/retro.md) |
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — files a friction item |
 | `publish-beads.sh` | `(no arguments)` — the publication push, with rejection recovery |
 
@@ -211,8 +212,8 @@ candidate; all closed → add the missing edges and re-run with
 the epic of <id>` line on stderr means that row was not classified: resolve it
 with `epic-of.sh` first. Empty and nothing resumable:
 
-- Every child closed (at least one) → `bd close <epic>`; on success,
-  `bd update <epic> --remove-label=owner:$BEADS_ACTOR`.
+- Every child closed (at least one) → `bd close <epic>`. Keep its `owner:`
+  label; `check-dotted-ids.sh` reads it.
 - Children open, none ready → the blocked flag goes stale, so run
   `verify-ready.sh` on them. Any READY → work it. None → comment why, `bd defer <epic>`.
 
@@ -401,7 +402,7 @@ Agent({
 Worktree <task-worktree>, branch task/<task-id>; base commit (cut from, not a diff baseline): <sha> <subject>.
 Diff your work against git merge-base <feature-branch> HEAD.
 Read <task-worktree>/.claude/skills/work/references/agent.md, then <task-worktree>/.claude/skills/work/references/implement.md.
-Read the bead: .claude/skills/work/scripts/bead.sh -C <main-checkout> <task-id>; comments: bd -C <main-checkout> comments <task-id> --json.
+Read the bead: .claude/skills/work/scripts/bead.sh -C <main-checkout> <task-id>; its feature's design: bead.sh -C <main-checkout> <feature-id> -r '.design'; comments: bd -C <main-checkout> comments <task-id> --json.
 Change only files in metadata.files. If the acceptance needs another, comment the file and clause on the bead at once and keep working inside the claim.
 Tracker writes: <cross_bead, or "only this bead and items you create">.
 Gate: <"the repo-wide ./gradlew test" | "scope to <modules>; the PR's required checks give repo-wide evidence">.
@@ -551,7 +552,7 @@ routes 2b, 3 and 4 may still dispatch a breakdown.
 | 4 | the epic is dry, budget remains | continuation work, below |
 | 5 | nothing can progress | step 6 |
 
-**Continuation work:** `bd ready --json` items with no epic ancestor (`epic-of.sh`
+**Continuation work:** `bd ready --json --exclude-type=retro` items with no epic ancestor (`epic-of.sh`
 → `(unparented)`) and features or tasks of other epics. Drop `human`-labelled,
 SDLC, recently parked, claim-overlapping, and reviews of your own session's
 output. Prefer dependents of what you finished and items touching your branches'
@@ -591,11 +592,13 @@ Uncertified → leave in draft; push what is committed. Running agents → do no
 wait; the next session resumes them. Report the main checkout's HEAD against
 `<scratch>/step1-head` if it moved.
 
-1. **Epic:** closed by someone else → remove only your `owner:` label. All
-   children closed (at least one) → close it, remove the label. Work remains →
+1. **Epic:** closed by someone else → leave it. All children closed (at least
+   one) → close it. Either way keep the `owner:` label. Work remains →
    `bd update <epic> --status=open --assignee="" --unset-metadata holder`.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
-3. **Friction:** step 7.
+3. **Friction:** step 7. Then the **retro record**, always, even for an empty
+   run: fill [retro.md](references/retro.md)'s template and
+   `.claude/skills/work/scripts/file-retro.sh --skill work --file <scratch>/retro.md --skill-version <sha> --started <t> --model <id>`.
 4. **Publish:** in each feature worktree you touched, `git status --short`
    (leftovers: report, do not commit) and push. Then `publish-beads.sh`; exit 2 →
    its ESCALATE line names a conflict (recovery.md) or a failure, and the

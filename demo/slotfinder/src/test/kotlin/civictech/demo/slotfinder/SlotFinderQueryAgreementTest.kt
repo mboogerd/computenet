@@ -1,8 +1,13 @@
 package civictech.demo.slotfinder
 
+import civictech.cell.Propagate
 import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.view.SetView
 import civictech.cell.graph.lookup
 import civictech.cell.link.LinkResult
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.oracle.model.Membership
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
@@ -53,6 +58,17 @@ import kotlin.random.Random
  *
  * `nearMiss` is a quorum output with no relational twin on the far side of the boundary
  * (cab.7-D3) and is not compared here.
+ *
+ * **Lateness (KE4.6, `[24-WL-10]`).** The hand-wired `byDay` declares a lateness over
+ * [SlotTime] and evicts passed days; [SlotFinderQuery]'s compiled plan models no lateness
+ * and is deliberately not changed — it is the un-evicted view. So case (i)'s `byDay`
+ * agreement is over `[24-WL-10]`'s domain: the reference counts the late-filtered input
+ * (every slot the built pipeline dropped onto `late` removed) and both sides keep only the
+ * days whose [DayEnd] is strictly above the final floor read from the built
+ * `WaterlineCell`. The reference reads that floor and late set from the pipeline the SAME
+ * [DifferentialRunner.check] call built — the runner evaluates the reference after driving
+ * to idle. `common` and `filtered` carry no lateness and are compared unrestricted; case
+ * (ii) never builds the pipeline and is untouched.
  */
 class SlotFinderQueryAgreementTest {
 
@@ -66,6 +82,12 @@ class SlotFinderQueryAgreementTest {
 
     // --------------------------------------------------------------------------- case (i)
 
+    /** The pipeline the current [DifferentialRunner.check] built, its folded `late` outlet and its `byDay` terminal. */
+    private class Built(val refs: SlotPipeline.Refs, val late: SetView<Slot>, val byDay: MapTerminalFold<String, Long>)
+
+    /** Set by [buildHandWired]; read by [handWiredReference] after the run reaches idle. */
+    private var built: Built? = null
+
     private fun buildHandWired(world: SimWorld): CaseGraph {
         val refs = SlotPipeline.build(world.host)
         val mgmt = world.host.managementInlet.call
@@ -73,6 +95,11 @@ class SlotFinderQueryAgreementTest {
         val commonFold = SetTerminalFold<Slot>()
         val filteredFold = SetTerminalFold<Slot>()
         val byDayFold = MapTerminalFold<String, Long>()
+
+        // `late` is a class-level port, not on GroupByApi: fold it through the concrete cell.
+        val late = SetView<Slot>()
+        refs.byDayCell.late.subscribe(Use.fixed(Propagate<SetDelta<Slot>> { late.apply(it) }, PortRef.generate()))
+        built = Built(refs, late, byDayFold)
         val terminals: List<Pair<String, TerminalFold>> = listOf(
             "common" to commonFold,
             "filtered" to filteredFold,
@@ -115,13 +142,28 @@ class SlotFinderQueryAgreementTest {
         } else {
             commonBatch.filter { it.hour in businessHours }.toSet()
         }
+        // [24-WL-10]: the hand-wired byDay is compared over the lateness-restricted domain —
+        // read off the pipeline this run built (the runner evaluates the reference at idle).
+        val run = checkNotNull(built) { "handWiredReference evaluated before buildHandWired built a pipeline" }
+        val finalFloor: Long? = run.refs.waterlineCell.floor()
+        val lateSlots: Set<Slot> = run.late.current()
+        fun live(day: String) = finalFloor == null || DayEnd(day) > finalFloor
+
         val byDay = LinkedHashMap<Any?, Any?>()
         if (businessHours == Slot.BUSINESS_HOURS) {
-            (evaluated.getValue("byDay") as RelationValue.Groups).entries.forEach { (key, count) ->
-                byDay[(key as Row).values[0] as String] = count
+            // The un-evicted view is still the compiled plan's, evaluated over the
+            // late-filtered `common` batch (a dropped slot is filtered by business hours
+            // anyway, so removing it from `common` removes exactly it from the plan's input).
+            val lateFilteredDb = mapOf("common" to (commonBatch - lateSlots).mapTo(LinkedHashSet<Row>()) { encodeSlot(it) })
+            val lateFilteredEval = BatchEvaluator.evaluate(SlotFinderQuery.compiled.plan, lateFilteredDb)
+            (lateFilteredEval.getValue("byDay") as RelationValue.Groups).entries.forEach { (key, count) ->
+                val day = (key as Row).values[0] as String
+                if (live(day)) byDay[day] = count
             }
         } else {
-            filtered.groupBy { it.day }.forEach { (day, slots) -> byDay[day] = slots.size.toLong() }
+            (filtered - lateSlots).groupBy { it.day }.forEach { (day, slots) ->
+                if (live(day)) byDay[day] = slots.size.toLong()
+            }
         }
 
         mapOf(
@@ -155,6 +197,8 @@ class SlotFinderQueryAgreementTest {
         var nonEmptyFilteredSeen = false
         var addsSeen = false
         var removesSeen = false
+        var floorPassedADaySeen = false
+        var lateDropSeen = false
         for (seed in seeds) {
             val script = participantScript(seed)
             script.slices.forEach { slice ->
@@ -167,11 +211,7 @@ class SlotFinderQueryAgreementTest {
                 }
             }
             val reference = handWiredReference()
-            val referenceState = reference.evaluate(script)
-            if ((referenceState.getValue("filtered") as ModelState.SetState).elements.isNotEmpty()) {
-                nonEmptyFilteredSeen = true
-            }
-
+            built = null
             val outcome = DifferentialRunner.check(
                 seed = seed,
                 caseMarker = "slotfinder hand-wired: SlotPipeline vs BatchEvaluator(SlotFinderQuery.compiled)",
@@ -180,6 +220,30 @@ class SlotFinderQueryAgreementTest {
                 buildGraph = ::buildHandWired,
             )
             assertEquals(RunOutcome.Success, outcome, describeOutcome(outcome, script))
+
+            // Evaluated after the check, so it reads THIS seed's built pipeline.
+            val referenceState = reference.evaluate(script)
+            if ((referenceState.getValue("filtered") as ModelState.SetState).elements.isNotEmpty()) {
+                nonEmptyFilteredSeen = true
+            }
+            // [24-WL-10]'s structural half, on the pipeline the check drove: no passed day
+            // survives in byDay (no exclusives here, so nothing is refused), and every late
+            // slot lies below the final floor.
+            val run = checkNotNull(built)
+            val finalFloor = run.refs.waterlineCell.floor()
+            fun live(day: String) = finalFloor == null || DayEnd(day) > finalFloor
+            assertEquals(finalFloor, run.refs.byDayCell.floor(), "seed=$seed byDay's floor lags the waterline at idle")
+            val observedByDay = run.byDay.current().entries
+            assertTrue(
+                observedByDay.keys.all { live(it as String) },
+                "seed=$seed byDay holds a passed day: $observedByDay floor=$finalFloor",
+            )
+            assertTrue(
+                run.late.current().all { finalFloor != null && SlotTime(it) < finalFloor },
+                "seed=$seed a late slot is not below the final floor: ${run.late.current()} floor=$finalFloor",
+            )
+            if (Slot.DAYS.any { !live(it) }) floorPassedADaySeen = true
+            if (run.late.current().isNotEmpty()) lateDropSeen = true
         }
         assertTrue(addsSeen, "the churn never issued an Add across seeds $seeds — script generator is vacuous")
         assertTrue(removesSeen, "the churn never issued a Remove across seeds $seeds — script generator is vacuous")
@@ -187,6 +251,8 @@ class SlotFinderQueryAgreementTest {
             nonEmptyFilteredSeen,
             "no seed of $seeds reached a non-empty 'filtered' reference — the case is vacuously true",
         )
+        assertTrue(floorPassedADaySeen, "no seed of $seeds advanced the floor past a day — the [24-WL-10] restriction is vacuous")
+        assertTrue(lateDropSeen, "no seed of $seeds dropped a late slot — the late-filtered batch input is vacuous")
     }
 
     @Test

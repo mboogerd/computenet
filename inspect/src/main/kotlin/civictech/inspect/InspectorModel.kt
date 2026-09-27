@@ -74,6 +74,15 @@ internal class InspectorModel(
      * for the same construction-order reason as [flow].
      */
     private val instruments: (CellRef) -> Boolean = { false },
+    /**
+     * WKB2 F6 (wczst-D6) — the in-flight apply id a ref currently belongs to
+     * (`STAGE`/`CUT_OVER`/`UNWIND`), or null. Read through a supplier for the
+     * same construction-order reason as [flow] and [instruments]: the server
+     * wires this to `StagedApplier::stagedApplyOf`, and the applier is built
+     * after this model. Defaults to a model that marks nothing, exactly as a
+     * build without an applier reported before this field existed.
+     */
+    private val staged: (CellRef) -> String? = { null },
 ) {
     private val lock = Any()
     private val hostNames: Map<ManagedHost, String> = hosts.entries.associate { (name, host) -> host to name }
@@ -316,6 +325,45 @@ internal class InspectorModel(
         emitEvent(Event.ACTIVITY, inspectorJson.encodeToJsonElement(entry).jsonObject)
     }
 
+    /**
+     * WKB2 F6 (wczst-D5) — one `apply.*` frame (`apply.phase` / `apply.step` /
+     * `apply.done`), rides the same monotonic [seq] as every other event —
+     * the server's `StagedApplier.ApplyListener` is the collaborator that
+     * decides *when*, this is only the emission point (mirrors
+     * [activityEvent], `[WKB2-38]`).
+     */
+    internal fun applyEvent(kind: String, payload: JsonObject) = synchronized(lock) {
+        emitEvent(kind, payload)
+    }
+
+    /**
+     * WKB2 F6 (wczst-D6) — re-emit `topology.node added` with [ref]'s current
+     * stamp, for a ref this view already holds; a no-op for one it does not.
+     *
+     * Exists for one ordering hazard: the registry's publish hook fires
+     * *inside* `delegate.spawnBound`, before the applier's recorder has
+     * appended the ref to `stagedRefs`, so the first `topology.node added`
+     * for a cell entering STAGE carries `staged: null`. The server calls this
+     * once the applier's own bookkeeping catches up (`onStaged`), and again
+     * once a committed apply's members go live (`onPhase(RETIRE)`). The
+     * upsert this relies on is the same one [mirroredPublish] already uses —
+     * re-emitting an `added` op for a node whose content changed is exactly
+     * the client's own semantics, not a new convention.
+     *
+     * A staged↔live flip also changes the navigator card
+     * ([GraphSummary.cells] / [GraphSummary.staged]) without moving
+     * membership, so it owes a `graphs.changed` the same way a lifecycle
+     * change does: coalesced through [lifecycleCardsDirty] onto the next tick.
+     */
+    internal fun restamp(ref: CellRef) = synchronized(lock) {
+        val node = nodes[ref] ?: return@synchronized
+        lifecycleCardsDirty = true
+        emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
+            put("op", Event.ADDED)
+            put("node", inspectorJson.encodeToJsonElement(stamped(ref, node)))
+        })
+    }
+
     /** The name of whichever anchor in [refs] sorts first by uuid, or null when none is anchored. */
     private fun nameOf(refs: Set<CellRef>): String? = refs
         .filter { it in graphAnchors }
@@ -333,7 +381,11 @@ internal class InspectorModel(
      * consistent answer for one cell.
      */
     private fun stamped(ref: CellRef, node: Node): Node =
-        node.copy(graph = componentIndex.componentOf(ref), lifecycle = lifecycleOf(ref))
+        node.copy(
+            graph = componentIndex.componentOf(ref),
+            lifecycle = lifecycleOf(ref),
+            staged = staged(ref)?.let(::StagedMark),
+        )
 
     /**
      * The contract's `"HOT" | "SUSPENDED"` for one cell, from registry and host

@@ -3687,3 +3687,227 @@ otherwise find nothing.
   anchor rebinding. DSC4 excludes revocation by its own residual R4, so the
   trigger is not DSC4 completing — it is whatever item finally builds the
   superseding-binding path DSC4 makes possible.
+
+## WKB2 — requirements cite 51/53 by section because those chapters carry no EARS ids (`spec-gap`, `[WKB2-63]`)
+
+Filed 2026-09-24 by `computenet-t728h.2`. Like `[DSC1-NV-01]` above, this entry
+names **no scenario id** — not because a scenario is forbidden, but because
+there is no requirement id for one to bind to, so no `covers:` binding is
+possible in either direction.
+
+- **Requirements affected**: WKB2's requirement set (`[WKB2-01]`…`[WKB2-63]`,
+  epic `computenet-7p8` §5) cites `doc/spec/50-development-process/51-construction.md`
+  and `doc/spec/50-development-process/53-evolution.md` by *section* — "Graph
+  construction DSL" (51), "The promotion swap" and "Replicated promotion" (53)
+  — rather than by `[NN-SLUG-nn]` id, because `doc/spec/CONCORDANCE.md`
+  §"Denominator honesty" lists `50-development-process/51-construction.md` and
+  `50-development-process/53-evolution.md` among the 13 normative chapters
+  that carry no requirement ids at all. That table already treats the absence
+  as structurally excluded rather than silently clean; this entry is the
+  dispute it points to for WKB2's specific citations.
+- **Missing capability**: EARS ids in 51 and 53. Without them no `covers:`
+  binding is possible, so the requirements WKB2 derives from those two
+  chapters are verifiable by named test but not by the concordance matrix —
+  they cannot appear as covered, dangling, or orphaned; they simply do not
+  exist as denominator.
+- **What was NOT done instead**: no id is minted in `doc/spec/` (`[WKB2-62]`
+  forbids editing spec/plan documents from this epic), no scenario binds to
+  an id that does not exist, and the workbench half of the epic's behaviour
+  specifications B1–B18 is asserted by named `:inspect`/`:kernel` tests — the
+  failure-case catalogue F13 (`computenet-n7iuo`) appends to
+  `doc/product/findings.md` — rather than by concord scenarios. The research
+  plan's R4 closure note (`doc/spec/90-roadmap/95-research-plan.md` §R4
+  Actions: "close this as (1) with a spec note") is itself a spec edit the
+  epic forbids itself, and it remains OPEN for a human; the evidence that
+  note would cite is `doc/product/findings.md` (this task's sibling file) and
+  the failure-case entries F13 appends there.
+- **Check to restore**: when 51/53 gain EARS ids, bind the WKB2 properties
+  those chapters ground to ordinary scenarios via `covers:`, regenerate
+  `doc/spec/CONCORDANCE.md`, and retire this entry.
+- **Revisit trigger**: an id-minting pass over `50-development-process/51-construction.md`
+  and `50-development-process/53-evolution.md`, or the R4 closure note (95
+  §R4) landing.
+
+## KE4.7 close-out — the `[24-WL-*]` ids and the B16 scenario the corpus does not carry
+
+Filed 2026-09-27 by `computenet-t4od7.9` (feature `computenet-t4od7` = KE4.7,
+epic `computenet-lxo` = KE4), over `feature/computenet-t4od7` at `15fd3e46`.
+Every other `[24-WL-nn]` id reads `covered` in `doc/spec/CONCORDANCE.md`
+(the `24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
+`[24-WL-11]`). The four ids below stay `gap` rows, and the fifth entry
+records a scenario that was designed and deliberately not authored. Kernel
+test names below were checked with `git grep -n` at that commit.
+
+## `24-WL-04` — the floor is a value, not a wave: only its settlement consequence is observable, and that half is checkable but not yet authored (`check-vocabulary-gap`)
+
+- **Requirement**: `[24-WL-04]` (`20-dataflow-semantics/24-data-cells.md`
+  §Lateness and waterlines; stated in `22-consistency.md` §Interaction with
+  other parts): the floor SHALL NOT be a wave position and SHALL NOT be a
+  member of any completeness set or glitch-free frontier. 22 names the
+  observable consequence: a wave that reaches the waterline without moving the
+  floor emits nothing and is absorb-acked (CP-A3), so a glitch-free consumer
+  downstream of both the data and the waterline settles that wave normally.
+- **Corrected premise.** The breakdown (t4od7-D10) disputed the whole id on
+  the grounds that no catalog cell accepts a waterline arm into a wave-aligned
+  fan-in. That is false. `aligned-view` accepts a `value-view` member
+  (`KernelCatalog.alignedView`, `"value-view" -> scalarView()`), and
+  `scalarView()` (`KernelAdapters.kt`) folds `WaterlineDelta`. A probe was
+  run and not committed: `a -> c.d`, `a -> wl (lateness 5)`, `wl -> c.f`,
+  adds `[10,x]`, `[3,y]`, `[8,z]`, each followed by a `quiesce`, the last two
+  leaving the floor at 5. It passed `final-view c == {d: [[3,y],[8,z],[10,x]],
+  f: 5}` and `composite-whole-waves` on `d` on all 20 schedule runs
+  (`CorpusRunner`, core profile, Darwin arm64). **The settlement consequence
+  is checkable with no schema change.** Nobody has yet shown that the probe
+  DISCRIMINATES: that needs a kernel mutation that stops the no-rise
+  absorb-ack, and the close-out's claim held no kernel file.
+- **Missing capability (for the half that stays disputed)**: the literal
+  statement, that the floor is not a wave position and is in no completeness
+  set, has no neutral observable. No check reads a cell's completeness set or
+  a frontier's members. The only observable consequence is the settlement
+  above. A broken implementation that made the floor a frontier member but
+  still acked every no-rise wave would pass every check this vocabulary can
+  state.
+- **What was NOT done instead**: the close-out authored no scenario (its
+  non-goal), so the probe is not in the corpus. No scenario covers
+  `[24-WL-04]` with a stand-in, such as an `observations-monotone` on the
+  floor, which is `[24-WL-03]`'s property and not this one.
+- **Check to restore**: the settlement scenario above, with the discriminating
+  kernel mutation, filed as `computenet-tcovt` (under `computenet-lxo`). When
+  it lands, shrink this entry to the "not a wave position" half.
+- **Kernel pin**: `WaterlineCellTest` `a wave that does not move the floor is
+  absorb-acked so a downstream glitch-free join settles it`.
+- **Revisit trigger**: `computenet-tcovt` landing. For the structural half, a
+  check that can read frontier membership.
+
+## `24-WL-15` — `retire(sourceId)` is a management verb with no script step (`schema-gap`)
+
+- **Requirement**: `[24-WL-15]`: WHERE a management operator invokes
+  `retire(sourceId)` on a `WaterlineCell`, that source SHALL stop gating the
+  floor. This is the manual escape hatch for the idle-source residual
+  (`[24-WL-14]`).
+- **Missing capability**: the closed script-step vocabulary in
+  `concord/schema/scenario.md` §script has no verb that reaches a cell's
+  management surface to retire a source. `git grep -n retire --
+  concord/schema/scenario.md` returns nothing. No driver binding exists
+  either. Epic `computenet-lxo` (B12) places the `retire` half in `:kernel`
+  tests by design.
+- **What was NOT done instead**: no scenario fakes retirement with a
+  `disconnect`. Retirement on `EdgeClose` is `[24-WL-12]`, a different
+  requirement, covered by `24-WL-CLOSE-01` and `24-WL-CLOSE-02`. The idle
+  freeze that `retire` exists to escape is covered by `24-WL-IDLE-01`
+  (`[24-WL-14]`), whose release comes from the idle source emitting again,
+  not from `retire`.
+- **Kernel pins**: `WaterlineChurnTest` `B12 - an idle contributing source
+  freezes the floor, retire raises it in one emission` and `manual retire
+  inside a foreign wave still emits a fresh wave`.
+- **Check to restore**: a `{type: retire, on: <waterline>, source: <cell>}`
+  step, gated as a schema change (single-writer `concord/schema/`), plus a
+  driver binding that resolves `<cell>` to the `sourceId` its waves carry.
+  Then take `24-WL-IDLE-01`'s shape with `retire` replacing b's second
+  emission: `final-view` of the floor at a's promise.
+- **Revisit trigger**: a schema change that adds management verbs, or R15
+  (`95-research-plan.md`, idle-source aging) replacing manual retirement.
+
+## `24-WL-17` — exclusive payloads refuse eviction, but the catalog carries no `Owned` set stream into an evicting cell (`driver-binding-gap`)
+
+- **Requirement**: `[24-WL-17]`: IF an element an eviction would remove
+  carries an `Owned` or `Leased` payload, THEN the cell SHALL refuse that
+  unit's eviction with a named diagnostic, leave the unit's state untouched,
+  not discharge it, and still evict every other passed unit in the same
+  delta.
+- **Missing capability**: two gaps, each enough by itself. (1) The only
+  `Owned`-carrying catalog source is `exclusive-source`
+  (`concord/schema/cell-catalog.md` §Nature / ownership sinks). It emits over
+  the driver's `ExclusivePush` contract (`KernelAdapters.kt`), an SPSC push
+  and not a `SetDelta` stream, so no `window` or join-family inlet accepts it.
+  No catalog id produces a set stream whose elements are `Owned`. (2) Even
+  with such a source, the refusal's observable is the kernel's
+  `GroupByCell.refusedWindows()` / `IntersectSetCell.refusedRows()` diagnostic
+  record, and no check reads it. `refusal-count` counts deliveries refused for
+  want of a position, which is a different refusal. A `final-view` alone
+  cannot tell "refused and kept" from "never passed".
+- **What was NOT done instead**: no scenario stands a plain element in for an
+  exclusive, and no scenario reads a still-live window as evidence of a
+  refusal.
+- **Kernel pins**: `GroupByEvictionTest` `B15 - a passed window holding an
+  Owned element is refused per window while the others evict` and `B15 - a
+  refused window leaves refusedWindows when its last member is retracted`.
+  `JoinFamilyEvictionTest` `an Owned row below the floor is refused per row
+  while the other passed rows evict` and `gated - an Owned add a floor rise
+  passed while buffered lands live and is refused at that same flush`.
+  `computenet-7y4sm` (the gated join-family flush diagnostic) is closed,
+  resolved by #1109.
+- **Check to restore**: an `exclusive-set-source` catalog id (a set source
+  whose `push` wraps each element in a fresh `Owned`), plus a check that reads
+  the evicting cell's refused units, for example
+  `{type: eviction-refusals, cell: w, exactly: [<window keys>]}`, gated as a
+  schema change.
+- **Revisit trigger**: a catalog change that adds an `Owned` set stream, or
+  G-47 (the observe/tap ADMIT half of `exclusive-sink`) reopening the
+  nature/ownership catalog.
+
+## `24-WL-18` — a `Replicable` cell evicts nothing, and the dist driver places no replicated evicting cell (`driver-binding-gap`)
+
+- **Requirement**: `[24-WL-18]`: WHILE a cell holds `Replicable` state, the
+  waterline path SHALL refuse destructive eviction of that state. It evicts
+  single-instance state only, and lifting the restriction ties the floor to
+  `Replication.stableFrontier`, which is a separate item.
+- **Missing capability**: `KernelDriverDist.spawnReplica` binds `replica-of`
+  for `set-source` (`SetCell`) and `ormap-source` (`OrMapCell`) only, and
+  throws `UnsupportedCatalogBinding` for every other type. Neither has a
+  `waterline` inlet. No production `Replicable` cell exposes a `waterline`
+  inlet at all: the seam's refusal (`WaterlineEviction.kt`, `check(host !is
+  Replicable<*>)`) is reachable only through the kernel tests' minimal
+  test-only `Replicable` hosts. So neither the refusal nor a control is
+  drivable from a scenario.
+- **What was NOT done instead**: no scenario asserts "a replica's view is
+  unchanged" over a `set-source` replica, which evicts nothing because it has
+  no waterline inlet, not because it refuses.
+- **Kernel pins**: `GroupByEvictionTest` `B17 - the eviction seam refuses a
+  Replicable host and leaves its state untouched` and `JoinFamilyEvictionTest`
+  `B17 - the grown seam still refuses a Replicable host and leaves its state
+  untouched`. Both run against test-only hosts. The epic excludes B17 from the
+  corpus as scaffolding.
+- **Check to restore**: none while the restriction stands. The requirement is
+  a refusal at a seam no production cell reaches. When a waterline floor is
+  tied to `Replication.stableFrontier` (E3.7-adjacent, `computenet-lxo`
+  lxo-D3), the replicated evicting cell becomes placeable. The honest scenario
+  is then the lifted behaviour, under a new id, and this entry is retired with
+  the B17 tests.
+- **Revisit trigger**: a waterline floor tied to the stable frontier. E3.7
+  merely existing does not qualify (lxo-D3).
+
+## `24-WL-GF-01` (not authored) — B16, a glitch-free wrap around an evicting cell (`check-vocabulary-gap` + `driver-binding-gap`)
+
+- **Requirement it would cover**: `[22-GF-01]`/`[22-GF-02]` for KE4's B16
+  (`[KE4-42]`): no observation mixes pre-eviction and post-eviction
+  membership. Both ids are already `covered` by other scenarios
+  (`[22-GF-01]` by `22-GF-DIAMOND-01`, `22-WAVE-FANIN-01`, `24-OP-COMBINE-02`
+  and `CTL-GF-01`; `[22-GF-02]` by `22-GF-NESTED-01`), so this entry costs no
+  CONCORDANCE row.
+  The feature's rule "B16 SHALL cover `[22-GF-01]`/`[22-GF-02]`" was
+  re-scoped to this entry (t4od7-D6).
+- **Missing capability**: (a) `glitch-free: true` makes the driver spawn a
+  `GlitchFreeCell` downstream of the operator's single outlet
+  (`KernelDriver.spawn`, `if (built.glitchFree)`). That wrapper cannot
+  coalesce the operator's own torn same-wave emissions, which is the R2-A
+  finding in `22-GF-DIAMOND-01`'s header. The kernel form
+  (`GroupByEvictionGlitchFreeTest`) arms a `WaveFrontier` per inlet on the
+  `GroupByCell` itself, `waterline` first (nt17o-D2). The catalog does not
+  expose that construction. (b) Even with it, no check states the property
+  for a map-shaped stream. `observations-whole-waves` compares against the
+  source's set fold. The only neutral necessary condition on a windowed map,
+  "no observed window ends at or below `maxStart - lateness`", passes the
+  empty intermediate `{}` that a wrong arrival order produces, so it is
+  weaker than the requirement.
+- **What was NOT done instead**: that weaker check was not authored, and no
+  `glitch-free: true` window scenario claims B16.
+- **Kernel pins**: `GroupByEvictionGlitchFreeTest` `B16 - the frontier arm
+  order prevents a torn wave across eviction and fold`, with its control
+  `control - eager delivery (no frontier) tears the wave`.
+- **Check to restore**: a map-shaped whole-wave check backed by per-prefix
+  folds from the lateness oracle (`BatchOracle`'s `Lateness` model gives the
+  final fold only, `computenet-t4od7.2`), plus per-inlet frontier gating
+  exposed by the catalog. Both are schema changes.
+- **Revisit trigger**: a catalog form for per-inlet frontier gating, or a
+  check vocabulary change that adds prefix folds over map views.
