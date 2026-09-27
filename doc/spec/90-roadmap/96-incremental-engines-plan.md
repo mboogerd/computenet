@@ -426,7 +426,7 @@ the E3.4↔E2.3 seam.
 
 ---
 
-## Milestone E4 — Lateness / waterline eviction ⚠ IN PROGRESS (E4.1-E4.5 landed; E4.6 open)
+## Milestone E4 — Lateness / waterline eviction ⚠ IN PROGRESS (E4.1-E4.6 landed; concord corpus coverage open, `computenet-t4od7`)
 
 Gap 6, event-time state: windowing shipped as key derivation with the honest caveat
 "windows never evict" — window-keyed `TagState` and `GroupByCell` state grow forever.
@@ -523,7 +523,7 @@ minted-tag count bounded; control: evicting minted pairs without exit-tag emissi
 tombstone-folding consumers dead (the M11.2 tag-hygiene control inverted).
 **Depends**: E4.3.
 
-### E4.6 — Generative lateness harness + demo adoption (gap 6; F-2 adjacent) — P3 · High · `data`
+### E4.6 — Generative lateness harness + demo adoption (gap 6; F-2 adjacent) — P3 · High · `data` ✅ LANDED (`computenet-fh1fo`)
 **Spec**: 50/52 (new invariant rows); 20/24 §Lateness and waterlines.
 **Implement**: a seeded generative harness over the E4.2-E4.5 pipeline shapes with
 configurable disorder and lateness violations; promote `[24-WL-10]`'s equivalence and
