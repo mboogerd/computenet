@@ -56,4 +56,5 @@ script:
   - {type: quiesce}
 checks:
   - {type: final-view, view: v, equals: {"70": 1, "80": 1, "90": 1}}
+  - {type: incremental-equals-batch, view: v}
   - {type: no-dead-letters}

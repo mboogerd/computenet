@@ -45,4 +45,5 @@ script:
   - {type: quiesce}
 checks:
   - {type: final-view, view: v, equals: {"30": 2}}
+  - {type: incremental-equals-batch, view: v}
   - {type: no-dead-letters}

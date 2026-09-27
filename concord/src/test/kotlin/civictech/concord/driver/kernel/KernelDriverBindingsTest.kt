@@ -7,7 +7,6 @@ import civictech.cell.data.op.IntersectSetCell
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.SemiJoinCell
 import civictech.concord.driver.LinkResult
-import civictech.concord.oracle.OracleUnsupported
 import civictech.concord.oracle.BatchOracle
 import civictech.concord.oracle.Fx.i
 import civictech.concord.oracle.Fx.list
@@ -60,6 +59,20 @@ class KernelDriverBindingsTest {
         cell.fn?.let { put("fn", Value.StrVal(it)) }
         cell.agg?.let { put("agg", Value.StrVal(it)) }
         cell.k?.let { put("k", Value.IntVal(it.toLong())) }
+        // the `window:` / `lateness` lowering, as CorpusRunner.params does it
+        cell.window?.let { w ->
+            put(
+                "window",
+                Value.MapVal(
+                    buildMap {
+                        put("kind", Value.StrVal(if (w.kind == civictech.concord.schema.WindowKind.TUMBLING) "tumbling" else "sliding"))
+                        put("size", Value.IntVal(w.size))
+                        w.slide?.let { put("slide", Value.IntVal(it)) }
+                    },
+                ),
+            )
+        }
+        cell.lateness?.let { put("lateness", Value.IntVal(it)) }
     }
 
     private fun drive(scenario: Scenario): KernelDriver {
@@ -395,8 +408,9 @@ class KernelDriverBindingsTest {
 
     // ---- lateness (computenet-t4od7.1, spec 24 §Lateness and waterlines) ----
     //
-    // No `bothAgree` here: the oracle refuses lateness until task 2 models it,
-    // so these drive the kernel side and assert the final view directly.
+    // These drive the kernel side and assert the final view directly; the oracle's
+    // lateness model (computenet-t4od7.2) is pinned against the driver by the last test
+    // here and, per operator, by BatchOracleTest.
 
     private fun lat(l: Long): Map<String, Value> = mapOf("lateness" to i(l))
 
@@ -549,7 +563,7 @@ class KernelDriverBindingsTest {
         d.deadLetters() shouldBe emptyList()
     }
 
-    @Test fun `the batch oracle refuses a lateness scenario rather than fold it unfiltered`() {
+    @Test fun `the batch oracle folds a lateness scenario late-filtered and eviction-restricted, never unfiltered`() {
         val sc = sc(
             listOf(
                 c("a", "set-source"),
@@ -564,6 +578,10 @@ class KernelDriverBindingsTest {
             listOf(l("a", "wl"), l("a", "w"), l("wl", "w", inlet = "waterline"), l("w", "v")),
             listOf(ap("a", "add", list(i(15), s("z"))), ap("a", "add", list(i(4), s("q")))),
         )
-        assertThrows<OracleUnsupported> { BatchOracle(sc).view("v") }
+        // computenet-t4od7.2: the oracle models lateness ([24-WL-10]). [4, q] trails [15, z]'s
+        // floor (13) with no quiesce between, so it may be admitted or late-dropped, but its
+        // window (0, end 10) is evicted by the final floor either way; the unfiltered fold
+        // would keep window 0. The driver's read and the oracle agree on the filtered batch.
+        bothAgree(sc, "v", map("10" to i(1)))
     }
 }

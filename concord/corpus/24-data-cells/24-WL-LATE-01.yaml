@@ -30,7 +30,7 @@
 # negative result, recorded rather than assumed.
 id: 24-WL-LATE-01
 title: A window with lateness folds an out-of-order-but-above-floor add as ordinary, late-drops a below-floor add onto its late outlet, and never retracts a live copy
-covers: [24-WL-01, 24-WL-06, 24-WL-07, 24-OP-WINDOW-02]
+covers: [24-WL-01, 24-WL-06, 24-WL-07, 24-OP-WINDOW-02, 24-WL-10]
 profile: core
 kind: example
 narrative:
@@ -76,4 +76,6 @@ script:
 checks:
   - {type: final-view, view: v, equals: {"20": 3}}
   - {type: final-view, view: l, equals: [[4, late], [19, late2], [22, w]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: incremental-equals-batch, view: l}
   - {type: no-dead-letters}

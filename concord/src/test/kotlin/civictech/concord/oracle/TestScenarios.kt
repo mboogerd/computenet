@@ -7,10 +7,12 @@ import civictech.concord.schema.Graph
 import civictech.concord.schema.Kind
 import civictech.concord.schema.LinkSpec
 import civictech.concord.schema.Profile
+import civictech.concord.schema.QuiesceStep
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.Step
 import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
+import civictech.concord.yaml.ConcordYaml
 
 /** Terse in-code builders for oracle/check fixtures — no YAML, no kernel. */
 object Fx {
@@ -22,10 +24,18 @@ object Fx {
         k: Int? = null,
         window: WindowSpec? = null,
         views: Map<String, String>? = null,
-    ): CellSpec = CellSpec(id = id, type = type, fn = fn, agg = agg, k = k, window = window, views = views)
+        lateness: Long? = null,
+    ): CellSpec = CellSpec(id = id, type = type, fn = fn, agg = agg, k = k, window = window, views = views, lateness = lateness)
 
-    fun link(from: String, to: String, inlet: String? = null): LinkSpec =
-        LinkSpec(from = from, to = to, inlet = inlet)
+    fun link(from: String, to: String, inlet: String? = null, outlet: String? = null): LinkSpec =
+        LinkSpec(from = from, to = to, inlet = inlet, outlet = outlet)
+
+    /** A quiesce barrier step. */
+    fun quiesce(): Step = QuiesceStep()
+
+    /** A corpus scenario, parsed from `concord/corpus/<path>` (the test runs in `concord/`). */
+    fun corpus(path: String): Scenario =
+        ConcordYaml.instance.decodeFromString(Scenario.serializer(), java.io.File("corpus/$path").readText())
 
     fun apply(on: String, op: String, value: Value? = null, times: Int? = null): Step =
         ApplyStep(on = on, op = op, value = value, times = times)

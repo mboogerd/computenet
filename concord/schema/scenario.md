@@ -211,10 +211,30 @@ elements, not by the join's row sources. Every `lateness` value in a graph is
 the author's to keep consistent: the operator's `lateness` sets its own
 per-inlet declaration and the waterline's sets the floor it receives.
 
-The batch oracle does not yet model lateness: `incremental-equals-batch` over a
-view whose cone reaches a `lateness` cell or a `waterline` reports
-`OracleUnsupported` rather than comparing against an unfiltered fold
-(computenet-t4od7 task 2 lifts this).
+**The batch oracle's lateness model, and the quiesce rule** (computenet-t4od7.2,
+`[24-WL-10]`). `incremental-equals-batch` folds a `waterline` and a
+lateness-declaring cell in script order, not as a multiset: a waterline's floor
+after each step is `[24-WL-02]`'s running max of min over its sources (each
+upstream source cell, direct or through `map fn: identity` relays, is one
+`sourceId`) of (max emitted `at` − `L`), with a `disconnect` of an edge into the
+waterline retiring what that edge carried (`[24-WL-12]`) and a `restart` of a
+`rebaseline-source` retiring its epoch (`[24-WL-13]`); an evicting operator's floor
+is the max over the waterlines linked into its `waterline` inlet — its own
+`lateness` number is never read. An add on a lateness-declaring inlet is **late**
+iff its event time is strictly below the floor **as of the last `quiesce` before
+it**, and certainly **admitted** at or above the highest floor that can reach the
+operator first — on one host (FIFO scheduling) the floor raised by the adds applied
+before it in its quiesce block, on several hosts the floor at the end of that block.
+An add between the two is order-dependent: the oracle refuses the view
+(`OracleUnsupported`, naming the step) unless both outcomes fold alike (its window, or
+its row, is evicted by the final floor either way) — **so an author separates a
+floor-raising add from a later add below the floor it raises with a `quiesce`.** The
+batch side is then `[24-WL-10]`'s: a tumbling `window` folds its late-filtered input
+and drops every window whose end (`start + size`) is at or below the final floor; a
+`join`/`semi-join`/`intersect` drops every row whose time is strictly below the final
+floor from both sides, then folds as usual; a `late`/`lateLeft`/`lateRight` view
+folds the adds that side late-dropped. `sliding` + `lateness`, a data input that is
+not a set source, and a `connect`/`disconnect` into the operator are refused.
 
 #### `interest` (W4-A followup, `42-INTEREST-01`)
 
@@ -708,7 +728,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 |---|---|---|
 | final-view | `{type: final-view, view: v, equals: <value>}` | at quiescence `readView(v)` equals the golden |
 | views-converge | `{type: views-converge, views: [a, b]}` | all listed views equal at quiescence |
-| incremental-equals-batch | `{type: incremental-equals-batch, view: v}` | view equals the harness batch oracle (catalog semantics over the accepted-op multiset) |
+| incremental-equals-batch | `{type: incremental-equals-batch, view: v}` | view equals the harness batch oracle (catalog semantics over the accepted-op multiset; a lateness cone in script order — see §`lateness`) |
 | late-join-equals-early | `{type: late-join-equals-early, early?: e, late?: l}` | late- and early-linked folds equal |
 | observations-all-satisfy | `{type: observations-all-satisfy, view: v, fn: even}` | every observation-stream event satisfies a catalog predicate |
 | observations-monotone | `{type: observations-monotone, view: v, order?: ...}` | stream never regresses under the order |
