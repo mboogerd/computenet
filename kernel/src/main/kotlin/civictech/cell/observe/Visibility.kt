@@ -98,6 +98,14 @@ interface FrontierWitness {
      * with plain `thenAccept` runs there too: a dependent that blocks occupies
      * one default-pool worker. A caller needing isolation uses
      * `thenAcceptAsync(fn, ownExecutor)`.
+     *
+     * One JDK exception to "runs there": a thread *waiting* on the handle with
+     * `get`/`join` may itself run a still-pending plain dependent, because
+     * those calls help drain the dependents once they see the result
+     * (`CompletableFuture`'s "any other caller of a completion method"). So
+     * never block on a handle from the scheduler thread — that would stall the
+     * host anyway — and poll `isDone`/`getNow` where a waiter must not run
+     * dependents (computenet-517q4).
      */
     fun visibilityOf(wave: Timestamp): CompletableFuture<Visibility>
 
