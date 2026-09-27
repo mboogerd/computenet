@@ -743,9 +743,9 @@ class DeliberationEngine(
         }
         // CRED-01 (a link's stance is its argument's CRED-02 strength, judged at attach time)
         if (synchronized(lock) { !c.isLink && c.plausibility == null }) {
-            val (path, text) = synchronized(lock) { pathOf(c) to c.text }
+            val text = synchronized(lock) { c.text }
             attempt(c, "plausibility") {
-                val p = judge.plausibility(questionOf(c), path, text)
+                val p = judge.plausibility(questionOf(c), text)
                 synchronized(serviceLock) { service.setStance(c.ref, JEV, p) }
                 p
             }?.let { p ->
