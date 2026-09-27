@@ -22,10 +22,11 @@ import java.util.*
  * the delivered-counter lattice of spec 40/42 over (replica slot, sourceId) —
  * the two share a word stem and nothing else.
  *
- * - **Floor** (`[24-WL-02]`): `min` over contributing sources of
- *   (max observed [Windows.Lateness.timeFn] − [Windows.Lateness.lateness]),
- *   keyed on the arriving *wave's* `sourceId`. Before any source contributes
- *   the floor is the identity, reported as `null`, and nothing is emitted.
+ * - **Floor** (`[24-WL-02]`): the running maximum of the **candidate**, which
+ *   is `min` over contributing sources of (max observed
+ *   [Windows.Lateness.timeFn] − [Windows.Lateness.lateness]), keyed on the
+ *   arriving *wave's* `sourceId`. Before any source contributes the floor is
+ *   the identity, reported as `null`, and nothing is emitted.
  * - **Monotone, effective-only** (`[24-WL-03]`): the floor never falls — a new
  *   source joining with a low maximum leaves it where it is — and a delta that
  *   does not strictly raise it emits nothing and absorb-acks instead (22

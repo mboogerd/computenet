@@ -613,12 +613,15 @@ the floor unchanged and emit nothing for that contribution, SHALL count the
 source as contributing from then on, so that the floor rises again only when
 the candidate — whose minimum now includes that source — exceeds it
 (`[24-WL-02]`), and every lateness-declaring inlet downstream SHALL treat
-that source's elements below the floor as late under `[24-WL-07]`
-(Event-driven). Monotonicity wins over the minimum on that prefix. Worked
-example, lateness 5: A contributes t=40 and the floor rises to 35. C then
-first contributes t=2; the candidate is min(40, 2) − 5 = −3, the floor stays
-35, nothing is emitted, and C's t=2 element is late-dropped — visibly, on the
-`late` outlet — by every lateness-declaring cell it reaches. A then sends
+that source's elements below the floor as late wherever `[24-WL-07]` applies
+to them — i.e. once that inlet's own floor has passed the element's event
+time — not as a stronger, unconditional guarantee that outruns `[24-WL-07]`
+itself (Event-driven). Monotonicity wins over the minimum on that prefix.
+Worked example, lateness 5: A contributes t=40 and the floor rises to 35. C
+then first contributes t=2; the candidate is min(40, 2) − 5 = −3, the floor
+stays 35, nothing is emitted, and C's t=2 element is late-dropped — visibly,
+on the `late` outlet — by every lateness-declaring cell it reaches once that
+cell's own floor has passed t=2 under `[24-WL-07]`. A then sends
 t=100: the candidate is min(100, 2) − 5 = −3, and C now holds the floor at 35.
 C sends t=38 (candidate 33, floor still 35), then t=45: the candidate is
 min(100, 45) − 5 = 40 and the floor rises to 40 — the first rise C takes part
