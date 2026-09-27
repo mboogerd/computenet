@@ -39,6 +39,9 @@ class DeliberateApp(
     private val uiDir: File? = defaultUiDir(),
     private val flushIntervalMs: Long = 100,
 ) {
+    // Bind before starting any scheduler/executor threads. A bind failure must
+    // not leave a half-constructed app running in the background.
+    private val shell = DemoShell(port)
     private val scheduler = VirtualThreadScheduler("deliberate-host")
     private val registry = LocationRegistry()
     private val host = ManagedHost(
@@ -50,7 +53,6 @@ class DeliberateApp(
     private val service = AgoraService(host, registry, onCredence = { _, _ -> dirty.set(true) })
     val engine = DeliberationEngine(service, judge, proposers, config) { dirty.set(true) }
 
-    private val shell = DemoShell(port)
     val boundPort: Int get() = shell.boundPort
 
     private val flusher = Executors.newSingleThreadScheduledExecutor { r ->
@@ -76,7 +78,9 @@ class DeliberateApp(
             try {
                 if (dirty.getAndSet(false)) shell.broadcast { graphJson() }
             } catch (e: Exception) {
-                // A failed frame must not cancel the schedule (a thrown task ends it).
+                // A failed frame must neither cancel the schedule (a thrown
+                // task ends it) nor consume the update that requested it.
+                dirty.set(true)
                 System.err.println("deliberate: broadcast failed: $e")
             }
         }, flushIntervalMs, flushIntervalMs, TimeUnit.MILLISECONDS)
@@ -84,16 +88,26 @@ class DeliberateApp(
 
     fun stop() {
         flusher.shutdownNow()
+        try {
+            if (!flusher.awaitTermination(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                System.err.println("deliberate: SSE flusher did not stop within ${STOP_TIMEOUT_SECONDS}s")
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
         engine.close()
         shell.stop()
         scheduler.shutdown()
     }
 
+    internal val flusherTerminated: Boolean get() = flusher.isTerminated
+
     // ------------------------------------------------------------ handlers
 
     private fun handleQuestion(ex: HttpExchange) {
         if (ex.requestMethod != "POST") return ex.respond(405, "POST only")
-        val text = form(ex)["text"]?.trim()
+        val params = readForm(ex) ?: return
+        val text = params["text"]?.trim()
         if (text.isNullOrEmpty()) return ex.respond(400, "missing text")
         if (text.length > MAX_QUESTION) return ex.respond(400, "question longer than $MAX_QUESTION characters")
         val root = engine.ask(text)
@@ -102,7 +116,7 @@ class DeliberateApp(
 
     private fun handleOverride(ex: HttpExchange) {
         if (ex.requestMethod != "POST") return ex.respond(405, "POST only")
-        val params = form(ex)
+        val params = readForm(ex) ?: return
         val id = params["id"]?.let { runCatching { UUID.fromString(it.trim()) }.getOrNull() }
             ?: return ex.respond(400, "id must be a claim ref")
         val mode = params["mode"]?.trim()?.uppercase()?.let { m -> Override.entries.firstOrNull { it.name == m } }
@@ -115,14 +129,19 @@ class DeliberateApp(
         ex.respond(200, "ok")
     }
 
+    private fun readForm(ex: HttpExchange): Map<String, String>? = try {
+        form(ex)
+    } catch (_: IllegalArgumentException) {
+        ex.respond(400, "malformed form encoding")
+        null
+    }
+
     private fun serveStatic(ex: HttpExchange) {
         if (ex.requestMethod != "GET" && ex.requestMethod != "HEAD") return ex.respond(405, "GET only")
         val dir = uiDir?.takeIf { File(it, "index.html").isFile }
             ?: return ex.respond(200, HINT_PAGE, "text/html; charset=utf-8")
         val path = ex.requestURI.path.removePrefix("/").ifEmpty { "index.html" }
-        val root = dir.canonicalFile
-        val file = File(root, path).canonicalFile
-        if (!file.path.startsWith(root.path + File.separator) || !file.isFile) return ex.respond(404, "not found")
+        val file = resolveStaticFile(dir, path) ?: return ex.respond(404, "not found")
         val bytes = file.readBytes()
         ex.responseHeaders.add("Content-Type", contentType(file.name))
         // Hashed assets are immutable; index.html must revalidate to pick up a rebuild.
@@ -139,6 +158,7 @@ class DeliberateApp(
     companion object {
         const val DEFAULT_PORT = 8091
         const val MAX_QUESTION = 1_000
+        private const val STOP_TIMEOUT_SECONDS = 5L
 
         val JSON = Json {
             explicitNulls = false
@@ -153,13 +173,19 @@ class DeliberateApp(
             listOf(File(cwd, "ui/dist"), File(cwd, "demo/deliberate/ui/dist"))
                 .firstOrNull { File(it, "index.html").isFile }
 
-        private fun form(ex: HttpExchange): Map<String, String> =
-            ex.requestBody.readBytes().decodeToString()
-                .split("&").filter { it.contains("=") }
-                .associate {
-                    val (k, v) = it.split("=", limit = 2)
-                    URLDecoder.decode(k, Charsets.UTF_8) to URLDecoder.decode(v, Charsets.UTF_8)
-                }
+        private fun form(ex: HttpExchange): Map<String, String> = ex.requestBody.readBytes().decodeToString()
+            .split("&").filter { it.contains("=") }
+            .associate {
+                val (k, v) = it.split("=", limit = 2)
+                URLDecoder.decode(k, Charsets.UTF_8) to URLDecoder.decode(v, Charsets.UTF_8)
+            }
+
+        /** Resolve a decoded request path without allowing `..` or symlinks to leave [dir]. */
+        internal fun resolveStaticFile(dir: File, path: String): File? = runCatching {
+            val root = dir.canonicalFile.toPath()
+            val candidate = File(dir.canonicalFile, path).canonicalFile
+            candidate.takeIf { it.toPath().startsWith(root) && it.isFile }
+        }.getOrNull()
 
         private fun contentType(name: String) = when (name.substringAfterLast('.', "").lowercase()) {
             "html" -> "text/html; charset=utf-8"
@@ -203,29 +229,38 @@ internal class Options(args: Array<String>) {
             }
             i++
         }
+        require(positional.size <= 1) { "expected at most one port argument" }
     }
 
     val help get() = "--help" in values
-    val port: Int = positional.firstOrNull()?.let { requireNotNull(it.toIntOrNull()) { "port must be a number: $it" } }
-        ?: System.getenv("PORT")?.toIntOrNull() ?: DeliberateApp.DEFAULT_PORT
-    val proposers: List<String> = (values["--proposers"] ?: "claude,codex").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    val port: Int = (
+        positional.firstOrNull()?.let { requireNotNull(it.toIntOrNull()) { "port must be a number: $it" } }
+            ?: System.getenv("PORT")?.toIntOrNull() ?: DeliberateApp.DEFAULT_PORT
+        ).also { require(it in 0..65535) { "port must be between 0 and 65535: $it" } }
+    val proposers: List<String> = (values["--proposers"] ?: "claude,codex")
+        .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        .also {
+            require(it.isNotEmpty()) { "--proposers is empty" }
+            require(it.all { proposer -> proposer == "claude" || proposer == "codex" }) {
+                "unknown proposer '${it.first { proposer -> proposer != "claude" && proposer != "codex" }}' (claude, codex)"
+            }
+        }
     val claudeModel get() = values["--claude-model"]
     val codexModel get() = values["--codex-model"]
     val ui get() = values["--ui"]?.let(::File)
-    val maxProcesses get() = int("--max-processes") ?: 4
+    val maxProcesses = (int("--max-processes") ?: 4)
+        .also { require(it > 0) { "--max-processes must be positive: $it" } }
 
-    val config: DeliberationEngine.Config
-        get() {
-            val d = DeliberationEngine.Config()
-            return d.copy(
-                argsPerCall = int("--args-per-call") ?: d.argsPerCall,
-                maxRounds = int("--max-rounds") ?: d.maxRounds,
-                maxDepth = int("--max-depth") ?: d.maxDepth,
-                maxClaims = int("--max-claims") ?: d.maxClaims,
-                saturation = double("--saturation") ?: d.saturation,
-                relevance = double("--relevance") ?: d.relevance,
-            )
-        }
+    val config: DeliberationEngine.Config = DeliberationEngine.Config().let { d ->
+        d.copy(
+            argsPerCall = int("--args-per-call") ?: d.argsPerCall,
+            maxRounds = int("--max-rounds") ?: d.maxRounds,
+            maxDepth = int("--max-depth") ?: d.maxDepth,
+            maxClaims = int("--max-claims") ?: d.maxClaims,
+            saturation = double("--saturation") ?: d.saturation,
+            relevance = double("--relevance") ?: d.relevance,
+        )
+    }
 
     private fun int(flag: String) = values[flag]?.let { requireNotNull(it.toIntOrNull()) { "$flag must be an integer: $it" } }
     private fun double(flag: String) = values[flag]?.let { requireNotNull(it.toDoubleOrNull()) { "$flag must be a number: $it" } }
@@ -273,15 +308,8 @@ fun main(args: Array<String>) {
         when (it) {
             "claude" -> CliProposer.claude(gate, opts.claudeModel)
             "codex" -> CliProposer.codex(gate, opts.codexModel)
-            else -> {
-                System.err.println("deliberate: unknown proposer '$it' (claude, codex)")
-                exitProcess(2)
-            }
+            else -> error("validated proposer became unknown: $it")
         }
-    }
-    if (proposers.isEmpty()) {
-        System.err.println("deliberate: --proposers is empty")
-        exitProcess(2)
     }
     val uiDir = opts.ui ?: DeliberateApp.defaultUiDir()
     val app = DeliberateApp(opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir).start()

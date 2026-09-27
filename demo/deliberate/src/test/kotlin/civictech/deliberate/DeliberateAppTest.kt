@@ -18,7 +18,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The HTTP surface (SPEC §6) over real sockets, with a fake judge and fake proposers. */
@@ -42,10 +44,14 @@ class DeliberateAppTest {
     }
 
     private val apps = mutableListOf<DeliberateApp>()
+    private val probes = mutableListOf<HttpProbe>()
     private val decoder = Json { ignoreUnknownKeys = true }
 
     @AfterTest
-    fun tearDown() = apps.forEach { it.stop() }
+    fun tearDown() {
+        probes.forEach { it.close() }
+        apps.forEach { it.stop() }
+    }
 
     private fun app(
         config: DeliberationEngine.Config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40),
@@ -60,7 +66,9 @@ class DeliberateAppTest {
             uiDir = uiDir,
         ).start()
         apps += app
-        return app to HttpProbe("http://localhost:${app.boundPort}")
+        val probe = HttpProbe("http://localhost:${app.boundPort}")
+        probes += probe
+        return app to probe
     }
 
     private fun HttpProbe.graph(): GraphDto = decoder.decodeFromString(GraphDto.serializer(), get("/graph").body())
@@ -145,6 +153,7 @@ class DeliberateAppTest {
         } finally {
             reader.interrupt()
             stream.body().close()
+            client.shutdownNow()
         }
     }
 
@@ -159,6 +168,9 @@ class DeliberateAppTest {
         assertEquals(200, probe.postForm("id=${child.ref}&mode=STOP", "/override").statusCode())
         val stopped = probe.awaitGraph { gr -> gr.nodes.single { it.ref == child.ref }.status == Status.STOPPED }
         assertEquals(Override.STOP, stopped.nodes.single { it.ref == child.ref }.override)
+        assertEquals(200, probe.postForm("id=${child.ref}&mode=AUTO", "/override").statusCode())
+        val automatic = probe.awaitGraph { gr -> gr.nodes.single { it.ref == child.ref }.status == Status.ROUND_LIMIT }
+        assertEquals(Override.AUTO, automatic.nodes.single { it.ref == child.ref }.override)
 
         // EXPAND bypasses the depth gate: the DEPTH_LIMIT leaf grows children.
         assertEquals(200, probe.postForm("id=${leaf.ref}&mode=expand", "/override").statusCode())
@@ -176,6 +188,7 @@ class DeliberateAppTest {
         val (_, probe) = app()
         assertEquals(400, probe.postForm("text=", "/question").statusCode())
         assertEquals(400, probe.postForm("", "/question").statusCode())
+        assertEquals(400, probe.postForm("text=%", "/question").statusCode())
         assertEquals(400, probe.postForm("text=" + "x".repeat(DeliberateApp.MAX_QUESTION + 1), "/question").statusCode())
         assertEquals(405, probe.get("/question").statusCode())
         val root = probe.ask("Q?")
@@ -193,7 +206,8 @@ class DeliberateAppTest {
             File(dist, "index.html").writeText("<!doctype html><title>deliberate ui</title>")
             File(dist, "assets").mkdir()
             File(dist, "assets/app.js").writeText("console.log(1)")
-            File(dist.parentFile, "${dist.name}-secret.txt").writeText("secret")
+            val secret = File(dist.parentFile, "${dist.name}-secret.txt").apply { writeText("secret") }
+            Files.createSymbolicLink(File(dist, "assets/secret.txt").toPath(), secret.toPath())
             val (_, probe) = app(uiDir = dist)
             assertTrue("deliberate ui" in probe.get("/").body())
             val js = probe.get("/assets/app.js")
@@ -201,6 +215,13 @@ class DeliberateAppTest {
             assertTrue(js.headers().firstValue("Content-Type").get().startsWith("text/javascript"))
             assertEquals(404, probe.get("/assets/missing.js").statusCode())
             assertEquals(404, probe.get("/../${dist.name}-secret.txt").statusCode())
+            assertEquals(404, probe.get("/assets/secret.txt").statusCode())
+            assertNull(DeliberateApp.resolveStaticFile(dist, "../${dist.name}-secret.txt"))
+            assertNull(DeliberateApp.resolveStaticFile(dist, "assets/secret.txt"))
+            assertEquals(
+                File(dist, "assets/app.js").canonicalFile,
+                DeliberateApp.resolveStaticFile(dist, "assets/../assets/app.js"),
+            )
 
             val (_, bare) = app(uiDir = null)
             val hint = bare.get("/")
@@ -214,15 +235,33 @@ class DeliberateAppTest {
 
     @Test
     fun `command line parses port, proposers and config knobs`() {
-        val o = Options(arrayOf("--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex", "--args-per-call", "3"))
+        val o = Options(
+            arrayOf(
+                "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",
+                "--args-per-call", "3", "--max-processes", "2",
+            ),
+        )
         assertEquals(9000, o.port)
         assertEquals(listOf("codex"), o.proposers)
+        assertEquals(2, o.maxProcesses)
         assertEquals(2, o.config.maxDepth)
         assertEquals(20, o.config.maxClaims)
         assertEquals(3, o.config.argsPerCall)
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
         assertEquals(DeliberateApp.DEFAULT_PORT, Options(arrayOf("--max-depth", "2")).port.takeIf { System.getenv("PORT") == null } ?: DeliberateApp.DEFAULT_PORT)
-        kotlin.test.assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
-        kotlin.test.assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")).config }
+        assertEquals(4, Options(emptyArray()).maxProcesses)
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-processes", "0")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--proposers", "other")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("9000", "9001")) }
+    }
+
+    @Test
+    fun `stop joins the SSE flusher`() {
+        val (running, _) = app()
+        running.stop()
+        apps.remove(running)
+        assertTrue(running.flusherTerminated)
     }
 }
