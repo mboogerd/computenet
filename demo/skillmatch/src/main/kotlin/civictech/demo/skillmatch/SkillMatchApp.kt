@@ -21,6 +21,8 @@ import civictech.demo.shell.esc
 import civictech.demo.shell.respond
 import civictech.inspect.InspectorServer
 import civictech.inspect.edit.Capability
+import civictech.inspect.edit.Catalogue
+import civictech.inspect.edit.KernelEntries
 import civictech.inspect.edit.WritePlane
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
@@ -288,7 +290,11 @@ class SkillMatchApp(port: Int = 8080) {
      *
      * [writePlane] is [WritePlane.Disabled] by default (`[WKB2-06]`): the write
      * plane is a per-process opt-in, decided by `main`'s `--inspect-write` flag,
-     * never by this method's own defaults changing.
+     * never by this method's own defaults changing. WKB2 F12 (va0c4-D10): an
+     * [WritePlane.Enabled] plane also populates the named-factory catalogue
+     * ([KernelEntries.register]) before the server starts — the palette is
+     * part of the opt-in, not of the read-only instrument, so a disabled
+     * plane leaves the catalogue exactly as it found it.
      */
     fun startInspector(
         port: Int = InspectorServer.DEFAULT_PORT,
@@ -296,6 +302,7 @@ class SkillMatchApp(port: Int = 8080) {
         coldSideGraph: Boolean = false,
         writePlane: WritePlane = WritePlane.Disabled,
     ): InspectorServer {
+        if (writePlane is WritePlane.Enabled) KernelEntries.register()
         val side = if (withSideGraph) SideGraph.build(host) else null
         if (coldSideGraph) side?.let { refs ->
             listOf(refs.saved, refs.mirror).forEach { host.managementInlet.call.suspend(it) }
@@ -451,7 +458,10 @@ fun main(args: Array<String>) {
         println("computenet inspector: http://localhost:${inspector.boundPort}${InspectorServer.TOPOLOGY_PATH}")
         if (cold) println("  side graph started cold ($COLD_FLAG) — wake it from the navigator")
         if (writePlane is WritePlane.Enabled) {
-            println("inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}")
+            println(
+                "inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}; " +
+                    "catalogue entries: ${Catalogue.entries().size}",
+            )
         }
     }
 }
