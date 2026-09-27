@@ -316,18 +316,26 @@ class JevJudgeTest {
 
     @Test
     fun `IO failure is not retried`() {
-        val unusedPort = ServerSocket(0).use { it.localPort }
-        val delays = mutableListOf<Duration>()
-        val offline = JevJudge(
-            apiKey = "test-key",
-            baseUrl = "http://127.0.0.1:$unusedPort",
-            backoff = Duration.ZERO,
-            requestTimeout = Duration.ofSeconds(1),
-            sleeper = { delays += it },
-        )
-        val error = assertFailsWith<JevException> { offline.relevance(ctx) }
-        assertEquals(null, error.status)
-        assertTrue(delays.isEmpty())
+        // Bound but never accept()ed: the port stays reserved to this process for the whole
+        // test, so it cannot be grabbed by another process the way a freed port could (seen
+        // once locally). The connection sits in the backlog and the request times out instead
+        // of being refused, which is still an IOException the client wraps the same way.
+        val stub = ServerSocket(0)
+        try {
+            val delays = mutableListOf<Duration>()
+            val offline = JevJudge(
+                apiKey = "test-key",
+                baseUrl = "http://127.0.0.1:${stub.localPort}",
+                backoff = Duration.ZERO,
+                requestTimeout = Duration.ofMillis(300),
+                sleeper = { delays += it },
+            )
+            val error = assertFailsWith<JevException> { offline.relevance(ctx) }
+            assertEquals(null, error.status)
+            assertTrue(delays.isEmpty())
+        } finally {
+            stub.close()
+        }
     }
 
     @Test
