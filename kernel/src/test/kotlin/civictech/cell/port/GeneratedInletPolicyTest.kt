@@ -11,15 +11,31 @@ import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.link.LinkResult
+import civictech.cell.proxy.Invocation
 import civictech.gen.wire.CellBase
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
 /** A non-Propagate ops Api whose generated `opsHandler()` binding returns a SAM-converted lambda. */
 fun interface TallyOps {
     fun tally(n: Int)
+}
+
+/** A suspend Api, for [Invocation.invokeSuspending]'s share of the same access fix. */
+interface SuspendTally {
+    suspend fun tally(n: Int)
+}
+
+/** Top-level `private`, so its JVM class is package-private in `civictech.cell.port` — not accessible from `civictech.cell.proxy`. */
+private class HiddenSuspendTally : SuspendTally {
+    val seen = mutableListOf<Int>()
+
+    override suspend fun tally(n: Int) {
+        seen += n
+    }
 }
 
 /**
@@ -131,5 +147,15 @@ class GeneratedInletPolicyTest {
         cell.ops.call.tally(2)
 
         cell.seen shouldBe listOf(-2)
+    }
+
+    @Test
+    fun `invokeSuspending reaches a suspend handler whose class is not accessible`() {
+        val target = HiddenSuspendTally()
+        val method = SuspendTally::class.java.methods.single { it.name == "tally" }
+
+        runBlocking { Invocation.of(method, arrayOf(4)).invokeSuspending(target) }
+
+        target.seen shouldBe listOf(4)
     }
 }
