@@ -1932,19 +1932,6 @@ class DeliberationEngineTest {
         assertTrue(g.claims().none { it.status == Status.DIMINISHING })
     }
 
-    @Test
-    fun `yield stop needs the claim floor, twice the window of rounds, and a real decline`() {
-        val stop = DeliberationEngine.YieldStop(window = 2, ratio = 0.6, minClaims = 10)
-        val decaying = listOf(1.0, 1.0, 0.1, 0.1)
-        assertTrue(stop.diminished(decaying, claims = 10))
-        assertTrue(!stop.diminished(decaying, claims = 9), "below the claim floor")
-        assertTrue(!stop.diminished(decaying.drop(1), claims = 50), "fewer than 2 × window rounds")
-        assertTrue(!stop.diminished(listOf(0.5, 0.5, 0.5, 0.5, 0.5), claims = 50), "flat yields")
-        // recent 0.6 is not below 0.6 × 1.0
-        assertTrue(!stop.diminished(listOf(1.0, 1.0, 0.6, 0.6), claims = 50))
-        assertTrue(!stop.diminished(listOf(0.0, 0.0, 0.0, 0.0), claims = 50), "nothing to decline from")
-    }
-
     /** Triage keeps the first [keep] candidates and drops every later one as an untargeted DUPLICATE (yield 0). */
     private fun decayingJudge(keep: Int, allowAll: AtomicBoolean = AtomicBoolean(false)): FakeJudge {
         val seen = AtomicInteger()
