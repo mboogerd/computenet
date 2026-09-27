@@ -935,6 +935,42 @@ if [u["id"] for u in _got] != ["route0"]:
     print("FAIL: running_elsewhere must exclude the feature, the epic, this "
           f"feature's own candidates and claimless units — got {_got}")
 
+# Another feature's AGGREGATE claim is not a running unit (computenet-pl6wv):
+# only its running tasks hold files. An aggregate-only overlap batches and is
+# reported as a warning; a live task of that feature still blocks.
+_agg = {"id": "computenet-t4od7", "files": ["concord/corpus/DISPUTES.md"],
+        "holder": "LIVE", "aggregate": True}
+_ecase(["fh1fo.1"], None, [_agg],
+       [(t("fh1fo.1", "concord/corpus/DISPUTES.md"), False)],
+       "an overlap with another feature's aggregate claim alone does not skip")
+_ecase([], "running outside this feature: computenet-t4od7.2",
+       [_agg, {"id": "computenet-t4od7.2", "files": ["concord/corpus/DISPUTES.md"], "holder": "LIVE"}],
+       [(t("fh1fo.1", "concord/corpus/DISPUTES.md"), False)],
+       "a running task of that feature holding the file still blocks")
+elsewhere_cases += 1
+_aw = getattr(nb, "aggregate_warnings", None)
+_awg = _aw([{"id": "fh1fo.1", "files": ["concord/corpus/DISPUTES.md"]}], [_agg]) if _aw else []
+if len(_awg) != 1 or "computenet-t4od7" not in _awg[0] or "fh1fo.1" not in _awg[0]:
+    failed += 1
+    print(f"FAIL: an aggregate-only overlap must be reported as a warning — got {_awg}")
+# A generated file blocks nothing: not a sibling, not a live unit elsewhere.
+_ecase(["s1", "s2"], None,
+       [{"id": "computenet-fh1fo.3", "files": ["doc/spec/CONCORDANCE.md"], "holder": "LIVE"}],
+       [(t("s1", "concord/corpus/a.yaml,doc/spec/CONCORDANCE.md"), False),
+        (t("s2", "concord/corpus/b.yaml,doc/spec/CONCORDANCE.md"), False)],
+       "doc/spec/CONCORDANCE.md (generated) does not block batching")
+_saved_bd = nb.bd
+nb.bd = lambda *a: [
+    {"id": "otherfeat", "issue_type": "feature", "metadata": {"files": "a.kt"}},
+    {"id": "othertask", "issue_type": "task", "metadata": {"files": "a.kt"}},
+]
+_got = nb.running_elsewhere("MacBoo", "feat", set())
+nb.bd = _saved_bd
+elsewhere_cases += 1
+if [(u["id"], bool(u.get("aggregate"))) for u in _got] != [("otherfeat", True), ("othertask", False)]:
+    failed += 1
+    print(f"FAIL: running_elsewhere must mark a feature's claim as aggregate — got {_got}")
+
 # The batch path WRITES the lag memory but never READS it (computenet-bydx4):
 # 5b's batch call dispatches agents that the 5e reviewer's --capacity read
 # cannot see in load1, so that read must warn — while the batch call's own
