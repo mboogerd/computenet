@@ -31,6 +31,53 @@ data class QuestionDto(
     val yieldEarlier: Double? = null,
     /** Why the tree stopped growing early: "budget", "diminishing" (only when queued work was halted), or null. */
     val stoppedBy: String? = null,
+    /** SPEC §12: USD spent on this question so far — the sum of every priced call (unpriced calls are left out). */
+    val costUsd: Double = 0.0,
+    /** SPEC §12: costUsd + claims still to explore × mean cost per completed round; null until 3 rounds completed. */
+    val projectedUsd: Double? = null,
+    /** SPEC §12: what the figure is made of, per backend. */
+    val cost: CostDto = CostDto(),
+)
+
+/** SPEC §12: the details behind a question's cost figure. */
+@Serializable
+data class CostDto(
+    /** One entry per backend that made at least one call for the question, in claude, codex, jev order. */
+    val backends: List<BackendCostDto> = emptyList(),
+    /** Rounds completed in the question (over all its claims). */
+    val rounds: Int = 0,
+    /** Claims still QUEUED, JUDGING or EXPLORING — the projection assumes one more round each. */
+    val queued: Int = 0,
+    /** Mean USD per completed round; null until 3 rounds completed. */
+    val perRoundUsd: Double? = null,
+)
+
+@Serializable
+data class BackendCostDto(
+    /** "claude" | "codex" | "jev". */
+    val backend: String,
+    val models: List<String> = emptyList(),
+    val calls: Int,
+    /** Every input token, cached reads and cache writes included. */
+    val inputTokens: Long,
+    val cachedInputTokens: Long,
+    val cacheWriteTokens: Long,
+    /** Every output token, reasoning included. */
+    val outputTokens: Long,
+    val reasoningTokens: Long,
+    /** USD of the priced calls; null when none could be priced. */
+    val usd: Double?,
+    /** Calls left out of every total because they could not be priced (rate unknown, no reported cost). */
+    val unpricedCalls: Int = 0,
+    /** The price applied, in words (e.g. "$4.00/1M input · …"). */
+    val rate: String,
+    val rateSource: String,
+    /** When the price was looked up (ISO date); null for a cost the backend reported itself. */
+    val rateDate: String? = null,
+    /** true when the price is not a published price of the provider. */
+    val assumed: Boolean,
+    /** A caveat to show with it (e.g. Claude's subscription note). */
+    val note: String? = null,
 )
 
 /** SPEC §5. DIMINISHING (EXP-10): the question's returns diminished before this claim's next round. */

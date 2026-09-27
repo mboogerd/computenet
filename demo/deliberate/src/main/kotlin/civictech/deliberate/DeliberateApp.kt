@@ -45,6 +45,8 @@ class DeliberateApp(
     private val semantics: SemanticsConfig = SemanticsConfig(),
     /** How often the metadata journal checks whether it has grown enough to compact itself. */
     private val compactEveryMs: Long = 30_000,
+    /** SPEC §12: how each backend's usage is priced. */
+    pricing: Pricing = Pricing(),
 ) {
     /**
      * SPEC §2 "Credence layers and consensus". [layers] always includes
@@ -118,7 +120,7 @@ class DeliberateApp(
         }
     }
 
-    val engine = DeliberationEngine(graph, judge, proposers, config, merger, store = metaStore) { dirty.set(true) }
+    val engine = DeliberationEngine(graph, judge, proposers, config, merger, store = metaStore, pricing = pricing) { dirty.set(true) }
 
     /** Journal length right after the last checkpoint; the periodic compaction measures growth against it. */
     @Volatile
@@ -409,6 +411,16 @@ internal class Options(args: Array<String>) {
         )
     }
 
+    /** SPEC §12: the prices applied to Codex and Jev usage (Claude reports its own). */
+    val pricing: Pricing = Pricing.of(
+        codexModel = values["--codex-model"],
+        codexInput = double("--codex-input-rate"),
+        codexCached = double("--codex-cached-rate"),
+        codexOutput = double("--codex-output-rate"),
+        jevInput = double("--jev-input-rate"),
+        jevOutput = double("--jev-output-rate"),
+    )
+
     /** SPEC §11: the durable data directory, or null (volatile). */
     val data get() = values["--data"]?.let(::File)
 
@@ -442,6 +454,7 @@ internal class Options(args: Array<String>) {
             "--yield-stop", "--yield-window", "--yield-ratio", "--yield-min-claims",
             "--data", "--semantics", "--semantics-layers", "--consensus",
             "--wlo-alpha", "--wlo-k", "--wlo-p", "--wlo-gamma",
+            "--codex-input-rate", "--codex-cached-rate", "--codex-output-rate", "--jev-input-rate", "--jev-output-rate",
         )
         private val D = DeliberationEngine.Config()
         private val Y = DeliberationEngine.YieldStop()
@@ -469,6 +482,10 @@ internal class Options(args: Array<String>) {
               --semantics-layers <ids>    credence layers to propagate (${SemanticsCatalog.IDS.joinToString(",")}); dfquad always runs
               --consensus <ids>           layers averaged (in log-odds) into the consensus (${Consensus.DEFAULT_MEMBERS.joinToString(",")})
               --wlo-k/--wlo-p/--wlo-gamma/--wlo-alpha <x>  weighted log-odds parameters (2.4, 2, 1.3, 1)
+              --codex-input-rate/--codex-cached-rate/--codex-output-rate <usd>  Codex price per 1M tokens
+                                          (default ${Pricing.DEFAULT_CODEX_MODEL}: 4.00 / 0.40 / 20.00; another
+                                          --codex-model without them is shown as tokens only, rate unknown)
+              --jev-input-rate/--jev-output-rate <usd>  Jev price per 1M tokens (assumed 0.042 / 0; unpublished)
               --ui <dir>                  built UI directory (default ui/dist)
             requires TYPESAFE_API_KEY and logged-in `claude` / `codex` CLIs.
         """.trimIndent()
@@ -503,7 +520,7 @@ fun main(args: Array<String>) {
     val merger = CliMerger(proposers.filterIsInstance<CliProposer>().firstOrNull { it.id == "claude" } ?: CliProposer.claude(gate, opts.claudeModel))
     val app = DeliberateApp(
         opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger,
-        dataDir = opts.data, semantics = opts.semantics,
+        dataDir = opts.data, semantics = opts.semantics, pricing = opts.pricing,
     ).start()
     Runtime.getRuntime().addShutdownHook(Thread { app.stop() })
     announcePort("http", app.boundPort)
@@ -511,6 +528,7 @@ fun main(args: Array<String>) {
     println(if (uiDir != null && File(uiDir, "index.html").isFile) "  serving UI from $uiDir" else "  UI not built — see demo/deliberate/README.md")
     println("  layers: ${opts.semantics.running.joinToString()}  (headline ${opts.semantics.headline}, consensus ${opts.semantics.consensus.joinToString()})")
     println(if (opts.data != null) "  keeping deliberations in ${opts.data} (kill -9 safe)" else "  volatile: add --data <dir> to survive restarts")
+    println("  cost: claude as reported by its CLI; codex ${opts.pricing.info(Pricing.CODEX).rate}; jev ${opts.pricing.info(Pricing.JEV).rate} (assumed)")
 }
 
 /**

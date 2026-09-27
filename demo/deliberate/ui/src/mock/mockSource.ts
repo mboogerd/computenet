@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, DEFAULT_CONSENSUS, type GraphDto, type NodeDto, type Override, type Polarity } from '../api/types';
+import { ACTIVE_STATUSES, DEFAULT_CONSENSUS, type GraphDto, type NodeDto, type Override, type Polarity, type QuestionDto } from '../api/types';
 
 /** The backend's credence layers, and per-layer log-odds shifts that make the mock's rules disagree plausibly. */
 const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp'] as const;
@@ -167,10 +167,56 @@ export class MockSource implements GraphSource {
         text: r.text ?? '',
         claims: claims.length,
         active: claims.some((c) => c.status !== undefined && ACTIVE_STATUSES.has(c.status)),
+        ...mockCost(claims),
       };
     });
     return { questions, nodes, consensusMembers: [...DEFAULT_CONSENSUS] };
   }
+}
+
+/**
+ * SPEC §12: plausible cost for a mock tree, shaped like the backend's — per
+ * round one Claude and one Codex call per side, and a handful of Jev
+ * requests per claim (prices as the backend's defaults, measured magnitudes).
+ */
+export function mockCost(claims: readonly NodeDto[]): Pick<QuestionDto, 'costUsd' | 'projectedUsd' | 'cost'> {
+  const rounds = claims.reduce((a, c) => a + (c.rounds ?? 0), 0);
+  const queued = claims.filter((c) => c.status !== undefined && ACTIVE_STATUSES.has(c.status)).length;
+  const calls = 2 * rounds;
+  const jevCalls = 2 * claims.length + 3 * rounds;
+  const codexIn = 13_000 * calls;
+  const codexCached = 8_400 * calls;
+  const codexOut = 90 * calls;
+  const codexUsd = ((codexIn - codexCached) * 4 + codexCached * 0.4 + codexOut * 20) / 1e6;
+  const jevIn = 450 * jevCalls;
+  const backends = [
+    {
+      backend: 'claude', models: ['claude-sonnet-5'], calls, inputTokens: 11_300 * calls, cachedInputTokens: 3_400 * calls,
+      cacheWriteTokens: 7_900 * calls, outputTokens: 60 * calls, reasoningTokens: 0, usd: 0.031 * calls, unpricedCalls: 0,
+      rate: 'as reported by Claude Code (total_cost_usd per call)', rateSource: 'Claude Code CLI', assumed: false,
+      note: 'API-equivalent as reported by Claude Code; not your bill if you use a subscription.',
+    },
+    {
+      backend: 'codex', models: ['gpt-5.6-sol'], calls, inputTokens: codexIn, cachedInputTokens: codexCached,
+      cacheWriteTokens: 0, outputTokens: codexOut, reasoningTokens: 30 * calls, usd: codexUsd, unpricedCalls: 0,
+      rate: '$4.00/1M input · $0.40/1M cached input · $20.00/1M output · cache writes 1.25× input · prompts over 272K tokens 2× input, 1.5× output',
+      rateSource: 'developers.openai.com/api/docs/models/gpt-5.6-sol', rateDate: '2026-09-27', assumed: false,
+      note: 'Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21.',
+    },
+    {
+      backend: 'jev', models: ['jev-1.13.0'], calls: jevCalls, inputTokens: jevIn, cachedInputTokens: 0, cacheWriteTokens: 0,
+      outputTokens: 12 * jevCalls, reasoningTokens: 0, usd: (jevIn * 0.042) / 1e6, unpricedCalls: 0,
+      rate: '$0.042/1M input · output free', rateSource: 'third-party: OpenRouter typesafe/jev-1.13, MindStudio',
+      rateDate: '2026-09-27', assumed: true, note: 'TypeSafe publishes no pricing; this is a third-party listing.',
+    },
+  ].filter((b) => b.calls > 0);
+  const costUsd = backends.reduce((a, b) => a + b.usd, 0);
+  const perRoundUsd = rounds >= 3 ? costUsd / rounds : undefined;
+  return {
+    costUsd,
+    projectedUsd: perRoundUsd === undefined ? undefined : costUsd + queued * perRoundUsd,
+    cost: { backends, rounds, queued, perRoundUsd },
+  };
 }
 
 function seedFinished(m: MockSource): void {

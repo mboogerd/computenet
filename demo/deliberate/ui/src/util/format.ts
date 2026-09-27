@@ -209,3 +209,35 @@ export function layerLines(n: NodeDto, members: readonly string[]): string[] {
     ([id, c]) => `${LAYER_NAMES[id] ?? id} · ${pct(c)}${members.includes(id) ? ' · in consensus' : ''}`,
   );
 }
+
+// ---------- SPEC §12 cost ----------
+
+/**
+ * A dollar figure for the cost UI: "$0.84", "<$0.01" for a non-zero amount
+ * under a cent, "$0.00" for nothing, whole dollars from $1,000 up.
+ */
+export function usd(x: number | undefined): string {
+  if (x === undefined || !Number.isFinite(x)) return '—';
+  if (x <= 0) return '$0.00';
+  if (x < 0.01) return '<$0.01';
+  if (x < 1000) return `$${x.toFixed(2)}`;
+  return `$${Math.round(x).toLocaleString('en-US')}`;
+}
+
+/** A token count in short form: 950, 12.6K, 3.4M. */
+export function tokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Plain names for the backends that cost money. */
+export const BACKEND_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', jev: 'Jev' };
+
+/** "≈$2.10 if the queued claims are explored", or why there is no projection yet. */
+export function projectionText(q: QuestionDto | undefined): string {
+  const c = q?.cost;
+  if (q?.projectedUsd === undefined || !c) return 'Projection after 3 completed rounds';
+  if (c.queued === 0) return 'Nothing left queued';
+  return `≈${usd(q.projectedUsd)} if the ${c.queued} queued claim${c.queued === 1 ? ' is' : 's are'} explored`;
+}

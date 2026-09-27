@@ -302,6 +302,17 @@ class DeliberateAppTest {
     }
 
     @Test
+    fun `command line pricing flags (SPEC 12)`() {
+        assertEquals(Pricing(), Options(emptyArray()).pricing)
+        assertEquals(Pricing(), Options(arrayOf("--codex-model", "gpt-5.6-sol")).pricing)
+        assertEquals(null, Options(arrayOf("--codex-model", "gpt-9")).pricing.codex, "rate unknown without flags")
+        val flagged = Options(arrayOf("--codex-model", "gpt-9", "--codex-input-rate", "1", "--codex-cached-rate", "0.1", "--codex-output-rate", "2")).pricing
+        assertEquals(Rate(1.0, 0.1, 2.0, cacheWriteMultiplier = 1.25), flagged.codex)
+        assertEquals(0.5, Options(arrayOf("--jev-input-rate", "0.5")).pricing.jev.inputPerM)
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--jev-input-rate", "cheap")) }
+    }
+
+    @Test
     fun `command line parses port, proposers and config knobs`() {
         val o = Options(
             arrayOf(

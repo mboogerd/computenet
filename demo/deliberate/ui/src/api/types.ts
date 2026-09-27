@@ -26,6 +26,53 @@ export interface QuestionDto {
   yieldEarlier?: number;
   /** Why the tree stopped growing early: the claim budget, or diminishing returns that halted queued work. */
   stoppedBy?: StoppedBy;
+  // SPEC §12. costUsd and cost have Kotlin defaults and are always sent;
+  // optional so hand-written fixtures without them stay valid.
+  /** USD spent on this question so far — the sum of every priced call (unpriced calls are left out). */
+  costUsd?: number;
+  /** costUsd + claims still to explore × mean cost per completed round; absent until 3 rounds completed. */
+  projectedUsd?: number;
+  /** What the figure is made of, per backend. */
+  cost?: CostDto;
+}
+
+/** SPEC §12: the details behind a question's cost figure. */
+export interface CostDto {
+  /** One entry per backend that made at least one call for the question, in claude, codex, jev order. */
+  backends: BackendCostDto[];
+  /** Rounds completed in the question (over all its claims). */
+  rounds: number;
+  /** Claims still QUEUED, JUDGING or EXPLORING — the projection assumes one more round each. */
+  queued: number;
+  /** Mean USD per completed round; absent until 3 rounds completed. */
+  perRoundUsd?: number;
+}
+
+export interface BackendCostDto {
+  /** "claude" | "codex" | "jev". */
+  backend: string;
+  models: string[];
+  calls: number;
+  /** Every input token, cached reads and cache writes included. */
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  /** Every output token, reasoning included. */
+  outputTokens: number;
+  reasoningTokens: number;
+  /** USD of the priced calls; absent when none could be priced. */
+  usd?: number;
+  /** Calls left out of every total because they could not be priced. */
+  unpricedCalls: number;
+  /** The price applied, in words. */
+  rate: string;
+  rateSource: string;
+  /** When the price was looked up (ISO date); absent for a cost the backend reported itself. */
+  rateDate?: string;
+  /** true when the price is not a published price of the provider. */
+  assumed: boolean;
+  /** A caveat to show with it (e.g. Claude's subscription note). */
+  note?: string;
 }
 
 export type StoppedBy = 'budget' | 'diminishing';

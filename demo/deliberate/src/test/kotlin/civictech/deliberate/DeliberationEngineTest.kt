@@ -177,7 +177,7 @@ class DeliberationEngineTest {
         assertEquals(setOf("claude", "codex"), g.claims().filter { it.depth == 1 }.map { it.proposer }.toSet())
         // EXP-10: root rounds are excluded from per-question yield history.
         val q = g.questions.single()
-        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false), q)
+        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, cost = CostDto(rounds = 1)), q)
         assertNull(q.yieldRecent)
     }
 

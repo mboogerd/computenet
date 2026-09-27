@@ -4,6 +4,7 @@ import { buildTree } from '../tree/buildTree';
 import { agreementText, questionProgress, shown, STATUS_HINT, STATUS_LABEL, stoppedHint, stoppedText, verdict } from '../util/format';
 import { createTween } from '../util/tween';
 import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
+import { CostBadge } from './CostBadge';
 import { OverrideControl } from './OverrideControl';
 
 export function TreeView(props: { graph: GraphDto; root: string }) {
@@ -126,6 +127,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                   </span>
                 </Show>
                 <span class="card__spacer" />
+                <Show when={question()}>{(q) => <CostBadge question={q()} />}</Show>
                 <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
                   <OverrideControl id={claim().ref} value={override()} />
                 </span>

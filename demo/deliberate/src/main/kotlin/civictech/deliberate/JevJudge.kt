@@ -91,7 +91,12 @@ class JevJudge(
      * argument's full state.
      */
     override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment {
-        val plausibility = java.util.concurrent.CompletableFuture.supplyAsync({ plausibility(question, path, child) }, PARALLEL)
+        // SPEC §12: the parallel request's usage belongs to the same question.
+        val sink = Usage.current
+        val plausibility = java.util.concurrent.CompletableFuture.supplyAsync(
+            { Usage.within(sink) { plausibility(question, path, child) } },
+            PARALLEL,
+        )
         val state = buildJsonObject {
             put("root_question", question)
             putStrings("path_from_root", path)
@@ -250,7 +255,12 @@ class JevJudge(
             try {
                 val response = http.send(request, HttpResponse.BodyHandlers.ofString())
                 val status = response.statusCode()
-                if (status == 200) return answersOf(response.body(), questions.keys)
+                if (status == 200) {
+                    // SPEC §12: every successful request reports its usage; a retried 429/529 is not billed.
+                    Usage.raw("jev") { Regex("\"usage\"\\s*:\\s*\\{[^}]*}").find(response.body())?.value ?: "none" }
+                    Usage.capture("jev") { jevUsageOf(response.body()) }
+                    return answersOf(response.body(), questions.keys)
+                }
                 val error = JevException(status, "Jev HTTP $status: ${response.body().take(500)}")
                 if (status != 429 && status != 529 || attempt == maxAttempts) throw error
                 sleeper(backoff.multipliedBy(1L shl (attempt - 1)))
@@ -373,4 +383,18 @@ class JevJudge(
         fun JsonObjectBuilder.putStrings(key: String, values: List<String>) =
             putJsonArray(key) { values.forEach { add(it) } }
     }
+}
+
+/** SPEC §12: the `usage` of a System One response ({input_tokens, output_tokens}); null when absent. */
+internal fun jevUsageOf(body: String): CallUsage? {
+    val root = Json.parseToJsonElement(body).jsonObject
+    val u = root["usage"] as? JsonObject ?: return null
+    fun long(k: String) = (u[k] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: 0L
+    val model = (root["model"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+    return CallUsage(
+        backend = Pricing.JEV,
+        models = listOfNotNull(model),
+        inputTokens = long("input_tokens"),
+        outputTokens = long("output_tokens"),
+    )
 }
