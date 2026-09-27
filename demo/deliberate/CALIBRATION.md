@@ -179,6 +179,50 @@ and counts its 2 × window minimum over non-root rounds. The Trump label exposed
 a separate reporting error: its threshold crossed only after no claim was
 left to halt. The final rule records `stoppedBy = "diminishing"` only when at
 least one `QUEUED` claim is actually halted; an exhausted tree reports no
-stop. Deterministic engine tests cover both cases. Saturation is still
+stop. Engine tests with scripted fake proposers and judge cover both cases. Saturation is still
 calibrated under iteration-2 judgments; a fresh live run of the corrected
 stop remains useful calibration work, not a condition of this correction.
+
+## Calibration history in brief (formerly SPEC §10)
+
+SPEC §10 states only the calibration criteria; this is the narrative it used
+to carry, kept here with the measurements it summarises.
+
+- **Iteration 2.** The first live runs showed both Jev gates inert
+  (saturation 0.04–0.43 against a 0.7 threshold; relevance never below 0.5),
+  so exploration was stopped only by hard limits. That prompted the
+  measured calibration at the top of this file. Criterion (a) is met on the
+  median; the per-side cap remains the dependable stop because Jev's
+  saturation signal is shallow.
+- **Iteration 4.** Plausibility's state (CRED-01) changed and a canonical
+  factor was added to quality (EXP-05) after that calibration, so
+  `saturation` and `minInfluence` had been calibrated under the old
+  judgments. The first live run under the new ones pruned every depth-1
+  argument, so `minInfluence` was rescaled to 0.15 (section "Iteration 4").
+- **Iteration 5.** Tree size was decided at depth 1 and very uneven across
+  questions (21 vs 57 and 110 claims in one run): the canonical factor pruned
+  the most on-point arguments (it anti-correlated with relevance, r −0.30 to
+  −0.54), two prompt examples about a real politician were copied into one
+  question's root arguments, and a flat threshold cannot suit questions whose
+  argument quality differs. So quality lost its canonical factor (EXP-05),
+  the prompt examples became topic-neutral (EXP-02), `minInfluence` became
+  0.10 (an offline replay of the recorded trees balanced best there), and each
+  question now stops by its own diminishing returns (EXP-10) rather than by
+  the budget. Root rounds are excluded from the yield history, and a
+  diminishing stop is recorded only when it actually halts a `QUEUED` claim;
+  these corrections prevent a high-yield root from depressing the apparent
+  return of its children and prevent exhausted trees from claiming they were
+  stopped (section "Iteration 5").
+- **Residual.** A full recalibration of `saturation` under the current
+  judgments is still outstanding.
+
+## Findings behind individual requirements
+
+- **CRED-01, plausibility sees no path.** A live investigation measured the
+  path pulling the plausibility judgment towards the claim's role in the
+  argument (e.g. 0.31 with the path vs 0.53 without); dropping the path
+  shifts fresh arguments by −0.011 on average.
+- **EXP-04, balance rule.** Jev's saturation reads systematically higher for
+  con sides, so con sides stopped early — one root ended 5 pro / 2 con —
+  which is why a side holding fewer arguments than the other is never
+  saturated by Jev's judgment.

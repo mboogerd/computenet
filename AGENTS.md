@@ -104,6 +104,11 @@ for documentation maintenance.
     semantic/invariant tests; use it to detect accidental API or behavior
     regressions. Its SolidJS/Vite frontend lives in `demo/agora/ui/` (npm, not
     Gradle).
+  - `demo/deliberate/` (`:demo:deliberate`): LLM-explored deliberation graph —
+    Claude/Codex propose claims and edges, Jev judges them, credence lives in
+    vector-valued cells, and durability journals inputs only (judgements are
+    recomputed). Depends on `:kernel`, `:demo:shell` and `:demo:agora`. Its
+    SolidJS/Vite frontend lives in `demo/deliberate/ui/` (npm, not Gradle).
   - `demo/beadsmirror/` (`:demo:beadsmirror`): mirrors a bd/Dolt-backed beads
     workspace — polls the Dolt commit feed, projects it through kernel cells
     into a materialized OR-map fold, and serves the fold over `:demo:shell`'s
