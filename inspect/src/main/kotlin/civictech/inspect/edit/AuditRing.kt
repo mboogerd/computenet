@@ -14,9 +14,10 @@ import civictech.inspect.RingBuffer
  * implementation; that type's `add` is already `@Synchronized`, so this class
  * adds no lock of its own.
  *
- * This is a self-contained type with its own test. It is not wired into
- * `InspectorServer` here — the `GET /api/inspect/applies` route that serves
- * it is feature "http surface" (`computenet-wczst`).
+ * This is a self-contained type with its own test. `InspectorServer` holds
+ * one per process (WKB2 F6, `computenet-wczst`): `WritePlaneRoutes` records
+ * each apply's terminal record here and serves [entries] as
+ * `GET /api/inspect/applies`.
  */
 internal class AuditRing(capacity: Int = CAPACITY) {
 

@@ -107,13 +107,13 @@ class WriteGateTest {
     }
 
     @Test
-    fun `an admitted well-formed request reaches the placeholder`() {
+    fun `an admitted well-formed request reaches the precheck`() {
         started()
 
-        val response = send("POST", PRECHECK, body = "{}", writeHeader = CAPABILITY)
+        val response = send("POST", PRECHECK, body = """{"nodes":[]}""", writeHeader = CAPABILITY)
 
-        response.statusCode() shouldBe 501
-        reasonOf(response) shouldBe "precheck not implemented"
+        response.statusCode() shouldBe 200
+        response.body() shouldBe """{"steps":[],"appliable":true}"""
     }
 
     @Test
