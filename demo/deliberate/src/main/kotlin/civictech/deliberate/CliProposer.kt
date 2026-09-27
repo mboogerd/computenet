@@ -190,6 +190,21 @@ class CliProposer internal constructor(
             process.destroyForcibly()
             process.waitFor(5, TimeUnit.SECONDS)
         }
+        // ProcessHandle.destroyForcibly() is asynchronous. In particular, a
+        // descendant can still report alive briefly after its parent has
+        // reaped it, so do not return the gate permit until the captured tree
+        // has actually disappeared (or the bounded cleanup wait expires).
+        descendants.asReversed().forEach { child ->
+            if (child.isAlive) child.destroyForcibly()
+            try {
+                child.onExit().get(5, TimeUnit.SECONDS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            } catch (_: Exception) {
+                // Best effort: the original timeout/failure remains the call's error.
+            }
+        }
     }
 
     companion object {
