@@ -475,8 +475,12 @@ weight-adjacent delta that IS gossip-safe); additive wire registration.
 wave's `sourceId`), emits effective-only monotone floor advances; `Stateful` (per-source
 maxima + last floor); late-join catch-up emits the current floor. No new `@Contract` —
 delta-only cell. Test: seeded run over interleaved multi-source streams; invariants:
-floor monotone on every prefix, floor ≤ min-source promise, duplicated delivery converges
-identically; control: a max-over-sources variant admits a violation seed.
+floor monotone on every prefix, floor equals the running max over prefixes of the
+[24-WL-02] candidate (min over sources contributing at that prefix of max timeFn −
+lateness — not a plain per-prefix min-source promise, which a low/late joiner falsifies
+under [24-WL-20]), floor ≤ the promise of every source contributing since the floor's
+last rise, duplicated delivery converges identically; control: a max-over-sources variant
+admits a violation seed, as does a variant that lets the floor fall.
 **Depends**: E4.1.
 
 ### E4.3 — Eviction inlet on `GroupByCell` + late-drop guard (gap 6) — P2 · High · `data` ✅ LANDED (#1102)

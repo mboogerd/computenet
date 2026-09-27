@@ -360,12 +360,17 @@ requires — 42):
    join.
 6. M11.6 — outer joins as GraphDsl compositions; `Windows` assigners —
    windowing is key derivation over event-time-as-data (no wall clock, P1);
-   windows never close, watermark eviction deferred with trigger.
+   at the time of M11, windows never closed and watermark eviction was
+   deferred with trigger — **since landed**, 96 §E4 (KE4, epic `computenet-lxo`):
+   per-inlet `lateness`, the `WaterlineCell`/`WaterlineDelta` floor (20/24
+   §Lateness and waterlines), and destructive eviction across `GroupByCell`
+   and the join family.
 
 Deferred with triggers (recorded in 24/91): OR-map keyed family, gossipable
-aggregate outputs, weighted/bag semantics, session windows, watermark
-eviction, PartitionedCell sharding (G-24 trigger now armed), atomic
-outer-join cell.
+aggregate outputs, weighted/bag semantics, session windows, PartitionedCell
+sharding (G-24 trigger now armed), atomic outer-join cell. (Watermark
+eviction's trigger fired and landed — 96 §E4 above — so it is no longer on
+this deferred list.)
 
 *Exit criterion — met (`DataflowSuiteExitTest`): writers → union → mapSet
 (many-to-one) → equi-join → antijoin → groupBy(sum) + groupBy(topK)
