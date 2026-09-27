@@ -89,7 +89,25 @@ internal object LinkAdmission {
     ): LinkResult.Rejected? {
         val reg = topology ?: return null
         if (!reg.wouldCloseCycle(from, to)) return null
+        return cycleRefusal(from, outletName, outlet, to, inletName, inlet)
+    }
 
+    /**
+     * The half of cycle admission that runs once a `from -> to` edge is known
+     * to close a cycle: headedness, then the FU-8 damping witness. `null` =
+     * admitted. `internal` because `civictech.cell.graph.precheck` is the
+     * second caller (computenet-91xzn.2, 91xzn-D5): it asks its own scratch
+     * index over live ∪ planned links whether the edge closes a cycle, then
+     * reports these same strings cold.
+     */
+    internal fun cycleRefusal(
+        from: CellRef,
+        outletName: String,
+        outlet: Port,
+        to: CellRef,
+        inletName: String,
+        inlet: LinkFrom<*>,
+    ): LinkResult.Rejected? {
         // Headedness (spec 10/13): the closing edge MUST land on a declared
         // CycleHead.
         if (inlet !is FeedbackInlet<*>) {

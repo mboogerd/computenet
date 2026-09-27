@@ -108,4 +108,30 @@ class GraphSpecRemoteApplyTest {
         (redup.results.getValue("count2") is StepResult.Rejected) shouldBe true
         letters.size shouldBe 2
     }
+
+    @Test
+    fun `a throwing factory dead-letters on the target host through applyRemote`() {
+        // computenet-hfmht: [15-APPLY-01] says rejected steps dead-letter on
+        // the target host; a factory.create throw is a rejected step exactly
+        // like a spawn() rejection, so it must dead-letter too, not merely be
+        // folded into the (non-throwing) ApplyReport.
+        val controller = SimulationController(seed = 9)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = deadLettersOf(host)
+
+        val boom = IllegalStateException("factory boom")
+        val spec = GraphSpec(
+            listOf(SpawnStep("boom", CellFactory { throw boom })),
+        )
+
+        val report = spec.applyRemote(host.managementInlet)
+        controller.runToIdle()
+
+        letters.size shouldBe 1
+        letters[0].description shouldContain "spawnBound rejected"
+        letters[0].description shouldContain boom.message!!
+
+        (report.results.getValue("boom") is StepResult.Rejected) shouldBe true
+        report.allApplied shouldBe false
+    }
 }

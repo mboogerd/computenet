@@ -1512,9 +1512,14 @@ open class ManagedHost(
                 // for introspection; membrane/exposure enforcement is G-9 (unbuilt,
                 // out of this ticket's scope) — a non-null parent is bookkept only.
                 val ref = identity.resolve()
-                val cell = factory.create(ref)
-                requireBoundRef("spawnBound", identity, ref, cell.ref)
                 return try {
+                    // [15-APPLY-01]/G-51: factory construction and the bound-ref
+                    // check are part of "the step", not preconditions to it — a
+                    // throwing factory or an identity/ref mismatch is as much a
+                    // rejected step as a spawn() failure, so both live inside this
+                    // dead-lettering try alongside spawn() itself.
+                    val cell = factory.create(ref)
+                    requireBoundRef("spawnBound", identity, ref, cell.ref)
                     spawn(cell).also { spawnedRef -> if (parent != null) cellParents[spawnedRef] = parent }
                 } catch (e: Exception) {
                     // G-51: per-step rejections surface as dead letters on the
@@ -1792,6 +1797,18 @@ open class ManagedHost(
             (ports[name] as? FanOutlet<*>)?.takeIf { it.ref.id == port.id }
         }
     }
+
+    /**
+     * The port registered as [name] on the cell [ref] names, when that cell is
+     * hosted here; null when it is not, or when it registers no such port.
+     * Same rationale as [outletAt]: everything handed back is already reachable
+     * via `PortRegistry.of(cell)` to any caller holding the cell object — this
+     * threads the host's own [cells] map into that lookup rather than
+     * reflecting the map out of it. The caller is
+     * [civictech.cell.graph.precheck], which reads a live boundary port
+     * (policies, cardinality, payload class, natures) without linking it.
+     */
+    fun portAt(ref: CellRef, name: String): Port? = cells[ref]?.let { findPort(it, name) }
 
     /**
      * Host-routed state read (the [Stateful] half of the observation seam,

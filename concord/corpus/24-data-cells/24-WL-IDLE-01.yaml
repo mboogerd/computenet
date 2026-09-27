@@ -1,0 +1,61 @@
+id: 24-WL-IDLE-01
+title: An idle, open, contributing source freezes the floor at its promise; eviction resumes when it emits
+covers: [24-WL-14]
+profile: core
+kind: example
+narrative:
+  given: >-
+    two set-sources (a, b) feeding a waterline (lateness 0) whose floor is also read
+    through a value view and gates a tumbling window (size 10, lateness 0) over the
+    same two sources, observed through a count view
+  when: b joins once and then goes idle while a rises four times, before b finally emits again
+  then: >-
+    the floor freezes at b's promise for as long as b stays open and idle ([24-WL-14]) —
+    no advance, no eviction, no data lost — and only resumes, evicting every window it
+    now outruns, once b emits; the manual `retire` escape ([24-WL-15]) has no corpus
+    verb and is disputed by `computenet-t4od7.9`; aging an idle source without a wall
+    clock is the accepted research residual (`doc/spec/90-roadmap/95-research-plan.md`
+    §R15)
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: wl, type: waterline, lateness: 0}
+    - {id: f, type: value-view}
+    - {id: w, type: window, window: {kind: tumbling, size: 10}, lateness: 0}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: wl}
+    - {from: b, to: wl}
+    - {from: wl, to: f}
+    - {from: a, to: w}
+    - {from: b, to: w}
+    - {from: wl, to: w, inlet: waterline}
+    - {from: w, to: v}
+script:
+  # b t=20: candidate min(20)-0 = 20, floor 20 (first rise); at w, window 20 (end 30)
+  - {type: apply, on: b, op: add, value: [20, b1]}
+  - {type: quiesce}
+  # a t=30: candidate min(30,20)-0 = 20 (b idle, holds the floor); at w, window 30 (end 40)
+  - {type: apply, on: a, op: add, value: [30, a1]}
+  - {type: quiesce}
+  # a t=45: candidate still 20; at w, window 40 (end 50)
+  - {type: apply, on: a, op: add, value: [45, a2]}
+  - {type: quiesce}
+  # a t=60: candidate still 20; at w, window 60 (end 70)
+  - {type: apply, on: a, op: add, value: [60, a3]}
+  - {type: quiesce}
+  # a t=75: candidate still 20; at w, window 70 (end 80). Frozen state: floor 20, all five
+  # windows live (every end > 20), no eviction, no data lost.
+  - {type: apply, on: a, op: add, value: [75, a4]}
+  - {type: quiesce}
+  # b t=80: candidate min(80,75)-0 = 75, floor rises 20 -> 75; at w, window 80 (end 90);
+  # the floor's rise to 75 evicts every window with end <= 75: 20 (end30), 30 (end40),
+  # 40 (end50), 60 (end70) all go; 70 (end80) and 80 (end90) survive
+  - {type: apply, on: b, op: add, value: [80, b2]}
+  - {type: quiesce}
+checks:
+  - {type: observations-monotone, view: f}
+  - {type: final-view, view: f, equals: 75}
+  - {type: final-view, view: v, equals: {"70": 1, "80": 1}}
+  - {type: no-dead-letters}

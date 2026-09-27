@@ -18,8 +18,9 @@ package civictech.demo.alignment
  * translated to their rank with a CSS transition) is otherwise v1 behaviour, made null-safe: a
  * segment whose `byDim[d].contribution` is `null` (a cost dimension, or a score-null row) gets
  * zero width and no title instead of throwing on `.toFixed`. Each row (10mvq-D3/D9/D11) also
- * carries a one-decimal score, a muted "N of M rated" line, a "value · cost" line when the topic
- * has a cost dimension, a "÷ cost" badge on the bar, an agreement indicator (the split pill,
+ * carries a one-decimal score, a muted "N of M rated" line, a "value [· factor] [· cost]" line
+ * (design contract 2026-09-22: shown whenever the topic has a cost or a factor dimension, with
+ * only the parts the topic has), a "÷ cost" badge on the bar, an agreement indicator (the split pill,
  * "agreed" or "mixed") for every row with rated data, and — only while the topic's experimental
  * Gut check round is enabled (`t.gutCheck === true`, teu97-D9) — its dot total as text beside the
  * raters line ("● N dots"/"no dots yet"), never a bar segment and never a sort key: rows still
@@ -64,6 +65,21 @@ package civictech.demo.alignment
  * return (no topic, pending, closed), so the dialog is closed and unopenable while the Board is
  * gated for the viewer — the gate itself (`boardGate`, computenet-aa6gl's parked rule) is
  * consumed as-is.
+ *
+ * Factor dimensions (design contract 2026-09-22): the legend's `wdir` text now falls back to the
+ * raw `d.direction` (so `factor` shows, not just `value`/`cost`), and `#weights` grows a trailing
+ * formula line — `score = value`, then ` × factor` when the topic has a factor dim, then
+ * ` ÷ cost` when it has a cost dim. Each row gains a `.factorbadge` (sibling of `.costbadge`,
+ * `var(--accent)`-coloured, `× n.nn` or `× —`) whenever the topic has a factor dim and the row is
+ * ranked; both badges' `title` and the score cell's `title` spell out the full
+ * `value v.v × factor f.ff ÷ cost c.c = s.s` line from the parts present (`—` for a null part). A
+ * ranked row whose computed `f.score` is exactly `0` (the topic's factor side sank it, not an
+ * override) folds `sunk by <name>[, <name>]` onto the end of the `.vc` line (not a third `.reason`
+ * line — the fixed `.rankrow` height only fits two sub-lines), listing the factor dims at
+ * `byDim[d].mean <= 1`; the row keeps its normal (non-`unranked`) treatment since its zero-width
+ * bar segments are legitimate. The not-rated-yet reason line also
+ * gains `factor not rated yet` between `value` and `cost`. `f.factor` is read null-safe throughout
+ * (`undefined` treated as `null`) so the page never throws against a server that omits the field.
  */
 internal const val BOARD_MAIN = """
 <style>
@@ -76,6 +92,7 @@ internal const val BOARD_MAIN = """
   #weights .sw { width: .7rem; height: .7rem; border-radius: 3px; flex: 0 0 auto; }
   #weights .wdir { color: var(--muted); font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .03em; }
   #weights .wv { font-variant-numeric: tabular-nums; color: var(--muted); }
+  #weights .wformula { color: var(--muted); font-size: var(--fs-1); margin-left: auto; }
   #gate .gate-card { text-align: center; padding: 2rem 1.5rem; }
   #gate .gate-card h3 { margin: 0 0 .4rem; }
   #gate .gate-card p { margin: 0; }
@@ -108,6 +125,9 @@ internal const val BOARD_MAIN = """
   .rankrow .costbadge { flex: 0 0 auto; font-size: .65rem; padding: .05rem .4rem; border: 1px solid var(--cost-1);
                          color: var(--cost-1); border-radius: 4px; white-space: nowrap; }
   .rankrow .costbadge[hidden] { display: none; }
+  .rankrow .factorbadge { flex: 0 0 auto; font-size: .65rem; padding: .05rem .4rem; border: 1px solid var(--accent);
+                           color: var(--accent); border-radius: 4px; white-space: nowrap; }
+  .rankrow .factorbadge[hidden] { display: none; }
   .rankrow .spread { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
   .rankrow .spread[hidden] { display: none; }
   .rankrow .axisrow { position: relative; height: 4px; background: var(--track); border-radius: 2px; }
@@ -170,7 +190,7 @@ internal const val BOARD_MAIN = """
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
   <div id="scatter" hidden></div>
-  <p class="note">Bar segments show each dimension's weighted contribution to the score; a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
+  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
 </section>
 <script>
 // ── Board: the aggregate view ──────────────────────────────────────────────
@@ -208,6 +228,44 @@ document.querySelectorAll('#boardMode button').forEach(b => {
 });
 
 function hasCostDim(t) { return t.dimensions.some(d => d.direction === 'cost'); }
+function hasFactorDim(t) { return t.dimensions.some(d => d.direction === 'factor'); }
+
+/** "value v.v × factor f.ff ÷ cost c.c = s.s" from the parts the topic has, '—' for a null part. */
+function scoreMathTitle(f, factory, costy) {
+  const valueTxt = (f.value === null || f.value === undefined) ? '—' : f.value.toFixed(1);
+  const scoreTxt = (f.score === null || f.score === undefined) ? '—' : f.score.toFixed(1);
+  let line = 'value ' + valueTxt;
+  if (factory) {
+    const factorTxt = (f.factor === null || f.factor === undefined) ? '—' : f.factor.toFixed(2);
+    line += ' × factor ' + factorTxt;
+  }
+  if (costy) {
+    const costTxt = (f.cost === null || f.cost === undefined) ? '—' : f.cost.toFixed(1);
+    line += ' ÷ cost ' + costTxt;
+  }
+  return line + ' = ' + scoreTxt;
+}
+
+/**
+ * "sunk by <name>[, <name>]": the factor dims whose byDim mean is at or below the sinking anchor
+ * (design contract 2026-09-22). Falls back to a generic reason when no dim matches — f.score can
+ * be exactly 0 from floating-point underflow of a near-1 mean without any dim reading <= 1 on the
+ * nose, and a bare "sunk by " must never render.
+ */
+function sunkReason(t, f) {
+  const names = t.dimensions
+    .filter(d => d.direction === 'factor' && f.byDim[d.id] && f.byDim[d.id].mean <= 1)
+    .map(d => d.name);
+  return names.length ? 'sunk by ' + names.join(', ') : 'sunk by a factor rated 1';
+}
+
+/** "value not rated yet" / "factor not rated yet" / "cost not rated yet", in formula order (design contract 2026-09-22). */
+function notRatedYetReason(f, factory) {
+  if (f.value === null || f.value === undefined) return 'value not rated yet';
+  if (factory && (f.factor === null || f.factor === undefined)) return 'factor not rated yet';
+  if (f.cost === null || f.cost === undefined) return 'cost not rated yet';
+  return '';
+}
 
 function renderBoard() {
   const gateBox = document.getElementById('gate');
@@ -326,13 +384,23 @@ function renderLegend(t) {
     name.textContent = d.name;
     const dir = document.createElement('span');
     dir.className = 'wdir';
-    dir.textContent = d.direction === 'cost' ? 'cost' : 'value';
+    dir.textContent = d.direction || 'value';
     const v = document.createElement('span');
     v.className = 'wv';
     v.textContent = (d.weight === null || d.weight === undefined) ? '—' : String(d.weight);
     cell.appendChild(sw); cell.appendChild(name); cell.appendChild(dir); cell.appendChild(v);
     box.appendChild(cell);
   });
+  const factory = hasFactorDim(t), costy = hasCostDim(t);
+  if (factory || costy) {
+    const formula = document.createElement('span');
+    formula.className = 'wformula';
+    let txt = 'score = value';
+    if (factory) txt += ' × factor';
+    if (costy) txt += ' ÷ cost';
+    formula.textContent = txt;
+    box.appendChild(formula);
+  }
 }
 
 /** The widest per-dimension stdev in idea.byDim, or -1 when byDim is empty (D9, D6 carry-over). */
@@ -442,14 +510,19 @@ function boardScoreOpener(cell, ideaId) {
 }
 
 /**
- * Rebuilds the score cell's view (effective score, override badge/title, computed value, the
- * creator's × clear) — never while it is being edited (w61az-D11, checked by the caller).
+ * Rebuilds the score cell's view (effective score, override badge, the creator's × clear) — never
+ * while it is being edited (w61az-D11, checked by the caller). The cell's `title` is the override
+ * gloss when overridden; otherwise the full `value × factor ÷ cost = score` math line, shown only
+ * when the row has rated-and-configured data (`hasData`, design contract 2026-09-22) — an entirely
+ * unrated row must not title a bare `value — ÷ cost — = —`.
  */
 function renderScoreCell(cell, t, f, canOverride) {
   cell.innerHTML = '';
   const hasOverride = f.override !== null && f.override !== undefined;
   const main = cell.closest('.main');
   if (main) main.classList.toggle('has-override', hasOverride); // computenet-uuy2c: widen only this row's score column
+  const factory = hasFactorDim(t), costy = hasCostDim(t);
+  const hasData = Object.keys(f.byDim || {}).length > 0;
   const eff = effective(f);
   const txt = document.createElement('span');
   txt.className = 'scoretxt';
@@ -480,6 +553,8 @@ function renderScoreCell(cell, t, f, canOverride) {
   if (hasOverride) {
     cell.title = 'facilitator override ' + eff.toFixed(1) + '; ' +
       (f.score !== null && f.score !== undefined ? 'computed ' + f.score.toFixed(1) : 'computed —');
+  } else if ((factory || costy) && hasData) {
+    cell.title = scoreMathTitle(f, factory, costy);
   } else {
     cell.removeAttribute('title');
   }
@@ -504,6 +579,7 @@ function renderRanking(t, ideas, participants, stagger) {
   const box = document.getElementById('ranking');
   const dims = t ? t.dimensions : [];
   const costy = t ? hasCostDim(t) : false;
+  const factory = t ? hasFactorDim(t) : false;
   // D10 (v48mn), amended w61az-D8: the max EFFECTIVE score over ranked rows fills the bar; bar
   // segments themselves stay the API's computed contributions, never rescaled to an override.
   const effs = ideas.filter(f => f.rank !== null).map(effective).filter(v => v !== null && v !== undefined);
@@ -523,7 +599,7 @@ function renderRanking(t, ideas, participants, stagger) {
       row.innerHTML = '<div class="main">' +
                          '<div class="pos"></div><div class="ttl"></div>' +
                          '<div class="barcell">' +
-                           '<div class="stackwrap"><div class="stack"></div><span class="costbadge" hidden></span></div>' +
+                           '<div class="stackwrap"><div class="stack"></div><span class="factorbadge" hidden></span><span class="costbadge" hidden></span></div>' +
                            '<div class="spread" hidden></div>' +
                          '</div>' +
                          '<div class="score"></div><span class="pill" hidden></span>' +
@@ -635,16 +711,26 @@ function renderRanking(t, ideas, participants, stagger) {
       stackwrap.hidden = false;
       spread.hidden = true;
     }
+    const factorBadge = row.querySelector('.factorbadge');
+    if (ranked && factory) {
+      factorBadge.hidden = false;
+      const factorTxt = (f.factor === null || f.factor === undefined) ? '—' : f.factor.toFixed(2);
+      factorBadge.textContent = '× ' + factorTxt;
+      // null-safe (design contract 2026-09-22): f.factor is null-safe throughout; the badge still
+      // shows the computed math, not the override.
+      factorBadge.title = scoreMathTitle(f, factory, costy);
+    } else {
+      factorBadge.hidden = true;
+      factorBadge.removeAttribute('title');
+    }
     const badge = row.querySelector('.costbadge');
     if (ranked && costy) {
       badge.hidden = false;
       const costTxt = f.cost === null ? '—' : f.cost.toFixed(1);
       badge.textContent = '÷ ' + costTxt;
-      const valueTxt = f.value === null ? '—' : f.value.toFixed(1);
       // null-safe (w61az-D9 carry-over hazard): f.score is null on an override-only or
       // partially-rated ranked row; the badge still shows the computed math, not the override.
-      const scoreTxt = (f.score !== null && f.score !== undefined) ? f.score.toFixed(1) : '—';
-      badge.title = 'value ' + valueTxt + ' ÷ cost ' + costTxt + ' = ' + scoreTxt;
+      badge.title = scoreMathTitle(f, factory, costy);
     } else {
       badge.hidden = true;
       badge.removeAttribute('title');
@@ -652,7 +738,8 @@ function renderRanking(t, ideas, participants, stagger) {
     const scoreCell = row.querySelector('.score');
     if (!editing(scoreCell)) renderScoreCell(scoreCell, t, f, canOverride); // w61az-D11 focus guard
 
-    // sub-lines (D3, amended w61az-D9): "N of M rated" + "value · cost" for a ranked row, the
+    // sub-lines (D3, amended w61az-D9): "N of M rated" + "value [· factor] [· cost]" (shown
+    // whenever the topic has a cost or factor dim, design contract 2026-09-22) for a ranked row, the
     // raters line gaining "· computed …" on an overridden row so the computed value stays
     // visible beside the effective one; the not-rated-yet reason for a row (ranked via override,
     // or not ranked at all) that has no computed score, worded by how much data it carries;
@@ -668,19 +755,35 @@ function renderRanking(t, ideas, participants, stagger) {
       ratersEl.textContent = hasOverride
         ? ratersTxt + ' · computed ' + (computedNull ? '—' : f.score.toFixed(1))
         : ratersTxt;
-      if (costy) {
+      const sunk = !hasOverride && f.score === 0;
+      if (costy || factory) {
         vcEl.hidden = false;
-        const valueTxt = f.value === null ? '—' : f.value.toFixed(1);
-        const costTxt = f.cost === null ? '—' : f.cost.toFixed(1);
-        vcEl.textContent = 'value ' + valueTxt + ' · cost ' + costTxt;
+        const valueTxt = (f.value === null || f.value === undefined) ? '—' : f.value.toFixed(1);
+        let vcTxt = 'value ' + valueTxt;
+        if (factory) {
+          const factorTxt = (f.factor === null || f.factor === undefined) ? '—' : f.factor.toFixed(2);
+          vcTxt += ' · factor ' + factorTxt;
+        }
+        if (costy) {
+          const costTxt = (f.cost === null || f.cost === undefined) ? '—' : f.cost.toFixed(1);
+          vcTxt += ' · cost ' + costTxt;
+        }
+        // sunk (design contract 2026-09-22): folded into .vc rather than shown on its own .reason
+        // line, since factor-sinking implies factory=true (this branch always runs) and a third
+        // sub-line would overlap the next row within the fixed .rankrow height (BoardView.kt CSS
+        // `.rankrow`/`ROW`).
+        if (sunk) vcTxt += ' · ' + sunkReason(t, f);
+        vcEl.textContent = vcTxt;
       } else {
         vcEl.hidden = true;
       }
-      if (!computedNull) {
+      // Gated on !hasOverride: an overridden row's computed score being 0 is not why it ranks
+      // where it does, so it must not fire the sunk reason (BLOCKER fix, review 2026-09-22).
+      if (sunk || !computedNull) {
         reasonEl.hidden = true;
       } else if (hasData) {
         reasonEl.hidden = false;
-        reasonEl.textContent = f.value === null ? 'value not rated yet' : (f.cost === null ? 'cost not rated yet' : '');
+        reasonEl.textContent = notRatedYetReason(f, factory);
       } else {
         reasonEl.hidden = false;
         reasonEl.textContent = 'not rated yet';
@@ -690,7 +793,7 @@ function renderRanking(t, ideas, participants, stagger) {
       vcEl.hidden = true;
       if (hasData) {
         reasonEl.hidden = false;
-        reasonEl.textContent = f.value === null ? 'value not rated yet' : (f.cost === null ? 'cost not rated yet' : '');
+        reasonEl.textContent = notRatedYetReason(f, factory);
       } else {
         reasonEl.hidden = true;
       }

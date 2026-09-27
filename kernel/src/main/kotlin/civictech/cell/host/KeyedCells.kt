@@ -95,6 +95,14 @@ class KeyedCells<K : Any>(
     /** Every key ever spawned by this family — durable, so complete after [recover]. */
     fun keys(): Set<K> = synchronized(lock) { known.toSet() }
 
+    /**
+     * Whether [key] has ever been spawned — durable, so complete after
+     * [recover], same as [keys]. An O(1) membership check against the same
+     * lock-guarded set [keys] copies wholesale; prefer this when only
+     * membership is wanted (e.g. one scope key per pull), not the whole set.
+     */
+    fun contains(key: K): Boolean = synchronized(lock) { key in known }
+
     /** Deterministic, restart-stable ref: `nameUUIDFromBytes("$namespace:$key")` (instanceId 0). */
     private fun refFor(key: K): CellRef =
         CellRef(UUID.nameUUIDFromBytes("$namespace:${render(key)}".toByteArray()))

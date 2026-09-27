@@ -25,6 +25,17 @@ package civictech.demo.alignment
  * `renderScatter` reads only the `t` and `ideas` (the aggregate rows) it is given — never
  * `state.ratings`, never a participant name (10mvq-D6). Shared helper contract: the comment
  * block at the top of the shell's script in [AlignmentPage.kt]. No `$` anywhere.
+ *
+ * Factor dimensions (design contract 2026-09-22): when the topic has any dimension with
+ * `direction === 'factor'`, the plotted y is `value × factor` instead of plain `value` — an idea
+ * is plottable only when its `value`, `cost` AND `factor` are all non-null (`factor` read
+ * null-safe: `undefined` counts as `null`) — the y scale then covers `[0, 9]` instead of `[1, 9]`
+ * (a fully sunk idea, factor 0, must still plot and compete for the frontier, not clip off the
+ * canvas), the quadrant midline sits at plotted-y 4.5 instead of 5, the heading reads
+ * "Value × factor vs. cost", the y-axis label becomes "↑ value × factor" and each tooltip reads
+ * "Title — value v.v × factor f.ff · cost c.c". The Pareto frontier is computed over this plotted
+ * y, never over the raw `value`. The show condition is unchanged: the topic needs a cost
+ * dimension and at least one plottable idea.
  */
 internal const val SCATTER_VIEW = """
 <style>
@@ -53,23 +64,44 @@ function scatterEligible(t) {
   return !!t && t.dimensions.some(d => d.direction === 'cost');
 }
 
-function scatterPlottable(ideas) {
-  return ideas.filter(f => f.value !== null && f.value !== undefined && f.cost !== null && f.cost !== undefined);
+function scatterHasFactorDim(t) {
+  return !!t && t.dimensions.some(d => d.direction === 'factor');
+}
+
+/** value, or value × factor when the topic has a factor dim (design contract 2026-09-22). */
+function scatterY(f, hasFactor) {
+  return hasFactor ? f.value * f.factor : f.value;
+}
+
+// plottable ideas, as {f, y, cost} points: value and cost non-null always; factor non-null too
+// (undefined treated as null) whenever the topic has a factor dim, since y = value × factor then.
+function scatterPlottable(t, ideas) {
+  const hasFactor = scatterHasFactorDim(t);
+  return ideas
+    .filter(f => f.value !== null && f.value !== undefined && f.cost !== null && f.cost !== undefined)
+    .filter(f => !hasFactor || (f.factor !== null && f.factor !== undefined))
+    .map(f => ({ f: f, y: scatterY(f, hasFactor), cost: f.cost }));
 }
 
 /** true when `b` dominates `a`: at least as good on both axes, strictly better on one. */
 function scatterDominates(a, b) {
-  const ge = b.value >= a.value && b.cost <= a.cost;
-  const strict = b.value > a.value || b.cost < a.cost;
+  const ge = b.y >= a.y && b.cost <= a.cost;
+  const strict = b.y > a.y || b.cost < a.cost;
   return ge && strict;
 }
 
-function scatterFrontier(plottable) {
-  return plottable.filter(a => !plottable.some(b => b !== a && scatterDominates(a, b)));
+function scatterFrontier(points) {
+  return points.filter(a => !points.some(b => b !== a && scatterDominates(a, b)));
 }
 
 function scatterEllipsize(title) {
   return title.length > 18 ? title.slice(0, 18) + '…' : title;
+}
+
+// "Title — value v.v × factor f.ff · cost c.c" (factor segment only when the topic has one)
+function scatterTooltip(f, hasFactor) {
+  const valuePart = 'value ' + f.value.toFixed(1) + (hasFactor ? ' × factor ' + f.factor.toFixed(2) : '');
+  return f.title + ' — ' + valuePart + ' · cost ' + f.cost.toFixed(1);
 }
 
 function scatterEl(tag, attrs) {
@@ -81,26 +113,30 @@ function scatterEl(tag, attrs) {
 function renderScatter(t, ideas) {
   const box = document.getElementById('scatter');
   if (!box) return;
-  const plottable = scatterEligible(t) ? scatterPlottable(ideas || []) : [];
+  const hasFactor = scatterHasFactorDim(t);
+  const pts = scatterEligible(t) ? scatterPlottable(t, ideas || []) : [];
   box.innerHTML = '';
-  if (!scatterEligible(t) || plottable.length === 0) { box.hidden = true; return; }
+  if (!scatterEligible(t) || pts.length === 0) { box.hidden = true; return; }
   box.hidden = false;
 
   const heading = document.createElement('h3');
-  heading.textContent = 'Value vs. cost';
+  heading.textContent = hasFactor ? 'Value × factor vs. cost' : 'Value vs. cost';
   box.appendChild(heading);
 
   const w = SCATTER_SIZE, h = SCATTER_SIZE;
   const plotW = w - SCATTER_PAD.left - SCATTER_PAD.right;
   const plotH = h - SCATTER_PAD.top - SCATTER_PAD.bottom;
-  // x = cost 1..9 left to right; y = value 1..9 bottom to top
+  // x = cost 1..9 left to right; y = plotted value (value × factor when the topic has a factor
+  // dim, so y ranges [0, 9]; else plain value, [1, 9]) bottom to top
+  const yMin = hasFactor ? 0 : 1;
   const px = v => SCATTER_PAD.left + ((v - 1) / 8) * plotW;
-  const py = v => SCATTER_PAD.top + plotH - ((v - 1) / 8) * plotH;
+  const py = v => SCATTER_PAD.top + plotH - ((v - yMin) / (9 - yMin)) * plotH;
 
   const svg = scatterEl('svg', { viewBox: '0 0 ' + w + ' ' + h, preserveAspectRatio: 'xMidYMid meet' });
 
-  // quadrant split lines at cost 5 / value 5
-  const xMid = px(5), yMid = py(5);
+  // quadrant split lines at cost 5 / plotted-y midpoint (4.5 when the topic has a factor dim
+  // and the plotted range is [0, 9], else 5)
+  const xMid = px(5), yMid = py(hasFactor ? 4.5 : 5);
   const vLine = scatterEl('line', { class: 'sc-axis', x1: xMid, y1: SCATTER_PAD.top, x2: xMid, y2: h - SCATTER_PAD.bottom });
   const hLine = scatterEl('line', { class: 'sc-axis', x1: SCATTER_PAD.left, y1: yMid, x2: w - SCATTER_PAD.right, y2: yMid });
   svg.appendChild(vLine); svg.appendChild(hLine);
@@ -119,7 +155,7 @@ function renderScatter(t, ideas) {
     class: 'sc-axislabel', x: 10, y: SCATTER_PAD.top + plotH / 2, 'text-anchor': 'middle',
     transform: 'rotate(-90 10 ' + (SCATTER_PAD.top + plotH / 2) + ')'
   });
-  yLabel.textContent = '↑ value';
+  yLabel.textContent = hasFactor ? '↑ value × factor' : '↑ value';
   svg.appendChild(xLabel); svg.appendChild(yLabel);
 
   // quadrant labels: Quick wins (top-left), Big bets (top-right), Fill-ins (bottom-left), Money pits (bottom-right).
@@ -128,10 +164,10 @@ function renderScatter(t, ideas) {
   // neither the circle nor a frontier label collides with the fixed quadrant label text
   // (computenet-obpl4).
   const quadInset = 6, cornerX = 40, cornerY = 16, cornerShift = 22;
-  const nearLeftTop = plottable.some(f => px(f.cost) < SCATTER_PAD.left + cornerX && py(f.value) < SCATTER_PAD.top + cornerY);
-  const nearRightTop = plottable.some(f => px(f.cost) > w - SCATTER_PAD.right - cornerX && py(f.value) < SCATTER_PAD.top + cornerY);
-  const nearLeftBottom = plottable.some(f => px(f.cost) < SCATTER_PAD.left + cornerX && py(f.value) > h - SCATTER_PAD.bottom - cornerY);
-  const nearRightBottom = plottable.some(f => px(f.cost) > w - SCATTER_PAD.right - cornerX && py(f.value) > h - SCATTER_PAD.bottom - cornerY);
+  const nearLeftTop = pts.some(p => px(p.cost) < SCATTER_PAD.left + cornerX && py(p.y) < SCATTER_PAD.top + cornerY);
+  const nearRightTop = pts.some(p => px(p.cost) > w - SCATTER_PAD.right - cornerX && py(p.y) < SCATTER_PAD.top + cornerY);
+  const nearLeftBottom = pts.some(p => px(p.cost) < SCATTER_PAD.left + cornerX && py(p.y) > h - SCATTER_PAD.bottom - cornerY);
+  const nearRightBottom = pts.some(p => px(p.cost) > w - SCATTER_PAD.right - cornerX && py(p.y) > h - SCATTER_PAD.bottom - cornerY);
   const quads = [
     { text: 'Quick wins', x: SCATTER_PAD.left + quadInset, y: SCATTER_PAD.top + 12 + (nearLeftTop ? cornerShift : 0), anchor: 'start' },
     { text: 'Big bets', x: w - SCATTER_PAD.right - quadInset, y: SCATTER_PAD.top + 12 + (nearRightTop ? cornerShift : 0), anchor: 'end' },
@@ -144,15 +180,15 @@ function renderScatter(t, ideas) {
     svg.appendChild(t2);
   });
 
-  const frontier = scatterFrontier(plottable);
+  const frontier = scatterFrontier(pts);
   const frontierSet = new Set(frontier);
-  const dominated = plottable.filter(f => !frontierSet.has(f));
+  const dominated = pts.filter(p => !frontierSet.has(p));
 
   // dominated: small muted circles with a tooltip, drawn first (under the frontier)
-  dominated.forEach(f => {
-    const c = scatterEl('circle', { class: 'sc-dominated', cx: px(f.cost), cy: py(f.value), r: 4 });
+  dominated.forEach(p => {
+    const c = scatterEl('circle', { class: 'sc-dominated', cx: px(p.cost), cy: py(p.y), r: 4 });
     const title = scatterEl('title', {});
-    title.textContent = f.title + ' — value ' + f.value.toFixed(1) + ' · cost ' + f.cost.toFixed(1);
+    title.textContent = scatterTooltip(p.f, hasFactor);
     c.appendChild(title);
     svg.appendChild(c);
   });
@@ -160,17 +196,17 @@ function renderScatter(t, ideas) {
   // frontier polyline in ascending cost order (single point: no line)
   if (frontier.length > 1) {
     const ordered = frontier.slice().sort((a, b) => a.cost - b.cost);
-    const points = ordered.map(f => px(f.cost) + ',' + py(f.value)).join(' ');
-    const line = scatterEl('polyline', { class: 'sc-frontierline', points: points });
+    const linePoints = ordered.map(p => px(p.cost) + ',' + py(p.y)).join(' ');
+    const line = scatterEl('polyline', { class: 'sc-frontierline', points: linePoints });
     svg.appendChild(line);
   }
 
   // frontier: larger accent circles with a title-ellipsis label and a tooltip
-  frontier.forEach(f => {
-    const cx = px(f.cost), cy = py(f.value);
+  frontier.forEach(p => {
+    const cx = px(p.cost), cy = py(p.y);
     const c = scatterEl('circle', { class: 'sc-frontier', cx: cx, cy: cy, r: 6 });
     const title = scatterEl('title', {});
-    title.textContent = f.title + ' — value ' + f.value.toFixed(1) + ' · cost ' + f.cost.toFixed(1);
+    title.textContent = scatterTooltip(p.f, hasFactor);
     c.appendChild(title);
     svg.appendChild(c);
     // keep the label inside the plot: flip below when too close to the top edge,
@@ -182,7 +218,7 @@ function renderScatter(t, ideas) {
     const label = scatterEl('text', {
       class: 'sc-frontierlabel', x: labelX, y: labelY, 'text-anchor': nearRight ? 'end' : 'start'
     });
-    label.textContent = scatterEllipsize(f.title);
+    label.textContent = scatterEllipsize(p.f.title);
     svg.appendChild(label);
   });
 

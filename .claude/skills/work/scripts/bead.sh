@@ -16,12 +16,13 @@
 # Usage: bead.sh [-C <dir>] <id> [-r] [jq-filter]
 #   Default filter is '.' — the projected object, pretty-printed.
 #   bead.sh <id> '.metadata.files[]'      # any field of the projection
-#   bead.sh <id> -r '.status'             # -r before the filter for raw output
+#   bead.sh <id> -r '.status'             # -r for raw output
+#   bead.sh -C <main> <parent> -r '.design'  # one field of a feature: no dep inlining
 #   bead.sh -C <main-checkout> <id>       # from outside the repo, where bd
 #                                         # cannot resolve the database
 #
-# -C IS FORWARDED TO bd, NOT TO jq. It is accepted before or after the id, so
-# both orders a dispatched agent might type work. Without it, `bd` resolves
+# -C IS FORWARDED TO bd, NOT TO jq. It is accepted in any position, so
+# every order a dispatched agent might type works. Without it, `bd` resolves
 # the database through GIT: inside the repo — a worktree included, via the git
 # common dir — it finds it; from outside, bead.sh printed NOTHING and exited 1,
 # which this header documents below as meaning the id does not exist
@@ -52,26 +53,24 @@
 # scalar filter (`-r '.status'`) never spills, but `-r '.description'` will.
 set -uo pipefail
 
-# -C is accepted in either position, so the two instructions a dispatched TASK
-# IMPLEMENTER or BREAKDOWN is given ("-C the main checkout" and "use bead.sh",
-# both in SKILL.md 5b) compose whichever order it types them in. Reviewers are
-# given bare `bead.sh <id>`, which is correct from a worktree.
-dir=""
-[ "${1:-}" = "-C" ] && { dir=${2:?-C needs a directory}; shift 2; }
-id=${1:?usage: bead.sh [-C <dir>] <id> [-r] [jq-filter]}
-shift
-[ "${1:-}" = "-C" ] && { dir=${2:?-C needs a directory}; shift 2; }
-raw=""
-[ "${1:-}" = "-r" ] && { raw="-r"; shift; }
-filter=${1:-.}
-
-# A trailing `-C` past the filter would be silently dropped and the call would
-# then fail as an empty rc=1 — the same ambiguous silence this flag exists to
-# remove. Refuse it loudly instead.
-[ $# -gt 1 ] && {
-  echo "bead.sh: unexpected argument '$2' — -C goes before the id or right after it" >&2
-  exit 2
-}
+# Flags go anywhere: `-C <dir>` and `-r` are taken wherever they appear, the
+# first other word is the id and the second the filter. Fixed positions failed
+# whichever order an agent typed: `bead.sh -r -C <dir> <id>` fed the id to jq
+# as a filter and died as a jq compile error (computenet-7ejdv).
+usage="usage: bead.sh [-C <dir>] <id> [-r] [jq-filter] (flags in any position)"
+dir="" raw="" id="" filter=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -C) dir=${2:?-C needs a directory}; shift 2 ;;
+    -r) raw="-r"; shift ;;
+    *) if [ -z "$id" ]; then id=$1
+       elif [ -z "$filter" ]; then filter=$1
+       else echo "bead.sh: unexpected argument '$1' — $usage" >&2; exit 2
+       fi; shift ;;
+  esac
+done
+[ -n "$id" ] || { echo "$usage" >&2; exit 2; }
+filter=${filter:-.}
 
 # An unset dir must NOT become `bd -C ""` (bd would chdir to the empty path),
 # so the flag is carried as an array that is empty when no -C was given. The

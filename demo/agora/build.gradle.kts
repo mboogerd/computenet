@@ -23,6 +23,9 @@ dependencies {
     implementation(project(":demo:shell"))
 
     testImplementation(project(":testkit"))
+    // Test-scope consumer only (TimeTravelWalkthroughTest, computenet-3qkx1.3) — the same shape
+    // as the demo modules' `:query` test dependency; :timetravel stays a main-scope leaf [TTD1-53].
+    testImplementation(project(":timetravel"))
 
     testFixturesImplementation(project(":kernel"))
 }

@@ -1,6 +1,13 @@
 package civictech.demo.skillmatch
 
+import civictech.inspect.CatalogueDto
+import civictech.inspect.InspectorServer
+import civictech.inspect.edit.Capability
+import civictech.inspect.edit.KernelEntries
+import civictech.inspect.edit.ParamKind
+import civictech.inspect.edit.WritePlane
 import civictech.testkit.HttpProbe
+import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -83,6 +90,68 @@ class SkillMatchInspectorTest {
         try {
             // the demo's own port serves the demo, and nothing else was bound
             assertTrue(""""candidates":{}""" in HttpProbe("http://localhost:${app.boundPort}").state())
+        } finally {
+            app.stop()
+        }
+    }
+
+    /**
+     * WKB2 F5 (`[WKB2-06]`): the write plane defaults to off, and `startInspector`
+     * passing an [WritePlane.Enabled] plane is what advertises it — the demo-flag
+     * half (`main`'s `--inspect-write`) is verified by compile plus the manual
+     * run the epic prescribes, per this task's bead.
+     */
+    @Test
+    fun `the write plane stays off unless asked for`() {
+        val disabledApp = SkillMatchApp(port = 0).start()
+        val enabledApp = SkillMatchApp(port = 0).start()
+        try {
+            val disabledPort = disabledApp.startInspector(port = 0).boundPort
+            val enabledPort = enabledApp.startInspector(
+                port = 0,
+                writePlane = WritePlane.Enabled(Capability("t")),
+            ).boundPort
+
+            val disabledBody = HttpProbe("http://localhost:$disabledPort").state(InspectorServer.CAPABILITIES_PATH)
+            val enabledBody = HttpProbe("http://localhost:$enabledPort").state(InspectorServer.CAPABILITIES_PATH)
+
+            assertEquals("""{"writePlane":false}""", disabledBody, "disabled by default: $disabledBody")
+            assertTrue(""""writePlane":true""" in enabledBody, "enabled when passed: $enabledBody")
+        } finally {
+            disabledApp.stop()
+            enabledApp.stop()
+        }
+    }
+
+    /**
+     * WKB2 F12 task 4 (va0c4-D10): an enabled write plane populates
+     * [KernelEntries] into the process-wide catalogue before the server
+     * starts. The registry is process-wide, so this does not assert a
+     * disabled app's catalogue is empty (another test in this JVM may already
+     * have populated it) — only that the three kernel entries are present and
+     * carry the schema the design fixes for `filter.string.prefix`.
+     */
+    @Test
+    fun `an enabled write plane registers the kernel entries in the catalogue`() {
+        val app = SkillMatchApp(port = 0).start()
+        try {
+            val port = app.startInspector(port = 0, writePlane = WritePlane.Enabled(Capability("t"))).boundPort
+
+            val body = HttpProbe("http://localhost:$port").state(InspectorServer.CATALOGUE_PATH)
+            val dto = Json.decodeFromString(CatalogueDto.serializer(), body)
+            val byId = dto.entries.associateBy { it.id }
+
+            assertTrue(
+                setOf(KernelEntries.SET_STRING, KernelEntries.FILTER_STRING_PREFIX, KernelEntries.TRAFFIC_LIGHT_STRING)
+                    .all { it in byId },
+                "expected all three kernel entries, got ${byId.keys}: $body",
+            )
+
+            val filterEntry = byId.getValue(KernelEntries.FILTER_STRING_PREFIX)
+            assertEquals(1, filterEntry.schema.params.size, "prefix schema: $body")
+            val prefixParam = filterEntry.schema.params.single()
+            assertEquals("prefix", prefixParam.name, "prefix schema: $body")
+            assertEquals(ParamKind.STRING, prefixParam.kind, "prefix schema: $body")
         } finally {
             app.stop()
         }

@@ -70,6 +70,18 @@ class SocialSchemaTest {
         roundTrip(tag) shouldBe tag
     }
 
+    // --- computenet-flfkm.1: Message.locationCountryId round-trips -----------
+
+    @Test
+    fun `a Message with a non-null locationCountryId round-trips with the field intact`() {
+        val located = Message(10, 1, 7L, "hi", forumId = 100, locationCountryId = 6)
+
+        ((located as Any) is java.io.Serializable) shouldBe true
+        val restored = roundTrip(located)
+        restored shouldBe located
+        restored.locationCountryId shouldBe 6L
+    }
+
     // --- SOC1-SCHEMA-02 (cell half) -----------------------------------------
 
     @Test

@@ -89,6 +89,16 @@ object Values {
      *
      * A `tagged-map-view` is deliberately NOT in [SET_VIEW_TYPES]: its payload is a
      * map, which [Value.MapVal] equality already compares key-order-insensitively.
+     *
+     * **`aligned-view` is deliberately NOT in this set (computenet-5ubdv, 5ubdv-D2).**
+     * The wave-aligned multi-view sink (`[22-OBS-01]`/`[22-OBS-02]`) is a terminal
+     * view, but its value is a composite of member folds and [BatchOracle] has no
+     * composite fold. Unlike the journaled and tagged cases above, widening here
+     * would not make a check honest: `incremental-equals-batch view: '*'` would reach
+     * a view the oracle cannot fold, and unnamed `late-join-equals-early` inference
+     * would pair it with a single-fold view. A scenario that wants an oracle
+     * comparison of a member compares a sibling standalone view; the composite is
+     * checked by `final-view` (via [canonicalForView]) and `composite-whole-waves`.
      */
     val VIEW_TYPES: Set<String> =
         SET_VIEW_TYPES + setOf("map-view", "count-view", "value-view", "list-view", "tagged-map-view")
@@ -163,13 +173,22 @@ object Values {
      * [SET_VIEW_TYPES], journaled or not) is order-independent, so its list payload is
      * sorted; every other view keeps its structure (ordered lists, maps —
      * [Value.MapVal] equality is already key-order-insensitive).
+     *
+     * An `aligned-view` composite (5ubdv-D2) is a [Value.MapVal] of member renderings;
+     * each [Value.ListVal] member is a set member (the only list-shaped member kind the
+     * binding accepts is `set-view`), so each is sorted as a set. Non-list members
+     * (map/count/value) keep their structure.
      */
-    fun canonicalForView(v: Value, viewType: String?): Value =
-        if (viewType != null && viewType in SET_VIEW_TYPES && v is Value.ListVal) {
+    fun canonicalForView(v: Value, viewType: String?): Value = when {
+        viewType != null && viewType in SET_VIEW_TYPES && v is Value.ListVal ->
             Value.ListVal(sortedList(v.items))
-        } else {
-            v
-        }
+        viewType == ALIGNED_VIEW && v is Value.MapVal ->
+            Value.MapVal(v.entries.mapValues { (_, m) -> if (m is Value.ListVal) Value.ListVal(sortedList(m.items)) else m })
+        else -> v
+    }
+
+    /** The catalog id of the wave-aligned multi-view sink (cell-catalog.md §Views). */
+    const val ALIGNED_VIEW: String = "aligned-view"
 
     /** View-type-aware equality: equal after [canonicalForView] on both sides. */
     fun equalForView(a: Value, b: Value, viewType: String?): Boolean =

@@ -29,9 +29,11 @@ fun interface ProtocolBridge {
  * CP-F3: reconcile a producer's [offered] natures against a consumer's
  * [required] natures, mapping a [Reconciliation.Refuse] onto the typed
  * [LinkResult.Rejected] the handshake returns. Null ⇒ [Reconciliation.Direct]
- * ⇒ the link proceeds exactly as today.
+ * ⇒ the link proceeds exactly as today. `internal` because
+ * [civictech.cell.graph.precheck] is the second caller: it reports the same
+ * typed refusal cold, before any link is attempted.
  */
-private fun reconcileNatures(offered: NatureVector, required: NatureVector): LinkResult.Rejected? =
+internal fun reconcileNatures(offered: NatureVector, required: NatureVector): LinkResult.Rejected? =
     when (val outcome = NatureNegotiation.reconcile(offered, required)) {
         Reconciliation.Direct -> null
         is Reconciliation.Refuse -> LinkResult.Rejected(
@@ -86,8 +88,11 @@ private fun payloadClassOf(port: Any?): Class<*>? = when (port) {
  * it needs the port to carry a declared payload class independent of `Api`
  * erasure, since generic cells create their ports under a non-reified type
  * parameter and so cannot capture `typeOf<Api>()`.
+ *
+ * `internal` because [civictech.cell.graph.precheck] is the second caller: it
+ * reports this exact refusal string cold, before any link is attempted.
  */
-private fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetRef: PortRef): LinkResult.Rejected? {
+internal fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetRef: PortRef): LinkResult.Rejected? {
     val outClazz = payloadClassOf(portOut) ?: return null
     val inClazz = payloadClassOf(target) ?: return null
     if (outClazz != inClazz) {

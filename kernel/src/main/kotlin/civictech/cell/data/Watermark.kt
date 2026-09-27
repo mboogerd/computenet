@@ -26,6 +26,10 @@ import java.util.*
  * merge inlet are ports. Effective-only re-emission (spec 21): only entries that
  * RAISED a watermark propagate, which terminates mesh echoes.
  *
+ * Not the event-time waterline of spec 24 §Lateness and waterlines: that is
+ * [WaterlineCell], a min-over-sources floor of observed event times. This cell
+ * counts delivered waves per (replica slot, sourceId) and must not grow a lane for it.
+ *
  * **Four independent lattices** (T11-F self-documentation — SRP audit: this
  * class carries four settlement concerns with no prior enumeration), each
  * grow-only/pointwise-monotone in its own right and each added by a distinct

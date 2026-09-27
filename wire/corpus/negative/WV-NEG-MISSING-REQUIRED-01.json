@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-MISSING-REQUIRED-01",
+  "title": "The no-default `portName` key is absent",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I10"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJ0eXBlIjoiUE9SVF9BUEkiLCJhcmdzIjpbWyJTdGFsbCIseyJyZWFzb24iOiJTVVNQRU5ERUQifV1dfQ=="
+  },
+  "expect": {
+    "reject": "missing-required-field"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: the `\"portName\":\"inlet\",` key removed entirely — `portName` has no default in `WireFrame`. normative ([WIR1-I10]): observed kotlinx.serialization.MissingFieldException \"Field 'portName' is required for type with serial name 'civictech.cell.wire.WireFrame', but it was missing at path: $\". Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

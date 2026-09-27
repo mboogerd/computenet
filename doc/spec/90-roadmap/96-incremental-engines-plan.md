@@ -426,7 +426,7 @@ the E3.4↔E2.3 seam.
 
 ---
 
-## Milestone E4 — Lateness / waterline eviction ⚠ PROPOSED
+## Milestone E4 — Lateness / waterline eviction ✅ LANDED (E4.1-E4.6; concord corpus coverage `computenet-t4od7`, with `[24-WL-04/15/17/18]` filed in `concord/corpus/DISPUTES.md`)
 
 Gap 6, event-time state: windowing shipped as key derivation with the honest caveat
 "windows never evict" — window-keyed `TagState` and `GroupByCell` state grow forever.
@@ -438,13 +438,13 @@ made here: eviction is destructive **and emits ordinary retractions** — a cell
 remains equal to its integrated output, keeping catch-up, `Stateful` snapshots, and
 per-peer recompute correct with zero new machinery; late-below-waterline arrivals are
 dropped at the guarded inlet and side-channeled on a `late` outlet. Honest equivalence:
-**incremental == batch over the late-filtered input**, conditional on the waterline being
-derivable from a monotone event-time attribute — checked per pipeline, never assumed.
-Restriction: destructive eviction of `Replicable` state is forbidden until E3.7 exists (a
-replica evicting locally while a peer still gossips below the floor re-admits ghosts);
-single-instance cells (`GroupByCell`, the join family) evict freely.
+governed by `[24-WL-10]` (20/24 §Lateness and waterlines) — see that clause for the exact
+restriction and domain rather than restating it here.
+Restriction: governed by `[24-WL-18]` (20/24 §Lateness and waterlines) — destructive
+eviction of `Replicable` state is single-instance-state only; single-instance cells
+(`GroupByCell`, the join family) evict freely.
 
-### E4.1 — Spec: lateness, waterline, and destructive eviction (gap 6, G-42 partial) — P2 · High · `spec`
+### E4.1 — Spec: lateness, waterline, and destructive eviction (gap 6, G-42 partial) — P2 · High · `spec` ✅ LANDED (#1090)
 **Spec**: 20/24 new §Lateness and waterlines (replacing the deferred-trigger bullet in
 §Grouped aggregation); 20/21 §Incremental vs complete (the late-drop rule as a stated,
 declared exception to "late elements are ordinary adds"); 20/22 (the waterline floor is
@@ -461,11 +461,11 @@ ordinary retraction path** (dels flow, groups die, `MapDelta` removals emit), pr
 state = integrated output. (4) *Late arrivals below the waterline are dropped* at the
 guarded inlet and re-emitted verbatim on a `late` side-channel outlet; record the refuted
 Feldera claim (research 01 §5) and the conditional equivalence statement.
-(5) *Replication restriction*: no destructive eviction of `Replicable` state until E3.7.
+(5) *Replication restriction*: governed by `[24-WL-18]` — single-instance state only.
 **Implement**: spec text only; cite research 01 §5, 04 §1-2, 05 gap 6.
 **Unblocks** E4.2-E4.6.
 
-### E4.2 — `WaterlineCell` + `WaterlineDelta` (gap 6) — P2 · High · `data`
+### E4.2 — `WaterlineCell` + `WaterlineDelta` (gap 6) — P2 · High · `data` ✅ LANDED (#1097)
 **Spec**: 20/24 §Lateness and waterlines (E4.1).
 **Implement**: `WaterlineDelta(floor: Long)` — `@Serializable
 @SerialName("WaterlineDelta")`, `MergeablePayload` merging by max (idempotent — the one
@@ -475,11 +475,15 @@ weight-adjacent delta that IS gossip-safe); additive wire registration.
 wave's `sourceId`), emits effective-only monotone floor advances; `Stateful` (per-source
 maxima + last floor); late-join catch-up emits the current floor. No new `@Contract` —
 delta-only cell. Test: seeded run over interleaved multi-source streams; invariants:
-floor monotone on every prefix, floor ≤ min-source promise, duplicated delivery converges
-identically; control: a max-over-sources variant admits a violation seed.
+floor monotone on every prefix, floor equals the running max over prefixes of the
+[24-WL-02] candidate (min over sources contributing at that prefix of max timeFn −
+lateness — not a plain per-prefix min-source promise, which a low/late joiner falsifies
+under [24-WL-20]), floor ≤ the promise of every source contributing since the floor's
+last rise, duplicated delivery converges identically; control: a max-over-sources variant
+admits a violation seed, as does a variant that lets the floor fall.
 **Depends**: E4.1.
 
-### E4.3 — Eviction inlet on `GroupByCell` + late-drop guard (gap 6) — P2 · High · `data`
+### E4.3 — Eviction inlet on `GroupByCell` + late-drop guard (gap 6) — P2 · High · `data` ✅ LANDED (#1102)
 **Spec**: 20/24 §Lateness and waterlines, §Grouped aggregation.
 **Implement**: `TagState.evictBelow(predicate: (E) -> Boolean): SetDelta<E>` —
 destructively drops live tags of matching elements, returning the dels-delta.
@@ -488,14 +492,15 @@ destructively drops live tags of matching elements, returning the dels-delta.
 key lies entirely below the floor via the ordinary retraction fold — groups die,
 `MapDelta` removals emit under the waterline delta's wave. Main-inlet guard: an add with
 `timeFn(e) < floor` is dropped from the fold and forwarded **verbatim** (original tags)
-on a new `late` outlet; dels below floor are no-ops. Test: seeded windowed pipeline
+on a new `late` outlet; a del folds iff its target tag is live, whatever its event
+time (`[24-WL-08]`). Test: seeded windowed pipeline
 (writers → union → tumbling group-by) with shuffled event times; invariants: post-idle
-state equals batch recompute over late-filtered input on every seed; state bounded by the
+state satisfies `[24-WL-10]`'s equivalence on every seed; state bounded by the
 lateness horizon; `late` carries exactly the dropped elements; control:
 evict-without-retract leaves a late subscriber diverging from an old subscriber.
 **Depends**: E4.2.
 
-### E4.4 — Waterline lifecycle under source churn (G-42 partial) — P2 · Medium · `data`+`glitchfree`
+### E4.4 — Waterline lifecycle under source churn (G-42 partial) — P2 · Medium · `data`+`glitchfree` ✅ LANDED (#1106)
 **Spec**: 20/24 §Lateness and waterlines (source-retirement paragraph); 20/22 §Source
 identity.
 **Implement**: `WaterlineCell` retires a source's max contribution on (a) `EdgeClose` for
@@ -508,7 +513,7 @@ idle source) asserting the floor resumes after retirement and never advances pas
 source's promise.
 **Depends**: E4.2; 94 W1.7 (edge events); coordinates with the `ReBaselineNotice` fold.
 
-### E4.5 — `Evictable` seam across the join family (gap 6) — P3 · Medium · `data`
+### E4.5 — `Evictable` seam across the join family (gap 6) — P3 · Medium · `data` ✅ LANDED (#1108, #1109)
 **Spec**: 20/24 §Lateness and waterlines (family-wide paragraph).
 **Implement**: extract the E4.3 pattern into an internal seam shared by the other
 `TagState`/`MintedTags` holders — `JoinSetCell` (per-side rows + minted pairs),
@@ -516,16 +521,17 @@ source's promise.
 minted pairs below the floor (the DD reader-frontier analog scoped to the waterline: late
 input below the floor is inadmissible, so no reader can distinguish the dropped history —
 research 02 §4). Same destructive-with-retraction rule; same `late` guard on inlets
-declaring lateness. Test: windowed equi-join == batch over late-filtered inputs;
+declaring lateness. Test: windowed equi-join satisfies `[24-WL-10]`'s equivalence over the
+join-family domain (that clause governs; do not restate its restriction here);
 minted-tag count bounded; control: evicting minted pairs without exit-tag emission leaves
 tombstone-folding consumers dead (the M11.2 tag-hygiene control inverted).
 **Depends**: E4.3.
 
-### E4.6 — Generative lateness harness + demo adoption (gap 6; F-2 adjacent) — P3 · High · `data`
+### E4.6 — Generative lateness harness + demo adoption (gap 6; F-2 adjacent) — P3 · High · `data` ✅ LANDED (`computenet-fh1fo`)
 **Spec**: 50/52 (new invariant rows); 20/24 §Lateness and waterlines.
 **Implement**: a seeded generative harness over the E4.2-E4.5 pipeline shapes with
-configurable disorder and lateness violations; promote "incremental == batch over
-late-filtered input" and "memory bounded by lateness horizon" to standing 52 invariants.
+configurable disorder and lateness violations; promote `[24-WL-10]`'s equivalence and
+"memory bounded by lateness horizon" to standing 52 invariants.
 Adopt in `:demo:slotfinder`'s `byDay` fold (its natural event-time window) as the first
 real consumer. Test: is the item — 100 seeds, with the E4.3/E4.5 controls kept
 red-capable.

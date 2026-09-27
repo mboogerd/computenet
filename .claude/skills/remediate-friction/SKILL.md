@@ -137,7 +137,8 @@ change explains itself.
 
 ## 6. Finalize
 
-Run `publish-beads.sh` with a timeout of at least 300s. Then report:
+File the retro record (/work's `references/retro.md`; `file-retro.sh --skill
+remediate-friction`), then run `publish-beads.sh` with a timeout of at least 300s. Then report:
 
 - verdict counts per triage row, with PRs for fix-now items;
 - the revision PR, if any;
