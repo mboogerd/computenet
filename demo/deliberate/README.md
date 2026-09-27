@@ -44,7 +44,7 @@ Every attached argument gets a **contribution**: reach × relevance × quality
 canonical form is asked of the proposers, never scored).
 Exploration is best-first by contribution across one queue, one round per
 task. A claim with rounds left goes back into the queue at
-contribution × `--round-decay` per round it already ran, so a strong claim's
+contribution × 0.5 per round it already ran, so a strong claim's
 second round still beats a weak sibling's first. Arguments below
 `--min-influence` are never explored (`PRUNED`), so irrelevant or badly built
 ones cost nothing, and the claim budget is spent on the strongest ones first.
@@ -124,28 +124,26 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--proposers claude,codex` | both | which CLIs propose arguments |
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
-| `--args-per-call <n>` | 1 | arguments per proposer call, per side |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
 | `--max-depth <n>` | 5 | claims deeper than this are `DEPTH_LIMIT` |
 | `--max-claims <n>` | 180 | claims per question; unexplored claims past it become `BUDGET`, explored ones end `ROUND_LIMIT` ("budget exhausted"). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
-| `--max-args-per-side-child <n>` | 3 | the same cap for every claim below the root |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
 | `--min-influence <p>` | 0.10 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
-| `--round-decay <f>` | 0.5 | a claim's next round is queued at contribution × f^(rounds run) |
 | `--yield-stop on\|off` | on | stop a question once its returns diminish (EXP-10); `off` leaves only `--max-claims` |
 | `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `PRUNED` unless expanded |
-| `--yield-window <n>` | 8 | …when the mean yield of its last n non-root rounds (and never before 2n such rounds) |
-| `--yield-ratio <f>` | 0.6 | …falls below f × the mean yield of all its earlier rounds |
-| `--yield-min-claims <n>` | 40 | …and never before the question holds n claims |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
-| `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Safe upgrades*) |
-| `--semantics-layers <ids>` | all seven | credence layers to propagate (`dfquad` always runs) |
-| `--consensus <ids>` | `wlo,jnb,woe` | layers averaged into the headline consensus |
+| `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Restarting paused*) |
 | `--semantics <id>` | `consensus` | what a node's `credence` reports: the consensus, or one layer id |
-| `--wlo-k` / `--wlo-p` / `--wlo-gamma` / `--wlo-alpha` | 2.4 / 2 / 1.3 / 1 | weighted log-odds parameters |
 | `--codex-input-rate` / `--codex-cached-rate` / `--codex-output-rate` | 4.00 / 0.40 / 20.00 | Codex price in USD per 1M tokens (SPEC §12); required for a `--codex-model` other than `gpt-5.6-sol`, else its cost is "rate unknown" and left out of the total |
-| `--jev-input-rate` / `--jev-output-rate` | 0.042 / 0 | Jev price in USD per 1M tokens — an assumption (third-party listing; TypeSafe publishes none) |
+
+Fixed in code (`DeliberationEngine.Config`, `DeliberateApp.SemanticsConfig`,
+`Pricing`), no longer flags: one argument per proposer call per side, a
+per-side cap of 3 below the root, a round decay of 0.5, the EXP-10 window /
+ratio / minimum claims (8 / 0.6 / 40), all seven credence layers with the
+consensus over `wlo,jnb,woe`, the weighted log-odds parameters (k 2.4, p 2,
+γ 1.3, α 1), and the assumed Jev price (USD 0.042 per 1M input tokens, output
+free — a third-party listing; TypeSafe publishes none).
 
 **Reach** is how much a claim can still matter to the question. The root has
 reach 1, and an argument's reach is its parent's reach times the Jev strength
@@ -179,8 +177,8 @@ roughly 4–10 s, but at most `--max-processes` run at once, so when a whole tre
 level expands together, most of the wall time is spent queueing for a process
 slot.
 
-Measured on 2026-09-27 with `--max-depth 2 --max-claims 30 --max-rounds 2
---args-per-call 1`: a 30-claim tree took about 1–2 minutes. It ran 14–17 rounds,
+Measured on 2026-09-27 with `--max-depth 2 --max-claims 30 --max-rounds 2`
+(one argument per call): a 30-claim tree took about 1–2 minutes. It ran 14–17 rounds,
 which is roughly 60 CLI invocations billed to your Claude and Codex accounts,
 plus a couple of hundred Jev requests. In a calibration run using a per-side
 cap of 4, 2 arguments per call, `--min-influence 0.35`, and 8 processes, a
@@ -268,8 +266,8 @@ influence and consensus is recomputed from those inputs on boot. The journal
 compacts itself to one checkpoint at boot, at shutdown, and whenever it has
 grown by more than 64 KB and its own last checkpoint size. On restart the
 trees are rebuilt, and every claim that was waiting or being explored is
-queued again; an interrupted round simply runs again. Restarting with a
-different `--semantics-layers` is fine: the layers are recomputed anyway.
+queued again; an interrupted round simply runs again. An `EXPAND` whose
+forced round the restart interrupted is not resumed: expand the claim again.
 
 Measured live on 2026-09-27 ("Should cities ban private cars from their
 centres?", `--max-claims 60`, all seven layers): 87 KB for the 60 claims while
@@ -277,21 +275,16 @@ running (1.4 KB/claim, the journal not yet compacted), 36 KB (0.6 KB/claim)
 after a SIGTERM, and still 36 KB after two more restarts — SIGTERM, then
 `kill -9` — with every layer's credence and every consensus identical after
 each restart. The one-graph-per-layer design used about 71 KB per claim and
-grew about five-fold over three restarts. A data directory from that design is
-refused with a message; start a fresh one.
+grew about five-fold over three restarts.
 
-### Safe upgrades
+### Restarting paused
 
-A restart re-queues whatever was still running, and a new build may restore
-old data under new rules — so restarting after an upgrade can start spending
-on questions you considered finished. Restart with `--start-paused`: every
+A restart re-queues whatever was still running, so it can start spending on
+questions you considered finished. Restart with `--start-paused`: every
 restored question comes back paused (SPEC DUR-06), nothing runs, and you
 resume only the questions you want to continue, each with the **Resume**
 button in its header (or `POST /question/pause` `paused=false`). The pause is
 recorded, so later restarts keep those questions paused until you resume them.
-Links of edges created before links existed come back `PRUNED` ("created
-before link exploration — expand to explore") rather than queued (DUR-05);
-expand one to explore it.
 
 ```bash
 build/install/deliberate/bin/deliberate 8091 --data <dir> --start-paused

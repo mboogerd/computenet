@@ -84,7 +84,7 @@ names that model.)
   and its source's credence vector. Each semantics computes its own energy
   from the pair — `energy(strength, credence)`, DF-QuAD's product for most —
   and combines a node's base with the energies of its attacks and supports.
-  Layers (`--semantics-layers`, default all seven): `dfquad` (agora's
+  Layers (all seven always run): `dfquad` (agora's
   DF-QuAD), `wlo` (weighted log-odds: σ(α·logit(base) + k·(‖S^γ‖_p −
   ‖A^γ‖_p)), α = 1, k = 2.4, p = 2, γ = 1.3), `jnb` (Jeffrey / naive-Bayes:
   the argument's likelihood ratio LR(s) = ((1+s)/(1−s))^K is Jeffrey-
@@ -101,7 +101,7 @@ names that model.)
   schedules by.
 - **CRED-05** A node's **consensus** is σ(mean over the member layers of
   logit(cᵢ)), each cᵢ clamped to [0.001, 0.999] — the geometric mean of their
-  odds. Members (`--consensus`, default `wlo,jnb,woe`: the rules that pass
+  odds. Members (default `wlo,jnb,woe`: the rules that pass
   every intuition check D1–D5c at their defaults). Its **spread** is the
   [min, max] of the credence over *all* layers. The consensus is a summary:
   nothing feeds it back into any layer or into a parent. The UI's headline
@@ -340,7 +340,9 @@ child rewords its link), and explores the link exactly like a claim:
   `DIMINISHING` — its next
   round is **forced**, and it runs at least that round. It skips the
   contribution and depth gates, is queued ahead of all contributions, and
-  raises the claim's round limit by one if needed. The forced round ignores
+  raises the claim's round limit by one if needed. The forcing is not
+  durable: an `EXPAND` whose round a restart interrupted is not resumed —
+  the claim restores like any other and the human expands it again. The forced round ignores
   Jev saturation, the round limit and `maxClaims`: it has its own allowance of
   up to one per-side cap of new arguments per side (shared by the proposers'
   turns), and they are attached even when the tree is at its budget. Triage
@@ -506,32 +508,22 @@ they were stopped. A full recalibration of
   record (its yields and whether it stopped) is one more record of the same
   store. Every argument's link is rebuilt with it and its `l:` record
   re-applied; an edge targeting an edge places its source under that edge's
-  link (so undercutters recorded before links were explorable become their
-  link's con arguments). Every known stance is
+  link. A link whose `l:` record never reached the journal is rebuilt from
+  the structure alone and queued afresh, like any other such claim. With
+  `--explore-links off` a restored link — whatever status its record holds,
+  an interrupted `EXPLORING` one included — ends `PRUNED` at the LINK-04 gate
+  and runs no round unless expanded. Every known stance is
   re-applied (the graph skips a stance a node already holds). Every claim
   that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
   round simply runs again — and an argument whose attach-time assessment
   never completed is assessed first.
-- **DUR-04** A data directory in the earlier one-agora-graph-per-layer format
-  (`graph-<layer>.jsonl`) is refused at startup with a message; it is not
-  migrated.
-- **DUR-05** A restart or an upgrade never starts spending that nobody asked
-  for. In particular, an edge whose argument has a record but whose link has
-  none — data written before links existed (§3 "Links as claims") — gets its
-  link restored as terminal `PRUNED` with the error "created before link
-  exploration — expand to explore", never `QUEUED`; `EXPAND` explores it (and
-  clears the note). The status is then recorded like any other, so later
-  restarts keep it. (An argument with no record at all was never persisted;
-  it and its link are rebuilt and queued afresh, as DUR-03 says.) With
-  `--explore-links off` a restored link — whatever status its record holds,
-  an interrupted `EXPLORING` one included — ends `PRUNED` at the LINK-04 gate
-  and runs no round unless expanded.
 - **DUR-06** `--start-paused` pauses (CTL-05) every question restored at boot
   before anything is scheduled, so a boot runs no round and no Jev call until
   the human resumes a question; questions asked afterwards run normally. The
   pause is recorded, so it outlasts the boot that set it: a later restart
-  without the flag keeps those questions paused until each is resumed. It is
-  the safe way to restart after an upgrade whose restore rules may differ.
+  without the flag keeps those questions paused until each is resumed. No
+  forced round survives the restart (CTL-02), so nothing in a restored
+  question runs until it is resumed or a claim in it is expanded again.
 
 ## 12. Cost (requirements COST-*)
 
@@ -569,7 +561,7 @@ they were stopped. A full recalibration of
     2026-11-21). With another `--codex-model` the rate flags must be given,
     else the rate is **unknown**: its tokens are shown, its cost is left out
     of every total and the details say so.
-  - Jev (`--jev-input-rate`, `--jev-output-rate`): $0.042 per 1M input
+  - Jev (no flag): $0.042 per 1M input
     tokens, output free — a third-party listing (OpenRouter
     typesafe/jev-1.13, MindStudio), since TypeSafe publishes no pricing, so
     it is labelled **assumed**.
@@ -581,9 +573,7 @@ they were stopped. A full recalibration of
   null until the question completed 3 rounds) and `cost`: per backend its
   calls, tokens by kind, USD, the rate applied, its source and date, whether
   it is assumed, and its caveat, plus the rounds, queued claims and cost per
-  round behind the projection. A question restored from a durable record made
-  before cost tracking is marked incomplete: it has no projection, and any
-  newly tracked spend is only a lower bound.
+  round behind the projection. A question simply has the costs it recorded.
 - **COST-04** The cost is durable (DUR-02): per question and backend one
   aggregate counter set (calls, token sums, USD, unpriced calls, models) —
   never a per-call log — stored in the question's record as one field per
@@ -595,7 +585,4 @@ they were stopped. A full recalibration of
   cost, the price with its source and date (marked *assumed* where it is),
   the projection ("≈$2.10 if the 9 queued claims are explored") and the
   Claude subscription caveat — that closes on Escape or a click outside.
-  A restored pre-cost question shows `—` and “cost not tracked for this
-  question (created before cost tracking)”; after new tracked calls it shows
-  “at least $X (earlier rounds not tracked)”.
   `?mock` shows plausible figures. The legend says what the figure means.

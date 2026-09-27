@@ -220,8 +220,6 @@ data class Pricing(
             codexInput: Double?,
             codexCached: Double?,
             codexOutput: Double?,
-            jevInput: Double?,
-            jevOutput: Double?,
         ): Pricing {
             val model = codexModel ?: DEFAULT_CODEX_MODEL
             val anyCodexFlag = codexInput != null || codexCached != null || codexOutput != null
@@ -246,14 +244,7 @@ data class Pricing(
                 codex = CODEX_DEFAULT.takeIf { model == DEFAULT_CODEX_MODEL }
                 codexSource = null
             }
-            val jevFlags = jevInput != null || jevOutput != null
-            return Pricing(
-                codexModel = model,
-                codex = codex,
-                codexSource = codexSource,
-                jev = if (jevFlags) Rate(jevInput ?: JEV_DEFAULT.inputPerM, outputPerM = jevOutput ?: JEV_DEFAULT.outputPerM) else JEV_DEFAULT,
-                jevSource = if (jevFlags) PriceInfo("", "command-line rate flags", null, assumed = false) else null,
-            )
+            return Pricing(codexModel = model, codex = codex, codexSource = codexSource)
         }
     }
 }

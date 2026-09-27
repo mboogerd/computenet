@@ -345,8 +345,9 @@ class DeliberateAppTest {
         assertEquals(null, Options(arrayOf("--codex-model", "gpt-9")).pricing.codex, "rate unknown without flags")
         val flagged = Options(arrayOf("--codex-model", "gpt-9", "--codex-input-rate", "1", "--codex-cached-rate", "0.1", "--codex-output-rate", "2")).pricing
         assertEquals(Rate(1.0, 0.1, 2.0, cacheWriteMultiplier = 1.25), flagged.codex)
-        assertEquals(0.5, Options(arrayOf("--jev-input-rate", "0.5")).pricing.jev.inputPerM)
-        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--jev-input-rate", "cheap")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--codex-input-rate", "cheap")) }
+        // The Jev rate is a code default, not a flag.
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--jev-input-rate", "0.5")) }
     }
 
     @Test
@@ -354,8 +355,8 @@ class DeliberateAppTest {
         val o = Options(
             arrayOf(
                 "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",
-                "--args-per-call", "3", "--max-processes", "2",
-                "--max-args-per-side", "5", "--max-args-per-side-child", "2", "--saturation", "0.4", "--min-influence", "0.25",
+                "--max-processes", "2",
+                "--max-args-per-side", "5", "--saturation", "0.4", "--min-influence", "0.25",
             ),
         )
         assertEquals(9000, o.port)
@@ -363,15 +364,12 @@ class DeliberateAppTest {
         assertEquals(2, o.maxProcesses)
         assertEquals(2, o.config.maxDepth)
         assertEquals(20, o.config.maxClaims)
-        assertEquals(3, o.config.argsPerCall)
         assertEquals(5, o.config.maxArgsPerSide)
-        assertEquals(2, o.config.maxArgsPerSideChild)
         assertEquals(0.4, o.config.saturation)
         assertEquals(0.25, o.config.minInfluence)
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
         assertEquals(DeliberateApp.DEFAULT_PORT, Options(arrayOf("--max-depth", "2")).port.takeIf { System.getenv("PORT") == null } ?: DeliberateApp.DEFAULT_PORT)
         assertEquals(8, Options(emptyArray()).maxProcesses)
-        assertEquals(1, Options(emptyArray()).config.argsPerCall)
         assertEquals(6, Options(emptyArray()).config.maxArgsPerSide)
         assertEquals(3, Options(emptyArray()).config.maxArgsPerSideChild)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--relevance", "0.5")) }
@@ -387,10 +385,15 @@ class DeliberateAppTest {
         // EXP-10 knobs
         assertEquals(DeliberationEngine.YieldStop(), Options(emptyArray()).config.yieldStop)
         assertEquals(null, Options(arrayOf("--yield-stop", "off")).config.yieldStop)
-        assertEquals(
-            DeliberationEngine.YieldStop(window = 5, ratio = 0.5, minClaims = 30),
-            Options(arrayOf("--yield-window", "5", "--yield-ratio", "0.5", "--yield-min-claims", "30")).config.yieldStop,
-        )
+        // Knobs kept in code only (SPEC §3 defaults), no longer command-line flags.
+        for (gone in listOf(
+            "--args-per-call", "--max-args-per-side-child", "--round-decay", "--yield-window", "--yield-ratio",
+            "--yield-min-claims", "--semantics-layers", "--consensus", "--wlo-k", "--wlo-p", "--wlo-gamma", "--wlo-alpha",
+            "--jev-output-rate",
+        )) {
+            assertFailsWith<IllegalArgumentException>(gone) { Options(arrayOf(gone, "1")) }
+            assertTrue(gone !in Options.USAGE, gone)
+        }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--yield-stop", "maybe")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--proposers", "other")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("9000", "9001")) }
@@ -414,15 +417,12 @@ class DeliberateAppTest {
     fun `command line parses the durability and semantics flags`() {
         val o = Options(
             arrayOf(
-                "--data", "/tmp/deliberate-x", "--semantics", "wlo", "--semantics-layers", "wlo,jnb", "--consensus", "wlo",
-                "--wlo-k", "3", "--wlo-p", "1", "--wlo-gamma", "1.1", "--wlo-alpha", "0.9",
+                "--data", "/tmp/deliberate-x", "--semantics", "wlo",
             ),
         )
         assertEquals(File("/tmp/deliberate-x"), o.data)
         assertEquals("wlo", o.semantics.headline)
-        assertEquals(listOf("dfquad", "wlo", "jnb"), o.semantics.running) // dfquad always runs
-        assertEquals(listOf("wlo"), o.semantics.consensus)
-        assertEquals(listOf(0.9, 3.0, 1.0, 1.1), o.semantics.wlo.let { listOf(it.alpha, it.k, it.p, it.gamma) })
+        assertEquals(SemanticsCatalog.IDS, o.semantics.running) // every layer always runs
         val d = Options(emptyArray())
         assertNull(d.data)
         assertEquals(180, d.config.maxClaims)
@@ -434,8 +434,6 @@ class DeliberateAppTest {
         assertEquals("consensus", Options(arrayOf("--semantics", "consensus")).semantics.headline)
         assertEquals(listOf("wlo", "jnb", "woe"), d.semantics.consensus)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics", "nope")) }
-        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics-layers", "wlo", "--semantics", "jnb")) }
-        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics-layers", "wlo", "--consensus", "mlp")) }
     }
 
     @Test
@@ -676,21 +674,6 @@ class DeliberateAppTest {
             } finally {
                 crashed.deleteRecursively()
             }
-        } finally {
-            dir.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun `a data directory in the old per-layer format is refused`() {
-        val dir = Files.createTempDirectory("deliberate-old").toFile()
-        try {
-            File(dir, "graph-dfquad.jsonl").writeText("")
-            File(dir, DeliberateApp.STRUCTURE_LOG).writeText("")
-            val e = assertFailsWith<IllegalArgumentException> {
-                DeliberateApp(port = 0, judge = FixedJudge(), proposers = emptyList(), uiDir = null, dataDir = dir)
-            }
-            assertTrue("old per-layer format" in e.message.orEmpty(), e.message)
         } finally {
             dir.deleteRecursively()
         }

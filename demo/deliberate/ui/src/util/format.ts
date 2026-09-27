@@ -302,25 +302,14 @@ export function tokens(n: number): string {
 /** Plain names for the backends that cost money. */
 export const BACKEND_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', jev: 'Jev' };
 
-/** The header figure, including the lower-bound treatment for questions restored from pre-cost records. */
+/** The header figure: the sum of the question's priced calls. */
 export function costLabel(q: QuestionDto): string {
-  if (q.cost?.complete !== false) return usd(q.costUsd ?? 0);
-  const hasPricedCalls = q.cost.backends.some((b) => b.usd !== undefined);
-  return hasPricedCalls ? `at least ${usd(q.costUsd ?? 0)}` : '—';
-}
-
-/** The explicit history caveat required for questions created before tracking existed. */
-export function costHistoryText(q: QuestionDto): string | undefined {
-  if (q.cost?.complete !== false) return undefined;
-  return q.cost.backends.some((b) => b.usd !== undefined)
-    ? `${costLabel(q)} (earlier rounds not tracked)`
-    : 'cost not tracked for this question (created before cost tracking)';
+  return usd(q.costUsd ?? 0);
 }
 
 /** "≈$2.10 if the queued claims are explored", or why there is no projection yet. */
 export function projectionText(q: QuestionDto | undefined): string {
   const c = q?.cost;
-  if (c?.complete === false) return 'Projection unavailable because earlier rounds were not tracked';
   if (q?.projectedUsd === undefined || !c) return 'Projection after 3 completed rounds';
   if (c.queued === 0) return 'Nothing left queued';
   return `≈${usd(q.projectedUsd)} if the ${c.queued} queued claim${c.queued === 1 ? ' is' : 's are'} explored`;

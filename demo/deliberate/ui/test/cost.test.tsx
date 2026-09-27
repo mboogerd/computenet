@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { NodeDto, QuestionDto } from '../src/api/types';
 import { CostBadge, CostPanel, nextCostPopoverState } from '../src/components/CostBadge';
 import { mockCost } from '../src/mock/mockSource';
-import { costHistoryText, costLabel, projectionText, tokens, usd } from '../src/util/format';
+import { projectionText, tokens, usd } from '../src/util/format';
 
 const question: QuestionDto = {
   root: 'q',
@@ -13,7 +13,6 @@ const question: QuestionDto = {
   costUsd: 0.8412,
   projectedUsd: 2.104,
   cost: {
-    complete: true,
     rounds: 6,
     queued: 9,
     perRoundUsd: 0.1402,
@@ -63,17 +62,6 @@ describe('dollar and token formatting (SPEC §12)', () => {
     expect(projectionText(question)).toBe('≈$2.10 if the 9 queued claims are explored');
     expect(projectionText({ ...question, projectedUsd: undefined })).toBe('Projection after 3 completed rounds');
     expect(projectionText({ ...question, cost: { ...question.cost!, queued: 0 } })).toBe('Nothing left queued');
-  });
-
-  it('distinguishes untracked history from a real zero and keeps later cost as a lower bound', () => {
-    const legacy = { ...question, costUsd: 0, projectedUsd: undefined, cost: { ...question.cost!, complete: false, backends: [] } };
-    expect(costLabel(legacy)).toBe('—');
-    expect(costHistoryText(legacy)).toBe('cost not tracked for this question (created before cost tracking)');
-    expect(projectionText(legacy)).toBe('Projection unavailable because earlier rounds were not tracked');
-
-    const partial = { ...legacy, costUsd: 0.8412, cost: { ...legacy.cost!, backends: question.cost!.backends } };
-    expect(costLabel(partial)).toBe('at least $0.84');
-    expect(costHistoryText(partial)).toBe('at least $0.84 (earlier rounds not tracked)');
   });
 });
 

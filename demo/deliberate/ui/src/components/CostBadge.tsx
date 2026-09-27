@@ -1,6 +1,6 @@
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import type { BackendCostDto, QuestionDto } from '../api/types';
-import { BACKEND_NAMES, costHistoryText, costLabel, projectionText, tokens, usd } from '../util/format';
+import { BACKEND_NAMES, costLabel, projectionText, tokens, usd } from '../util/format';
 
 export type CostPopoverAction = 'toggle' | 'outside' | 'escape';
 
@@ -66,7 +66,6 @@ export function CostPanel(props: { id: string; question: QuestionDto }) {
         <span>Estimated cost</span>
         <strong>{costLabel(props.question)}</strong>
       </p>
-      <Show when={costHistoryText(props.question)}>{(history) => <p class="cost__history">{history()}</p>}</Show>
       <p class="cost__projection">{projectionText(props.question)}</p>
       <Show when={backends().length > 0} fallback={<p class="cost__empty">No tracked calls yet.</p>}>
         <ul class="cost__list">
