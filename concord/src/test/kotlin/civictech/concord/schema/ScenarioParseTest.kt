@@ -194,6 +194,58 @@ class ScenarioParseTest {
         ConcordYaml.instance.decodeFromString(Scenario.serializer(), reencoded) shouldBe decoded
     }
 
+    @org.junit.jupiter.api.Test
+    fun `a lateness cell carries its typed param, round-trips, and reaches the driver params`() {
+        // computenet-t4od7.1: `lateness:` is a typed field because the lenient
+        // parser would otherwise drop it silently — and a dropped lateness binds
+        // the pre-lateness operator, which passes every never-close check.
+        val yaml = """
+            id: FX-LATENESS-01
+            title: lateness fixture
+            covers: [24-WL-07]
+            profile: core
+            kind: example
+            graph:
+              cells:
+                - {id: a, type: set-source}
+                - {id: wl, type: waterline, lateness: 2}
+                - {id: w, type: window, window: {kind: tumbling, size: 10}, lateness: 2}
+                - {id: v, type: count-view}
+                - {id: l, type: set-view}
+              links:
+                - {from: a, to: wl}
+                - {from: a, to: w}
+                - {from: wl, to: w, inlet: waterline}
+                - {from: w, to: v}
+                - {from: w, to: l, outlet: late}
+        """.trimIndent()
+        val decoded = ConcordYaml.instance.decodeFromString(Scenario.serializer(), yaml)
+        val cells = decoded.graph!!.cells.associateBy { it.id }
+        cells.getValue("wl").lateness shouldBe 2L
+        cells.getValue("w").lateness shouldBe 2L
+        cells.getValue("v").lateness shouldBe null
+        decoded.graph!!.links.single { it.to == "w" && it.from == "wl" }.inlet shouldBe "waterline"
+        decoded.graph!!.links.single { it.to == "l" }.outlet shouldBe "late"
+
+        val reencoded = ConcordYaml.instance.encodeToString(Scenario.serializer(), decoded)
+        ConcordYaml.instance.decodeFromString(Scenario.serializer(), reencoded) shouldBe decoded
+
+        val runner = civictech.concord.runner.CorpusRunner()
+        runner.params(cells.getValue("w"))["lateness"] shouldBe civictech.concord.value.Value.IntVal(2)
+        runner.params(cells.getValue("wl"))["lateness"] shouldBe civictech.concord.value.Value.IntVal(2)
+        runner.params(cells.getValue("v")).containsKey("lateness") shouldBe false
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `a window file without lateness parses unchanged`() {
+        // [24-WL-11]: the param is additive — an existing window scenario carries
+        // none, and its lowered params carry no `lateness` key at all.
+        val s = load("corpus/24-data-cells/24-OP-WINDOW-01.yaml")
+        s.graph!!.cells.forEach { it.lateness shouldBe null }
+        val runner = civictech.concord.runner.CorpusRunner()
+        s.graph!!.cells.forEach { runner.params(it).containsKey("lateness") shouldBe false }
+    }
+
     private fun load(path: String): Scenario =
         ConcordYaml.instance.decodeFromString(Scenario.serializer(), File(path).readText())
 }

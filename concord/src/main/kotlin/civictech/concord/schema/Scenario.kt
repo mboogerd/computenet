@@ -175,6 +175,19 @@ data class CellSpec(
      * into the driver's params.
      */
     val views: Map<String, String>? = null,
+    /**
+     * The event-time lateness `L` (spec 24 §Lateness and waterlines,
+     * `[24-WL-01]`) — a non-negative integer in the same units as the
+     * elements' event time. Legal on `window` (`kind: tumbling` only),
+     * `join`, `semi-join`, `intersect` and `waterline`; any other catalog type
+     * carrying it is refused by the driver (`UnsupportedCatalogBinding`).
+     * Optional and additive (computenet-t4od7.1): absent ⇒ no lateness, the
+     * operator is exactly the pre-lateness one (`[24-WL-11]`), so every
+     * existing scenario parses and binds unchanged. Typed rather than left to
+     * the lenient parser, which would silently drop it. Semantics and the
+     * explicit waterline wiring: `concord/schema/scenario.md` §`lateness`.
+     */
+    val lateness: Long? = null,
 )
 
 /**
@@ -182,8 +195,9 @@ data class CellSpec(
  * element's event time to one composite bucket key (`size`); sliding expands
  * each element into every window of `size` it falls in, `slide` apart, then
  * groups (mirrors the kernel `Windows.tumbling`/`Windows.sliding` assigners —
- * see `KernelCatalog`/`BatchOracle`). Windows never close (`24-OP-WINDOW-02`):
- * a late element is an ordinary add and retractions flow like any other view.
+ * see `KernelCatalog`/`BatchOracle`). Windows never close (`24-OP-WINDOW-02`,
+ * `[24-WL-11]`) unless the cell declares [CellSpec.lateness]: without it a late
+ * element is an ordinary add and retractions flow like any other view.
  */
 @Serializable
 data class WindowSpec(

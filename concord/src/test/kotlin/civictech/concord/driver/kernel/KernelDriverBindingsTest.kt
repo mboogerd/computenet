@@ -1,6 +1,13 @@
 package civictech.concord.driver.kernel
 
+import civictech.cell.data.WaterlineCell
+import civictech.cell.data.Windows
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.IntersectSetCell
+import civictech.cell.data.op.JoinSetCell
+import civictech.cell.data.op.SemiJoinCell
 import civictech.concord.driver.LinkResult
+import civictech.concord.oracle.OracleUnsupported
 import civictech.concord.oracle.BatchOracle
 import civictech.concord.oracle.Fx.i
 import civictech.concord.oracle.Fx.list
@@ -384,5 +391,179 @@ class KernelDriverBindingsTest {
         d.connect("a", "v2")
         d.quiesce(BUDGET)
         d.readView("v2") shouldBe list(s("x"), s("y"))
+    }
+
+    // ---- lateness (computenet-t4od7.1, spec 24 §Lateness and waterlines) ----
+    //
+    // No `bothAgree` here: the oracle refuses lateness until task 2 models it,
+    // so these drive the kernel side and assert the final view directly.
+
+    private fun lat(l: Long): Map<String, Value> = mapOf("lateness" to i(l))
+
+    private fun tumbling(size: Long, lateness: Long? = null): Map<String, Value> = buildMap {
+        put("window", map("kind" to s("tumbling"), "size" to i(size)))
+        lateness?.let { put("lateness", i(it)) }
+    }
+
+    private fun KernelDriver.link(from: String, to: String, inlet: String? = null, outlet: String? = null) =
+        connect(from, to, inlet, outlet, null).shouldBeInstanceOf<LinkResult.Connected>()
+
+    /** A private `Windows.Lateness` field of a built operator (the ctor params are not exposed). */
+    private fun latenessField(cell: Any, name: String): Windows.Lateness<*>? =
+        cell.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(cell) as Windows.Lateness<*>?
+
+    private fun roundTrip(x: java.io.Serializable): Any? {
+        val bytes = java.io.ByteArrayOutputStream().also { java.io.ObjectOutputStream(it).use { o -> o.writeObject(x) } }
+        return java.io.ObjectInputStream(bytes.toByteArray().inputStream()).use { it.readObject() }
+    }
+
+    @Test fun `waterline binds a WaterlineCell whose timeFn is a named serializable object reading the head`() {
+        val cell = KernelCatalog.build("waterline", lat(5)).cell.shouldBeInstanceOf<WaterlineCell<*>>()
+        cell.lateness.lateness shouldBe 5L
+        cell.lateness.timeFn shouldBe EventTimeOfPair
+        // [24-WL-01]: a named object, so it survives serialization as itself
+        roundTrip(cell.lateness) shouldBe cell.lateness
+        EventTimeOfPair(listOf(20L, "x")) shouldBe 20L
+        // a waterline without `lateness` has nothing to subtract: refused, not defaulted
+        assertThrows<UnsupportedCatalogBinding> { KernelCatalog.build("waterline", emptyMap()) }
+    }
+
+    @Test fun `a value-view over a two-source waterline reads the min-over-sources floor`() {
+        val d = KernelDriver(0L)
+        d.spawn("", "a", "set-source", emptyMap())
+        d.spawn("", "b", "set-source", emptyMap())
+        d.spawn("", "wl", "waterline", lat(5))
+        d.spawn("", "v", "value-view", emptyMap())
+        d.link("a", "wl"); d.link("b", "wl"); d.link("wl", "v")
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe i(0) // no source contributed: the view's zero
+        d.apply("a", "add", list(i(20), s("x")))
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe i(15)
+        d.apply("b", "add", list(i(50), s("y")))
+        d.quiesce(BUDGET)
+        // [24-WL-02]: min over sources (20, 50) − 5 = 15; max-over-sources would read 45
+        d.readView("v") shouldBe i(15)
+        d.deadLetters() shouldBe emptyList()
+    }
+
+    @Test fun `a tumbling window with lateness evicts passed windows and routes a below-floor add to late`() {
+        val d = KernelDriver(0L)
+        d.spawn("", "a", "set-source", emptyMap())
+        d.spawn("", "wl", "waterline", lat(2))
+        d.spawn("", "w", "window", tumbling(10, lateness = 2))
+        d.spawn("", "v", "count-view", emptyMap())
+        d.spawn("", "l", "set-view", emptyMap())
+        // the three explicit links (t4od7-D1) plus the ordinary data path
+        d.link("a", "wl")
+        d.link("a", "w")
+        d.link("wl", "w", inlet = "waterline")
+        d.link("w", "v")
+        d.link("w", "l", outlet = "late")
+        for (e in listOf(list(i(3), s("x")), list(i(12), s("y")), list(i(15), s("z")))) {
+            d.apply("a", "add", e)
+            d.quiesce(BUDGET)
+        }
+        // floor = 15 − 2 = 13: window [0,10) ends at 10 <= 13 and is evicted; window
+        // [10,20) ends at 20 and stays. (keyTime = start would also evict [10,20).)
+        d.readView("v") shouldBe map("10" to i(2))
+        d.apply("a", "add", list(i(4), s("q"))) // at 4 < floor 13: late
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe map("10" to i(2))
+        d.readView("l") shouldBe list(list(i(4), s("q")))
+        d.deadLetters() shouldBe emptyList()
+        KernelCatalog.build("window", tumbling(10, lateness = 2)).cell.shouldBeInstanceOf<GroupByCell<*, *, *, *>>()
+    }
+
+    @Test fun `a tumbling window without lateness never closes (24-WL-11)`() {
+        val d = KernelDriver(0L)
+        d.spawn("", "a", "set-source", emptyMap())
+        d.spawn("", "w", "window", tumbling(10))
+        d.spawn("", "v", "count-view", emptyMap())
+        d.link("a", "w"); d.link("w", "v")
+        listOf(list(i(3), s("x")), list(i(15), s("z")), list(i(4), s("q"))).forEach { d.apply("a", "add", it) }
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe map("0" to i(2), "10" to i(1))
+    }
+
+    @Test fun `sliding window with lateness is refused naming WindowSlidingCell`() {
+        val params = mapOf(
+            "window" to map("kind" to s("sliding"), "size" to i(10), "slide" to i(5)),
+            "lateness" to i(2),
+        )
+        assertThrows<UnsupportedCatalogBinding> { KernelCatalog.build("window", params) }
+            .message!!.contains("WindowSlidingCell") shouldBe true
+    }
+
+    @Test fun `lateness on any other catalog type is refused`() {
+        for (type in listOf("union", "group-by", "lookup-join", "set-view", "set-source", "filter")) {
+            val params = lat(2) + (if (type == "filter") mapOf("fn" to s("even")) else emptyMap())
+            assertThrows<UnsupportedCatalogBinding>("lateness on $type") { KernelCatalog.build(type, params) }
+        }
+        assertThrows<UnsupportedCatalogBinding> { KernelCatalog.build("waterline", mapOf("lateness" to i(-1))) }
+    }
+
+    @Test fun `the join family declares the same lateness on both inlets with the decided row time`() {
+        val join = KernelCatalog.build("join", lat(3) + ("fn" to s("key-of"))).cell.shouldBeInstanceOf<JoinSetCell<*, *, *, *>>()
+        val semi = KernelCatalog.build("semi-join", lat(3) + ("fn" to s("key-of"))).cell.shouldBeInstanceOf<SemiJoinCell<*, *, *>>()
+        val inter = KernelCatalog.build("intersect", lat(3)).cell.shouldBeInstanceOf<IntersectSetCell<*>>()
+        for (c in listOf(join, semi)) for (side in listOf("leftLateness", "rightLateness")) {
+            latenessField(c, side) shouldBe Windows.Lateness(EventTimeOfRow, 3L)
+        }
+        for (side in listOf("leftLateness", "rightLateness")) {
+            latenessField(inter, side) shouldBe Windows.Lateness(EventTimeOfPair, 3L)
+        }
+        // row time: an integer value, else the head of a list value
+        EventTimeOfRow(listOf("k", 40L)) shouldBe 40L
+        EventTimeOfRow(listOf("k", listOf(41L, "p"))) shouldBe 41L
+        roundTrip(EventTimeOfRow) shouldBe EventTimeOfRow
+        // without lateness nothing is declared ([24-WL-11])
+        latenessField(KernelCatalog.build("join", mapOf("fn" to s("key-of"))).cell, "leftLateness") shouldBe null
+    }
+
+    @Test fun `a join with lateness routes a below-floor left row to lateLeft`() {
+        val d = KernelDriver(0L)
+        d.spawn("", "t", "set-source", emptyMap()) // [at, tick] elements drive the floor
+        d.spawn("", "wl", "waterline", lat(0))
+        d.spawn("", "a", "set-source", emptyMap())
+        d.spawn("", "b", "set-source", emptyMap())
+        d.spawn("", "j", "join", lat(0) + ("fn" to s("key-of")))
+        d.spawn("", "v", "set-view", emptyMap())
+        d.spawn("", "ll", "set-view", emptyMap())
+        d.link("t", "wl")
+        d.link("wl", "j", inlet = "waterline")
+        d.link("a", "j", inlet = "left")
+        d.link("b", "j", inlet = "right")
+        d.link("j", "v")
+        d.link("j", "ll", outlet = "lateLeft")
+        d.apply("t", "add", list(i(100), s("tick")))
+        d.quiesce(BUDGET)
+        d.apply("a", "add", list(s("k1"), i(50)))                   // [k, at]: 50 < 100, late
+        d.apply("a", "add", list(s("k2"), list(i(90), s("p"))))     // [k, [at, payload]]: 90 < 100, late
+        d.apply("a", "add", list(s("k1"), i(120)))                  // admitted
+        d.apply("b", "add", list(s("k1"), i(130)))                  // admitted
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe list(list(s("k1"), i(120), i(130)))
+        (d.readView("ll") as Value.ListVal).items.toSet() shouldBe
+            setOf(list(s("k1"), i(50)), list(s("k2"), list(i(90), s("p"))))
+        d.deadLetters() shouldBe emptyList()
+    }
+
+    @Test fun `the batch oracle refuses a lateness scenario rather than fold it unfiltered`() {
+        val sc = sc(
+            listOf(
+                c("a", "set-source"),
+                c("wl", "waterline").copy(lateness = 2),
+                CellSpec(
+                    id = "w", type = "window",
+                    window = civictech.concord.schema.WindowSpec(civictech.concord.schema.WindowKind.TUMBLING, 10),
+                    lateness = 2,
+                ),
+                c("v", "count-view"),
+            ),
+            listOf(l("a", "wl"), l("a", "w"), l("wl", "w", inlet = "waterline"), l("w", "v")),
+            listOf(ap("a", "add", list(i(15), s("z"))), ap("a", "add", list(i(4), s("q")))),
+        )
+        assertThrows<OracleUnsupported> { BatchOracle(sc).view("v") }
     }
 }

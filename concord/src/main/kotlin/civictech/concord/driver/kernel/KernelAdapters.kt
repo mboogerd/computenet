@@ -16,6 +16,7 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.control.Magnitude
 import civictech.cell.data.delta.PnCounterDelta
+import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.Propagate
 import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObservationSink
@@ -283,14 +284,25 @@ internal class RecordedComposite(
  * ships only `set` / `map` / `count`). Folds a scalar delta stream into a single
  * running `Long`, dispatching on the payload type so **one** `value-view` binding
  * serves both `counter-source`/`combine-latest`/`feedback` ([CounterDelta], raw
- * addition) and `pn-counter` ([PnCounterDelta], per-source pointwise-max union).
+ * addition), `pn-counter` ([PnCounterDelta], per-source pointwise-max union)
+ * and `waterline` ([WaterlineDelta], max-merged floor — computenet-t4od7.1).
  * The inlet is erased ([civictech.cell.host.ObserveCell] serves `Propagate<Any>`),
  * so the same cell folds whichever scalar delta its producer emits.
+ *
+ * A waterline view reads the floor: the max over every `WaterlineDelta` it has
+ * received (the delta's own lattice merge, so a duplicate or out-of-order
+ * delivery never lowers it). Before any `WaterlineDelta` arrives — the
+ * waterline's `[24-WL-02]` identity, no source contributed yet — the view
+ * reads its zero, `0`, exactly as an untouched counter view does; a scenario
+ * that must tell "no floor" from "floor 0" observes the stream, not the final
+ * value. The terms are summed, but a view is fed one producer kind in
+ * practice, so exactly one term is ever non-zero.
  */
 fun scalarView(): View<Any, Long> = object : View<Any, Long> {
     private var counterTotal = 0L
     private val incs = HashMap<UUID, Long>()
     private val decs = HashMap<UUID, Long>()
+    private var waterline: WaterlineDelta? = null
 
     override fun apply(delta: Any): Boolean {
         val before = current()
@@ -300,14 +312,17 @@ fun scalarView(): View<Any, Long> = object : View<Any, Long> {
                 delta.incs.forEach { (s, t) -> incs[s] = maxOf(incs[s] ?: 0L, t) }
                 delta.decs.forEach { (s, t) -> decs[s] = maxOf(decs[s] ?: 0L, t) }
             }
+            is WaterlineDelta -> waterline = waterline?.merge(delta) ?: delta
             else -> return false
         }
         return current() != before
     }
 
-    override fun current(): Long = counterTotal + incs.values.sum() - decs.values.sum()
+    override fun current(): Long =
+        counterTotal + incs.values.sum() - decs.values.sum() + (waterline?.floor ?: 0L)
 
-    override fun snapshot(): Serializable = arrayListOf<Serializable>(counterTotal, HashMap(incs), HashMap(decs))
+    override fun snapshot(): Serializable =
+        arrayListOf<Serializable?>(counterTotal, HashMap(incs), HashMap(decs), waterline)
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
@@ -315,6 +330,8 @@ fun scalarView(): View<Any, Long> = object : View<Any, Long> {
         counterTotal = parts[0] as Long
         incs.clear(); incs.putAll(parts[1] as Map<UUID, Long>)
         decs.clear(); decs.putAll(parts[2] as Map<UUID, Long>)
+        // A pre-t4od7.1 snapshot has three parts and no waterline term.
+        waterline = parts.getOrNull(3) as WaterlineDelta?
     }
 }
 

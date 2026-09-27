@@ -8,10 +8,13 @@ import civictech.concord.oracle.Fx.list
 import civictech.concord.oracle.Fx.map
 import civictech.concord.oracle.Fx.s
 import civictech.concord.oracle.Fx.scenario
+import civictech.concord.schema.LinkSpec
 import civictech.concord.schema.WindowKind
 import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import org.junit.jupiter.api.assertThrows
 import kotlin.test.Test
 
 /**
@@ -503,6 +506,45 @@ class BatchOracleTest {
             ),
         )
         BatchOracle(sc).view("v") shouldBe list(s("x"))
+    }
+
+    @Test
+    fun `a lateness-declaring cell on the view's cone is refused, never folded unfiltered`() {
+        // computenet-t4od7.1: until task 2 models the floor, a late drop and a
+        // window eviction are not a function of the multiset this oracle folds.
+        // Unfiltered, this fold would count [4, q] into window 0 — the wrong batch.
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"),
+                cell("wl", "waterline").copy(lateness = 2),
+                cell("w", "window", window = WindowSpec(kind = WindowKind.TUMBLING, size = 10)).copy(lateness = 2),
+                cell("v", "count-view"),
+                cell("l", "set-view"),
+                // a branch whose cone reaches no lateness still folds
+                cell("plain", "set-view"),
+            ),
+            links = listOf(
+                link("a", "wl"), link("a", "w"), link("wl", "w", inlet = "waterline"),
+                link("w", "v"), LinkSpec(from = "w", to = "l", outlet = "late"), link("a", "plain"),
+            ),
+            script = listOf(apply("a", "add", list(i(15), s("z"))), apply("a", "add", list(i(4), s("q")))),
+        )
+        assertThrows<OracleUnsupported> { BatchOracle(sc).view("v") }.message!! shouldContain
+            "lateness is not modelled by the oracle yet"
+        assertThrows<OracleUnsupported> { BatchOracle(sc).view("l") }
+        assertThrows<OracleUnsupported> { BatchOracle(sc).allViewValues() }
+        (BatchOracle(sc).view("plain") as Value.ListVal).items.toSet() shouldBe
+            setOf(list(i(4), s("q")), list(i(15), s("z")))
+    }
+
+    @Test
+    fun `a waterline cell on the view's cone is refused`() {
+        val sc = scenario(
+            cells = listOf(cell("a", "set-source"), cell("wl", "waterline").copy(lateness = 5), cell("v", "value-view")),
+            links = listOf(link("a", "wl"), link("wl", "v")),
+            script = listOf(apply("a", "add", list(i(20), s("x")))),
+        )
+        assertThrows<OracleUnsupported> { BatchOracle(sc).view("v") }.message!! shouldContain "waterline"
     }
 
     @Test
