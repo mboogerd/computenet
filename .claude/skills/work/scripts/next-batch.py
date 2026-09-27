@@ -54,7 +54,10 @@ to a query about one feature — can no longer have its files handed to a second
 agent (computenet-z6q2). It is emitted so the caller can see what a short batch
 was held behind. Each unit carries its `holder` liveness; a DEAD or STALE one
 is a resume marker, not a running agent, so it is reported but blocks nothing
-(computenet-09o4w).
+(computenet-09o4w). A FEATURE's claim is its tasks' aggregate, marked
+`aggregate`: its running tasks hold their own files, so an overlap with the
+aggregate alone is a warning, not a skip; `GENERATED` files never block
+(computenet-pl6wv).
 """
 import json
 import os
@@ -195,6 +198,11 @@ def overlaps(files, taken):
             if "." in (f, t) or f == t or f.startswith(t + "/") or t.startswith(f + "/"):
                 hits.add(t)
     return hits
+
+
+# Regenerated, never hand-edited: every writer produces the same content, so a
+# shared claim on one is not a merge conflict and blocks nothing (computenet-pl6wv).
+GENERATED = frozenset({"doc/spec/CONCORDANCE.md"})
 
 
 # Cores one dispatched agent needs to itself. See capacity_limit().
@@ -640,10 +648,16 @@ def plan_batch(candidates, feature=None, elsewhere=()):
     # Seed with what is already running outside this feature (computenet-z6q2),
     # so an overlap with a route-0 unit is skipped by the same rule that skips
     # an overlap with a sibling — no second implementation, no memory.
+    # Another feature's aggregate claim is not a running unit: its running
+    # tasks are listed on their own and hold their files; the aggregate only
+    # warns (aggregate_warnings, computenet-pl6wv).
     outside = {}
     for unit in elsewhere:
+        if unit.get("aggregate"):
+            continue
         for f in unit["files"]:
-            outside[f] = unit["id"]
+            if f not in GENERATED:
+                outside[f] = unit["id"]
     taken |= set(outside)
     for task, resumed in candidates:
         tid = task["id"]
@@ -677,7 +691,8 @@ def plan_batch(candidates, feature=None, elsewhere=()):
             skipped.extend({"id": t["id"], "reason": f"deferred behind {behind} task"}
                            for t, _ in candidates if t["id"] != tid and t["id"] not in already)
             break
-        collisions = overlaps(files, taken)
+        contested = files - GENERATED
+        collisions = overlaps(contested, taken)
         if collisions:
             # Name the RUNNING UNIT, not just the path: the caller's next move
             # for "overlaps a sibling in this batch" is to wait one round, and
@@ -689,9 +704,28 @@ def plan_batch(candidates, feature=None, elsewhere=()):
                 reason += " — running outside this feature: " + ",".join(owners)
             skipped.append({"id": tid, "reason": reason})
             continue
-        taken |= files
+        taken |= contested
         batch.append(_entry(task, resumed, sorted(files), feature))
     return batch, skipped
+
+
+def aggregate_warnings(batch, elsewhere):
+    """Advisory lines for batched tasks whose claim meets only another
+    feature's AGGREGATE metadata.files — no running task of it holds the file,
+    so it is not a skip (computenet-pl6wv), but a later task of that feature
+    may still touch it."""
+    out = []
+    for unit in elsewhere:
+        if not unit.get("aggregate") or unit.get("holder") in RELEASABLE:
+            continue
+        for e in batch:
+            hits = overlaps(set(e["files"]) - GENERATED, unit["files"])
+            if hits:
+                out.append("%s overlaps %s's aggregate files claim (%s) but no "
+                           "running task of it holds them -- batched; check "
+                           "before that feature dispatches a task on them"
+                           % (e["id"], unit["id"], ",".join(sorted(hits))))
+    return out
 
 
 def drop_unmerged_blocked(candidates):
@@ -759,8 +793,11 @@ def running_elsewhere(actor, feature, candidate_ids):
             continue                      # not ours to diagnose; 5b names it
         if files:
             token = (task.get("metadata") or {}).get("holder")
-            out.append({"id": tid, "files": sorted(files),
-                        "holder": holder_state(token, task.get("updated_at")) if token else "NONE"})
+            unit = {"id": tid, "files": sorted(files),
+                    "holder": holder_state(token, task.get("updated_at")) if token else "NONE"}
+            if task.get("issue_type") == "feature":
+                unit["aggregate"] = True  # its running tasks are listed apart
+            out.append(unit)
     return out
 
 
@@ -873,7 +910,8 @@ def main():
 
     verdict, parked = _assess(feature, batch)
     warnings = []
-    warnings = dir_claim_warnings(candidates, batch, skipped)
+    warnings = (dir_claim_warnings(candidates, batch, skipped)
+                + aggregate_warnings(batch, elsewhere))
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "warnings": warnings,
                       "running_elsewhere": elsewhere,
