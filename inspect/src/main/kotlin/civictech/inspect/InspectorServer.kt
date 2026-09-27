@@ -9,12 +9,13 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.beginSse
 import civictech.demo.shell.respond
 import civictech.demo.shell.sseFrame
+import civictech.inspect.edit.AuditRing
 import civictech.inspect.edit.Catalogue
+import civictech.inspect.edit.StagedApplier
 import civictech.inspect.edit.WriteGate
 import civictech.inspect.edit.WritePlane
-import civictech.inspect.edit.respondRefusal
+import civictech.inspect.edit.WritePlaneRoutes
 import com.sun.net.httpserver.HttpExchange
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.net.InetAddress
@@ -98,9 +99,20 @@ import java.util.concurrent.TimeUnit
  * the one place this otherwise read-only instrument accepts graph edits, and
  * only when the embedding process constructs it with [WritePlane.Enabled]:
  *
- * - `GET /api/inspect/capabilities` — a [CapabilitiesDto] saying whether it did;
- * - `POST /api/inspect/apply/precheck` — a placeholder mutating route that
- *   exists to prove the gate, replaced by WKB2 F6.
+ * - `GET /api/inspect/capabilities` — a [CapabilitiesDto] saying whether it did.
+ *
+ * WKB2 F6 serves the write plane's five routes, every one through [WriteGate]
+ * first and every handler in [WritePlaneRoutes] (wczst-D8):
+ *
+ * - `POST /api/inspect/apply/precheck` — the plan for a draft, with no effect;
+ * - `POST /api/inspect/apply` — `202 {"applyId"}`; the apply runs on its own
+ *   thread through [StagedApplier] (or `422` when the plan is not appliable);
+ * - `GET /api/inspect/apply/{id}` — that apply's `ApplyRecord`;
+ * - `POST /api/inspect/apply/{id}/abort` — abort an apply still in STAGE;
+ * - `GET /api/inspect/applies` — the audit ring's terminal records;
+ * - and three SSE events on the shared `seq`: `apply.phase`, `apply.step` and
+ *   `apply.done`. While an apply is staged and not cut over, its cells carry
+ *   `Node.staged` and `GET /graphs` counts them under `staged`, not `cells`.
  *
  * WKB2 F12 adds the named-factory catalogue a browser draft resolves against:
  *
@@ -275,6 +287,9 @@ class InspectorServer internal constructor(
             // `flow` — the supplier only runs once hooks fire or sync() runs,
             // both after construction completes
             instruments = { ref -> ref in observations.sinkRefs },
+            // WKB2 F6 (wczst-D6): `stagedApplier` is declared below; safe for
+            // the same reason as `flow` and `instruments`
+            staged = { ref -> stagedApplier.stagedApplyOf(ref) },
         )
 
     /**
@@ -291,6 +306,30 @@ class InspectorServer internal constructor(
      * `System::currentTimeMillis` and nothing behaves differently from before.
      */
     internal var inspectorClock: () -> Long = System::currentTimeMillis
+
+    /**
+     * WKB2 F6 — the staged applier the write plane's `POST /apply` drives
+     * (see [WritePlaneRoutes]). Built whatever [writePlane] says: with the
+     * plane disabled every route that could reach it answers 404 at
+     * [WriteGate], so it is simply never called.
+     *
+     * Internal for the same reason as [inspectorClock]: a route test installs
+     * its `afterStage` / `beforeBoundaryLink` pauses on the applier this
+     * server built (wczst-D2.5, wczst-D9). Its listener turns every phase,
+     * step, staged spawn and outcome into `apply.*` events and staged-mark
+     * restamps on [model].
+     */
+    internal val stagedApplier: StagedApplier = StagedApplier(
+        hosts, registry,
+        clock = { inspectorClock() },
+        listener = WritePlaneRoutes.listener(model),
+    )
+
+    /** WKB2 F6 — every terminal apply record, served by `GET /applies` (`[WKB2-42]`). */
+    private val auditRing = AuditRing()
+
+    /** WKB2 F6 — the five write-plane routes' handlers (wczst-D8). */
+    private val writePlaneRoutes = WritePlaneRoutes(writeGate, stagedApplier, auditRing, hosts)
 
     /** M3 — the flow feed (see [FlowCollector]); attaches taps as edges appear. */
     private val flow: FlowCollector =
@@ -536,9 +575,8 @@ class InspectorServer internal constructor(
             runCatching { serveSearch(exchange) }
                 .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
         }
-        // WKB2 F5 — the write plane's advertisement and its (placeholder)
-        // mutating route. Neither path prefixes, or is prefixed by, any other
-        // route here — see [CAPABILITIES_PATH] and [APPLY_PATH].
+        // WKB2 F5 — the write plane's advertisement. Its path prefixes, and is
+        // prefixed by, no other route here — see [CAPABILITIES_PATH].
         shell.route(CAPABILITIES_PATH) { exchange ->
             exchange.allowCrossOrigin()
             if (exchange.requestMethod != "GET") {
@@ -556,9 +594,18 @@ class InspectorServer internal constructor(
             }
             exchange.respond(200, inspectorJson.encodeToString(CatalogueDto.serializer(), catalogueDto()), JSON)
         }
+        // WKB2 F6 (wczst-D8) — the write plane. APPLIES_PATH is registered
+        // BEFORE APPLY_PATH because `apply` is a prefix of `applies`: see
+        // [APPLIES_PATH] for the discipline [GRAPH_PATH] states. Both hand the
+        // whole exchange to [WritePlaneRoutes], which calls [WriteGate] first.
+        shell.route(APPLIES_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            runCatching { writePlaneRoutes.serveApplies(exchange) }
+                .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
+        }
         shell.route(APPLY_PATH) { exchange ->
             exchange.allowCrossOrigin()
-            runCatching { serveApply(exchange) }
+            runCatching { writePlaneRoutes.serveApply(exchange) }
                 .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
         }
         shell.route(EVENTS_PATH) { exchange ->
@@ -693,35 +740,6 @@ class InspectorServer internal constructor(
             )
         },
     )
-
-    /**
-     * The `/apply/…` subtree — one route today, `POST .../precheck`, and a
-     * **placeholder**: WKB2 F5 needs a mutating route to prove [WriteGate] on,
-     * and WKB2 F6 replaces this body with the real precheck.
-     *
-     * The order is the point. The route shape is checked first (anything but
-     * `POST /apply/precheck` is a 404, as [serveGraph] does), then the gate —
-     * which refuses without reading the body — and only an admitted request
-     * reaches the body at all: malformed JSON is `400 malformed body`,
-     * well-formed is `501 precheck not implemented`. The two distinct reasons
-     * are what let a test tell "refused by the gate" from "passed the gate and
-     * read the body".
-     */
-    private fun serveApply(exchange: HttpExchange) {
-        if (exchange.tailSegments(APPLY_PATH) != listOf(PRECHECK) || exchange.requestMethod != "POST") {
-            return exchange.respond(404, problem("expected POST /apply/precheck"), JSON)
-        }
-        when (val admission = writeGate.admit(exchange)) {
-            is WriteGate.Admission.Refused -> exchange.respondRefusal(admission)
-            is WriteGate.Admission.Admitted -> {
-                val body = exchange.requestBody.use { it.readBytes().toString(Charsets.UTF_8) }
-                if (runCatching { Json.parseToJsonElement(body) }.isFailure) {
-                    return exchange.respond(400, problem("malformed body"), JSON)
-                }
-                exchange.respond(501, problem("precheck not implemented"), JSON)
-            }
-        }
-    }
 
     private fun serveCell(exchange: HttpExchange) {
         val segments = exchange.tailSegments(CELL_PATH)
@@ -1201,14 +1219,30 @@ class InspectorServer internal constructor(
         const val CATALOGUE_PATH = "$BASE_PATH/catalogue"
 
         /**
-         * WKB2 F5 — the write plane's mutating subtree, gated by [WriteGate];
-         * today only the placeholder `POST $APPLY_PATH/precheck`. Neither a
-         * prefix nor a prefixee of any existing route under [BASE_PATH]
-         * (`activity` is not `apply`), so no registration-order care is needed
-         * yet. WKB2 F6 adds `applies` beside it, which `apply` *does* prefix —
-         * that feature owns the ordering [GRAPH_PATH] describes.
+         * WKB2 F5/F6 — the write plane's per-apply subtree, gated by
+         * [WriteGate]: `POST $APPLY_PATH/precheck`, `POST $APPLY_PATH`,
+         * `GET $APPLY_PATH/{id}` and `POST $APPLY_PATH/{id}/abort`, one context
+         * dispatched on method + tail segments (see [WritePlaneRoutes]).
+         *
+         * **Registration-order constraint, the one [GRAPH_PATH] states**:
+         * this path is a prefix of [APPLIES_PATH], so [APPLIES_PATH]'s route is
+         * registered *before* this one in `init`. The JDK http server matches
+         * contexts by longest path prefix, so `/applies` reaches its own
+         * handler and `/apply/…` reaches this one; `WritePlaneRoutesTest`
+         * resolves both on one server. `precheck` versus `{id}` is not a
+         * registration question — both arrive here and are told apart by the
+         * tail.
          */
         const val APPLY_PATH = "$BASE_PATH/apply"
+
+        /**
+         * WKB2 F6 — `GET $APPLIES_PATH`, the audit ring's terminal records
+         * (`[WKB2-42]`), gated by [WriteGate] like every write-plane route.
+         * [APPLY_PATH] is a prefix of this path, so this route is registered
+         * **before** [APPLY_PATH]'s in `init` — the discipline [GRAPH_PATH]
+         * documents (longer, more specific prefix first).
+         */
+        const val APPLIES_PATH = "$BASE_PATH/applies"
 
         /** Contract §SSE: "Server sends `heartbeat` every 15 s". */
         const val HEARTBEAT_SECONDS = 15L
@@ -1302,7 +1336,6 @@ class InspectorServer internal constructor(
         private const val STATE = "state"
         private const val OBSERVE = "observe"
         private const val WAKE = "wake"
-        private const val PRECHECK = "precheck"
 
         /**
          * T19 — required on every `POST .../wake`; see that route's KDoc and
@@ -1336,12 +1369,13 @@ class InspectorServer internal constructor(
 /**
  * The non-empty `/`-separated segments of this request's path after
  * stripping [prefix] — "strip the route prefix, split on `/`, drop empty
- * segments", shared by [InspectorServer.serveGraph] and
- * [InspectorServer.serveCell] so a third sub-path handler under
+ * segments", shared by [InspectorServer.serveGraph],
+ * [InspectorServer.serveCell] and the write plane's
+ * [WritePlaneRoutes.serveApply] (internal for that one) so a further sub-path handler under
  * [InspectorServer.BASE_PATH] has one helper to reach for instead of writing
  * a third slightly-different inline parse (T24).
  */
-private fun HttpExchange.tailSegments(prefix: String): List<String> =
+internal fun HttpExchange.tailSegments(prefix: String): List<String> =
     requestURI.path.removePrefix(prefix).split('/').filter { it.isNotEmpty() }
 
 /**
@@ -1393,8 +1427,8 @@ private fun HttpExchange.noContent() {
  *   between `observe` and anything off this machine is the loopback bind.
  *   Recorded here rather than quietly widened, so the next reader is not told
  *   again that everything behind this helper is read-only.
- * - The **write plane**'s routes (WKB2 F5; today `POST APPLY_PATH/precheck`)
- *   mutate the graph once F6 lands, and every one calls [WriteGate] first: 404
+ * - The **write plane**'s routes (WKB2 F5/F6: `APPLY_PATH/…` and
+ *   `APPLIES_PATH`) mutate the graph, and every one calls [WriteGate] first: 404
  *   while the plane is [WritePlane.Disabled], then 400 without
  *   [WriteGate.WRITE_HEADER], then 403 for a value that is not the process
  *   capability — all before the body is read. That header is non-simple too,
