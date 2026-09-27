@@ -82,3 +82,95 @@ canonical factor 0.43 ≈ 0.15. On that run it would expand 8 of the 9 depth-1
 arguments (the old calibration expanded ~72%). This rescaling rests on 9
 samples; a full recalibration of `minInfluence` and `saturation` under the new
 judgments is residual.
+
+## Iteration 5: balancing exploration depth across questions
+
+**Symptom.** A live run on 2026-09-27 (defaults of iteration 4, three
+questions asked at once) grew very uneven trees: "Does God exist?" 57 claims,
+"Is Trump intelligent?" 21, "Do animals employ language?" 110. Tree size was
+decided at depth 1: only 36% of root arguments passed the gate
+contribution = reach × relevance × quality ≥ 0.15, where the calibration above
+intended about 72%.
+
+**Causes** (found by re-asking Jev for every factor of the recorded trees):
+
+1. The canonical-form factor inside quality **anti-correlated with relevance**
+   (r −0.30 to −0.54 per question): the most on-point arguments — concrete,
+   specific evidence — were the ones Jev faulted on scope and dates, so the
+   factor pruned exactly them (most visibly for "Does God exist?").
+2. Two of the four `CliProposer.CANONICAL_EXAMPLES` were about Donald Trump
+   and were copied near-verbatim into that question's root arguments, which
+   Jev then rated low on relevance. Swapping in topic-neutral examples raised
+   the mean relevance of that question's root arguments from 0.29 to 0.45 in
+   a regeneration experiment.
+3. Incident-style arguments (one quote, one event) bearing weakly on a
+   generalisation about a person.
+4. A discount Jev applies to relevance for claims about a known person —
+   not addressable in this demo.
+
+**Offline replay.** The recorded trees were replayed through alternative rules
+(a claim the rule expands produces its recorded children, or ones resampled
+from its question's recorded claims when the recording never expanded it;
+200 runs per rule; budget 180). Mean claims ± sd per question, and
+min/max of the three means:
+
+| rule | God | Trump | animals | min/max |
+|---|---|---|---|---|
+| iteration 4 (quality with canonical factor, ≥ 0.15) | 50 ± 0 | 21 ± 0 | 110 ± 0 | 0.19 |
+| no canonical factor, ≥ 0.20 | 174 ± 10 | 21 ± 0 | 179 ± 3 | 0.12 |
+| no canonical factor, ≥ 0.15 | 180 ± 0 | 66 ± 13 | 180 ± 0 | 0.37 |
+| no canonical factor, ≥ 0.10, budget 100 | 100 ± 0 | 100 ± 1 | 100 ± 0 | 1.00 |
+| no canonical factor, ≥ 0.10 + yield stop (0.6, window 8, ≥ 40 claims), budget 180 | 140 ± 53 | 124 ± 44 | 142 ± 43 | 0.87 |
+
+Without the canonical factor a 0.10 floor lets every question grow; the budget
+alone then decides every tree's size, which balances them only by filling each
+one to the cap. A per-question stop **relative to the question's own history**
+balances them without a flat cap: absolute round yields differ several-fold
+between questions (Trump's rounds yielded roughly half of the others'), so any
+absolute yield threshold would starve one question again.
+
+**Decided** (SPEC EXP-02, EXP-05, EXP-10): quality is the construction Noul
+alone — the canonical Noul is no longer asked at all, canonical form is only
+urged in the proposer and merger prompts; the prompt examples use invented,
+mundane subjects (a test keeps demo-run topics out of the prompts);
+`minInfluence` = 0.10; the yield stop (window 8, ratio 0.6, at least 40
+claims and 16 rounds) ends each question; `maxClaims` stays 180 as a ceiling.
+
+### Live result (2026-09-27, defaults, fresh `--data`, the same three questions asked at once)
+
+| question | claims before → after | stopped by | depth 0/1/2/3/4/5 | explored (rounds > 0) by depth | depth-1 explored | yield rounds, recent vs earlier | done after |
+|---|---|---|---|---|---|---|---|
+| Does God exist? | 57 → **162** | diminishing | 1/12/28/54/55/12 | 1/6/16/12 | 6 of 12 | 41, 0.113 vs 0.188 | ~5.0 min |
+| Is Trump intelligent? | 21 → **55** | diminishing (nothing left to halt) | 1/10/25/13/5/1 | 1/5/1/2 | 5 of 10 | 22, 0.060 vs 0.114 | ~5.4 min |
+| Do animals employ language? | 110 → **64** | diminishing | 1/8/27/20/8/0 | 1/8/5/2 | 8 of 8 | 16, 0.113 vs 0.198 | ~3.4 min |
+
+Status counts: God — 65 `DEPTH_LIMIT`, 50 `PRUNED`, 42 `DIMINISHING`,
+3 `SATURATED`, 2 `ROUND_LIMIT`; Trump — 40 `PRUNED`, 6 `DEPTH_LIMIT`,
+6 `ROUND_LIMIT`, 3 `SATURATED`; animals — 31 `PRUNED`, 22 `DIMINISHING`,
+8 `DEPTH_LIMIT`, 2 `SATURATED`, 1 `ROUND_LIMIT`. Triage: God 172 proposals
+(107 added, 43 nested as evidence, 10 undercuts), Trump 59 (29, 14, 11),
+animals 69 (47, 14, 3). The whole run made 332 CLI calls (169 `claude`,
+163 `codex`) over 5.1 minutes; no question reached the 180-claim budget.
+
+**Reading.** min/max of the three tree sizes went from 0.19 to 0.34, and the
+smallest tree grew 2.6×. Trump's tree now explores half its root arguments
+(before, only one root argument was explored), for example "Donald Trump scored 30/30 on the
+Montreal Cognitive Assessment in 2018, according to White House physician
+Ronny Jackson.", "During an April 2020 White House briefing, Donald Trump
+proposed investigating disinfectant injections into the body as a treatment
+for COVID-19." and "Donald Trump built a real estate and branding business
+that Forbes estimated to be worth billions of dollars as of the 2020s." — each
+a checkable, relevant fact rather than a copy of a prompt example. Its root
+relevance stays low (0.16–0.57, cause 4), so it still ends mostly by `PRUNED`;
+its yield stop fired on its last rounds with no claim left waiting.
+
+**Residual.** The stop fired for "Do animals employ language?" at the first
+moment it could (16 rounds, 53 claims), cutting all 8 explored depth-1 claims
+after one or two rounds: that question's earliest rounds are the root's,
+whose yields are naturally high, so a 16-round history compares the tree's
+second level against its root. The replay predicted this spread (sd ≈ 45
+claims per question). A later iteration could exclude the root's rounds from
+the "earlier" mean or raise the minimum history; the knobs
+(`--yield-window`, `--yield-ratio`, `--yield-min-claims`) allow trying either
+without code changes. Saturation is still calibrated under iteration-2
+judgments.

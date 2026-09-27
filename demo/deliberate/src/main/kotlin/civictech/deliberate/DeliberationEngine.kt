@@ -834,7 +834,7 @@ class DeliberationEngine(
         val halted = update {
             // The series is frozen at the stop, so it shows why the question stopped;
             // rounds that were in flight then still attach what they found.
-            if (c.root in diminished) return@update emptyList()
+            if (c.root in diminished) return@update null
             val value = attached.sumOf { n ->
                 (n.edge?.strength ?: Config.FALLBACK_STRENGTH) * (n.relevance ?: 1.0) * (n.quality ?: 1.0)
             }
@@ -843,9 +843,9 @@ class DeliberationEngine(
             else 1.0 - ((counts[TriageAction.DUPLICATE] ?: 0) + (counts[TriageAction.DROP] ?: 0)).toDouble() / triaged
             val ys = yields.getOrPut(c.root) { mutableListOf() }
             ys += value * novelty / requested
-            val stop = config.yieldStop ?: return@update emptyList()
+            val stop = config.yieldStop ?: return@update null
             val size = treeSize.getValue(c.root)
-            if (size >= config.maxClaims || !stop.diminished(ys, size)) return@update emptyList()
+            if (size >= config.maxClaims || !stop.diminished(ys, size)) return@update null
             diminished += c.root
             claims.values.filter { n ->
                 n.root == c.root && !n.forceRound && n.override != Override.EXPAND && !n.rewriteInFlight &&
@@ -856,7 +856,7 @@ class DeliberationEngine(
                 n.status = if (n.override == Override.STOP) Status.STOPPED else Status.DIMINISHING
             }
         }
-        if (halted.isNotEmpty()) {
+        if (halted != null) {
             System.err.println(
                 "deliberate: question ${c.root.id} stopped, returns diminished " +
                     "(${yields[c.root]?.size} rounds, ${halted.size} claims left unexplored)",
