@@ -52,8 +52,9 @@ class CliMerger(private val cli: CliProposer) : Merger {
                 |Argument B:
                 |  $b
                 |
-                |Write a single declarative sentence that is self-contained, keeps every distinct point of both
-                |arguments, and adds nothing new. No numbering, labels or commentary.
+                |Write a single declarative sentence that is self-contained, states the shared point once and keeps
+                |what each argument adds, and adds nothing new. Keep it concise: at most about 35 words, as short as
+                |either argument if you can. No numbering, labels or commentary.
                 |
                 |Output ONLY that sentence as one JSON string, e.g. "The merged argument.". No other text.
             """.trimMargin()

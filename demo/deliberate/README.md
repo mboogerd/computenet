@@ -113,7 +113,11 @@ cap of 4, 2 arguments per call, `--min-influence 0.35`, and 8 processes, a
 60-claim question took about 1 minute on 2026-09-27. It expanded the root and
 6 of the 8 depth-1 claims, one round each, before the cap saturated them.
 Of the 50 depth-2 claims, 37 were `PRUNED` and 13 were `BUDGET`, and no claim
-hit `DEPTH_LIMIT`. Jev calls slower than 20 s are logged to stderr. Nothing
+hit `DEPTH_LIMIT`. With best-first exploration and triage (defaults, both CLIs,
+"Should cities ban private cars from their centres?"), a 60-claim tree took
+about 1.5 minutes on 2026-09-27: every depth-1 claim was explored, 6 of 38
+depth-2 claims were `BUDGET`, and Jev's triage merged 8 and nested 10
+proposals as evidence. Jev calls slower than 20 s are logged to stderr. Nothing
 persists across restarts.
 
 ## Tests
