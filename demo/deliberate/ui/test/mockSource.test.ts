@@ -91,4 +91,33 @@ describe('MockSource', () => {
     expect(g.nodes.find((n) => n.ref === u.undercuts)?.kind).toBe('EDGE');
     source.stop();
   });
+  it('covers links as claims: explored links with arguments of their own, and flat leaves', async () => {
+    const frames: GraphDto[] = [];
+    const source = new MockSource(1, false);
+    source.start((graph) => frames.push(graph), () => undefined);
+    await vi.advanceTimersByTimeAsync(400);
+    const g = frames.at(-1)!;
+    const byRef = new Map(g.nodes.map((n) => [n.ref, n]));
+    const links = g.nodes.filter((n) => n.kind === 'EDGE');
+    // every edge carries its link's claim-like fields
+    for (const l of links) {
+      expect(l.text).toMatch(/^“.*” is a reason (for|against) “.*”$/);
+      expect(l.status).toBeDefined();
+      expect(l.override).toBeDefined();
+    }
+    const explored = links.filter((l) => (l.rounds ?? 0) > 0);
+    expect(explored.length).toBeGreaterThanOrEqual(2);
+    // arguments about a link target its edge and say so, for and against
+    const onLink = g.nodes.filter((n) => n.onLink !== undefined);
+    expect(onLink.some((n) => n.undercuts === undefined)).toBe(true);
+    expect(onLink.some((n) => n.undercuts === n.onLink)).toBe(true);
+    for (const n of onLink) expect(byRef.get(n.onLink!)?.kind).toBe('EDGE');
+    // a node with no arguments has no spread; one with arguments may
+    const targeted = new Set(links.map((l) => l.target));
+    for (const n of g.nodes.filter((n) => !targeted.has(n.ref))) expect(n.spreadLow).toBe(n.spreadHigh);
+    // a link is steered like a claim
+    await source.override(explored[0].ref, 'EXPAND');
+    expect(source.snapshot().nodes.find((n) => n.ref === explored[0].ref)?.override).toBe('EXPAND');
+    source.stop();
+  });
 });

@@ -327,9 +327,11 @@ class CliProposer internal constructor(
 
         private fun String?.flag(name: String) = if (this == null) emptyList() else listOf(name, this)
 
+        private fun bullets(items: List<String>) = if (items.isEmpty()) "  (none yet)" else items.joinToString("\n") { "  - $it" }
+
         fun prompt(ctx: ClaimContext, side: Polarity, max: Int): String {
+            ctx.link?.let { return linkPrompt(ctx, it, side, max) }
             val direction = if (side == Polarity.SUPPORT) "FOR (supporting)" else "AGAINST (attacking)"
-            fun bullets(items: List<String>) = if (items.isEmpty()) "  (none yet)" else items.joinToString("\n") { "  - $it" }
             val path = if (ctx.path.isEmpty()) "  (the claim is the question itself)"
             else ctx.path.mapIndexed { i, c -> "  ${i + 1}. $c" }.joinToString("\n")
             return """
@@ -357,6 +359,59 @@ class CliProposer internal constructor(
                 |$CANONICAL_EXAMPLES
                 |
                 |Output ONLY a JSON array of at most $max strings, e.g. ["First argument.", "Second argument."]. No numbering, labels or other text.
+            """.trimMargin()
+        }
+
+        /**
+         * SPEC §3 "Links as claims": the variant for a link — "A is a reason
+         * for/against B". It asks about the *connection* only: FOR, why A,
+         * if true, really bears on B that way; AGAINST (undercutters), why A
+         * does not show it even if true. Neither side may argue that A or B
+         * is true or false. The canonical rules and examples are shared.
+         */
+        fun linkPrompt(ctx: ClaimContext, link: LinkContext, side: Polarity, max: Int): String {
+            val relation = if (link.side == Polarity.SUPPORT) "a reason FOR" else "a reason AGAINST"
+            val ask = if (side == Polarity.SUPPORT) {
+                "Give at most $max new reasons why the connection HOLDS: why, if the argument is true, it really does " +
+                    "count as $relation the claim (a principle, mechanism or fact that ties the two together)."
+            } else {
+                "Give at most $max new reasons why the connection FAILS: why, even if the argument is true, it does not " +
+                    "bear on the claim in that way (a gap, confounder, different scope, or exception in the inference)."
+            }
+            val path = if (ctx.path.isEmpty()) "  (the claim is the question itself)"
+            else ctx.path.mapIndexed { i, c -> "  ${i + 1}. $c" }.joinToString("\n")
+            return """
+                |You are helping map a deliberation. Below, an argument is offered as $relation a claim. Examine the
+                |LINK between them — whether the argument bears on the claim — not whether either is true.
+                |
+                |Question under deliberation:
+                |  ${ctx.question}
+                |
+                |Path of claims from the question down to the claim:
+                |$path
+                |
+                |Claim:
+                |  ${link.parent}
+                |
+                |Argument offered as $relation it:
+                |  ${link.argument}
+                |
+                |Existing reasons the connection holds:
+                |${bullets(ctx.pros)}
+                |
+                |Existing reasons the connection fails:
+                |${bullets(ctx.cons)}
+                |
+                |$ask Assume the argument is true; do not dispute it, and do not argue about the claim on other grounds.
+                |For example, if "The path is wet" is offered to show "It rained", "A sprinkler also wets the path"
+                |undercuts that link; "The forecast says it will stay dry" is a counter-argument, not an undercutter.
+                |Each must be substantively new, not a rewording of an existing reason above.
+                |
+                |$CANONICAL_RULES
+                |
+                |$CANONICAL_EXAMPLES
+                |
+                |Output ONLY a JSON array of at most $max strings, e.g. ["First reason.", "Second reason."]. No numbering, labels or other text.
             """.trimMargin()
         }
 

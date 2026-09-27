@@ -94,6 +94,8 @@ export type Status =
 
 export type Override = 'AUTO' | 'EXPAND' | 'STOP';
 
+export type Activity = 'exploring' | 'judging' | 'assessing';
+
 export type Polarity = 'SUPPORT' | 'ATTACK';
 
 export interface NodeDto {
@@ -113,11 +115,22 @@ export interface NodeDto {
   /** Lowest and highest credence over all layers. */
   spreadLow?: number;
   spreadHigh?: number;
-  // --- CLAIM only ---
+  // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth,
+  // status, override, reach, contribution, saturation, rounds,
+  // duplicatesDropped, triage, error, activity) ---
+  /** A claim's text; an edge's link text, "“<source>” is a reason for|against “<target>”". */
   text?: string;
+  /** A link's depth is its argument's depth. */
   depth?: number;
   status?: Status;
   override?: Override;
+  /**
+   * What the node is doing right now, for the activity line: "exploring" (a
+   * round in flight), "judging" (its plausibility, before its first round) or
+   * "assessing" (its attach-time judgments); absent when idle.
+   */
+  activity?: Activity;
+  // --- CLAIM only ---
   /** "question" for a root, else the proposer id ("claude" | "codex"). */
   proposer?: string;
   /** EXP-03: other proposers that proposed the same point (DUPLICATE) or the replaced wording (REPLACE). */
@@ -129,15 +142,24 @@ export interface NodeDto {
    * that edge's source bears on its target. Its own edge's `target` is that ref.
    */
   undercuts?: string;
+  /**
+   * SPEC §3 "Links as claims": the ref of the EDGE whose link this claim argues
+   * about — for (SUPPORT: why the connection holds) or against (ATTACK, then
+   * also `undercuts`). Absent for an argument about a claim.
+   */
+  onLink?: string;
   /** Jev plausibility stance (CRED-01), once judged. */
   plausibility?: number;
   /** Jev relevance probability (EXP-05), judged when the argument was attached. */
   relevance?: number;
   /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
   quality?: number;
-  /** SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1). */
+  /**
+   * SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1);
+   * for a link, its argument's contribution × 4·s·(1 − s), s its strength.
+   */
   contribution?: number;
-  /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1). */
+  /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */
   reach?: number;
   /** Last Jev saturation probabilities per side (EXP-04). */
   proSaturation?: number;

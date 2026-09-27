@@ -62,6 +62,39 @@ header then says "stopped: returns diminished" (or "stopped: claim budget
 spent" when `--max-claims` ended it). An `EXPAND` still explores a
 `DIMINISHING` claim.
 
+### Links as claims
+
+Every argument's edge is a claim too — its **link**: "“A” is a reason for
+“B”" (SPEC §3 "Links as claims"). It is explored like a claim, in the same
+queue: the proposers are asked why the connection **holds** (why A, if true,
+really bears on B) and why it **fails** (why A, even if true, does not show
+it — the undercutters), with a prompt that forbids disputing A or arguing B on
+other grounds. Their arguments attach to the edge node, so they move the
+edge's credence and with it A's pull on B; Jev sorts them against the link's
+own arguments and judges them with the link as their parent. A link's
+contribution is its argument's contribution × 4·s·(1 − s), with s the link
+strength: an open link (s near ½) under a strong argument is explored early, a
+clear-cut one (s near 0 or 1) is left alone unless you expand it. Links count
+in the question's rounds and cost, not in its claim count. `--explore-links
+off` stops automatic link exploration (`EXPAND` still works).
+
+Measured once (2026-09-27, defaults but `--max-claims 80`, a question about
+motion-activated streetlights): 8 of 82 links were explored automatically (5
+of the 7 root arguments' links, contributions 0.38–0.44, and 3 at depth 2,
+0.30–0.31), gathering 10 reasons a link holds and 13 that it fails, before
+the budget stopped the question at 26 rounds and $1.12; expanding one more
+link by hand (strength 0.5, left at `BUDGET`) added two undercutters, took its
+credence from 0.50 to 0.35 and moved the root from 0.594 to 0.604, for $0.07.
+
+In the UI the connector — "Pro · strong link 72%" under an argument — is a
+button: hover or focus it for a preview of the link, press it to open the
+link with its own credence, status, Auto/Expand/Stop and its "why it holds" /
+"why it fails" arguments, drawn dashed under the link. A "now" line under the
+question names the claims and links being explored or judged at the moment.
+A claim or link without arguments shows no spread band, because every rule
+starts from the same first impression; the UI says so instead of drawing an
+invisible band.
+
 ## Prerequisites
 
 - JDK 21 (the Gradle toolchain provisions it) and Node 22+ for the UI.
@@ -101,6 +134,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--min-influence <p>` | 0.10 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
 | `--round-decay <f>` | 0.5 | a claim's next round is queued at contribution × f^(rounds run) |
 | `--yield-stop on\|off` | on | stop a question once its returns diminish (EXP-10); `off` leaves only `--max-claims` |
+| `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `PRUNED` unless expanded |
 | `--yield-window <n>` | 8 | …when the mean yield of its last n non-root rounds (and never before 2n such rounds) |
 | `--yield-ratio <f>` | 0.6 | …falls below f × the mean yield of all its earlier rounds |
 | `--yield-min-claims <n>` | 40 | …and never before the question holds n claims |
@@ -131,8 +165,8 @@ chance to stop a side before the cap supplies the dependable stop.
 ## HTTP
 
 - `POST /question` with form field `text=…` returns `{"root":"<ref>"}`.
-- `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. Bad input returns 400, and an unknown ref returns 404.
-- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow` and `spreadHigh`; an undercutter has `undercuts`, the ref of the edge it attacks.
+- `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. The ref is a claim's, or an edge's to steer its link. Bad input returns 400, and an unknown ref returns 404.
+- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow` and `spreadHigh`; an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`.
 - `GET /events` is an SSE stream. Every message is a full `GraphDto`, and messages are coalesced to at most about 10 per second.
 
 ## Cost and time

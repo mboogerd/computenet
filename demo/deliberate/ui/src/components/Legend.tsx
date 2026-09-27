@@ -35,16 +35,32 @@ export function Legend() {
             <span class="pro-text">Pro</span> / <span class="con-text">Con</span>
           </dt>
           <dd>An argument for or against the claim directly above it.</dd>
-          <dt>Undercuts the link</dt>
-          <dd>Does not dispute the claim above; it denies that the argument above actually supports or attacks it.</dd>
+          <dt>Link</dt>
+          <dd>
+            The connection between an argument and the claim above it — “A is a reason for B” — is a claim of its own.
+            Its chip shows the link strength; hover or focus it to preview the link, press it to open it: its own
+            credence, status, Auto/Expand/Stop, and arguments about the connection.
+          </dd>
+          <dt>Link holds / Undercuts the link</dt>
+          <dd>
+            Arguments about a link, drawn dashed under it: why the argument really bears on the claim, or why it does
+            not (it may be true and still not show what it is offered to show).
+          </dd>
           <dt>Link strength</dt>
-          <dd>If the argument were true, how much it would move the claim above.</dd>
+          <dd>Jev's first impression: if the argument were true, how much it would move the claim above.</dd>
+          <dt>No band</dt>
+          <dd>A claim or link with no arguments yet has no band: every rule starts from the same first impression, so they agree by construction.</dd>
           <dt>Reach</dt>
           <dd>How much a claim can matter to the question: its link strengths multiplied up to the top. Faint claims barely can.</dd>
           <dt>Quality</dt>
           <dd>Whether an argument is well made: self-contained, coherent and actually about the claim above.</dd>
           <dt>Contribution</dt>
-          <dd>Reach × relevance × quality. The strongest claims are explored first; too low and a claim is set aside.</dd>
+          <dd>
+            Reach × relevance × quality. The strongest claims are explored first; too low and a claim is set aside. A
+            link's contribution is its argument's, scaled by how unsettled its strength is (most at 50%).
+          </dd>
+          <dt>Now</dt>
+          <dd>The line under the question: which claims and links are being explored or judged at this moment.</dd>
           <dt>Jev</dt>
           <dd>
             The AI judge. It scores every claim and link, sorts new arguments (added, repeat, reworded, merged, nested as

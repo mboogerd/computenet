@@ -236,13 +236,13 @@ class DeliberateApp(
         if (ex.requestMethod != "POST") return ex.respond(405, "POST only")
         val params = readForm(ex) ?: return
         val id = params["id"]?.let { runCatching { UUID.fromString(it.trim()) }.getOrNull() }
-            ?: return ex.respond(400, "id must be a claim ref")
+            ?: return ex.respond(400, "id must be a claim or link (edge) ref")
         val mode = params["mode"]?.trim()?.uppercase()?.let { m -> Override.entries.firstOrNull { it.name == m } }
             ?: return ex.respond(400, "mode must be AUTO, EXPAND or STOP")
         try {
             engine.setOverride(CellRef(id), mode)
         } catch (_: IllegalArgumentException) {
-            return ex.respond(404, "unknown claim $id")
+            return ex.respond(404, "unknown claim or link $id")
         }
         ex.respond(200, "ok")
     }
@@ -397,6 +397,12 @@ internal class Options(args: Array<String>) {
             saturation = double("--saturation") ?: d.saturation,
             minInfluence = double("--min-influence") ?: d.minInfluence,
             roundDecay = double("--round-decay") ?: d.roundDecay,
+            exploreLinks = when (val mode = values["--explore-links"]?.trim()?.lowercase()) {
+                null -> d.exploreLinks
+                "on" -> true
+                "off" -> false
+                else -> throw IllegalArgumentException("--explore-links must be on or off: $mode")
+            },
             yieldStop = when (val mode = values["--yield-stop"]?.trim()?.lowercase()) {
                 null, "on" -> (d.yieldStop ?: DeliberationEngine.YieldStop()).let { y ->
                     DeliberationEngine.YieldStop(
@@ -451,7 +457,7 @@ internal class Options(args: Array<String>) {
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
             "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
             "--max-args-per-side-child", "--saturation", "--min-influence", "--round-decay",
-            "--yield-stop", "--yield-window", "--yield-ratio", "--yield-min-claims",
+            "--yield-stop", "--explore-links", "--yield-window", "--yield-ratio", "--yield-min-claims",
             "--data", "--semantics", "--semantics-layers", "--consensus",
             "--wlo-alpha", "--wlo-k", "--wlo-p", "--wlo-gamma",
             "--codex-input-rate", "--codex-cached-rate", "--codex-output-rate", "--jev-input-rate", "--jev-output-rate",
@@ -474,6 +480,7 @@ internal class Options(args: Array<String>) {
               --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
               --round-decay <f>           a claim's next round is queued at contribution x f^rounds (${D.roundDecay})
               --yield-stop on|off         stop a question once its returns diminish (on)
+              --explore-links on|off      explore links ("A is a reason for B") like claims (on)
               --yield-window <n>          ...when the mean yield of its last n non-root rounds (${Y.window})
               --yield-ratio <f>           ...falls below f x the mean of its earlier rounds (${Y.ratio})
               --yield-min-claims <n>      ...and it holds at least n claims (${Y.minClaims})

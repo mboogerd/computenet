@@ -222,6 +222,28 @@ class CliProposerTest {
     }
 
     @Test
+    fun `a link prompt asks about the connection, not the truth of either end`() {
+        val ctx = ClaimContext(
+            "Should the pool open earlier?", listOf("Should the pool open earlier?"),
+            "“Swimmers queue at 7am.” is a reason for “The pool should open earlier.”",
+            listOf("Queues show unmet demand."), emptyList(),
+            LinkContext("Swimmers queue at 7am.", "The pool should open earlier.", Polarity.SUPPORT),
+        )
+        val holds = CliProposer.prompt(ctx, Polarity.SUPPORT, 1)
+        val fails = CliProposer.prompt(ctx, Polarity.ATTACK, 2)
+        for (p in listOf(holds, fails)) {
+            assertTrue("Swimmers queue at 7am." in p && "The pool should open earlier." in p, p)
+            assertTrue("not whether either is true" in p && "do not dispute it" in p, p)
+            assertTrue("Queues show unmet demand." in p && "ONE proposition" in p && "JSON array" in p, p)
+        }
+        assertTrue("why the connection HOLDS" in holds && "a reason FOR" in holds, holds)
+        assertTrue("why the connection FAILS" in fails && "at most 2" in fails, fails)
+        assertTrue("even if the argument is true" in fails && "does not bear on the claim" in fails, fails)
+        assertTrue("undercuts that link" in fails && "counter-argument, not an undercutter" in fails, fails)
+        assertTrue("reason it points the other way" !in fails, fails)
+    }
+
+    @Test
     fun `proposer and merger prompts carry no topic from the demo runs`() {
         // The examples teach the form only: no real person, political figure or contested topic
         // may leak from the prompt into a deliberation (computenet-dq2fy.12).
@@ -229,6 +251,10 @@ class CliProposerTest {
             CliProposer.prompt(ClaimContext("Q?", emptyList(), "C.", emptyList(), emptyList()), Polarity.SUPPORT, 1),
             CliProposer.prompt(ClaimContext("Q?", listOf("Q?"), "C.", listOf("A."), listOf("B.")), Polarity.ATTACK, 2),
             CliMerger.prompt("C.", Polarity.ATTACK, "A.", "B."),
+            CliProposer.prompt(
+                ClaimContext("Q?", listOf("Q?"), "“A.” is a reason for “Q?”", emptyList(), emptyList(), LinkContext("A.", "Q?", Polarity.SUPPORT)),
+                Polarity.ATTACK, 1,
+            ),
         )
         val deny = Regex(
             "\\b(trump|donald|god|gods|divine|religio\\w*|mystical|collagen|cars?|pedestrian\\w*|animals?|language|" +

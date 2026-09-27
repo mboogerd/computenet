@@ -327,7 +327,7 @@ class DeliberationEngineTest {
     @Test
     fun `claims beyond maxDepth are DEPTH_LIMIT and never explored`() {
         val judge = FakeJudge()
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1))
+        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, exploreLinks = false))
         e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -793,7 +793,7 @@ class DeliberationEngineTest {
             proposers = listOf(p),
             config = DeliberationEngine.Config(
                 argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25, minInfluence = 0.35,
-                maxArgsPerSide = 4, maxArgsPerSideChild = 3, roundDecay = 0.5, workers = 1,
+                maxArgsPerSide = 4, maxArgsPerSideChild = 3, roundDecay = 0.5, workers = 1, exploreLinks = false,
             ),
         )
         val root = e.ask("Q?")
@@ -1186,7 +1186,8 @@ class DeliberationEngineTest {
         val e = engine(
             judge = judge,
             proposers = listOf(claude, codex),
-            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0),
+            // U sits one level below P's link, which is at P's depth (1).
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 2, minInfluence = 0.0),
         )
         val root = e.ask("Q?")
         e.idle()
@@ -1199,20 +1200,339 @@ class DeliberationEngineTest {
         assertEquals(pEdge.ref, uEdge.target)
         assertEquals("ATTACK", uEdge.polarity)
         assertEquals(pEdge.ref, u.undercuts)
+        assertEquals(pEdge.ref, u.onLink)
         assertEquals(listOf(p.ref), g.childrenOf(root).map { it.source })
-        assertEquals(1, u.depth)
+        // P's link is at P's depth; its arguments one below.
+        assertEquals(1, pEdge.depth)
+        assertEquals(2, u.depth)
         assertEquals(mapOf("ADD" to 1, "UNDERCUT" to 1), g.node(root).triage)
         // reach(root) x strength(U's edge) x strength(P's edge)
         assertEquals(0.6 * 0.8, u.reach!!, 1e-9)
         // Judged against the link it denies, not against the root claim.
         val call = judge.relationCalls.single { it.child == "U" }
-        assertTrue(call.parent.contains("\"P\"") && call.parent.contains("\"Q?\""), call.parent)
+        assertEquals("“P” is a reason for “Q?”", call.parent)
         // Explored like any claim: its own argument attaches to it, with the root question as its path.
         assertEquals(Status.ROUND_LIMIT, u.status)
         assertEquals(listOf("U holds"), g.childrenOf(g.ref(u)).map { g.claim(it.source!!).text })
-        assertEquals(listOf("Q?"), claude.contexts.first { it.claim == "U" }.path)
+        assertEquals(listOf("Q?", "“P” is a reason for “Q?”"), claude.contexts.first { it.claim == "U" }.path)
         // The undercut lowers the link's credence below its own strength stance.
         awaitUntil("the undercut edge loses credence") { e.snapshot().nodes.single { it.ref == pEdge.ref }.credence < 0.8 - 1e-6 }
+    }
+
+    // ------------------------------------------------------------ SPEC §3 "Links as claims"
+
+    private fun GraphDto.linkOf(arg: NodeDto) = edges().single { it.source == arg.ref }
+    private fun GraphDto.text(t: String) = claims().single { it.text == t }
+
+    /** Root: one pro per entry of [rootPros], one con per entry of [rootCons]; links: [onLink] (argument, side) → texts. */
+    private fun linkProposer(
+        rootPros: List<String> = emptyList(),
+        rootCons: List<String> = emptyList(),
+        onLink: (LinkContext, Side, Int) -> List<String> = { _, _, _ -> emptyList() },
+    ) = FakeProposer("claude") { ctx, side, _ ->
+        when {
+            ctx.link != null -> onLink(ctx.link!!, side, 0)
+            ctx.path.isEmpty() -> if (side == Polarity.SUPPORT) rootPros else rootCons
+            else -> emptyList()
+        }
+    }
+
+    @Test
+    fun `a link is queued by its argument's contribution times the uncertainty of its strength and explored like a claim`() {
+        val p = linkProposer(rootPros = listOf("Strong"), rootCons = listOf("Even")) { link, side, _ ->
+            if (link.argument == "Even") listOf(if (side == Polarity.SUPPORT) "Even holds" else "Even fails") else emptyList()
+        }
+        val judge = FakeJudge(strength = { when (it) { "Strong" -> 1.0; "Even" -> 0.5; else -> 0.8 } })
+        val e = engine(judge = judge, proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1))
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val strong = g.linkOf(g.text("Strong"))
+        val even = g.linkOf(g.text("Even"))
+        // contribution(argument) x 4 s (1 - s): a decisive link is settled, an even one is wide open.
+        assertEquals(0.0, strong.contribution!!, 1e-9)
+        assertEquals(Status.PRUNED, strong.status)
+        assertEquals(0, strong.rounds)
+        assertEquals(0.5, even.contribution!!, 1e-9)
+        assertEquals(0.5, even.reach!!, 1e-9)
+        assertEquals(Status.ROUND_LIMIT, even.status)
+        assertEquals(1, even.rounds)
+        // The link is a claim: its text is built from its ends, at its argument's depth.
+        assertEquals("“Even” is a reason against “Q?”", even.text)
+        assertEquals(1, even.depth)
+        assertEquals(Override.AUTO, even.override)
+        // Proposers were asked about the connection, with the link's ends.
+        val ctx = p.contexts.first { it.link != null }
+        assertEquals(LinkContext("Even", "Q?", Polarity.ATTACK), ctx.link)
+        assertEquals(even.text, ctx.claim)
+        assertEquals(listOf("Q?"), ctx.path)
+        // Its arguments attach to the edge node, one level below it, and are judged against the link.
+        val holds = g.text("Even holds")
+        val fails = g.text("Even fails")
+        assertEquals(even.ref, g.linkOf(holds).target)
+        assertEquals("SUPPORT", g.linkOf(holds).polarity)
+        assertEquals(even.ref, holds.onLink)
+        assertNull(holds.undercuts)
+        assertEquals(even.ref, fails.onLink)
+        assertEquals(even.ref, fails.undercuts)
+        assertEquals(2, holds.depth)
+        assertEquals(Status.DEPTH_LIMIT, holds.status)
+        assertEquals(even.text, judge.relationCalls.single { it.child == "Even holds" }.parent)
+        assertEquals(mapOf("ADD" to 2), even.triage)
+        // Link rounds are non-root work and therefore participate in the
+        // question's diminishing-return yield series (EXP-10).
+        assertEquals(3, g.questions.single().yieldRounds)
+        // A link's arguments are claims of the question; links themselves are not.
+        assertEquals(5, g.questions.single().claims)
+        assertTrue(g.childrenOf(root).none { it.source == holds.ref })
+    }
+
+    @Test
+    fun `a counter-argument found in link triage attacks the parent claim instead of the link`() {
+        val p = linkProposer(rootPros = listOf("The path is wet.")) { link, side, _ ->
+            if (link.argument == "The path is wet." && side == Polarity.ATTACK) {
+                listOf("The forecast predicted dry weather.")
+            } else {
+                emptyList()
+            }
+        }
+        val judge = FakeJudge(
+            strength = { if (it == "The path is wet.") 0.5 else 0.8 },
+            triage = { ctx, cands ->
+                cands.map {
+                    if (ctx.link != null && it.text == "The forecast predicted dry weather.") {
+                        Triage(TriageAction.OTHER_SIDE)
+                    } else {
+                        Triage(TriageAction.ADD)
+                    }
+                }
+            },
+        )
+        val e = engine(
+            judge = judge, proposers = listOf(p),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, workers = 1),
+        )
+        val root = e.ask("It rained.")
+        e.idle()
+        val g = e.snapshot()
+        val argument = g.text("The path is wet.")
+        val link = g.linkOf(argument)
+        val counter = g.text("The forecast predicted dry weather.")
+        val counterEdge = g.linkOf(counter)
+
+        assertEquals(root.id.toString(), counterEdge.target)
+        assertEquals("ATTACK", counterEdge.polarity)
+        assertNull(counter.onLink)
+        assertNull(counter.undercuts)
+        assertTrue(g.childrenOf(g.ref(link)).isEmpty(), "counter-argument must not become a link argument")
+        assertEquals(mapOf("OTHER_SIDE" to 1), link.triage)
+        assertEquals(setOf(argument.ref, counter.ref), g.childrenOf(root).mapNotNull { it.source }.toSet())
+    }
+
+    @Test
+    fun `maxClaims also bounds automatic link exploration although links do not consume the budget`() {
+        val p = linkProposer(rootPros = listOf("P")) { _, side, _ ->
+            if (side == Polarity.SUPPORT) listOf("L") else emptyList()
+        }
+        val e = engine(
+            judge = FakeJudge(strength = { 0.5 }), proposers = listOf(p),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 3, maxDepth = 8, maxClaims = 3,
+                minInfluence = 0.0, workers = 1, yieldStop = null,
+            ),
+        )
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        val links = g.edges()
+
+        // Every non-root claim creates exactly one link, so the claim ceiling
+        // is also a structural ceiling on links. Disabling EXP-10 still cannot
+        // produce an unbounded chain.
+        assertEquals(3, q.claims)
+        assertEquals(q.claims - 1, links.size)
+        assertEquals(1, links.sumOf { it.rounds ?: 0 })
+        assertTrue(links.any { it.status == Status.BUDGET }, "$links")
+        assertTrue(g.nodes.none { it.status in setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING) })
+    }
+
+    @Test
+    fun `EXPAND on a link explores it and its arguments move the edge credence and hence the parent`() {
+        val p = linkProposer(rootPros = listOf("P")) { link, side, _ ->
+            if (link.argument == "P" && side == Polarity.ATTACK) listOf("P fails") else emptyList()
+        }
+        val judge = FakeJudge(
+            plausibility = { if (it == "P fails") 0.9 else 0.5 },
+            strength = { if (it == "P fails") 0.9 else 0.8 },
+        )
+        val e = engine(
+            judge = judge, proposers = listOf(p),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = false),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val link = g.linkOf(g.text("P"))
+        assertEquals(Status.PRUNED, link.status)
+        awaitUntil("the root settles on its one argument") { e.snapshot().node(root).credence > 0.5 + 1e-6 }
+        val rootBefore = e.snapshot().node(root).credence
+        val edgeBefore = e.snapshot().nodes.single { it.ref == link.ref }.credence
+
+        e.setOverride(g.ref(link), Override.EXPAND)
+        e.idle()
+        val g2 = e.snapshot()
+        val expanded = g2.nodes.single { it.ref == link.ref }
+        assertEquals(Override.EXPAND, expanded.override)
+        assertEquals(1, expanded.rounds)
+        assertEquals(listOf("P fails"), g2.childrenOf(g2.ref(link)).map { g2.claim(it.source!!).text })
+        // The undercutter lowers the link's credence, and with it the argument's pull on the root.
+        awaitUntil("the undercut lowers the edge and the root") {
+            val s = e.snapshot()
+            s.nodes.single { it.ref == link.ref }.credence < edgeBefore - 1e-6 && s.node(root).credence < rootBefore - 1e-6
+        }
+    }
+
+    @Test
+    fun `triage on a link compares its candidates with the link's own arguments`() {
+        val calls = AtomicInteger()
+        val p = linkProposer(rootPros = listOf("P")) { _, side, _ ->
+            if (side == Polarity.SUPPORT) listOf(if (calls.getAndIncrement() == 0) "L1" else "L1 again") else emptyList()
+        }
+        val judge = FakeJudge(
+            strength = { if (it == "P") 0.5 else 0.8 },
+            triage = { ctx, cands -> cands.map { if (ctx.link != null && ctx.pros.isNotEmpty()) Triage(TriageAction.DUPLICATE, 0) else Triage(TriageAction.ADD) } },
+        )
+        val e = engine(judge = judge, proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 2, maxDepth = 1))
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val link = g.linkOf(g.text("P"))
+        val linkTriage = judge.triageCalls.filter { it.first.link != null }.map { it.first }
+        assertEquals(2, linkTriage.size)
+        assertTrue(linkTriage.all { it.claim == link.text }, "$linkTriage")
+        assertEquals(listOf("L1"), linkTriage[1].pros)
+        assertEquals(mapOf("ADD" to 1, "DUPLICATE" to 1), link.triage)
+        assertEquals(1, link.duplicatesDropped)
+        assertEquals(2, link.rounds)
+        assertEquals(listOf("L1"), g.childrenOf(g.ref(link)).map { g.claim(it.source!!).text })
+    }
+
+    @Test
+    fun `STOP on a queued link prevents its rounds and AUTO requeues it through the gates`() {
+        val release = CountDownLatch(1)
+        val entered = CountDownLatch(1)
+        val inner = linkProposer(rootPros = listOf("P")) { _, side, _ -> if (side == Polarity.SUPPORT) listOf("L") else emptyList() }
+        val gated = object : Proposer by inner {
+            override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> {
+                if (ctx.claim == "P") {
+                    entered.countDown()
+                    release.await(20, TimeUnit.SECONDS)
+                }
+                return inner.propose(ctx, side, max)
+            }
+        }
+        // One worker: P (0.6) runs before its link (0.6 x 0.96) and blocks while the link waits in the queue.
+        val e = engine(
+            judge = FakeJudge(strength = { if (it == "P") 0.6 else 0.8 }), proposers = listOf(gated),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, workers = 1),
+        )
+        e.ask("Q?")
+        try {
+            assertTrue(entered.await(20, TimeUnit.SECONDS))
+            val link = e.snapshot().let { it.linkOf(it.text("P")) }
+            assertEquals(Status.QUEUED, link.status)
+            e.setOverride(e.snapshot().ref(link), Override.STOP)
+            assertEquals(Status.STOPPED, e.snapshot().nodes.single { it.ref == link.ref }.status)
+        } finally {
+            release.countDown()
+        }
+        e.idle()
+        val g = e.snapshot()
+        val link = g.linkOf(g.text("P"))
+        assertEquals(Status.STOPPED, link.status)
+        assertEquals(0, link.rounds)
+        assertTrue(g.childrenOf(g.ref(link)).isEmpty())
+        assertTrue(inner.contexts.none { it.link != null })
+
+        e.setOverride(g.ref(link), Override.AUTO)
+        e.idle()
+        val g2 = e.snapshot()
+        val again = g2.nodes.single { it.ref == link.ref }
+        assertEquals(Status.ROUND_LIMIT, again.status)
+        assertEquals(listOf("L"), g2.childrenOf(g2.ref(link)).map { g2.claim(it.source!!).text })
+    }
+
+    @Test
+    fun `link metadata survives a restart`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-link-restore").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val store = InMemoryMetaStore()
+        val judge = FakeJudge(strength = { when (it) { "Strong" -> 1.0; "Even" -> 0.5; else -> 0.8 } })
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1)
+        fun proposer() = linkProposer(rootPros = listOf("Strong"), rootCons = listOf("Even")) { link, side, _ ->
+            if (link.argument == "Even") listOf(if (side == Polarity.SUPPORT) "Even holds" else "Even fails") else emptyList()
+        }
+        val e1 = DeliberationEngine(CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(proposer()), config, store = store)
+            .also { engines += it }
+        e1.ask("Q?")
+        e1.idle()
+        val strong = e1.snapshot().let { it.linkOf(it.text("Strong")) }
+        e1.setOverride(e1.snapshot().ref(strong), Override.STOP)
+        e1.idle()
+        val before = e1.snapshot()
+        e1.close()
+        assertTrue(store.load().getValue("l:${strong.ref}").containsKey("override"))
+
+        val scheduler2 = VirtualThreadScheduler("deliberate-link-restore-2")
+        try {
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val e2 = DeliberationEngine(CredenceGraph(host2, registry2, dfquad, structureLog = log), judge, listOf(proposer()), config, store = store)
+                .also { engines += it }
+            e2.idle()
+            val after = e2.snapshot()
+            fun key(n: NodeDto) = listOf(n.ref, n.kind, n.text, n.depth, n.status, n.override, n.rounds, n.triage,
+                n.reach, n.contribution, n.duplicatesDropped, n.onLink, n.undercuts, n.strength)
+            assertEquals(before.nodes.map(::key), after.nodes.map(::key))
+            val restored = after.nodes.single { it.ref == strong.ref }
+            assertEquals(Status.STOPPED, restored.status)
+            assertEquals(Override.STOP, restored.override)
+            assertEquals(1, after.linkOf(after.text("Even")).rounds)
+        } finally {
+            scheduler2.shutdown()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a rewritten argument re-gates its unexplored link with the new wording`() {
+        val judge = FakeJudge(
+            strength = { if (it == "Clearer P") 0.5 else 1.0 },
+            // Below 1, so the root's second round (priority 1) runs before "P" does.
+            quality = { if (it == "P") 0.9 else 1.0 },
+            triage = { ctx, cands -> cands.map { if (ctx.path.isEmpty() && it.text == "Clearer P") Triage(TriageAction.REPLACE, 0) else Triage(TriageAction.ADD) } },
+        )
+        val first = AtomicBoolean(true)
+        val p = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.path.isEmpty() && side == Polarity.SUPPORT -> listOf(if (first.getAndSet(false)) "P" else "Clearer P")
+                else -> emptyList()
+            }
+        }
+        // Two rounds of the root, one worker: "P" (link pruned, strength 1) is rewritten before anything below runs.
+        val e = engine(
+            judge = judge, proposers = listOf(p),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 2, maxDepth = 1, roundDecay = 1.0, workers = 1),
+        )
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val arg = g.text("Clearer P")
+        val link = g.linkOf(arg)
+        assertEquals("“Clearer P” is a reason for “Q?”", link.text)
+        assertEquals(0.5, link.contribution!!, 1e-9)
+        assertEquals(Status.ROUND_LIMIT, link.status)
     }
 
     @Test
@@ -1345,7 +1665,9 @@ class DeliberationEngineTest {
         // The structure log holds the text; the record holds it only after a rewrite.
         assertNull(root["text"], root.toString())
         // One record per claim, plus one per question (EXP-10: its round yields).
-        assertTrue(saved.keys.all { it.startsWith("c:") || it.startsWith("q:") }, saved.keys.toString())
+        // ... and one per link (SPEC §3 "Links as claims"), keyed by its edge ref.
+        assertTrue(saved.keys.all { it.startsWith("c:") || it.startsWith("l:") || it.startsWith("q:") }, saved.keys.toString())
+        assertTrue(saved.keys.any { it.startsWith("l:") }, saved.keys.toString())
         assertEquals(1, saved.keys.count { it.startsWith("q:") })
 
         val writesBeforeRestart = store.writes.get()
@@ -1493,7 +1815,7 @@ class DeliberationEngineTest {
         val e = engine(
             judge = judge,
             proposers = listOf(proposer),
-            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1, minInfluence = 0.0),
+            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false),
         )
         e.ask("Q?")
         e.idle()
@@ -1519,7 +1841,7 @@ class DeliberationEngineTest {
             proposers = listOf(proposer),
             config = DeliberationEngine.Config(
                 argsPerCall = 3, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, workers = 1,
-                yieldStop = DeliberationEngine.YieldStop(window = 2, ratio = 0.6, minClaims = 0),
+                yieldStop = DeliberationEngine.YieldStop(window = 2, ratio = 0.6, minClaims = 0), exploreLinks = false,
             ),
         )
         e.ask("Q?")
@@ -1551,7 +1873,7 @@ class DeliberationEngineTest {
             proposers = listOf(proposer),
             config = DeliberationEngine.Config(
                 argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, workers = 1,
-                yieldStop = DeliberationEngine.YieldStop(window = 1, ratio = 0.6, minClaims = 0),
+                yieldStop = DeliberationEngine.YieldStop(window = 1, ratio = 0.6, minClaims = 0), exploreLinks = false,
             ),
         )
         e.ask("Q?")

@@ -102,11 +102,22 @@ data class NodeDto(
     /** Lowest and highest credence over all layers. */
     val spreadLow: Double = credence,
     val spreadHigh: Double = credence,
-    // --- CLAIM only ---
+    // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth, status,
+    // override, reach, contribution, saturation, rounds, duplicatesDropped, triage,
+    // error, activity) ---
+    /** A claim's text; an edge's link text, "“<source>” is a reason for|against “<target>”". */
     val text: String? = null,
+    /** A link's depth is its argument's depth. */
     val depth: Int? = null,
     val status: Status? = null,
     val override: Override? = null,
+    /**
+     * What the node is doing right now, for the UI's activity line: "exploring"
+     * (a round in flight), "judging" (its plausibility, before its first
+     * round) or "assessing" (its attach-time judgments); null when idle.
+     */
+    val activity: String? = null,
+    // --- CLAIM only ---
     /** "question" for a root, else the proposer id ("claude" | "codex"). */
     val proposer: String? = null,
     /** EXP-03: other proposers that proposed the same point (DUPLICATE) or the replaced wording (REPLACE). */
@@ -118,15 +129,24 @@ data class NodeDto(
      * that edge's source bears on its target. Its own edge's `target` is that ref.
      */
     val undercuts: String? = null,
+    /**
+     * SPEC §3 "Links as claims": the ref of the EDGE whose link this claim
+     * argues about — for (SUPPORT: why the connection holds) or against
+     * (ATTACK, then also [undercuts]). Null for an argument about a claim.
+     */
+    val onLink: String? = null,
     /** Jev plausibility stance (CRED-01), once judged. */
     val plausibility: Double? = null,
     /** Jev relevance probability (EXP-05), judged when the argument was attached. */
     val relevance: Double? = null,
     /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
     val quality: Double? = null,
-    /** SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1). */
+    /**
+     * SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1);
+     * for a link, its argument's contribution × 4·s·(1 − s), s its strength.
+     */
     val contribution: Double? = null,
-    /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1). */
+    /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */
     val reach: Double? = null,
     /** Last Jev saturation probabilities per side (EXP-04). */
     val proSaturation: Double? = null,

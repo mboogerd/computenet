@@ -1,7 +1,20 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildTree } from '../tree/buildTree';
-import { agreementText, questionProgress, shown, STATUS_HINT, STATUS_LABEL, stoppedHint, stoppedText, verdict } from '../util/format';
+import {
+  ACTIVITY_VERB,
+  activityOf,
+  agreementText,
+  clip,
+  linkParts,
+  questionProgress,
+  shown,
+  STATUS_HINT,
+  STATUS_LABEL,
+  stoppedHint,
+  stoppedText,
+  verdict,
+} from '../util/format';
 import { createTween } from '../util/tween';
 import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
 import { CostBadge } from './CostBadge';
@@ -64,7 +77,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
 
               <div
                 class="gauge"
-                title={`Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())})`}
+                title={`Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim(), e().node.children.length === 0)})`}
               >
                 <span class="gauge__con" aria-hidden="true">no</span>
                 <span class="gauge__track" aria-hidden="true">
@@ -133,8 +146,15 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                 </span>
               </p>
 
+              <NowLine graph={props.graph} root={props.root} />
+
               <Show when={open()}>
-                <Facts id={`facts-${claim().ref}`} claim={claim()} members={props.sel.members?.()} />
+                <Facts
+                  id={`facts-${claim().ref}`}
+                  claim={claim()}
+                  leaf={e().node.children.length === 0}
+                  members={props.sel.members?.()}
+                />
               </Show>
             </section>
 
@@ -150,5 +170,52 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
         );
       }}
     </Show>
+  );
+}
+
+/** A link's argument, for the "now" line: the link text without "is a reason for …". */
+const linkArgumentOf = (text: string) => linkParts(text)?.argument ?? text;
+
+/** How many things the "now" line names before it says "+N more". */
+const NOW_SHOWN = 3;
+
+/**
+ * "Now: gathering arguments on “…” · weighing link “…”": what the question's
+ * deliberation is doing this moment — the claims and links being explored or
+ * judged (SPEC §3 "Links as claims", NodeDto.activity). Not a live region: it
+ * changes several times a second while busy.
+ */
+function NowLine(props: { graph: () => GraphDto; root: string }) {
+  const items = createMemo(() => activityOf(props.graph().nodes, props.root));
+  // Keyed by ref (a new frame is all new objects), so an item stays put while it is in flight.
+  const shownRefs = createMemo(() => items().slice(0, NOW_SHOWN).map((it) => it.ref), undefined, {
+    equals: (a, b) => a.length === b.length && a.every((r, i) => r === b[i]),
+  });
+  const byRef = createMemo(() => new Map(items().map((it) => [it.ref, it])));
+  return (
+    <p class="now" classList={{ 'is-idle': items().length === 0 }} aria-label="Now exploring">
+      <span class="now__label">now</span>
+      <Show when={items().length > 0} fallback={<span class="now__idle">nothing in flight</span>}>
+        <For each={shownRefs()}>
+          {(ref) => (
+            <Show when={byRef().get(ref)}>
+              {(it) => (
+                <span class={`now__item now__item--${it().activity}`} title={it().text}>
+                  <span class="now__dot" aria-hidden="true" />
+                  {ACTIVITY_VERB[it().activity]}{' '}
+                  <Show when={it().kind === 'link'}>
+                    <span class="tag tag--link">link</span>{' '}
+                  </Show>
+                  <span class="now__text">{clip(it().kind === 'link' ? linkArgumentOf(it().text) : it().text)}</span>
+                </span>
+              )}
+            </Show>
+          )}
+        </For>
+        <Show when={items().length > NOW_SHOWN}>
+          <span class="now__more">+{items().length - NOW_SHOWN} more</span>
+        </Show>
+      </Show>
+    </p>
   );
 }

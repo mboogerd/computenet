@@ -183,6 +183,39 @@ class CostTest {
     }
 
     @Test
+    fun `link rounds are attributed to their question and counted as rounds`() {
+        val linkCalls = ConcurrentHashMap<String, AtomicInteger>()
+        val proposer = PricedProposer({ if (it == "One?") 0.01 else 0.02 }) { ctx ->
+            if (ctx.link != null) linkCalls.computeIfAbsent(ctx.question) { AtomicInteger() }.incrementAndGet()
+        }
+        val judge = PricedJudge()
+        // maxDepth 1: the depth-1 arguments and their links (at the same depth) explore; their arguments do not.
+        val e = DeliberationEngine(
+            graph(), judge, listOf(proposer),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxArgsPerSide = 10, minInfluence = 0.0),
+        ).also { engines += it }
+        e.ask("One?")
+        e.ask("Two?")
+        e.idle()
+        val g = e.snapshot()
+        for ((text, usd) in listOf("One?" to 0.01, "Two?" to 0.02)) {
+            val q = g.questions.single { it.text == text }
+            val links = g.nodes.filter { it.kind == "EDGE" && it.root == q.root && it.depth == 1 }
+            assertEquals(2, links.size)
+            assertTrue(links.all { it.rounds == 1 }, "$links")
+            // Each link round asked both sides once, billed to the link's question.
+            assertEquals(4, linkCalls.getValue(text).get(), text)
+            val claude = q.cost.backends.single { it.backend == "claude" }
+            assertEquals(proposer.calls.getValue(text).get(), claude.calls)
+            near(claude.calls * usd, claude.usd, "$text claude usd")
+            // root + 2 claims + 2 links: one round each.
+            assertEquals(5, q.cost.rounds)
+            // Links are work, not claims: 1 root + 2 arguments + their 4 arguments + 4 link arguments.
+            assertEquals(11, q.claims)
+        }
+    }
+
+    @Test
     fun `the projection is spent plus the claims to explore times the mean cost per round`() {
         val release = CountDownLatch(1)
         val blocked = CountDownLatch(1)
@@ -195,7 +228,7 @@ class CostTest {
         // One worker; roundDecay 1 keeps the root's three rounds (priority 1) ahead of its children (0.8).
         val e = DeliberationEngine(
             graph(), PricedJudge(), listOf(proposer),
-            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 1, maxArgsPerSide = 10, roundDecay = 1.0, workers = 1, minInfluence = 0.0),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 1, maxArgsPerSide = 10, roundDecay = 1.0, workers = 1, minInfluence = 0.0, exploreLinks = false),
         ).also { engines += it }
         try {
             e.ask("Grow?")

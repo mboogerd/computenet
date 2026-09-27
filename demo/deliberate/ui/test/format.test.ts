@@ -195,5 +195,6 @@ describe('credence layers', () => {
 
   it('names the UNDERCUT triage action', () => {
     expect(triageText({ ADD: 1, UNDERCUT: 2 })).toBe('1 added · 2 undercut a link');
+    expect(triageText({ OTHER_SIDE: 1 }, true)).toBe('1 moved to parent');
   });
 });

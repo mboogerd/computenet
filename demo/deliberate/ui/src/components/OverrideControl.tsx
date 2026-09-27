@@ -10,7 +10,15 @@ export const MODE_HINT: Record<Override, string> = {
   STOP: 'Stop exploring this claim',
 };
 
-export function OverrideControl(props: { id: string; value: Override }) {
+/** SPEC §3 "Links as claims": the same control, steering a link. */
+export const LINK_MODE_HINT: Record<Override, string> = {
+  AUTO: 'Let Jev decide whether this link is worth exploring',
+  EXPAND: 'Ask the proposers why this link holds and why it fails, regardless of what Jev thinks',
+  STOP: 'Stop exploring this link',
+};
+
+export function OverrideControl(props: { id: string; value: Override; what?: 'claim' | 'link' }) {
+  const hints = () => (props.what === 'link' ? LINK_MODE_HINT : MODE_HINT);
   // Optimistic until the next frame reports a different server value.
   const [pending, setPending] = createSignal<Override>();
   // Memo so a new frame carrying the same value does not clear `pending`.
@@ -30,7 +38,7 @@ export function OverrideControl(props: { id: string; value: Override }) {
   };
 
   return (
-    <div class="seg" role="group" aria-label="Exploration override">
+    <div class="seg" role="group" aria-label={props.what === 'link' ? 'Link exploration override' : 'Exploration override'}>
       <For each={MODES}>
         {(m) => (
           <button
@@ -38,7 +46,7 @@ export function OverrideControl(props: { id: string; value: Override }) {
             class="seg__btn"
             classList={{ 'is-on': shown() === m, [`seg__btn--${m.toLowerCase()}`]: true }}
             aria-pressed={shown() === m}
-            title={MODE_HINT[m]}
+            title={hints()[m]}
             onClick={(e) => {
               e.stopPropagation();
               void choose(m);
