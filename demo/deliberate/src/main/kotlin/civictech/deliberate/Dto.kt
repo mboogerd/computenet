@@ -11,7 +11,7 @@ import kotlinx.serialization.Serializable
 data class GraphDto(
     val questions: List<QuestionDto>,
     val nodes: List<NodeDto>,
-    /** SPEC §2: the layers averaged into every node's `consensus` (`--consensus`). */
+    /** SPEC §2: the fixed layers averaged into every node's `consensus`. */
     val consensusMembers: List<String> = emptyList(),
 )
 

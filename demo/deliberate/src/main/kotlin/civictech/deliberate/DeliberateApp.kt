@@ -68,8 +68,8 @@ class DeliberateApp(
                 require(it in SemanticsCatalog.IDS) { "unknown semantics '$it' (${SemanticsCatalog.IDS.joinToString()})" }
             }
             require(headline == LayerSet.CONSENSUS || headline in running) { "--semantics $headline is not among the layers ${running.joinToString()}" }
-            require(consensus.all { it in running }) { "--consensus ${consensus.joinToString()} names a layer that does not run (${running.joinToString()})" }
-            require(consensus.isNotEmpty()) { "--consensus is empty" }
+            require(consensus.all { it in running }) { "consensus ${consensus.joinToString()} names a layer that does not run (${running.joinToString()})" }
+            require(consensus.isNotEmpty()) { "consensus is empty" }
         }
     }
 

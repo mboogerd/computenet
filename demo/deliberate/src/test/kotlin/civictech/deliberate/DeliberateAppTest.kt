@@ -352,6 +352,8 @@ class DeliberateAppTest {
 
     @Test
     fun `command line parses port, proposers and config knobs`() {
+        assertEquals(19, (Options.FLAGS + Options.SWITCHES).size, "the public CLI is deliberately limited to 19 flags")
+        assertTrue(Options.FLAGS.intersect(Options.SWITCHES).isEmpty())
         val o = Options(
             arrayOf(
                 "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",

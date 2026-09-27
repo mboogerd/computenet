@@ -5,7 +5,7 @@
 export interface GraphDto {
   questions: QuestionDto[];
   nodes: NodeDto[];
-  /** SPEC §2: the layers averaged into every node's `consensus` (`--consensus`); always sent, see NodeDto. */
+  /** SPEC §2: the fixed layers averaged into every node's `consensus`; always sent, see NodeDto. */
   consensusMembers?: string[];
 }
 
@@ -188,5 +188,5 @@ export interface QuestionCreated {
 /** Statuses during which the explorer is still working on a claim. */
 export const ACTIVE_STATUSES: ReadonlySet<Status> = new Set(['QUEUED', 'JUDGING', 'EXPLORING']);
 
-/** The layers a node's consensus averages over by default (`--consensus`). */
+/** The fixed layers a node's consensus averages over. */
 export const DEFAULT_CONSENSUS: readonly string[] = ['wlo', 'jnb', 'woe'];

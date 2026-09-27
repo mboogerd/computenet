@@ -276,4 +276,41 @@ class CostTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun `a restored question with no cost fields reports zero recorded cost`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-costless-record").toFile()
+        try {
+            val log = java.io.File(dir, "graph.jsonl")
+            val firstStore = InMemoryMetaStore()
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 10)
+            val first = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = firstStore)
+                .also { engines += it }
+            first.ask("Recorded cost only?")
+            first.idle()
+            first.close()
+
+            val store = InMemoryMetaStore().also { copy ->
+                firstStore.load().forEach { (key, fields) ->
+                    copy.put(
+                        key,
+                        if (key.startsWith("q:")) fields.filterKeys { it in setOf("yields", "diminished", "paused") }
+                        else fields,
+                    )
+                }
+            }
+            val restored = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
+                .also { engines += it }
+            restored.idle()
+
+            val question = restored.snapshot().questions.single()
+            assertEquals(3, question.cost.rounds)
+            assertTrue(question.cost.backends.isEmpty())
+            assertEquals(0.0, question.costUsd)
+            assertEquals(0.0, question.cost.perRoundUsd)
+            assertEquals(0.0, question.projectedUsd)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

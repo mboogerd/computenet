@@ -2172,6 +2172,36 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `a restored link without a metadata record is rebuilt from structure and queued afresh`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-link-without-record").toFile()
+        try {
+            val firstStore = InMemoryMetaStore()
+            twoLinkRun(dir, firstStore)
+            val store = InMemoryMetaStore().also { copy ->
+                firstStore.load().forEach { (key, fields) ->
+                    if (!key.startsWith("l:")) copy.put(key, fields)
+                }
+            }
+            val proposer = LinkCounter()
+            val e = restart(
+                java.io.File(dir, "graph.jsonl"),
+                store,
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true),
+                judge = FakeJudge(strength = { 0.5 }),
+                proposers = listOf(proposer),
+            )
+
+            e.idle()
+
+            val links = e.snapshot().edges()
+            assertEquals(2, proposer.linkCalls.toSet().size, "both rebuilt links were explored")
+            assertTrue(links.all { it.rounds == 1 && it.status == Status.ROUND_LIMIT && it.error == null }, links.toString())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `a paused question finishes its round in flight, starts no other, runs an EXPAND, and resumes`() {
         val gate = CountDownLatch(1)
         val blocked = CountDownLatch(1)
@@ -2365,7 +2395,7 @@ class DeliberationEngineTest {
                 "reach" to null, "contribution" to null, "status" to null))
             // An EXPAND was requested before the restart. Its forced round is not
             // resumed (DUR-06): the paused boot holds the claim like any other.
-            store.put("c:${q1.id}", mapOf("override" to "\"EXPAND\""))
+            store.put("c:${q1.id}", mapOf("override" to "\"EXPAND\"", "forceRound" to "true"))
 
             val judge = FakeJudge(strength = { 0.5 })
             val p = FakeProposer("claude") { _, _, _ -> emptyList() }
