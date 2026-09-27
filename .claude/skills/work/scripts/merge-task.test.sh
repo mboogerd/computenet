@@ -84,6 +84,28 @@ EOF
 }
 
 run() { (cd "$CO" && PATH="$STUB:$PATH" CTRL="$CTRL" BD_LOG="$BD_LOG" "$SCRIPT" "$@" 2>&1); }
+# conflict <paths...> -> a sibling merged into the feature after the task
+# forked, and both sides changed <paths> differently. Also installs the regen
+# stub (stands in for ./gradlew; logs its args, rewrites the concordance).
+conflict() {
+  local p
+  for p in "$@"; do
+    mkdir -p "$TASKWT/$(dirname "$p")" "$FWT/$(dirname "$p")"
+    echo "task side" > "$TASKWT/$p"; echo "sibling side" > "$FWT/$p"
+  done
+  (cd "$TASKWT"; git add -- "$@"; git commit --quiet -m "task regen") >/dev/null 2>&1
+  (cd "$FWT"; git add -- "$@"; git commit --quiet -m "sibling merged"
+   git push --quiet origin "$FBR") >/dev/null 2>&1
+  cat > "$STUB/regen" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$CTRL/regen.log"
+[ -f "$CTRL/regen-fail" ] && { echo "BUILD FAILED" >&2; exit 1; }
+echo regenerated > doc/spec/CONCORDANCE.md
+EOF
+  chmod +x "$STUB/regen"
+}
+runregen() { MERGE_TASK_REGEN="$STUB/regen" run "$@"; }
+CONC=doc/spec/CONCORDANCE.md
 closed()      { grep -qx "close $TASK" "$BD_LOG"; }
 merged_local() { git -C "$FWT" log --format=%s -1 | grep -qF "Merge $TASK"; }
 tip_on_origin() {
@@ -269,7 +291,41 @@ has "$out" "behind $FBR" "how far the base moved is stated"
 hasnt "$out" "deletion" "the preview reports no deletions at all — this merge removes nothing"
 merged_local && bad "dry run merged" || ok "nothing merged"
 
-# 15. usage
+# 15. a conflict confined to the generated concordance is resolved by
+# regenerating it, then merged, proven and closed as usual (computenet-5sasu)
+echo
+echo "concordance-only conflict: regenerated, not stopped"
+fixture
+conflict "$CONC"
+out=$(runregen "$TASK" "$FBR"); rc=$?
+[ "$rc" -eq 0 ] && ok "exits 0" || bad "exits $rc, wanted 0 -- $(tr '\n' '|' <<<"$out")"
+grep -qx ":concord:concordance" "$CTRL/regen.log" 2>/dev/null \
+  && ok "regen ran :concord:concordance" || bad "regen never ran"
+[ "$(cat "$FWT/$CONC" 2>/dev/null)" = regenerated ] \
+  && ok "committed concordance is the regenerated one" || bad "concordance not regenerated"
+[ -z "$(git -C "$FWT" status --porcelain)" ] && ok "merge completed, tree clean" || bad "merge left unfinished"
+merged_local && ok "merge commit on the feature branch" || bad "no merge commit"
+tip_on_origin && ok "task tip is on origin/$FBR" || bad "task tip not durable"
+closed && ok "bd close ran" || bad "bd close never ran"
+
+# ...a failed regen stops without closing
+fixture
+conflict "$CONC"
+touch "$CTRL/regen-fail"
+out=$(runregen "$TASK" "$FBR"); rc=$?
+[ "$rc" -eq 1 ] && ok "failed regen exits 1" || bad "failed regen exits $rc, wanted 1"
+closed && bad "closed after a failed regen" || ok "failed regen: nothing closed"
+
+# ...and any other conflicted path keeps the stop, regen untouched
+fixture
+conflict "$CONC" t.txt
+out=$(runregen "$TASK" "$FBR"); rc=$?
+[ "$rc" -eq 1 ] && ok "mixed conflict exits 1" || bad "mixed conflict exits $rc, wanted 1"
+has "$out" "merge FAILED" "mixed conflict stops as before"
+[ -f "$CTRL/regen.log" ] && bad "regen ran on a mixed conflict" || ok "no regen on a mixed conflict"
+closed && bad "closed a conflicted merge" || ok "mixed conflict: nothing closed"
+
+# 16. usage
 echo
 echo "usage"
 fixture
