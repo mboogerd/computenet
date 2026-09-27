@@ -120,8 +120,9 @@ object SlotPipeline {
         val waterline: CellRef,
         /**
          * The locally-built `byDay` instance. `floor()` and `droppedBelowFloor`
-         * are not port methods, and `host.lookup`'s hosted proxy answers a
-         * non-port call with `null` — so the concrete cell is the only reader
+         * are not port methods, and `host.lookup` cannot reach them: it builds a
+         * hosted proxy, which refuses a concrete class ("Only interfaces can be
+         * represented") — so the concrete cell is the only reader
          * (doc/demo-findings.md F-28). Local-apply only; read it at idle.
          */
         val byDayCell: GroupByCell<Slot, String, Long, Long>,
