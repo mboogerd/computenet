@@ -559,6 +559,10 @@ class DeliberateAppTest {
             for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance", "agora.")) {
                 assertTrue(derived !in journal, "the journal holds a derived frame ($derived)")
             }
+            // What a kill -9 at this instant leaves behind: the structure log and a journal of
+            // uncompacted frames (both written through, the journal synced per frame).
+            val crashed = Files.createTempDirectory("deliberate-space-crash").toFile()
+            dir.copyRecursively(crashed, overwrite = true)
             // A quiescent checkpoint compacts it while the app keeps running.
             val uncompacted = live.length()
             first.checkpointNow()
@@ -584,6 +588,18 @@ class DeliberateAppTest {
             )
             assertTrue(fresh / claims < 4_000, "fresh ${fresh / claims} B/claim")
             assertTrue(sizes.last() <= fresh * 1.05, "3 restarts grew the data dir: $sizes")
+
+            // The crash copy replays its frames into the same trees and credences, then compacts.
+            try {
+                val (app, probe) = app(config = config, judge = VariedJudge(), dataDir = crashed)
+                probe.awaitGraph { g -> g.nodes.size == before.nodes.size && g.idle(root) }
+                assertSameCredences(before, probe.settled())
+                assertTrue(File(crashed, "host.journal").length() < uncompacted, "boot compacts the replayed journal")
+                app.stop()
+                apps.remove(app)
+            } finally {
+                crashed.deleteRecursively()
+            }
         } finally {
             dir.deleteRecursively()
         }

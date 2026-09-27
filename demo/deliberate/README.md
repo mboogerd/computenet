@@ -167,10 +167,14 @@ trees are rebuilt, and every claim that was waiting or being explored is
 queued again; an interrupted round simply runs again. Restarting with a
 different `--semantics-layers` is fine: the layers are recomputed anyway.
 
-A 60-claim tree takes about 0.5 KB per claim on disk (the test suite measures
-it; restarts add nothing), where the one-graph-per-layer design used about
-71 KB per claim and grew about five-fold over three restarts. A data
-directory from that design is refused with a message; start a fresh one.
+Measured live on 2026-09-27 ("Should cities ban private cars from their
+centres?", `--max-claims 60`, all seven layers): 87 KB for the 60 claims while
+running (1.4 KB/claim, the journal not yet compacted), 36 KB (0.6 KB/claim)
+after a SIGTERM, and still 36 KB after two more restarts — SIGTERM, then
+`kill -9` — with every layer's credence and every consensus identical after
+each restart. The one-graph-per-layer design used about 71 KB per claim and
+grew about five-fold over three restarts. A data directory from that design is
+refused with a message; start a fresh one.
 
 ## Tests
 
