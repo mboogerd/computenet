@@ -166,87 +166,181 @@ class WaterlineCellTest {
     }
 
     /**
-     * Monotonicity beats the min (`[24-WL-03]`): a source that first contributes
-     * below the current floor lowers min-over-sources but never the floor. This
-     * is the one prefix on which `floor() <= min(maxima) - lateness` does not
-     * hold — see [seededRun]'s joiner rule.
+     * `[24-WL-20]`'s worked example (computenet-zrnhf): a source that first
+     * contributes below the floor lowers the candidate (min over sources) but
+     * never the floor (`[24-WL-03]`), emits nothing, and gates every later rise
+     * — the floor rises again only once the candidate, which now includes it,
+     * exceeds the floor; from that rise on it is protected (`[24-WL-02]`).
      */
     @Test
-    fun `a late source joining low never lowers the floor`() {
+    fun `a late source joining low never lowers the floor and gates the next rise`() {
         val cell = WaterlineCell(lateness = lateness)
         val rec = record(cell)
         send(cell, a, 1, 40)
-        send(cell, c, 1, 2)
+        send(cell, c, 1, 2) // candidate min(40,2)-5 = -3
         cell.floor() shouldBe 35L
         cell.maxima() shouldBe mapOf(a to 40L, c to 2L)
         rec.floors shouldBe listOf(35L)
+
+        send(cell, a, 2, 100) // candidate min(100,2)-5 = -3: C now holds the floor
+        send(cell, c, 2, 38) // candidate 33 < 35
+        rec.floors shouldBe listOf(35L)
+
+        val tsC3 = send(cell, c, 3, 45) // candidate min(100,45)-5 = 40: the first rise C takes part in
+        rec.seen.last() shouldBe (WaterlineDelta(40) to tsC3)
+        rec.floors shouldBe listOf(35L, 40L)
+        cell.floor() shouldBe 40L
+    }
+
+    /** `[24-WL-20]`, re-admission branch: a retired source contributing again below the floor is a low joiner. */
+    @Test
+    fun `a retired source re-admitted below the floor leaves it and gates the next rise`() {
+        val cell = WaterlineCell(lateness = lateness)
+        val rec = record(cell)
+        send(cell, a, 1, 30)
+        send(cell, b, 1, 50)
+        rec.floors shouldBe listOf(25L)
+        cell.retire(a) // candidate 45
+        rec.floors shouldBe listOf(25L, 45L)
+
+        send(cell, a, 2, 10) // re-admitted: candidate min(10,50)-5 = 5 < 45
+        cell.floor() shouldBe 45L
+        send(cell, b, 2, 90) // A gates: candidate 5
+        rec.floors shouldBe listOf(25L, 45L)
+        send(cell, a, 3, 60) // candidate min(60,90)-5 = 55
+        rec.floors shouldBe listOf(25L, 45L, 55L)
     }
 
     // ---------------------------------------------------------------------
-    // B8 ([KE4-05], [KE4-33])
+    // B8 ([KE4-05], [KE4-33]; decided rule [24-WL-02]/[24-WL-20], computenet-zrnhf)
 
-    /**
-     * One seeded 3-source interleaving, asserting on every prefix that emitted
-     * floors strictly increase, the last equals `floor()`, and `floor()` is
-     * `<= min(maxima) - lateness`.
-     *
-     * Joiner rule: a source's *first* event time is drawn at or above the
-     * highest maximum seen so far. Without it the last invariant is false by
-     * design — a low late joiner lowers the min but not the (monotone) floor,
-     * pinned separately by the test above — and it would fail the min variant
-     * too, so the control would prove nothing. Later events are unconstrained
-     * relative to other sources: they mostly rise but may fall back.
-     */
-    private fun seededRun(seed: Long, combine: ((Collection<Long>) -> Long)? = null) {
+    /** What a seeded run drives: the shipped cell, a control cell, or a test-local falling-floor model. */
+    private interface Subject {
+        fun send(src: UUID, counter: Long, t: Long)
+        fun floor(): Long?
+        val emitted: List<Long>
+    }
+
+    private fun cellSubject(combine: ((Collection<Long>) -> Long)?): Subject {
         // null = the production constructor, so B8 checks the shipped combine, not a test copy of it
         val cell = if (combine == null) WaterlineCell(lateness = lateness)
         else WaterlineCell(CellRef(UUID.randomUUID()), lateness, combine)
         val rec = record(cell)
+        return object : Subject {
+            override fun send(src: UUID, counter: Long, t: Long) { this@WaterlineCellTest.send(cell, src, counter, t) }
+            override fun floor() = cell.floor()
+            override val emitted get() = rec.floors
+        }
+    }
+
+    /**
+     * The "floor may fall" control, test-local because the cell's clamp lives in
+     * `Waterline.kt`, outside this item's files claim: floor = the current
+     * min-over-sources candidate, emitted whenever it changes.
+     */
+    private fun fallingFloorSubject(): Subject = object : Subject {
+        val maxima = mutableMapOf<UUID, Long>()
+        var f: Long? = null
+        override val emitted = mutableListOf<Long>()
+        override fun send(src: UUID, counter: Long, t: Long) {
+            maxima[src] = maxOf(maxima[src] ?: t, t)
+            val cand = maxima.values.min() - lateness.lateness
+            if (cand != f) { f = cand; emitted += cand }
+        }
+        override fun floor() = f
+    }
+
+    /**
+     * One seeded 3-source interleaving, checked on every prefix against an
+     * oracle independent of the cell (its own per-source maxima, never
+     * `cell.maxima()`): the floor equals the running maximum over prefixes of
+     * the min-over-contributing-sources candidate (`[24-WL-02]`, `[24-WL-20]`),
+     * emitted floors strictly increase, the last equals `floor()`, and the floor
+     * is at or below (max - lateness) of every source contributing since at or
+     * before the oracle floor's most recent rise (the protected set).
+     *
+     * First event times are unconstrained: half the joiners arrive at or above
+     * the highest maximum, half anywhere below it — often under the floor, so
+     * the monotone clamp is exercised by the run itself. Returns how many
+     * contributions arrived with a candidate below the oracle floor.
+     */
+    private fun seededRun(seed: Long, subject: Subject): Int {
         val rnd = Random(seed)
         val sources = listOf(a, b, c)
         val counters = LongArray(3)
-        val cursor = LongArray(3) // per-source maximum sent so far (first draws are >= 0)
-        fun reference() = (0 until 3).filter { counters[it] > 0L }.map { cursor[it] }
+        val cursor = LongArray(3) // the oracle's per-source maxima
+        var oracle: Long? = null
+        var protectedAtRise = emptySet<Int>() // sources contributing when the oracle floor last rose
+        var clamped = 0
         val steps = 60 + rnd.nextInt(61)
         for (step in 0 until steps) {
             val i = rnd.nextInt(3)
-            val src = sources[i]
+            val contributing = (0 until 3).filter { counters[it] > 0L }
+            val highest = contributing.maxOfOrNull { cursor[it] } ?: 0L
             val t = if (counters[i] == 0L) {
-                (reference().maxOrNull() ?: 0L) + rnd.nextInt(10)
+                if (rnd.nextBoolean()) highest + rnd.nextInt(10) else rnd.nextLong(highest + 1)
             } else if (rnd.nextInt(4) == 0) {
                 cursor[i] - rnd.nextInt(20) // falls back
             } else {
                 cursor[i] + rnd.nextInt(10)
             }
-            cursor[i] = maxOf(cursor[i], t)
+            cursor[i] = if (counters[i] == 0L) t else maxOf(cursor[i], t)
             counters[i]++
-            send(cell, src, counters[i], t)
+            subject.send(sources[i], counters[i], t)
 
-            val floors = rec.floors
-            val where = "seed=$seed step=$step src=$i t=$t floors=$floors maxima=${cell.maxima()}"
+            val now = (0 until 3).filter { counters[it] > 0L }
+            val candidate = now.minOf { cursor[it] } - lateness.lateness
+            val prev = oracle
+            if (prev == null || candidate > prev) {
+                oracle = candidate
+                protectedAtRise = now.toSet()
+            } else if (candidate < prev) {
+                clamped++
+            }
+
+            val floors = subject.emitted
+            val where = "seed=$seed step=$step src=$i t=$t floors=$floors oracle=$oracle maxima=${cursor.toList()}"
             for (k in 1 until floors.size) {
                 if (floors[k] <= floors[k - 1]) throw AssertionError("not strictly increasing: $where")
             }
-            if (floors.lastOrNull() != cell.floor()) throw AssertionError("last emission != floor(): $where")
-            val f = cell.floor() ?: continue
-            // the test's own per-source maxima, not cell.maxima(): the bound must not trust the cell's keying
-            val bound = reference().min() - lateness.lateness
-            if (f > bound) throw AssertionError("floor $f > min(maxima)-lateness $bound: $where")
+            if (floors.lastOrNull() != subject.floor()) throw AssertionError("last emission != floor(): $where")
+            if (subject.floor() != oracle) throw AssertionError("floor ${subject.floor()} != running max of candidate: $where")
+            val bound = protectedAtRise.minOf { cursor[it] } - lateness.lateness
+            if (oracle!! > bound) throw AssertionError("floor above a protected source's promise $bound: $where")
         }
+        return clamped
     }
 
     @Test
-    fun `B8 - seeded 3-source interleavings keep a monotone floor at or below min over sources`() {
-        for (seed in 0L until 100L) seededRun(seed)
+    fun `B8 - seeded 3-source interleavings with low late joiners keep the floor at the running max of the min`() {
+        var clamped = 0
+        var seedsClamped = 0
+        for (seed in 0L until 100L) {
+            val n = seededRun(seed, cellSubject(null))
+            clamped += n
+            if (n > 0) seedsClamped++
+        }
+        println("B8 clamped contributions: $clamped across $seedsClamped of 100 seeds")
+        // the generator must actually produce below-floor joiners, or the clamp goes unexercised
+        (seedsClamped >= 20) shouldBe true
     }
 
     /** The `[KE4-33]` control: max-over-sources lets a fast source run the floor past a slow one. */
     @Test
-    fun `B8 control - max over sources fails the bound`() {
+    fun `B8 control - max over sources fails the oracle`() {
         val err = shouldThrow<AssertionError> {
-            for (seed in 0L until 100L) seededRun(seed) { it.max() }
+            for (seed in 0L until 100L) seededRun(seed, cellSubject { it.max() })
         }
-        println("B8 control first failure: ${err.message}")
+        println("B8 max control first failure: ${err.message}")
+    }
+
+    /** The `[24-WL-03]` control: a floor that follows the min down fails on a low joiner. */
+    @Test
+    fun `B8 control - a floor allowed to fall fails the oracle`() {
+        val err = shouldThrow<AssertionError> {
+            for (seed in 0L until 100L) seededRun(seed, fallingFloorSubject())
+        }
+        println("B8 falling-floor control first failure: ${err.message}")
     }
 
     // ---------------------------------------------------------------------

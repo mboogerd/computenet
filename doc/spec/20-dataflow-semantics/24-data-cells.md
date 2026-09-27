@@ -572,14 +572,28 @@ an explicit element attribute read by `timeFn`, never a wall clock, a wave
 counter or an arrival tick: any of those would make window contents
 placement-dependent, the reason wave/tick-based windows are rejected above.
 
-**The floor.** `[24-WL-02]` The waterline floor SHALL be the minimum, over
-every contributing source, of (that source's maximum observed `timeFn(e)` −
-the declared lateness), where a source is the arriving wave's `sourceId`
-(`[22-SRC-01]`) — never a cell ref, host or link — and, before any source has
-contributed, the floor SHALL be the identity that admits every element: no
-eviction, no late-drop (Ubiquitous). The minimum, not the maximum, is the
-point: a max would let a fast source evict a slow source's still-admissible
-data. `[24-WL-03]` The floor SHALL be computed by an ordinary data cell inside
+**The floor.** `[24-WL-02]` The waterline **candidate** at a prefix of an
+execution SHALL be the minimum, over every source contributing at that prefix
+— one that has contributed and has not been retired since (`[24-WL-12]`,
+`[24-WL-13]`, `[24-WL-15]`) — of (that source's maximum observed `timeFn(e)`
+− the declared lateness), where a source is the arriving wave's `sourceId`
+(`[22-SRC-01]`) — never a cell ref, host or link. The waterline **floor**
+SHALL be the greatest candidate over every prefix so far; before any source
+has contributed it SHALL be the identity that admits every element: no
+eviction, no late-drop (Ubiquitous). Equivalently, the floor moves only to a
+candidate that exceeds it, and a prefix with no contributing source offers no
+candidate. The minimum, not the maximum, is the point: a max would let a fast
+source evict a slow source's still-admissible data. The floor is the running
+maximum of the candidate rather than the candidate itself because the cell
+knows no source set in advance: a source can first contribute — or contribute
+again after retirement — below a floor that has already risen, and the
+candidate then falls while the floor does not (`[24-WL-20]`). What the minimum
+protects is therefore bounded by the floor's history: the floor never exceeds
+(maximum − lateness) of any source that has been contributing, unretired, since
+at or before the floor's most recent rise, since each such source was inside
+the minimum that rise took and its maximum has not fallen since. A source that
+joins below the floor is protected from the first rise it takes part in, not
+retroactively. `[24-WL-03]` The floor SHALL be computed by an ordinary data cell inside
 the dataflow (`WaterlineCell`, emitting `WaterlineDelta`), using no wall clock
 and no cross-host coordination, and SHALL be monotone non-decreasing on every
 prefix of every execution (Ubiquitous). `WaterlineDelta` merges by maximum, so
@@ -590,6 +604,44 @@ SHALL be a value, not a wave: it SHALL NOT be a wave position and SHALL NOT be
 a member of any completeness set or glitch-free frontier (Ubiquitous). How a
 `WaterlineDelta` emission nonetheless rides the wave plane is stated once, in
 22 §Interaction with other parts.
+
+**A source joining below the floor.** `[24-WL-20]` WHEN a source first
+contributes, or contributes again after retirement (`[24-WL-12]`,
+`[24-WL-13]`, `[24-WL-15]`), with (its maximum observed `timeFn(e)` − the
+declared lateness) below the current floor, the `WaterlineCell` SHALL leave
+the floor unchanged and emit nothing for that contribution, SHALL count the
+source as contributing from then on, so that the floor rises again only when
+the candidate — whose minimum now includes that source — exceeds it
+(`[24-WL-02]`), and every lateness-declaring inlet downstream SHALL treat
+that source's elements below the floor as late under `[24-WL-07]`
+(Event-driven). Monotonicity wins over the minimum on that prefix. Worked
+example, lateness 5: A contributes t=40 and the floor rises to 35. C then
+first contributes t=2; the candidate is min(40, 2) − 5 = −3, the floor stays
+35, nothing is emitted, and C's t=2 element is late-dropped — visibly, on the
+`late` outlet — by every lateness-declaring cell it reaches. A then sends
+t=100: the candidate is min(100, 2) − 5 = −3, and C now holds the floor at 35.
+C sends t=38 (candidate 33, floor still 35), then t=45: the candidate is
+min(100, 45) − 5 = 40 and the floor rises to 40 — the first rise C takes part
+in, after which the floor stays at or below C's maximum − 5 for as long as C
+contributes.
+
+The alternative — a declared source set, per inlet or taken from linked
+edges, holding the floor at the identity until every declared source has
+contributed — was rejected. A source is a wave's `sourceId`, and a
+RESTART'd producer contributes under a fresh one (`[24-WL-13]`) that no
+declaration made in advance can name; declaring by link instead re-keys the
+floor on the edge, which this section rules out. A declared source that never
+starts would hold the identity, and with it every eviction and late-drop,
+indefinitely: the idle-source residual of `[24-WL-14]`, widened to sources
+that never emitted at all. And lowering the floor to admit a late joiner is
+not open to any design, because `WaterlineDelta` merges by maximum
+(`[24-WL-03]`) and eviction is destructive (`[24-WL-05]`): windows already
+evicted cannot be restored. The cost of the decided rule is a deployment
+obligation, stated here rather than verified: a producer whose data must not
+be late-dropped must be linked and contributing to the waterline before the
+floor passes its event times — an author's promise of the same kind as
+`[24-WL-10]`'s condition. Its breach is never silent: `[24-WL-07]` accounts
+every dropped add even when `late` is unlinked.
 
 **Eviction.** `[24-WL-05]` Evicted state SHALL leave through the ordinary
 retraction path — dels flow, groups whose last member is evicted die as a
@@ -713,13 +765,20 @@ requirement claims no bound for a join cell's state as a whole.
 minimum forever, so the floor forgets sources explicitly. `[24-WL-12]` WHEN an
 `EdgeClose` fires for a contributing source's edge, the `WaterlineCell` SHALL
 retire that source's maximum from the minimum; the floor then resumes
-advancing and SHALL still never exceed any remaining live source's promise
-(Event-driven). `[24-WL-13]` WHEN a `ReBaselineNotice` supersedes a source
+advancing and SHALL still never exceed the promise of any remaining live
+source that has been contributing since at or before the floor's most recent
+rise (`[24-WL-02]`) (Event-driven). A remaining source that joined below the
+floor after that rise (`[24-WL-20]`) is not covered until it takes part in a
+rise: the retirement does not lower the floor to it, and the floor does not
+rise again until the candidate, which now includes it, exceeds the floor.
+`[24-WL-13]` WHEN a `ReBaselineNotice` supersedes a source
 (`[21-REBASE-01]`), the `WaterlineCell` SHALL retire the superseded source's
-maximum and let the fresh epoch's `sourceId` contribute from scratch, so a
+maximum and let the fresh epoch's `sourceId` contribute from scratch —
+under `[24-WL-20]` if that first contribution lies below the floor — so a
 RESTART'd producer's stale pre-restart maximum never gates the floor
 (Event-driven). `[24-WL-14]` WHILE a contributing source is linked and open
-but idle, the floor SHALL NOT advance past that source's promise
+but idle, the floor SHALL NOT advance past that source's promise — and, for a
+source that joined below the floor (`[24-WL-20]`), SHALL NOT advance at all
 (State-driven). This is the accepted residual: frozen but correct — eviction
 stalls, and with it the memory bound (`[24-WL-19]`), until the source emits,
 closes or is retired. What should retire or age an idle source without a wall clock is
