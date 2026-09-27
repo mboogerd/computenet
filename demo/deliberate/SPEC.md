@@ -18,10 +18,15 @@ names that model.)
 - **Claim** — an agora `CLAIM` node: one self-contained declarative sentence.
 - **Argument** — a claim linked to a **parent** claim by an agora `EDGE` of
   polarity `SUPPORT` (pro) or `ATTACK` (con). Edge direction: child → parent.
+- **Link** — the claim an edge makes: "“<child>” is a reason for|against
+  “<parent>”". Every argument's edge is one; it is explored like a claim
+  (§3 "Links as claims").
 - **Undercutter** — a claim that does not dispute a claim but denies that one
-  of its arguments bears on it ("this does not show that"): its `ATTACK` edge
-  targets that argument's *edge* (agora edges are claims), lowering the edge's
-  credence and with it the argument's influence (EXP-03 `UNDERCUT`).
+  of its arguments bears on it ("this does not show that"): an argument
+  *against that argument's link*, its `ATTACK` edge targeting the argument's
+  *edge* (agora edges are claims), lowering the edge's credence and with it
+  the argument's influence (EXP-03 `UNDERCUT`). A **link supporter** is the
+  converse: a `SUPPORT` edge on the link ("why this does bear on it").
 - **Proposer** — an argument generator: `claude` (Claude CLI) or `codex`
   (Codex CLI). Every argument records which proposer produced it.
 - **Judge** — Jev. Judgments are typed (score / noul / choice), never prose.
@@ -152,12 +157,13 @@ names that model.)
     `SUPPORT` argument under the target instead of under the claim;
   - `OTHER_SIDE` — argues the opposite side: attached there;
   - `UNDERCUT` — does not dispute the claim but denies that the target
-    argument bears on it: attached as an undercutter, an `ATTACK` edge
-    targeting the target's *edge*. For paths and context an undercutter is a
-    claim about the target's parent, at the target's depth; it is assessed
-    against the link it denies (its `parent_claim` is "The argument "X" is a
-    reason to accept/reject the claim "Y"."), and explored like any claim. An
-    argument holds at most one per-side cap of undercutters;
+    argument bears on it: attached as an undercutter — a con argument of the
+    target's *link* (§3 "Links as claims"), an `ATTACK` edge targeting the
+    target's *edge*. Like every argument of a link it sits one level below the
+    link (the link is at the target's depth), its path runs through the link's
+    text, it is assessed against the link (its `parent_claim` is "“X” is a
+    reason for|against “Y”"), and explored like any claim. A link holds at
+    most one per-side cap of undercutters;
   - `DROP` — not a real argument about the claim (off-topic, incoherent, a
     question, a restatement of the claim).
 
@@ -261,12 +267,64 @@ first-in, first-out. An argument is queued, at its contribution priority, as
 soon as its attach-time assessment completes — at the end of the round that
 attached it, since a later turn may still reword it; it does not wait for its
 parent to finish later rounds. A claim the human forces with `EXPAND` is queued ahead
-of all contributions.
+of all contributions. Links (below) share this one queue.
+
+### Links as claims
+
+Every edge is also a claim — its **link**: "“<child>” is a reason for
+“<parent>”" (SUPPORT) or "… is a reason against …" (ATTACK). The engine builds
+that text from the two ends (it is never stored, so a REPLACE or MERGE of the
+child rewords its link), and explores the link exactly like a claim:
+
+- **LINK-01 Arguments.** A link's pro arguments say why the connection holds
+  ("why this does bear on the parent"), its con arguments why it fails — the
+  undercutters of EXP-03. Both attach by `SUPPORT`/`ATTACK` edges that target
+  the *edge node* (the cell model propagates edge-targeted edges: a link's
+  arguments move the edge's credence, and with it the argument's pull on its
+  parent). A link's `jev` stance is its argument's CRED-02 strength; a link is
+  never assessed itself.
+- **LINK-02 Place.** A link's parent (for paths and context) is its argument's
+  parent, and its depth its argument's depth; its arguments sit one level
+  below, their path running through the link text, and each is assessed
+  (CRED-01/02, EXP-05) with the link text as `parent_claim`. Arguments about
+  a link have links of their own.
+- **LINK-03 Contribution.** A link matters in proportion to how much its
+  argument can move the parent, and to how open its strength still is:
+  `contribution(link) = contribution(argument) × 4·s·(1 − s)`, with `s` the
+  argument's CRED-02 strength (0.5 when that judgment failed: factor 1), and
+  `reach(link) = reach(argument)`. The factor is the normalised variance of a
+  Bernoulli(s): 1 at s = ½, 0 for a link judged irrelevant or decisive, so a
+  link never outranks its argument and a clear-cut link is left alone unless
+  the human expands it. An argument about a link then has
+  `reach = reach(argument) × strength(its own edge)` — for an undercutter,
+  exactly EXP-05's formula.
+- **LINK-04 Scheduling.** A link joins the queue with its argument, once the
+  argument's attach-time assessment completed (its strength is then known),
+  at its contribution; the EXP-05/06/10 gates (depth, `minInfluence`, budget,
+  diminishing returns) apply as to a claim. `--explore-links off` (default
+  on) keeps links from being explored automatically — they end `PRUNED` —
+  while `EXPAND` still explores one.
+- **LINK-05 Rounds.** A link's round is EXP-02..04 with the link as the claim:
+  per-side cap `maxArgsPerSideChild`, triage against the link's own
+  arguments (EXP-03, so duplicates are caught against them; the claim-level
+  `UNDERCUT` re-targeting of EXP-03 is unchanged and lands here), saturation
+  per side, yields (EXP-10) recorded like any non-root round. Proposers get
+  `ClaimContext.link` (the argument, the parent, the direction) and a prompt
+  variant (`CliProposer.linkPrompt`, same canonical rules and examples): FOR
+  asks why, if the argument is true, it really does count as a reason for/
+  against the claim; AGAINST why, even if true, it does not — neither may
+  dispute the argument or argue the claim on other grounds.
+- **LINK-06 Accounting.** A link is part of its question's work, not of its
+  claims: its rounds count in `cost.rounds`, its calls are billed to the
+  question (COST-01), an active link keeps the question `active` and counts in
+  `cost.queued`, but `QuestionDto.claims` and the `maxClaims` budget count
+  claims only (the arguments a link gets are claims and count).
 
 ## 4. Human control (requirements CTL-*)
 
-- **CTL-01** The human can set any claim's override to `AUTO`, `EXPAND` or
-  `STOP` at any time.
+- **CTL-01** The human can set any claim's — or link's (§3 "Links as
+  claims"; the `/override` id is then the edge ref) — override to `AUTO`,
+  `EXPAND` or `STOP` at any time. CTL-02..04 apply to a link unchanged.
 - **CTL-02** `EXPAND` always explores: whatever the claim's status —
   queued, running, or finished for any reason including `BUDGET` and
   `DIMINISHING` — its next
@@ -294,11 +352,17 @@ Every status change is broadcast.
 ## 6. HTTP surface (the UI contract)
 
 - `POST /question` form `text=` → `{"root":"<ref>"}`
-- `POST /override` form `id=<ref>&mode=AUTO|EXPAND|STOP` → `ok`
+- `POST /override` form `id=<ref>&mode=AUTO|EXPAND|STOP` → `ok` (a claim ref,
+  or an edge ref for its link)
 - `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
   `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`; an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
-  its edge's `target`); the graph carries `consensusMembers`; every question
+  its edge's `target`) and every argument about a link carries `onLink` (that
+  edge); an EDGE carries its link's claim-like fields (`text`, `depth`,
+  `status`, `override`, `reach`, `contribution`, `proSaturation`,
+  `conSaturation`, `rounds`, `duplicatesDropped`, `triage`, `error`); every
+  claim and link carries `activity` while it is being explored, judged or
+  assessed; the graph carries `consensusMembers`; every question
   carries `yieldRounds`, `yieldRecent`, `yieldEarlier` and `stoppedBy`
   (EXP-10), and `costUsd`, `projectedUsd` and `cost` (§12).
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
@@ -312,20 +376,28 @@ Every status change is broadcast.
 - **UI-03** Each claim shows its text, its credence (bar/number: the
   consensus, with the spread as a thin band), its status, the proposer that
   produced it, and its override control. Each argument shows its polarity
-  (pro/con visually distinct) and relation strength; an undercutter is shown
-  under the argument whose link it attacks, labelled "undercuts the link".
-  The facts panel lists every layer's credence, marks the consensus members,
-  and says how far the rules agree.
+  (pro/con visually distinct) and relation strength. The facts panel lists
+  every layer's credence, marks the consensus members, and says how far the
+  rules agree; for a claim or link with no arguments yet it says "no
+  arguments yet — all rules agree with the first impression" (the spread is
+  zero by construction, not a bug), and its bar marks the single value.
 - **UI-04** Minimal, modern, slick: a calm neutral palette, pro/con as the only
   saturated colours, smooth enter animation for new nodes, light and dark mode.
+- **UI-05** The connector between a claim and an argument is a control: it
+  shows the link strength and how many arguments the link has; hovering or
+  focusing it previews the link as a claim, pressing it (click, tap, Enter)
+  opens it — its text, credence (the edge's) with its spread, status, its
+  own Auto/Expand/Stop and its numbers. The link's arguments — "why it holds",
+  and "why it fails" (undercutters, labelled "undercuts the link") — are drawn
+  under the link, dashed and tagged "link", never under the claim.
+- **UI-06** Under each question a "now" line names what the deliberation is
+  doing this moment: which claims and links are being explored or judged.
 
 ## 8. Non-goals (v1)
 
 Multiple users; human stances; editing claims; cross-tree links; merging
-equivalent claims across branches; exploring an *edge* as a claim of its own
-("[child] is a reason for [parent]", with proposers asked for arguments
-about the link) — only Jev's `UNDERCUT` re-targeting exists (residual of
-iteration 4).
+equivalent claims across branches. (Exploring an edge as a claim of its own,
+a residual of iteration 4, is now §3 "Links as claims".)
 
 ## 9. Acceptance
 
@@ -386,7 +458,9 @@ they were stopped. A full recalibration of
 - **DUR-02** The engine's per-claim metadata (question membership, status,
   override, proposer, rewritten text, Jev judgments — plausibility and edge
   strength are the `jev` stances —, saturation, triage counts, rounds,
-  errors) is one record per claim of named fields, written as routed
+  errors) is one record per claim of named fields — and one per link (§3
+  "Links as claims": status, override, rounds, saturation, triage, reach,
+  contribution…), keyed `l:<edge ref>` — written as routed
   invocations into a hosted observation cell (a last-writer-wins fold per
   field). Only the fields that changed are written (a field back at its
   default is written as a removal), every 100 ms and when the engine closes
@@ -405,7 +479,10 @@ they were stopped. A full recalibration of
   and queued afresh; a claim created without the edge that places it (the
   process died between the two writes) is left out. Each question's EXP-10
   record (its yields and whether it stopped) is one more record of the same
-  store. Every known stance is
+  store. Every argument's link is rebuilt with it and its `l:` record
+  re-applied; an edge targeting an edge places its source under that edge's
+  link (so undercutters recorded before links were explorable become their
+  link's con arguments). Every known stance is
   re-applied (the graph skips a stance a node already holds). Every claim
   that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
   round simply runs again — and an argument whose attach-time assessment

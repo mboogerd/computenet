@@ -6,6 +6,7 @@ import {
   activityOf,
   agreementText,
   clip,
+  linkParts,
   questionProgress,
   shown,
   STATUS_HINT,
@@ -172,6 +173,9 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
   );
 }
 
+/** A link's argument, for the "now" line: the link text without "is a reason for …". */
+const linkArgumentOf = (text: string) => linkParts(text)?.argument ?? text;
+
 /** How many things the "now" line names before it says "+N more". */
 const NOW_SHOWN = 3;
 
@@ -183,17 +187,29 @@ const NOW_SHOWN = 3;
  */
 function NowLine(props: { graph: () => GraphDto; root: string }) {
   const items = createMemo(() => activityOf(props.graph().nodes, props.root));
+  // Keyed by ref (a new frame is all new objects), so an item stays put while it is in flight.
+  const shownRefs = createMemo(() => items().slice(0, NOW_SHOWN).map((it) => it.ref), undefined, {
+    equals: (a, b) => a.length === b.length && a.every((r, i) => r === b[i]),
+  });
+  const byRef = createMemo(() => new Map(items().map((it) => [it.ref, it])));
   return (
     <p class="now" classList={{ 'is-idle': items().length === 0 }} aria-label="Now exploring">
       <span class="now__label">now</span>
       <Show when={items().length > 0} fallback={<span class="now__idle">nothing in flight</span>}>
-        <For each={items().slice(0, NOW_SHOWN)}>
-          {(it) => (
-            <span class={`now__item now__item--${it.activity}`} title={it.text}>
-              <span class="now__dot" aria-hidden="true" />
-              {ACTIVITY_VERB[it.activity]} <Show when={it.kind === 'link'}><span class="tag tag--link">link</span> </Show>
-              <span class="now__text">{clip(it.kind === 'link' ? it.text.replace(/^“([\s\S]*?)” is a reason (?:for|against) [\s\S]*$/, '$1') : it.text)}</span>
-            </span>
+        <For each={shownRefs()}>
+          {(ref) => (
+            <Show when={byRef().get(ref)}>
+              {(it) => (
+                <span class={`now__item now__item--${it().activity}`} title={it().text}>
+                  <span class="now__dot" aria-hidden="true" />
+                  {ACTIVITY_VERB[it().activity]}{' '}
+                  <Show when={it().kind === 'link'}>
+                    <span class="tag tag--link">link</span>{' '}
+                  </Show>
+                  <span class="now__text">{clip(it().kind === 'link' ? linkArgumentOf(it().text) : it().text)}</span>
+                </span>
+              )}
+            </Show>
           )}
         </For>
         <Show when={items().length > NOW_SHOWN}>

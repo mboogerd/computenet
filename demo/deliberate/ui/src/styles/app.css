@@ -1198,7 +1198,8 @@ button {
 .card:focus-within .reveal,
 .hero:hover .reveal,
 .hero:focus-within .reveal,
-.is-open .reveal,
+.card.is-open .reveal,
+.hero.is-open .reveal,
 .reveal.is-pinned {
   opacity: 1;
 }
@@ -1400,7 +1401,8 @@ button {
   .reveal:not(.is-pinned) {
     display: none;
   }
-  .is-open .reveal {
+  .card.is-open .reveal,
+  .hero.is-open .reveal {
     display: inline-flex;
   }
 }
@@ -1428,7 +1430,8 @@ button {
   .reveal:not(.is-pinned) {
     display: none;
   }
-  .is-open .reveal {
+  .card.is-open .reveal,
+  .hero.is-open .reveal {
     display: inline-flex;
   }
   .card {

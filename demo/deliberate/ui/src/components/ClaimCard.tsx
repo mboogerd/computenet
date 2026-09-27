@@ -149,7 +149,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                     </span>
                   )}
                 </Show>
-                <Show when={claim().error && phase() !== 'failed'}>
+                <Show when={callFailed(claim()) && phase() !== 'failed'}>
                   <span class="status status--failed" title={claim().error}>a call failed</span>
                 </Show>
                 <Show when={childRefs().length > 0}>
@@ -204,6 +204,10 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
   );
 }
 
+/** The engine's EXP-06 note on a claim that explored and then met the budget: not a failed call. */
+const BUDGET_EXHAUSTED = 'budget exhausted';
+const callFailed = (n: NodeDto) => n.error !== undefined && n.error !== BUDGET_EXHAUSTED;
+
 const SIDE_WORD = { pro: 'Pro', con: 'Con', holds: 'Link holds', undercut: 'Undercuts the link' } as const;
 
 /** Counts of a link's own arguments: "1 holds · 2 fails". */
@@ -246,7 +250,7 @@ function LinkChip(props: {
         <span class="linkchip__knot" aria-hidden="true" />
         <span class="side__word">{SIDE_WORD[props.side]}</span>
         <span class="side__strength">
-          {' · '}
+          {'\u00a0· '}
           {strengthWord(props.edge.strength)}
           <Show when={props.edge.strength !== undefined}>
             {' '}
@@ -377,7 +381,7 @@ export function LinkPanel(props: {
                 </span>
               )}
             </Show>
-            <Show when={props.edge.error && phase() !== 'failed'}>
+            <Show when={callFailed(props.edge) && phase() !== 'failed'}>
               <span class="status status--failed" title={props.edge.error}>a call failed</span>
             </Show>
             <button type="button" class="linkish" aria-expanded={facts()} aria-controls={`facts-${props.edge.ref}`} onClick={() => setFacts(!facts())}>
