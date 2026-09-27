@@ -619,6 +619,70 @@ class JoinFamilyEvictionTest {
         cell.droppedBelowFloorLeft shouldBe 0L
     }
 
+    private class AnySource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Any>>>())
+    }
+
+    @Test
+    fun `gated - an Owned add a floor rise passed while buffered lands live at flush and the next rise refuses it`() {
+        // [24-WL-17] / 23 §Taps: the flush-time drop of passed adds must not silently drop an exclusive.
+        // The ungated cell under the same arrival order admits the Owned row at floor 10, refuses its
+        // eviction at the rise to 15 (it stays live), then pairs it with r16 — the gated cell lands it
+        // at flush and mints the same pair; the refusal diagnostic comes with the next rise.
+        val owned = Owned(Row("a", 12))
+        val rowOf = IdentityHashMap<Any, Row>().apply { put(owned, Row("a", 12)) }
+        val asRow: (Any) -> Row = { e -> e as? Row ?: rowOf.getValue(e) }
+        val ref = CellRef(UUID.randomUUID())
+        val cell = JoinSetCell<Any, Row, Any, Pair<Any, Row>>(
+            ref = ref,
+            leftKey = { e -> window(asRow(e).t) },
+            rightKey = { r -> window(r.t) },
+            emitOnFrontier = true,
+            leftLateness = Windows.Lateness({ e: Any -> asRow(e).t }, 0),
+            rightLateness = Windows.Lateness(RowTime, 0),
+        ) { a, b -> a to b }
+        val out = collect(cell.outlet)
+        val lateL = collect(cell.lateLeft)
+        val leftSrc = AnySource()
+        val rightSrc = RowSource()
+        @Suppress("UNCHECKED_CAST")
+        leftSrc.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<Any>>>)
+        @Suppress("UNCHECKED_CAST")
+        rightSrc.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<Row>>>)
+        val s = UUID(8, 8)
+        val w = UUID(9, 9)
+        underWave(w, 1) { cell.waterline.call.propagate(WaterlineDelta(10)) }
+
+        // the Owned row (t=12) is at/above floor 10 at arrival: admitted, buffered
+        val ownedTag = tag(1)
+        underWave(s, 1) { leftSrc.outlet.call.propagate(SetDelta(adds = mapOf<Any, Set<Timestamp>>(owned to setOf(ownedTag)))) }
+        cell.bufferedWaves shouldBe 1
+
+        // the floor passes it while buffered; it is not in state yet, so this rise refuses nothing
+        underWave(w, 2) { cell.waterline.call.propagate(WaterlineDelta(15)) }
+        cell.refusedRows().shouldBeEmpty()
+
+        // flush: the exclusive is kept — it lands live and pairs with r16, never dropped, never late
+        underWave(s, 1) { rightSrc.outlet.call.propagate(adds(Row("r", 16) to tag(2))) }
+        cell.bufferedWaves shouldBe 0
+        leftRows(cell) shouldBe setOf<Any>(owned)
+        tagFold(out) shouldBe setOf<Pair<Any, Row>>(owned to Row("r", 16))
+        lateL.shouldBeEmpty()
+        cell.droppedBelowFloorLeft shouldBe 0L
+
+        // the next rise re-evaluates it like any passed row and refuses it per row (r16 is not passed)
+        underWave(w, 3) { cell.waterline.call.propagate(WaterlineDelta(16)) }
+        val refusal = cell.refusedRows().single()
+        refusal.cellRef shouldBe ref
+        refusal.unit shouldBe "row"
+        cell.refusedEvictions shouldBe 1L
+        leftRows(cell) shouldBe setOf<Any>(owned)
+        tagFold(out) shouldBe setOf<Pair<Any, Row>>(owned to Row("r", 16))
+
+        // the cell never consumed the exclusive
+        owned.take() shouldBe Row("a", 12)
+    }
+
     // ------------------------------------------ [24-WL-19] structural, rows
 
     @Test
