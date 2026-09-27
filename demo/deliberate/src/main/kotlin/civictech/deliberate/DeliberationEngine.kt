@@ -6,6 +6,7 @@ import civictech.cell.CellRef
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.Semaphore
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -20,8 +21,8 @@ import kotlin.time.Duration
  * FIFO queue (so trees grow roughly level by level); each round fans its
  * proposer calls out on a separate call executor. All engine metadata sits
  * behind [lock], held only for short reads/writes and never across a
- * Judge/Proposer call. Agora structure mutations go through [serviceLock]
- * because `AgoraService.createClaim`/`createEdge` are single-writer.
+ * Judge/Proposer call. Agora mutations go through [serviceLock], preserving
+ * the service's single-writer mutation model while worker threads expand.
  */
 class DeliberationEngine(
     private val service: AgoraService,
@@ -38,8 +39,14 @@ class DeliberationEngine(
         val relevance: Double = 0.5,
         val maxDepth: Int = 3,
         val maxClaims: Int = 60,
+        val maxProcesses: Int = 4,
         val workers: Int = 8,
-    )
+    ) {
+        init {
+            require(maxProcesses > 0) { "maxProcesses must be positive" }
+            require(workers > 0) { "workers must be positive" }
+        }
+    }
 
     private class Claim(
         val ref: CellRef,
@@ -63,6 +70,7 @@ class DeliberationEngine(
         val saturated = mutableSetOf<Side>()
         /** CTL-02: the next round ignores saturation (a forced re-run). */
         var forceRound = false
+        var roundInFlight = false
         var anyCallSucceeded = false
         val children = mutableListOf<Claim>()
     }
@@ -84,6 +92,7 @@ class DeliberationEngine(
         config.workers, config.workers, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(),
     ) { r -> Thread(r, "deliberate-worker").apply { isDaemon = true } }
     private val calls: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+    private val processPermits = Semaphore(config.maxProcesses)
 
     private companion object {
         val FINISHED = setOf(
@@ -118,15 +127,23 @@ class DeliberationEngine(
             c.override = mode
             when (mode) {
                 // CTL-03: queued work is cancelled at once; a running claim stops at its next round boundary.
-                Override.STOP -> { if (c.status == Status.QUEUED) c.status = Status.STOPPED; false }
+                Override.STOP -> {
+                    if (c.status !in setOf(Status.JUDGING, Status.EXPLORING)) c.status = Status.STOPPED
+                    false
+                }
                 // CTL-04: back through the normal gates.
                 Override.AUTO -> (c.status == Status.STOPPED).also { if (it) c.status = Status.QUEUED }
                 // CTL-02: a finished claim runs again with one extra round, saturation ignored for it.
-                Override.EXPAND -> (c.status in FINISHED).also {
-                    if (it) {
-                        c.roundLimit = if (c.rounds == 0) config.maxRounds else c.rounds + 1
+                Override.EXPAND -> (c.status in FINISHED && c.status != Status.BUDGET).also { finished ->
+                    if (finished) {
+                        c.roundLimit = maxOf(c.roundLimit, c.rounds + 1)
                         c.forceRound = true
                         c.status = Status.QUEUED
+                    } else if (c.status == Status.JUDGING || c.status == Status.EXPLORING) {
+                        // If a round is already in flight, the override belongs to the next round;
+                        // do not let completion of this one consume the human's request.
+                        c.roundLimit = maxOf(c.roundLimit, c.rounds + if (c.roundInFlight) 2 else 1)
+                        c.forceRound = true
                     }
                 }
             }
@@ -224,6 +241,17 @@ class DeliberationEngine(
             // EXP-08: never let an exception kill a worker or leave a claim stuck.
             update { c.status = Status.FAILED; c.error = t.toString() }
         }
+        // An EXPAND racing the terminal transition either queued itself in
+        // setOverride(), or left forceRound behind while this invocation was
+        // still active. The latter must not be lost at the finish boundary.
+        val forcedRequeue = synchronized(lock) {
+            (c.override == Override.EXPAND && c.forceRound && c.status in FINISHED && c.status != Status.BUDGET)
+                .also { if (it) c.status = Status.QUEUED }
+        }
+        if (forcedRequeue) {
+            onChange()
+            enqueue(c)
+        }
     }
 
     /** Runs gates and rounds; returns the children to enqueue. */
@@ -231,8 +259,11 @@ class DeliberationEngine(
         // CRED-01
         if (synchronized(lock) { c.plausibility } == null) {
             val path = synchronized(lock) { pathOf(c) }
-            attempt(c, "plausibility") { judge.plausibility(questionOf(c), path, c.text) }?.let { p ->
-                service.setStance(c.ref, "jev", p)
+            attempt(c, "plausibility") {
+                val p = judge.plausibility(questionOf(c), path, c.text)
+                synchronized(serviceLock) { service.setStance(c.ref, "jev", p) }
+                p
+            }?.let { p ->
                 update { c.plausibility = p }
             }
         }
@@ -252,17 +283,29 @@ class DeliberationEngine(
 
         val created = mutableListOf<Claim>()
         while (true) {
-            val (sides, stop, limit) = synchronized(lock) {
-                val s = if (c.forceRound) SIDES else SIDES - c.saturated
-                Triple(s, c.override == Override.STOP, c.rounds >= c.roundLimit)
+            val (sides, terminal) = synchronized(lock) {
+                val forcedRound = c.forceRound
+                val nextSides = if (forcedRound) SIDES else SIDES - c.saturated
+                val nextStatus = when {
+                    c.override == Override.STOP -> Status.STOPPED
+                    nextSides.isEmpty() -> Status.SATURATED
+                    !forcedRound && c.rounds >= c.roundLimit -> Status.ROUND_LIMIT
+                    treeSize.getValue(c.root) >= config.maxClaims -> Status.BUDGET
+                    else -> null
+                }
+                if (nextStatus == null) {
+                    if (forcedRound) c.saturated.clear()
+                    c.forceRound = false
+                    c.roundInFlight = true
+                }
+                nextSides to nextStatus
             }
-            when {
-                stop -> return finish(c, Status.STOPPED, created)
-                sides.isEmpty() -> return finish(c, Status.SATURATED, created)
-                limit -> return finish(c, Status.ROUND_LIMIT, created)
-                budgetExhausted(c) -> return finish(c, Status.BUDGET, created)
+            if (terminal != null) return finish(c, terminal, created)
+            val outcome = try {
+                round(c, sides, created)
+            } finally {
+                synchronized(lock) { c.roundInFlight = false }
             }
-            val outcome = round(c, sides, created)
             if (outcome != null) return finish(c, outcome, created)
         }
     }
@@ -276,7 +319,14 @@ class DeliberationEngine(
         // EXP-02: every proposer × side, concurrently.
         val futures = sides.flatMap { side ->
             proposers.map { p ->
-                Triple(side, p, calls.submit<List<String>> { p.propose(ctx, side, config.argsPerCall).take(config.argsPerCall) })
+                Triple(side, p, calls.submit<List<String>> {
+                    processPermits.acquire()
+                    try {
+                        p.propose(ctx, side, config.argsPerCall).take(config.argsPerCall)
+                    } finally {
+                        processPermits.release()
+                    }
+                })
             }
         }
         var failures = 0
@@ -290,11 +340,11 @@ class DeliberationEngine(
                 null
             }
         }
-        if (failures == futures.size && futures.isNotEmpty()) {
-            val never = synchronized(lock) { c.rounds++; !c.anyCallSucceeded }
-            return if (never) Status.FAILED else Status.ROUND_LIMIT
+        val allProposersFailed = failures == futures.size && futures.isNotEmpty()
+        val noProposerHasEverSucceeded = synchronized(lock) {
+            if (!allProposersFailed) c.anyCallSucceeded = true
+            !c.anyCallSucceeded
         }
-        synchronized(lock) { c.anyCallSucceeded = true }
 
         // EXP-03: dedupe within the round, then against existing siblings via the judge.
         var budgetHit = false
@@ -308,7 +358,7 @@ class DeliberationEngine(
                     if (seen.add(normalize(t))) fresh += t to pid else dropped++
                 }
             }
-            val survivors = if (existing.isEmpty() || fresh.isEmpty()) fresh else {
+            val survivors = if (fresh.isEmpty()) fresh else {
                 val verdict = attempt(c, "duplicates") { judge.duplicates(c.text, side, existing, fresh.map { it.first }) }
                 if (verdict == null) fresh else fresh.filterIndexed { i, _ -> verdict.getOrNull(i) == null }
                     .also { dropped += fresh.size - it.size }
@@ -323,8 +373,6 @@ class DeliberationEngine(
         update { c.rounds++ }
 
         // EXP-04: saturation per side (a forced round's sides are re-judged too).
-        val wasForced = synchronized(lock) { c.forceRound.also { c.forceRound = false } }
-        if (wasForced) synchronized(lock) { c.saturated.clear() }
         val after = context(c)
         for (side in sides) {
             val p = attempt(c, "saturation") { judge.saturation(after, side) } ?: continue
@@ -333,7 +381,11 @@ class DeliberationEngine(
                 if (p >= config.saturation) c.saturated += side
             }
         }
-        return if (budgetHit) Status.BUDGET else null
+        return when {
+            budgetHit -> Status.BUDGET
+            allProposersFailed && noProposerHasEverSucceeded -> Status.FAILED
+            else -> null
+        }
     }
 
     private fun attach(parent: Claim, side: Side, text: String, proposerId: String): Claim {
@@ -349,8 +401,11 @@ class DeliberationEngine(
             parent.children += child
         }
         // CRED-02
-        attempt(parent, "relationStrength") { judge.relationStrength(questionOf(parent), parent.text, text, side) }?.let { s ->
-            service.setStance(edgeRef, "jev", s)
+        attempt(parent, "relationStrength") {
+            val s = judge.relationStrength(questionOf(parent), parent.text, text, side)
+            synchronized(serviceLock) { service.setStance(edgeRef, "jev", s) }
+            s
+        }?.let { s ->
             update { edge.strength = s }
         }
         return child
@@ -359,7 +414,7 @@ class DeliberationEngine(
     private fun finish(c: Claim, status: Status, created: List<Claim> = emptyList()): List<Claim> {
         update {
             // A STOP that raced the last round boundary still wins (CTL-03).
-            c.status = if (c.override == Override.STOP && status != Status.FAILED) Status.STOPPED else status
+            c.status = if (c.override == Override.STOP) Status.STOPPED else status
         }
         return created
     }

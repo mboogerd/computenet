@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -24,6 +25,13 @@ import kotlin.time.Duration.Companion.seconds
 
 /** Engine behaviour (SPEC EXP-02..08, CTL-01..04) with a fake judge and fake proposers. */
 class DeliberationEngineTest {
+
+    private data class RelationCall(
+        val question: String,
+        val parent: String,
+        val child: String,
+        val side: Side,
+    )
 
     private class FakeJudge(
         val plausibility: (String) -> Double = { 0.5 },
@@ -33,10 +41,21 @@ class DeliberationEngineTest {
         val relevance: (ClaimContext) -> Double = { 1.0 },
     ) : Judge {
         val relevanceCalls = CopyOnWriteArrayList<String>()
-        override fun plausibility(question: String, path: List<String>, claim: String) = plausibility(claim)
-        override fun relationStrength(question: String, parent: String, child: String, side: Side) = strength
-        override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>) =
-            duplicates(existing, candidates)
+        val plausibilityCalls = CopyOnWriteArrayList<Triple<String, List<String>, String>>()
+        val relationCalls = CopyOnWriteArrayList<RelationCall>()
+        val duplicateCalls = CopyOnWriteArrayList<Pair<List<String>, List<String>>>()
+        override fun plausibility(question: String, path: List<String>, claim: String): Double {
+            plausibilityCalls += Triple(question, path, claim)
+            return plausibility(claim)
+        }
+        override fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
+            relationCalls += RelationCall(question, parent, child, side)
+            return strength
+        }
+        override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>): List<Int?> {
+            duplicateCalls += existing to candidates
+            return duplicates(existing, candidates)
+        }
         override fun saturation(ctx: ClaimContext, side: Side) = saturation.invoke(ctx, side)
         override fun relevance(ctx: ClaimContext): Double {
             relevanceCalls += ctx.claim
@@ -130,13 +149,22 @@ class DeliberationEngineTest {
 
     @Test
     fun `jev stances land and move the propagated credence`() {
-        val e = engine(judge = FakeJudge(plausibility = { if (it == "Q?") 0.9 else 0.5 }, strength = 0.7))
+        val judge = FakeJudge(plausibility = { if (it == "Q?") 0.9 else 0.5 }, strength = 0.7)
+        val e = engine(judge = judge)
         val root = e.ask("Q?")
         e.idle()
         val g0 = e.snapshot()
         assertEquals(0.9, g0.node(root).plausibility)
         assertTrue(g0.edges().all { it.strength == 0.7 })
         assertTrue(g0.claims().all { it.plausibility != null })
+        assertTrue(judge.plausibilityCalls.contains(Triple("Q?", emptyList(), "Q?")))
+        assertTrue(judge.plausibilityCalls.filter { it.third != "Q?" }.all { it.first == "Q?" && it.second == listOf("Q?") })
+        assertEquals(g0.edges().size, judge.relationCalls.size)
+        assertTrue(judge.relationCalls.all { call ->
+            call.question == "Q?" && call.parent == "Q?" && g0.edges().any { edge ->
+                edge.polarity == call.side.name && g0.claim(edge.source!!).text == call.child
+            }
+        })
         awaitUntil("root credence moves away from 0.5") {
             e.snapshot().node(root).credence.let { it > 0.5 + 1e-6 || it < 0.5 - 1e-6 }
         }
@@ -185,6 +213,9 @@ class DeliberationEngineTest {
         val texts = g.childrenOf(root).map { g.claim(it.source!!).text }.toSet()
         assertEquals(setOf("Cars pollute.", "Streets get safer", "Noise drops", "Land is freed"), texts)
         assertEquals(2, g.node(root).duplicatesDropped)
+        assertTrue(judge.duplicateCalls.any { (existing, candidates) ->
+            existing.isEmpty() && candidates == listOf("Cars pollute.", "Streets get safer")
+        })
     }
 
     @Test
@@ -248,6 +279,61 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `a fully failed later round does not masquerade as the round limit`() {
+        val calls = AtomicInteger()
+        val flaky = FakeProposer("claude") { _, _, _ ->
+            when (calls.incrementAndGet()) {
+                1, 2 -> listOf("first-${calls.get()}")
+                3, 4 -> error("temporary outage")
+                else -> emptyList()
+            }
+        }
+        val e = engine(
+            proposers = listOf(flaky),
+            config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, argsPerCall = 1),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val node = e.snapshot().node(root)
+        assertEquals(Status.ROUND_LIMIT, node.status)
+        assertEquals(3, node.rounds)
+        assertEquals(6, calls.get())
+        assertTrue(node.error!!.contains("temporary outage"), node.error)
+    }
+
+    @Test
+    fun `proposer process concurrency is globally bounded`() {
+        assertEquals(4, DeliberationEngine.Config().maxProcesses)
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        val firstPair = CountDownLatch(2)
+        val overLimit = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val blocking = FakeProposer("claude") { _, _, _ ->
+            val now = active.incrementAndGet()
+            maximum.accumulateAndGet(now, ::maxOf)
+            if (now > 2) overLimit.countDown()
+            firstPair.countDown()
+            try {
+                release.await(20, TimeUnit.SECONDS)
+                emptyList()
+            } finally {
+                active.decrementAndGet()
+            }
+        }
+        val e = engine(
+            proposers = listOf(blocking),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0, maxProcesses = 2, workers = 4),
+        )
+        repeat(4) { e.ask("Q$it?") }
+        assertTrue(firstPair.await(20, TimeUnit.SECONDS), "two proposer calls did not overlap")
+        assertFalse(overLimit.await(500, TimeUnit.MILLISECONDS), "more than maxProcesses proposer calls overlapped")
+        release.countDown()
+        e.idle()
+        assertEquals(2, maximum.get())
+    }
+
+    @Test
     fun `a claim whose every call failed is FAILED`() {
         val e = engine(proposers = listOf(
             FakeProposer("claude") { _, _, _ -> error("no claude") },
@@ -265,16 +351,21 @@ class DeliberationEngineTest {
     fun `a failing judge never kills the deliberation`() {
         val judge = object : Judge by FakeJudge() {
             override fun plausibility(question: String, path: List<String>, claim: String): Double = error("429")
+            override fun relationStrength(question: String, parent: String, child: String, side: Side) = 2.0
             override fun saturation(ctx: ClaimContext, side: Side): Double = error("529")
         }
         val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 2, maxDepth = 0))
         val root = e.ask("Q?")
         e.idle()
-        val r = e.snapshot().node(root)
+        val g = e.snapshot()
+        val r = g.node(root)
         assertEquals(Status.ROUND_LIMIT, r.status)
         assertEquals(2, r.rounds)
         assertNull(r.plausibility)
         assertNotNull(r.error)
+        assertEquals(16, g.childrenOf(root).size)
+        assertTrue(g.edges().all { it.strength == null })
+        assertTrue(g.childrenOf(root).all { g.claim(it.source!!).status == Status.DEPTH_LIMIT })
     }
 
     /** Proposer that blocks the root's first round until released. */
@@ -355,6 +446,64 @@ class DeliberationEngineTest {
         assertEquals(Status.SATURATED, g.node(root).status)
         assertEquals(2, g.node(root).rounds)
         assertEquals(16, g.childrenOf(root).size)
+    }
+
+    @Test
+    fun `EXPAND racing an in-flight last round is applied to the next round`() {
+        val p = GatedProposer("claude")
+        val e = engine(
+            judge = FakeJudge(saturation = { _, _ -> 1.0 }),
+            proposers = listOf(p),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0),
+        )
+        val root = e.ask("Q?")
+        assertTrue(p.entered.await(20, TimeUnit.SECONDS))
+        e.setOverride(root, Override.EXPAND)
+        p.release.countDown()
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(Status.SATURATED, g.node(root).status)
+        assertEquals(2, g.node(root).rounds)
+        assertEquals(8, g.childrenOf(root).size)
+    }
+
+    @Test
+    fun `STOP on a finished claim becomes STOPPED and AUTO requeues through normal limits`() {
+        val e = engine()
+        val root = e.ask("Q?")
+        e.idle()
+        val children = e.snapshot().childrenOf(root).size
+        assertEquals(Status.ROUND_LIMIT, e.snapshot().node(root).status)
+
+        e.setOverride(root, Override.STOP)
+        assertEquals(Status.STOPPED, e.snapshot().node(root).status)
+        e.setOverride(root, Override.AUTO)
+        e.idle()
+
+        val node = e.snapshot().node(root)
+        assertEquals(Override.AUTO, node.override)
+        assertEquals(Status.ROUND_LIMIT, node.status)
+        assertEquals(children, e.snapshot().childrenOf(root).size)
+    }
+
+    @Test
+    fun `status changes broadcast the specified state machine`() {
+        val seen = CopyOnWriteArrayList<Status>()
+        lateinit var e: DeliberationEngine
+        e = DeliberationEngine(
+            service,
+            FakeJudge(),
+            listOf(FakeProposer("claude")),
+            DeliberationEngine.Config(maxRounds = 1, maxDepth = 0),
+        ) {
+            e.snapshot().claims().firstOrNull { it.depth == 0 }?.status?.let(seen::add)
+        }.also { engines += it }
+        e.ask("Q?")
+        e.idle()
+        val ordered = seen.distinct()
+        assertTrue(ordered.indexOf(Status.QUEUED) < ordered.indexOf(Status.JUDGING), ordered.toString())
+        assertTrue(ordered.indexOf(Status.JUDGING) < ordered.indexOf(Status.EXPLORING), ordered.toString())
+        assertTrue(ordered.indexOf(Status.EXPLORING) < ordered.indexOf(Status.ROUND_LIMIT), ordered.toString())
     }
 
     @Test
