@@ -23,9 +23,18 @@ data class QuestionDto(
     val claims: Int,
     /** true while any claim in the tree is QUEUED, JUDGING or EXPLORING. */
     val active: Boolean,
+    /** EXP-10: non-root rounds whose yield was recorded (rounds that asked for at least one proposal). */
+    val yieldRounds: Int = 0,
+    /** EXP-10: mean yield of the last `yieldWindow` recorded rounds (all of them while there are fewer). */
+    val yieldRecent: Double? = null,
+    /** EXP-10: mean yield of every recorded round before those; null until there are more than `yieldWindow`. */
+    val yieldEarlier: Double? = null,
+    /** Why the tree stopped growing early: "budget", "diminishing" (only when queued work was halted), or null. */
+    val stoppedBy: String? = null,
 )
 
-enum class Status { QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, STOPPED, FAILED }
+/** SPEC §5. DIMINISHING (EXP-10): the question's returns diminished before this claim's next round. */
+enum class Status { QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING, STOPPED, FAILED }
 
 enum class Override { AUTO, EXPAND, STOP }
 
@@ -64,7 +73,7 @@ data class NodeDto(
     val plausibility: Double? = null,
     /** Jev relevance probability (EXP-05), judged when the argument was attached. */
     val relevance: Double? = null,
-    /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent. */
+    /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
     val quality: Double? = null,
     /** SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1). */
     val contribution: Double? = null,

@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildTree } from '../tree/buildTree';
-import { agreementText, questionProgress, shown, STATUS_HINT, STATUS_LABEL, verdict } from '../util/format';
+import { agreementText, questionProgress, shown, STATUS_HINT, STATUS_LABEL, stoppedHint, stoppedText, verdict } from '../util/format';
 import { createTween } from '../util/tween';
 import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
 import { OverrideControl } from './OverrideControl';
@@ -41,6 +41,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
   const entry = () => props.index().get(props.root);
   const childRefs = useChildRefs(entry);
   const progress = createMemo(() => questionProgress(props.graph().nodes, props.root));
+  const question = () => props.graph().questions.find((q) => q.root === props.root);
 
   return (
     <Show when={entry()}>
@@ -112,6 +113,13 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                     ? `deliberating · ${progress().settled} of ${progress().total} claims settled`
                     : `settled · ${progress().total} claims`}
                 </span>
+                <Show when={stoppedText(question())}>
+                  {(text) => (
+                    <span class="hero__stopped" title={stoppedHint(question())}>
+                      {text()}
+                    </span>
+                  )}
+                </Show>
                 <Show when={claim().status && (claim().status === 'STOPPED' || claim().status === 'FAILED')}>
                   <span class="status status--halted" title={STATUS_HINT[claim().status!]}>
                     question {STATUS_LABEL[claim().status!]}

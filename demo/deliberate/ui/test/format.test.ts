@@ -4,6 +4,10 @@ import {
   agreementText,
   layerLines,
   phaseOf,
+  STATUS_HINT,
+  STATUS_LABEL,
+  stoppedHint,
+  stoppedText,
   questionProgress,
   reachTier,
   reachWeight,
@@ -97,6 +101,19 @@ describe('strength and status wording', () => {
     expect(phaseOf('PRUNED')).toBe('halted');
     expect(phaseOf('STOPPED')).toBe('halted');
     expect(phaseOf('FAILED')).toBe('failed');
+    expect(phaseOf('DIMINISHING')).toBe('halted');
+  });
+
+  it('words the diminishing-returns stop for claims and questions (EXP-10)', () => {
+    expect(STATUS_LABEL.DIMINISHING).toBe('returns diminished');
+    expect(STATUS_HINT.DIMINISHING).toContain('much less new');
+    const q = { root: 'q', text: 'Q?', claims: 60, active: false };
+    expect(stoppedText(q)).toBeUndefined();
+    expect(stoppedText(undefined)).toBeUndefined();
+    expect(stoppedText({ ...q, stoppedBy: 'budget' })).toBe('stopped: claim budget spent');
+    expect(stoppedText({ ...q, stoppedBy: 'diminishing' })).toBe('stopped: returns diminished');
+    expect(stoppedHint({ ...q, stoppedBy: 'diminishing', yieldRecent: 0.1, yieldEarlier: 0.4 })).toContain('0.10 vs 0.40');
+    expect(stoppedHint(q)).toBeUndefined();
   });
 });
 

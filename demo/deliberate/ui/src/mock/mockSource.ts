@@ -189,7 +189,7 @@ function seedFinished(m: MockSource): void {
 function script(
   source: MockSource,
   sequence: number,
-  text = 'Should cities ban private cars from their centres?',
+  text = 'Should the Northfield library open on Sundays?',
 ): { root: string; steps: Array<() => void> } {
   const root = `q${sequence}`;
   const scoped = (ref: string) => (ref === 'q0' ? root : `${root}-${ref}`);
@@ -215,11 +215,11 @@ function script(
     () => m.claim(q, q, text, 0, 'question'),
     () => m.set(q, { status: 'JUDGING' }),
     () => m.set(q, { status: 'EXPLORING', plausibility: 0.5 }),
-    () => m.arg('c1', q, q, 'SUPPORT', 'Car-free centres measurably reduce air pollution and noise.', 'claude'),
-    () => m.arg('c2', q, q, 'ATTACK', 'A ban would hurt small retailers who depend on drive-in customers.', 'codex'),
-    () => m.arg('c3', q, q, 'SUPPORT', 'Freed road space can be given to transit, cycling and greenery.', 'codex'),
+    () => m.arg('c1', q, q, 'SUPPORT', 'Weekend visitor counts at the Northfield library are the highest of the week.', 'claude'),
+    () => m.arg('c2', q, q, 'ATTACK', 'Sunday opening would require paying the library staff a weekend wage premium.', 'codex'),
+    () => m.arg('c3', q, q, 'SUPPORT', 'Students without quiet space at home need somewhere to study on Sundays.', 'codex'),
     () => {
-      m.arg('c4', q, q, 'ATTACK', 'People with limited mobility rely on cars to reach the centre.', 'claude');
+      m.arg('c4', q, q, 'ATTACK', 'The volunteers who run the Northfield reading groups are unavailable on Sundays.', 'claude');
       m.edge('c1', q, 0.78);
     },
     () => {
@@ -232,23 +232,23 @@ function script(
       m.set(q, { credence: 0.54, rounds: 1, proSaturation: 0.42, conSaturation: 0.51, duplicatesDropped: 1 });
       m.set('c1', { plausibility: 0.75, credence: 0.74 });
     },
-    () => m.arg('c5', q, q, 'SUPPORT', 'Pedestrian zones tend to raise footfall for shops over time.', 'claude'),
+    () => m.arg('c5', q, q, 'SUPPORT', 'Libraries in neighbouring towns that open on Sundays report steady Sunday attendance.', 'claude'),
     () => {
       m.edge('c5', q, 0.66);
       m.set(q, { status: 'SATURATED', rounds: 2, proSaturation: 0.83, conSaturation: 0.76, credence: 0.6 });
       m.set('c1', { status: 'JUDGING' });
     },
     () => m.set('c1', { status: 'EXPLORING', relevance: 0.81 }),
-    () => m.arg('c1a', q, 'c1', 'ATTACK', 'Traffic may simply shift to the ring roads, moving pollution elsewhere.', 'codex'),
+    () => m.arg('c1a', q, 'c1', 'ATTACK', 'Most weekend visitors could come on Saturday instead.', 'codex'),
     () => {
-      m.arg('c1b', q, 'c1', 'SUPPORT', 'Madrid and Oslo saw NO₂ fall after restricting central traffic.', 'claude');
+      m.arg('c1b', q, 'c1', 'SUPPORT', 'The Saturday reading room at the Northfield library is full by noon on most weekends.', 'claude');
       m.edge('c1a', 'c1', 0.58);
       m.set('c2', { status: 'JUDGING' });
     },
     () => {
       m.edge('c1b', 'c1', 0.8);
       m.set('c1', { credence: 0.69 });
-      m.undercut('c1bu', q, 'c1b', 'c1', 'Madrid renewed its bus fleet in the same years that its central NO₂ fell.', 'codex', {
+      m.undercut('c1bu', q, 'c1b', 'c1', 'The Saturday reading room lost half its seats to a renovation in the same months.', 'codex', {
         status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.72,
       });
       m.set('c2', { status: 'PRUNED', relevance: 0.34, plausibility: 0.5, credence: 0.47 });
@@ -256,7 +256,7 @@ function script(
     () => m.set('c3', { status: 'JUDGING' }),
     () => m.set('c3', { status: 'EXPLORING', relevance: 0.66, plausibility: 0.75 }),
     () => {
-      m.arg('c3a', q, 'c3', 'ATTACK', 'Transit capacity cannot be expanded quickly enough to absorb car trips.', 'codex');
+      m.arg('c3a', q, 'c3', 'ATTACK', 'The town hall study centre already opens on Sundays.', 'codex');
       m.set('c1', { status: 'SATURATED', rounds: 1, proSaturation: 0.77, conSaturation: 0.72 });
     },
     () => {
@@ -266,7 +266,7 @@ function script(
     },
     () => m.set('c3a', { status: 'JUDGING' }),
     () => m.set('c3a', { status: 'EXPLORING', relevance: 0.59, plausibility: 0.5 }),
-    () => m.arg('c3a1', q, 'c3a', 'ATTACK', 'Bus lanes can be painted in weeks, far faster than rail is built.', 'claude', { status: 'DEPTH_LIMIT' }),
+    () => m.arg('c3a1', q, 'c3a', 'ATTACK', 'The town hall study centre has only twenty seats.', 'claude', { status: 'DEPTH_LIMIT' }),
     () => {
       m.edge('c3a1', 'c3a', 0.52);
       m.set('c3a', { status: 'SATURATED', rounds: 1, proSaturation: 0.71, conSaturation: 0.7, credence: 0.49 });
@@ -275,12 +275,12 @@ function script(
     },
     () => m.set('c4', { status: 'EXPLORING', relevance: 0.72, plausibility: 0.75, credence: 0.7 }),
     () => {
-      m.arg('c4a', q, 'c4', 'ATTACK', 'Exemption permits for disabled drivers are standard in existing schemes.', 'codex');
+      m.arg('c4a', q, 'c4', 'ATTACK', 'Paid staff could run the reading groups on Sundays.', 'codex');
       m.set('c1a', { status: 'JUDGING' });
     },
     () => {
-      m.arg('c3a2', q, 'c3a', 'SUPPORT', 'Bus networks in most cities already run near capacity at peak hours.', 'codex', { status: 'QUEUED' });
-      m.arg('c4b', q, 'c4', 'SUPPORT', 'Paratransit services are often underfunded.', 'codex', { status: 'FAILED', error: 'claude: exit 1; codex: timed out after 120 s' });
+      m.arg('c3a2', q, 'c3a', 'SUPPORT', 'The town hall study centre is rarely full on Sundays.', 'codex', { status: 'QUEUED' });
+      m.arg('c4b', q, 'c4', 'SUPPORT', 'The library budget does not cover paid reading-group staff.', 'codex', { status: 'FAILED', error: 'claude: exit 1; codex: timed out after 120 s' });
     },
     () => {
       m.edge('c3a2', 'c3a', 0.3);

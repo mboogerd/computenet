@@ -1,7 +1,7 @@
 import { For } from 'solid-js';
 
 export const EXAMPLES = [
-  'Should cities ban private cars from their centres?',
+  'Is it worth learning a musical instrument as an adult?',
   'Is remote work better for junior engineers?',
   'Should schools replace homework with projects?',
 ] as const;

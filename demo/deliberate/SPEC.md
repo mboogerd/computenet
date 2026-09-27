@@ -35,6 +35,8 @@ names that model.)
   (§3 "Exploration order").
 - **Contribution** — how much exploring a claim is worth: reach × relevance ×
   quality (EXP-05); 1 for the root.
+- **Yield** — what one round returned, per argument asked for (EXP-10); a
+  question stops when its recent yields fall well below its earlier ones.
 - **Override** — the human's per-claim setting: `AUTO` (Jev decides),
   `EXPAND` (force expansion), `STOP` (force no further expansion).
 
@@ -122,8 +124,12 @@ names that model.)
   parallel. Arguments are asked for in **canonical form** (one checkable
   proposition, the reason rather than its bearing on the claim, explicit
   subject and scope, no hedges, dated only when time matters, no invented
-  details, ≤ 25 words; `CliProposer.CANONICAL_RULES`); proposers are not asked
-  to label rebuttals and undercutters — that is triage's job.
+  details, ≤ 25 words; `CliProposer.CANONICAL_RULES`, with examples about
+  invented, mundane subjects only — no real person, political figure or
+  contested topic may appear in a prompt, so no example content leaks into a
+  deliberation); proposers are not asked to label rebuttals and undercutters —
+  that is triage's job. Canonical form is **only** asked for: it is not
+  scored or gated anywhere (EXP-05).
 - **EXP-03** Before attaching, exact-text repeats are dropped, then Jev
   **triages** every remaining candidate of the round in one request: per
   candidate an *action* Choice and, when there is anything to point at, an
@@ -182,26 +188,27 @@ names that model.)
   should be answered?") and its **quality** (a Noul: "is this a
   well-constructed argument — a self-contained, coherent claim that actually
   bears on its parent in the stated direction, not a restatement, off-topic or
-  a rhetorical question?") times a **canonical-form** Noul ("is it a precise,
-  canonical claim: one self-contained proposition with an explicit subject,
-  explicit scope or quantity, no hedging words, and dated if time-sensitive?"
-  — it passed 3% of old-style and 64% of canonical arguments). Its
-  **contribution** is `reach × relevance × quality`. An undercutter's reach is
-  `reach(parent) × strength(its edge) × strength(the undercut edge)`. A non-root claim whose contribution is below
-  `minInfluence` (default 0.15: calibrated at 0.35 in §10 on relevance × reach,
-  then scaled by the median canonical-form factor of iteration 4's quality) is
-  `PRUNED` without being explored — an irrelevant or poorly constructed
-  argument never is. If the assessment fails, strength 0.5 is used and
+  a rhetorical question?"). Its **contribution** is
+  `reach × relevance × quality`. An undercutter's reach is
+  `reach(parent) × strength(its edge) × strength(the undercut edge)`. A
+  non-root claim whose contribution is below `minInfluence` (default 0.10,
+  §10 iteration 5) is `PRUNED` without being explored — an irrelevant or
+  poorly constructed argument never is. (Iteration 4 multiplied a
+  canonical-form Noul into quality; it anti-correlated with relevance,
+  r −0.3 to −0.54, and pruned the most on-point arguments, so iteration 5
+  removed it: canonical form is asked of the proposers only, EXP-02.) If the assessment fails, strength 0.5 is used and
   relevance and quality count as 1. The root is always expanded. Beyond
   `maxDepth` (default 3) claims are `DEPTH_LIMIT` — a safety net, not the
   primary stop.
 - **EXP-06** A global `maxClaims` budget (default 180 per question) is enforced:
   no argument is attached once the tree holds that many claims. The budget is
   spent in exploration order (below), so it goes to the most contributing
-  claims first. Gates run in the order depth → contribution → budget, so
-  `BUDGET` means the claim would otherwise have expanded and never did; a
-  claim that already ran a round and then meets the budget ends `ROUND_LIMIT`
-  with `error = "budget exhausted"`.
+  claims first. Gates run in the order depth → contribution → budget →
+  diminishing returns (EXP-10), so `BUDGET` means the claim would otherwise
+  have expanded and never did; a claim that already ran a round and then meets
+  the budget ends `ROUND_LIMIT` with `error = "budget exhausted"`. A question
+  at its budget reports `stoppedBy = "budget"`. The budget is a ceiling; the
+  per-question stop that normally ends a tree is EXP-10.
 - **EXP-07** Concurrency is bounded: at most `maxProcesses` (default 8) CLI
   processes run at once across the whole app. Jev calls are not rate-limited
   by us but retry 429/529 with exponential backoff (≤ 4 attempts).
@@ -213,6 +220,35 @@ names that model.)
   with a per-call timeout (default 120 s). Output is parsed as a JSON array of
   strings, tolerating surrounding prose/code fences; anything unparseable is a
   failed call.
+- **EXP-10** Every question stops by its own **diminishing returns**. Each
+  round of any **non-root** claim in the question that asked for at least one
+  argument records a **yield**: Σ over the arguments it attached (REFINE and UNDERCUT
+  included) of `strength × relevance × quality` (the EXP-05 fallbacks for a
+  failed assessment), × `1 − (DUPLICATE + DROP) / triaged` (the round's triage
+  counts, exact-text repeats included; 1 when nothing was triaged), ÷ the
+  number of arguments asked for. Root rounds are excluded because their
+  naturally high yields otherwise inflate the earlier mean. The question
+  keeps its non-root yields in completion order. Once it holds ≥
+  `yieldMinClaims` (default 40) claims and ≥ 2 × `yieldWindow` (default 8)
+  non-root yields, and is below its budget, it stops
+  when mean(last `yieldWindow` yields) < `yieldRatio` (default 0.6) ×
+  mean(all earlier yields), **provided at least one claim in `QUEUED` can
+  actually be halted**. If the threshold is first observed after the question
+  ran out of queued work on its own, no stop is recorded and `stoppedBy`
+  remains null. Stopping: no new round starts in the question; every claim
+  waiting for its first or next round, and every argument
+  attached later that passes the depth and contribution gates, ends
+  `DIMINISHING` (terminal); rounds in flight complete and attach, but their
+  yields are not recorded (the series is frozen at the stop, so it shows why
+  the question stopped). `EXPAND` still forces a round on a `DIMINISHING`
+  claim (CTL-02), whose new arguments then meet the stop like any other.
+  `--yield-stop off` disables the stop (yields are still recorded). The
+  question reports `yieldRounds` (non-root rounds), `yieldRecent` (mean of the last window),
+  `yieldEarlier` (mean before it) and `stoppedBy` (`"diminishing"`,
+  `"budget"` or null); the yields and the stop are durable (DUR-02). The
+  relative, per-question comparison is the point: absolute yields differ
+  several-fold between questions (§10 iteration 5), so any absolute threshold
+  would again starve one question and overgrow another.
 
 ### Exploration order
 
@@ -232,7 +268,8 @@ of all contributions.
 - **CTL-01** The human can set any claim's override to `AUTO`, `EXPAND` or
   `STOP` at any time.
 - **CTL-02** `EXPAND` always explores: whatever the claim's status —
-  queued, running, or finished for any reason including `BUDGET` — its next
+  queued, running, or finished for any reason including `BUDGET` and
+  `DIMINISHING` — its next
   round is **forced**, and it runs at least that round. It skips the
   contribution and depth gates, is queued ahead of all contributions, and
   raises the claim's round limit by one if needed. The forced round ignores
@@ -250,7 +287,8 @@ of all contributions.
 ## 5. Claim status (the state machine the UI renders)
 
 `QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
-alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`, `STOPPED`, `FAILED`.
+alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`, `DIMINISHING` (EXP-10),
+`STOPPED`, `FAILED`.
 Every status change is broadcast.
 
 ## 6. HTTP surface (the UI contract)
@@ -260,7 +298,9 @@ Every status change is broadcast.
 - `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
   `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`; an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
-  its edge's `target`); the graph carries `consensusMembers`.
+  its edge's `target`); the graph carries `consensusMembers`; every question
+  carries `yieldRounds`, `yieldRecent`, `yieldEarlier` and `stoppedBy`
+  (EXP-10).
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
 
@@ -312,8 +352,22 @@ Iteration 4 changed plausibility's state (CRED-01) and added the canonical
 factor to quality (EXP-05) after this calibration, so `saturation` and
 `minInfluence` were calibrated under the old judgments. The first live run
 under the new ones showed the influence gate misbehaving (every depth-1
-argument `PRUNED`), so `minInfluence` was rescaled to 0.15; a full
-recalibration of both is residual (see `CALIBRATION.md`).
+argument `PRUNED`), so `minInfluence` was rescaled to 0.15.
+
+Iteration 5 (`CALIBRATION.md`) found tree size decided at depth 1 and very
+uneven across questions (21 vs 57 and 110 claims in one run): the canonical
+factor pruned the most on-point arguments, two prompt examples about a real
+politician were copied into one question's root arguments, and a flat
+threshold cannot suit questions whose argument quality differs. So quality
+lost its canonical factor (EXP-05), the prompt examples became topic-neutral
+(EXP-02), `minInfluence` became 0.10 (an offline replay of the recorded trees
+balanced best there), and each question now stops by its own diminishing
+returns (EXP-10) rather than by the budget. Root rounds are excluded from its
+history, and a diminishing stop is recorded only when it actually halts a
+`QUEUED` claim; these corrections prevent a high-yield root from depressing
+the apparent return of its children and prevent exhausted trees from claiming
+they were stopped. A full recalibration of
+`saturation` is still residual.
 
 ## 11. Durability (requirements DUR-*)
 
@@ -349,7 +403,9 @@ recalibration of both is residual (see `CALIBRATION.md`).
   the edges placing them, in creation order) plus those records. A claim
   whose record never reached the journal is rebuilt from the structure alone
   and queued afresh; a claim created without the edge that places it (the
-  process died between the two writes) is left out. Every known stance is
+  process died between the two writes) is left out. Each question's EXP-10
+  record (its yields and whether it stopped) is one more record of the same
+  store. Every known stance is
   re-applied (the graph skips a stance a node already holds). Every claim
   that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
   round simply runs again — and an argument whose attach-time assessment

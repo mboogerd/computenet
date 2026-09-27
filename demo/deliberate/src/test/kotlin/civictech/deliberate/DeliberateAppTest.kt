@@ -103,6 +103,10 @@ class DeliberateAppTest {
 
         val q = g.questions.single()
         assertEquals("Should cities make public transit free?", q.text)
+        assertEquals(4, q.yieldRounds, "only the four non-root rounds contribute yields")
+        assertNotNull(q.yieldRecent)
+        assertNull(q.yieldEarlier)
+        assertNull(q.stoppedBy)
         val claims = g.nodes.filter { it.kind == "CLAIM" }
         // root + 4 children (2 proposers x 2 sides x 1) + 4 grandchildren each (depth 2 > maxDepth=1: DEPTH_LIMIT)
         assertEquals(21, claims.size)
@@ -326,6 +330,14 @@ class DeliberateAppTest {
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-processes", "0")) }
+        // EXP-10 knobs
+        assertEquals(DeliberationEngine.YieldStop(), Options(emptyArray()).config.yieldStop)
+        assertEquals(null, Options(arrayOf("--yield-stop", "off")).config.yieldStop)
+        assertEquals(
+            DeliberationEngine.YieldStop(window = 5, ratio = 0.5, minClaims = 30),
+            Options(arrayOf("--yield-window", "5", "--yield-ratio", "0.5", "--yield-min-claims", "30")).config.yieldStop,
+        )
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--yield-stop", "maybe")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--proposers", "other")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("9000", "9001")) }
     }

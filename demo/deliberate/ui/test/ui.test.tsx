@@ -103,6 +103,19 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('2 of 3 claims settled');
   });
 
+  it('says in the question header when returns diminished, and nothing while the tree grows', () => {
+    expect(renderToString(() => <TreeView graph={graph} root="q" />)).not.toContain('stopped:');
+    const stopped: GraphDto = {
+      ...graph,
+      questions: [{ ...graph.questions[0], active: false, stoppedBy: 'diminishing', yieldRecent: 0.05, yieldEarlier: 0.2 }],
+      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'DIMINISHING' } : n)),
+    };
+    const html = renderToString(() => <TreeView graph={stopped} root="q" />);
+    expect(html).toContain('stopped: returns diminished');
+    expect(html).toContain('returns diminished');
+    expect(html).toContain('0.05 vs 0.20');
+  });
+
   it('makes every progressive disclosure keyboard/touch reachable and relates it to its panel', () => {
     const html = renderToString(() => <TreeView graph={graph} root="q" />);
     expect(html).toContain('aria-controls="facts-q"');

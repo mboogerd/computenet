@@ -53,7 +53,8 @@ export function Legend() {
           <dt>Status</dt>
           <dd>
             <em>gathering arguments</em> and <em>weighing</em> are live; <em>fully argued</em> means both sides are
-            complete; <em>set aside</em> means unlikely to change the answer; <em>depth limit</em>,
+            complete; <em>set aside</em> means unlikely to change the answer; <em>returns diminished</em> means the
+            question stopped once its new rounds were adding much less than its earlier ones; <em>depth limit</em>,
             <em> budget spent</em> and <em>round limit</em> are safety stops.
           </dd>
         </dl>

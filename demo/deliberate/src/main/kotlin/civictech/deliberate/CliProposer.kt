@@ -242,20 +242,25 @@ class CliProposer internal constructor(
             |Write each argument in canonical form, so that it can be judged true or false on its own:
             |1. ONE proposition: a single subject-predicate assertion. No second clause that draws a conclusion ("…, which shows…", "…, suggesting…", "…, so…", "…, making…", "because…"), and no list of separate reasons joined by "and".
             |2. State the REASON, not its bearing on the claim. Give the fact, finding or principle itself; never add that it supports, undermines, is evidence for, or is best explained by the claim's thesis. How strongly it bears on the claim is judged separately.
-            |3. EXPLICIT SUBJECT: name every person, place, group and thing ("Donald Trump", "Paris", "women over 45"). No pronouns or references to things outside the sentence ("he", "this", "these trials", "such bans").
-            |4. EXPLICIT SCOPE: say how many, how often, where, for whom ("most", "in at least five cities", "in trials of women aged 40–65"). Do not overgeneralise ("all", "always", "never") unless that is literally true.
+            |3. EXPLICIT SUBJECT: name every person, place, group and thing ("the Riverton municipal pool", "adults over 65", "the Model K2 kettle"). No pronouns or references to things outside the sentence ("he", "this", "these trials", "such bans").
+            |4. EXPLICIT SCOPE: say how many, how often, where, for whom ("most", "in at least five depots", "in trials of adults aged 40–65"). Do not overgeneralise ("all", "always", "never") unless that is literally true.
             |5. NO HEDGES: no "can", "may", "might", "could", "often", "tends to", "suggests", "some evidence". If uncertainty or frequency is the point, state it as a quantity or proportion ("in 3 of 11 trials", "in roughly a third of cases").
-            |6. DATED ONLY WHEN IT MATTERS: for an event or a state that changes over time (elections, office-holders, prices, current policies, the latest research), name the year or period ("in the 2024 election", "as of 2025"). Do not date timeless facts.
+            |6. DATED ONLY WHEN IT MATTERS: for an event or a state that changes over time (office-holders, prices, opening hours, current rules, the latest research), name the year or period ("in the 2024 season", "as of 2025"). Do not date timeless facts.
             |7. ACCURATE AND CHECKABLE: prefer established, checkable facts; never invent studies, numbers or quotes. Give precise numbers or citations only when they are widely known. If unsure of a detail, drop the detail rather than guess.
             |8. SHORT: at most 25 words. Do not restate the claim's own wording.
         """.trimMargin()
 
+        /**
+         * Four examples of the form, about invented, mundane subjects only: they
+         * teach the shape of a canonical argument and must not leak content into
+         * any deliberation (no real person, political figure or contested topic).
+         */
         val CANONICAL_EXAMPLES = """
-            |Examples (bad → canonical):
-            |- "Trump won the presidency twice against experienced opponents, which required shrewd strategic instincts." → "Donald Trump won the 2016 and 2024 US presidential elections against opponents with decades of political experience."
-            |- "He has made many factual errors, suggesting a limited grasp of policy." → "Donald Trump repeatedly said in 2018–2019 that China pays US tariffs, which US importers actually pay."  (a fact about what he said, not the conclusion)
-            |- "Car bans can harm local businesses." → "Retail footfall rose after pedestrianisation in most before-and-after studies of European city-centre shopping streets."  (the general finding with its scope; a specific figure only if it is widely known)
-            |- "Religious experiences are best explained by encounters with a real divine being." → "Reports of mystical experiences with similar features appear in most documented religious traditions."  (the observation; whether God best explains it is a separate step)
+            |Examples (bad → canonical; the subjects are invented and only show the form):
+            |- "The new kettle is great because it boils fast, so everyone should buy one." → "The Model K2 kettle boils one litre of water in under three minutes in the manufacturer's published tests."  (one proposition: the reason, without the conclusion)
+            |- "It rains a lot there, suggesting the harvest will suffer." → "The village of Eastmere recorded rain on more than half of the days in June 2024."  (explicit subject, scope as a quantity, dated because weather changes)
+            |- "The new cart may help workers pack faster." → "Packing teams using Lift-A carts completed more orders in 7 of 9 timed warehouse trials."  (no hedge: the frequency is stated as a proportion)
+            |- "The pool is popular and should stay open." → "The Riverton municipal pool recorded more than 18,000 visits in 2023."  (the fact with its scope and year, not the recommendation)
         """.trimMargin()
 
         /**

@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, type NodeDto, type Status } from '../api/types';
+import { ACTIVE_STATUSES, type NodeDto, type QuestionDto, type Status } from '../api/types';
 
 export const pct = (x: number | undefined): string => (x === undefined ? '—' : `${Math.round(x * 100)}%`);
 
@@ -16,6 +16,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   PRUNED: 'set aside',
   DEPTH_LIMIT: 'depth limit',
   BUDGET: 'budget spent',
+  DIMINISHING: 'returns diminished',
   STOPPED: 'stopped by you',
   FAILED: 'failed',
 };
@@ -29,9 +30,30 @@ export const STATUS_HINT: Record<Status, string> = {
   PRUNED: 'Judged unlikely to change the answer to the question, so not explored further',
   DEPTH_LIMIT: 'Too far from the question to explore further',
   BUDGET: 'The question reached its claim budget',
+  DIMINISHING: "Not explored: the question's recent rounds were finding much less new than its earlier ones, so it stopped",
   STOPPED: 'You stopped exploring this claim',
   FAILED: 'Every call for this claim failed',
 };
+
+/**
+ * Why a question stopped growing early, in plain words ("stopped: returns
+ * diminished"), or undefined while it has not (SPEC EXP-06, EXP-10).
+ */
+export function stoppedText(q: QuestionDto | undefined): string | undefined {
+  if (q?.stoppedBy === 'diminishing') return 'stopped: returns diminished';
+  if (q?.stoppedBy === 'budget') return 'stopped: claim budget spent';
+  return undefined;
+}
+
+/** One-line explanation of a stop, for a tooltip. */
+export function stoppedHint(q: QuestionDto | undefined): string | undefined {
+  if (q?.stoppedBy === 'budget') return STATUS_HINT.BUDGET;
+  if (q?.stoppedBy !== 'diminishing') return undefined;
+  const recent = q.yieldRecent === undefined ? undefined : q.yieldRecent.toFixed(2);
+  const earlier = q.yieldEarlier === undefined ? undefined : q.yieldEarlier.toFixed(2);
+  const numbers = recent && earlier ? ` (recent non-root rounds ${recent} vs ${earlier} earlier, per argument asked)` : '';
+  return `New non-root rounds were adding much less than earlier ones${numbers}, so queued work was halted`;
+}
 
 /** How a status reads at a glance: still moving, finished, halted early, or broken. */
 export type Phase = 'active' | 'done' | 'halted' | 'failed';
