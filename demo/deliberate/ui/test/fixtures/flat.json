@@ -1,0 +1,13 @@
+{
+  "questions": [{ "root": "c0", "text": "Should cities ban cars downtown?", "claims": 4, "active": true }],
+  "nodes": [
+    { "ref": "c0", "kind": "CLAIM", "credence": 0.5, "root": "c0", "text": "Should cities ban cars downtown?", "depth": 0, "status": "EXPLORING", "override": "AUTO", "proposer": "question" },
+    { "ref": "c1", "kind": "CLAIM", "credence": 0.7, "root": "c0", "text": "Car-free centres cut air pollution.", "depth": 1, "status": "QUEUED", "override": "AUTO", "proposer": "claude" },
+    { "ref": "e1", "kind": "EDGE", "credence": 0.6, "root": "c0", "polarity": "ATTACK", "source": "c2", "target": "c0", "strength": 0.4 },
+    { "ref": "c2", "kind": "CLAIM", "credence": 0.4, "root": "c0", "text": "Bans hurt small retailers.", "depth": 1, "status": "QUEUED", "override": "AUTO", "proposer": "codex" },
+    { "ref": "e0", "kind": "EDGE", "credence": 0.8, "root": "c0", "polarity": "SUPPORT", "source": "c1", "target": "c0", "strength": 0.8 },
+    { "ref": "c3", "kind": "CLAIM", "credence": 0.5, "root": "c0", "text": "Delivery access can be carved out.", "depth": 1, "status": "QUEUED", "proposer": "claude" },
+    { "ref": "e2", "kind": "EDGE", "credence": 0.5, "root": "c0", "polarity": "SUPPORT", "source": "c3", "target": "c0" },
+    { "ref": "e9", "kind": "EDGE", "credence": 0.5, "root": "c0", "polarity": "SUPPORT", "source": "missing", "target": "c0" }
+  ]
+}
