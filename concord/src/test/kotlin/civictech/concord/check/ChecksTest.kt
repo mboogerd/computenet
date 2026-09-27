@@ -220,6 +220,33 @@ class ChecksTest {
         fail(Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx))
     }
 
+    /**
+     * computenet-vu274: `view: '*'` previously resolved via
+     * `BatchOracle.allViewValues()`, which folds every view immediately and lets
+     * an [civictech.concord.oracle.OracleUnsupported] refusal from ANY view
+     * escape outside the per-view `try`/`catch` — so one refused view (here fed
+     * from a source type the oracle does not model) made the whole check throw
+     * instead of reporting a named `Failed`, even though the sibling view `v1`
+     * is fine and the per-view (`view: v2`) form already reports this refusal
+     * as `Failed`. Fixed by resolving `'*'` to the graph's view-cell ids without
+     * folding, deferring each fold to the per-view loop.
+     */
+    @Test
+    fun `incremental-equals-batch view star reports Failed, not a throw, when one view is refused`() {
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"), cell("v1", "set-view"),
+                cell("b", "mystery-source"), cell("v2", "set-view"),
+            ),
+            links = listOf(link("a", "v1"), link("b", "v2")),
+            script = listOf(apply("a", "add", s("apple"))),
+        )
+        val ctx = FakeContext(FakeDriver(views = mapOf("v1" to list(s("apple")), "v2" to list(s("whatever")))), sc)
+        val r = Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "v2"
+    }
+
     @Test
     fun `late-join-equals-early infers an early-late pair of journaled views`() {
         val sc = scenario(listOf(cell("early", "journal-set-view"), cell("late", "journal-set-view")), emptyList())
