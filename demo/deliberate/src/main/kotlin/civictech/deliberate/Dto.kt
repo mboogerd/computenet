@@ -46,6 +46,8 @@ data class NodeDto(
     val plausibility: Double? = null,
     /** Last Jev relevance probability (EXP-05), when judged. */
     val relevance: Double? = null,
+    /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1). */
+    val reach: Double? = null,
     /** Last Jev saturation probabilities per side (EXP-04). */
     val proSaturation: Double? = null,
     val conSaturation: Double? = null,

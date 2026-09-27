@@ -53,21 +53,27 @@ credences. The human can override the explorer's depth decisions per claim.
   question per candidate in one request). Duplicates are dropped and counted.
   Candidates from the same round are also deduped against each other.
 - **EXP-04** After each round, Jev judges **saturation** per side (a Noul:
-  "do the existing arguments on this side already cover the substantive
-  considerations, so that a further one would most likely repeat them?").
-  A side with p ≥ `saturation` (default 0.7) is saturated and receives no
-  further proposals. Expansion ends when both sides are saturated or
+  "is an important consideration on this side still missing from the existing
+  arguments?", read as saturated = 1 − p). A side is saturated when that value
+  ≥ `saturation` (default: calibrated on live Jev samples, see §10), or when it
+  already holds `maxArgsPerSide` (default 4) arguments. Saturated sides receive
+  no further proposals. Expansion ends when both sides are saturated or
   `maxRounds` (default 3) is reached.
-- **EXP-05** Before expanding a non-root claim, Jev judges **relevance** (a
-  Noul given the root question and the full path: "would analysing this claim
-  further materially change how the root question should be answered?").
-  p < `relevance` (default 0.5) ⇒ the claim is `PRUNED`. The root is always
-  expanded. Beyond `maxDepth` (default 3) claims are `DEPTH_LIMIT` without a
-  relevance call.
+- **EXP-05** Relevance decays along the tree. Each claim has a **reach**:
+  1 for the root, `reach(parent) × strength(edge)` for an argument (CRED-02
+  strength of the edge attaching it). Before expanding a non-root claim, Jev
+  judges **relevance** (a Noul given the root question and the full path:
+  "would analysing this claim further materially change how the root question
+  should be answered?"). The claim is expanded only when
+  `relevance × reach ≥ minInfluence` (default: calibrated, §10); otherwise it
+  is `PRUNED`. The root is always expanded. Beyond `maxDepth` (default 3)
+  claims are `DEPTH_LIMIT` without a relevance call — a safety net, not the
+  primary stop.
 - **EXP-06** A global `maxClaims` budget (default 60 per question) is enforced:
   no argument is attached once the tree holds that many claims; remaining
-  queued claims become `BUDGET`.
-- **EXP-07** Concurrency is bounded: at most `maxProcesses` (default 4) CLI
+  queued claims become `BUDGET`. Together with `maxArgsPerSide` this keeps
+  any one claim from consuming the budget.
+- **EXP-07** Concurrency is bounded: at most `maxProcesses` (default 8) CLI
   processes run at once across the whole app. Jev calls are not rate-limited
   by us but retry 429/529 with exponential backoff (≤ 4 attempts).
 - **EXP-08** A proposer or Jev failure never kills the deliberation: the
@@ -132,3 +138,13 @@ cross-tree links; merging equivalent claims across branches.
    payloads; a live smoke test runs only when `DELIBERATE_LIVE=1`.
 3. A live manual run against a real question grows a multi-level graph whose
    credences move in the UI, and both overrides visibly work.
+
+## 10. Calibration (iteration 2)
+
+The first live runs showed both Jev gates inert (saturation 0.04–0.43 vs a
+0.7 threshold; relevance never below 0.5), so exploration was stopped only by
+hard limits. Thresholds are therefore set from evidence: a calibration run
+over real claims at depths 0–3 with 0–6 arguments per side, recorded in
+`demo/deliberate/CALIBRATION.md`, must show that with the defaults (a) a side
+typically saturates by 3–4 arguments and (b) a typical question tree stops
+growing through `PRUNED` before `DEPTH_LIMIT` for most depth-2 claims.

@@ -50,6 +50,8 @@ export interface NodeDto {
   plausibility?: number;
   /** Last Jev relevance probability (EXP-05), when judged. */
   relevance?: number;
+  /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1). */
+  reach?: number;
   /** Last Jev saturation probabilities per side (EXP-04). */
   proSaturation?: number;
   conSaturation?: number;
