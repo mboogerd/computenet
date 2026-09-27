@@ -212,7 +212,12 @@ class DeliberationEngine(
 
     init {
         if (store != null) {
-            restore(store.load())
+            val restored = store.load()
+            // DUR-02 writes only changed records. Seed the write-behind cache
+            // from the fold we just restored, so a quiet restart does not
+            // append every question and claim to the host journal again.
+            persisted.putAll(restored)
+            restore(restored)
             persister!!.scheduleWithFixedDelay({
                 try {
                     persistNow()

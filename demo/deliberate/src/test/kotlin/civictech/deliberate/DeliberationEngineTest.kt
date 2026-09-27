@@ -81,6 +81,18 @@ class DeliberationEngineTest {
         }
     }
 
+    private class RecordingMetaStore(initial: Map<String, String> = emptyMap()) : MetaStore {
+        private val records = java.util.concurrent.ConcurrentHashMap(initial)
+        val writes = AtomicInteger()
+
+        override fun load(): Map<String, String> = HashMap(records)
+
+        override fun put(key: String, value: String) {
+            records[key] = value
+            writes.incrementAndGet()
+        }
+    }
+
     private val scheduler = VirtualThreadScheduler("deliberate-test")
     private val registry = LocationRegistry()
     private val host = ManagedHost(
@@ -1295,6 +1307,99 @@ class DeliberationEngineTest {
         } finally {
             gate.countDown()
             scheduler2.shutdown()
+        }
+    }
+
+    @Test
+    fun `metadata write-behind flushes on close and a quiet restart rewrites nothing`() {
+        val store = RecordingMetaStore()
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0)
+        val first = DeliberationEngine(
+            AgoraLayers("dfquad", service), FakeJudge(), listOf(FakeProposer("claude")), config,
+            store = store, persistEveryMs = 60_000,
+        ).also { engines += it }
+        first.ask("Durable?")
+        first.idle()
+        // The periodic writer cannot have run; close() must flush the question
+        // and its root record before interrupting the worker.
+        first.close()
+        val saved = store.load()
+        assertTrue(saved.keys.any { it.startsWith("q:") }, saved.keys.toString())
+        assertTrue(saved.keys.any { it.startsWith("c:") }, saved.keys.toString())
+
+        val writesBeforeRestart = store.writes.get()
+        val second = DeliberationEngine(
+            AgoraLayers("dfquad", service), FakeJudge(), listOf(FakeProposer("claude")), config,
+            store = store, persistEveryMs = 60_000,
+        ).also { engines += it }
+        second.persistNow()
+        assertEquals(writesBeforeRestart, store.writes.get(), "unchanged restored records must not be appended again")
+    }
+
+    @Test
+    fun `restart rebuilds missing metadata, omits an unplaced claim, and does not attach a duplicate`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-torn-restore").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val root = service.createClaim("Q?")
+        val placed = service.createClaim("P")
+        service.createEdge(placed, root, Polarity.SUPPORT)
+        val orphan = service.createClaim("orphan") // crash before its placing edge was written
+        val store = RecordingMetaStore(mapOf("q:${root.id}" to "Q?")) // neither claim record reached the journal
+
+        val scheduler2 = VirtualThreadScheduler("deliberate-torn-restore-2")
+        try {
+            // Copy the existing primary structure into the log in creation order.
+            val registryLog = LocationRegistry()
+            val schedulerLog = VirtualThreadScheduler("deliberate-torn-restore-log")
+            try {
+                val logService = AgoraService(ManagedHost(scheduler = schedulerLog, registry = registryLog), registryLog, structureLog = log)
+                val loggedRoot = logService.createClaim("Q?", root)
+                val loggedPlaced = logService.createClaim("P", placed)
+                logService.createEdge(loggedPlaced, loggedRoot, Polarity.SUPPORT)
+                logService.createClaim("orphan", orphan)
+            } finally {
+                schedulerLog.shutdown()
+            }
+
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2)
+            val restoredService = AgoraService(host2, registry2, structureLog = log)
+            val proposer = FakeProposer("claude") { ctx, side, _ ->
+                if (ctx.claim == "Q?" && side == Polarity.SUPPORT) listOf("P") else emptyList()
+            }
+            val restored = DeliberationEngine(
+                AgoraLayers("dfquad", restoredService), FakeJudge(), listOf(proposer),
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0),
+                store = store,
+            ).also { engines += it }
+            restored.idle()
+            val graph = restored.snapshot()
+            assertEquals(listOf("Q?", "P"), graph.claims().map { it.text })
+            assertEquals(1, graph.edges().size)
+            assertEquals(1, graph.node(root).duplicatesDropped)
+            assertTrue(graph.nodes.none { it.ref == orphan.id.toString() })
+            assertEquals(Status.DEPTH_LIMIT, graph.node(placed).status)
+        } finally {
+            scheduler2.shutdown()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `reconcile completes a semantics layer whose structure log lost its tail`() {
+        val root = service.createClaim("Q?")
+        val child = service.createClaim("P")
+        val edge = service.createEdge(child, root, Polarity.SUPPORT)
+        val mirror = AgoraService(host, registry, semantics = SemanticsCatalog.of("wlo"), hubRef = AgoraLayers.hubRef("repair-wlo"))
+        val layers = AgoraLayers("dfquad", service, mapOf("wlo" to mirror))
+
+        layers.reconcile(mapOf(root to 0.6, child to 0.7, edge to 0.8))
+
+        for (ref in listOf(root, child, edge)) {
+            assertNotNull(mirror.nodeInfo(layers.refIn("wlo", ref)), "missing mirror node for $ref")
+        }
+        awaitUntil("re-applied stances propagate in the repaired layer") {
+            layers.credences(root).getValue("wlo") != 0.5 && layers.credences(child).getValue("wlo") != 0.5
         }
     }
 }
