@@ -28,7 +28,11 @@ function mount(ui: () => unknown): HTMLElement {
   return host;
 }
 
-const flush = () => new Promise((r) => setTimeout(r, 0));
+/** Drain the already-settled command promise and its async handler without a clock-based wait. */
+const flush = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
 const frame = (claims: number): QuestionDto[] => [
   { root: 'q0', text: 'First?', claims, active: true },
