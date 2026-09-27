@@ -65,7 +65,10 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  *   (`Windows.tumbling`/`sliding` + `GroupByCell`, `KernelCatalog`/
  *   `WindowSlidingCell`). Windows never close: the fold is over the whole
  *   accepted-op multiset, so a late add is just another member — there is no
- *   separate eviction step to model. `partition` is a sharded group-by
+ *   separate eviction step to model. A cell declaring `lateness` (or a
+ *   `waterline` cell) is the exception, and is **refused** with
+ *   [OracleUnsupported] until computenet-t4od7 task 2 models it — see
+ *   [foldOf]. `partition` is a sharded group-by
  *   (PartitionedCell) whose union of shard aggregates equals the
  *   unpartitioned group-by twin, so it folds identically to `group-by`.
  * - **`join` family element shape.** With no pilot pinning the joined element, the
@@ -133,6 +136,18 @@ class BatchOracle(private val scenario: Scenario) {
         memo[id]?.let { return it }
         if (!visiting.add(id)) throw OracleUnsupported("feedback cycle at cell '$id' — not a batch-oracle topology")
         val cell = cellsById[id] ?: throw OracleUnsupported("unknown cell '$id'")
+        // Lateness (spec 24 §Lateness and waterlines) makes a view depend on the
+        // order ops cross a waterline floor — a late drop and a window eviction
+        // are not a function of the accepted-op multiset this oracle folds.
+        // Until the model lands (computenet-t4od7 task 2, t4od7-D7), refuse any
+        // cone that reaches a lateness-declaring cell or a waterline, rather
+        // than fold its input unfiltered and compare against the wrong batch.
+        if (cell.lateness != null || cell.type == "waterline") {
+            throw OracleUnsupported(
+                "lateness is not modelled by the oracle yet (computenet-t4od7 task 2): cell '$id' " +
+                    "(${cell.type}) ${if (cell.type == "waterline") "is a waterline" else "declares lateness ${cell.lateness}"}",
+            )
+        }
         val result = if (inputsByCell[id].isNullOrEmpty()) sourceFold(cell) else operatorFold(cell)
         visiting.remove(id)
         memo[id] = result
