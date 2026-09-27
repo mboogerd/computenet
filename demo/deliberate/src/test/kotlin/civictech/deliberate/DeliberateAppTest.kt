@@ -457,4 +457,149 @@ class DeliberateAppTest {
             dir.deleteRecursively()
         }
     }
+
+    /** Judgments that differ per claim, so every layer, the consensus and the spread carry distinct values. */
+    private class VariedJudge : Judge {
+        private fun h(text: String, salt: Int) = 0.1 + 0.8 * (((text.hashCode() * 31 + salt) and 0x7fffffff) % 1000) / 1000.0
+        override fun plausibility(question: String, path: List<String>, claim: String) = h(claim, 1)
+        override fun relationStrength(question: String, parent: String, child: String, side: Side) = h(child, 2)
+        override fun quality(question: String, parent: String, child: String, side: Side) = 1.0
+        override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map { Triage(TriageAction.ADD) }
+        override fun saturation(ctx: ClaimContext, side: Side) = 0.0
+        override fun relevance(ctx: ClaimContext) = 1.0
+    }
+
+    /** The graph once two reads 100 ms apart agree (propagation settles asynchronously). */
+    private fun HttpProbe.settled(): GraphDto {
+        var before = graph()
+        awaitUntil("credences settle") {
+            Thread.sleep(100)
+            val next = graph()
+            (next == before).also { before = next }
+        }
+        return before
+    }
+
+    private fun dirBytes(dir: File) = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    private fun assertSameCredences(before: GraphDto, after: GraphDto) {
+        assertEquals(before.nodes.map { it.ref }, after.nodes.map { it.ref })
+        before.nodes.zip(after.nodes).forEach { (b, a) ->
+            assertEquals(b.credences.keys, a.credences.keys)
+            b.credences.forEach { (id, c) -> assertEquals(c, a.credences.getValue(id), 1e-9, "${b.ref} $id") }
+            assertEquals(b.credence, a.credence, 1e-9)
+            assertEquals(b.consensus, a.consensus, 1e-9)
+            assertEquals(b.spreadLow, a.spreadLow, 1e-9)
+            assertEquals(b.spreadHigh, a.spreadHigh, 1e-9)
+        }
+    }
+
+    /**
+     * SPEC DUR-01: only inputs are durable, so a restart recomputes every
+     * credence from them — and it must land exactly where it was, restart
+     * after restart, in every layer and in the consensus.
+     */
+    @Test
+    fun `every layer and the consensus survive repeated restarts unchanged`() {
+        val dir = Files.createTempDirectory("deliberate-restarts").toFile()
+        try {
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40)
+            val (first, probe1) = app(config = config, judge = VariedJudge(), dataDir = dir)
+            val root = probe1.ask("Restart twice?")
+            probe1.awaitGraph { it.idle(root) }
+            val before = probe1.settled()
+            assertTrue(before.nodes.size > 20, "a tree with depth: ${before.nodes.size} nodes")
+            assertTrue(before.nodes.any { it.spreadHigh - it.spreadLow > 1e-3 }, "the layers disagree somewhere")
+            first.stop()
+            apps.remove(first)
+            val sizes = mutableListOf(dirBytes(dir))
+            repeat(2) { restart ->
+                val (app, probe) = app(config = config, judge = VariedJudge(), dataDir = dir)
+                val after = probe.awaitGraph { g ->
+                    g.nodes.size == before.nodes.size && g.nodes.zip(before.nodes).all { (a, b) ->
+                        b.credences.all { (id, c) -> kotlin.math.abs(a.credences.getValue(id) - c) < 1e-9 }
+                    }
+                }
+                assertSameCredences(before, after)
+                assertSameCredences(before, probe.settled())
+                app.stop()
+                apps.remove(app)
+                sizes += dirBytes(dir)
+                println("restart ${restart + 1}: data dir ${sizes.last()} bytes")
+            }
+            assertEquals(sizes.first(), sizes.last(), "restarts of an idle deliberation must not grow the data: $sizes")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * SPEC DUR-01/02: the data directory holds inputs only — one structure log
+     * and a metadata journal compacted to a checkpoint — so a ~60-claim tree
+     * costs a few KB per claim, and restarts do not grow it.
+     */
+    @Test
+    fun `a sixty-claim tree stays small and restarts do not grow it`() {
+        val dir = Files.createTempDirectory("deliberate-space").toFile()
+        try {
+            val config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 2, maxDepth = 3, maxClaims = 60,
+                maxArgsPerSide = 3, maxArgsPerSideChild = 2, minInfluence = 0.0,
+            )
+            val (first, probe1) = app(config = config, judge = VariedJudge(), dataDir = dir)
+            val root = probe1.ask("How big is a deliberation on disk?")
+            probe1.awaitGraph { it.idle(root) }
+            val before = probe1.settled()
+            val claims = before.nodes.count { it.kind == "CLAIM" }
+            assertTrue(claims in 55..60, "claims: $claims")
+            // While it runs, the journal holds metadata frames and nothing derived.
+            val live = File(dir, "host.journal")
+            val journal = live.readBytes().decodeToString()
+            assertTrue("deliberate.MetaFields" in journal, "the running journal holds metadata frames")
+            for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance", "agora.")) {
+                assertTrue(derived !in journal, "the journal holds a derived frame ($derived)")
+            }
+            // A quiescent checkpoint compacts it while the app keeps running.
+            val uncompacted = live.length()
+            first.checkpointNow()
+            assertTrue(live.length() < uncompacted, "checkpoint compacts: $uncompacted -> ${live.length()}")
+            first.compactIfGrown() // nothing grew since: a no-op
+            first.stop()
+            apps.remove(first)
+            val fresh = dirBytes(dir)
+            println("deliberate space: running journal $uncompacted B before its checkpoint")
+            val sizes = mutableListOf(fresh)
+            repeat(3) {
+                val (app, probe) = app(config = config, judge = VariedJudge(), dataDir = dir)
+                probe.awaitGraph { g -> g.nodes.size == before.nodes.size && g.idle(root) }
+                assertSameCredences(before, probe.settled())
+                app.stop()
+                apps.remove(app)
+                sizes += dirBytes(dir)
+            }
+            println(
+                "deliberate space: $claims claims, fresh $fresh B (${fresh / claims} B/claim: " +
+                    "graph.jsonl ${File(dir, "graph.jsonl").length()} B, host.journal ${File(dir, "host.journal").length()} B); " +
+                    "after restarts $sizes",
+            )
+            assertTrue(fresh / claims < 4_000, "fresh ${fresh / claims} B/claim")
+            assertTrue(sizes.last() <= fresh * 1.05, "3 restarts grew the data dir: $sizes")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a data directory in the old per-layer format is refused`() {
+        val dir = Files.createTempDirectory("deliberate-old").toFile()
+        try {
+            File(dir, "graph-dfquad.jsonl").writeText("")
+            val e = assertFailsWith<IllegalArgumentException> {
+                DeliberateApp(port = 0, judge = FixedJudge(), proposers = emptyList(), uiDir = null, dataDir = dir)
+            }
+            assertTrue("old per-layer format" in e.message.orEmpty(), e.message)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

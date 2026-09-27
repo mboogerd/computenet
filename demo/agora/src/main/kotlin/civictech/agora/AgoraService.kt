@@ -39,12 +39,6 @@ class AgoraService(
      * (rebuild → `host.recoverFrom(journal)` → `host.checkpoint(journal)`).
      */
     private val structureLog: java.io.File? = null,
-    /**
-     * The read-model hub's ref. Deterministic, because journaled hub frames
-     * re-deliver after a restart; distinct per service when several services
-     * share one host (`:demo:deliberate` runs one per semantics).
-     */
-    hubRef: CellRef = DEFAULT_HUB_REF,
     onCredence: (CellRef, Double) -> Unit = { _, _ -> },
 ) {
     enum class Kind { CLAIM, EDGE }
@@ -63,7 +57,10 @@ class AgoraService(
     private val manage = host.managementInlet.call
 
     // deterministic ref: journaled hub frames re-deliver after a restart
-    val hub = civictech.cell.observe.ObserveCell(CredenceView(onCredence), ref = hubRef)
+    val hub = civictech.cell.observe.ObserveCell(
+        CredenceView(onCredence),
+        ref = CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray())),
+    )
 
     private val cells = mutableMapOf<CellRef, ClaimCell>()
 
@@ -289,9 +286,6 @@ class AgoraService(
         registry.inlet(id, "stanceInlet")
 
     companion object {
-        /** The hub ref of a service that is alone on its host. */
-        val DEFAULT_HUB_REF = CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray()))
-
         /**
          * Magnitude → band mapping for agora hosts: sizes are credence deltas
          * in [0,1], so the attention quantizer's 0.4/0.75 knees would leave

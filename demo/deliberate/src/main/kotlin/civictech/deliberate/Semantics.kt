@@ -7,21 +7,55 @@ import kotlin.math.ln
 import kotlin.math.pow
 
 /**
+ * One argument as a semantics layer sees it (SPEC CRED-04): the [strength] of
+ * its edge — the edge's own credence in that layer, i.e. the Jev strength
+ * stance lowered by any undercutter — and the [credence] of its source claim
+ * in that layer. They arrive separately (an [Influence] carries both vectors),
+ * so a semantics that treats them differently, like [JeffreyNaiveBayes], is
+ * exact rather than reading their product.
+ */
+data class Arg(val strength: Double, val credence: Double)
+
+/**
+ * A credence layer's rule (SPEC CRED-03/04), the prototype `semantics.js`
+ * shape: [energy] turns one (strength, credence) pair into an energy and
+ * [combine] folds a claim's base with the energies of its attacks and
+ * supports. The default energy is DF-QuAD's product `s·c`; the default base
+ * is agora's, the clamped mean of the stances.
+ */
+interface Semantics {
+    fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
+
+    fun energy(arg: Arg): Double = arg.strength.coerceIn(0.0, 1.0) * arg.credence.coerceIn(0.0, 1.0)
+
+    fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double
+
+    /** The credence of a claim with [base] and these arguments. */
+    fun evaluate(base: Double, attacks: List<Arg>, supports: List<Arg>): Double =
+        combine(base, attacks.map(::energy), supports.map(::energy))
+}
+
+/** An agora [GradualSemantics] as a layer: product energies, agora's own base. */
+class EnergySemantics(private val g: GradualSemantics) : Semantics {
+    override fun base(stances: Collection<Double>) = g.base(stances)
+    override fun combine(base: Double, attacks: List<Double>, supports: List<Double>) = g.combine(base, attacks, supports)
+    override fun toString() = g.toString()
+}
+
+/**
  * The gradual semantics a deliberation can be propagated under (SPEC CRED-03,
- * §2 "Semantics layers"). Each is an agora [GradualSemantics]: its `combine`
- * sees only the *energies* of a claim's incoming edges, and an agora edge's
- * energy is its own credence (the Jev strength stance, lowered by undercutters)
- * times its source's credence. Ported from the deliberate semantics prototype
- * (`semantics.js`); every candidate keeps agora's base, the clamped mean of the
- * stances (the prototype's `shrunkBase` at its default root-prior weight 1).
+ * §2 "Credence layers and consensus"), ported from the deliberate semantics
+ * prototype (`semantics.js`); every candidate keeps agora's base, the clamped
+ * mean of the stances (the prototype's `shrunkBase` at its default root-prior
+ * weight 1).
  */
 object SemanticsCatalog {
-    /** Every semantics the app can run, in display order. `dfquad` is the default primary. */
+    /** Every semantics the app can run, in display order. `dfquad` always runs. */
     val IDS = listOf("dfquad", "wlo", "jnb", "woe", "euler", "qe", "mlp")
     const val DEFAULT_PRIMARY = "dfquad"
 
-    fun of(id: String, wlo: WeightedLogOdds = WeightedLogOdds()): GradualSemantics = when (id) {
-        "dfquad" -> DfQuad
+    fun of(id: String, wlo: WeightedLogOdds = WeightedLogOdds()): Semantics = when (id) {
+        "dfquad" -> EnergySemantics(DfQuad)
         "wlo" -> wlo
         "jnb" -> JeffreyNaiveBayes()
         "woe" -> WeightOfEvidence()
@@ -61,13 +95,11 @@ class WeightedLogOdds(
     val k: Double = 2.4,
     val p: Double = 2.0,
     val gamma: Double = 1.3,
-) : GradualSemantics {
+) : Semantics {
     init {
         require(p >= 1) { "wlo p must be >= 1: $p" }
         require(k >= 0 && alpha >= 0 && gamma > 0) { "wlo needs alpha >= 0, k >= 0, gamma > 0" }
     }
-
-    override fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
 
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double {
         fun g(e: Double) = e.coerceIn(0.0, 1.0).pow(gamma)
@@ -78,32 +110,40 @@ class WeightedLogOdds(
 }
 
 /**
- * Jeffrey / naive-Bayes likelihood ratios: a true argument of strength s is
- * evidence with likelihood ratio `((1+s)/(1−s))^K`; its log-weight per side
- * aggregates by p-norm into `sigmoid(α·logit(base) + ‖W_S‖_p − ‖W_A‖_p)`.
- * Defaults α = 1, K = 0.7, p = 2, s clamped to `smax` = 0.8.
+ * Jeffrey / naive-Bayes likelihood ratios, exactly as the prototype's
+ * `energy_jnb` / `combine_jnb`: a true argument of strength s is evidence with
+ * likelihood ratio `LR = ((1+s)/(1−s))^K` (s clamped to [0, `smax`]); Jeffrey
+ * conditioning on the source's credence c gives the odds multiplier
+ * `m = c·LR + (1−c)·LR^(−r)`, and the argument's energy is the log-weight
+ * `ln m` (signed when r > 0: a doubted argument then counts for the other
+ * side). Energies aggregate per effective side by p-norm into
+ * `sigmoid(α·logit(base) + ‖W_S‖_p − ‖W_A‖_p)`.
+ * Defaults α = 1, K = 0.7, p = 2, r = 0, smax = 0.8.
  *
- * Port note: the prototype's edge applies Jeffrey conditioning to the
- * credence c and strength s separately (`ln(c·LR(s) + 1 − c)`), but an agora
- * edge emits only their product e = c·s. The port reads e as the strength of
- * a certain argument (`K·ln((1+e)/(1−e))`) — exact when the source is certain,
- * and otherwise a doubted argument counts as a weaker sure one.
+ * Strength and credence enter separately — the one semantics for which that
+ * matters, and the reason an [Influence] carries both vectors rather than
+ * their product.
  */
 class JeffreyNaiveBayes(
     val alpha: Double = 1.0,
     val bigK: Double = 0.7,
     val p: Double = 2.0,
+    val r: Double = 0.0,
     val smax: Double = 0.8,
-) : GradualSemantics {
-    override fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
-
-    private fun weight(e: Double): Double {
-        val s = e.coerceIn(0.0, smax)
-        return bigK * ln((1 + s) / (1 - s))
+) : Semantics {
+    override fun energy(arg: Arg): Double {
+        val s = arg.strength.coerceIn(0.0, smax)
+        val lr = ((1 + s) / (1 - s)).pow(bigK)
+        val c = arg.credence.coerceIn(0.0, 1.0)
+        return ln(c * lr + (1 - c) * lr.pow(-r))
     }
 
-    override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double =
-        sigmoid(alpha * logit(clampBase(base)) + pnorm(supports.map(::weight), p) - pnorm(attacks.map(::weight), p))
+    override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double {
+        // effectiveSides: a negative energy argues for the other side (only reachable when r > 0).
+        val pro = supports.filter { it >= 0 } + attacks.filter { it < 0 }.map { -it }
+        val con = attacks.filter { it >= 0 } + supports.filter { it < 0 }.map { -it }
+        return sigmoid(alpha * logit(clampBase(base)) + pnorm(pro, p) - pnorm(con, p))
+    }
 }
 
 /**
@@ -117,9 +157,7 @@ class WeightOfEvidence(
     val k: Double = 1.2,
     val p: Double = 2.0,
     val emax: Double = 0.7,
-) : GradualSemantics {
-    override fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
-
+) : Semantics {
     private fun weight(e: Double) = -ln(1 - e.coerceIn(0.0, emax))
 
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double =
@@ -141,23 +179,70 @@ object Consensus {
     /** The consensus of [credences] (layer id → credence) over [members]; all layers when no member is present. */
     fun of(credences: Map<String, Double>, members: Collection<String>): Double {
         val xs = members.mapNotNull { credences[it] }.ifEmpty { credences.values.toList() }
+        return ofValues(xs)
+    }
+
+    /** The consensus of the member credences [xs], in member order. */
+    fun ofValues(xs: List<Double>): Double {
         if (xs.isEmpty()) return 0.5
         return sigmoid(xs.map { logit(it.coerceIn(LOW, HIGH)) }.average())
     }
 }
 
-/** Euler-based semantics (Amgoud & Ben-Naim 2018): `1 − (1 − b²) / (1 + b·e^E)`, E = Σ supports − Σ attacks. */
-object EulerBased : GradualSemantics {
-    override fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
+/**
+ * The credence layers one deliberation graph evaluates (SPEC CRED-04): every
+ * claim and edge cell computes one credence per layer, so a credence is a
+ * vector indexed like [ids]. [consensusMembers] are the layers [Consensus]
+ * averages (those that do not run are skipped; none running means all);
+ * [headline] is the layer shown as `NodeDto.credence`.
+ */
+class LayerSet(
+    val ids: List<String>,
+    val semantics: List<Semantics>,
+    consensusMembers: List<String> = Consensus.DEFAULT_MEMBERS,
+    val headline: String = ids.first(),
+) {
+    init {
+        require(ids.isNotEmpty()) { "at least one credence layer must run" }
+        require(ids.size == semantics.size) { "one semantics per layer id" }
+        require(ids.distinct() == ids) { "duplicate layer ids: $ids" }
+        require(headline in ids) { "unknown headline layer '$headline'" }
+    }
 
+    /** The consensus members that run, in their configured order; every layer when none does. */
+    val members: List<String> = consensusMembers.filter { it in ids }.ifEmpty { ids }
+    private val memberIndex = members.map(ids::indexOf)
+    val headlineIndex = ids.indexOf(headline)
+
+    /** One credence per layer for a node with these [stances] and arguments. */
+    fun evaluate(stances: Collection<Double>, attacks: List<List<Arg>>, supports: List<List<Arg>>): List<Double> =
+        semantics.mapIndexed { l, s -> s.evaluate(s.base(stances), attacks.map { it[l] }, supports.map { it[l] }) }
+
+    /** SPEC CRED-05, over a credence vector. Same arithmetic, same order as [Consensus.of]. */
+    fun consensus(values: List<Double>): Double = Consensus.ofValues(memberIndex.map { values[it] })
+
+    /** Layer id → credence. */
+    fun named(values: List<Double>): Map<String, Double> = ids.zip(values).toMap()
+
+    companion object {
+        /** Every layer in [ids] from the catalog. */
+        fun of(
+            ids: List<String>,
+            consensusMembers: List<String> = Consensus.DEFAULT_MEMBERS,
+            headline: String = ids.first(),
+            wlo: WeightedLogOdds = WeightedLogOdds(),
+        ) = LayerSet(ids, ids.map { SemanticsCatalog.of(it, wlo) }, consensusMembers, headline)
+    }
+}
+
+/** Euler-based semantics (Amgoud & Ben-Naim 2018): `1 − (1 − b²) / (1 + b·e^E)`, E = Σ supports − Σ attacks. */
+object EulerBased : Semantics {
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double =
         1 - (1 - base * base) / (1 + base * exp(net(attacks, supports)))
 }
 
 /** Quadratic energy (Potyka 2018): `b − b·h(−E) + (1 − b)·h(E)`, h(x) = max(0,x)² / (1 + max(0,x)²). */
-object QuadraticEnergy : GradualSemantics {
-    override fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
-
+object QuadraticEnergy : Semantics {
     private fun h(x: Double): Double {
         val m = maxOf(0.0, x)
         return m * m / (1 + m * m)
@@ -170,9 +255,7 @@ object QuadraticEnergy : GradualSemantics {
 }
 
 /** MLP-based semantics (Potyka 2021): `sigmoid(logit(b) + Σ supports − Σ attacks)`. */
-object MlpBased : GradualSemantics {
-    override fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
-
+object MlpBased : Semantics {
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double =
         sigmoid(logit(clampBase(base)) + net(attacks, supports))
 }

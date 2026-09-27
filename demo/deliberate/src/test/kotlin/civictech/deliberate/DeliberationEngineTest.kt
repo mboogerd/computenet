@@ -81,17 +81,21 @@ class DeliberationEngineTest {
         }
     }
 
-    private class RecordingMetaStore(initial: Map<String, String> = emptyMap()) : MetaStore {
-        private val records = java.util.concurrent.ConcurrentHashMap(initial)
+    private class RecordingMetaStore(initial: Map<String, Map<String, String>> = emptyMap()) : MetaStore {
+        private val inner = InMemoryMetaStore().apply { initial.forEach { (k, v) -> put(k, v) } }
         val writes = AtomicInteger()
+        val fieldsWritten = AtomicInteger()
 
-        override fun load(): Map<String, String> = HashMap(records)
+        override fun load() = inner.load()
 
-        override fun put(key: String, value: String) {
-            records[key] = value
+        override fun put(key: String, fields: Map<String, String?>) {
+            inner.put(key, fields)
             writes.incrementAndGet()
+            fieldsWritten.addAndGet(fields.size)
         }
     }
+
+    private val dfquad = LayerSet.of(listOf("dfquad"))
 
     private val scheduler = VirtualThreadScheduler("deliberate-test")
     private val registry = LocationRegistry()
@@ -100,7 +104,7 @@ class DeliberationEngineTest {
         registry = registry,
         attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
     )
-    private val service = AgoraService(host, registry)
+    private val service = CredenceGraph(host, registry, dfquad)
     private val engines = mutableListOf<DeliberationEngine>()
 
     @AfterTest
@@ -1207,10 +1211,7 @@ class DeliberationEngineTest {
     @Test
     fun `every semantics layer propagates the same stances and the consensus is their log-odds mean`() {
         val ids = listOf("wlo", "jnb", "woe", "mlp")
-        val mirrors = ids.associateWith { id ->
-            AgoraService(host, registry, semantics = SemanticsCatalog.of(id), hubRef = AgoraLayers.hubRef(id))
-        }
-        val layers = AgoraLayers("dfquad", service, mirrors, consensusMembers = listOf("wlo", "jnb", "woe"))
+        val layers = CredenceGraph(host, registry, LayerSet.of(listOf("dfquad") + ids, listOf("wlo", "jnb", "woe")))
         val e = DeliberationEngine(
             layers,
             FakeJudge(plausibility = { if (it == "Q?") 0.7 else 0.9 }, strength = { if (it.contains("support")) 0.9 else 0.3 }),
@@ -1260,11 +1261,11 @@ class DeliberationEngineTest {
             strength = { if (it == "claude-SUPPORT") 0.9 else 0.8 },
             triage = { _, cands -> cands.map { if (it.text == "codex-ATTACK") Triage(TriageAction.UNDERCUT, 0) else Triage(TriageAction.ADD) } },
         )
-        val first = AgoraService(host, registry, structureLog = log, hubRef = AgoraLayers.hubRef("first"))
+        val first = CredenceGraph(host, registry, dfquad, structureLog = log)
         // e1 writes to a store of its own; the test copies it at the "kill" instant and leaves e1
         // blocked, standing in for the killed process.
         val store1 = InMemoryMetaStore()
-        val e1 = DeliberationEngine(AgoraLayers("dfquad", first), judge,
+        val e1 = DeliberationEngine(first, judge,
             listOf(proposer("claude", gated = true), proposer("codex", gated = true)), config, store = store1)
             .also { engines += it }
         val root = e1.ask("Q?")
@@ -1280,8 +1281,8 @@ class DeliberationEngineTest {
         try {
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-            val second = AgoraService(host2, registry2, structureLog = log)
-            val e2 = DeliberationEngine(AgoraLayers("dfquad", second), judge,
+            val second = CredenceGraph(host2, registry2, dfquad, structureLog = log)
+            val e2 = DeliberationEngine(second, judge,
                 listOf(proposer("claude", gated = false), proposer("codex", gated = false)), config, store = store)
                 .also { engines += it }
             val after = e2.snapshot()
@@ -1315,7 +1316,7 @@ class DeliberationEngineTest {
         val store = RecordingMetaStore()
         val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0)
         val first = DeliberationEngine(
-            AgoraLayers("dfquad", service), FakeJudge(), listOf(FakeProposer("claude")), config,
+            service, FakeJudge(), listOf(FakeProposer("claude")), config,
             store = store, persistEveryMs = 60_000,
         ).also { engines += it }
         first.ask("Durable?")
@@ -1324,12 +1325,14 @@ class DeliberationEngineTest {
         // and its root record before interrupting the worker.
         first.close()
         val saved = store.load()
-        assertTrue(saved.keys.any { it.startsWith("q:") }, saved.keys.toString())
-        assertTrue(saved.keys.any { it.startsWith("c:") }, saved.keys.toString())
+        val root = saved.values.single { it["question"] == "true" }
+        // The structure log holds the text; the record holds it only after a rewrite.
+        assertNull(root["text"], root.toString())
+        assertTrue(saved.keys.all { it.startsWith("c:") }, saved.keys.toString())
 
         val writesBeforeRestart = store.writes.get()
         val second = DeliberationEngine(
-            AgoraLayers("dfquad", service), FakeJudge(), listOf(FakeProposer("claude")), config,
+            service, FakeJudge(), listOf(FakeProposer("claude")), config,
             store = store, persistEveryMs = 60_000,
         ).also { engines += it }
         second.persistNow()
@@ -1344,7 +1347,8 @@ class DeliberationEngineTest {
         val placed = service.createClaim("P")
         service.createEdge(placed, root, Polarity.SUPPORT)
         val orphan = service.createClaim("orphan") // crash before its placing edge was written
-        val store = RecordingMetaStore(mapOf("q:${root.id}" to "Q?")) // neither claim record reached the journal
+        // Only the root's question flag reached the journal: neither claim record did.
+        val store = RecordingMetaStore(mapOf("c:${root.id}" to mapOf("question" to "true")))
 
         val scheduler2 = VirtualThreadScheduler("deliberate-torn-restore-2")
         try {
@@ -1352,7 +1356,7 @@ class DeliberationEngineTest {
             val registryLog = LocationRegistry()
             val schedulerLog = VirtualThreadScheduler("deliberate-torn-restore-log")
             try {
-                val logService = AgoraService(ManagedHost(scheduler = schedulerLog, registry = registryLog), registryLog, structureLog = log)
+                val logService = CredenceGraph(ManagedHost(scheduler = schedulerLog, registry = registryLog), registryLog, dfquad, structureLog = log)
                 val loggedRoot = logService.createClaim("Q?", root)
                 val loggedPlaced = logService.createClaim("P", placed)
                 logService.createEdge(loggedPlaced, loggedRoot, Polarity.SUPPORT)
@@ -1363,12 +1367,12 @@ class DeliberationEngineTest {
 
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2)
-            val restoredService = AgoraService(host2, registry2, structureLog = log)
+            val restoredService = CredenceGraph(host2, registry2, dfquad, structureLog = log)
             val proposer = FakeProposer("claude") { ctx, side, _ ->
                 if (ctx.claim == "Q?" && side == Polarity.SUPPORT) listOf("P") else emptyList()
             }
             val restored = DeliberationEngine(
-                AgoraLayers("dfquad", restoredService), FakeJudge(), listOf(proposer),
+                restoredService, FakeJudge(), listOf(proposer),
                 DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0),
                 store = store,
             ).also { engines += it }
@@ -1382,24 +1386,6 @@ class DeliberationEngineTest {
         } finally {
             scheduler2.shutdown()
             dir.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun `reconcile completes a semantics layer whose structure log lost its tail`() {
-        val root = service.createClaim("Q?")
-        val child = service.createClaim("P")
-        val edge = service.createEdge(child, root, Polarity.SUPPORT)
-        val mirror = AgoraService(host, registry, semantics = SemanticsCatalog.of("wlo"), hubRef = AgoraLayers.hubRef("repair-wlo"))
-        val layers = AgoraLayers("dfquad", service, mapOf("wlo" to mirror))
-
-        layers.reconcile(mapOf(root to 0.6, child to 0.7, edge to 0.8))
-
-        for (ref in listOf(root, child, edge)) {
-            assertNotNull(mirror.nodeInfo(layers.refIn("wlo", ref)), "missing mirror node for $ref")
-        }
-        awaitUntil("re-applied stances propagate in the repaired layer") {
-            layers.credences(root).getValue("wlo") != 0.5 && layers.credences(child).getValue("wlo") != 0.5
         }
     }
 }

@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
 
 /**
- * The deliberate backend (SPEC §6): an [AgoraService] on a [ManagedHost], a
+ * The deliberate backend (SPEC §6): a [CredenceGraph] on a [ManagedHost], a
  * [DeliberationEngine] growing trees over it, and a [DemoShell] serving the
  * UI contract plus the built UI.
  *
@@ -43,12 +43,14 @@ class DeliberateApp(
     /** SPEC §11: with a directory, deliberations survive restarts (and `kill -9`); null is volatile. */
     private val dataDir: File? = null,
     private val semantics: SemanticsConfig = SemanticsConfig(),
+    /** How often the metadata journal checks whether it has grown enough to compact itself. */
+    private val compactEveryMs: Long = 30_000,
 ) {
     /**
-     * SPEC §2 "Credence layers and consensus". [layers] always includes the
-     * structural layer `dfquad` (agora's own semantics, whose refs are the
-     * deliberation's identity); [headline] picks the layer shown as
-     * `NodeDto.credence`; [consensus] the layers averaged into `consensus`.
+     * SPEC §2 "Credence layers and consensus". [layers] always includes
+     * `dfquad` (agora's own semantics, the reference layer); [headline] picks
+     * the layer shown as `NodeDto.credence`; [consensus] the layers averaged
+     * into `consensus`.
      */
     data class SemanticsConfig(
         val headline: String = SemanticsCatalog.DEFAULT_PRIMARY,
@@ -56,7 +58,7 @@ class DeliberateApp(
         val consensus: List<String> = Consensus.DEFAULT_MEMBERS,
         val wlo: WeightedLogOdds = WeightedLogOdds(),
     ) {
-        /** Every layer that runs, the structural one first. */
+        /** Every layer that runs, `dfquad` first. */
         val running: List<String> = (listOf(SemanticsCatalog.DEFAULT_PRIMARY) + layers).distinct()
 
         init {
@@ -69,50 +71,62 @@ class DeliberateApp(
         }
     }
 
+    init {
+        // Before anything binds or starts a thread.
+        dataDir?.let(::refuseOldFormat)
+    }
+
     // Bind before starting any scheduler/executor threads. A bind failure must
     // not leave a half-constructed app running in the background.
     private val shell = DemoShell(port)
     private val scheduler = VirtualThreadScheduler("deliberate-host")
     private val registry = LocationRegistry()
+
     private val journal = dataDir?.let { FileJournal(File(it.apply { mkdirs() }, "host.journal")) }
+
+    /**
+     * SPEC DUR-01: only the metadata cell is journaled (`journalFor`); every
+     * credence cell is volatile and recomputed from the inputs on boot, so
+     * the journal never holds a derived frame.
+     */
     private val host = ManagedHost(
         scheduler = scheduler,
         registry = registry,
         attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
-        journal = journal,
+        journalFor = { ref -> journal?.takeIf { ref == JournaledMetaStore.REF } },
     )
     private val dirty = AtomicBoolean(false)
     private val metaStore = dataDir?.let { JournaledMetaStore(host, registry) }
 
-    /** One agora graph per semantics layer; each replays its own structure log, all share the host journal. */
-    private fun layer(id: String) = AgoraService(
+    /** Every credence layer in one cell graph; its structure log is the one durable record of the trees. */
+    private val graph = CredenceGraph(
         host,
         registry,
-        semantics = SemanticsCatalog.of(id, semantics.wlo),
-        structureLog = dataDir?.let { File(it, "graph-$id.jsonl") },
-        hubRef = if (id == SemanticsCatalog.DEFAULT_PRIMARY) AgoraService.DEFAULT_HUB_REF else AgoraLayers.hubRef(id),
-        onCredence = { _, _ -> dirty.set(true) },
-    )
-
-    private val layers = AgoraLayers(
-        primaryId = SemanticsCatalog.DEFAULT_PRIMARY,
-        primary = layer(SemanticsCatalog.DEFAULT_PRIMARY),
-        mirrors = semantics.running.drop(1).associateWith(::layer),
-        consensusMembers = semantics.consensus,
-        headlineId = semantics.headline,
+        LayerSet.of(semantics.running, semantics.consensus, semantics.headline, semantics.wlo),
+        structureLog = dataDir?.let { File(it, STRUCTURE_LOG) },
+        onCredence = { dirty.set(true) },
     )
 
     init {
-        // Rebuild (the layers' constructors replayed their structure logs) → replay the
-        // host journal → wait until the engine's metadata records are folded again.
-        // No startup checkpoint, for the reason AgoraApp gives.
+        // Rebuild (the graph replayed its structure log) → replay the metadata journal →
+        // wait until it is folded → compact it: the fold now holds every replayed frame,
+        // so the checkpoint is quiescent (JournaledMetaStore.checkpoint).
         if (journal != null) {
             host.recoverFrom(journal)
             metaStore!!.awaitReplayed(kotlin.time.Duration.parse("60s"))
+            metaStore.checkpoint(journal)
         }
     }
 
-    val engine = DeliberationEngine(layers, judge, proposers, config, merger, store = metaStore) { dirty.set(true) }
+    val engine = DeliberationEngine(graph, judge, proposers, config, merger, store = metaStore) { dirty.set(true) }
+
+    /** Journal length right after the last checkpoint; the periodic compaction measures growth against it. */
+    @Volatile
+    private var checkpointedBytes = journalFile()?.length() ?: 0L
+
+    private val compactor = journal?.let {
+        Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "deliberate-compact").apply { isDaemon = true } }
+    }
 
     val boundPort: Int get() = shell.boundPort
 
@@ -145,6 +159,33 @@ class DeliberateApp(
                 System.err.println("deliberate: broadcast failed: $e")
             }
         }, flushIntervalMs, flushIntervalMs, TimeUnit.MILLISECONDS)
+        compactor?.scheduleWithFixedDelay({
+            try {
+                compactIfGrown()
+            } catch (e: Exception) {
+                System.err.println("deliberate: metadata checkpoint failed: $e")
+            }
+        }, compactEveryMs, compactEveryMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun journalFile() = dataDir?.let { File(it, "host.journal") }
+
+    /**
+     * SPEC DUR-02: the metadata journal compacts itself once it has grown by
+     * [COMPACT_MIN_BYTES] and by as much again as its last checkpoint, so it
+     * stays within about twice the size of the state it holds.
+     */
+    internal fun compactIfGrown() {
+        val length = journalFile()?.length() ?: return
+        if (length - checkpointedBytes < maxOf(COMPACT_MIN_BYTES, checkpointedBytes)) return
+        checkpointNow()
+    }
+
+    /** Compacts the metadata journal to one checkpoint of the fold now (a no-op without `--data`). */
+    internal fun checkpointNow() {
+        val j = journal ?: return
+        metaStore!!.checkpoint(j)
+        checkpointedBytes = journalFile()!!.length()
     }
 
     fun stop() {
@@ -156,7 +197,14 @@ class DeliberateApp(
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         }
-        engine.close()
+        compactor?.shutdown()
+        compactor?.awaitTermination(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        engine.close() // persists the metadata one last time
+        try {
+            checkpointNow()
+        } catch (e: Exception) {
+            System.err.println("deliberate: final metadata checkpoint failed: $e")
+        }
         shell.stop()
         scheduler.shutdown()
     }
@@ -218,6 +266,23 @@ class DeliberateApp(
 
     companion object {
         const val DEFAULT_PORT = 8091
+        /** SPEC DUR-01: the one structure log (claims and edges, in creation order). */
+        const val STRUCTURE_LOG = "graph.jsonl"
+        /** The metadata journal compacts once it grew by at least this much since its last checkpoint. */
+        const val COMPACT_MIN_BYTES = 64L * 1024
+
+        /**
+         * A data directory from before the one-graph design (one structure log
+         * per layer, a host journal of agora frames) cannot be read by this one:
+         * refuse it with a clear message instead of failing inside the replay.
+         */
+        internal fun refuseOldFormat(dir: File) {
+            val old = dir.listFiles { f -> f.name.startsWith("graph-") && f.name.endsWith(".jsonl") }.orEmpty()
+            require(old.isEmpty() || File(dir, STRUCTURE_LOG).exists()) {
+                "--data $dir holds a deliberation in the old per-layer format (${old.joinToString { it.name }}); " +
+                    "start with a fresh data directory"
+            }
+        }
         const val MAX_QUESTION = 1_000
         private const val STOP_TIMEOUT_SECONDS = 5L
 
