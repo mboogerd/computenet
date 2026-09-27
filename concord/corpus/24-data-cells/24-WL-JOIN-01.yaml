@@ -52,7 +52,7 @@
 # exercise it — recorded as a negative result, not assumed.
 id: 24-WL-JOIN-01
 title: A floor rise evicts both support rows of a windowed join's pair at row granularity; a del of an evicted row is a no-op; late rows leave on lateLeft/lateRight
-covers: [24-WL-16, 24-WL-09]
+covers: [24-WL-16, 24-WL-09, 24-WL-10]
 profile: core
 kind: example
 narrative:
@@ -100,4 +100,7 @@ checks:
   - {type: final-view, view: v, equals: [[k2, 30, 31]]}
   - {type: final-view, view: ll, equals: [[k1, 20]]}
   - {type: final-view, view: lr, equals: [[k2, 15]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: incremental-equals-batch, view: ll}
+  - {type: incremental-equals-batch, view: lr}
   - {type: no-dead-letters}
