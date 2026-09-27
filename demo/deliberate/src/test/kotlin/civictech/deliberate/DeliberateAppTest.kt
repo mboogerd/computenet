@@ -55,7 +55,7 @@ class DeliberateAppTest {
     }
 
     private fun app(
-        config: DeliberationEngine.Config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40),
+        config: DeliberationEngine.Config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40, exploreLinks = false),
         delayMs: Long = 0,
         uiDir: File? = null,
         judge: Judge = FixedJudge(),
@@ -432,7 +432,7 @@ class DeliberateAppTest {
     fun `a deliberation survives a restart on the same data directory and resumes`() {
         val dir = Files.createTempDirectory("deliberate-data").toFile()
         try {
-            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40)
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxClaims = 40, exploreLinks = false)
             val semantics = DeliberateApp.SemanticsConfig(layers = listOf("dfquad", "wlo"), consensus = listOf("wlo"))
             // Claude's one pro argument of the root (its number depends on which side's call ran first).
             fun isTarget(text: String?) = text != null && text.startsWith("claude support argument")
