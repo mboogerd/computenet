@@ -4,8 +4,8 @@ Ask a question and watch a deliberation graph grow for it live. Two LLM
 CLIs (Claude Code and Codex) propose arguments for and against each claim,
 recursively. **Jev** (TypeSafe System One, `jev-latest`) makes every judgment
 that steers the exploration: triage of new arguments, their quality and
-relevance, saturation, and the stances credence is computed from. The kernel-hosted agora argumentation
-graph propagates credence. You can override the explorer per claim: force it
+relevance, saturation, and the stances credence is computed from. A kernel-hosted
+argumentation graph, modelled on agora's, propagates credence. You can override the explorer per claim: force it
 to expand a claim (it always runs at least one more round, even when the
 question's claim budget is spent), or stop it. The goal specification is [`SPEC.md`](SPEC.md).
 
@@ -14,9 +14,9 @@ question's claim budget is spent), or stop it. The goal specification is [`SPEC.
 1. Every claim gets a Jev *plausibility* judgment (five levels, false … true, mapped to [0,1]). It is judged on the claim and the question alone: no path, parent or direction, which a live investigation showed pulling the judgment towards the claim's role in the argument.
 2. Every pro/con edge gets a Jev *relation strength* judgment: how strongly the child would bear on the parent if it were true.
    A new argument gets both judgments as soon as its round ends: plausibility in its own request, in parallel with one request that asks its strength, quality and relevance (see *Exploration*).
-3. Both judgments are recorded as stances of the agora user `jev`.
-4. Agora propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **seven semantics at once**, one agora graph (layer) per semantics on the same host: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy) and `mlp`.
-5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it. The consensus only summarises; it never feeds back into a layer. The deliberation code never propagates credence itself.
+3. Both judgments are recorded as stances of the user `jev`, on the claim and on the edge (an edge is a claim too: it has its own credence, and an undercutter attacks it).
+4. One cell graph propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **seven semantics at once** — every claim and edge cell computes a credence *vector*, one value per layer: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy) and `mlp`. An edge tells its target both its own credence vector (the strength) and its source's, so every semantics computes its own energy from the two — `jnb` conditions on the source's credence exactly as its definition says.
+5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it. Each claim cell derives both from its vector and emits them with it; they only summarise and never feed back into a layer. The deliberation code never propagates credence itself.
 
 ## Exploration
 
@@ -147,22 +147,34 @@ most depth-2 and depth-3 claims ended `PRUNED`, and 27 claims sit at depth 4–5
 evidence, 9 undercuts, 3 duplicates, 2 moved sides, 4 dropped. With the
 proposers taking turns, **no** root argument was a cross-proposer duplicate
 (0 of 11), where before about half of Claude/Codex same-round pairs at the root
-were. The data directory holds about 38 MB after three trees (263 claims) and
-three restarts, most of it host journal.
+were. The data directory then held about 38 MB after three trees (263 claims)
+and three restarts, most of it host journal — see *Durability* for what it
+holds now.
 
 ## Durability
 
 With `--data <dir>` a deliberation survives a restart, `kill -9` included.
-Each credence layer keeps its structure in `graph-<layer>.jsonl`, and one
-write-ahead host journal (`host.journal`) holds every stance and credence
-update — the `AgoraApp --journal` mechanism. The engine's own per-claim
-metadata (status, override, proposer, rewrites, Jev judgments, triage
-counts, rounds, errors) rides the same journal: it is written as records into
-a hosted cell, so one mechanism covers the graph and the engine. On restart
-the trees are rebuilt, and every claim that was waiting or being explored is
+Only **inputs** are kept: `graph.jsonl` records every claim and edge once
+(append-only, in creation order), and the write-ahead `host.journal` holds
+the engine's per-claim metadata — status, override, proposer, rewritten text,
+the Jev judgments (which are the `jev` stances), triage counts, rounds,
+errors — as field-level changes written into one hosted cell, the only
+journaled cell on the host. Nothing derived is written: every credence,
+influence and consensus is recomputed from those inputs on boot. The journal
+compacts itself to one checkpoint at boot, at shutdown, and whenever it has
+grown by more than 64 KB and its own last checkpoint size. On restart the
+trees are rebuilt, and every claim that was waiting or being explored is
 queued again; an interrupted round simply runs again. Restarting with a
-different `--semantics-layers` is fine (a new layer is built from `dfquad`'s
-structure); the journal grows with every restart (no compaction yet).
+different `--semantics-layers` is fine: the layers are recomputed anyway.
+
+Measured live on 2026-09-27 ("Should cities ban private cars from their
+centres?", `--max-claims 60`, all seven layers): 87 KB for the 60 claims while
+running (1.4 KB/claim, the journal not yet compacted), 36 KB (0.6 KB/claim)
+after a SIGTERM, and still 36 KB after two more restarts — SIGTERM, then
+`kill -9` — with every layer's credence and every consensus identical after
+each restart. The one-graph-per-layer design used about 71 KB per claim and
+grew about five-fold over three restarts. A data directory from that design is
+refused with a message; start a fresh one.
 
 ## Tests
 

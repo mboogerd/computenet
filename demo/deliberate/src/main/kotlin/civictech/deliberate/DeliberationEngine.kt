@@ -1,10 +1,11 @@
 package civictech.deliberate
 
-import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -17,10 +18,10 @@ import kotlin.math.pow
 import kotlin.time.Duration
 
 /**
- * Grows one deliberation tree per question (SPEC §3–§5) on top of
- * [AgoraLayers] (one agora graph per semantics): proposers generate
- * arguments, the [judge] steers the exploration and supplies the `jev`
- * stances, agora propagates credence.
+ * Grows one deliberation tree per question (SPEC §3–§5) on top of one
+ * [CredenceGraph] (every credence layer in one cell graph): proposers
+ * generate arguments, the [judge] steers the exploration and supplies the
+ * `jev` stances, the graph propagates credence vectors.
  *
  * Threading: claims are expanded by `config.workers` threads pulling from one
  * priority queue (SPEC §3 "Exploration order"). One queue task runs one round:
@@ -34,17 +35,19 @@ import kotlin.time.Duration
  * concurrent CLI processes (EXP-07) is not the engine's: it is the one
  * [ProcessGate] the CLI proposers share. All engine metadata sits behind
  * [lock], held only for short reads/writes and never across a Judge/Proposer
- * call. Agora mutations go through [serviceLock], preserving the service's
+ * call. Graph mutations go through [serviceLock], preserving the graph's
  * single-writer mutation model while worker threads expand.
  *
  * Durability (SPEC §11): with a [store], every claim's metadata is written to
- * it as one record per claim (only records that changed, every
- * [persistEveryMs] and on [close]); a new engine over a [store] that holds
- * records rebuilds its trees from the agora structure plus those records
+ * it as one record per claim, field by field (only the fields that changed,
+ * every [persistEveryMs] and on [close]); the `jev` stances are part of it
+ * (plausibility, edge strength). A new engine over a [store] that holds
+ * records rebuilds its trees from the graph's structure plus those records,
+ * re-applies the stances — the graph recomputes every credence from them —
  * and re-queues whatever was still active ([restore]).
  */
 class DeliberationEngine(
-    private val service: AgoraLayers,
+    private val service: CredenceGraph,
     private val judge: Judge,
     private val proposers: List<Proposer>,
     private val config: Config = Config(),
@@ -54,16 +57,6 @@ class DeliberationEngine(
     private val persistEveryMs: Long = 100,
     private val onChange: () -> Unit = {},
 ) : AutoCloseable {
-
-    /** One agora graph under agora's default semantics (DF-QuAD), no durability. */
-    constructor(
-        service: AgoraService,
-        judge: Judge,
-        proposers: List<Proposer>,
-        config: Config = Config(),
-        merger: Merger? = null,
-        onChange: () -> Unit = {},
-    ) : this(AgoraLayers(SemanticsCatalog.DEFAULT_PRIMARY, service), judge, proposers, config, merger, null, 100, onChange)
 
     /** Knobs of SPEC §3; the Jev thresholds' defaults come from `CALIBRATION.md` (SPEC §10). */
     data class Config(
@@ -113,7 +106,7 @@ class DeliberationEngine(
         val parent: Claim?,
         /** The polarity of the edge attaching it (ATTACK for an undercutter). */
         val side: Side?,
-        /** EXP-03 REPLACE may swap it while the claim is still unexplored (agora's text is immutable). */
+        /** EXP-03 REPLACE may swap it while the claim is still unexplored (the graph's text is immutable). */
         var text: String,
         val depth: Int,
         var proposer: String,
@@ -121,6 +114,8 @@ class DeliberationEngine(
         /** EXP-03 UNDERCUT: the argument whose link to [parent] this claim attacks; null for an ordinary argument. */
         val undercuts: Claim? = null,
     ) {
+        /** The text the structure log holds for it; the record stores [text] only when a rewrite changed it. */
+        val structureText: String = text
         var status = Status.QUEUED
         var override = Override.AUTO
         var plausibility: Double? = null
@@ -190,8 +185,8 @@ class DeliberationEngine(
         Thread.ofPlatform().daemon().name("deliberate-worker-$i").start(::work)
     }
 
-    /** What [persistNow] last wrote, by key. */
-    private val persisted = HashMap<String, String>()
+    /** The record fields [persistNow] last wrote (or found at boot), by key. */
+    private val persisted = HashMap<String, Map<String, String>>()
     private val persister: ScheduledExecutorService? = store?.let {
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "deliberate-persist").apply { isDaemon = true } }
     }
@@ -206,8 +201,10 @@ class DeliberationEngine(
         val Side.opposite get() = if (this == Polarity.SUPPORT) Polarity.ATTACK else Polarity.SUPPORT
         fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?', ';')
         val RECORDS = Json { encodeDefaults = false; ignoreUnknownKeys = true }
-        const val QUESTION_KEY = "q:"
         const val CLAIM_KEY = "c:"
+        const val JEV = "jev"
+        /** A node's credence before its first emission reached the hub. */
+        const val NEUTRAL = 0.5
     }
 
     init {
@@ -232,7 +229,7 @@ class DeliberationEngine(
 
     /** EXP-01: create the root claim and start expanding it; returns at once. */
     fun ask(question: String): CellRef {
-        val ref = synchronized(serviceLock) { service.createClaim(question) }
+        val ref = synchronized(serviceLock) { service.createClaim(question, question = true) }
         val root = Claim(ref, ref, null, null, question, 0, "question", config.maxRounds)
         synchronized(lock) {
             claims[ref] = root
@@ -300,19 +297,27 @@ class DeliberationEngine(
         enqueueAgain?.let(::enqueue)
     }
 
+    /**
+     * The UI's view (SPEC §6). It only reads: every credence, the consensus
+     * and the spread come from the graph's hub fold, where the cells put
+     * them (CRED-06).
+     */
     fun snapshot(): GraphDto {
         val graph = service.graph()
+        val layers = service.layers
+        val neutral = List(layers.ids.size) { NEUTRAL }
         return synchronized(lock) {
             val nodes = graph.mapNotNull { n ->
-                val layers = service.credences(n.ref)
-                val credence = layers[service.headlineId] ?: n.credence
-                val consensus = Consensus.of(layers, service.consensusMembers)
-                val low = layers.values.minOrNull() ?: credence
-                val high = layers.values.maxOrNull() ?: credence
+                val values = n.credence?.values ?: neutral
+                val named = layers.named(values)
+                val credence = values[layers.headlineIndex]
+                val consensus = n.credence?.consensus ?: NEUTRAL
+                val low = n.credence?.spreadLow ?: NEUTRAL
+                val high = n.credence?.spreadHigh ?: NEUTRAL
                 claims[n.ref]?.let { c ->
                     NodeDto(
                         ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
-                        credences = layers, consensus = consensus, spreadLow = low, spreadHigh = high,
+                        credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
                         text = c.text, depth = c.depth, status = c.status, override = c.override,
                         proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
                         quality = c.quality, contribution = c.contribution,
@@ -326,7 +331,7 @@ class DeliberationEngine(
                 } ?: edges[n.ref]?.let { e ->
                     NodeDto(
                         ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
-                        credences = layers, consensus = consensus, spreadLow = low, spreadHigh = high,
+                        credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
                         polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
                         strength = e.strength,
                     )
@@ -336,7 +341,7 @@ class DeliberationEngine(
                 val tree = claims.values.filter { it.root == root }
                 QuestionDto(root.id.toString(), text, tree.size, tree.any { it.status in ACTIVE })
             }
-            GraphDto(qs, nodes, service.consensusMembers.filter { it in service.ids }.ifEmpty { service.ids })
+            GraphDto(qs, nodes, layers.members)
         }
     }
 
@@ -353,18 +358,23 @@ class DeliberationEngine(
         return true
     }
 
-    /** SPEC §11: writes every claim record and question that changed since the last call to the [store]. */
+    /**
+     * SPEC §11 DUR-02: writes, per claim, the record fields that changed since
+     * the last call (a removed field — back at its default — is written as
+     * null). A record that did not change writes nothing.
+     */
     @Synchronized
     fun persistNow() {
         val s = store ?: return
-        val current = synchronized(lock) {
-            questions.map { (ref, text) -> QUESTION_KEY + ref.id to text } +
-                claims.values.map { c -> CLAIM_KEY + c.ref.id to RECORDS.encodeToString(ClaimRecord.serializer(), recordOf(c)) }
-        }
-        for ((key, value) in current) {
-            if (persisted[key] != value) {
-                s.put(key, value)
-                persisted[key] = value
+        val current = synchronized(lock) { claims.values.map { c -> CLAIM_KEY + c.ref.id to fieldsOf(recordOf(c)) } }
+        for ((key, fields) in current) {
+            val old = persisted[key].orEmpty()
+            val delta = LinkedHashMap<String, String?>()
+            fields.forEach { (f, v) -> if (old[f] != v) delta[f] = v }
+            old.keys.forEach { if (it !in fields) delta[it] = null }
+            if (delta.isNotEmpty()) {
+                s.put(key, delta)
+                persisted[key] = fields
             }
         }
     }
@@ -502,7 +512,7 @@ class DeliberationEngine(
             val (path, text) = synchronized(lock) { pathOf(c) to c.text }
             attempt(c, "plausibility") {
                 val p = judge.plausibility(questionOf(c), path, text)
-                synchronized(serviceLock) { service.setStance(c.ref, AgoraLayers.JEV, p) }
+                synchronized(serviceLock) { service.setStance(c.ref, JEV, p) }
                 p
             }?.let { p ->
                 update { c.plausibility = p }
@@ -782,8 +792,8 @@ class DeliberationEngine(
             }
             val edge = synchronized(lock) { n.edge!! }
             if (a != null) synchronized(serviceLock) {
-                service.setStance(n.ref, AgoraLayers.JEV, a.plausibility)
-                service.setStance(edge.ref, AgoraLayers.JEV, a.strength)
+                service.setStance(n.ref, JEV, a.plausibility)
+                service.setStance(edge.ref, JEV, a.strength)
             }
             update {
                 if (a != null) {
@@ -941,8 +951,8 @@ class DeliberationEngine(
             n.contribution = reach
         }
         synchronized(serviceLock) {
-            service.setStance(n.ref, AgoraLayers.JEV, null)
-            service.setStance(edge.ref, AgoraLayers.JEV, null)
+            service.setStance(n.ref, JEV, null)
+            service.setStance(edge.ref, JEV, null)
         }
     }
 
@@ -972,14 +982,22 @@ class DeliberationEngine(
 
     // ---------------------------------------------------------------- durability (SPEC §11)
 
-    /** One claim's engine metadata as the [store] keeps it. Agora keeps its text too, but not rewrites. */
+    /**
+     * One claim's engine metadata as the [store] keeps it, one field per
+     * property; a property at its default is not stored. [text] is stored
+     * only when a rewrite (EXP-03 REPLACE/MERGE) changed it: the structure
+     * log holds the original. The `jev` stances are [plausibility] and
+     * [edgeStrength]; nothing else of the credence graph is persisted.
+     */
     @Serializable
     private data class ClaimRecord(
-        val text: String,
-        val proposer: String,
-        val status: Status,
+        /** The root ref of the question tree this claim belongs to. */
+        val question: String? = null,
+        val text: String? = null,
+        val proposer: String? = null,
+        val status: Status = Status.QUEUED,
         val override: Override = Override.AUTO,
-        val roundLimit: Int,
+        val roundLimit: Int? = null,
         val rounds: Int = 0,
         val forceRound: Boolean = false,
         val plausibility: Double? = null,
@@ -1001,50 +1019,57 @@ class DeliberationEngine(
 
     /** Caller holds [lock]. */
     private fun recordOf(c: Claim) = ClaimRecord(
-        text = c.text, proposer = c.proposer, status = c.status, override = c.override,
+        question = c.root.id.toString(),
+        text = c.text.takeIf { it != c.structureText }, proposer = c.proposer, status = c.status, override = c.override,
         roundLimit = c.roundLimit, rounds = c.rounds, forceRound = c.forceRound,
         plausibility = c.plausibility, relevance = c.relevance, quality = c.quality,
-        reach = c.reach, contribution = c.contribution,
+        reach = c.reach.takeIf { c.parent != null }, contribution = c.contribution.takeIf { c.parent != null },
         proSaturation = c.proSaturation, conSaturation = c.conSaturation, saturated = c.saturated.toList(),
         duplicatesDropped = c.duplicatesDropped, triage = c.triage.mapKeys { it.key.name },
         alsoProposedBy = c.alsoProposedBy.toList(), merged = c.merged, error = c.error,
         anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
     )
 
+    private fun fieldsOf(r: ClaimRecord): Map<String, String> =
+        RECORDS.encodeToJsonElement(ClaimRecord.serializer(), r).jsonObject.mapValues { it.value.toString() }
+
+    private fun recordFrom(fields: Map<String, String>): ClaimRecord =
+        RECORDS.decodeFromJsonElement(ClaimRecord.serializer(), JsonObject(fields.mapValues { RECORDS.parseToJsonElement(it.value) }))
+
     /**
-     * SPEC §11: rebuilds every tree from the agora structure (claims and the
-     * edges linking them, in creation order) and the [meta] records, then
-     * re-queues every claim that was still active — an interrupted round
-     * simply runs again. A claim whose record never reached the store is
-     * rebuilt from agora alone and queued afresh; a claim agora holds without
-     * the edge that would place it in a tree (the process died between the
-     * two writes) is left out. Arguments that were never assessed are
-     * assessed again before they are queued.
+     * SPEC §11: rebuilds every tree from the graph's structure (claims and the
+     * edges linking them, in creation order) and the [meta] records,
+     * re-applies the `jev` stances (the graph recomputes every credence from
+     * them), then re-queues every claim that was still active — an
+     * interrupted round simply runs again. A claim whose record never reached
+     * the store is rebuilt from the structure alone and queued afresh; a claim
+     * the structure holds without the edge that would place it in a tree (the
+     * process died between the two writes) is left out. Arguments that were
+     * never assessed are assessed again before they are queued.
      */
-    private fun restore(meta: Map<String, String>) {
-        val roots = meta.filterKeys { it.startsWith(QUESTION_KEY) }
-            .mapKeys { CellRef(UUID.fromString(it.key.removePrefix(QUESTION_KEY))) }
+    private fun restore(meta: Map<String, Map<String, String>>) {
         val records = meta.filterKeys { it.startsWith(CLAIM_KEY) }.entries.associate { (k, v) ->
-            CellRef(UUID.fromString(k.removePrefix(CLAIM_KEY))) to RECORDS.decodeFromString(ClaimRecord.serializer(), v)
+            CellRef(UUID.fromString(k.removePrefix(CLAIM_KEY))) to recordFrom(v)
         }
         val graph = service.graph()
-        val attaching = graph.filter { it.info.kind == AgoraService.Kind.EDGE }.groupBy { it.info.source }
+        val attaching = graph.filter { it.info.kind == CredenceGraph.Kind.EDGE }.groupBy { it.info.source }
         synchronized(lock) {
             for (n in graph) {
-                if (n.info.kind != AgoraService.Kind.CLAIM) continue
+                if (n.info.kind != CredenceGraph.Kind.CLAIM) continue
                 val rec = records[n.ref]
-                val claim = roots[n.ref]?.let { question ->
-                    questions[n.ref] = question
-                    Claim(n.ref, n.ref, null, null, rec?.text ?: question, 0, "question", config.maxRounds)
-                } ?: run {
+                val structureText = n.info.text.orEmpty()
+                val claim = if (n.info.question || rec?.question == n.ref.id.toString()) {
+                    questions[n.ref] = structureText
+                    Claim(n.ref, n.ref, null, null, structureText, 0, "question", config.maxRounds)
+                } else run {
                     val e = attaching[n.ref]?.firstOrNull() ?: return@run null
                     val target = e.info.target!!
                     val undercut = edges[target]?.let { claims[it.source] }
                     val parent = undercut?.parent ?: claims[target] ?: return@run null
                     val side = e.info.polarity!!
                     Claim(
-                        n.ref, parent.root, parent, side, rec?.text ?: n.info.text.orEmpty(), parent.depth + 1,
-                        rec?.proposer ?: "unknown", config.maxRounds, undercut,
+                        n.ref, parent.root, parent, side, structureText, parent.depth + 1,
+                        "unknown", config.maxRounds, undercut,
                     ).also { child ->
                         val edge = Edge(e.ref, parent.root, n.ref, target, side)
                         child.edge = edge
@@ -1060,8 +1085,9 @@ class DeliberationEngine(
         val stances = synchronized(lock) {
             claims.values.mapNotNull { c -> c.plausibility?.let { c.ref to it } } +
                 edges.values.mapNotNull { e -> e.strength?.let { e.ref to it } }
-        }.toMap()
-        synchronized(serviceLock) { service.reconcile(stances) }
+        }
+        // The graph skips a stance a node already holds (CredenceGraph.setStance).
+        synchronized(serviceLock) { stances.forEach { (ref, v) -> service.setStance(ref, JEV, v) } }
         val (unassessed, queued) = synchronized(lock) {
             claims.values.filter { it.status == Status.QUEUED }
                 .partition { it.parent != null && it.plausibility == null && it.edge?.strength == null }
@@ -1083,11 +1109,12 @@ class DeliberationEngine(
 
     /** Caller holds [lock]. */
     private fun apply(c: Claim, r: ClaimRecord) {
-        c.proposer = r.proposer
+        r.text?.let { c.text = it }
+        r.proposer?.let { c.proposer = it }
         // SPEC §11: whatever was still active re-enters the queue; an interrupted round re-runs.
         c.status = if (r.status in ACTIVE) Status.QUEUED else r.status
         c.override = r.override
-        c.roundLimit = r.roundLimit
+        r.roundLimit?.let { c.roundLimit = it }
         c.rounds = r.rounds
         c.forceRound = r.forceRound
         c.plausibility = r.plausibility

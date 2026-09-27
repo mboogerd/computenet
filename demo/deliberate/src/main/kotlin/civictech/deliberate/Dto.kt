@@ -33,7 +33,7 @@ enum class Override { AUTO, EXPAND, STOP }
 data class NodeDto(
     val ref: String,
     val kind: String, // "CLAIM" | "EDGE"
-    /** Propagated agora credence in the primary semantics layer (`--semantics`), [0,1]. */
+    /** Propagated credence in the headline semantics layer (`--semantics`), [0,1]. */
     val credence: Double,
     /** The question tree this node belongs to (its root claim ref). */
     val root: String,

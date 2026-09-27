@@ -1,5 +1,6 @@
 package civictech.deliberate
 
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.test.Test
@@ -10,13 +11,18 @@ import kotlin.test.assertTrue
 /**
  * The credence layers (SPEC §2 "Credence layers and consensus"). Reference
  * values were computed with the prototype `semantics.js` under node
- * (`combine_<id>(base, attacks, supports)` at the defaults; for jnb the
- * energies go through `energy_jnb(1, e)`, the port's reading of agora's
- * product energy — see [JeffreyNaiveBayes]).
+ * (`combine_<id>(base, attacks.map(energy_<id>(c, s)), …)` at the defaults).
+ * The energy-only cases below use arguments of credence 1 and strength e,
+ * so every layer's energy is e — except jnb's, which is `energy_jnb(1, e)`.
  */
 class SemanticsTest {
 
     private data class Case(val base: Double, val attacks: List<Double>, val supports: List<Double>)
+
+    /** Arguments whose source is certain, so their energy is the strength [e] (jnb: `energy_jnb(1, e)`). */
+    private fun sure(e: List<Double>) = e.map { Arg(strength = it, credence = 1.0) }
+    private fun Semantics.at(base: Double, attacks: List<Double>, supports: List<Double>) =
+        evaluate(base, sure(attacks), sure(supports))
 
     private val cases = listOf(
         Case(0.8, listOf(0.95 * 0.9), emptyList()),
@@ -42,7 +48,7 @@ class SemanticsTest {
         for ((id, expected) in reference) {
             val s = SemanticsCatalog.of(id)
             cases.zip(expected).forEach { (c, want) ->
-                assertEquals(want, s.combine(c.base, c.attacks, c.supports), 1e-12, "$id $c")
+                assertEquals(want, s.at(c.base, c.attacks, c.supports), 1e-12, "$id $c")
             }
         }
     }
@@ -67,16 +73,21 @@ class SemanticsTest {
         for (id in SemanticsCatalog.IDS) {
             val s = SemanticsCatalog.of(id)
             for (b in listOf(0.01, 0.2, 0.5, 0.8, 0.99)) {
-                assertEquals(b, s.combine(b, emptyList(), emptyList()), 1e-12, "$id keeps its base")
+                assertEquals(b, s.at(b, emptyList(), emptyList()), 1e-12, "$id keeps its base")
                 for (x in grid) for (y in grid) {
-                    val v = s.combine(b, listOf(x), listOf(y))
+                    val v = s.at(b, listOf(x), listOf(y))
                     assertTrue(v in 0.0..1.0, "$id($b, $x, $y) = $v")
                     // more support never lowers, more attack never raises
-                    if (y < 1.0) assertTrue(s.combine(b, listOf(x), listOf(y, 0.3)) >= v - 1e-12, "$id support monotone")
-                    if (x < 1.0) assertTrue(s.combine(b, listOf(x, 0.3), listOf(y)) <= v + 1e-12, "$id attack monotone")
+                    if (y < 1.0) assertTrue(s.at(b, listOf(x), listOf(y, 0.3)) >= v - 1e-12, "$id support monotone")
+                    if (x < 1.0) assertTrue(s.at(b, listOf(x, 0.3), listOf(y)) <= v + 1e-12, "$id attack monotone")
+                    // a more credible source never weakens its argument
+                    for (c in grid) {
+                        val sup = s.evaluate(b, emptyList(), listOf(Arg(y, c)))
+                        assertTrue(s.evaluate(b, emptyList(), listOf(Arg(y, minOf(c + 0.1, 1.0)))) >= sup - 1e-12, "$id credence monotone")
+                    }
                 }
                 // a higher base never lowers the result
-                assertTrue(s.combine(minOf(b + 0.05, 0.99), listOf(0.4), listOf(0.3)) >= s.combine(b, listOf(0.4), listOf(0.3)) - 1e-12, id)
+                assertTrue(s.at(minOf(b + 0.05, 0.99), listOf(0.4), listOf(0.3)) >= s.at(b, listOf(0.4), listOf(0.3)) - 1e-12, id)
             }
         }
     }
@@ -89,9 +100,35 @@ class SemanticsTest {
             for (b in listOf(0.2, 0.5, 0.7)) {
                 val a = listOf(0.3, 0.8)
                 val sup = listOf(0.5)
-                assertEquals(1 - s.combine(1 - b, sup, a), s.combine(b, a, sup), 1e-12, "$id at $b")
+                assertEquals(1 - s.at(1 - b, sup, a), s.at(b, a, sup), 1e-12, "$id at $b")
             }
         }
+    }
+
+    /**
+     * jnb is exact: the edge's strength and its source's credence reach the
+     * layer separately, and Jeffrey conditioning is applied to them as the
+     * prototype does (`energy_jnb(c, s)` = ln(c·LR(s) + (1−c)·LR(s)^−r)),
+     * not to their product. Reference values: node, prototype `semantics.js`.
+     */
+    @Test
+    fun `jnb matches the prototype's Jeffrey conditioning exactly`() {
+        data class J(val base: Double, val attacks: List<Arg>, val supports: List<Arg>)
+        // Arg(strength, credence) = the prototype's energy_jnb(credence, strength).
+        val js = listOf(
+            J(0.8, listOf(Arg(0.95, 0.9)), emptyList()),
+            J(0.5, listOf(Arg(0.6, 0.3), Arg(0.2, 0.7)), listOf(Arg(0.9, 0.4), Arg(0.5, 1.0))),
+            J(0.3, emptyList(), listOf(Arg(0.7, 0.5))),
+            J(0.9, listOf(Arg(0.9, 0.1), Arg(0.85, 0.95)), listOf(Arg(0.1, 0.6))),
+        )
+        val r0 = listOf(0.48251003362507106, 0.67576802703019578, 0.48345213537677784, 0.68000351754621557)
+        val r1 = listOf(0.48712392335374854, 0.70629345097282104, 0.43986176237851315, 0.75527207436080979)
+        js.zip(r0).forEach { (j, want) -> assertEquals(want, JeffreyNaiveBayes().evaluate(j.base, j.attacks, j.supports), 1e-12, "$j") }
+        js.zip(r1).forEach { (j, want) -> assertEquals(want, JeffreyNaiveBayes(r = 1.0).evaluate(j.base, j.attacks, j.supports), 1e-12, "r=1 $j") }
+        // The product reading the agora port used is not the same thing.
+        val doubted = listOf(Arg(0.9, 0.5))
+        assertTrue(abs(JeffreyNaiveBayes().evaluate(0.5, emptyList(), doubted) -
+            JeffreyNaiveBayes().evaluate(0.5, emptyList(), listOf(Arg(0.45, 1.0)))) > 1e-3)
     }
 
     @Test

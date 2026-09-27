@@ -4,8 +4,12 @@ A demo in which a human poses a question and watches a **deliberation graph**
 grow for it in real time: LLM agents (Claude CLI and Codex CLI) recursively
 propose arguments for and against each claim; **Jev** (TypeSafe System One,
 `jev-latest`) supplies every judgment that steers the exploration and every
-credence; the kernel-hosted agora argumentation graph propagates those
+credence; a kernel-hosted argumentation graph (agora's model) propagates those
 credences. The human can override the explorer's depth decisions per claim.
+
+(Credence is propagated by deliberate's own cell graph, modelled on agora's:
+claims and edges as cells, edges being claims. "agora `CLAIM`/`EDGE`" below
+names that model.)
 
 ## 1. Vocabulary
 
@@ -44,7 +48,7 @@ credences. The human can override the explorer's depth decisions per claim.
   role in the argument, e.g. 0.31 with the path vs 0.53 without; dropping it
   shifts fresh arguments by −0.011 on average). The instruction tells Jev the
   question only names the topic, and not to reward or penalise the claim for
-  the answer it favours. It is applied as the agora stance of user `jev` on
+  the answer it favours. It is applied as the stance of user `jev` on
   that claim. An argument is judged the moment it is attached: plausibility
   in its own request, in parallel with one request asking its CRED-02
   strength and EXP-05 quality and relevance (independent questions over the
@@ -55,28 +59,39 @@ credences. The human can override the explorer's depth decisions per claim.
   the stated direction" (irrelevant … decisive), mapped to [0,1]. Applied as the
   `jev` stance on the edge node. An argument whose text changes (EXP-03
   REPLACE or MERGE) is assessed again.
-- **CRED-03** Credence is agora-propagated over the `jev` stances and the
-  incoming edges, under each of several gradual semantics ("Credence layers
-  and consensus" below). The deliberation code never propagates credence
-  itself; it only summarises the layers' results into a consensus.
+- **CRED-03** Credence is propagated over the `jev` stances and the incoming
+  edges by one kernel-hosted cell graph, under each of several gradual
+  semantics ("Credence layers and consensus" below). The deliberation code
+  never propagates credence itself; it only reads the graph's results.
 
 ### Credence layers and consensus
 
-- **CRED-04** Every deliberation is propagated by one agora graph per
-  semantics — a **layer** — all on one host: the same claims and edges, the
-  same `jev` stances, each layer its own `ClaimCell`/`EdgeCell` graph under
-  its own `GradualSemantics`. Every semantics sees only edge energies, an
-  energy being the edge's credence (its strength stance, lowered by any
-  undercutter) times its source's credence. Layers (`--semantics-layers`,
-  default all seven): `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds:
-  σ(α·logit(base) + k·(‖S^γ‖_p − ‖A^γ‖_p)), α = 1, k = 2.4, p = 2, γ = 1.3),
-  `jnb` (Jeffrey / naive-Bayes likelihood ratios; the edge's product energy is
-  read as the strength of a certain argument), `woe` (log-odds DF-QuAD,
-  weight of evidence −ln(1 − e)), `euler` (Euler-based), `qe` (quadratic
-  energy), `mlp` (MLP-based); formulas and defaults as in the prototype
+- **CRED-04** Every deliberation is propagated by **one** cell graph whose
+  credences are vectors: one `ClaimNode` per claim and one `EdgeNode` per
+  edge (an edge is a claim — "source supports/attacks target" — with its own
+  `jev` stance, its own incoming edges and its own credence, so an
+  undercutter attacks it), each computing one credence per semantics — a
+  **layer**. A node emits its **credence vector**; an edge emits an
+  **influence** carrying structured data: its ref, polarity, its own credence
+  vector (the **strength**: the strength stance, lowered by any undercutter)
+  and its source's credence vector. Each semantics computes its own energy
+  from the pair — `energy(strength, credence)`, DF-QuAD's product for most —
+  and combines a node's base with the energies of its attacks and supports.
+  Layers (`--semantics-layers`, default all seven): `dfquad` (agora's
+  DF-QuAD), `wlo` (weighted log-odds: σ(α·logit(base) + k·(‖S^γ‖_p −
+  ‖A^γ‖_p)), α = 1, k = 2.4, p = 2, γ = 1.3), `jnb` (Jeffrey / naive-Bayes:
+  the argument's likelihood ratio LR(s) = ((1+s)/(1−s))^K is Jeffrey-
+  conditioned on its source's credence c, energy ln(c·LR + (1−c)·LR^−r),
+  exact because s and c arrive separately), `woe` (log-odds DF-QuAD, weight
+  of evidence −ln(1 − e)), `euler` (Euler-based), `qe` (quadratic energy),
+  `mlp` (MLP-based); formulas and defaults as in the prototype
   `semantics.js`, and every layer keeps agora's base (the clamped mean of the
-  stances). `dfquad` always runs: its refs are the deliberation's identity,
-  and every other layer's refs are derived from them.
+  stances). `dfquad` always runs. Cycle handling is agora's: the edge that
+  closes a cycle is its head and absorbs a returning source update whose
+  largest per-layer change is below the quiescence threshold; a node's
+  arguments are folded in ref order, so emission is deterministic. Every
+  message carries a magnitude — the largest per-layer change — that the host
+  schedules by.
 - **CRED-05** A node's **consensus** is σ(mean over the member layers of
   logit(cᵢ)), each cᵢ clamped to [0.001, 0.999] — the geometric mean of their
   odds. Members (`--consensus`, default `wlo,jnb,woe`: the rules that pass
@@ -86,11 +101,12 @@ credences. The human can override the explorer's depth decisions per claim.
   number and verdict are the consensus, drawn over the spread as a band.
   `--semantics` names the layer shown as `NodeDto.credence` (default
   `dfquad`). No averaging layer beyond this consensus exists.
-- **CRED-06** The consensus and spread are computed when a snapshot is
-  taken, from the layers' own materialized credence folds (their hubs):
-  they are a pure function of state the kernel already keeps, and a derived
-  cell would need a reverse index over every layer's derived refs plus
-  volatile-journal plumbing so a restart does not replay derived state.
+- **CRED-06** The consensus and spread are **derived by the cells**: a
+  claim or edge cell emits `{vector, consensus, spreadLow, spreadHigh}` with
+  every change of its vector, and the graph's hub folds those emissions. The
+  consensus is a pure function of the vector, so computing it where the
+  vector is computed is the simplest derived form — no second cell per node,
+  no second hop, no second fold. The snapshot only reads the hub.
 
 ## 3. Exploration (requirements EXP-*)
 
@@ -143,7 +159,7 @@ credences. The human can override the explorer's depth decisions per claim.
   `QUEUED`, no children); otherwise, or if the merge call fails (error
   recorded), they fall back to `DUPLICATE`. A targeted action without a target
   becomes `ADD` (`DUPLICATE`: dropped). The claim counts each action taken in
-  `triage`. Rewording lives in the deliberation layer (agora's claim text is
+  `triage`. Rewording lives in the deliberation layer (the graph's claim text is
   immutable); if the triage request fails, every candidate is `ADD`.
 - **EXP-04** After each round, Jev judges **saturation** per side (a Noul:
   "is an important consideration on this side still missing from the existing
@@ -302,26 +318,42 @@ recalibration of both is residual (see `CALIBRATION.md`).
 ## 11. Durability (requirements DUR-*)
 
 - **DUR-01** With `--data <dir>`, deliberations survive restarts, including
-  `kill -9`; without it the app is volatile. Each layer's agora graph writes
-  its structure to `graph-<layer>.jsonl`, and one host journal
-  (`host.journal`, write-ahead, synced per frame) holds every data frame —
-  stances and credence propagation of every layer — exactly as `AgoraApp
-  --journal` does.
-- **DUR-02** The engine's per-claim metadata (status, override, proposer,
-  rewritten text, Jev judgments, saturation, triage counts, rounds, errors,
-  question membership) goes through the **same** mechanism: one record per
-  claim, written as a routed invocation into a hosted observation cell (a
-  last-writer-wins fold) whose frames the host journal records like any
-  other. Only records that changed are written, every 100 ms and when the
-  engine closes (before its workers are interrupted). After a restart the
-  host journal replays them into the fold; a fence record tells the app
-  when the replay has been folded.
+  `kill -9`; without it the app is volatile. Only **inputs** are durable:
+  the structure — every claim and edge, once, in creation order — in one
+  append-only log `graph.jsonl` (a torn last line is cut off on boot), and
+  the engine's metadata, which includes the `jev` stances, in the host
+  journal (`host.journal`, write-ahead, synced per frame). Nothing derived —
+  no credence vector, influence or hub update — is ever written: the
+  metadata cell is the only journaled cell on the host (a per-cell journal
+  selector), every credence cell is volatile, and on boot the graph
+  recomputes every credence from the structure and the re-applied stances,
+  with catch-up baselines enabled. A restart reproduces every layer's
+  credence and every consensus (within 1e-9), restart after restart.
+- **DUR-02** The engine's per-claim metadata (question membership, status,
+  override, proposer, rewritten text, Jev judgments — plausibility and edge
+  strength are the `jev` stances —, saturation, triage counts, rounds,
+  errors) is one record per claim of named fields, written as routed
+  invocations into a hosted observation cell (a last-writer-wins fold per
+  field). Only the fields that changed are written (a field back at its
+  default is written as a removal), every 100 ms and when the engine closes
+  (before its workers are interrupted); the text is written only when a
+  rewrite changed it, since the structure log holds the original. The engine
+  seeds what it last wrote from the state it loaded, so an unchanged record
+  is never rewritten. After a restart the host journal replays into the fold;
+  a fence record tells the app when the replay has been folded. The journal
+  compacts itself to one checkpoint of the fold when **quiescent** — writes
+  held off and a fence folded, so every frame it holds has been applied: at
+  boot after the replay, at shutdown, and whenever it has grown by more than
+  64 KB and its own last checkpoint size.
 - **DUR-03** On restart the trees are rebuilt from the structure (claims and
   the edges placing them, in creation order) plus those records. A claim
-  whose record never reached the journal is rebuilt from agora alone and
-  queued afresh; a claim created without the edge that places it (the
-  process died between the two writes) is left out; a layer missing the tail
-  of the structure is completed from `dfquad`'s, and every known stance is
-  re-applied to every layer. Every claim that was `QUEUED`, `JUDGING` or
-  `EXPLORING` is re-queued — an interrupted round simply runs again — and an
-  argument whose attach-time assessment never completed is assessed first.
+  whose record never reached the journal is rebuilt from the structure alone
+  and queued afresh; a claim created without the edge that places it (the
+  process died between the two writes) is left out. Every known stance is
+  re-applied (the graph skips a stance a node already holds). Every claim
+  that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
+  round simply runs again — and an argument whose attach-time assessment
+  never completed is assessed first.
+- **DUR-04** A data directory in the earlier one-agora-graph-per-layer format
+  (`graph-<layer>.jsonl`) is refused at startup with a message; it is not
+  migrated.
