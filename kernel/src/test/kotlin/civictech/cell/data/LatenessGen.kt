@@ -140,7 +140,18 @@ class LatenessGen(val env: Envelope, val seed: Long) {
  * Sources here are writers: each writer is one outlet, hence one wave
  * `sourceId`, and nothing retires.
  */
-class LatenessOracle(private val lateness: Long, private val window: Long) {
+class LatenessOracle(
+    private val lateness: Long,
+    private val window: Long,
+    /**
+     * Whether a del emitted by writer `emitter` reaches the state holding
+     * row `e`. The identity for a single-inlet cell (every writer feeds the
+     * one inlet). The join shape (computenet-fh1fo.2) routes each writer to
+     * ONE side, so a del of the other side's row lands on a side that never
+     * held it and is a no-op — this predicate says so.
+     */
+    private val delReaches: (emitter: Int, e: Ev) -> Boolean = { _, _ -> true },
+) {
     private val maxima = HashMap<Int, Long>()
 
     /** Current floor; `null` is the identity. */
@@ -155,6 +166,9 @@ class LatenessOracle(private val lateness: Long, private val window: Long) {
 
     /** Admitted adds still live (not yet deleted by liveness). Never evicted: the batch side restricts instead. */
     val live = LinkedHashMap<Ev, Set<Timestamp>>()
+
+    /** Every admitted add, tags verbatim, in arrival order — deleted or not (the join arm's density source). */
+    val admitted = LinkedHashMap<Ev, Set<Timestamp>>()
 
     /** The generator's own per-window ADMITTED count (dels not subtracted) — B7's density ceiling. */
     val admittedPerWindow = HashMap<Long, Int>()
@@ -174,11 +188,12 @@ class LatenessOracle(private val lateness: Long, private val window: Long) {
                 lateSet[e] = tags
             } else {
                 live[e] = tags
+                admitted[e] = tags
                 admittedPerWindow.merge(windowOf(e.t), 1, Int::plus)
             }
         }
         // 3. dels fold iff their tag is live ([24-WL-08]); a del of a late add is a no-op
-        for ((e, tags) in wave.dels) if (live[e] == tags) live.remove(e)
+        for ((e, tags) in wave.dels) if (delReaches(wave.writer, e) && live[e] == tags) live.remove(e)
         floors += floor
     }
 
@@ -203,8 +218,43 @@ class LatenessOracle(private val lateness: Long, private val window: Long) {
 
     fun maxDensityPerWindow(): Int = admittedPerWindow.values.maxOrNull() ?: 0
 
-    companion object {
-        fun run(gen: LatenessGen): LatenessOracle =
-            LatenessOracle(gen.env.lateness, gen.env.window).apply { gen.waves.forEach(::apply) }
+    // ---- the join-family domain (computenet-fh1fo.2, [24-WL-10] join clause, [24-WL-16])
+
+    /**
+     * True iff row [e] survives the final floor: the join family's eviction
+     * unit is the row, evicted exactly when `t < floor` (strict — the same
+     * threshold as the late drop, `[24-WL-16]`). No exclusives, so nothing is
+     * refused and every such row is gone.
+     */
+    fun survives(e: Ev): Boolean = floor.let { f -> f == null || !(e.t < f) }
+
+    /** The live rows left after the final floor's row eviction: late-filtered, del-folded, then `t < finalFloor` removed. */
+    fun remaining(): Map<Ev, Set<Timestamp>> = live.filterKeys(::survives)
+
+    /**
+     * `[24-WL-10]`'s join-family batch: the equi-join over [remaining] rows,
+     * split into sides by [isLeft], matched by [key]. Whole state — no
+     * output-side filter ("the two sides then need no further filter").
+     */
+    fun <K> joinBatch(isLeft: (Ev) -> Boolean, key: (Ev) -> K): Set<Pair<Ev, Ev>> {
+        val rows = remaining().keys
+        val right = rows.filterNot(isLeft).groupBy(key)
+        return rows.filter(isLeft).flatMapTo(LinkedHashSet()) { l -> (right[key(l)] ?: emptyList()).map { r -> l to r } }
     }
+
+    companion object {
+        fun run(gen: LatenessGen, delReaches: (Int, Ev) -> Boolean = { _, _ -> true }): LatenessOracle =
+            LatenessOracle(gen.env.lateness, gen.env.window, delReaches).apply { gen.waves.forEach(::apply) }
+    }
+}
+
+/**
+ * The join shape's key (computenet-fh1fo.2), the oracle's copy: a windowed
+ * equi-join — same tumbling window of [window] AND same `seq % alphabet`. A
+ * small [alphabet] makes several rows per window share a key, so pairs are
+ * actually minted. Derived from `seq`, not drawn from the generator's `Random`,
+ * so adding the join arm leaves every group-by stream byte-identical.
+ */
+class OracleJoinKey(private val window: Long, private val alphabet: Int) : (Ev) -> Pair<Long, Int>, Serializable {
+    override fun invoke(e: Ev): Pair<Long, Int> = Math.floorDiv(e.t, window) * window to e.seq % alphabet
 }
