@@ -212,6 +212,15 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // by-default rule exists to prevent. ManagedHost.readState refuses instead.
 
     /**
+     * A [civictech.cell.KeyBound] is honoured, unlike a scope: the bound is over
+     * `K`, this cell's own key domain and the one its walk order is imposed
+     * over, so the two-domains objection that keeps [supportsScope] false does
+     * not apply — there is no neighbouring domain the bound could be mistaken
+     * for. It is applied at walk open, inside [EntryOrder]'s frozen key order.
+     */
+    override val supportsKeyBound: Boolean get() = true
+
+    /**
      * One page of this cell's key -> `(element, tag)` table (V1C-CELLS).
      *
      * - **One entry** is one [KeyedSetStateEntry] — `(key, element, tag)`.
@@ -256,7 +265,10 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // exactly as [snapshot] does. There is no outbound call in here, so the
         // monitor is only ever held across pure map work.
         @Suppress("UNCHECKED_CAST")
-        val walk = (request.cursor?.token as? KeyWalk<K>) ?: KeyWalk(EntryOrder.freeze(current.keys) { true }, 0)
+        // the key bound is read only when the walk opens; a resumed page carries
+        // it in its frozen `order` and never re-reads `request.keyBound`.
+        val walk = (request.cursor?.token as? KeyWalk<K>)
+            ?: KeyWalk(EntryOrder.freeze(current.keys) { k -> EntryOrder.admits(k, request.keyBound) }, 0)
         val order = walk.order
         val since = request.since?.perSource?.get(tagSource) ?: -1L
 

@@ -148,12 +148,21 @@ interface BoundedStateful : Stateful {
  * pays O(n log n) to freeze the walk order and O(page) per page to resume it
  * — the bound narrows the output, not the cost ceiling (`[KAGG-R-29]`).
  *
- * [from] and [to], when both non-null, are expected to be the same runtime
- * type as the keys a bound cell's [civictech.cell.data.EntryOrder] compares.
- * When an end is a different runtime class than the key it is compared
- * against, [civictech.cell.data.EntryOrder] rule 3 (compare by class name)
- * applies exactly as it would to any other cross-type comparison — this type
- * does not special-case it.
+ * **A non-null end must be the same runtime class as the keys it is compared
+ * against, or the walk is refused (D9, maintainer decision 2026-09-27).** A
+ * cell's `readBounded` throws [IllegalArgumentException] naming both classes
+ * when its walk compares a non-null key against an end of another class — at
+ * walk open, before any entry is answered — and [civictech.cell.host.ManagedHost.readState]
+ * answers that as [StateReadResult.Reason.READ_FAILED]. It is never answered by
+ * [civictech.cell.data.EntryOrder]'s cross-class rule (compare by class name),
+ * which would silently return nothing for `KeyBound(1, 10)` over `Long` keys
+ * and *everything* for `KeyBound(100, null)` — the silent widening obligation 5
+ * forbids. There is no numeric coercion: bound a `Long` key space with `Long`
+ * ends (`KeyBound(40L, 80L)`, not `KeyBound(40, 80)`). The check is against
+ * the keys actually compared, so a heterogeneous key space refuses any bound,
+ * a `null` key is not a mismatch, and an empty cell (nothing compared) answers
+ * its one empty page. This type does not check it at construction: it does not
+ * know the key class.
  */
 data class KeyBound(val from: Any?, val to: Any?) : Serializable {
     init {
