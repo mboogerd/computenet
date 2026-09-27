@@ -164,8 +164,10 @@ interface IntersectSetApi<E> {
  * An exclusive element kept at flush because it cannot be evicted is recorded
  * as an [ExclusiveEvictionRefused] immediately, in the same flush, rather than
  * waiting for the next rise (`[24-WL-17]`, computenet-7y4sm) — the gated cell
- * and the ungated one agree on `refusedRows()`/`refusedEvictions` at
- * quiescence with no further floor rise, matching `[24-WL-10]`.
+ * and the ungated one agree on `refusedRows()` at quiescence with no further
+ * floor rise, matching `[24-WL-10]`. `refusedEvictions` agrees when one rise
+ * passed the buffered add; when several did, the ungated cell counts one per
+ * rise and the gated cell one at flush.
  *
  * **Single-instance only (`[24-WL-18]`)**, checked in [WaterlineEviction.evict].
  */
@@ -216,10 +218,10 @@ class IntersectSetCell<E>(
 
     private var refused: List<ExclusiveEvictionRefused> = emptyList()
 
-    /** The passed elements refused eviction on the latest rise because they are exclusive (`[24-WL-17]`). Not snapshotted. */
+    /** The passed elements refused eviction on the latest rise, plus any a gated flush kept since, because they are exclusive (`[24-WL-17]`). Not snapshotted. */
     fun refusedRows(): List<ExclusiveEvictionRefused> = refused
 
-    /** Cumulative count of per-element eviction refusals, one per refused element per rise. A counter, not state. */
+    /** Cumulative count of per-element eviction refusals, one per refused element per rise and one per exclusive element a gated flush keeps. A counter, not state. */
     var refusedEvictions: Long = 0
         private set
 
