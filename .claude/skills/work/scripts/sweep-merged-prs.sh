@@ -156,11 +156,23 @@ while IFS=$'\t' read -r id action worktree why; do
   # the opposite of a backstop.
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "would close: $id — $why"
-  elif bd close "$id" >/dev/null 2>&1; then
+  elif err=$(bd close "$id" 2>&1 >/dev/null); then
     echo "closed: $id — $why"
     closed=$((closed + 1))
   else
-    echo "FAILED to close: $id — $why (left for the next sweep)" >&2
+    # A merged bead blocked by open issues is usually blocked by its own review
+    # residual (review.md makes the feature depend on the gap bug it files).
+    # That refusal never clears by itself, so "left for the next sweep" is a
+    # lie, and main's CI may already be red on the residual since the merge.
+    # Say what bd said and who blocks it. Edges are NOT removed here: whether
+    # a blocker is really this bead's residual is a judgement (computenet-9ha2y).
+    echo "FAILED to close: $id — $why: ${err:-no error text}" >&2
+    if blockers=$(sed -nE 's/.*blocked by open issues \[([^]]*)\].*/\1/p' <<<"$err") \
+       && [ -n "$blockers" ]; then
+      echo "  blockers of $id: $blockers — likely its review residual(s); check main's CI for them (a residual's base_branch may name a squash-merged branch), then close or unlink by hand" >&2
+    else
+      echo "  (left for the next sweep)" >&2
+    fi
     failed=$((failed + 1))
     continue          # never remove a worktree whose bead did not close
   fi
