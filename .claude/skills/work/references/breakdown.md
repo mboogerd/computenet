@@ -46,8 +46,8 @@ park if it would change what the spec already means.
 **Tag every factual claim with how you know it.** Later agents execute what you
 write literally and cannot tell a guess from a check. A claim about existing
 code or tools, a claim that a test proves a property, a cost or duration, a
-prescribed command, reproduction or check (mutation route, fixture values,
-expected result) is either `observed:` with the command, run or sha, or
+prescribed command, reproduction or check (mutation route and the assertion
+it should redden, fixture values, expected result) is either `observed:` with the command, run or sha, or
 `unverified:` so the implementer checks it first. A negative assertion over
 values you chose ("not any member's row") can be false by coincidence; do the
 arithmetic before writing it. A bug reproduction you did not watch fail on the
