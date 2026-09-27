@@ -3,7 +3,9 @@ import { renderToString } from 'solid-js/web';
 import { describe, expect, it, vi } from 'vitest';
 import type { GraphDto } from '../src/api/types';
 import { EmptyState, EXAMPLES } from '../src/components/EmptyState';
+import { Legend } from '../src/components/Legend';
 import { QuestionInput } from '../src/components/QuestionInput';
+import { ThemeToggle } from '../src/components/ThemeToggle';
 import { TreeView } from '../src/components/TreeView';
 
 vi.mock('../src/sync/store', () => ({
@@ -14,7 +16,7 @@ vi.mock('../src/sync/store', () => ({
 }));
 
 const graph: GraphDto = {
-  questions: [{ root: 'q', text: 'Should we?', claims: 2, active: true }],
+  questions: [{ root: 'q', text: 'Should we?', claims: 3, active: true }],
   nodes: [
     {
       ref: 'q', kind: 'CLAIM', credence: 0.63, root: 'q', text: 'Should we?', depth: 0,
@@ -28,6 +30,14 @@ const graph: GraphDto = {
       ref: 'a-q', kind: 'EDGE', credence: 0.8, root: 'q', polarity: 'SUPPORT',
       source: 'a', target: 'q', strength: 0.8,
     },
+    {
+      ref: 'b', kind: 'CLAIM', credence: 0.3, root: 'q', text: 'It has a cost.', depth: 2,
+      status: 'PRUNED', override: 'AUTO', proposer: 'codex', reach: 0.32,
+    },
+    {
+      ref: 'b-a', kind: 'EDGE', credence: 0.4, root: 'q', polarity: 'ATTACK',
+      source: 'b', target: 'a', strength: 0.4,
+    },
   ],
 };
 
@@ -38,6 +48,14 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('for="ask-input"');
     expect(html).toContain('type="submit"');
     expect(html).toContain('Deliberate');
+  });
+
+  it('UI-01 exposes busy and failed submission outcomes', () => {
+    const html = renderToString(() => <QuestionInput ask={async () => false} busy error="backend unavailable" />);
+    expect(html).toContain('disabled');
+    expect(html).toContain('Asking…');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('backend unavailable');
   });
 
   it('UI-02/UI-03 renders a rooted tree with all claim and argument facts', () => {
@@ -55,7 +73,9 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('claude');
     expect(html).toContain('aria-label="Exploration override"');
     expect(html).toContain('branch--pro');
+    expect(html).toContain('branch--con');
     expect(html).toContain('Pro');
+    expect(html).toContain('Con');
     expect(html).toContain('decisive link');
     expect(html).toContain('80%');
     // reach drives visual weight; a non-AUTO override stays visible at rest
@@ -63,7 +83,28 @@ describe('SPEC UI contract', () => {
     expect(html).toMatch(/--w:\s*0\.94/);
     expect(html).toContain('is-pinned');
     // the root is still active, so the progress line is shown as busy
-    expect(html).toContain('1 of 2 claims settled');
+    expect(html).toContain('2 of 3 claims settled');
+  });
+
+  it('makes every progressive disclosure keyboard/touch reachable and relates it to its panel', () => {
+    const html = renderToString(() => <TreeView graph={graph} root="q" />);
+    expect(html).toContain('aria-controls="facts-q"');
+    expect(html).toContain('aria-controls="facts-a"');
+    expect(html).toContain('aria-controls="children-a"');
+    expect(html).toContain('id="children-a"');
+    expect(html).toContain('aria-label="Hide arguments for It would help."');
+    expect(html.match(/aria-label="Exploration override"/g)).toHaveLength(3);
+    expect(html).toContain('aria-pressed="true"');
+  });
+
+  it('uses native or labelled controls for help and theme disclosure', () => {
+    const legend = renderToString(() => <Legend />);
+    const theme = renderToString(() => <ThemeToggle />);
+    expect(legend).toContain('<details');
+    expect(legend).toContain('<summary');
+    expect(legend).toContain('aria-label="How to read this"');
+    expect(theme).toContain('type="button"');
+    expect(theme).toContain('aria-label="Switch to dark theme"');
   });
 
   it('shows a helpful empty state with clickable examples', () => {

@@ -63,6 +63,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
         const counts = () => sideCounts(e().node);
         const override = () => claim().override ?? 'AUTO';
         const panelId = () => `facts-${claim().ref}`;
+        const childrenId = () => `children-${claim().ref}`;
 
         return (
           <li
@@ -115,6 +116,8 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                     type="button"
                     class="linkish"
                     aria-expanded={!collapsed()}
+                    aria-controls={childrenId()}
+                    aria-label={`${collapsed() ? 'Show' : 'Hide'} arguments for ${claim().text}`}
                     onClick={() => setCollapsed(!collapsed())}
                   >
                     <span class="chevron" classList={{ 'is-collapsed': collapsed() }} aria-hidden="true" />
@@ -136,7 +139,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
             </article>
 
             <Show when={childRefs().length > 0 && !collapsed()}>
-              <ul class="children">
+              <ul class="children" id={childrenId()}>
                 <For each={childRefs()}>{(ref) => <ClaimCard claimRef={ref} index={props.index} sel={props.sel} />}</For>
               </ul>
             </Show>

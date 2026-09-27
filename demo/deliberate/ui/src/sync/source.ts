@@ -8,6 +8,6 @@ export interface GraphSource {
   start(onGraph: (g: GraphDto) => void, onState: (s: ConnState) => void): void;
   stop(): void;
   /** Submits a question; resolves to the new root claim ref. */
-  ask(text: string): Promise<string | undefined>;
+  ask(text: string): Promise<string>;
   override(id: string, mode: Override): Promise<void>;
 }

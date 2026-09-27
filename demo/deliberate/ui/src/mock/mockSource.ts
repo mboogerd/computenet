@@ -6,10 +6,10 @@ import type { ConnState, GraphSource } from '../sync/source';
  *  questions (the welcome screen); asking anything then runs the script with
  *  that text. Overrides are applied locally so the control visibly works. */
 export class MockSource implements GraphSource {
-  private timer?: ReturnType<typeof setTimeout>;
+  private timers = new Set<ReturnType<typeof setTimeout>>();
   private nodes = new Map<string, NodeDto>();
   private onGraph?: (g: GraphDto) => void;
-  private running = false;
+  private nextQuestion = 0;
 
   constructor(
     private stepMs = 650,
@@ -17,9 +17,11 @@ export class MockSource implements GraphSource {
   ) {}
 
   start(onGraph: (g: GraphDto) => void, onState: (s: ConnState) => void): void {
+    this.stop();
     onState('mock');
     this.onGraph = onGraph;
     this.nodes.clear();
+    this.nextQuestion = 0;
     if (this.empty) {
       onGraph(this.snapshot());
       return;
@@ -28,35 +30,48 @@ export class MockSource implements GraphSource {
     this.run();
   }
 
-  private run(questionText?: string): void {
-    if (this.running) return;
-    this.running = true;
-    const steps = script(this, questionText);
+  private run(questionText?: string): string {
+    const { root, steps } = script(this, this.nextQuestion++, questionText);
     let i = 0;
     const tick = () => {
       if (i < steps.length) steps[i++]();
       this.onGraph?.(this.snapshot());
-      if (i < steps.length) this.timer = setTimeout(tick, this.stepMs);
+      if (i < steps.length) {
+        let timer!: ReturnType<typeof setTimeout>;
+        timer = setTimeout(() => {
+          this.timers.delete(timer);
+          tick();
+        }, this.stepMs);
+        this.timers.add(timer);
+      }
     };
     tick();
+    return root;
   }
 
   stop(): void {
-    clearTimeout(this.timer);
-    this.running = false;
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
+    this.onGraph = undefined;
   }
 
-  async ask(text: string): Promise<string | undefined> {
+  async ask(text: string): Promise<string> {
     console.info('[mock] POST /question', { text });
-    if (this.running) return undefined;
-    this.run(text);
-    return 'q0';
+    return this.run(text);
   }
 
   async override(id: string, mode: Override): Promise<void> {
     console.info('[mock] POST /override', { id, mode });
-    const status = mode === 'STOP' ? 'STOPPED' : mode === 'EXPAND' ? 'EXPLORING' : undefined;
-    this.set(id, status ? { override: mode, status } : { override: mode });
+    const node = this.nodes.get(id);
+    if (node?.kind !== 'CLAIM') throw new Error(`unknown claim ${id}`);
+    const status = mode === 'STOP'
+      ? 'STOPPED'
+      : mode === 'AUTO' && node.status === 'STOPPED'
+        ? 'QUEUED'
+        : mode === 'EXPAND' && node.status !== 'BUDGET' && (node.status === undefined || !ACTIVE_STATUSES.has(node.status))
+          ? 'EXPLORING'
+          : node.status;
+    this.set(id, { override: mode, status });
     this.onGraph?.(this.snapshot());
   }
 
@@ -87,7 +102,13 @@ export class MockSource implements GraphSource {
 
   set(ref: string, patch: Partial<NodeDto>): void {
     const n = this.nodes.get(ref);
-    if (n) this.nodes.set(ref, { ...n, ...patch });
+    if (n) {
+      const next = { ...n, ...patch };
+      // CTL-03: scripted in-flight results may still arrive, but STOP remains
+      // terminal until the user returns the claim to AUTO.
+      if (n.override === 'STOP' && patch.override === undefined) next.status = 'STOPPED';
+      this.nodes.set(ref, next);
+    }
   }
 
   edge(child: string, parent: string, strength: number): void {
@@ -134,9 +155,30 @@ function seedFinished(m: MockSource): void {
   m.edge('w3', 'w1', 0.61);
 }
 
-function script(m: MockSource, text = 'Should cities ban private cars from their centres?'): Array<() => void> {
+function script(
+  source: MockSource,
+  sequence: number,
+  text = 'Should cities ban private cars from their centres?',
+): { root: string; steps: Array<() => void> } {
+  const root = `q${sequence}`;
+  const scoped = (ref: string) => (ref === 'q0' ? root : `${root}-${ref}`);
+  const m = {
+    claim: (ref: string, treeRoot: string, claimText: string, depth: number, proposer: string, patch?: Partial<NodeDto>) =>
+      source.claim(scoped(ref), scoped(treeRoot), claimText, depth, proposer, patch),
+    arg: (
+      ref: string,
+      treeRoot: string,
+      parent: string,
+      polarity: Polarity,
+      claimText: string,
+      proposer: string,
+      patch?: Partial<NodeDto>,
+    ) => source.arg(scoped(ref), scoped(treeRoot), scoped(parent), polarity, claimText, proposer, patch),
+    set: (ref: string, patch: Partial<NodeDto>) => source.set(scoped(ref), patch),
+    edge: (child: string, parent: string, strength: number) => source.edge(scoped(child), scoped(parent), strength),
+  };
   const q = 'q0';
-  return [
+  const steps = [
     () => m.claim(q, q, text, 0, 'question'),
     () => m.set(q, { status: 'JUDGING' }),
     () => m.set(q, { status: 'EXPLORING', plausibility: 0.5 }),
@@ -220,4 +262,5 @@ function script(m: MockSource, text = 'Should cities ban private cars from their
       m.set('c3a2', { status: 'BUDGET', plausibility: 0.5, credence: 0.5 });
     },
   ];
+  return { root, steps };
 }

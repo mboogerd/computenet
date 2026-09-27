@@ -30,7 +30,7 @@ export function App() {
     setAskError(undefined);
     try {
       const root = await source.ask(text);
-      if (root) setSelected(root);
+      setSelected(root);
       return true;
     } catch (err) {
       setAskError(err instanceof Error ? err.message : String(err));
