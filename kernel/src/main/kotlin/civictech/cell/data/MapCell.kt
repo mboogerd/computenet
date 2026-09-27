@@ -3,6 +3,7 @@ package civictech.cell.data
 import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Cursor
+import civictech.cell.KeyBound
 import civictech.cell.ExclusiveEntry
 import civictech.cell.Propagate
 import civictech.cell.StatePage
@@ -118,6 +119,13 @@ class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, 
      */
     override val supportsScope: Boolean get() = true
 
+    /**
+     * A [civictech.cell.KeyBound] is over `K` — the same domain [supportsScope]'s
+     * interest is over — and is applied at walk open inside [EntryOrder]'s frozen
+     * key order, composed with the scope by conjunction.
+     */
+    override val supportsKeyBound: Boolean get() = true
+
     // supportsSince stays false (the safe default): this cell mints no tags, so
     // ManagedHost.readState refuses a non-null `since` rather than letting this
     // cell answer full state as though the delta bound had been applied.
@@ -155,9 +163,10 @@ class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, 
         // reads the LIVE map, so it races the fold exactly as [snapshot] does.
         // There is no outbound call in here, so the monitor is only ever held
         // across pure map work.
-        val scope = request.scope
+        // scope and keyBound are read only when the walk opens: a resumed page
+        // carries both in its frozen `order` and never re-reads the request.
         @Suppress("UNCHECKED_CAST")
-        val walk = (request.cursor?.token as? KeyWalk<K>) ?: openWalk(scope)
+        val walk = (request.cursor?.token as? KeyWalk<K>) ?: openWalk(request.scope, request.keyBound)
         val order = walk.order
 
         val entries = ArrayList<Serializable>(minOf(request.limit, 64))
@@ -196,9 +205,11 @@ class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, 
     }
 
     /** The walk's one O(n log n) pass (V1C-CELLS): impose the key order once, never per page. */
-    private fun openWalk(scope: Interest?): KeyWalk<K> = synchronized(stateLock) {
-        val admit: (K) -> Boolean =
+    private fun openWalk(scope: Interest?, bound: KeyBound?): KeyWalk<K> = synchronized(stateLock) {
+        val inScope: (K) -> Boolean =
             if (scope == null || scope is Interest.Total) { _ -> true } else { k -> scope.admits(k) }
+        val admit: (K) -> Boolean =
+            if (bound == null) inScope else { k -> inScope(k) && EntryOrder.admits(k, bound) }
         KeyWalk(EntryOrder.freeze(state.keys, admit), 0)
     }
 

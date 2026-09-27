@@ -122,7 +122,7 @@ class RoutedWalkRefusalTest {
     // silently widened.
 
     @Test
-    fun `readRouted refuses SINCE_UNSUPPORTED and SCOPE_UNSUPPORTED before any task reaches the cell`() {
+    fun `readRouted refuses SINCE_UNSUPPORTED, SCOPE_UNSUPPORTED and KEY_BOUND_UNSUPPORTED before any task reaches the cell`() {
         val cell = spawn(PlainBoundedCell())
 
         val sinceResult = readRouted(registry, cell.ref, StateRead(since = TagFrontier(emptyMap())))
@@ -135,13 +135,18 @@ class RoutedWalkRefusalTest {
         scopeResult.get(TIMEOUT_MS, TimeUnit.MILLISECONDS) shouldBe
             StateReadResult.Unavailable(StateReadResult.Reason.SCOPE_UNSUPPORTED)
 
+        val keyBoundResult = readRouted(registry, cell.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        keyBoundResult.isDone.shouldBeTrue()
+        keyBoundResult.get(TIMEOUT_MS, TimeUnit.MILLISECONDS) shouldBe
+            StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+
         // decided on the caller's thread: no task was ever queued
         controller.step().shouldBeFalse()
         cell.reads shouldBe 0
     }
 
     @Test
-    fun `walkRouted refuses SINCE_UNSUPPORTED and SCOPE_UNSUPPORTED on return, with no page and no cell read`() {
+    fun `walkRouted refuses SINCE_UNSUPPORTED, SCOPE_UNSUPPORTED and KEY_BOUND_UNSUPPORTED on return, with no page and no cell read`() {
         val sinceCell = spawn(PlainBoundedCell())
         val sinceWalk = walkRouted(registry, sinceCell.ref, StateRead(since = TagFrontier(emptyMap())))
         sinceWalk.outcome.isDone.shouldBeTrue()
@@ -160,6 +165,17 @@ class RoutedWalkRefusalTest {
         scopeOutcome.pages shouldBe 0
         scopeOutcome.entries.shouldBeEmpty()
         scopeCell.reads shouldBe 0
+        controller.step().shouldBeFalse()
+
+        val keyBoundCell = spawn(PlainBoundedCell())
+        val keyBoundWalk = walkRouted(registry, keyBoundCell.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        keyBoundWalk.outcome.isDone.shouldBeTrue()
+        val keyBoundOutcome = keyBoundWalk.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        keyBoundOutcome.termination shouldBe
+            StateWalkOutcome.Termination.Refused(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        keyBoundOutcome.pages shouldBe 0
+        keyBoundOutcome.entries.shouldBeEmpty()
+        keyBoundCell.reads shouldBe 0
         controller.step().shouldBeFalse()
     }
 
