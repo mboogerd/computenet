@@ -1,0 +1,59 @@
+# No quiesce is needed between the adds: the sequence is strictly increasing
+# in event time, so every add's own contribution to the floor (its value minus
+# the lateness) can never exceed its own event time, and the floor before this
+# add (built from a strictly smaller max) is strictly below it too. The add is
+# therefore admitted whichever of the two hops (a->w directly, or a->wl->w)
+# the scheduler happens to run first — the ordering caveat 24-WL-LATE-01
+# documents does not apply here. One quiesce at the end settles eviction
+# before the final read.
+#
+# Correction to the breakdown's hand-derived goldens (computenet-t4od7.3,
+# resolved by re-deriving from Windows.tumbling/GroupByCell rather than by
+# assuming one window per decade): the bead's script (3, 12, 25, 38, 51, 64,
+# then 77, 90 — eight adds) skips window buckets 40 and 80 entirely (no
+# element's floorDiv(at, 10)*10 lands there), so its claimed final view
+# {"70": 1, "80": 1, "90": 1} is unreachable — the actual final state from
+# that script is {"70": 1, "90": 1}, two windows, not three. The script below
+# is a different nine-element sequence, chosen so that after six adds and
+# again after all nine the state genuinely holds three live windows (the
+# acceptance criterion's own nine-add, three-window shape), verified by
+# tracing Windows.tumbling's bucketing and GroupByCell.onFloorRaised's
+# eviction rather than by assuming even spacing.
+id: 24-WL-BOUND-01
+title: A window with lateness holds state bounded by the lateness horizon, not by stream length
+covers: [24-WL-19]
+profile: core
+kind: example
+narrative:
+  given: a set source of [event-time, value] pairs feeding a waterline (lateness 15) and a tumbling window (size 10, lateness 15), observed through a count view
+  when: nine strictly-increasing-event-time elements arrive
+  then: at every point the live windows are exactly those whose end lies above the current floor — never more than the lateness-plus-size horizon allows, regardless of how many elements have arrived ([24-WL-19])
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: wl, type: waterline, lateness: 15}
+    - {id: w, type: window, agg: count, window: {kind: tumbling, size: 10}, lateness: 15}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: wl}
+    - {from: a, to: w}
+    - {from: wl, to: w, inlet: waterline}
+    - {from: w, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [3, p1]}    # max=3, floor=-12 -> v {"0": 1}
+  - {type: apply, on: a, op: add, value: [12, p2]}   # max=12, floor=-3 -> v {"0": 1, "10": 1}
+  - {type: apply, on: a, op: add, value: [25, p3]}   # max=25, floor=10: window 0 (end 10) evicted -> v {"10": 1, "20": 1}
+  - {type: apply, on: a, op: add, value: [38, p4]}   # max=38, floor=23: window 10 (end 20) evicted -> v {"20": 1, "30": 1}
+  - {type: apply, on: a, op: add, value: [44, p5]}   # max=44, floor=29: window 20 (end 30) > 29, not evicted -> v {"20": 1, "30": 1, "40": 1}
+  - {type: apply, on: a, op: add, value: [51, p6]}   # max=51, floor=36: window 20 (end 30) evicted -> v {"30": 1, "40": 1, "50": 1}
+  # after six adds: three live windows (30, 40, 50) — the first of the two "both readings"
+  - {type: apply, on: a, op: add, value: [72, p7]}   # max=72, floor=57: windows 30 (end 40) and 40 (end 50) evicted -> v {"50": 1, "70": 1}
+  - {type: apply, on: a, op: add, value: [83, p8]}   # max=83, floor=68: window 50 (end 60) evicted -> v {"70": 1, "80": 1}
+  - {type: apply, on: a, op: add, value: [90, p9]}   # max=90, floor=75: window 70 (end 80) > 75, not evicted -> v {"70": 1, "80": 1, "90": 1}
+  # after nine adds: three live windows (70, 80, 90) — the second reading; the horizon
+  # (lateness 15 + size 10 = 25, spanning up to three 10-wide buckets) bounds state, not
+  # the stream length (nine elements observed, never more than three windows live at once).
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: {"70": 1, "80": 1, "90": 1}}
+  - {type: no-dead-letters}
