@@ -133,7 +133,16 @@ class FanInlet<Api : Any>(
         val stage = Stage(policy)
         stages += stage
         // Attach once; the release indirects through the (later re-wired) slot.
-        policy.attach(this) { inv -> stage.downstream(inv) }
+        // computenet-sdqq7: a throwing attach must leave the inlet unchanged —
+        // remove the just-added stage (and skip rewire()) before propagating,
+        // so a rejected policy is never left half-installed nor spliced into
+        // the chain by a later install's rewire().
+        try {
+            policy.attach(this) { inv -> stage.downstream(inv) }
+        } catch (t: Throwable) {
+            stages -= stage
+            throw t
+        }
         rewire()
     }
 

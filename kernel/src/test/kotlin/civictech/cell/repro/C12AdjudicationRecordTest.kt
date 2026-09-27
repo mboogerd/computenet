@@ -1,6 +1,7 @@
 package civictech.cell.repro
 
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain as shouldContainElement
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
@@ -68,7 +69,14 @@ class C12AdjudicationRecordTest {
         // [CHA2-31]: CHA2 cites this scenario as the existing coverage of the
         // RESTART re-baseline mechanism; it authors no duplicate.
         read("concord/corpus/21-propagation/21-REBASE-01.yaml") shouldContain "covers: [21-REBASE-01]"
-        read("doc/spec/CONCORDANCE.md") shouldContain "| 21-REBASE-01 | 21-REBASE-01 | covered |"
+        // Other scenarios may also cover the id (24-WL-REBASE-01, computenet-t4od7),
+        // so the row is read cell by cell rather than matched verbatim.
+        val row = read("doc/spec/CONCORDANCE.md").lineSequence()
+            .firstOrNull { it.startsWith("| 21-REBASE-01 |") }
+        requireNotNull(row) { "doc/spec/CONCORDANCE.md has no 21-REBASE-01 row" }
+        val cells = row.split('|').map { it.trim() }
+        cells[2].split(',').map { it.trim() } shouldContainElement "21-REBASE-01"
+        cells[3] shouldBe "covered"
     }
 
     @Test

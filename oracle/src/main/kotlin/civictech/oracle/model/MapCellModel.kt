@@ -184,17 +184,36 @@ import java.io.Serializable
  *   differential sweep.
  *
  * - **Window close / eviction.** `Windows` (`kernel/src/main/kotlin/civictech/cell/data/
- *   Windows.kt`) is not a cell — it is two pure key-assignment functions, `tumbling`/`sliding`,
- *   consumed by `FlatMapSetCell`/`GroupByCell`, both already in this vocabulary. Its own KDoc
- *   states plainly: *"Windows never close: late elements are ordinary adds and retractions
- *   flow… Watermark-driven eviction is deferred."* There is therefore no window-close/eviction
- *   *behaviour in the kernel itself* to model or to exclude — windowing-as-key-derivation is
- *   already fully expressible with the registered `flatMapSet`/`groupBy*` entries, and eviction
- *   is `KE4` (epic §5/§9 risk 7), unbuilt on the kernel side, out of scope here.
- *   *DISPUTES audit: no filing* — and this one could not produce a filing even in principle:
- *   there is no landed behaviour to check, so there is no requirement going unchecked.
- *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
- *   exist.
+ *   Windows.kt`) is not a cell — it is pure key-assignment/lateness functions, `tumbling`/
+ *   `sliding`/`Windows.Lateness`, consumed by `FlatMapSetCell`/`GroupByCell` (and the
+ *   join family), all already in this vocabulary. `KE4` (epic `computenet-lxo`) has since
+ *   landed watermark-driven eviction on the kernel side: `Windows`'s own KDoc no longer says
+ *   eviction is deferred — it now reads *"Watermark-driven eviction below the waterline floor
+ *   is opt-in per inlet — declare it with `Windows.Lateness`"* — and `GroupByCell`/join-family
+ *   eviction is built and tested (`WaterlineCellTest`, `WaterlineChurnTest`,
+ *   `GroupByEvictionTest`, `JoinFamilyEvictionTest`, `GroupByEvictionGlitchFreeTest`). This
+ *   bullet is therefore **excluded**, not unbuilt: the reason is the same one `WaterlineCell`'s
+ *   own entry below gives — a batch script reference has no expression for the live-wave
+ *   `sourceId`/timestamp the floor is folded from — but `BatchOracle` (the *concord* batch
+ *   reference, a different model from this `:oracle` module, per `ORA1 §HONEST-01`'s note
+ *   that the two are independently written) special-cases exactly this: its `Lateness` model
+ *   folds a waterline/lateness-declaring cell in script order instead of order-independently,
+ *   and its scenarios are checked with `incremental-equals-batch` against the live kernel.
+ *   Windowing-as-key-derivation without lateness remains fully expressible with the registered
+ *   `flatMapSet`/`groupBy*` entries and is unaffected by this bullet.
+ *   *DISPUTES audit: no filing for this exclusion.* The `[24-WL-*]` requirement family is `covered` in
+ *   `doc/spec/CONCORDANCE.md` except four ids the KE4.7 close-out ("KE4.7 close-out — the
+ *   `[24-WL-*]` ids and the B16 scenario the corpus does not carry", `concord/corpus/
+ *   DISPUTES.md`) leaves as open `gap` rows for reasons unrelated to this exclusion —
+ *   `[24-WL-04]` (a settlement consequence checked but not yet proven discriminating),
+ *   `[24-WL-15]` (a schema gap: no script verb reaches `retire(sourceId)`), `[24-WL-17]` and
+ *   `[24-WL-18]` (driver-binding gaps: no catalog id emits an `Owned`/`Replicable` set stream
+ *   into an evicting cell) — plus a fifth, undropped, B16 entry recording a glitch-free-wrap
+ *   scenario that was designed and deliberately not authored. None of the five concludes
+ *   eviction itself goes unchecked; each names the kernel test that checks it directly instead
+ *   (for example `[24-WL-04]`'s `WaterlineCellTest` pin, `[24-WL-15]`'s `WaterlineChurnTest`
+ *   pins). `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part
+ *   that does not touch lateness.
  *
  * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `ORA1 §MODEL-02`'s
  *   minimum list; **excluded**, per the bead's default direction. Verified against its own
@@ -252,6 +271,34 @@ import java.io.Serializable
  *   `WatermarkCellBoundedReadTest.kt`,
  *   `kernel/src/test/kotlin/civictech/cell/replication/DeliveredWatermarkTest.kt`), and by
  *   `civictech.cell.consistency.ReplicaQuorum`'s own tests where it is actually consumed.
+ *
+ * - **`WaterlineCell`.** (computenet-sjqat, KE4.2.) Verified against its own KDoc
+ *   (`kernel/src/main/kotlin/civictech/cell/data/Waterline.kt`): the event-time waterline of
+ *   spec 24 §Lateness and waterlines folds per-source maxima into a monotone floor, and the
+ *   *source* of each contribution is the arriving wave's `sourceId`, read from
+ *   `CurrentContext.get()?.timestamp` — a delivery under a null or baseline context contributes
+ *   nothing. Like `WatermarkCell` it has no `@Contract` and no application-facing `Use<Ops>`
+ *   inlet; its input is keyed by a live-wave signal with no expression in a [Script]/
+ *   [ScriptEvent] slice, so a batch script reference cannot say which source an event belongs
+ *   to, and the floor is a function of exactly that. **Excluded** as uncheckable by a batch
+ *   reference. It is also not named in epic computenet-4ru §3.1's operator inventory; it
+ *   postdates it.
+ *   *DISPUTES audit:* `[24-WL-02]`/`[24-WL-03]` are exercised by the kernel's own suite
+ *   (`kernel/src/test/kotlin/civictech/cell/data/WaterlineCellTest.kt`), which stamps each
+ *   delivery's wave context directly — the absence here is of a batch check, not of the
+ *   requirements' coverage. `[24-WL-15]` (`retire(sourceId)`) is pinned by
+ *   `kernel/src/test/kotlin/civictech/cell/data/WaterlineChurnTest.kt` rather than
+ *   `WaterlineCellTest`. `[24-WL-04]` and `[24-WL-15]` are also two of the four `[24-WL-*]`
+ *   ids the KE4.7 close-out ("KE4.7 close-out — the `[24-WL-*]` ids and the B16 scenario the
+ *   corpus does not carry", `concord/corpus/DISPUTES.md`) leaves open as `gap` rows in
+ *   `doc/spec/CONCORDANCE.md` — `[24-WL-04]` because the settlement consequence is checked
+ *   but not yet proven discriminating, `[24-WL-15]` because the closed script-step vocabulary
+ *   has no verb reaching a cell's management surface — alongside `[24-WL-17]`/`[24-WL-18]`
+ *   (driver-binding gaps, `Owned`/`Replicable` set streams into an evicting cell). None of the
+ *   four is a case of a requirement going unchecked: each entry names its kernel pin (this
+ *   bullet's `WaterlineCellTest`/`WaterlineChurnTest` among them), so "no filing" still holds
+ *   for what this ledger tracks — no `[24-WL-*]` requirement is uncheckable *anywhere*, only
+ *   uncheckable by this batch reference.
  */
 
 /**

@@ -1,0 +1,49 @@
+# No quiesce is needed around the two `remove` steps for the ordering reason
+# 24-WL-LATE-01 documents: `[24-WL-08]` dels are never filtered by time (only
+# TagState's liveness fold gates them), so their outcome never depends on
+# whether the waterline's floor update or the window's own copy of the
+# delivery is processed first. The one quiesce before the removes settles the
+# floor-raising adds; the one after settles eviction before the final read.
+#
+# `late` is deliberately left unlinked: the below-floor drop still happens
+# ([24-WL-07]) on every add, but nothing here observes it — this scenario is
+# about the del/eviction interaction, not the late path (24-WL-LATE-01 covers
+# that).
+id: 24-WL-DEL-01
+title: A del of a live element below the floor retracts it and can kill its group; a del of an already-evicted element is a no-op with no dead letters
+covers: [24-WL-08, 24-WL-09, 24-OP-GROUPBY-02]
+profile: core
+kind: example
+narrative:
+  given: a set source of [event-time, value] pairs feeding a waterline (lateness 2) and a tumbling window (size 10, lateness 2), observed through a count view; the late outlet is unlinked
+  when: a live element below the current floor is removed, its group's last member dies with it, a later floor rise evicts the group its sibling belonged to, and removes then arrive for both the already-retracted and the already-evicted elements
+  then: the live-but-below-floor removal folds through the ordinary liveness guard and kills its group ([24-WL-08], [24-OP-GROUPBY-02]); a removal of an evicted element is a no-op with no dead letter — the crash TagState's liveness check exists to prevent ([24-WL-09])
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: wl, type: waterline, lateness: 2}
+    - {id: w, type: window, agg: count, window: {kind: tumbling, size: 10}, lateness: 2}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: wl}
+    - {from: a, to: w}
+    - {from: wl, to: w, inlet: waterline}
+    - {from: w, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [12, y]}    # max=12, floor=10
+  - {type: apply, on: a, op: add, value: [21, z]}    # max=21, floor=19: window 10's end 20 > 19, not evicted -> v {"10": 1, "20": 1}
+  - {type: quiesce}
+  # 12 is below the floor (19), but its tag is still live: liveness, not time, is the
+  # guard on a del ([24-WL-08]) — it folds, and group 10's last member dying removes it
+  # (SQL group-death semantics, [24-OP-GROUPBY-02]).
+  - {type: apply, on: a, op: remove, value: [12, y]}   # -> v {"20": 1}
+  - {type: apply, on: a, op: add, value: [35, q]}      # max=35, floor=33: window 20's end 30 <= 33, evicted -> v {"30": 1}
+  - {type: quiesce}
+  - {type: apply, on: a, op: remove, value: [21, z]}   # evicted, no live tag: no-op, no dead letter ([24-WL-09])
+  - {type: apply, on: a, op: remove, value: [12, y]}   # already retracted: no-op
+  - {type: apply, on: a, op: add, value: [36, r]}      # -> v {"30": 2}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: {"30": 2}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

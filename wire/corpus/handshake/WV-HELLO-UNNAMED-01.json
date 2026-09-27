@@ -1,0 +1,20 @@
+{
+  "id": "WV-HELLO-UNNAMED-01",
+  "title": "legacy HELLO line carrying a mirrorRef with no peerName",
+  "category": "handshake",
+  "kind": "handshake-text",
+  "covers": ["WIR1-C07", "WIR1-I12"],
+  "codecVersion": 2,
+  "messageKind": "text",
+  "decoded": {
+    "type": "HELLO",
+    "fields": {
+      "mirrorRef": "00000000-0000-0000-0000-0000000000c1"
+    }
+  },
+  "encoded": {
+    "utf8": "HELLO 00000000-0000-0000-0000-0000000000c1",
+    "base64": "SEVMTE8gMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGMx"
+  },
+  "notes": "One WebSocket TEXT message, no terminator, no trailing space (SCHEMA.md §Kinds handshake-text). Pins the legacy HELLO grammar's unnamed form ([DSC1-HELLO-10], HelloProtocol.kt file KDoc: the legacy grammar is frozen). pinned-because-current ([WIR1-C16]): the session behaviour around this line (mirror spawn, announcement wiring) is feature computenet-ncz.5's HandshakeSessionBehaviourTest, not this vector — this vector pins only the text grammar HandshakeLines.lineOf builds from decoded, and specifically that omitting peerName produces no trailing space."
+}

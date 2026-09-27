@@ -179,11 +179,25 @@ the measured account of where and what it costs.
 ### A peering that re-opens mid-run is outside the determinism contract
 
 **A graph whose run re-opens a `Peering.Loopback` — `heal()` after `partition()` — is not
-trace-reproducible. `DstRun.assertDeterministic()` fails on it, and no rig-side change can make
-it pass.** On the churn mesh (`ChurnMesh.spec`) that is every drawn plan containing a
-`DepartureMode.PARTITION_SUSPEND` departure that is later rejoined or healed, and only those:
-`MeshPeer.rejoin` on a suspended peer is `heal()`, and `LinkControl.severing`'s heal is
-`Peering.Loopback.heal()`.
+trace-reproducible. `DstRun.assertDeterministic()` fails on it, and no change inside `:testkit`'s
+six public seams (§1) can make it pass.** On the churn mesh (`ChurnMesh.spec`) that is every drawn
+plan containing a `DepartureMode.PARTITION_SUSPEND` departure that is later rejoined or healed,
+and only those: `MeshPeer.rejoin` on a suspended peer is `heal()`, and `LinkControl.severing`'s
+heal is `Peering.Loopback.heal()`.
+
+**RESTATED (computenet-tp47y, 2026-09-25): a JVM-level pin of the entropy stream itself, outside
+any rig seam, CAN make it pass.** `GcSafetySweepTest`'s BS-13/LOCAL arm folds three
+`PartitionFault.park`s whose heal is exactly this `Loopback.heal()`, so every one of its seeds
+consumes the draw described below, not only a `PARTITION_SUSPEND`-drawing plan. MEASURED
+(darwin/arm64, LOCAL arm, seeds 1..200, budget 40_000, three sweeps each): with
+`UUID.randomUUID()`'s `SecureRandom` SPI left as shipped (fresh entropy), trace digests were
+identical on 4 of 200 seeds; with the SPI swapped for a `java.util.Random` reseeded per seed via
+`sun.misc.Unsafe` (test-only; `GcSafetySweepTest.PinnedUuidEntropy`), digests were identical on
+200 of 200 seeds, all three sweeps. So "no rig-side change" was too broad — it is accurate for
+every seam this document defines (§1), and false for a JVM-level swap of the static generator an
+in-process seam cannot reach. The cost is `sun.misc.Unsafe` (`jdk.unsupported`), deprecated for
+removal from JDK 23 on (JEP 471); see `PinnedUuidEntropy`'s KDoc for the mechanism, the
+self-check that fails loudly if the pin does not take, and the toolchain caveat.
 
 **The mechanism.** `Loopback.heal()` is `open()`: it spawns fresh `RegistryMirrorCell`s and calls
 `Peering.announceTo` on both sides. `announceTo`'s catch-up sweep is
@@ -232,10 +246,19 @@ sweep.
 **The verdict-level consequence, which is what actually bites a consumer.** Because the failing
 region moves, **pinning a failing SEED SET by number is unsound over this rig** — four 200-seed
 runs of one identical churn-mesh sweep produced failing sets of 12, 12, 15 and 14 seeds agreeing
-on only 6 members. **Pinning one recorded seed by repeated re-run IS sound**: a single seed
-re-run in isolation reproduces its own outcome (8 of 8 for each of six candidates). So record the
-seed and re-run it; never assert "exactly these seeds fail", and never assert an exact failure
-density. A sweep that asserts only `assertAllPassed()` names no seed and is unaffected.
+on only 6 members. **Pinning one recorded seed by repeated re-run is sound on computenet-l0gd's
+own candidates** (six of them scored 8 of 8), **but is not sound in general, and is not sound on
+`GcSafetySweepTest`'s churn sweep specifically.** RESTATED (computenet-tp47y, 2026-09-25,
+darwin/arm64, LOCAL arm, seeds 1..200, budget 40_000): computenet-nwnl's dedicated per-seed
+pins of the BS-13/LOCAL witness — five re-runs each, on every candidate seed the widened sweeps
+produced — scored at best 4 of 5, never 5 of 5. computenet-tp47y localized why: the seed alone
+does not fix the run, because `heal()`'s re-announcement order also draws fresh UUID entropy
+every run (the entry above); of the same 200 seeds, only 4 reproduced their trace digest under
+that fresh entropy across three sweeps, against 200 of 200 once the draw was pinned too. So a
+re-run count in isolation is not evidence that a seed is safe to pin on a sweep that folds a
+`PartitionFault.park`/`heal()` cycle — the count must be taken on that sweep itself, not inferred
+from a different sweep's candidates. A sweep that asserts only `assertAllPassed()` names no seed
+and is unaffected.
 
 **What the audit of existing sweeps found** (computenet-l0gd, same commit). No suite pins an
 exact failing seed set or an exact failure density over a `PARTITION_SUSPEND`-capable churn

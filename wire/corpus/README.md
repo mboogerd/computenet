@@ -369,9 +369,9 @@ branch (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:518-539`):
 ## 8. Payload discriminators
 
 The registered polymorphic list, grouped as `WireCodec.baselineModule`
-registers them (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:182-267`;
+registers them (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:183-272`;
 `grep -c 'subclass(' kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt`
-prints `40` = 33 `Any`-polymorphic registrations + 7 `Interest` arms):
+prints `41` = 34 `Any`-polymorphic registrations + 7 `Interest` arms):
 
 **Primitives** (no `@SerialName` — builtin kotlinx serializers; discriminator
 is the builtin descriptor's serial name, §3): `String` (`kotlin.String`),
@@ -382,8 +382,8 @@ is the builtin descriptor's serial name, §3): `String` (`kotlin.String`),
 `Timestamp`, `CellRef`, `PortRef`, `TopologyLink`, `MessageContext`.
 
 **Deltas** (spec 20/24 data-cell operator algebra): `CounterDelta`,
-`PnCounterDelta`, `WatermarkDelta`, `SetDelta`, `MapDelta`,
-`TaggedMapDelta`, `ListDelta`.
+`PnCounterDelta`, `WatermarkDelta`, `WaterlineDelta` (`[24-WL-03]`), `SetDelta`,
+`MapDelta`, `TaggedMapDelta`, `ListDelta`.
 
 **Replication / routing**: `RoutedCommand`, `Stamped`, `LeaderMark`,
 `Assignment`.
@@ -397,7 +397,7 @@ payload must never serialize at all (below).
 `Progress`, `SaturationSignal`, `EdgeOpen`, `EdgeClose`, `StateRequest`.
 
 **`Interest` arms** (its own `polymorphic` block,
-`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:257-266`): `Total`,
+`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:262-271`): `Total`,
 `Empty`, `Union`, `Intersect`, `Complement`, `Ranges`, `Slots`. **Not** bare
 simple names on the wire: each carries its own explicit `@SerialName`
 override in `kernel/src/main/kotlin/civictech/cell/link/Interest.kt`, and
@@ -408,11 +408,11 @@ string a reader must match is `Interest.<Name>`, not `<Name>` — distinct
 both from the bare simple name and from the `Any`-polymorphic namespace
 above (verify: `git grep -n 'SerialName("Interest\.' kernel/src/main/kotlin/civictech/cell/link/Interest.kt`).
 
-Every one of the 33+7 registrations except the 5 primitives and `Uuid`
-carries an explicit `@SerialName` — equal to its simple name for the 27
+Every one of the 34+7 registrations except the 5 primitives and `Uuid`
+carries an explicit `@SerialName` — equal to its simple name for the 28
 `Any`-polymorphic classes, `Interest.<Name>` for the 7 arms above (verified by the
 sibling task ncz.1.3's breakdown comment: `git grep -n 'SerialName("'` over
-`kernel/src/main/kotlin` matches all 33 `Any` registrations and 7 `Interest`
+`kernel/src/main/kotlin` matches all 34 `Any` registrations and 7 `Interest`
 arms) — no fully-qualified Kotlin class name appears among these
 discriminators.
 

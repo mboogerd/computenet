@@ -1163,6 +1163,18 @@ holds too: these belong to whoever replans *engines*, not to this checkpoint.
   `CombineLatestCell(emitOnFrontier = true)` may feed a view of an
   `observeAligned` composite, or the inlet of another gated operator.**
 
+  > **Re-trued 2026-09-26.** Landed as `computenet-0favn` (PR #1089, commit
+  > `c9b741e5`): `emitOnFrontier`/`WaveGate` now gates the whole binary-join
+  > family (`SemiJoinCell`, `CombineLatestCell`, `JoinSetCell`, `JoinCell`,
+  > `IntersectSetCell`, `LookupJoinCell`); the default stays ungated, and the
+  > "only `SemiJoinCell`/`CombineLatestCell` may feed" sentence above is
+  > superseded. The current admission rule for an ungated cell in an aligned
+  > composite is KE2-F3 / `computenet-lw0mv` ([KE2-09]), not restated here.
+  > `InternalConsistencyTest` keeps E2-SUITE's third control deliberately
+  > ungated (per its own KDoc), so the tripwire described below never fired
+  > and this note would have silently outlived the change without this pass
+  > (found by `computenet-0favn`'s feature review, filed as `computenet-p4dbv`).
+
   **Deliberately not ticketed here**, though it is ticket-ready. It is 96-plan
   §E2.4 scope, and the 99-plan explicitly left E1.4–E1.6, E2.6 and E3+ with the
   96-plan "until a later replan"; minting one E2.4 ticket from an *inspector*
@@ -1188,6 +1200,10 @@ Six stops, in decreasing order of how close they came to a Go.
 3. **The `JoinSetCell`/`IntersectSetCell`/`JoinCell`/`LookupJoinCell`
    `emitOnFrontier` extension.** Ticket-ready, but 96-plan §E2.4 scope; owned
    by the next engines replan, with a live tripwire in the meantime.
+   **Re-trued 2026-09-26**: landed as `computenet-0favn` (PR #1089, commit
+   `c9b741e5`) — all four cells now gate, default stays ungated; the
+   admission rule for an ungated cell in an aligned composite is KE2-F3 /
+   `computenet-lw0mv` ([KE2-09]) (filed as `computenet-p4dbv`).
 4. **Paging a drained host's checkpoint blob.** Newly visible, well-defined,
    and buys none of the property the paging primitive exists for.
 5. **Cursor residency** (O(n) key references per open walk, ×256). Bounded and

@@ -1,0 +1,106 @@
+# Correction to the breakdown's original wiring sketch (computenet-t4od7.7):
+# the sketch linked `a`/`b` — whose rows are `[k, at]` — directly into `wl`.
+# A waterline reads an `[at, value]` element's HEAD as its event time
+# (scenario.md's `lateness` table: `waterline` | ... | `[at, value]` -> `at`),
+# so feeding it `[k1, 10]` would read the key `k1` as a time, not the integer
+# `10`. scenario.md says so outright for this exact shape ("a waterline's
+# elements are read as `[at, value]` -- so for a join whose rows are `[k, at]`,
+# the waterline is fed by a source of `[at, ...]`"), and t4od7.1's review
+# comment on computenet-t4od7.1 states the same binding convention. `ta`/`tb`
+# below are that separate `[at, ...]` source per side — one per join inlet, so
+# the floor's per-side minimum (`[24-WL-02]`) still tracks each inlet's own
+# maximum independently, exactly as the sketch intended. Only the two adds that
+# actually raise a side's maximum are mirrored onto `ta`/`tb`; the three later
+# adds below existing per-side maxima (`b`'s `[k1, 40]`, `a`'s late `[k1, 20]`,
+# `b`'s late `[k2, 15]`) would leave the floor computation identical whether
+# mirrored or not, so they are omitted from `ta`/`tb` for clarity.
+#
+# Eviction arithmetic (`[24-WL-02]`: floor = min-over-sources(max event time) -
+# lateness; lateness 5 here):
+#   after ta=10, tb=12:  floor = min(10, 12) - 5 = 5
+#   after ta=30, tb=31:  floor = min(30, 31) - 5 = 25
+# At floor 25, rows with time < 25 are evicted at row granularity (`[24-WL-16]`):
+# a's `[k1, 10]` and b's `[k1, 12]` both fall below it, and the pair `[k1, 10,
+# 12]` they support exits as the fold's consequence, in the same delta as their
+# eviction -- never as a unit of its own (`JoinFamilyEvictionTest`'s
+# "B14 - a floor rise evicts both support rows and the pair exits with its
+# minted tag, in one delta" is the kernel-level pin for this; a control that
+# skipped the eviction step would leave `v` holding `[k1, 10, 12]` alongside
+# `[k2, 30, 31]`, which is exactly what that kernel test's tombstone-folding
+# consumer assertion catches -- outside this claim). k2's rows (30, 31) sit
+# above the new floor and are untouched: eviction is row-granular, not
+# whole-join.
+#
+# Quiesce rule (24-WL-LATE-01's wording): the floor path is now THREE hops
+# (`a`/`b` -> `ta`/`tb` -> `wl` -> `j`) while the data path `a`/`b` -> `j` is
+# one hop, so a `quiesce` separates every floor-raising pair of mirrored adds
+# from the dependent add that relies on the resulting floor -- the same
+# ordering hazard 24-WL-LATE-01 documents, just one hop further apart here.
+#
+# Verification note (computenet-t4od7.7, evidence.md's schedule-dependence
+# check, same experiment 24-WL-LATE-01 ran): deleting the quiesce between the
+# `ta=30`/`tb=31` adds and `b`'s `[k1, 40]` add does NOT redden this file's
+# checks under the 20-run schedule sweep (`./gradlew :concord:test
+# -Pconcord.profiles=core --rerun --tests
+# 'civictech.concord.runner.CorpusRunner'`, all 20 runs green). Reason: `40` is
+# far above every floor this run ever reaches (the floor only ever rises to
+# 25), so whichever hop wins the race — `b`'s add reaching `j` before or after
+# the delayed floor update — `40` is admitted either way; the value does not
+# sit in the gap between the pre- and post-rise floor that the general hazard
+# needs. The hazard the quiesce rule guards against is real (an add strictly
+# between 5 and 25 would race), this file's chosen value just does not
+# exercise it — recorded as a negative result, not assumed.
+id: 24-WL-JOIN-01
+title: A floor rise evicts both support rows of a windowed join's pair at row granularity; a del of an evicted row is a no-op; late rows leave on lateLeft/lateRight
+covers: [24-WL-16, 24-WL-09, 24-WL-10]
+profile: core
+kind: example
+narrative:
+  given: two set sources of [key, event-time] rows feeding a relational join (lateness 5) guarded by a waterline (lateness 5) fed by a companion [event-time, ...] source per side, observed through a set view of pairs and, on the join's late outlets, a set view per side
+  when: a floor rise puts one key's two support rows below the floor while another key's rows stay above it, a later add on the evicted key's side finds no live match, below-floor adds on each side arrive after the rise, and a remove targets an already-evicted row
+  then: the floor rise evicts both of the first key's support rows and their pair exits in the same delta, as the fold's consequence rather than as a unit of its own (B14, [24-WL-16]); the second key's pair survives untouched (row granularity); the post-rise add is admitted but pairs with nothing, since its match was evicted; each side's below-floor add lands on that side's late outlet with no pair minted; and the remove of the evicted row is a no-op with no dead letter ([24-WL-09])
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: ta, type: set-source}
+    - {id: tb, type: set-source}
+    - {id: wl, type: waterline, lateness: 5}
+    - {id: j, type: join, fn: key-of, lateness: 5}
+    - {id: v, type: set-view}
+    - {id: ll, type: set-view}
+    - {id: lr, type: set-view}
+  links:
+    - {from: a, to: j, inlet: left}
+    - {from: b, to: j, inlet: right}
+    - {from: ta, to: wl}
+    - {from: tb, to: wl}
+    - {from: wl, to: j, inlet: waterline}
+    - {from: j, to: v}
+    - {from: j, to: ll, outlet: lateLeft}
+    - {from: j, to: lr, outlet: lateRight}
+script:
+  - {type: apply, on: a, op: add, value: [k1, 10]}
+  - {type: apply, on: ta, op: add, value: [10, k1]}
+  - {type: apply, on: b, op: add, value: [k1, 12]}     # pair [k1, 10, 12] mints
+  - {type: apply, on: tb, op: add, value: [12, k1]}
+  - {type: quiesce}                                     # floor = min(10, 12) - 5 = 5
+  - {type: apply, on: a, op: add, value: [k2, 30]}
+  - {type: apply, on: ta, op: add, value: [30, k2]}
+  - {type: apply, on: b, op: add, value: [k2, 31]}     # pair [k2, 30, 31] mints
+  - {type: apply, on: tb, op: add, value: [31, k2]}
+  - {type: quiesce}                                     # floor = min(30, 31) - 5 = 25: a's [k1,10] and b's [k1,12] evicted -> pair [k1,10,12] exits (fold consequence, [24-WL-16]); k2's rows (>=25) untouched
+  - {type: apply, on: b, op: add, value: [k1, 40]}     # 40 >= 25: admitted; no live left k1 row (evicted) -> no pair
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [k1, 20]}     # 20 < 25: late -> lateLeft; a late row is never a live support, so no pair
+  - {type: apply, on: b, op: add, value: [k2, 15]}     # 15 < 25: late -> lateRight
+  - {type: apply, on: a, op: remove, value: [k1, 10]}  # evicted: no live tag -> no-op, no dead letter ([24-WL-09])
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: [[k2, 30, 31]]}
+  - {type: final-view, view: ll, equals: [[k1, 20]]}
+  - {type: final-view, view: lr, equals: [[k2, 15]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: incremental-equals-batch, view: ll}
+  - {type: incremental-equals-batch, view: lr}
+  - {type: no-dead-letters}

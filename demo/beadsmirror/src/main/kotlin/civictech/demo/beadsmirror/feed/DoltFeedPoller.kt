@@ -22,7 +22,9 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  *
  * Each tick:
  * 1. Reads the persisted checkpoint (or `null` for genesis) from [checkpoint].
- * 2. Calls [DoltCommitFeed.readFrom] with it. A [DoltCommitFeed] refuses an
+ * 2. Calls [DoltCommitFeed.readFromWithHead] with it — one `dolt_log` read
+ *    that bounds both the records and the head to persist (computenet-yspa5;
+ *    see "Why step 4 is sound" below). A [DoltCommitFeed] refuses an
  *    `afterCommit` that has fallen out of `dolt_log` with
  *    [CheckpointNotInHistoryException] — the history-truncation precondition
  *    computenet-dqj.1.2 left for this task to convert into the feature's
@@ -41,15 +43,15 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  *    [onBatch] and ONLY THEN persists the new checkpoint — so a crash between
  *    steps 3's two halves re-delivers the batch next tick (acceptable, replay
  *    is idempotent downstream) rather than ever skipping it (not acceptable).
- * 4. The new checkpoint is the LATER of the last record's commit and the head
- *    the tick observed before its read — so a commit that carries no
- *    `issues`/`dependencies` row (an `events`-only no-op `bd update`, a
- *    `comments`- or `labels`-only commit: none of those tables feed the fold)
- *    is passed over rather than pinning the checkpoint below head until some
- *    later commit happens to carry a record (bug computenet-btt30). An empty
- *    read therefore still advances the checkpoint, to that head.
+ * 4. The new checkpoint is [FeedRead.head] — the tail of the same `dolt_log`
+ *    that bounded the read — so a commit that carries no `issues`/
+ *    `dependencies` row (an `events`-only no-op `bd update`, a `comments`- or
+ *    `labels`-only commit: none of those tables feed the fold) is passed over
+ *    rather than pinning the checkpoint below head until some later commit
+ *    happens to carry a record (bug computenet-btt30). An empty read
+ *    therefore still advances the checkpoint, to that head.
  *
- * ## Why step 4 is sound, and why the head is read BEFORE the feed
+ * ## Why step 4 is sound, and why one read is enough
  *
  * The checkpoint means "every record at or below this commit has been
  * handed to [onBatch]", not "the commit of the last record" — and nothing
@@ -57,18 +59,23 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  * already persists the captured head, whatever that commit touched, and a
  * record's [FeedPosition] comes from its height in the whole `dolt_log`, never
  * from the checkpoint, so where the checkpoint sits cannot move a dot. Resume
- * from a record-less commit is an ordinary [DoltCommitFeed.readFrom] of the
- * commits after it.
+ * from a record-less commit is an ordinary [DoltCommitFeed.readFromWithHead]
+ * of the commits after it.
  *
- * The head must be the one read BEFORE [DoltCommitFeed.readFrom]: that read's
- * own `dolt_log` is then a superset of the observed one (bd history is linear
- * and append-only; a merge is refused by the read itself), so "the read found
- * no record after the checkpoint" covers every commit up to the observed head.
- * A head read AFTER the feed could name a commit that landed between the two
- * reads, carrying records the tick never saw, and persisting it would skip
- * them. The cost is one `dolt_log` read per tick; a tick whose observed head
- * already equals the checkpoint stops there, so an idle tick still costs one
- * read, as it did before.
+ * The head persisted must come from the *same* `dolt_log` read that bounded
+ * the records, which is exactly what [DoltCommitFeed.readFromWithHead]
+ * guarantees: `wanted` and both diff queries are scoped to precisely that
+ * log ([DoltCommitFeed] KDoc, RESOLVED note), so any commit in it — including
+ * one trailing the last record with no record of its own — was covered by
+ * this same pass. A head from a *later*, independent read could name a
+ * commit that landed after this tick's own log was read, carrying records
+ * this tick never saw, and persisting it would skip them; that is why this
+ * poller no longer reads the head via a separate [DoltCommitFeed.history]
+ * call before the feed read (computenet-btt30 did; computenet-yspa5 dropped
+ * it once `readFromWithHead` could hand back a head from its own single
+ * read). The cost is one `dolt_log` read per tick either way — one whose
+ * `afterCommit` already equals the tail it reads short-circuits before any
+ * diff query, so an idle tick still costs exactly that one read.
  *
  * Threading: [start] runs the loop on one daemon background thread; [stop]
  * (also reachable via [close]) requests it to stop and joins that thread
@@ -155,9 +162,9 @@ class DoltFeedPoller(
 
     /**
      * Runs one poll tick synchronously on the calling thread: read the
-     * checkpoint, observe the head, read the feed, hand any records to
-     * [onBatch], persist the new checkpoint — the observed head when no record
-     * lies beyond it (class KDoc, step 4). Raises via [onCondition] (default: throws
+     * checkpoint, read the feed and its bounding head in one call, hand any
+     * records to [onBatch], persist the new checkpoint at that head (class
+     * KDoc, step 4). Raises via [onCondition] (default: throws
      * [FeedConditionException]) on history truncation, emitting nothing. Any
      * other exception a tick's read raises — including a plain
      * [IllegalArgumentException] that is not [CheckpointNotInHistoryException]
@@ -165,13 +172,14 @@ class DoltFeedPoller(
      */
     fun pollOnce() {
         val after = checkpoint.read()
-        // Observed BEFORE the feed read — see the class KDoc, "Why step 4 is
-        // sound": only a head no newer than the read's own may be persisted.
-        val observed = feed.history()
-        val head = observed.lastOrNull()
-        if (head != null && head == after) return
-        val records = try {
-            feed.readFrom(after)
+        // A single dolt_log read bounds both the records and the head: see
+        // the class KDoc, "Why step 4 is sound" and
+        // [DoltCommitFeed.readFromWithHead]'s KDoc. Any commit in that one log
+        // was covered by this same pass, so its head is as safe to persist as
+        // a head read before the feed would have been — without the second
+        // `dolt_log` query that separate read cost (computenet-yspa5).
+        val read = try {
+            feed.readFromWithHead(after)
         } catch (e: CheckpointNotInHistoryException) {
             onCondition(FeedCondition.CheckpointGone(e.checkpoint))
             return
@@ -179,14 +187,12 @@ class DoltFeedPoller(
             onCondition(FeedCondition.HistoryMerged(e.mergeCommit))
             return
         }
-        val last = records.lastOrNull()
-        if (last != null) onBatch(records)
-        val advanceTo = when {
-            last == null -> head
-            // Record-less commits trail the batch up to the observed head.
-            last.position.commitHeight < observed.lastIndex -> head
-            else -> last.commitHash
-        }
+        if (read.records.isNotEmpty()) onBatch(read.records)
+        // read.head is the tail of the exact log that bounded read.records
+        // (record-less commits trailing the last record included), so it is
+        // always the right checkpoint to advance to — whether or not any
+        // record was found.
+        val advanceTo = read.head
         if (advanceTo != null && advanceTo != after) checkpoint.write(advanceTo)
     }
 

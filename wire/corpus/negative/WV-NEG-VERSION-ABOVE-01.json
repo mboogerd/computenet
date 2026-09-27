@@ -1,0 +1,22 @@
+{
+  "id": "WV-NEG-VERSION-ABOVE-01",
+  "title": "explicit \"version\":99 (above current) is refused as unsupported-version",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-C16",
+    "WIR1-I04"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"version\":99,\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJ2ZXJzaW9uIjo5OSwiY29udHJhY3RJZCI6LTk5NjQyNjIxNTczNDIxNjA0MCwibWV0aG9kSWQiOi0xMzQxNzU4Mjc1Mzc2MTc5MDMsImNlbGxSZWYiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDIifSwicG9ydE5hbWUiOiJpbmxldCIsInR5cGUiOiJQT1JUX0FQSSIsImFyZ3MiOltbIlN0YWxsIix7InJlYXNvbiI6IlNVU1BFTkRFRCJ9XV19"
+  },
+  "expect": {
+    "reject": "unsupported-version"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: `{\"version\":99,` spliced in right after the opening brace, before `\"contractId\"`. pinned-because-current ([WIR1-C16]): emitted frames carry no version key (`WireFrame.version` defaults to `WireCodec.VERSION` with `encodeDefaults` unset — `WireCodecTest.\"KE3-39 - VERSION is omitted from every encoded frame…\"`), so this guard is reachable only by a foreign frame; the check is strict equality, not a floor or range (this vector and WV-NEG-VERSION-BELOW-01 together pin that — B2.6/B2.7). Cite computenet-u5gb and doc/spec/40-distribution/42-replication.md §\"Decision: the frame version stays unemitted, and the check stays a foreign-frame guard\". Observed IllegalStateException \"unsupported wire version 99\". Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

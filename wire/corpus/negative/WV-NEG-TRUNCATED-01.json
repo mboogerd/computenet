@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-TRUNCATED-01",
+  "title": "A strict prefix of the seed's 200 bytes, cut mid-object",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I07"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9"
+  },
+  "expect": {
+    "reject": "truncated"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: the seed's first 120 bytes (floor(0.6 * 200), offset 120 of 200), ending right after the `cellRef` object closes and before `portName` begins. normative ([WIR1-I07]'s truncation clause): observed kotlinx.serialization.SerializationException (JsonDecodingException) \"Expected end of the object '}', but had 'EOF' instead at path: $\" — the JVM decoder DOES distinguish this from other malformed JSON by its own message, so no `malformed` fallback was needed here (SCHEMA.md's `truncated` classifies exactly). Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

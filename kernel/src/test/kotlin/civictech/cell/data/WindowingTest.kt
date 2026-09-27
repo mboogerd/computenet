@@ -6,8 +6,13 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import io.kotest.assertions.throwables.shouldThrow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
@@ -15,6 +20,17 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
 
 data class Reading(val sensor: String, val at: Long, val value: Long) : Serializable
+
+/** Named, [Serializable] `timeFn` for [Windows.Lateness] — never a lambda (`[24-WL-01]`). */
+private object ReadingEventTime : (Reading) -> Long, Serializable {
+    override fun invoke(r: Reading): Long = r.at
+
+    // Preserve singleton identity across a java.io round-trip, the ordinary JVM
+    // idiom for a Serializable object — without it, a deserialized copy is a
+    // distinct instance and Windows.Lateness's data-class equals (which compares
+    // timeFn structurally) sees two unequal ReadingEventTime instances.
+    private fun readResolve(): Any = ReadingEventTime
+}
 
 class WindowingTest {
 
@@ -109,5 +125,33 @@ class WindowingTest {
             held.forEach { r -> window(r.at).forEach { w -> batch.merge("${r.sensor}@$w", r.value, Long::plus) } }
             assertEquals(batch, mapFold(out), "sliding windows diverged from batch on seed $seed")
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Windows.Lateness — `[24-WL-01]`, `[KE4-01]`, `[KE4-02]`, `[KE4-37]`
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `Lateness rejects a negative lateness`() {
+        shouldThrow<IllegalArgumentException> { Windows.Lateness(ReadingEventTime, -1) }
+    }
+
+    @Test
+    fun `Lateness accepts a zero lateness`() {
+        val lateness = Windows.Lateness(ReadingEventTime, 0)
+        assertEquals(0L, lateness.lateness)
+    }
+
+    @Test
+    fun `Lateness built with a named Serializable timeFn survives a java-io round-trip`() {
+        val original = Windows.Lateness(ReadingEventTime, 5)
+
+        val bytes = ByteArrayOutputStream().also { ObjectOutputStream(it).use { out -> out.writeObject(original) } }.toByteArray()
+        @Suppress("UNCHECKED_CAST")
+        val revived = ObjectInputStream(ByteArrayInputStream(bytes)).readObject() as Windows.Lateness<Reading>
+
+        assertEquals(original, revived)
+        assertEquals(original.lateness, revived.lateness)
+        assertEquals(original.timeFn(Reading("s1", 7, 1)), revived.timeFn(Reading("s1", 7, 1)))
     }
 }

@@ -404,17 +404,19 @@ class MutualDialTest {
      * that down as the far side's tie-break close. That down is the one
      * tie-break close B counts, and it is quiet.
      *
-     * Known flake, a production race, not a test fault (computenet-wad38): the
-     * release lets B's reader deliver that waiting down BEFORE B's dial thread
-     * has run `observer.onUp` in `IrohConnection.openLink`. `IrohNode.down`
-     * then finds no record for the link and tells no listener, so "B's
-     * outbound loser to go down" times out — while B's stderr still carries
-     * the "went down unadmitted ... tie-break loss" line, because `retire`
-     * did run. Seen on build-test-fast in both attempts of run 35804856334
-     * (PR #1024, head 568f0a9d); whether that head raises the rate, and why,
-     * is open (computenet-4gbnc). The dial thread won that race in 15 of 15
-     * local runs of each of dff87ead and 568f0a9d (Darwin arm64). Do not loosen
-     * the await to hide it: the listener missing a down is the defect.
+     * computenet-wad38 names the race this test now guards against: the
+     * release used to let B's reader deliver that waiting down BEFORE B's
+     * dial thread had run `observer.onUp` in `IrohConnection.openLink`.
+     * `IrohNode.down` found no record for the link and told no listener, so
+     * "B's outbound loser to go down" timed out — while B's stderr still
+     * carried the "went down unadmitted ... tie-break loss" line, because
+     * `retire` did run. Seen on build-test-fast in both attempts of run
+     * 35804856334 (PR #1024, head 568f0a9d). `IrohNode.down` now stashes an
+     * early down in `downsBeforeUp` when it finds no record, and `up` replays
+     * it as onUp-then-onDown once the link registers, so the listener always
+     * sees the down regardless of which side of the race it lands on. Do not
+     * loosen the await to hide a regression here: the listener missing a down
+     * is the defect.
      *
      * Mutation (computenet-07hpc): replace `linksToSeed`'s larger-id guard
      * with `if (true)`, seeding settled dials at both ids. B's gate then sees
@@ -485,9 +487,12 @@ class MutualDialTest {
             try {
                 await("B's outbound loser to go down") { bDowns.any { it.first == dialFromB.link } }
             } catch (e: AssertionError) {
-                // computenet-wad38: the down reached B's connection before its
-                // dial thread published the link, and IrohNode dropped it. The
-                // signature is a registry that still lists the dead link.
+                // computenet-wad38's regression signature: the down reached
+                // B's connection before its dial thread published the link.
+                // IrohNode.down now stashes and replays that case (see the
+                // class doc above), so this timing out means that no longer
+                // happens; a registry that still lists the dead link narrows
+                // it to the fixed race rather than some other cause.
                 fail(
                     "B's listener never saw its outbound loser ${dialFromB.link} go down (computenet-wad38 if B " +
                         "still lists it): B's links to A ${b.links(a.own)}, downs seen $bDowns, " +
