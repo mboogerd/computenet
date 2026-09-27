@@ -767,11 +767,15 @@ requirement claims no bound for a join cell's state as a whole.
 **Source retirement.** A source that stops contributing would pin the
 minimum forever, so the floor forgets sources explicitly. `[24-WL-12]` WHEN an
 `EdgeClose` fires for a contributing source's edge, the `WaterlineCell` SHALL
-retire that source's maximum from the minimum; the floor then resumes
-advancing and SHALL still never exceed the promise of any remaining live
-source that has been contributing since at or before the floor's most recent
-rise (`[24-WL-02]`) (Event-driven). A remaining source that joined below the
-floor after that rise (`[24-WL-20]`) is not covered until it takes part in a
+retire that source's maximum from the minimum — unless the same `sourceId`
+has also arrived over another still-open edge of that inlet (a diamond: one
+source reaching the inlet through two relays), in which case, because a
+source is a `sourceId` and never a link (`[24-WL-02]`), it stays live and is
+retired only once the last edge still carrying it closes; the floor then
+resumes advancing and SHALL still never exceed the promise of any remaining
+live source that has been contributing since at or before the floor's most
+recent rise (`[24-WL-02]`) (Event-driven). A remaining source that joined
+below the floor after that rise (`[24-WL-20]`) is not covered until it takes part in a
 rise: the retirement does not lower the floor to it, and the floor does not
 rise again until the candidate, which now includes it, exceeds the floor.
 `[24-WL-13]` WHEN a `ReBaselineNotice` supersedes a source
