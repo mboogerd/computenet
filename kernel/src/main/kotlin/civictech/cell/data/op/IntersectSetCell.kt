@@ -149,7 +149,8 @@ interface IntersectSetApi<E> {
  * **Per-element exclusive refusal (`[24-WL-17]`).** A passed element that is
  * itself `Owned`/`Leased` is left live, untouched and undischarged, recorded
  * as an [ExclusiveEvictionRefused] (unit `"row"`) in [refusedRows] (replaced
- * on every rise) and counted in [refusedEvictions]; every other passed
+ * on every rise, and appended to by a gated flush that keeps one — see
+ * [sinceArrival]) and counted in [refusedEvictions]; every other passed
  * element still evicts in the same delta, and every later rise re-evaluates
  * it. Only a top-level exclusive element is detected (computenet-woto).
  *
@@ -160,6 +161,11 @@ interface IntersectSetApi<E> {
  * has passed by flush are evicted before they land
  * ([WaterlineEviction.dropPassedAdds]) — admitted, so not forwarded late —
  * which is the ungated cell's admit-then-evict under the same arrival order.
+ * An exclusive element kept at flush because it cannot be evicted is recorded
+ * as an [ExclusiveEvictionRefused] immediately, in the same flush, rather than
+ * waiting for the next rise (`[24-WL-17]`, computenet-7y4sm) — the gated cell
+ * and the ungated one agree on `refusedRows()`/`refusedEvictions` at
+ * quiescence with no further floor rise, matching `[24-WL-10]`.
  *
  * **Single-instance only (`[24-WL-18]`)**, checked in [WaterlineEviction.evict].
  */
@@ -340,12 +346,24 @@ class IntersectSetCell<E>(
     /**
      * Gated flush only: evict the adds of a buffered, arrival-admitted delta
      * that a floor rise has passed since it arrived (see
-     * [WaterlineEviction.dropPassedAdds]). The identity without a floor or
-     * without this side's declaration.
+     * [WaterlineEviction.dropPassedAdds]). An exclusive element kept despite
+     * having passed is recorded as an immediate `[24-WL-17]` refusal — appended
+     * to [refused] and counted in [refusedEvictions] right here at flush,
+     * rather than left to the next floor rise's [onFloorRaised] to discover
+     * (computenet-7y4sm: the gated cell must agree with the ungated one at
+     * quiescence, per `[24-WL-10]`). The identity without a floor or without
+     * this side's declaration.
      */
     private fun sinceArrival(value: SetDelta<E>, lateness: Windows.Lateness<E>?): SetDelta<E> {
         val current = floor
-        return if (lateness == null || current == null) value else WaterlineEviction.dropPassedAdds(lateness, current, value)
+        if (lateness == null || current == null) return value
+        val (kept, refusedElements) = WaterlineEviction.dropPassedAdds(lateness, current, value)
+        if (refusedElements.isNotEmpty()) {
+            val newlyRefused = refusedElements.map { ExclusiveEvictionRefused(ref, it, 1, unit = "row") }
+            refused = refused + newlyRefused
+            refusedEvictions += newlyRefused.size
+        }
+        return kept
     }
 
     private fun onWaterline(delta: WaterlineDelta) {
