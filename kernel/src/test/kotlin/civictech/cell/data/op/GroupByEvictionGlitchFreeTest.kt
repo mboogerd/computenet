@@ -151,64 +151,11 @@ class GroupByEvictionGlitchFreeTest {
     }
 
     /**
-     * A reflection-safe stand-in for installing the inlet arm directly on
-     * `gb.inlet`.
-     *
-     * `GroupByCell.inlet` is `@CellBase`-generated (`GroupByApi.inlet`); the
-     * generator wires its served handler with `onEach(this::onInlet)`
-     * (`ContractProcessor.kt`'s `SERVE_ROLE`/Propagate branch), and `onEach`
-     * (`civictech.cell.Propagate.kt`) SAM-converts that bound reference into a
-     * Kotlin-synthesized `PropagateKt$sam$civictech_cell_Propagate$0` — a
-     * non-public class. Installing ANY `InletPolicy` on an inlet routes every
-     * delivery through `FanInlet`'s reflective terminal
-     * (`Invocation.invoke`: `target.javaClass.methods.find{...}` +
-     * `Method.invoke`), which enforces the JVM's ordinary cross-package
-     * access rule on the method's DECLARING class — and that adapter class
-     * lives in package `civictech.cell`, one package away from
-     * `civictech.cell.proxy.Invocation`. So `gb.inlet.install(frontier.arm())`
-     * reddens on every delivery with `IllegalAccessException` (verified: it
-     * was tried first, and reproduced here before this relay replaced it —
-     * excerpted on this bead's follow-up). `gb.waterline` is unaffected:
-     * `GroupByCell` wires it with a plain (public) anonymous `Propagate`
-     * object, not `onEach` — see `GroupByCell.kt`'s init block.
-     *
-     * This is a pre-existing, orthogonal kernel gap — any `@CellBase`-
-     * generated inlet plus any installed `InletPolicy` — not a defect in
-     * task .3/.4's work, and out of reach of a test-only claim (filed as a
-     * follow-up, not parented here to avoid holding up this feature's
-     * review). The relay keeps the actual mechanism this test is about (one
-     * `WaveFrontier`, two arms, `waterline` attached first, nt17o-D2's release
-     * order) genuinely exercised through the real `WaveFrontier`/`GroupByCell`
-     * classes: the frontier's SECOND arm installs here — a plain public
-     * `Propagate` object, exactly like every hand-rolled inlet elsewhere in
-     * this file and in `WaveFrontierMultiInletTest` — which forwards
-     * synchronously, in the same wave's `CurrentContext`, straight into
-     * `gb.inlet.call.propagate(...)`: an ordinary (non-reflective) interface
-     * call, since `gb.inlet` itself carries no installed policy. The
-     * externally observed release order and content are identical to
-     * installing the arm directly on `gb.inlet`; only the internal wiring
-     * differs.
+     * The diamond, wired per nt17o-D2: waterline arm attached first, then inlet —
+     * both arms installed directly on the `@CellBase`-generated `GroupByCell`
+     * inlets (the `inlet` handler is `onEach`-bound; computenet-mdvgt made a
+     * policy on that shape deliverable).
      */
-    private class InletRelay(
-        private val gb: GroupByCell<Long, Long, Long, Long>,
-        override val ref: CellRef = CellRef(UUID.randomUUID()),
-    ) : Cell {
-        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Long>>>())
-
-        /** The wave of every delivery the frontier's inlet arm RELEASED, in release order. */
-        val released = mutableListOf<Timestamp?>()
-
-        init {
-            inlet.serve(object : Propagate<SetDelta<Long>> {
-                override fun propagate(value: SetDelta<Long>) {
-                    released += CurrentContext.get()?.timestamp
-                    gb.inlet.call.propagate(value)
-                }
-            })
-        }
-    }
-
-    /** The diamond, wired per nt17o-D2: waterline arm attached first, then inlet (via [InletRelay]). */
     private class Rig {
         val cell = GroupByCell(
             keyFn = Windows.tumbling(10),
@@ -218,7 +165,6 @@ class GroupByEvictionGlitchFreeTest {
         )
         val wc = WaterlineCell(lateness = Windows.Lateness(LongTime, 0))
         val src = Source()
-        val relay = InletRelay(cell)
         val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
     }
 
@@ -227,9 +173,9 @@ class GroupByEvictionGlitchFreeTest {
         // nt17o-D2: waterline arm attached FIRST — its release (eviction) precedes
         // the inlet arm's release (the wave's fold) within one wave.
         rig.cell.waterline.install(rig.frontier.arm())
-        rig.relay.inlet.install(rig.frontier.arm())
+        rig.cell.inlet.install(rig.frontier.arm())
         link(rig.src.outlet, rig.wc.inlet)
-        link(rig.src.outlet, rig.relay.inlet)
+        link(rig.src.outlet, rig.cell.inlet)
         link(rig.wc.outlet, rig.cell.waterline)
         return rig
     }
@@ -307,25 +253,31 @@ class GroupByEvictionGlitchFreeTest {
         val rig = buildRig()
         val gb = rig.cell
         val seen = recordWaves(gb)
-        rig.src.add(3, 15) // wave 1: floor -> 15, put {10: 1}
-        rig.src.add(12, 25) // wave 2: floor -> 25, removal {10}, put {20: 1}
+        val late = collect(gb.late)
+        rig.src.add(3, 15) // wave 1: floor -> 15, put {10: 1}, 3 late
+        rig.src.add(12, 25) // wave 2: floor -> 25, removal {10}, put {20: 1}, 12 late
         val emittedBeforeWave3 = seen.size
+        late.size shouldBe 2
 
-        // wave (S,3): the ONLY value that both keeps WC's max at 25 (so the floor
-        // does not raise) and is not late-dropped (>= floor 25) is 25 itself — a
-        // re-add of the element already live in window 20. GroupByCell's own
-        // contract (class KDoc: "membership flips, not tag churn, drive
-        // insert/retract") means this folds as tag churn: no flip, no MapDelta.
-        // WC's own delivery is likewise non-raising, so it absorb-acks
-        // (`raiseTo` returns false) instead of emitting a WaterlineDelta — the
-        // waterline arm's edge settles by Progress, never by an invocation.
-        rig.src.add(25)
+        // wave (S,3): {25, 24} keeps WC's max at 25, so the floor does not raise.
+        // 25 (not < 25) is a re-add of the element already live in window 20:
+        // GroupByCell's own contract (class KDoc: "membership flips, not tag
+        // churn, drive insert/retract") folds it as tag churn — no flip, no
+        // MapDelta. 24 (< 25) is late-dropped, so the fold's release is visible
+        // on `late` (the direct-wiring stand-in for counting the inlet arm's
+        // releases; the arm sits on the generated inlet itself). WC's own
+        // delivery is non-raising too, so it absorb-acks (`raiseTo` returns
+        // false) instead of emitting a WaterlineDelta — the waterline arm's
+        // edge settles by Progress, never by an invocation.
+        rig.src.add(25, 24)
 
-        seen.size shouldBe emittedBeforeWave3 // absorbed on both arms, nothing new
+        seen.size shouldBe emittedBeforeWave3 // absorbed on both arms, no MapDelta
         // the fold of wave 3 was released NOW, by WC's absorb-ack alone — not later,
         // swept out by wave 4's monotone watermark advance (which would leave the
-        // assertions below green even with the absorb-ack removed)
-        rig.relay.released.size shouldBe 3
+        // assertions below green even with the absorb-ack removed): with the
+        // absorb-ack gone, the frontier still holds wave 3 here and `late` is 2.
+        late.size shouldBe 3
+        late[2].adds.keys shouldBe setOf(24L)
         rig.wc.floor() shouldBe 25L
         gb.floor() shouldBe 25L
 
