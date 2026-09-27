@@ -356,8 +356,8 @@ class DeliberationEngine(
             val nodes = graph.mapNotNull { n ->
                 val values = n.credence?.values ?: neutral
                 val named = layers.named(values)
-                val credence = values[layers.headlineIndex]
                 val consensus = n.credence?.consensus ?: NEUTRAL
+                val credence = layers.headlineOf(values, consensus)
                 val low = n.credence?.spreadLow ?: NEUTRAL
                 val high = n.credence?.spreadHigh ?: NEUTRAL
                 claims[n.ref]?.let { c ->

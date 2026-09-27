@@ -107,7 +107,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
 | `--semantics-layers <ids>` | all seven | credence layers to propagate (`dfquad` always runs) |
 | `--consensus <ids>` | `wlo,jnb,woe` | layers averaged into the headline consensus |
-| `--semantics <id>` | `dfquad` | the layer reported as a node's `credence` |
+| `--semantics <id>` | `consensus` | what a node's `credence` reports: the consensus, or one layer id |
 | `--wlo-k` / `--wlo-p` / `--wlo-gamma` / `--wlo-alpha` | 2.4 / 2 / 1.3 / 1 | weighted log-odds parameters |
 | `--codex-input-rate` / `--codex-cached-rate` / `--codex-output-rate` | 4.00 / 0.40 / 20.00 | Codex price in USD per 1M tokens (SPEC §12); required for a `--codex-model` other than `gpt-5.6-sol`, else its cost is "rate unknown" and left out of the total |
 | `--jev-input-rate` / `--jev-output-rate` | 0.042 / 0 | Jev price in USD per 1M tokens — an assumption (third-party listing; TypeSafe publishes none) |

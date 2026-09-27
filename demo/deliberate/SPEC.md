@@ -101,8 +101,8 @@ names that model.)
   [min, max] of the credence over *all* layers. The consensus is a summary:
   nothing feeds it back into any layer or into a parent. The UI's headline
   number and verdict are the consensus, drawn over the spread as a band.
-  `--semantics` names the layer shown as `NodeDto.credence` (default
-  `dfquad`). No averaging layer beyond this consensus exists.
+  `--semantics` names what `NodeDto.credence` shows: `consensus` (the
+  default) or one layer id. No averaging layer beyond this consensus exists.
 - **CRED-06** The consensus and spread are **derived by the cells**: a
   claim or edge cell emits `{vector, consensus, spreadLow, spreadHigh}` with
   every change of its vector, and the graph's hub folds those emissions. The
