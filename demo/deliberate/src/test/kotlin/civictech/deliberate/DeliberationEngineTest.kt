@@ -1661,7 +1661,7 @@ class DeliberationEngineTest {
         val allowAll = AtomicBoolean(false)
         val e = engine(
             judge = decayingJudge(keep = 50, allowAll = allowAll),
-            config = deepConfig.copy(maxClaims = 55),
+            config = deepConfig.copy(maxClaims = 55, workers = 1),
         )
         e.ask("Q?")
         e.idle()
