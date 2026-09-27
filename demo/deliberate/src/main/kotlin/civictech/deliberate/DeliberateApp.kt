@@ -248,7 +248,7 @@ internal class Options(args: Array<String>) {
     val claudeModel get() = values["--claude-model"]
     val codexModel get() = values["--codex-model"]
     val ui get() = values["--ui"]?.let(::File)
-    val maxProcesses = (int("--max-processes") ?: 4)
+    val maxProcesses = (int("--max-processes") ?: DEFAULT_MAX_PROCESSES)
         .also { require(it > 0) { "--max-processes must be positive: $it" } }
 
     val config: DeliberationEngine.Config = DeliberationEngine.Config().let { d ->
@@ -257,8 +257,9 @@ internal class Options(args: Array<String>) {
             maxRounds = int("--max-rounds") ?: d.maxRounds,
             maxDepth = int("--max-depth") ?: d.maxDepth,
             maxClaims = int("--max-claims") ?: d.maxClaims,
+            maxArgsPerSide = int("--max-args-per-side") ?: d.maxArgsPerSide,
             saturation = double("--saturation") ?: d.saturation,
-            relevance = double("--relevance") ?: d.relevance,
+            minInfluence = double("--min-influence") ?: d.minInfluence,
         )
     }
 
@@ -266,22 +267,27 @@ internal class Options(args: Array<String>) {
     private fun double(flag: String) = values[flag]?.let { requireNotNull(it.toDoubleOrNull()) { "$flag must be a number: $it" } }
 
     companion object {
+        /** EXP-07. */
+        const val DEFAULT_MAX_PROCESSES = 8
         val FLAGS = setOf(
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
-            "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--saturation", "--relevance",
+            "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
+            "--saturation", "--min-influence",
         )
+        private val D = DeliberationEngine.Config()
         val USAGE = """
             usage: deliberate [port] [options]            (port default 8091, or ${'$'}PORT)
               --proposers claude,codex    which CLIs propose arguments
               --claude-model <m>          model for the Claude CLI (its default otherwise)
               --codex-model <m>           model for the Codex CLI (its default otherwise)
-              --max-processes <n>         concurrent CLI processes, app-wide (4)
-              --args-per-call <n>         arguments per proposer call per side (2)
-              --max-rounds <n>            rounds per claim (3)
-              --max-depth <n>             deepest expanded level (3)
-              --max-claims <n>            claims per question (60)
-              --saturation <p>            saturation threshold (0.7)
-              --relevance <p>             relevance threshold (0.5)
+              --max-processes <n>         concurrent CLI processes, app-wide ($DEFAULT_MAX_PROCESSES)
+              --args-per-call <n>         arguments per proposer call per side (${D.argsPerCall})
+              --max-rounds <n>            rounds per claim (${D.maxRounds})
+              --max-depth <n>             deepest expanded level (${D.maxDepth})
+              --max-claims <n>            claims per question (${D.maxClaims})
+              --max-args-per-side <n>     arguments per side of a claim before it is saturated (${D.maxArgsPerSide})
+              --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
+              --min-influence <p>         expand a claim only if relevance x reach >= p (${D.minInfluence})
               --ui <dir>                  built UI directory (default ui/dist)
             requires TYPESAFE_API_KEY and logged-in `claude` / `codex` CLIs.
         """.trimIndent()

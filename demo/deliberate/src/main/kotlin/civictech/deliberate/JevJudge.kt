@@ -127,17 +127,19 @@ class JevJudge(
             put("claim", ctx.claim)
             putStrings("existing_arguments", if (side == Polarity.SUPPORT) ctx.pros else ctx.cons)
         }
+        // EXP-04 asks the question in the "missing" direction: first live runs showed Jev
+        // rarely affirms "covered", so the Noul is p(an important consideration is
+        // still missing) and saturation is its complement.
         val q = noul(
-            "`existing_arguments` are the arguments ${side.preposition} `claim` collected so far. Do they already " +
-                "cover the substantive considerations ${side.preposition} `claim`, so that a further argument " +
-                "${side.preposition} it would most likely repeat them?",
-            yes = "Covered: the main considerations ${side.preposition} the claim are already represented (or there " +
-                "is genuinely nothing substantive to add); another argument would mostly restate or marginally " +
-                "refine them.",
-            no = "Not covered: at least one substantive consideration ${side.preposition} the claim is still " +
-                "missing from `existing_arguments`.",
+            "`existing_arguments` are the arguments ${side.preposition} `claim` collected so far. Is an important " +
+                "consideration ${side.preposition} `claim` still missing from `existing_arguments`?",
+            yes = "Missing: at least one important consideration ${side.preposition} the claim is not yet " +
+                "represented by `existing_arguments`, not even in other words.",
+            no = "Nothing important missing: the important considerations ${side.preposition} the claim are already " +
+                "represented (or there is genuinely nothing substantive to add); a further argument would mostly " +
+                "restate or marginally refine them.",
         )
-        return noulOf(evaluate(state, mapOf("saturated" to q)).getValue("saturated"))
+        return 1.0 - noulOf(evaluate(state, mapOf("missing" to q)).getValue("missing"))
     }
 
     override fun relevance(ctx: ClaimContext): Double {

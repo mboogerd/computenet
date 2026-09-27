@@ -11,7 +11,7 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 /** Bounds concurrent CLI processes app-wide (EXP-07); share one instance. Fair, so no caller starves. */
-class ProcessGate(maxProcesses: Int = 4) {
+class ProcessGate(maxProcesses: Int = Options.DEFAULT_MAX_PROCESSES) {
     init {
         require(maxProcesses > 0) { "maxProcesses must be positive" }
     }

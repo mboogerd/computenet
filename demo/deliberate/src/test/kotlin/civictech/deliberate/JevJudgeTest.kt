@@ -136,15 +136,17 @@ class JevJudgeTest {
 
     @Test
     fun `saturation sends the side's arguments with explicit criteria`() {
-        noulReply("saturated", 0.82)
-        assertEquals(0.82, judge.saturation(ctx, Polarity.ATTACK), 1e-9)
+        // EXP-04: Jev is asked whether something is still MISSING; saturation is the complement.
+        noulReply("missing", 0.82)
+        assertEquals(0.18, judge.saturation(ctx, Polarity.ATTACK), 1e-9)
         val body = seen.single().body
         assertEquals(listOf("c1", "c2"), (body["state"]!!.jsonObject["existing_arguments"] as JsonArray).map { it.jsonPrimitive.content })
-        val q = question(body, "saturated")
+        val q = question(body, "missing")
+        assertTrue("still missing" in q["instructions"]!!.jsonPrimitive.content)
         assertEquals("noul", q["type"]!!.jsonPrimitive.content)
         assertEquals(setOf("true", "false"), q["criteria"]!!.jsonObject.keys)
-        assertTrue("another argument would mostly restate" in q["criteria"]!!.jsonObject["true"]!!.jsonPrimitive.content)
-        assertTrue("still missing" in q["criteria"]!!.jsonObject["false"]!!.jsonPrimitive.content)
+        assertTrue("not yet represented" in q["criteria"]!!.jsonObject["true"]!!.jsonPrimitive.content)
+        assertTrue("would mostly restate" in q["criteria"]!!.jsonObject["false"]!!.jsonPrimitive.content)
     }
 
     @Test

@@ -32,17 +32,33 @@ class DeliberationEngine(
     private val onChange: () -> Unit = {},
 ) : AutoCloseable {
 
+    /** Knobs of SPEC §3; the Jev thresholds' defaults come from `CALIBRATION.md` (SPEC §10). */
     data class Config(
         val argsPerCall: Int = 2,
         val maxRounds: Int = 3,
-        val saturation: Double = 0.7,
-        val relevance: Double = 0.5,
+        /** EXP-04: a side whose Jev saturation (1 − p(missing)) reaches this gets no more proposals. */
+        val saturation: Double = DEFAULT_SATURATION,
+        /** EXP-04: a side holding this many arguments is saturated regardless of Jev. */
+        val maxArgsPerSide: Int = 4,
+        /** EXP-05: a non-root claim is expanded only when relevance × reach reaches this. */
+        val minInfluence: Double = DEFAULT_MIN_INFLUENCE,
         val maxDepth: Int = 3,
         val maxClaims: Int = 60,
         val workers: Int = 8,
     ) {
         init {
             require(workers > 0) { "workers must be positive" }
+            require(maxArgsPerSide > 0) { "maxArgsPerSide must be positive" }
+        }
+
+        companion object {
+            const val DEFAULT_SATURATION = 0.22
+            const val DEFAULT_MIN_INFLUENCE = 0.35
+            /**
+             * EXP-05: reach assumes this edge strength when the CRED-02 judgment
+             * failed — middling, so one failure neither prunes nor frees a subtree.
+             */
+            const val FALLBACK_STRENGTH = 0.5
         }
     }
 
@@ -60,6 +76,8 @@ class DeliberationEngine(
         var override = Override.AUTO
         var plausibility: Double? = null
         var relevance: Double? = null
+        /** EXP-05: 1 for the root; parent reach × edge strength once the edge is judged. */
+        var reach: Double? = if (parent == null) 1.0 else null
         var proSaturation: Double? = null
         var conSaturation: Double? = null
         var rounds = 0
@@ -157,7 +175,7 @@ class DeliberationEngine(
                     NodeDto(
                         ref = c.ref.id.toString(), kind = "CLAIM", credence = n.credence, root = c.root.id.toString(),
                         text = c.text, depth = c.depth, status = c.status, override = c.override,
-                        proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance,
+                        proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
                         proSaturation = c.proSaturation, conSaturation = c.conSaturation, rounds = c.rounds,
                         duplicatesDropped = c.duplicatesDropped, error = c.error,
                     )
@@ -268,20 +286,27 @@ class DeliberationEngine(
         val forced = synchronized(lock) { c.override == Override.EXPAND }
         val isRoot = c.parent == null
         if (!isRoot && !forced && c.depth > config.maxDepth) return finish(c, Status.DEPTH_LIMIT)
-        if (budgetExhausted(c)) return finish(c, Status.BUDGET)
         if (!isRoot && !forced) {
+            // EXP-05: influence = relevance × reach. attach() always sets reach before the
+            // child is enqueued; if relevance itself cannot be judged, the gate falls back to
+            // reach alone (the upper bound of the influence).
+            val reach = synchronized(lock) { c.reach } ?: Config.FALLBACK_STRENGTH
             val r = attempt(c, "relevance") { judge.relevance(context(c)) }
-            if (r != null) {
-                update { c.relevance = r }
-                if (r < config.relevance) return finish(c, Status.PRUNED)
-            }
+            if (r != null) update { c.relevance = r }
+            if ((r ?: 1.0) * reach < config.minInfluence) return finish(c, Status.PRUNED)
         }
+        // EXP-06 after EXP-05: BUDGET means "would have been expanded", so a claim the
+        // influence gate rejects reads PRUNED even once the budget is spent.
+        if (budgetExhausted(c)) return finish(c, Status.BUDGET)
         update { c.status = Status.EXPLORING }
 
         val created = mutableListOf<Claim>()
         while (true) {
-            val (sides, terminal) = synchronized(lock) {
+            val (sides, forcedRound, terminal) = synchronized(lock) {
                 val forcedRound = c.forceRound
+                // EXP-04: a side at maxArgsPerSide is saturated (checked here too, so a
+                // re-queued claim whose side filled up earlier asks no proposer for it).
+                if (!forcedRound) SIDES.filter { atCap(c, it) }.forEach { c.saturated += it }
                 val nextSides = if (forcedRound) SIDES else SIDES - c.saturated
                 val nextStatus = when {
                     c.override == Override.STOP -> Status.STOPPED
@@ -295,11 +320,11 @@ class DeliberationEngine(
                     c.forceRound = false
                     c.roundInFlight = true
                 }
-                nextSides to nextStatus
+                Triple(nextSides, forcedRound, nextStatus)
             }
             if (terminal != null) return finish(c, terminal, created)
             val outcome = try {
-                round(c, sides, created)
+                round(c, sides, forcedRound, created)
             } finally {
                 synchronized(lock) { c.roundInFlight = false }
             }
@@ -309,14 +334,20 @@ class DeliberationEngine(
 
     /**
      * One round (EXP-02..04). Returns a terminal status when the round ends
-     * the expansion early (all calls failed, budget), else null.
+     * the expansion early (all calls failed, budget), else null. A [forced]
+     * round (CTL-02) ignores saturation, including the per-side cap.
      */
-    private fun round(c: Claim, sides: List<Side>, created: MutableList<Claim>): Status? {
+    private fun round(c: Claim, sides: List<Side>, forced: Boolean, created: MutableList<Claim>): Status? {
         val ctx = context(c)
+        // EXP-04: never attach beyond maxArgsPerSide within a round.
+        val room = sides.associateWith { side ->
+            if (forced) Int.MAX_VALUE else synchronized(lock) { config.maxArgsPerSide - c.children.count { it.side == side } }
+        }
         // EXP-02: every proposer × side, concurrently.
         val futures = sides.flatMap { side ->
+            val ask = minOf(config.argsPerCall, room.getValue(side))
             proposers.map { p ->
-                Triple(side, p, calls.submit<List<String>> { p.propose(ctx, side, config.argsPerCall).take(config.argsPerCall) })
+                Triple(side, p, calls.submit<List<String>> { p.propose(ctx, side, ask).take(ask) })
             }
         }
         var failures = 0
@@ -354,8 +385,9 @@ class DeliberationEngine(
                     .also { dropped += fresh.size - it.size }
             }
             if (dropped > 0) update { c.duplicatesDropped += dropped }
-            // Attach every survivor that fits the budget — even if STOP arrived meanwhile (CTL-03).
-            for ((text, pid) in survivors) {
+            // Attach every survivor that fits the budget and the side's cap — even if STOP
+            // arrived meanwhile (CTL-03). Survivors past the cap are not attached.
+            for ((text, pid) in survivors.take(room.getValue(side))) {
                 if (!reserve(c.root)) { budgetHit = true; break }
                 created += attach(c, side, text, pid)
             }
@@ -365,6 +397,10 @@ class DeliberationEngine(
         // EXP-04: saturation per side (a forced round's sides are re-judged too).
         val after = context(c)
         for (side in sides) {
+            if (synchronized(lock) { atCap(c, side) }) {
+                update { c.saturated += side } // the cap decides; no Jev call needed
+                continue
+            }
             val p = attempt(c, "saturation") { judge.saturation(after, side) } ?: continue
             update {
                 if (side == Polarity.SUPPORT) c.proSaturation = p else c.conSaturation = p
@@ -391,12 +427,16 @@ class DeliberationEngine(
             parent.children += child
         }
         // CRED-02
-        attempt(parent, "relationStrength") {
+        val s = attempt(child, "relationStrength") {
             val s = judge.relationStrength(questionOf(parent), parent.text, text, side)
             synchronized(serviceLock) { service.setStance(edgeRef, "jev", s) }
             s
-        }?.let { s ->
-            update { edge.strength = s }
+        }
+        // EXP-05: reach decays by the edge strength; a failed judgment assumes FALLBACK_STRENGTH
+        // (the error is already recorded on the child by attempt()).
+        update {
+            if (s != null) edge.strength = s
+            child.reach = (parent.reach ?: 1.0) * (s ?: Config.FALLBACK_STRENGTH).coerceIn(0.0, 1.0)
         }
         return child
     }
@@ -419,6 +459,9 @@ class DeliberationEngine(
             update { c.error = "jev $what: $e" }
             null
         }
+
+    /** Caller holds [lock]. EXP-04: [side] of [c] already holds maxArgsPerSide arguments. */
+    private fun atCap(c: Claim, side: Side) = c.children.count { it.side == side } >= config.maxArgsPerSide
 
     private fun budgetExhausted(c: Claim) = synchronized(lock) { treeSize.getValue(c.root) >= config.maxClaims }
 

@@ -34,7 +34,7 @@ class DeliberationEngineTest {
 
     private class FakeJudge(
         val plausibility: (String) -> Double = { 0.5 },
-        val strength: Double = 0.8,
+        val strength: (child: String) -> Double = { 0.8 },
         val duplicates: (existing: List<String>, candidates: List<String>) -> List<Int?> = { _, c -> c.map { null } },
         val saturation: (ClaimContext, Side) -> Double = { _, _ -> 0.0 },
         val relevance: (ClaimContext) -> Double = { 1.0 },
@@ -49,13 +49,17 @@ class DeliberationEngineTest {
         }
         override fun relationStrength(question: String, parent: String, child: String, side: Side): Double {
             relationCalls += RelationCall(question, parent, child, side)
-            return strength
+            return strength(child)
         }
         override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>): List<Int?> {
             duplicateCalls += existing to candidates
             return duplicates(existing, candidates)
         }
-        override fun saturation(ctx: ClaimContext, side: Side) = saturation.invoke(ctx, side)
+        val saturationCalls = AtomicInteger()
+        override fun saturation(ctx: ClaimContext, side: Side): Double {
+            saturationCalls.incrementAndGet()
+            return saturation.invoke(ctx, side)
+        }
         override fun relevance(ctx: ClaimContext): Double {
             relevanceCalls += ctx.claim
             return relevance.invoke(ctx)
@@ -94,7 +98,8 @@ class DeliberationEngineTest {
     private fun engine(
         judge: Judge = FakeJudge(),
         proposers: List<Proposer> = listOf(FakeProposer("claude"), FakeProposer("codex")),
-        config: DeliberationEngine.Config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0),
+        // maxArgsPerSide above the 4 a single default round produces, so ROUND_LIMIT (not the cap) ends it.
+        config: DeliberationEngine.Config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0, maxArgsPerSide = 5),
     ) = DeliberationEngine(service, judge, proposers, config).also { engines += it }
 
     private fun DeliberationEngine.idle() = assertTrue(awaitIdle(20.seconds), "engine did not go idle")
@@ -148,7 +153,7 @@ class DeliberationEngineTest {
 
     @Test
     fun `jev stances land and move the propagated credence`() {
-        val judge = FakeJudge(plausibility = { if (it == "Q?") 0.9 else 0.5 }, strength = 0.7)
+        val judge = FakeJudge(plausibility = { if (it == "Q?") 0.9 else 0.5 }, strength = { 0.7 })
         val e = engine(judge = judge)
         val root = e.ask("Q?")
         e.idle()
@@ -172,7 +177,7 @@ class DeliberationEngineTest {
     @Test
     fun `saturation stops one side early and both sides end the expansion`() {
         val conSaturated = FakeJudge(saturation = { _, side -> if (side == Polarity.ATTACK) 0.9 else 0.1 })
-        val e = engine(judge = conSaturated, config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0))
+        val e = engine(judge = conSaturated, config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -219,8 +224,9 @@ class DeliberationEngineTest {
 
     @Test
     fun `irrelevant claims are pruned and the root is never relevance-judged`() {
+        // influence = relevance × reach(0.8): codex 0.16 < 0.3 ≤ 0.72 others
         val judge = FakeJudge(relevance = { if (it.claim.startsWith("codex")) 0.2 else 0.9 })
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1))
+        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, minInfluence = 0.3))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -321,7 +327,7 @@ class DeliberationEngineTest {
             override fun relationStrength(question: String, parent: String, child: String, side: Side) = 2.0
             override fun saturation(ctx: ClaimContext, side: Side): Double = error("529")
         }
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 2, maxDepth = 0))
+        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 2, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -353,7 +359,7 @@ class DeliberationEngineTest {
     @Test
     fun `STOP mid-round keeps the in-flight results and prevents further rounds`() {
         val p = GatedProposer("claude")
-        val e = engine(proposers = listOf(p), config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0))
+        val e = engine(proposers = listOf(p), config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         assertTrue(p.entered.await(20, TimeUnit.SECONDS))
         assertEquals(Status.EXPLORING, e.snapshot().node(root).status)
@@ -496,5 +502,151 @@ class DeliberationEngineTest {
         g.questions.forEach { assertEquals(60, it.claims); assertEquals(false, it.active) }
         assertEquals(120, g.claims().size)
         assertEquals(118, g.edges().size)
+    }
+
+    // ------------------------------------------------------------ iteration 2: reach, influence, cap
+
+    private fun GraphDto.ref(n: NodeDto) = CellRef(java.util.UUID.fromString(n.ref))
+
+    @Test
+    fun `reach is the product of edge strengths from the root`() {
+        val judge = FakeJudge(strength = { if (it.contains("support")) 0.8 else 0.5 })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(FakeProposer("claude")),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, minInfluence = 0.0),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(1.0, g.node(root).reach)
+        val d1 = g.claims().filter { it.depth == 1 }
+        assertEquals(2, d1.size)
+        d1.forEach { k ->
+            val s = if (k.text!!.contains("support")) 0.8 else 0.5
+            assertEquals(s, k.reach!!, 1e-9)
+            g.childrenOf(g.ref(k)).map { g.claim(it.source!!) }.also { assertEquals(2, it.size) }.forEach { kk ->
+                val ss = if (kk.text!!.contains("support")) 0.8 else 0.5
+                assertEquals(s * ss, kk.reach!!, 1e-9)
+            }
+        }
+    }
+
+    @Test
+    fun `a failed strength judgment gives reach the fallback strength and records the error`() {
+        val judge = object : Judge by FakeJudge() {
+            override fun relationStrength(question: String, parent: String, child: String, side: Side): Double = error("jev down")
+        }
+        val e = engine(judge = judge, proposers = listOf(FakeProposer("claude")),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0, argsPerCall = 1))
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val kids = g.childrenOf(root).map { g.claim(it.source!!) }
+        assertEquals(2, kids.size)
+        kids.forEach {
+            assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.reach)
+            assertTrue(it.error!!.contains("relationStrength"), it.error)
+        }
+        assertTrue(g.childrenOf(root).all { it.strength == null })
+    }
+
+    @Test
+    fun `influence gate expands relevant-and-reachable claims and prunes decayed ones`() {
+        // relevance 0.5 everywhere, strength 0.8: influence 0.4 at depth 1, 0.32 at depth 2.
+        val judge = FakeJudge(relevance = { 0.5 })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(FakeProposer("claude")),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1, minInfluence = 0.35),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.ROUND_LIMIT && it.relevance == 0.5 })
+        val d2 = g.claims().filter { it.depth == 2 }
+        assertEquals(4, d2.size)
+        assertTrue(d2.all { it.status == Status.PRUNED && it.relevance == 0.5 }, d2.toString())
+        assertTrue(g.claims().none { it.depth == 3 })
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+
+        // CTL-02: EXPAND bypasses the influence gate for that claim only.
+        val pruned = g.ref(d2.first())
+        val relevanceBefore = judge.relevanceCalls.size
+        e.setOverride(pruned, Override.EXPAND)
+        e.idle()
+        val g2 = e.snapshot()
+        assertEquals(Status.ROUND_LIMIT, g2.node(pruned).status)
+        val grandkids = g2.childrenOf(pruned).map { g2.claim(it.source!!) }
+        assertEquals(2, grandkids.size)
+        // its depth-3 children face the gate again: 0.5 × 0.8³ = 0.256 < 0.35
+        assertTrue(grandkids.all { it.status == Status.PRUNED })
+        assertEquals(relevanceBefore + 2, judge.relevanceCalls.size)
+    }
+
+    @Test
+    fun `a side at maxArgsPerSide is saturated without asking Jev and never overfilled in a round`() {
+        val judge = FakeJudge(saturation = { _, _ -> 0.0 })
+        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 3))
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val r = g.node(root)
+        // round 1 offers 2 proposers × 2 = 4 per side; only 3 fit
+        assertEquals(Status.SATURATED, r.status)
+        assertEquals(1, r.rounds)
+        assertEquals(3, g.childrenOf(root).count { it.polarity == "SUPPORT" })
+        assertEquals(3, g.childrenOf(root).count { it.polarity == "ATTACK" })
+        assertEquals(0, judge.saturationCalls.get())
+    }
+
+    @Test
+    fun `proposers are asked only for the room left under the cap`() {
+        val p = FakeProposer("claude")
+        val asked = CopyOnWriteArrayList<Int>()
+        val counting = object : Proposer by p {
+            override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> {
+                if (side == Polarity.SUPPORT) asked += max
+                return p.propose(ctx, side, max)
+            }
+        }
+        val e = engine(proposers = listOf(counting), config = DeliberationEngine.Config(maxRounds = 5, maxDepth = 0, maxArgsPerSide = 3))
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(listOf(2, 1), asked.toList())
+        assertEquals(3, g.childrenOf(root).count { it.polarity == "SUPPORT" })
+        assertEquals(Status.SATURATED, g.node(root).status)
+        assertEquals(2, g.node(root).rounds)
+    }
+
+    @Test
+    fun `Jev saturation at the threshold saturates a side below the cap`() {
+        val judge = FakeJudge(saturation = { ctx, side -> if (side == Polarity.SUPPORT && ctx.pros.size >= 2) 0.6 else 0.59 })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(FakeProposer("claude")),
+            config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, argsPerCall = 1, maxArgsPerSide = 10, saturation = 0.6),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(2, g.childrenOf(root).count { it.polarity == "SUPPORT" })
+        assertEquals(3, g.childrenOf(root).count { it.polarity == "ATTACK" })
+        assertEquals(0.6, g.node(root).proSaturation)
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+    }
+
+    @Test
+    fun `the influence gate runs before the budget so rejected claims read PRUNED, not BUDGET`() {
+        val judge = FakeJudge(relevance = { if (it.claim.startsWith("codex")) 0.1 else 1.0 })
+        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1, maxClaims = 5))
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val kids = g.childrenOf(root).map { g.claim(it.source!!) }
+        assertEquals(4, kids.size)
+        assertTrue(kids.filter { it.proposer == "codex" }.all { it.status == Status.PRUNED })
+        assertTrue(kids.filter { it.proposer == "claude" }.all { it.status == Status.BUDGET })
     }
 }
