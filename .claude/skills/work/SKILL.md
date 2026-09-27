@@ -551,7 +551,7 @@ routes 2b, 3 and 4 may still dispatch a breakdown.
 | 4 | the epic is dry, budget remains | continuation work, below |
 | 5 | nothing can progress | step 6 |
 
-**Continuation work:** `bd ready --json` items with no epic ancestor (`epic-of.sh`
+**Continuation work:** `bd ready --json --exclude-type=retro` items with no epic ancestor (`epic-of.sh`
 → `(unparented)`) and features or tasks of other epics. Drop `human`-labelled,
 SDLC, recently parked, claim-overlapping, and reviews of your own session's
 output. Prefer dependents of what you finished and items touching your branches'
@@ -595,7 +595,9 @@ wait; the next session resumes them. Report the main checkout's HEAD against
    one) → close it. Either way keep the `owner:` label. Work remains →
    `bd update <epic> --status=open --assignee="" --unset-metadata holder`.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
-3. **Friction:** step 7.
+3. **Friction:** step 7. Then the **retro record**, always, even for an empty
+   run: fill [retro.md](references/retro.md)'s template and
+   `.claude/skills/work/scripts/file-retro.sh --skill work --file <scratch>/retro.md --skill-version <sha> --started <t>`.
 4. **Publish:** in each feature worktree you touched, `git status --short`
    (leftovers: report, do not commit) and push. Then `publish-beads.sh`; exit 2 →
    its ESCALATE line names a conflict (recovery.md) or a failure, and the
