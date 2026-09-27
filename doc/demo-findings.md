@@ -1830,3 +1830,55 @@ silent arm.
 **Proposed shape**: none. Multi-root alignment is research-gated (PN-16 /
 G-13's frontier-traversal residual); this finding records the boundary, it
 does not propose closing it.
+
+## F-28 — A lateness-declaring `GroupByCell` is only reachable through its concrete instance: no typed ref reaches `waterline`/`late`, and `host.lookup` cannot read `floor()`/`droppedBelowFloor`
+
+**Observation** (KE4.6, `computenet-fh1fo.3`): adopting spec 24 §Lateness and
+waterlines in `:demo:slotfinder` (`byDay` fed by a `WaterlineCell` over the demo's
+`SlotTime`, lateness one day) needed three reads the typed surface does not offer:
+
+1. **Wiring the floor.** `byDay.waterline` and `byDay.late` are class-level ports, not on
+   `GroupByApi` (lxo-D5's landed form), so a `TypedRef<GroupByApi<…>>` cannot reach them.
+   The app links through the `graphOf` handle's concrete `.cell` — fine at build time,
+   and the typed `link(a.cell.outlet, b.cell.waterline)` stays compile-checked.
+2. **Observing the drop.** The shell's `late` view is registered with the untyped
+   `ObserveAllBuilder.set(name, CellRef, outletName = "late")` — an `Any?`-erased fold read
+   back with `view.get<Set<Slot>>` — because no typed overload names a `late` port.
+   `WaterlineCell` has no Api type at all (delta-only, like `WatermarkCell`), so `Refs`
+   carries it as a bare `CellRef`.
+3. **Reading the floor and the drop counter.** `floor()` and `droppedBelowFloor` are
+   plain members, not ports. `host.lookup<GroupByCell<…>>(ref)` and
+   `host.lookup<WaterlineCell<*>>(ref)` both **throw**
+   `IllegalArgumentException: Only interfaces can be represented` (observed on a probe
+   test, 2026-09-27, base `7fcf6216`) — `lookup` hands back a `HostedCellProxy`, and
+   even for an interface a non-port call answers `null` there
+   (`HostedCellProxy.cellInvocation`). So `SlotPipeline.Refs` now also carries the
+   locally-built `byDayCell: GroupByCell<…>` and `waterlineCell: WaterlineCell<Slot>`
+   instances, which the pipeline and agreement tests read at idle. The demo shell does
+   not expose `droppedBelowFloor` (reading an unsynchronized counter off the host's
+   scheduler threads from an HTTP thread is not something the demo should model); the
+   `late` set is its observable half of the drop.
+
+**Why it's a gap**: the lateness read side — current floor, drop count, the `late`
+stream — is exactly what an application wants to *show* (`[KE4-39]` makes the drop
+observable), but it is reachable only through a local instance handle, which does not
+survive relocation, a remote host, or a graph applied from a `GraphSpec` without the
+builder's handles. A `null` floor is also `[24-WL-02]`'s legitimate identity, so a
+proxy that answered `null` for a non-port read would be indistinguishable from "no
+source has contributed yet".
+
+**Proposed shape**: an additive, `GroupByApi`-independent read seam for lateness
+state — e.g. a `LatenessApi` (`waterline` inlet, `late` outlet, and a `floor` /
+`droppedBelowFloor` read published as a port value or a management query) that
+`GroupByCell`, the join family and `WaterlineCell` implement, plus a typed
+`ObserveAllBuilder.late(name, TypedRef<out LatenessApi<E>>)` overload. Kept off
+`GroupByApi` itself so a pre-lateness consumer is unchanged (`[24-WL-11]`).
+
+**Also observed, not a gap** (`[24-WL-14]` working as specified): `QuorumSetCell`
+emits a common slot under the wave of the participant whose add completed the quorum,
+so the waterline's contributing sources are *participants' waves*. On a probe, Mon-10
+completed by carol then Tue-10 completed by alice left two maxima (10, 34) and the
+floor at −14: carol, idle since, freezes eviction until her wave carries a later common
+slot. In the demo this reads as "a day closes only once everyone who has ever completed
+a common slot has moved past it" — correct per spec, and worth knowing before reading
+the `byDay` bars.

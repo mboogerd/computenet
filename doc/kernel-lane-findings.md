@@ -4312,3 +4312,237 @@ edit to `Aggregator.kt`, `BoundedRead.kt`, any cell, `91-gap-analysis.md`,
   read in `civictech.cell.observe`).
 - Oracle follow-up: `GROUP_BY_AGGREGATES` (`oracle/.../CoreOperators.kt:151`)
   is not widened by this epic — recorded above, no bead filed.
+
+## KE4 — epic close-out: corrected premises, dispositions, and what the pins showed
+
+Recorded by: `computenet-fh1fo.4` (task, feature `computenet-fh1fo` = KE4.6,
+epic `computenet-lxo` = KE4). Base commit: `6f4b3afe` (merge of main through
+#1111 into `feature/computenet-fh1fo`, holding `fh1fo.1`-`.3`). Append-only;
+touches no other entry. It cites what the epic's features, tasks and reviews
+established rather than re-deriving it. Test names are as landed at the base
+(`observed:` by grepping each file's backquoted `fun` names). **KE4 is not complete
+with this entry**: its concord corpus feature `computenet-t4od7` (KE4.7) is in
+progress — `t4od7.1` merged on its own branch, PR #1112 draft, `.2`-`.9` open
+— and every `[24-WL-01]`..`[24-WL-20]` row of `doc/spec/CONCORDANCE.md` still
+reads `gap` at the base. Nothing below claims corpus coverage.
+
+### Corrected premises
+
+Each: the epic's wording → the reading that landed → where it was decided.
+
+1. **lxo-D1** — `[KE4-08]` "the floor SHALL NOT be a wave" is about the
+   floor's *value*: a `WaterlineDelta` emission is ordinary transparent flow
+   riding the input wave, absorb-acked when ineffective (`[24-WL-04]`, 22
+   §Interaction). Epic breakdown comment, 2026-09-26 17:35.
+2. **lxo-D2** — `[KE4-35]`/B15: eviction of an `Owned`/`Leased` evictee is
+   **refused** with a named diagnostic, never discharged (the retraction path
+   re-references the element) → `[24-WL-17]`. Same comment.
+3. **lxo-D3** — `[KE4-28]` "refused until E3.7 exists": E3.7's reclaimer
+   exists (`StabilityReclaim`) but nothing ties a waterline to
+   `Replication.stableFrontier`; the restriction stands as "single-instance
+   state only", diagnostic names the stable frontier, never E3.7 →
+   `[24-WL-18]`. Same comment.
+4. **lxo-D7** — `[KE4-20]`'s time guard is wrong: the del guard is
+   **liveness**, not event time (`[24-WL-08]`); eviction is at window
+   granularity (`keyTime(k) <= floor`), which with the liveness guard is the
+   *narrower implemented* `[KE4-30]` rule the epic's risk 3 anticipated
+   (`[24-WL-09]`). Same comment.
+5. **`[24-WL-10]` restriction** — `[KE4-10]` "state == batch over the
+   late-filtered input" contradicts eviction; both sides are restricted to
+   window keys strictly above the final floor (`computenet-w161r`, 94360a63).
+   Corrected the same day: absence is claimed only for *evicted* windows — a
+   `[24-WL-17]`-refused window stays in state (epic CORRECTION 18:09, 24 at
+   4f066cbf).
+6. **Join-family unit and antijoin adds** — the eviction unit is one input
+   row of a lateness-declaring inlet, evicted iff `timeFn(row) < floor`;
+   minted pairs are never a unit; `[24-WL-10]` compares the whole state
+   against a batch over the late-filtered input less the evicted rows; a
+   negated `SemiJoinCell` emits *adds* on eviction; windows may be evicted in
+   part (`computenet-2qra5`, as corrected at 272e0893, epic 18:17 + 18:24).
+7. **Per-unit refusal and the window bound** — `[24-WL-17]` refuses per
+   eviction unit, never per `WaterlineDelta`; `[KE4-11]` became `[24-WL-19]`,
+   a bound on *windows*, not elements, qualified by `[24-WL-14]`/`-17`/`-18`,
+   with no whole-state bound for a join cell (`computenet-aghtb`, 428c4398;
+   window-size term `computenet-42zlu`).
+8. **`[24-WL-20]` monotone wins** — `[KE4-03]` reads as the running max of
+   the min-over-sources candidate (`[24-WL-02]`); `[KE4-33]` holds only for
+   sources contributing since at or before the floor's last rise — a low
+   joiner's sub-floor elements are late, not protected. The naive invariant
+   `floor <= min(maxima) − lateness` is **false by design**; tests use the
+   joiner-aware oracle (`computenet-zrnhf`, b809342d; downstream tie
+   `computenet-3hipj`; diamond rule for `EdgeClose` `computenet-427us`).
+9. **Ports on the class, not the Api** — lxo-D5 (ports on `GroupByApi`) is
+   retired: `PartitionedCell` implements `GroupByApi` directly, so
+   `waterline`/`late` are class-registered on `GroupByCell` and the join
+   family (nt17o AMENDS 1; 3vd7k AMENDS 2). No `Evictable.kt`: the seam is
+   `WaterlineEviction` (3vd7k-D1).
+10. **B2 as amended** — the late-drop threshold is the element's event time,
+    not its window end: floor 8 + add t=7 is a late-drop (nt17o AMENDS
+    2026-09-26 23:33).
+
+### Dispositions
+
+`[KE4-nn]` ids live only on the epic; `doc/spec` carries none (`git grep`
+over `doc/spec` at the base: 0 hits). The 24 id is from 24 §Lateness and
+waterlines and nt17o's AMENDS item 7 mapping; "cite" marks a test file whose
+KDoc cites the `[KE4-nn]` itself (`git grep -noE '\[KE4-[0-9]{2}\]'`,
+`observed:`). Files: `WCT` WaterlineCellTest, `WDT` WaterlineDeltaTest, `WT`
+WindowingTest, `WCh` WaterlineChurnTest, `GBE` GroupByEvictionTest, `GBG`
+GroupByEvictionGlitchFreeTest, `GBR` GroupByEvictionRecoveryTest, `TSE`
+TagStateEvictTest, `JFE` JoinFamilyEvictionTest, `SJE` SemiJoinEvictionTest,
+`IE` IntersectEvictionTest, `LHT` LatenessHarnessTest, `SFP`
+SlotFinderPipelineTest.
+
+| KE4 | 24 id | Held by (named test, or why none) |
+|---|---|---|
+| 01 | WL-01 | WT `Lateness rejects a negative lateness`, `...accepts a zero lateness` (cite) |
+| 02 | WL-01 | WT `Lateness built with a named Serializable timeFn survives a java-io round-trip` (cite) |
+| 03 | WL-02 (as corrected, #8) | WCT `B8 - seeded 3-source interleavings with low late joiners keep the floor at the running max of the min` |
+| 04 | WL-03 | spec-only, no test — by construction (`WaterlineCell` reads only `timeFn` and the wave `sourceId`) |
+| 05 | WL-03 | WCT B8 + `B8 control - a floor allowed to fall fails the oracle` (cite) |
+| 06 | WL-03 | WDT the four `merge is ...` laws; wire vector `WV-PAYLOAD-WATERLINEDELTA-01` (cite) |
+| 07 | WL-02 | WCT `worked example - min over sources, effective-only, riding the triggering wave`, `a delivery under no context contributes nothing` |
+| 08 | WL-04 (lxo-D1) | WCT `a wave that does not move the floor is absorb-acked so a downstream glitch-free join settles it`; GBG B16 |
+| 09 | WL-05 | GBE `B3 - a floor rise evicts every passed window as one removal delta under the waterline's wave` |
+| 10 | WL-10 | LHT the four `B6 -`/`B6 join -` tests; SFP `incremental equals batch recompute on every seed` (cite) |
+| 11 | WL-19 | LHT `B7 - live windows stay within the envelope's bound at 1k and at 10k`, `B7 join - ...` (cite) |
+| 12 | OP-WINDOW-02 trailer | spec/KDoc-only, no test — `Windows.kt` KDoc no longer carries the deferral (grep, nt17o review); 24 bullet retracted by `computenet-g37bz` |
+| 13 | WL-07 | GBE `a sub-floor add is excluded from the fold and forwarded verbatim on late`; LHT B6 (tags verbatim) |
+| 14 | WL-02 | WCT worked example |
+| 15 | WL-03 | WCT worked example |
+| 16 | WL-03 | WCT `redelivering covered event times emits nothing` (cite) |
+| 17 | WL-06 | GBE B3 |
+| 18 | WL-05/06 | GBE B3 (group death as `MapDelta` removal); SFP `the floor passing a day evicts its count as a MapDelta removal and does not re-create it` |
+| 19 | WL-07 | GBE `B1 - an add for an evicted window is late-dropped and re-creates no group`; SFP `a common slot arriving after its day closed is dropped onto late and counted, not folded` |
+| 20 | WL-08 (lxo-D7) | GBE `a del folds iff its tag is live, whatever its event time`, `B4 - a del in flight for an evicted element is a no-op, never a negative count` |
+| 21 | WL-03 | GBE `a non-raising waterline changes nothing and absorb-acks outlet and late`, `a redelivered waterline after an eviction evicts and emits nothing`; WCT (cite) |
+| 22 | WL-12 | WCh `B10 - EdgeClose retires every source the link carried, one detached emission` + three B10 siblings |
+| 23 | WL-13 | WCh `B11 hosted - a RESTART's superseding re-baseline retires the stale epoch and the fresh one contributes from scratch`, two `B11 direct` |
+| 24 | 21-CATCHUP-02 | WCT `a consumer linking after the floor is set receives exactly the floor` (cite) |
+| 25 | WL-16 | JFE `B14 - a floor rise evicts both support rows and the pair exits with its minted tag, in one delta`; SJE/IE equivalents (cite) |
+| 26 | WL-02 | WCT `before any contribution the floor is null and nothing is emitted` (cite) |
+| 27 | WL-14 | WCh `B12 - an idle contributing source freezes the floor, retire raises it in one emission`, `B12 - an idle source joined below the floor freezes it entirely, ...` |
+| 28 | WL-18 (lxo-D3) | GBE `B17 - the eviction seam refuses a Replicable host and leaves its state untouched`; JFE `B17 - the grown seam still refuses ...` |
+| 29 | WL-11 | GBE `without lateness the cell is today's operator and its lateness ports sit unlinked` (+ JFE/SJE/IE same name); WT `tumbling window sums update on late elements and retractions` |
+| 30 | WL-09 (narrower rule) | GBE B4; JFE/SJE/IE `B5 - ...` (cite). **Narrower implemented rule**: windows (group-by) and rows at the late-drop threshold (join family) plus the liveness del guard, stated normatively in `[24-WL-09]` — no DISPUTES entry, by 3vd7k-D8 |
+| 31 | WL-05 | GBE B3 + its mutation control (below); LHT `B3 control - evict without retract diverges the two subscribers` (cite); GBG `a late-linked subscriber's catch-up fold equals the early observer's, after every wave` |
+| 32 | WL-16 | LHT `B14 control - exit without tags leaves the consumer holding dead pairs`; IE `a floor rise past the last support removes the element from the tombstone-folding consumer` (cite) |
+| 33 | WL-02 (as corrected, #8) | WCT `B8 control - max over sources fails the oracle` (cite) |
+| 34 | WL-03 | WDT `fold over duplicated, reordered, replayed deltas equals in-order delivery and the maximum floor` (cite) |
+| 35 | WL-17 (lxo-D2) | GBE `B15 - a passed window holding an Owned element is refused per window while the others evict`, `B15 - a refused window leaves refusedWindows when its last member is retracted`; per-row Owned tests + `gated - an Owned add a floor rise passed while buffered lands live and is refused at that same flush` in JFE/SJE/IE (`computenet-7y4sm`, #1109) |
+| 36 | WL-13 | WCh B11 hosted |
+| 37 | WL-01 | `Windows.Lateness` KDoc + WT round-trip (cite); slotfinder `SlotTime` (cite, element-derived day×24+hour) |
+| 38 | WL-11 | GBE `without lateness ...`; GBE `lateness and keyTime come together, and a waterline on a cell without them throws` |
+| 39 | WL-07 | GBE `a sub-floor add is excluded and counted even when late is unlinked` (+ JFE/SJE/IE); SFP late case (cite) |
+| 40 | WL-16 | JFE/SJE/IE (cite) |
+| 41 | WL-15 | WCT `retiring the slowest source raises the floor by exactly one emission`; WCh B12 (both) |
+| 42 | 22-GF-01/02 | GBG `B16 - the frontier arm order prevents a torn wave across eviction and fold` + `control - eager delivery (no frontier) tears the wave`; `WaveFrontierMultiInletTest` (cite) |
+| 43 | WL-07 | GBE `a sub-floor re-add of a live element is dropped without touching the live copy` |
+| 44 | WL-12 (as restated, #8) | WCh B10 (first), `seeded churn against the joiner-aware oracle covers every kind` |
+| 45 | 22-REC-01, WL-05 | GBR `B13 - recovered after eviction, the late-linked fold equals the pre-crash fold on every seed` + `control - with recovery skipped the late-linked fold is empty`; GBE `a post-eviction snapshot restores the same fold and floor, and still late-drops` (cite) |
+
+No `[KE4-nn]` is NOT COVERED by a test except `[KE4-04]` and `[KE4-12]`,
+which are structural/spec statements with no behaviour to exercise.
+
+Behaviour specifications. "Corpus" is KE4.7's plan (t4od7 breakdown,
+2026-09-27 04:40), **none landed**: every B row's corpus column reads
+"t4od7, in flight".
+
+| B | Named test(s) | Corpus |
+|---|---|---|
+| B1 | GBE `B1 - ...`; SFP late case | t4od7.3 (LATE-01) |
+| B2 | GBE `an add at or above the floor, or under a null floor, is an ordinary add and late stays silent` (as amended, #10) | t4od7.3 (LATE-01) |
+| B3 | GBE `B3 - ...`; LHT `B3 control - ...`; GBG late-linked catch-up test | t4od7.6 (CATCHUP-01) |
+| B4 | GBE `B4 - ...` | t4od7.3 (DEL-01) |
+| B5 | JFE/SJE/IE `B5 - ...` | none planned; `[24-WL-09]` normative, no DISPUTES (3vd7k-D8) |
+| B6 | LHT four `B6` tests; SFP seeded test; `SlotFinderQueryAgreementTest` `hand-wired SlotPipeline agrees with the compiled query's BatchEvaluator reference on every seed` | t4od7.2 (oracle, covers 24-WL-10) |
+| B7 | LHT `B7 - ...`, `B7 join - ...` | none, by the epic (soak, not semantics) |
+| B8 | WCT B8 + two controls | t4od7.4 (FLOOR-01, JOINLOW-01) |
+| B9 | WDT fold test; WCT redelivery; GBE redelivered waterline | t4od7.4 (DUP-01) |
+| B10 | WCh four `B10 -` + `B10 hosted` | t4od7.5 (CLOSE-01/02) |
+| B11 | WCh `B11 hosted`, two `B11 direct` | t4od7.6 (REBASE-01) |
+| B12 | WCh two `B12 -` | t4od7.5 (IDLE-01) |
+| B13 | GBR `B13 - ...` + control | t4od7.8 (REC-01, DISPUTES fallback stated) |
+| B14 | JFE `B14 - ...`, `advancing the floor window by window keeps the minted ledger bounded by the rows above it`; LHT `B6 join`, `B7 join`, `B14 control` | t4od7.7 (JOIN-01) |
+| B15 | GBE two `B15 -`; JFE/SJE/IE per-row Owned + gated-flush tests | none; 23 carries no `[23-*]` ids |
+| B16 | GBG `B16 - ...` + eager-delivery control | t4od7.9 (DISPUTES entry, t4od7-D6) |
+| B17 | GBE `B17 - ...`; JFE `B17 - ...`; IE `the grown seam still refuses a Replicable host ...` | none, by the epic (scaffolding) |
+
+### Controls demonstrated red
+
+- **B3** (evict without retract): mutation `outlet.call.propagate(delta)` →
+  `Unit` in `GroupByCell.onFloorRaised`, red at `GroupByEvictionTest.kt:396`
+  `lateJoinFold(cell) shouldBe foldA` — `computenet-nt17o.3` implementer and
+  task-review comments (2026-09-26 23:58), cited by the nt17o feature review.
+  Standing harness control: LHT `B3 control - ...` (`computenet-fh1fo.1`).
+- **B8** (max over sources): `combine = { it.max() }`, "floor 9 >
+  min(maxima)-lateness 4: seed=0 step=1 src=2 t=14" — `computenet-sjqat.2`
+  (2026-09-26 20:05, re-observed 20:13). Standing: WCT `B8 control - max over
+  sources fails the oracle` (`shouldThrow<AssertionError>` over 100 seeds).
+- **B14** (exit without tags): dels emptied before `emitOrAbsorb` in
+  `JoinSetCell.onFloorRaised`, 8/16 red, B14 at the consumer assertion —
+  `computenet-3vd7k.1` implementer (02:12) and reviewer (02:23). Standing
+  harness control: LHT `B14 control - ...` (`computenet-fh1fo.2`).
+
+### Revisit triggers
+
+- **R15** (idle-source aging, `[24-WL-14]`, `95-research-plan.md` §R15):
+  KE4 ships frozen-but-correct; manual `retire` (`[24-WL-15]`) is the only
+  escape, and an idle source suspends the `[24-WL-19]` bound. Revisit when a
+  long-lived deployment (not a benchmark run) needs the bound to hold.
+- **B17** (`[24-WL-18]`): delete the B17 kernel tests and lift the seam's
+  `Replicable` refusal when a waterline floor is tied to
+  `Replication.stableFrontier` — not when E3.7 merely exists (lxo-D3).
+- **`[24-WL-20]` deployment obligation**: a producer whose data must not be
+  late-dropped must be contributing before the floor passes its event times;
+  unverified by the kernel, breach visible only through `[24-WL-07]`
+  accounting. Revisit if a declared source set becomes necessary (rejected in
+  24 for RESTART'd `sourceId`s).
+- **`[24-WL-10]` condition** is an author's promise: nothing checks that a
+  pipeline's waterline is derivable from a monotone event-time attribute
+  (epic risk 4).
+
+### Also worth recording
+
+- `WaveFrontier.arm()` (multi-inlet frontier, arm-attach release order,
+  nt17o-D2) plus the `Invocation` access fix (`computenet-mdvgt`) are what let
+  B16 gate a real `GroupByCell`; before mdvgt the wiring threw
+  `IllegalAccessException` on every release.
+- `WaterlineCell` is excluded from the oracle catalog by an HONEST-02 ledger
+  entry, not registered (sjqat feature review + second reader).
+- Harness design (fh1fo-D1..D5): no `UnionSetCell` — writers fan straight
+  into the waterline and the cell, waterline arm linked first; FanOutlet's
+  insertion-order emission made the oracle's per-wave floor match the cells on
+  every wave of 200 B6 seeds (`fh1fo.1`). The B7 bound is
+  `(lateness + 2·disorder + sourceLag + window)/window + 1` = 4 windows;
+  observed 1..3 at both 1k and 10k.
+- Slotfinder adoption (`fh1fo.3`): `SlotTime` = day index × 24 + hour,
+  lateness 24, `DayEnd` key time; `host.lookup` cannot return a concrete
+  cell (`Proxy.kt:50`, "Only interfaces can be represented"), so the read
+  side goes through concrete instances — demo-findings F-28.
+- Accepted cost (3vd7k-D6): row granularity makes a windowed antijoin emit
+  transient "no match" adds while the window is still open; stated in
+  `SemiJoinCell`'s KDoc, not revisited.
+
+### Not resolved by KE4
+
+- **`computenet-t4od7` (KE4.7, concord corpus)** — in progress; every
+  `[24-WL-*]` id is a CONCORDANCE `gap` until it lands. The epic's
+  "covered by a named test or concord scenario" is met by the tests above;
+  corpus coverage is not.
+- `WaterlineCell`'s `EdgeClose` retirement relies on `sourcePort ==
+  link.from`, established in-process only; `:wire` is unverified (its KDoc).
+- Nested exclusives inside a plain element are not detected by `[24-WL-17]`
+  (`computenet-woto`); the `Leased` path is untested (shares
+  `ExclusiveEntry.isExclusive` with `Owned`, nt17o review).
+- 96 §E4.2's Test clause still states the naive "floor ≤ min-source
+  promise" (false by design, #8), and 96 §E4.1(2) the unqualified minimum;
+  `92-way-forward.md:363` still says eviction is deferred. Read through
+  `[24-WL-02]`/`[24-WL-20]`; not edited here.
+- The 24 `> **Status**` lines and 96 §E4 headings were stale after KE4.2-4.5;
+  `computenet-lxo.2` (#1111) caught them up and this task marks E4.6 landed
+  with t4od7 named open. They flip to fully landed only when t4od7 closes.
+- `computenet-7y4sm` (gated join-family flush diagnostic) is **resolved**
+  (#1109) and is listed here only because the breakdown expected it open.
+- G-42 is marked realized for its event-time share only; its epoch-hygiene
+  (R14) and frontier-GC shares stay open.
