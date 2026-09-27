@@ -4,15 +4,20 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
+import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.control.Progress
 import civictech.cell.data.Aggregators
+import civictech.cell.data.Replicable
 import civictech.cell.data.Windows
+import civictech.cell.data.delta.TagState
+import civictech.cell.data.mapFold
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -35,8 +40,10 @@ import java.util.UUID
  * ports, floor tracking and late-drop guard — spec 24 §Lateness and
  * waterlines `[24-WL-03]` (the consumer's fixpoint), `[24-WL-04]`,
  * `[24-WL-07]`, `[24-WL-08]`, `[24-WL-11]`, and the floor half of
- * `[KE4-45]` (nt17o-D4). Eviction on a floor rise is computenet-nt17o.3's
- * and appends to this file.
+ * `[KE4-45]` (nt17o-D4). computenet-nt17o.3 appends eviction on a floor
+ * rise: `[24-WL-05]`, `[24-WL-06]`, `[24-WL-09]`, `[24-WL-17]` (per-window
+ * exclusive refusal), `[24-WL-18]` (the `Replicable` seam refusal), the
+ * structural half of `[24-WL-19]`, and the snapshot half of B13.
  *
  * Fixture: elements are `Long` event times, tumbling windows of 10 keyed by
  * their start, `keyTime` = the window's end, lateness 2, count per window.
@@ -171,6 +178,8 @@ class GroupByEvictionTest {
         cell.droppedBelowFloor shouldBe 1L
         // no group was created for the dropped element's window
         cell.snapshot().let { (it as List<*>)[1] as Map<*, *> }.keys shouldBe setOf(20L)
+        // and the dropped element never entered the tag state: only the admitted part was folded
+        cell.contents().adds shouldBe mapOf(25L to setOf(tag(2)))
     }
 
     @Test
@@ -252,7 +261,7 @@ class GroupByEvictionTest {
         outProbe.deltas.shouldBeEmpty()
         lateProbe.deltas.shouldBeEmpty()
         // each delivery is acked on both outlets under its own wave (the raising one
-        // by the nt17o.3 eviction hook, which in this task evicts nothing)
+        // by the eviction step, which here has no window to evict)
         val expected = listOf(Progress(src, 1), Progress(src, 2), Progress(src, 3))
         outProbe.acks shouldBe expected
         lateProbe.acks shouldBe expected
@@ -324,5 +333,269 @@ class GroupByEvictionTest {
         fromLegacy.restore(roundTrip(legacy))
         fromLegacy.floor() shouldBe null
         fromLegacy.contents() shouldBe cell.contents()
+    }
+
+    // ================================================ eviction (computenet-nt17o.3)
+
+    /** A late-joining subscriber: linking replays the cell's current aggregates (G-22 catch-up). */
+    private class LateJoiner<K, V> {
+        @Suppress("UNCHECKED_CAST")
+        val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<K, V>>>))
+        val arrivals = mutableListOf<MapDelta<K, V>>()
+
+        init {
+            inlet.serve(object : Propagate<MapDelta<K, V>> {
+                override fun propagate(value: MapDelta<K, V>) {
+                    arrivals += value
+                }
+            })
+        }
+    }
+
+    /** Link a fresh subscriber to [cell] now and return the fold of what it caught up with. */
+    private fun <K, V> lateJoinFold(cell: GroupByCell<*, K, V, *>): Map<K, V> {
+        val joiner = LateJoiner<K, V>()
+        @Suppress("UNCHECKED_CAST")
+        cell.outlet.linkTo(joiner.inlet as LinkFrom<Propagate<MapDelta<K, V>>>)
+        return mapFold(joiner.arrivals)
+    }
+
+    /** Subscriber A: every delta with the wave timestamp it arrived under (as `WaterlineCellTest.record`). */
+    private fun <K, V> recordWaves(cell: GroupByCell<*, K, V, *>): MutableList<Pair<MapDelta<K, V>, Timestamp?>> {
+        val seen = mutableListOf<Pair<MapDelta<K, V>, Timestamp?>>()
+        cell.outlet.subscribe(Use.fixed(object : Propagate<MapDelta<K, V>> {
+            override fun propagate(value: MapDelta<K, V>) {
+                seen += value to CurrentContext.get()?.timestamp
+            }
+        }, PortRef.generate()))
+        return seen
+    }
+
+    /** The keys [cell] holds in `groups`, read through its snapshot. */
+    private fun groupKeys(cell: GroupByCell<*, *, *, *>): Set<Any?> =
+        ((cell.snapshot() as List<*>)[1] as Map<*, *>).keys
+
+    /** Windows 0 {1, 5}, 10 {12}, 20 {25, 27} under tags 1..5. */
+    private fun populated(cell: GroupByCell<Long, Long, Long, Long>) = cell.inlet.call.propagate(
+        SetDelta(adds = mapOf(1L to setOf(tag(1)), 5L to setOf(tag(2)), 12L to setOf(tag(3)), 25L to setOf(tag(4)), 27L to setOf(tag(5)))),
+    )
+
+    @Test
+    fun `B3 - a floor rise evicts every passed window as one removal delta under the waterline's wave`() {
+        val cell = windowed()
+        val a = recordWaves(cell)
+        populated(cell)
+        a.map { it.first } shouldBe listOf(MapDelta(mapOf(0L to 2L, 10L to 1L, 20L to 2L), emptySet()))
+
+        val src = UUID(3, 3)
+        underWave(src, 7) { cell.waterline.call.propagate(WaterlineDelta(20)) }
+
+        // [24-WL-05]: state == integrated output — A's fold equals a late joiner's catch-up.
+        // Asserted first: the B3 control (eviction emission dropped) reddens exactly here.
+        val foldA = mapFold(a.map { it.first })
+        lateJoinFold(cell) shouldBe foldA
+        foldA shouldBe mapOf(20L to 2L)
+
+        // [24-WL-06]: exactly one MapDelta, removals {0, 10}, no puts, under (S, 7) ([24-OP-GROUPBY-03])
+        val eviction = a.drop(1)
+        eviction.size shouldBe 1
+        eviction.single().first shouldBe MapDelta(emptyMap(), setOf(0L, 10L))
+        eviction.single().second shouldBe Timestamp(src, 7)
+
+        // [24-WL-19] structural half: no window with keyTime <= floor remains (none refused here)
+        groupKeys(cell).filter { (it as Long) + 10 <= 20 }.shouldBeEmpty()
+        cell.contents().adds.keys shouldBe setOf(25L, 27L)
+        cell.refusedWindows() shouldBe emptyMap()
+        cell.refusedEvictions shouldBe 0L
+    }
+
+    @Test
+    fun `B1 - an add for an evicted window is late-dropped and re-creates no group`() {
+        val cell = windowed()
+        val out = collect(cell.outlet)
+        val late = collect(cell.late)
+        populated(cell)
+        cell.waterline.call.propagate(WaterlineDelta(20))
+        val emitted = out.size
+
+        val t9 = setOf(tag(9))
+        cell.inlet.call.propagate(SetDelta(adds = mapOf(7L to t9)))
+
+        out.size shouldBe emitted // no put for key 0
+        late shouldBe listOf(SetDelta(adds = mapOf(7L to t9)))
+        groupKeys(cell) shouldBe setOf(20L)
+        cell.droppedBelowFloor shouldBe 1L
+    }
+
+    @Test
+    fun `B4 - a del in flight for an evicted element is a no-op, never a negative count`() {
+        val cell = windowed()
+        val out = collect(cell.outlet)
+        val t1 = setOf(tag(1))
+        cell.inlet.call.propagate(SetDelta(adds = mapOf(7L to t1, 15L to setOf(tag(2)))))
+
+        cell.waterline.call.propagate(WaterlineDelta(12))
+        out.last() shouldBe MapDelta(emptyMap(), setOf(0L)) // window 0 evicted; window 10 (end 20) kept
+        val emitted = out.size
+
+        // [24-WL-09]: the del's tag is no longer live — no emission, no "retract for untracked group"
+        cell.inlet.call.propagate(SetDelta(dels = mapOf(7L to t1)))
+        out.size shouldBe emitted
+        groupKeys(cell) shouldBe setOf(10L)
+        mapFold(out) shouldBe mapOf(10L to 1L)
+        lateJoinFold(cell) shouldBe mapFold(out)
+    }
+
+    @Test
+    fun `a redelivered waterline after an eviction evicts and emits nothing`() {
+        val cell = windowed()
+        val probe = AckProbe<MapDelta<Long, Long>>()
+        @Suppress("UNCHECKED_CAST")
+        cell.outlet.linkTo(probe.inlet as LinkFrom<Propagate<MapDelta<Long, Long>>>)
+        populated(cell)
+        val src = UUID(3, 4)
+        underWave(src, 1) { cell.waterline.call.propagate(WaterlineDelta(20)) }
+        val deltas = probe.deltas.toList()
+        val contents = cell.contents()
+
+        // [24-WL-03] fixpoint: equal, then lower
+        underWave(src, 2) { cell.waterline.call.propagate(WaterlineDelta(20)) }
+        underWave(src, 3) { cell.waterline.call.propagate(WaterlineDelta(15)) }
+
+        probe.deltas shouldBe deltas
+        probe.acks shouldBe listOf(Progress(src, 2), Progress(src, 3))
+        cell.contents() shouldBe contents
+        groupKeys(cell) shouldBe setOf(20L)
+    }
+
+    @Test
+    fun `B15 - a passed window holding an Owned element is refused per window while the others evict`() {
+        // elements are Long or Owned<Long>; an Owned's event time comes from a test-side identity map,
+        // so the cell never borrows or takes it to read a time
+        val owned = Owned(3L)
+        val ownedTime = java.util.IdentityHashMap<Any, Long>().apply { put(owned, 3L) }
+        val timeOf: (Any) -> Long = { e -> if (e is Long) e else ownedTime.getValue(e) }
+        val window = Windows.tumbling(10)
+        val ref = CellRef(UUID.randomUUID())
+        val cell = GroupByCell<Any, Long, Long, Long>(
+            ref = ref,
+            keyFn = { e -> window(timeOf(e)) },
+            aggregator = Aggregators.count(),
+            lateness = Windows.Lateness(timeOf, 2),
+            keyTime = { k: Long -> k + 10 },
+        )
+        val out = collect(cell.outlet)
+        val late = collect(cell.late)
+        val ownedTag = setOf(tag(1))
+        cell.inlet.call.propagate(
+            SetDelta(adds = mapOf(owned to ownedTag, 5L to setOf(tag(2)), 12L to setOf(tag(3)), 15L to setOf(tag(4)))),
+        )
+
+        cell.waterline.call.propagate(WaterlineDelta(20))
+
+        // one delta, window 10 only; window 0 untouched, nothing emitted for it
+        out.drop(1) shouldBe listOf(MapDelta(emptyMap(), setOf(10L)))
+        groupKeys(cell) shouldBe setOf(0L)
+        mapFold(out) shouldBe mapOf(0L to 2L)
+        lateJoinFold(cell) shouldBe mapFold(out) // state still equals integrated output
+        val refusal = cell.refusedWindows().getValue(0L)
+        cell.refusedWindows().keys shouldBe setOf(0L)
+        refusal.cellRef shouldBe ref
+        refusal.windowKey shouldBe 0L
+        refusal.exclusiveCount shouldBe 1
+        refusal.message!! shouldContain ref.toString()
+        refusal.message!! shouldContain "window 0 "
+        refusal.message!! shouldContain "[24-WL-17]"
+        cell.refusedEvictions shouldBe 1L
+
+        // a sub-floor add into the refused window is still late-dropped
+        cell.inlet.call.propagate(SetDelta(adds = mapOf(4L to setOf(tag(5)))))
+        late shouldBe listOf(SetDelta(adds = mapOf<Any, Set<Timestamp>>(4L to setOf(tag(5)))))
+        out.size shouldBe 2
+
+        // [24-WL-08]: the refused window's tags stay live, so an ordinary del retracts normally
+        cell.inlet.call.propagate(SetDelta(dels = mapOf<Any, Set<Timestamp>>(owned to ownedTag)))
+        out.last() shouldBe MapDelta(mapOf(0L to 1L), emptySet())
+
+        // the next rise re-evaluates it: no exclusive left, so it is evicted now
+        cell.waterline.call.propagate(WaterlineDelta(21))
+        out.last() shouldBe MapDelta(emptyMap(), setOf(0L))
+        cell.refusedWindows() shouldBe emptyMap()
+        cell.refusedEvictions shouldBe 1L
+        groupKeys(cell).shouldBeEmpty()
+
+        // the cell never consumed the exclusive: it is still takeable, exactly once
+        owned.take() shouldBe 3L
+    }
+
+    @Test
+    fun `B15 - a refused window leaves refusedWindows when its last member is retracted`() {
+        val owned = Owned(3L)
+        val timeOf: (Any) -> Long = { e -> if (e is Long) e else 3L }
+        val window = Windows.tumbling(10)
+        val cell = GroupByCell<Any, Long, Long, Long>(
+            keyFn = { e -> window(timeOf(e)) },
+            aggregator = Aggregators.count(),
+            lateness = Windows.Lateness(timeOf, 2),
+            keyTime = { k: Long -> k + 10 },
+        )
+        val out = collect(cell.outlet)
+        val ownedTag = setOf(tag(1))
+        cell.inlet.call.propagate(SetDelta(adds = mapOf<Any, Set<Timestamp>>(owned to ownedTag)))
+        cell.waterline.call.propagate(WaterlineDelta(10))
+        cell.refusedWindows().keys shouldBe setOf(0L)
+
+        // the window's only member is retracted by an ordinary del: the group dies, and so does the refusal
+        cell.inlet.call.propagate(SetDelta(dels = mapOf<Any, Set<Timestamp>>(owned to ownedTag)))
+        out.last() shouldBe MapDelta(emptyMap(), setOf(0L))
+        cell.refusedWindows() shouldBe emptyMap()
+        cell.refusedEvictions shouldBe 1L
+        owned.take() shouldBe 3L
+    }
+
+    /** A minimal `Replicable` host with a `TagState` — the shape `[24-WL-18]` refuses at the seam. */
+    private class ReplicaHost(override val ref: CellRef = CellRef(UUID.randomUUID())) :
+        Cell, Replicable<SetDelta<String>> {
+        override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<String>>>())
+        override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<String>>>())
+        val state = TagState<String>()
+    }
+
+    @Test
+    fun `B17 - the eviction seam refuses a Replicable host and leaves its state untouched`() {
+        // DELETION TRIGGER: remove when the floor is tied to Replication.stableFrontier and [24-WL-18] is lifted.
+        val host = ReplicaHost()
+        host.state.apply(SetDelta(adds = mapOf("a" to setOf(tag(1)))))
+
+        val ex = shouldThrow<IllegalStateException> { WaterlineEviction.evict(host, host.state) { true } }
+
+        ex.message!! shouldContain "Replicable"
+        ex.message!! shouldContain "[24-WL-18]"
+        ex.message!! shouldContain "stableFrontier"
+        ex.message!! shouldContain host.ref.toString()
+        (ex.message!!.contains("E3.7")) shouldBe false
+        host.state.asDelta() shouldBe SetDelta(adds = mapOf("a" to setOf(tag(1))))
+    }
+
+    @Test
+    fun `a post-eviction snapshot restores the same fold and floor, and still late-drops`() {
+        val ref = CellRef(UUID.randomUUID())
+        val cell = windowed(ref)
+        val a = collect(cell.outlet)
+        populated(cell)
+        cell.waterline.call.propagate(WaterlineDelta(20))
+
+        val restored = windowed(ref)
+        restored.restore(roundTrip(cell.snapshot()))
+
+        restored.floor() shouldBe 20L
+        lateJoinFold(restored) shouldBe mapFold(a)
+        restored.contents() shouldBe cell.contents()
+        // a replayed sub-floor add for an evicted window is dropped, not re-admitted
+        val restoredOut = collect(restored.outlet)
+        restored.inlet.call.propagate(SetDelta(adds = mapOf(1L to setOf(tag(1)))))
+        restoredOut.shouldBeEmpty()
+        restored.droppedBelowFloor shouldBe 1L
+        groupKeys(restored) shouldBe setOf(20L)
     }
 }
