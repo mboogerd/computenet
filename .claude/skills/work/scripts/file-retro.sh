@@ -42,6 +42,10 @@ machine=${BEADS_ACTOR:-$(hostname -s)}
 now=$(date -u +%FT%TZ)
 meta=$(jq -nc --arg s "$skill" --arg m "$machine" --arg v "$ver" --arg st "$started" --arg e "$now" --arg mo "$model" \
   '{retro_skill:$s, retro_machine:$m, skill_version:$v, started:$st, ended:$e, model:$mo} | with_entries(select(.value != ""))')
+# stderr stays out of the id: a warning printed after a successful create
+# would otherwise read as failure, and a retry would file the record twice.
+err=$(mktemp "${TMPDIR:-/tmp}/file-retro.XXXXXX")
 id=$(bd create "retro: $skill on $machine $(date -u +%F)" --type=retro --priority=4 --labels=retro \
-       --body-file "$file" --metadata "$meta" --silent 2>&1 | tail -1)
-case $id in computenet-*) echo "$id" ;; *) echo "file-retro: bd create failed: $id" >&2; exit 1 ;; esac
+       --body-file "$file" --metadata "$meta" --silent 2>"$err" | tail -1)
+case $id in computenet-*) rm -f "$err"; echo "$id" ;;
+  *) echo "file-retro: bd create failed: $id $(tail -3 "$err")" >&2; rm -f "$err"; exit 1 ;; esac

@@ -11,7 +11,7 @@ echo "$*" >> "$BD_LOG"
 case "$1 $2" in
   "config get") cat "$ROOT/types" 2>/dev/null || echo "types.custom (not set)" ;;
   "config set") echo "$4" > "$ROOT/types" ;;
-  create*) echo "computenet-r3tro" ;;
+  create*) echo "computenet-r3tro"; [ -n "${BD_WARN:-}" ] && echo "Warning: export skipped" >&2; true ;;
 esac
 STUB
 chmod +x "$ROOT/bin/bd"; export PATH="$ROOT/bin:$PATH" ROOT BD_LOG="$ROOT/bd.log"
@@ -30,6 +30,9 @@ grep -q '"skill_version":"abc"' "$BD_LOG" && ok "metadata carries skill_version"
 : > "$BD_LOG"; echo "bug,retro" > "$ROOT/types"
 "$SCRIPT" --skill work --file "$ROOT/r.md" >/dev/null 2>&1
 grep -q 'config set' "$BD_LOG" && bad "re-registered an existing type" || ok "leaves an existing registration alone"
+
+out=$(BD_WARN=1 "$SCRIPT" --skill work --file "$ROOT/r.md" 2>/dev/null); st=$?
+[ $st -eq 0 ] && [ "$out" = computenet-r3tro ] && ok "a stderr warning after create is not a failure" || bad "warning after create: $st $out"
 
 good '- [other:dns] resolver down'
 "$SCRIPT" --skill work --file "$ROOT/r.md" >/dev/null 2>&1 && ok "other:<word> accepted" || bad "other tag"
