@@ -65,16 +65,16 @@ class CostTest {
 
     @Test
     fun `another codex model needs rate flags or its rate is unknown`() {
-        val unknown = Pricing.of("gpt-9", null, null, null, null, null)
+        val unknown = Pricing.of("gpt-9", null, null, null)
         assertNull(unknown.price(CallUsage(Pricing.CODEX, inputTokens = 1000)))
         assertTrue(unknown.info(Pricing.CODEX).rate.startsWith("rate unknown"))
-        val partial = Pricing.of("gpt-9", 1.0, null, 2.0, null, null)
+        val partial = Pricing.of("gpt-9", 1.0, null, 2.0)
         assertNull(partial.price(CallUsage(Pricing.CODEX, inputTokens = 1000)), "another model requires all three rate flags")
-        val flagged = Pricing.of("gpt-9", 1.0, 0.1, 2.0, null, null)
+        val flagged = Pricing.of("gpt-9", 1.0, 0.1, 2.0)
         near(0.9 + 0.01 + 2.0, flagged.price(CallUsage(Pricing.CODEX, inputTokens = 1_000_000, cachedInputTokens = 100_000, outputTokens = 1_000_000)))
         assertEquals("command-line rate flags", flagged.info(Pricing.CODEX).source)
-        val same = Pricing.of(null, null, null, null, 0.1, null)
-        near(0.1, same.price(CallUsage(Pricing.JEV, inputTokens = 1_000_000)))
+        val same = Pricing.of(null, null, null, null)
+        assertEquals(Pricing(), same)
         near(Pricing().price(CallUsage(Pricing.CODEX, inputTokens = 1000))!!, same.price(CallUsage(Pricing.CODEX, inputTokens = 1000)))
     }
 
@@ -175,7 +175,6 @@ class CostTest {
             assertEquals(listOf("claude-test"), claude.models)
             assertEquals(100L * proposals, claude.inputTokens)
             assertEquals(2, q.cost.rounds)
-            assertTrue(q.cost.complete)
             // Fewer than 3 rounds: no projection yet.
             assertNull(q.projectedUsd)
             assertNull(q.cost.perRoundUsd)
@@ -279,48 +278,37 @@ class CostTest {
     }
 
     @Test
-    fun `a restored pre-cost question is marked incomplete and new rounds remain a durable lower bound`() {
-        val dir = java.nio.file.Files.createTempDirectory("deliberate-legacy-cost").toFile()
+    fun `a restored question with no cost fields reports zero recorded cost`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-costless-record").toFile()
         try {
             val log = java.io.File(dir, "graph.jsonl")
-            val store = InMemoryMetaStore()
-            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, maxArgsPerSide = 10)
-            val e1 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
+            val firstStore = InMemoryMetaStore()
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 10)
+            val first = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = firstStore)
                 .also { engines += it }
-            val root = e1.ask("Older question?")
-            e1.idle()
-            e1.close()
+            first.ask("Recorded cost only?")
+            first.idle()
+            first.close()
 
-            // Simulate the durable question record written by a build before COST-01..05.
-            val key = "q:${root.id}"
-            val old = store.load().getValue(key)
-            store.put(
-                key,
-                old.keys.filter { it == "costComplete" || it.startsWith("cost.") }.associateWith { null },
-            )
-
-            val e2 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
+            val store = InMemoryMetaStore().also { copy ->
+                firstStore.load().forEach { (key, fields) ->
+                    copy.put(
+                        key,
+                        if (key.startsWith("q:")) fields.filterKeys { it in setOf("yields", "diminished", "paused") }
+                        else fields,
+                    )
+                }
+            }
+            val restored = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
                 .also { engines += it }
-            e2.idle()
-            val before = e2.snapshot().questions.single()
-            assertTrue(!before.cost.complete)
-            assertTrue(before.cost.backends.isEmpty())
-            assertEquals(0.0, before.costUsd)
-            assertNull(before.projectedUsd)
+            restored.idle()
 
-            e2.setOverride(root, Override.EXPAND)
-            e2.idle()
-            val after = e2.snapshot().questions.single()
-            assertTrue(!after.cost.complete)
-            assertTrue(after.costUsd > 0.0)
-            assertTrue(after.cost.backends.isNotEmpty())
-            assertNull(after.projectedUsd, "an incomplete lifetime must not produce a whole-question projection")
-            e2.close()
-
-            val e3 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
-                .also { engines += it }
-            e3.idle()
-            assertEquals(after, e3.snapshot().questions.single())
+            val question = restored.snapshot().questions.single()
+            assertEquals(3, question.cost.rounds)
+            assertTrue(question.cost.backends.isEmpty())
+            assertEquals(0.0, question.costUsd)
+            assertEquals(0.0, question.cost.perRoundUsd)
+            assertEquals(0.0, question.projectedUsd)
         } finally {
             dir.deleteRecursively()
         }

@@ -5,7 +5,7 @@
 export interface GraphDto {
   questions: QuestionDto[];
   nodes: NodeDto[];
-  /** SPEC §2: the layers averaged into every node's `consensus` (`--consensus`); always sent, see NodeDto. */
+  /** SPEC §2: the fixed layers averaged into every node's `consensus`; always sent, see NodeDto. */
   consensusMembers?: string[];
 }
 
@@ -43,8 +43,6 @@ export interface QuestionDto {
 
 /** SPEC §12: the details behind a question's cost figure. */
 export interface CostDto {
-  /** False when this question predates cost tracking, so the counters are only a lower bound. */
-  complete?: boolean;
   /** One entry per backend that made at least one call for the question, in claude, codex, jev order. */
   backends: BackendCostDto[];
   /** Rounds completed in the question (over all its claims). */
@@ -190,5 +188,5 @@ export interface QuestionCreated {
 /** Statuses during which the explorer is still working on a claim. */
 export const ACTIVE_STATUSES: ReadonlySet<Status> = new Set(['QUEUED', 'JUDGING', 'EXPLORING']);
 
-/** The layers a node's consensus averages over by default (`--consensus`). */
+/** The fixed layers a node's consensus averages over. */
 export const DEFAULT_CONSENSUS: readonly string[] = ['wlo', 'jnb', 'woe'];

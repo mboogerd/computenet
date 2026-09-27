@@ -11,7 +11,7 @@ import kotlinx.serialization.Serializable
 data class GraphDto(
     val questions: List<QuestionDto>,
     val nodes: List<NodeDto>,
-    /** SPEC §2: the layers averaged into every node's `consensus` (`--consensus`). */
+    /** SPEC §2: the fixed layers averaged into every node's `consensus`. */
     val consensusMembers: List<String> = emptyList(),
 )
 
@@ -44,8 +44,6 @@ data class QuestionDto(
 /** SPEC §12: the details behind a question's cost figure. */
 @Serializable
 data class CostDto(
-    /** False when this question predates cost tracking, so the counters are only a lower bound. */
-    val complete: Boolean = true,
     /** One entry per backend that made at least one call for the question, in claude, codex, jev order. */
     val backends: List<BackendCostDto> = emptyList(),
     /** Rounds completed in the question (over all its claims). */

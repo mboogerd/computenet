@@ -116,8 +116,6 @@ class DeliberationEngine(
             const val BUDGET_EXHAUSTED = "budget exhausted"
             /** CTL-02: a claim the human forced to expand is queued ahead of every contribution (≤ 1). */
             const val FORCED_PRIORITY = 2.0
-            /** DUR-05: the error of a link restored for an edge created before links existed (it has no record). */
-            const val LEGACY_LINK = "created before link exploration — expand to explore"
         }
     }
 
@@ -192,15 +190,12 @@ class DeliberationEngine(
         var error: String? = null
         /** EXP-04: the sides Jev last judged saturated (the cap and the balance rule apply on top, see saturatedSides). */
         val saturated = mutableSetOf<Side>()
-        /** CTL-02: the next round is forced (saturation, depth, contribution and budget ignored). */
-        var forceRound = false
         /**
-         * CTL-05: this process received the EXPAND that authorized [forceRound].
-         * Deliberately not durable: DUR-06 must hold a forced round restored by
-         * `--start-paused` until resume, while an EXPAND issued to an already
-         * paused question must still run.
+         * CTL-02: the next round is forced (saturation, depth, contribution and
+         * budget ignored). Not durable: an EXPAND interrupted by a restart is not
+         * resumed — the human expands again (DUR-06).
          */
-        var liveForce = false
+        var forceRound = false
         var roundInFlight = false
         /** Its attach-time assessment (CRED-01/02, EXP-05) is in flight — for the UI's activity line. */
         var assessing = false
@@ -248,8 +243,6 @@ class DeliberationEngine(
     private val diminished = HashSet<CellRef>()
     /** SPEC §12: per question, per backend, the usage of every call made for it. */
     private val costs = HashMap<CellRef, MutableMap<String, BackendTally>>()
-    /** Questions whose complete lifetime is covered by [costs]; absent for records created before cost tracking. */
-    private val completeCosts = HashSet<CellRef>()
     /** CTL-05: paused questions — no new round starts in them except a forced one (CTL-02). */
     private val paused = HashSet<CellRef>()
 
@@ -324,7 +317,6 @@ class DeliberationEngine(
             claims[ref] = root
             questions[ref] = question
             treeSize[ref] = 1
-            completeCosts += ref
         }
         onChange()
         enqueue(root)
@@ -338,15 +330,8 @@ class DeliberationEngine(
         val toSchedule: List<Claim> = synchronized(lock) {
             val c = requireNotNull(claims[ref]) { "unknown claim ${ref.id}" }
             c.override = mode
-            if (mode == Override.EXPAND) {
-                c.liveForce = true
-            } else {
-                // STOP cancels queued work; AUTO returns to ordinary gates.
-                // Neither may retain an earlier pause-bypass authorization.
-                c.forceRound = false
-                c.liveForce = false
-            }
-            if (mode == Override.EXPAND && c.error == Config.LEGACY_LINK) c.error = null
+            // STOP cancels queued work; AUTO returns to ordinary gates. Neither keeps an earlier forced round.
+            if (mode != Override.EXPAND) c.forceRound = false
             val scheduled = when (mode) {
                 // CTL-03: queued work is cancelled at once; a running claim stops at its next round boundary.
                 Override.STOP -> when {
@@ -630,12 +615,8 @@ class DeliberationEngine(
     /** Caller holds [lock]. A claim whose assessment failed falls back to its reach (EXP-05). */
     private fun contributionOf(c: Claim): Double = c.contribution ?: c.reach ?: Config.FALLBACK_STRENGTH
 
-    /**
-     * Caller holds [lock]. CTL-05: [c]'s question is paused and this process
-     * has not received an EXPAND authorizing its next forced round. A durable
-     * [Claim.forceRound] alone is insufficient: DUR-06 holds all restored work.
-     */
-    private fun held(c: Claim) = c.root in paused && !(c.forceRound && c.liveForce)
+    /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one (CTL-02). */
+    private fun held(c: Claim) = c.root in paused && !c.forceRound
 
     /**
      * Stops work that was dequeued just before its question paused. The task
@@ -803,7 +784,6 @@ class DeliberationEngine(
             if (nextStatus == null) {
                 if (forcedRound) c.saturated.clear()
                 c.forceRound = false
-                if (forcedRound) c.liveForce = false
                 c.roundInFlight = true
             }
             Triple(nextSides, forcedRound, nextStatus)
@@ -1127,12 +1107,10 @@ class DeliberationEngine(
         val rounds = tree.sumOf { it.rounds }
         val spent = tallies.values.sumOf { it.usd }
         return CostDto(
-            complete = root in completeCosts,
             backends = backends,
             rounds = rounds,
             queued = tree.count { it.status in ACTIVE },
-            // A legacy question's earlier spend and cost-per-round denominator are unknown.
-            perRoundUsd = if (root in completeCosts && rounds >= PROJECTION_MIN_ROUNDS) spent / rounds else null,
+            perRoundUsd = if (rounds >= PROJECTION_MIN_ROUNDS) spent / rounds else null,
         )
     }
 
@@ -1429,7 +1407,6 @@ class DeliberationEngine(
         val override: Override = Override.AUTO,
         val roundLimit: Int? = null,
         val rounds: Int = 0,
-        val forceRound: Boolean = false,
         val plausibility: Double? = null,
         val relevance: Double? = null,
         val quality: Double? = null,
@@ -1453,7 +1430,7 @@ class DeliberationEngine(
         // A link's text is built from its ends and it has no proposer: neither is stored.
         text = c.text.takeIf { !c.isLink && it != c.structureText }, proposer = c.proposer.takeIf { !c.isLink },
         status = c.status, override = c.override,
-        roundLimit = c.roundLimit, rounds = c.rounds, forceRound = c.forceRound,
+        roundLimit = c.roundLimit, rounds = c.rounds,
         plausibility = c.plausibility, relevance = c.relevance, quality = c.quality,
         reach = c.reach.takeIf { c.parent != null }, contribution = c.contribution.takeIf { c.parent != null },
         proSaturation = c.proSaturation, conSaturation = c.conSaturation, saturated = c.saturated.toList(),
@@ -1468,8 +1445,6 @@ class DeliberationEngine(
         /** Required so a question with no non-root round yet still has its one durable record (DUR-03). */
         val yields: List<Double>,
         val diminished: Boolean = false,
-        /** Missing/false identifies a record written before cost tracking existed. */
-        val costComplete: Boolean = false,
         /** CTL-05: the question is paused. */
         val paused: Boolean = false,
     )
@@ -1478,7 +1453,7 @@ class DeliberationEngine(
     private fun questionFieldsOf(q: CellRef): Map<String, String> =
         RECORDS.encodeToJsonElement(
             QuestionRecord.serializer(),
-            QuestionRecord(yields[q].orEmpty().toList(), q in diminished, q in completeCosts, q in paused),
+            QuestionRecord(yields[q].orEmpty().toList(), q in diminished, q in paused),
         ).jsonObject.mapValues { it.value.toString() } +
             // SPEC §12: one field per backend, so a call rewrites only its backend's counters.
             costs[q].orEmpty().map { (b, t) -> COST_FIELD + b to RECORDS.encodeToString(BackendTally.serializer(), t) }
@@ -1549,24 +1524,12 @@ class DeliberationEngine(
                 rec?.let { r -> apply(claim, r) }
                 claims[n.ref] = claim
                 treeSize.merge(claim.root, 1, Int::plus)
-                if (claim.edge != null) linkFor(claim).also { l ->
-                    val lr = linkRecords[l.ref]
-                    when {
-                        lr != null -> apply(l, lr)
-                        // DUR-05: its argument was recorded but it never was — the edge predates
-                        // links. Exploring it now would be spend nobody asked for.
-                        rec != null -> {
-                            l.status = Status.PRUNED
-                            l.error = Config.LEGACY_LINK
-                        }
-                    }
-                }
+                if (claim.edge != null) linkFor(claim).also { l -> linkRecords[l.ref]?.let { apply(l, it) } }
             }
             for ((q, r) in questionRecords) {
                 if (q !in questions) continue
                 yields[q] = r.yields.toMutableList()
                 if (r.diminished) diminished += q
-                if (r.costComplete) completeCosts += q
                 if (r.paused) paused += q
             }
             // DUR-06: --start-paused pauses every restored question before anything is scheduled.
@@ -1606,7 +1569,6 @@ class DeliberationEngine(
         c.override = r.override
         r.roundLimit?.let { c.roundLimit = it }
         c.rounds = r.rounds
-        c.forceRound = r.forceRound
         c.plausibility = r.plausibility
         c.relevance = r.relevance
         c.quality = r.quality

@@ -68,14 +68,9 @@ class DeliberateApp(
                 require(it in SemanticsCatalog.IDS) { "unknown semantics '$it' (${SemanticsCatalog.IDS.joinToString()})" }
             }
             require(headline == LayerSet.CONSENSUS || headline in running) { "--semantics $headline is not among the layers ${running.joinToString()}" }
-            require(consensus.all { it in running }) { "--consensus ${consensus.joinToString()} names a layer that does not run (${running.joinToString()})" }
-            require(consensus.isNotEmpty()) { "--consensus is empty" }
+            require(consensus.all { it in running }) { "consensus ${consensus.joinToString()} names a layer that does not run (${running.joinToString()})" }
+            require(consensus.isNotEmpty()) { "consensus is empty" }
         }
-    }
-
-    init {
-        // Before anything binds or starts a thread.
-        dataDir?.let(::refuseOldFormat)
     }
 
     // Bind before starting any scheduler/executor threads. A bind failure must
@@ -299,19 +294,6 @@ class DeliberateApp(
         const val STRUCTURE_LOG = "graph.jsonl"
         /** The metadata journal compacts once it grew by at least this much since its last checkpoint. */
         const val COMPACT_MIN_BYTES = 64L * 1024
-
-        /**
-         * A data directory from before the one-graph design (one structure log
-         * per layer, a host journal of agora frames) cannot be read by this one:
-         * refuse it with a clear message instead of failing inside the replay.
-         */
-        internal fun refuseOldFormat(dir: File) {
-            val old = dir.listFiles { f -> f.name.startsWith("graph-") && f.name.endsWith(".jsonl") }.orEmpty()
-            require(old.isEmpty()) {
-                "--data $dir holds a deliberation in the old per-layer format (${old.joinToString { it.name }}); " +
-                    "start with a fresh data directory"
-            }
-        }
         const val MAX_QUESTION = 1_000
         private const val STOP_TIMEOUT_SECONDS = 5L
 
@@ -409,15 +391,12 @@ internal class Options(args: Array<String>) {
 
     val config: DeliberationEngine.Config = DeliberationEngine.Config().let { d ->
         d.copy(
-            argsPerCall = int("--args-per-call") ?: d.argsPerCall,
             maxRounds = int("--max-rounds") ?: d.maxRounds,
             maxDepth = int("--max-depth") ?: d.maxDepth,
             maxClaims = int("--max-claims") ?: d.maxClaims,
             maxArgsPerSide = int("--max-args-per-side") ?: d.maxArgsPerSide,
-            maxArgsPerSideChild = int("--max-args-per-side-child") ?: d.maxArgsPerSideChild,
             saturation = double("--saturation") ?: d.saturation,
             minInfluence = double("--min-influence") ?: d.minInfluence,
-            roundDecay = double("--round-decay") ?: d.roundDecay,
             exploreLinks = when (val mode = values["--explore-links"]?.trim()?.lowercase()) {
                 null -> d.exploreLinks
                 "on" -> true
@@ -426,13 +405,7 @@ internal class Options(args: Array<String>) {
             },
             startPaused = "--start-paused" in values,
             yieldStop = when (val mode = values["--yield-stop"]?.trim()?.lowercase()) {
-                null, "on" -> (d.yieldStop ?: DeliberationEngine.YieldStop()).let { y ->
-                    DeliberationEngine.YieldStop(
-                        window = int("--yield-window") ?: y.window,
-                        ratio = double("--yield-ratio") ?: y.ratio,
-                        minClaims = int("--yield-min-claims") ?: y.minClaims,
-                    )
-                }
+                null, "on" -> d.yieldStop ?: DeliberationEngine.YieldStop()
                 "off" -> null
                 else -> throw IllegalArgumentException("--yield-stop must be on or off: $mode")
             },
@@ -445,28 +418,14 @@ internal class Options(args: Array<String>) {
         codexInput = double("--codex-input-rate"),
         codexCached = double("--codex-cached-rate"),
         codexOutput = double("--codex-output-rate"),
-        jevInput = double("--jev-input-rate"),
-        jevOutput = double("--jev-output-rate"),
     )
 
     /** SPEC §11: the durable data directory, or null (volatile). */
     val data get() = values["--data"]?.let(::File)
 
-    private fun list(flag: String) = values[flag]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
-
+    /** Every layer runs (SPEC §2); only the headline is chosen on the command line. */
     val semantics: DeliberateApp.SemanticsConfig = DeliberateApp.SemanticsConfig().let { d ->
-        val w = d.wlo
-        DeliberateApp.SemanticsConfig(
-            headline = values["--semantics"]?.trim() ?: d.headline,
-            layers = list("--semantics-layers") ?: d.layers,
-            consensus = list("--consensus") ?: d.consensus,
-            wlo = WeightedLogOdds(
-                alpha = double("--wlo-alpha") ?: w.alpha,
-                k = double("--wlo-k") ?: w.k,
-                p = double("--wlo-p") ?: w.p,
-                gamma = double("--wlo-gamma") ?: w.gamma,
-            ),
-        )
+        d.copy(headline = values["--semantics"]?.trim() ?: d.headline)
     }
 
     private fun int(flag: String) = values[flag]?.let { requireNotNull(it.toIntOrNull()) { "$flag must be an integer: $it" } }
@@ -477,48 +436,35 @@ internal class Options(args: Array<String>) {
         const val DEFAULT_MAX_PROCESSES = 8
         val FLAGS = setOf(
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
-            "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
-            "--max-args-per-side-child", "--saturation", "--min-influence", "--round-decay",
-            "--yield-stop", "--explore-links", "--yield-window", "--yield-ratio", "--yield-min-claims",
-            "--data", "--semantics", "--semantics-layers", "--consensus",
-            "--wlo-alpha", "--wlo-k", "--wlo-p", "--wlo-gamma",
-            "--codex-input-rate", "--codex-cached-rate", "--codex-output-rate", "--jev-input-rate", "--jev-output-rate",
+            "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
+            "--saturation", "--min-influence", "--yield-stop", "--explore-links",
+            "--data", "--semantics",
+            "--codex-input-rate", "--codex-cached-rate", "--codex-output-rate",
         )
         /** Flags that take no value. */
         val SWITCHES = setOf("--start-paused")
         private val D = DeliberationEngine.Config()
-        private val Y = DeliberationEngine.YieldStop()
         val USAGE = """
             usage: deliberate [port] [options]            (port default 8091, or ${'$'}PORT)
               --proposers claude,codex    which CLIs propose arguments
               --claude-model <m>          model for the Claude CLI (its default otherwise)
               --codex-model <m>           model for the Codex CLI (its default otherwise)
               --max-processes <n>         concurrent CLI processes, app-wide ($DEFAULT_MAX_PROCESSES)
-              --args-per-call <n>         arguments per proposer call per side (${D.argsPerCall})
               --max-rounds <n>            rounds per claim (${D.maxRounds})
               --max-depth <n>             deepest expanded level (${D.maxDepth})
               --max-claims <n>            claims per question (${D.maxClaims})
               --max-args-per-side <n>     arguments per side of the root before it is saturated (${D.maxArgsPerSide})
-              --max-args-per-side-child <n>  the same cap for claims below the root (${D.maxArgsPerSideChild})
               --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
               --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
-              --round-decay <f>           a claim's next round is queued at contribution x f^rounds (${D.roundDecay})
               --yield-stop on|off         stop a question once its returns diminish (on)
               --explore-links on|off      explore links ("A is a reason for B") like claims (on)
-              --yield-window <n>          ...when the mean yield of its last n non-root rounds (${Y.window})
-              --yield-ratio <f>           ...falls below f x the mean of its earlier rounds (${Y.ratio})
-              --yield-min-claims <n>      ...and it holds at least n claims (${Y.minClaims})
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)
               --start-paused              every restored question starts paused: nothing runs until you resume
-                                          one (safe after an upgrade); new questions run normally
+                                          one; new questions run normally
               --semantics <id>            what a node's credence shows: a layer id or ${LayerSet.CONSENSUS} (${LayerSet.CONSENSUS})
-              --semantics-layers <ids>    credence layers to propagate (${SemanticsCatalog.IDS.joinToString(",")}); dfquad always runs
-              --consensus <ids>           layers averaged (in log-odds) into the consensus (${Consensus.DEFAULT_MEMBERS.joinToString(",")})
-              --wlo-k/--wlo-p/--wlo-gamma/--wlo-alpha <x>  weighted log-odds parameters (2.4, 2, 1.3, 1)
               --codex-input-rate/--codex-cached-rate/--codex-output-rate <usd>  Codex price per 1M tokens
                                           (default ${Pricing.DEFAULT_CODEX_MODEL}: 4.00 / 0.40 / 20.00; another
                                           --codex-model without them is shown as tokens only, rate unknown)
-              --jev-input-rate/--jev-output-rate <usd>  Jev price per 1M tokens (assumed 0.042 / 0; unpublished)
               --ui <dir>                  built UI directory (default ui/dist)
             requires TYPESAFE_API_KEY and logged-in `claude` / `codex` CLIs.
         """.trimIndent()

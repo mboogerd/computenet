@@ -2086,7 +2086,7 @@ class DeliberationEngineTest {
         }
     }
 
-    // ------------------------------------------------------------ restart safety: DUR-05, DUR-06, CTL-05
+    // ------------------------------------------------------------ restart safety: DUR-06, CTL-05
 
     private val restartSchedulers = mutableListOf<VirtualThreadScheduler>()
 
@@ -2108,9 +2108,9 @@ class DeliberationEngineTest {
             .also { engines += it }
     }
 
-    /** Copies [from] into a new store, record by record, leaving out keys [drop] rejects. */
-    private fun copyOf(from: MetaStore, drop: (String) -> Boolean = { false }) = InMemoryMetaStore().also { to ->
-        from.load().forEach { (k, v) -> if (!drop(k)) to.put(k, v) }
+    /** Copies [from] into a new store, record by record. */
+    private fun copyOf(from: MetaStore) = InMemoryMetaStore().also { to ->
+        from.load().forEach { (k, v) -> to.put(k, v) }
     }
 
     /** A root with one pro "A" and one con "B"; every link explored once (it proposes nothing). */
@@ -2172,37 +2172,30 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `a link without a record restores PRUNED with a note instead of joining the queue`() {
-        val dir = java.nio.file.Files.createTempDirectory("deliberate-legacy-links").toFile()
+    fun `a restored link without a metadata record is rebuilt from structure and queued afresh`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-link-without-record").toFile()
         try {
-            val store1 = InMemoryMetaStore()
-            twoLinkRun(dir, store1)
-            // Data written before links existed: claim and question records, no link records.
-            val store = copyOf(store1) { it.startsWith("l:") }
-            val p = LinkCounter()
-            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true)
-            val e = restart(java.io.File(dir, "graph.jsonl"), store, config, judge = FakeJudge(strength = { 0.5 }), proposers = listOf(p))
-            e.idle()
-            assertEquals(0, p.calls.get(), "a restart of settled legacy data asks nobody anything")
-            val g = e.snapshot()
-            assertEquals(2, g.edges().size)
-            g.edges().forEach {
-                assertEquals(Status.PRUNED, it.status)
-                assertEquals(DeliberationEngine.Config.LEGACY_LINK, it.error)
-                assertEquals(0, it.rounds)
+            val firstStore = InMemoryMetaStore()
+            twoLinkRun(dir, firstStore)
+            val store = InMemoryMetaStore().also { copy ->
+                firstStore.load().forEach { (key, fields) ->
+                    if (!key.startsWith("l:")) copy.put(key, fields)
+                }
             }
-            assertTrue(g.questions.none { it.active })
-            // Now recorded: a later restart keeps it PRUNED without the legacy rule.
-            e.persistNow()
-            assertTrue(store.load().keys.count { it.startsWith("l:") } == 2)
-            // EXPAND explores it and clears the note.
-            val link = g.edges().first()
-            e.setOverride(g.ref(link), Override.EXPAND)
+            val proposer = LinkCounter()
+            val e = restart(
+                java.io.File(dir, "graph.jsonl"),
+                store,
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true),
+                judge = FakeJudge(strength = { 0.5 }),
+                proposers = listOf(proposer),
+            )
+
             e.idle()
-            val after = e.snapshot().nodes.single { it.ref == link.ref }
-            assertEquals(1, after.rounds)
-            assertNull(after.error)
-            assertEquals(listOf(link.ref), e.snapshot().edges().filter { (it.rounds ?: 0) > 0 }.map { it.ref }, "only the expanded link ran")
+
+            val links = e.snapshot().edges()
+            assertEquals(2, proposer.linkCalls.toSet().size, "both rebuilt links were explored")
+            assertTrue(links.all { it.rounds == 1 && it.status == Status.ROUND_LIMIT && it.error == null }, links.toString())
         } finally {
             dir.deleteRecursively()
         }
@@ -2400,9 +2393,8 @@ class DeliberationEngineTest {
             val kid = e1.snapshot().let { g -> g.childrenOf(q1).first().source!! }
             store.put("c:$kid", mapOf("plausibility" to null, "relevance" to null, "quality" to null, "edgeStrength" to null,
                 "reach" to null, "contribution" to null, "status" to null))
-            // A durable EXPAND was requested before this safe-upgrade boot.
-            // DUR-06 still holds it: only an EXPAND issued in this process may
-            // bypass the boot pause.
+            // An EXPAND was requested before the restart. Its forced round is not
+            // resumed (DUR-06): the paused boot holds the claim like any other.
             store.put("c:${q1.id}", mapOf("override" to "\"EXPAND\"", "forceRound" to "true"))
 
             val judge = FakeJudge(strength = { 0.5 })
