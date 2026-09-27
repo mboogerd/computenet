@@ -143,34 +143,93 @@ class SocialServerTest {
         return last
     }
 
-    @Test
-    fun `computenet-1uf0s a preloaded source's late-join catch-up computes state a bounded number of times`() {
-        // SnbGenerator(42, 0.05) mints roughly 297 preloaded sinks (per the
-        // bead's probe): start()'s graph.onChange attaches to every one of
-        // them, and each fires its own late-join catch-up on its own
-        // dispatcher thread. Uncoalesced that is ~297 stateJson()
-        // computations (confirmed by temporarily reverting the [broadcast]
-        // fix while developing this test: it measured exactly 297). The
-        // single-flight coalescing in [SocialApp.broadcast] does not reduce
-        // that to a small constant — how many separate broadcasts a burst
-        // this size produces depends on OS thread-scheduling jitter across
-        // ~297 near-simultaneous dispatcher threads, observed between ~15
-        // (isolated run) and ~36 (full-suite run, more contention). The
-        // bound below is intentionally generous — well under half of the
-        // sink count, and stable across repeated runs — to assert what the
-        // acceptance criterion actually requires (not tied to N, nowhere
-        // near one-broadcast-per-sink) without being sensitive to scheduler
-        // noise.
-        val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
+    /**
+     * computenet-l3msn: the startup `/state` broadcast count of an app with a
+     * preloaded source is a small constant, not a function of how many sinks
+     * the source created. `start()` fences the load and
+     * [SocialGraph.onChange]'s bulk attach drops each preloaded sink's
+     * late-join catch-up, so structurally the count is 0 — nothing writes
+     * after the fence. The bound is [STARTUP_BROADCAST_BOUND] rather than 0
+     * only to leave room for a stray fold; it is independent of N, which is
+     * what the two scales below pin (roughly 297 and 1060 sinks). The
+     * 1uf0s-era `1..100` at 0.05 alone went red on CI at 101-233 (runs
+     * 36302838435, 36302865720, 36309096662): coalescing a spread-out
+     * catch-up burst only divided N by a load-dependent factor.
+     */
+    private fun assertStartupBroadcastsBounded(scale: Double) {
+        val app = SocialApp(port = 0, source = SnbGenerator(42, scale)).start()
         try {
-            val settled = awaitStable { app.broadcastCount.get() }
+            val settled = awaitStable(quietMs = 500) { app.broadcastCount.get() }
+            println("computenet-l3msn: startup broadcasts at scale $scale: $settled")
             assertTrue(
-                settled in 1..100,
-                "expected a bounded number of startup broadcasts (independent of the ~297 sinks), got $settled",
+                settled <= STARTUP_BROADCAST_BOUND,
+                "expected at most $STARTUP_BROADCAST_BOUND startup broadcasts at scale $scale " +
+                    "(independent of the preloaded sink count), got $settled",
             )
         } finally {
             app.stop()
         }
+    }
+
+    @Test
+    fun `computenet-l3msn startup broadcasts are a small constant at SnbGenerator 0_05`() =
+        assertStartupBroadcastsBounded(0.05)
+
+    @Test
+    fun `computenet-l3msn startup broadcasts are a small constant at SnbGenerator 0_2`() =
+        assertStartupBroadcastsBounded(0.2)
+
+    /**
+     * computenet-l3msn: skipping catch-ups is confined to the sinks that
+     * existed when `start()` attached. A person created after `start()` gets
+     * its sink through [SocialGraph]'s forward attach, and its creating write
+     * still produces a broadcast — the one an SSE client needs to see the
+     * new person.
+     */
+    @Test
+    fun `computenet-l3msn a sink created after start still broadcasts its creating write`() {
+        val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
+        try {
+            val before = awaitStable(quietMs = 500) { app.broadcastCount.get() }
+            val newId = app.graph.personIds().last() + 1
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            assertEquals(200, probe.post("action=person&id=$newId&firstName=Late&lastName=Comer"))
+            awaitUntil("a broadcast for the new person's creating write", timeoutMs = 10_000) { app.broadcastCount.get() > before }
+            assertTrue(newId in app.graph.personIds(), "the new person $newId is admitted")
+        } finally {
+            app.stop()
+        }
+    }
+
+    /**
+     * computenet-l3msn: a throw inside a broadcast (here from the frame
+     * computation, via the test-only [SocialApp.frameFault]) must not wedge
+     * the single-flight worker. Before the `finally` reset,
+     * `broadcastInFlight` stayed true after the throw and every later
+     * [SocialApp.broadcast] returned early, so the count never moved again.
+     */
+    @Test
+    fun `computenet-l3msn a throwing broadcast does not stop later frames`() {
+        val app = SocialApp(port = 0).start()
+        try {
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            app.frameFault = { throw IllegalStateException("computenet-l3msn injected frame fault") }
+            assertEquals(200, probe.post("action=person&id=1&firstName=Ada&lastName=Lovelace"))
+            awaitUntil("the faulted broadcast attempt", timeoutMs = 10_000) { app.broadcastCount.get() >= 1 }
+            val afterFault = awaitStable(quietMs = 500) { app.broadcastCount.get() }
+            app.frameFault = null
+
+            assertEquals(200, probe.post("action=person&id=2&firstName=Bob&lastName=Brown"))
+            awaitUntil("a broadcast after the fault cleared", timeoutMs = 10_000) { app.broadcastCount.get() > afterFault }
+            assertTrue(""""id":2,""" in probe.await { """"id":2,""" in it }, "state carries person 2")
+        } finally {
+            app.stop()
+        }
+    }
+
+    private companion object {
+        /** See [assertStartupBroadcastsBounded]: structurally 0; a constant, never a fraction of N. */
+        const val STARTUP_BROADCAST_BOUND = 2L
     }
 
     // --- SOC1-SCHEMA-02 (state half, pinned in jo2jk-D6) -------------------

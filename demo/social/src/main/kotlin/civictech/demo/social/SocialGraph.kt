@@ -160,16 +160,55 @@ class SocialGraph(
     private val unadmittedForums = ConcurrentHashMap.newKeySet<Long>()
     private val unadmittedMessages = ConcurrentHashMap.newKeySet<Long>()
 
-    /** Registers [listener] to fire on every settled change of every sink, present and future. */
+    /**
+     * Registers [listener] to fire on every settled change of every sink,
+     * present and future, made AFTER this call. A sink's state as it already
+     * stands at registration is not announced: a caller that needs it reads it
+     * (`/state`, and `/events`' own connect frame, do exactly that).
+     *
+     * **The bulk attach skips each pre-existing sink's catch-up**
+     * (computenet-l3msn). [ObservationSink.onChange] always delivers one
+     * late-join catch-up per registration; for the first [onChange] that is
+     * one invocation per pre-existing sink — N `/state` computations for a
+     * preloaded source of N sinks (297 at `SnbGenerator(42, 0.05)`), which
+     * [SocialApp]'s coalescing only divided by a load-dependent factor (CI
+     * measured 101-233). So the bulk path registers [skipFirst]: its first
+     * invocation is dropped, and that first invocation is always the catch-up
+     * — `ObserveCell.onChange` adds the listener and submits the catch-up
+     * inside one `synchronized(lock)` block, and `propagate` submits a
+     * change only under the same lock, to the same single-consumer executor
+     * (`kernel/.../observe/Observe.kt`, `onChange` and `propagate`). No
+     * change fold can therefore be submitted for this listener before its
+     * catch-up, and every fold after registration still gets its own later
+     * invocation, so no change is dropped. The skip leans on that ordering,
+     * which the kernel states as a guarantee in `ObserveCell`'s class KDoc
+     * (T08 finding 4), not on an implementation accident.
+     *
+     * [attach], for a sink created AFTER listening started, keeps its
+     * catch-up: that sink's creating write may already have folded by the time
+     * the listener is registered, and then the catch-up is the only
+     * notification of it.
+     */
     fun onChange(listener: () -> Unit) {
         changeListeners += listener
         // Flag BEFORE iterating: a sink inserted concurrently is either seen by
         // this iteration or sees the flag in [attach] (possibly both — a
-        // doubly-attached sink fires fireChange twice, which is harmless).
+        // doubly-attached sink still gets [attach]'s catch-up, and fires
+        // fireChange twice per later change, which is harmless).
         if (listening.compareAndSet(false, true)) {
             (personSinks.values + forumSinks.values + messageSinks.values + authoredSinks.values)
-                .forEach { it.onChange { fireChange() } }
+                .forEach { it.onChange(skipFirst()) }
         }
+    }
+
+    /**
+     * A per-registration listener that ignores its first invocation — the
+     * late-join catch-up, see [onChange] — and calls [fireChange] on every
+     * later one. One instance per sink: the skip is per registration.
+     */
+    private fun <S> skipFirst(): (S) -> Unit {
+        val caughtUp = AtomicBoolean(false)
+        return { if (!caughtUp.compareAndSet(false, true)) fireChange() }
     }
 
     /** Gives a newly created [sink] the change listener once any [onChange] exists. */
@@ -487,7 +526,10 @@ class SocialGraph(
      * of 297 alive when `stop()` returned, nearly all `BLOCKED` in
      * `DemoShell.broadcast`), and `shutdown()` runs queued tasks rather than
      * dropping them. [closed] empties that work; this wait makes its end
-     * observable to the caller.
+     * observable to the caller. (That measurement predates computenet-l3msn:
+     * [onChange]'s bulk attach now drops each preloaded sink's catch-up
+     * without broadcasting, so that queue is short. The wait stays: any
+     * listener invocation can still be queued or running at `stop()`.)
      *
      * **How the threads are found — a stated dependency on a kernel naming
      * convention, not an API.** [ObserveCell] exposes no handle to its
