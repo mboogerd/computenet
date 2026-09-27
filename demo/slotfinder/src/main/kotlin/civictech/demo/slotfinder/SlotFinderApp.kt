@@ -1,9 +1,12 @@
 package civictech.demo.slotfinder
 
+import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.data.WaterlineCell
+import civictech.cell.data.Windows
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookupOrThrow
@@ -44,6 +47,32 @@ data class Slot(val day: String, val hour: Int) : Serializable {
 val PARTICIPANTS = listOf("alice", "bob", "carol")
 
 /**
+ * The demo's explicit **element-derived event-time attribute** (`[KE4-37]`,
+ * `[24-WL-01]`): hours since Monday 00:00 of the week the grid shows —
+ * `DAYS.indexOf(day) * 24 + hour`. It is an ordering the [Slot] itself
+ * carries, read off the element; it is never a wave counter, an arrival tick
+ * or a wall clock. A named `Serializable` object, not a lambda, because a
+ * lateness declaration is part of the cell's spawnable (replayed) definition.
+ */
+object SlotTime : (Slot) -> Long, Serializable {
+    override fun invoke(s: Slot): Long = Slot.DAYS.indexOf(s.day) * 24L + s.hour
+    private fun readResolve(): Any = SlotTime
+}
+
+/**
+ * `byDay`'s eviction clock (`[24-WL-06]`): a day window's **exclusive end** in
+ * [SlotTime] — `(DAYS.indexOf(day) + 1) * 24`. A day is passed, and evicted,
+ * once the floor reaches it (`keyTime(day) <= floor`).
+ */
+object DayEnd : (String) -> Long, Serializable {
+    override fun invoke(day: String): Long = (Slot.DAYS.indexOf(day) + 1) * 24L
+    private fun readResolve(): Any = DayEnd
+}
+
+/** One day of lateness: a common slot may trail the newest common slot by up to 24 event-time hours. */
+const val SLOT_LATENESS = 24L
+
+/**
  * The dataflow pipeline, shared verbatim by the app and the seeded
  * incremental-vs-batch test. Every participant fans into one `QuorumSetCell`
  * inlet; the quorum threshold reads the live-source count `n`, so `common`
@@ -51,9 +80,34 @@ val PARTICIPANTS = listOf("alice", "bob", "carol")
  * fan-in under two thresholds — no chained binary intersects, any participant
  * count:
  *
- *   alice ─┐
- *   bob   ─┼─► common   (quorum n)     ─► filtered (business hours) ─► byDay (count)
- *   carol ─┴─► nearMiss (quorum n − 1)
+ *   alice ─┐                                                  ┌─► waterline ──(floor)──┐
+ *   bob   ─┼─► common   (quorum n)     ─► filtered (9–17) ────┤                        ▼
+ *   carol ─┴─► nearMiss (quorum n − 1)                        └──────────────────► byDay (count) ─► outlet
+ *                                                                                        └─► late
+ *
+ * **Event time and lateness (KE4.6).** `byDay` is a window-keyed operator over
+ * the explicit event time [SlotTime] with a declared lateness of one day
+ * ([SLOT_LATENESS]) and eviction clock [DayEnd]. A [WaterlineCell] beside it,
+ * fed from `filtered`, folds the per-source maxima of [SlotTime] into one
+ * monotone floor (`[24-WL-02]`); its outlet drives `byDay.waterline`. What that
+ * means for the grid, stated honestly:
+ *
+ * - The waterline's contributing sources are the waves that carry `filtered`
+ *   adds. Once every contributing source's waves have carried a common slot
+ *   more than a day past the end of some day — floor = min over sources of
+ *   (max [SlotTime] − 24) reaching [DayEnd] of that day — that day's `byDay`
+ *   count is **evicted** (leaves as a `MapDelta` removal, `[24-WL-06]`) and a
+ *   later common slot with `SlotTime < floor` is **dropped** onto `byDay`'s
+ *   `late` outlet and counted in `droppedBelowFloor` rather than folded
+ *   (`[24-WL-07]`). An evicted day is not re-created by a late slot.
+ * - A source whose wave carried a common slot and then went idle **freezes**
+ *   the floor at its promise until it emits again (`[24-WL-14]`); a source
+ *   contributing for the first time below the floor leaves the floor where it
+ *   is (`[24-WL-20]`). No wall clock ever moves it.
+ * - This is the demo's event-time model, chosen to make the waterline visible
+ *   in a five-day grid — not a claim that meeting slots are naturally a
+ *   stream in event-time order. `common`, `nearMiss` and `filtered` carry no
+ *   lateness and are unaffected.
  */
 object SlotPipeline {
     data class Refs(
@@ -62,6 +116,17 @@ object SlotPipeline {
         val nearMiss: TypedRef<QuorumSetApi<Slot>>,
         val filtered: TypedRef<FilterSetApi<Slot>>,
         val byDay: TypedRef<GroupByApi<Slot, String, Long>>,
+        /** The [WaterlineCell] feeding `byDay.waterline`: delta-only, no Api type, so a plain [CellRef]. */
+        val waterline: CellRef,
+        /**
+         * The locally-built `byDay` instance. `floor()` and `droppedBelowFloor`
+         * are not port methods, and `host.lookup`'s hosted proxy answers a
+         * non-port call with `null` — so the concrete cell is the only reader
+         * (doc/demo-findings.md F-28). Local-apply only; read it at idle.
+         */
+        val byDayCell: GroupByCell<Slot, String, Long, Long>,
+        /** The locally-built [WaterlineCell] instance, for `floor()` — same reason as [byDayCell]. */
+        val waterlineCell: WaterlineCell<Slot>,
     )
 
     fun build(host: ManagedHost): Refs {
@@ -80,8 +145,17 @@ object SlotPipeline {
             val filtered = spawn("filtered") { ref ->
                 FilterCell<Slot>(ref = ref, predicate = { it.hour in Slot.BUSINESS_HOURS })
             }
+            val waterline = spawn("waterline") { ref ->
+                WaterlineCell(ref = ref, lateness = Windows.Lateness(SlotTime, SLOT_LATENESS))
+            }
             val byDay = spawn("byDay") { ref ->
-                GroupByCell(ref = ref, keyFn = { s: Slot -> s.day }, aggregator = Aggregators.count<Slot>())
+                GroupByCell(
+                    ref = ref,
+                    keyFn = { s: Slot -> s.day },
+                    aggregator = Aggregators.count<Slot>(),
+                    lateness = Windows.Lateness(SlotTime, SLOT_LATENESS),
+                    keyTime = DayEnd,
+                )
             }
 
             PARTICIPANTS.forEach { p ->
@@ -90,6 +164,12 @@ object SlotPipeline {
                 link(source.cell.outlet, nearMiss.cell.inlet)
             }
             link(common.cell.outlet, filtered.cell.inlet)
+            // The waterline arm is linked BEFORE the data arm (nt17o-D2, fh1fo-D2), so
+            // a wave's own floor rise is attached ahead of its fold into byDay.
+            // `waterline`/`late` live on the class, not on GroupByApi, so the handle's
+            // concrete `.cell` is what reaches them.
+            link(filtered.cell.outlet, waterline.cell.inlet)
+            link(waterline.cell.outlet, byDay.cell.waterline)
             link(filtered.cell.outlet, byDay.cell.inlet)
 
             Refs(
@@ -98,6 +178,9 @@ object SlotPipeline {
                 nearMiss = nearMiss.refAs(),
                 filtered = filtered.refAs(),
                 byDay = byDay.refAs(),
+                waterline = waterline.ref,
+                byDayCell = byDay.cell,
+                waterlineCell = waterline.cell,
             )
         }
         return refs
@@ -123,6 +206,9 @@ class SlotFinderApp(port: Int = 8080) {
         set("common", refs.common)
         set("filtered", refs.filtered)
         count("byDay", refs.byDay)
+        // [24-WL-07] / [KE4-39]: the observable half of a late drop — byDay's `late`
+        // outlet (a SetDelta port not on GroupByApi, so observed by CellRef + name).
+        set("late", refs.byDay.ref, outletName = "late")
     }
 
     private val shell = DemoShell(port)
@@ -178,7 +264,7 @@ class SlotFinderApp(port: Int = 8080) {
             values.sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
                 .joinToString(",", "[", "]") { "\"$it\"" }
 
-        val sets = (PARTICIPANTS + listOf("nearMiss", "common", "filtered"))
+        val sets = (PARTICIPANTS + listOf("nearMiss", "common", "filtered", "late"))
             .joinToString(",") { "\"$it\":${arr(slotsOf(it))}" }
         val counts = Slot.DAYS.filter { it in byDay }
             .joinToString(",", "{", "}") { "\"$it\":${byDay.getValue(it)}" }
@@ -224,6 +310,7 @@ private val PAGE = """
   .chips { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.6rem; }
   .chip { background: #ecfdf5; color: var(--hit); border: 1px solid #a7f3d0; border-radius: 999px; padding: .1rem .55rem; font-size: .75rem; cursor: pointer; }
   .chip.near { background: #eff6ff; color: var(--on); border-color: #bfdbfe; }
+  .chip.late { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
   #result { font-size: .9rem; color: var(--dim); margin: .1rem 0 1rem; }
   #result b { color: var(--hit); }
   @keyframes flash { 30% { box-shadow: 0 0 0 3px var(--hit); } }
@@ -242,6 +329,7 @@ private val PAGE = """
   <div class="card"><h2>common (all three)</h2><div class="chips" id="common"></div></div>
   <div class="card"><h2>business hours (9–17)</h2><div class="chips" id="filtered"></div></div>
   <div class="card"><h2>options per day</h2><div class="bars" id="byDay"></div></div>
+  <div class="card"><h2>late — arrived after its day closed</h2><div class="chips" id="late"></div></div>
 </div>
 <script>
 const DAYS = ["Mon","Tue","Wed","Thu","Fri"], HOURS = [];
@@ -302,6 +390,7 @@ function render() {
   chips('nearMiss', (state.nearMiss || []).filter(s => !commonSet.has(s)), 'near');
   chips('common', state.common || []);
   chips('filtered', state.filtered || []);
+  chips('late', state.late || [], 'late');
   const f = state.filtered || [], r = document.getElementById('result');
   r.innerHTML = f.length
     ? '<b>' + f.length + '</b> business-hours slot' + (f.length > 1 ? 's' : '') + ' work for everyone — ' + f.join(', ')
