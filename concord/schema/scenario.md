@@ -124,6 +124,7 @@ optional descriptor param the driver binds. The v1 named params:
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
 | `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
+| `lateness` | event-time lateness `L`, a non-negative integer, on `window` (tumbling), `join`, `semi-join`, `intersect` or `waterline` — see below (`computenet-t4od7`, additive) |
 
 `agg`, `k`, and `window` are **additive** (W3-0 / R2-B): existing files deserialize
 unchanged (all optional; `window` absent on every non-`window` cell). The parser
@@ -150,9 +151,70 @@ payload — the same `[k, v]` convention `join`/`group-by` use); its `agg` field
 | `size` | the window length, in event-time/sequence units (no wall clock) |
 | `slide` | the hop between successive window starts; **required** for `sliding`, ignored for `tumbling` |
 
-Windows never close (`24-OP-WINDOW-02`): a late element is an ordinary add and a
-retraction flows into the window aggregate exactly as any other `group-by` view —
-there is no eviction, no timer, no watermark (deferred with trigger, spec 24).
+Without `lateness`, windows never close (`24-OP-WINDOW-02`, `[24-WL-11]`): a late
+element is an ordinary add and a retraction flows into the window aggregate
+exactly as any other `group-by` view. Closing is **opt-in**: a `kind: tumbling`
+window that declares `lateness` (below) evicts every window whose end the
+waterline floor has passed, through ordinary retractions (`[24-WL-06]`), and
+routes an add below the floor to its `late` outlet instead of the aggregate
+(`[24-WL-07]`). There is still no wall clock and no timer — the floor is itself
+a function of the elements' event times.
+
+#### `lateness` (`computenet-t4od7`, spec 24 §Lateness and waterlines)
+
+`lateness: L` declares an operator's event-time lateness bound `L`
+(`[24-WL-01]`), a non-negative integer in the same units as the event times.
+It is additive: absent on every pre-existing file, and absent means the
+operator is exactly the pre-lateness one (`[24-WL-11]`). It is legal on these
+catalog ids only; on any other the kernel driver refuses the cell
+(`UnsupportedCatalogBinding`):
+
+| type | what `lateness` does | event time of an element |
+|---|---|---|
+| `waterline` | **required** — the floor it computes is `min` over sources of (max event time − `L`), monotone (`[24-WL-02]`/`[24-WL-03]`) | `[at, value]` → `at` |
+| `window` (`kind: tumbling`) | guards the data inlet against the floor on its `waterline` inlet; evicts passed windows; below-floor adds leave on `late` | `[at, value]` → `at` |
+| `join`, `semi-join` | declares the same `L` on **both** data inlets (per-side lateness is not expressible); below-floor rows leave on `lateLeft` / `lateRight` | row `[k, at]` → `at`; row `[k, [at, payload]]` → `at` |
+| `intersect` | as the join family, same `L` on both inlets | `[at, value]` → `at` |
+
+`window` with `kind: sliding` **and** `lateness` is refused: its binding has no
+`waterline` inlet and no `late` outlet.
+
+**The waterline is an explicit cell; the driver spawns nothing.** A
+lateness-declaring operator does not compute its own floor — it reads one on
+its `waterline` inlet, and the scenario wires that inlet itself, with
+port-addressed links (no new link syntax):
+
+```yaml
+cells:
+  - {id: a,  type: set-source}
+  - {id: wl, type: waterline, lateness: 2}
+  - {id: w,  type: window, window: {kind: tumbling, size: 10}, lateness: 2}
+  - {id: v,  type: count-view}
+  - {id: l,  type: set-view}
+  - {id: f,  type: value-view}           # optional: observe the floor itself
+links:
+  - {from: a,  to: wl}                    # the waterline folds the source's event times
+  - {from: a,  to: w}
+  - {from: wl, to: w, inlet: waterline}   # the floor feeds the evicting operator
+  - {from: w,  to: v}
+  - {from: w,  to: l, outlet: late}       # below-floor adds (join family: lateLeft / lateRight)
+  - {from: wl, to: f}
+```
+
+An operator declaring `lateness` with nothing linked into `waterline` never
+receives a floor, so it never drops or evicts. The waterline's `inlet` is a
+fan-in (several sources may feed one waterline; its floor is the minimum of
+their promises), and its `waterline`-linked consumers likewise accept several
+waterline cells. A waterline's elements are read as `[at, value]` — so for a
+join whose rows are `[k, at]`, the waterline is fed by a source of `[at, …]`
+elements, not by the join's row sources. Every `lateness` value in a graph is
+the author's to keep consistent: the operator's `lateness` sets its own
+per-inlet declaration and the waterline's sets the floor it receives.
+
+The batch oracle does not yet model lateness: `incremental-equals-batch` over a
+view whose cone reaches a `lateness` cell or a `waterline` reports
+`OracleUnsupported` rather than comparing against an unfiltered fold
+(computenet-t4od7 task 2 lifts this).
 
 #### `interest` (W4-A followup, `42-INTEREST-01`)
 
