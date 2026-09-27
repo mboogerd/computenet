@@ -1,26 +1,15 @@
 import { createSignal, Show } from 'solid-js';
-import { source } from '../sync/store';
 
-export function QuestionInput(props: { onAsked: (root: string) => void }) {
+/** The one question field (UI-01). Submission is owned by the caller so the
+ *  empty state's examples go through the same path. */
+export function QuestionInput(props: { ask: (text: string) => Promise<boolean>; busy?: boolean; error?: string }) {
   const [text, setText] = createSignal('');
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string>();
 
   const submit = async (e: Event) => {
     e.preventDefault();
     const t = text().trim();
-    if (!t || busy()) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const root = await source.ask(t);
-      setText('');
-      if (root) props.onAsked(root);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    if (!t || props.busy) return;
+    if (await props.ask(t)) setText('');
   };
 
   return (
@@ -30,17 +19,19 @@ export function QuestionInput(props: { onAsked: (root: string) => void }) {
         id="ask-input"
         class="ask__input"
         type="text"
-        placeholder="Ask a question to deliberate…"
+        placeholder="Ask a question with two sides…"
         autocomplete="off"
+        enterkeyhint="go"
         value={text()}
         onInput={(e) => setText(e.currentTarget.value)}
-        disabled={busy()}
+        disabled={props.busy}
       />
-      <button class="ask__submit" type="submit" disabled={busy() || !text().trim()}>
-        {busy() ? 'Asking…' : 'Deliberate'}
+      <button class="ask__submit" type="submit" disabled={props.busy || !text().trim()} aria-label="Deliberate">
+        <span class="ask__label">{props.busy ? 'Asking…' : 'Deliberate'}</span>
+        <span class="ask__arrow" aria-hidden="true">→</span>
       </button>
-      <Show when={error()}>
-        <p class="ask__error" role="alert">{error()}</p>
+      <Show when={props.error}>
+        <p class="ask__error" role="alert">{props.error}</p>
       </Show>
     </form>
   );

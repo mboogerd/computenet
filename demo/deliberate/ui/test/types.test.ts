@@ -25,6 +25,7 @@ type ExpectedNodeDto = {
   proposer?: string;
   plausibility?: number;
   relevance?: number;
+  reach?: number;
   proSaturation?: number;
   conSaturation?: number;
   rounds?: number;
