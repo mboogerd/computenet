@@ -4,6 +4,7 @@ import { Legend } from './components/Legend';
 import { QuestionInput } from './components/QuestionInput';
 import { QuestionList } from './components/QuestionList';
 import { ThemeToggle } from './components/ThemeToggle';
+import { Toasts } from './components/Toasts';
 import { TreeView } from './components/TreeView';
 import { conn, graph, source, startSync } from './sync/store';
 
@@ -62,6 +63,7 @@ export function App() {
           {(root) => <TreeView graph={graph()} root={root()} />}
         </Show>
       </main>
+      <Toasts />
     </div>
   );
 }

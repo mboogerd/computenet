@@ -11,19 +11,29 @@
   --hover: rgba(20, 20, 30, 0.035);
   --text: #17171a;
   --text-2: #5c5c62;
-  --text-3: #8d8d93;
+  --text-3: #6b6b71;
   --line: rgba(20, 20, 30, 0.09);
   --line-strong: rgba(20, 20, 30, 0.18);
   --shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 4px 16px rgba(20, 20, 30, 0.05);
   --focus: rgba(20, 20, 30, 0.35);
 
+  /* pro/con: bright values fill stripes and bars; the -text values are darkened so words stay ≥ 4.5:1 */
   --pro: #1a9a6c;
   --con: #d2474c;
+  --pro-text: #137a55;
+  --con-text: #b93a3f;
+  --toast: #2a2a2f;
+  --toast-text: #ffffff;
 
   --credence: #2a2a2f;
   --track: #e4e4e0;
   --seg-on: #ffffff;
   --sheen: rgba(255, 255, 255, 0.85);
+
+  /* Credence graphics: a soft fill up to the consensus, a solid marker at it, and the
+     rules' band drawn above both so the whole range stays visible (theme-derived). */
+  --fill-soft: color-mix(in srgb, var(--credence) 20%, var(--track));
+  --band: color-mix(in srgb, var(--credence) 48%, transparent);
 
   --radius: 12px;
   --radius-sm: 7px;
@@ -50,13 +60,17 @@
   --hover: rgba(255, 255, 255, 0.035);
   --text: #ececef;
   --text-2: #a4a4ab;
-  --text-3: #6f6f77;
+  --text-3: #88888f;
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.16);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
   --focus: rgba(255, 255, 255, 0.45);
   --pro: #3cc28f;
   --con: #f06b6f;
+  --pro-text: #3cc28f;
+  --con-text: #f06b6f;
+  --toast: #ececef;
+  --toast-text: #17171a;
   --credence: #e2e2e6;
   --track: #2c2c30;
   --seg-on: #34343a;
@@ -72,13 +86,17 @@
     --hover: rgba(255, 255, 255, 0.035);
     --text: #ececef;
     --text-2: #a4a4ab;
-    --text-3: #6f6f77;
+    --text-3: #88888f;
     --line: rgba(255, 255, 255, 0.08);
     --line-strong: rgba(255, 255, 255, 0.16);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
     --focus: rgba(255, 255, 255, 0.45);
     --pro: #3cc28f;
     --con: #f06b6f;
+    --pro-text: #3cc28f;
+    --con-text: #f06b6f;
+    --toast: #ececef;
+    --toast-text: #17171a;
     --credence: #e2e2e6;
     --track: #2c2c30;
     --seg-on: #34343a;

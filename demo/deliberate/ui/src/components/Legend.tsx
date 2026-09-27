@@ -23,63 +23,52 @@ export function Legend() {
       </summary>
       <div class="legend__panel">
         <dl>
-          <dt>Credence</dt>
-          <dd>How likely a claim is true — for the question, how likely the answer is yes — after weighing all its arguments.</dd>
-          <dt>Consensus and band</dt>
-          <dd>
-            Several rules for weighing arguments run side by side; the number is their consensus (an average in log-odds
-            of the rules that pass our sanity checks), and the faint band shows the range from the lowest to the highest
-            rule — a wide band means the rules disagree.
-          </dd>
           <dt>
-            <span class="pro-text">Pro</span> / <span class="con-text">Con</span>
+            <span class="glyph glyph--bar" aria-hidden="true">
+              <span class="glyph__fill" />
+              <span class="glyph__mark" />
+            </span>
+            Credence
+          </dt>
+          <dd>How likely a claim is true after weighing its arguments; for the question, how likely the answer is yes.</dd>
+          <dt>
+            <span class="glyph glyph--bar" aria-hidden="true">
+              <span class="glyph__fill" />
+              <span class="glyph__band" />
+              <span class="glyph__mark" />
+            </span>
+            Band
+          </dt>
+          <dd>Several rules weigh the arguments; the number is their consensus, the band their range. Wide means they disagree.</dd>
+          <dt>
+            <span class="glyph glyph--stripe glyph--pro" aria-hidden="true" />
+            <span class="pro-text">Pro</span> / <span class="glyph glyph--stripe glyph--con" aria-hidden="true" />
+            <span class="con-text">Con</span>
           </dt>
           <dd>An argument for or against the claim directly above it.</dd>
-          <dt>Link</dt>
-          <dd>
-            The connection between an argument and the claim above it — “A is a reason for B” — is a claim of its own.
-            Its chip shows the link strength; hover or focus it to preview the link, press it to open it: its own
-            credence, status, Auto/Expand/Stop, and arguments about the connection.
-          </dd>
-          <dt>Link holds / Undercuts the link</dt>
-          <dd>
-            Arguments about a link, drawn dashed under it: why the argument really bears on the claim, or why it does
-            not (it may be true and still not show what it is offered to show).
-          </dd>
-          <dt>Link strength</dt>
-          <dd>Jev's first impression: if the argument were true, how much it would move the claim above.</dd>
-          <dt>No band</dt>
-          <dd>A claim or link with no arguments yet has no band: every rule starts from the same first impression, so they agree by construction.</dd>
-          <dt>Reach</dt>
-          <dd>How much a claim can matter to the question: its link strengths multiplied up to the top. Faint claims barely can.</dd>
-          <dt>Quality</dt>
-          <dd>Whether an argument is well made: self-contained, coherent and actually about the claim above.</dd>
-          <dt>Contribution</dt>
-          <dd>
-            Reach × relevance × quality. The strongest claims are explored first; too low and a claim is set aside. A
-            link's contribution is its argument's, scaled by how unsettled its strength is (most at 50%).
-          </dd>
-          <dt>Now</dt>
-          <dd>The line under the question: which claims and links are being explored or judged at this moment.</dd>
+          <dt>
+            <span class="glyph glyph--link" aria-hidden="true" />
+            Link
+          </dt>
+          <dd>“A is a reason for B” is a claim too. Its chip says how far it holds; press it to open the link and steer it.</dd>
+          <dt>
+            <span class="glyph glyph--stripe glyph--dashed" aria-hidden="true" />
+            Holds / Undercuts
+          </dt>
+          <dd>Arguments about a link: why it really bears on the claim, or why it does not.</dd>
+          <dt>Faint text</dt>
+          <dd>Low reach: the claim can barely change the answer to the question.</dd>
           <dt>Jev</dt>
-          <dd>
-            The AI judge. It scores every claim and link, sorts new arguments (added, repeat, reworded, merged, nested as
-            evidence, moved sides, undercut a link, dropped), and decides what is worth exploring.
-          </dd>
+          <dd>The AI judge: it scores claims and links, sorts new arguments and decides what is worth exploring.</dd>
           <dt>Cost</dt>
-          <dd>
-            The dollar figure by the question: an estimate of what its model calls have cost so far (Claude as its CLI
-            reports it, Codex and Jev from token prices). Click it for the breakdown and a projection.
-          </dd>
+          <dd>The dollar figure is estimated model spend so far; press it for the backend breakdown and projection.</dd>
           <dt>Status</dt>
           <dd>
-            <em>gathering arguments</em> and <em>weighing</em> are live; <em>fully argued</em> means both sides are
-            complete; <em>set aside</em> means unlikely to change the answer; <em>returns diminished</em> means the
-            question stopped once its new rounds were adding much less than its earlier ones; <em>depth limit</em>,
-            <em> budget spent</em> and <em>round limit</em> are safety stops.
+            <em>gathering arguments</em> and <em>weighing</em> are live; <em>fully argued</em> is done; <em>set aside</em>{' '}
+            won't change the answer; the rest are safety stops.
           </dd>
         </dl>
-        <p class="legend__tip">Select a claim to see Jev's numbers and to steer it: Auto, Expand or Stop.</p>
+        <p class="legend__tip">Select a claim for Jev's numbers and to steer it: Auto, Expand or Stop.</p>
       </div>
     </details>
   );

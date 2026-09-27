@@ -74,17 +74,28 @@ describe('cost badge and popover (SPEC §12)', () => {
     expect(text(html)).toBe('$0.84');
   });
 
-  it('the popover lists calls, tokens, cost, price source and caveats per backend', () => {
-    const t = text(renderToString(() => <CostPanel id="c" question={question} />));
+  it('the popover leads with total, projection and one line per backend; the rest is pricing details', () => {
+    const html = renderToString(() => <CostPanel id="c" question={question} />);
+    const t = text(html);
     expect(t).toContain('Estimated cost$0.84');
     expect(t).toContain('≈$2.10 if the 9 queued claims are explored');
-    expect(t).toContain('Claude claude-sonnet-5$0.37');
-    expect(t).toContain('12 calls · 136K in · 41K cached · 95K cache writes · 720 out');
+    expect(t).toContain('Claude12 calls$0.37');
+    expect(t).toContain('Codex12 callsrate unknown');
+    expect(t).toContain('Jev42 calls<$0.01');
+    // rates, sources and caveats sit behind a closed disclosure, after the summary lines
+    const details = html.indexOf('<details');
+    expect(details).toBeGreaterThan(html.indexOf('class="cost__row'));
+    expect(html).not.toMatch(/<details[^>]*open/);
+    expect(html.indexOf('not your bill')).toBeGreaterThan(details);
+    expect(html.indexOf('OpenRouter')).toBeGreaterThan(details);
+    expect(t).toContain('pricing details');
+    expect(t).toContain('Claude claude-sonnet-5');
+    expect(t).toContain('136K in · 41K cached · 95K cache writes · 720 out');
     expect(t).toContain('not your bill if you use a subscription');
-    expect(t).toContain('Codex gpt-9rate unknown');
+    expect(t).toContain('Codex gpt-9');
     expect(t).toContain('360 reasoning');
     expect(t).toContain('Not in the total: 12 Codex calls (no price known).');
-    expect(t).toContain('Jev jev-1.13.0<$0.01');
+    expect(t).toContain('Jev jev-1.13.0');
     expect(t).toContain('assumed $0.042/1M input · output free');
     expect(t).toContain('OpenRouter typesafe/jev-1.13, MindStudio · 2026-09-27');
     expect(t).toContain('$0.14 per round over 6 rounds.');

@@ -95,8 +95,9 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('branch--con');
     expect(html).toContain('Pro');
     expect(html).toContain('Con');
-    expect(html).toContain('decisive link');
-    expect(html).toContain('80%');
+    // the connector leads with how far the link holds; Jev's first impression is in its label
+    expect(html).toContain('holds 80%');
+    expect(html).toContain('first impression: decisive link 80%');
     // reach drives visual weight; a non-AUTO override stays visible at rest
     expect(html).toContain('reach--high');
     expect(html).toMatch(/--w:\s*0\.94/);
@@ -118,21 +119,62 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('0.05 vs 0.20');
   });
 
-  it('CTL-05 offers pause beside the cost, and says "paused" in the header when paused', () => {
+  it('CTL-05 offers pause beside the cost, and shows "paused" with Resume beside the verdict when paused', () => {
     const running = renderToString(() => <TreeView graph={graph} root="q" />);
     expect(running).toMatch(/<button[^>]*class="pause\s*"[^>]*>Pause<\/button>/);
     expect(running).not.toContain('hero__paused');
     expect(running).toContain('deliberating');
+    // Next to the cost figure.
+    expect(running.indexOf('class="cost"')).toBeLessThan(running.search(/class="pause\s*"/));
     const paused: GraphDto = { ...graph, questions: [{ ...graph.questions[0], paused: true }] };
     const html = renderToString(() => <TreeView graph={paused} root="q" />);
     expect(html).toMatch(/<button[^>]*class="pause\s+is-on\s*"[^>]*>Resume<\/button>/);
+    expect(html.match(/class="pause[\s"]/g)).toHaveLength(1);
     expect(html).toContain('class="hero__paused"');
     expect(html).toContain('2 of 3 claims settled');
     // Waiting, not working: no "deliberating" and no busy animation.
     expect(html).not.toContain('deliberating');
     expect(html).not.toMatch(/class="hero[^"]*is-busy/);
-    // Next to the cost figure.
-    expect(html.indexOf('class="cost"')).toBeLessThan(html.search(/class="pause\s+is-on/));
+    // The paused chip and Resume sit in the verdict row, before the meta line.
+    const row = html.slice(html.indexOf('class="hero__row"'), html.indexOf('class="hero__meta"'));
+    expect(row).toContain('hero__paused');
+    expect(row).toContain('>Resume</button>');
+  });
+
+  it('CTL-05 hides Pause on a question that is not deliberating', () => {
+    const settled: GraphDto = { ...graph, questions: [{ ...graph.questions[0], active: false }] };
+    const html = renderToString(() => <TreeView graph={settled} root="q" />);
+    expect(html).not.toMatch(/class="pause/);
+    expect(html).toContain('settled · 3 claims');
+    expect(html).not.toContain('deliberating');
+    expect(html).not.toMatch(/class="hero[^"]*is-busy/);
+  });
+
+  it('treats active link work as deliberating even when every claim is settled', () => {
+    const linkBusy: GraphDto = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.kind === 'CLAIM'
+          ? { ...n, status: 'SATURATED' }
+          : n.ref === 'a-q'
+            ? { ...n, status: 'EXPLORING', activity: 'exploring' }
+            : n,
+      ),
+    };
+    const html = renderToString(() => <TreeView graph={linkBusy} root="q" />);
+    expect(html).toMatch(/class="hero[^"].*is-busy/);
+    expect(html).toContain('deliberating · 3 of 3 claims settled');
+    expect(html).toMatch(/<button[^>]*class="pause/);
+  });
+
+  it('shows the single first-impression value, not a verdict, on a question without arguments', () => {
+    const bare: GraphDto = { ...graph, nodes: [graph.nodes[0]] };
+    const html = renderToString(() => <TreeView graph={bare} root="q" />);
+    expect(html).toContain('no arguments yet — all rules agree with the first impression');
+    expect(html).not.toContain('leaning yes');
+    expect(html).toContain('gauge__band');
+    expect(html).toMatch(/class="gauge__mark"[^>]*left:\s*63%/);
+    expect(html).toContain('first impression: 63%');
   });
 
   it('makes every progressive disclosure keyboard/touch reachable and relates it to its panel', () => {
@@ -153,8 +195,10 @@ describe('SPEC UI contract', () => {
     for (const label of [
       'Credence', 'Plausible on its own', 'Link strength', 'Reach', 'Relevance', 'Quality',
       'Contribution', 'Sides covered', 'Rounds', 'Duplicates dropped', 'Sorted proposals',
-      'Proposed by', 'Also proposed by', 'Merged', 'Ref',
+      'Proposed by', 'Also proposed by', 'Merged',
     ]) expect(html).toContain(label);
+    // the ref is a debugging aid, shown only with ?debug
+    expect(html).not.toContain('Ref');
     expect(html).toContain('2 added · 1 merged');
     expect(html).toContain('codex');
     expect(html).toContain('58%');
@@ -169,6 +213,11 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('gauge__band');
     expect(html).toMatch(/left:\s*31%/);
     expect(html).toContain('rules disagree: 31–72%');
+    // the band is drawn above the fill, with a marker at the consensus and a caption under the gauge
+    const gauge = html.slice(html.indexOf('class="gauge'), html.indexOf('class="hero__row"'));
+    expect(gauge.indexOf('gauge__fill')).toBeLessThan(gauge.indexOf('gauge__band'));
+    expect(gauge).toMatch(/class="gauge__mark"[^>]*left:\s*41%/);
+    expect(gauge).toContain('rules: 31–72%');
     const facts = renderToString(() => <Facts id="f" claim={layered.nodes[0]} members={layered.consensusMembers} />);
     expect(facts).toContain('weighted log-odds · 41% · in consensus');
     expect(facts).toContain('Euler-based · 72%');
@@ -190,20 +239,18 @@ describe('SPEC UI contract', () => {
     expect(panel.indexOf('Helping is not the point.')).toBeLessThan(panel.indexOf('id="children-a"'));
   });
 
-  it('makes the connector a control that previews and opens the link as a claim', () => {
+  it('makes the connector a control that leads with how far the link holds and opens it', () => {
     const html = renderToString(() => <TreeView graph={layered} root="q" />);
-    // the chip on a's connector: link strength, expandable into the link panel, described by its preview
+    // the chip on a's connector: expandable into the link panel
     expect(html).toMatch(/<button[^>]*class="linkchip[^"]*"[^>]*aria-expanded="false"[^>]*aria-controls="link-a-q"/);
-    expect(html).toContain('aria-describedby="peek-a-q"');
-    expect(html).toContain('id="peek-a-q"');
-    expect(html).toContain('role="tooltip"');
-    const peek = html.slice(html.indexOf('id="peek-a-q"'), html.indexOf('id="peek-a-q"') + 1200).replace(/<!--[^>]*-->/g, '');
-    expect(peek).toContain('is a reason for');
-    expect(peek).toContain('“It would help.”');
-    expect(peek).toContain('set aside');
-    expect(peek).toContain('0 for · 1 against');
-    // its count of link arguments is shown on the connector itself
+    const chip = html.slice(html.search(/<button[^>]*class="linkchip/), html.indexOf('</button>', html.search(/<button[^>]*class="linkchip/)));
+    expect(chip.replace(/<!--[^>]*-->/g, '')).toContain('holds 80%');
+    expect(chip).not.toContain('decisive link 80%<');
+    // a readable total replaces cryptic +1/−1 counters; no preview until hover/focus
+    expect(chip.replace(/<!--[^>]*-->/g, '')).toContain('1 argument');
     expect(html).toContain('linkchip__count');
+    expect(html).not.toContain('role="tooltip"');
+    expect(html).not.toContain('aria-describedby="peek-');
   });
 
   it('opens a link panel with its credence, status, arguments and override', async () => {
@@ -251,8 +298,10 @@ describe('SPEC UI contract', () => {
     const text = renderToString(() => <TreeView graph={busy} root="q" />).replace(/<!--[^>]*-->/g, '');
     expect(text).toContain('aria-label="Now exploring"');
     expect(text).toContain('gathering arguments on');
-    expect(text).toContain('weighing');
-    expect(text).toMatch(/weighing <span[^>]*class="tag tag--link">link<\/span>/);
+    // one item on its one line; the rest counted, and named in the count's tooltip
+    expect(text.match(/class="now__item/g)).toHaveLength(1);
+    expect(text).toContain('+1 more');
+    expect(text).toMatch(/title="weighing link “It would help.”"/);
     const idle = renderToString(() => <TreeView graph={graph} root="q" />);
     expect(idle).toContain('nothing in flight');
   });
@@ -263,6 +312,8 @@ describe('SPEC UI contract', () => {
     expect(legend).toContain('<details');
     expect(legend).toContain('<summary');
     expect(legend).toContain('aria-label="How to read this"');
+    expect(legend).toContain('Cost');
+    expect(legend).toContain('estimated model spend so far');
     expect(theme).toContain('type="button"');
     expect(theme).toContain('aria-label="Switch to dark theme"');
   });

@@ -11,8 +11,9 @@ const route = { target: backend, changeOrigin: true };
 
 export default defineConfig({
   base: './',
-  // Vitest renders components through Solid's server renderer; production
-  // remains a normal hydrated browser build.
+  // Vitest renders components through Solid's server renderer (the `ssr`
+  // project); production remains a normal browser build. test/dom suites,
+  // which need real DOM nodes, compile for the client (vitest.workspace.ts).
   plugins: [solid({ ssr: process.env.VITEST === 'true' })],
   server: {
     proxy: {
@@ -25,5 +26,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.{ts,tsx}'],
+    // test/dom runs in its own project (vitest.workspace.ts): client build, jsdom.
+    exclude: ['test/dom/**', '**/node_modules/**'],
   },
 });
