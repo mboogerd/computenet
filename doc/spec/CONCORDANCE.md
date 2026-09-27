@@ -158,9 +158,9 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-WL-09 | 24-WL-DEL-01 | covered |
 | 24-WL-10 | — | gap |
 | 24-WL-11 | 24-OP-WINDOW-01 | covered |
-| 24-WL-12 | — | gap |
+| 24-WL-12 | 24-WL-CLOSE-01, 24-WL-CLOSE-02 | covered |
 | 24-WL-13 | — | gap |
-| 24-WL-14 | — | gap |
+| 24-WL-14 | 24-WL-IDLE-01 | covered |
 | 24-WL-15 | — | gap |
 | 24-WL-16 | — | gap |
 | 24-WL-17 | — | gap |
@@ -238,9 +238,7 @@ None.
 - Coverage gap: requirement '24-WL-04' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '24-WL-05' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-10' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-WL-12' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-13' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-WL-14' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-15' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-16' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-17' (20-dataflow-semantics/24-data-cells.md) has no covering scenario

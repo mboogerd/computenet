@@ -1,0 +1,43 @@
+id: 24-WL-CLOSE-01
+title: EdgeClose retires the source it carried, and the floor rises to the survivor's promise
+covers: [24-WL-12]
+profile: core
+kind: example
+narrative:
+  given: two set-sources feeding one waterline (lateness 0), its floor read through a value view
+  when: the slower source's link is disconnected mid-script
+  then: >-
+    the floor holds at the slower source's promise while both are open, rises in one step to
+    the remaining source's promise the instant the slow source's edge closes ([24-WL-12]), and
+    tracks that source afterwards — a waterline that failed to retire on `EdgeClose` would stay
+    at 20 forever
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: wl, type: waterline, lateness: 0}
+    - {id: v, type: value-view}
+  links:
+    - {from: a, to: wl}
+    - {from: b, to: wl}
+    - {from: wl, to: v}
+script:
+  # b t=20: candidate min(20)-0 = 20, floor 20 (first rise)
+  - {type: apply, on: b, op: add, value: [20, b1]}
+  - {type: quiesce}
+  # a t=50: candidate min(50,20)-0 = 20 (b still the minimum); no rise
+  - {type: apply, on: a, op: add, value: [50, a1]}
+  - {type: quiesce}
+  # a t=60: candidate min(60,20)-0 = 20; no rise
+  - {type: apply, on: a, op: add, value: [60, a2]}
+  - {type: quiesce}
+  # b's only edge closes: b retired, candidate min(60)-0 = 60, floor rises 20 -> 60
+  - {type: disconnect, from: b, to: wl}
+  - {type: quiesce}
+  # a t=70: candidate min(70)-0 = 70, floor rises 60 -> 70
+  - {type: apply, on: a, op: add, value: [70, a3]}
+  - {type: quiesce}
+checks:
+  - {type: observations-monotone, view: v}
+  - {type: final-view, view: v, equals: 70}
+  - {type: no-dead-letters}
