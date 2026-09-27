@@ -44,18 +44,30 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `[port]` (first bare arg, or `$PORT`) | 8091 | HTTP port |
 | `--proposers claude,codex` | both | which CLIs propose arguments |
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
-| `--max-processes <n>` | 4 | concurrent CLI processes, app-wide (EXP-07) |
-| `--args-per-call <n>` | 2 | arguments per proposer call, per side |
+| `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
+| `--args-per-call <n>` | 1 | arguments per proposer call, per side |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
 | `--max-depth <n>` | 3 | claims deeper than this are `DEPTH_LIMIT` |
 | `--max-claims <n>` | 60 | claims per question; the rest become `BUDGET` |
-| `--saturation <p>` | 0.7 | a side with Jev saturation ≥ p gets no more proposals |
-| `--relevance <p>` | 0.5 | a claim with Jev relevance < p is `PRUNED` |
+| `--max-args-per-side <n>` | 6 | a side holding n arguments is saturated; a round never attaches beyond it |
+| `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
+| `--min-influence <p>` | 0.35 | a non-root claim is expanded only if Jev relevance × reach ≥ p, else `PRUNED` |
 
-The budget is spent in breadth-first order. With the defaults, the root alone
-can take up to 2 proposers × 2 sides × 2 arguments × 3 rounds = 24 claims. To
-get a deeper tree from a small budget, lower `--args-per-call` and
-`--max-rounds`: for example, `--args-per-call 1 --max-rounds 2 --max-claims 30`.
+**Reach** is how much a claim can still matter to the question. The root has
+reach 1, and an argument's reach is its parent's reach times the Jev strength
+of the edge that attaches it (0.5 is assumed if that judgment failed). Reach
+therefore decays down the tree even where Jev keeps calling every claim fairly
+relevant. The `--saturation` and `--min-influence` defaults were calibrated on
+live Jev judgments of real proposer output; the data and reasoning are in
+[`CALIBRATION.md`](CALIBRATION.md). In short, Jev's saturation reading rises
+only weakly with the number of arguments, so `--max-args-per-side` is the
+dependable stop. Most depth-2 claims fall below `--min-influence`, so
+`DEPTH_LIMIT` is a safety net that rarely fires.
+
+The budget is spent in breadth-first order. With the defaults, the per-side
+cap bounds any one claim to 12 arguments. Each default round offers two new
+arguments per side, giving Jev a chance to stop a side after 2 and 4 arguments
+before the cap supplies the dependable stop at 6.
 
 ## HTTP
 
@@ -75,8 +87,12 @@ slot.
 Measured on 2026-09-27 with `--max-depth 2 --max-claims 30 --max-rounds 2
 --args-per-call 1`: a 30-claim tree took about 1–2 minutes. It ran 14–17 rounds,
 which is roughly 60 CLI invocations billed to your Claude and Codex accounts,
-plus a couple of hundred Jev requests. The default 60-claim configuration costs
-roughly twice as much. Jev calls slower than 20 s are logged to stderr. Nothing
+plus a couple of hundred Jev requests. In a calibration run using a per-side
+cap of 4, 2 arguments per call, `--min-influence 0.35`, and 8 processes, a
+60-claim question took about 1 minute on 2026-09-27. It expanded the root and
+6 of the 8 depth-1 claims, one round each, before the cap saturated them.
+Of the 50 depth-2 claims, 37 were `PRUNED` and 13 were `BUDGET`, and no claim
+hit `DEPTH_LIMIT`. Jev calls slower than 20 s are logged to stderr. Nothing
 persists across restarts.
 
 ## Tests
@@ -84,5 +100,7 @@ persists across restarts.
 ```bash
 ./gradlew :demo:deliberate:test --rerun         # fakes only, no network
 DELIBERATE_LIVE=1 ./gradlew :demo:deliberate:test --tests '*LiveSmokeTest' --rerun
+# re-measure the Jev thresholds (CALIBRATION.md); regenerates material only if its cache is absent
+DELIBERATE_CALIBRATE=1 ./gradlew :demo:deliberate:test --tests '*CalibrationTest' --rerun
 cd demo/deliberate/ui && npm run typecheck && npm test
 ```

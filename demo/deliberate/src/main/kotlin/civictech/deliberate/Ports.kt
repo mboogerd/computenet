@@ -44,7 +44,10 @@ interface Judge {
      */
     fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>): List<Int?>
 
-    /** EXP-04: probability that [side] of the claim is saturated. */
+    /**
+     * EXP-04: probability that [side] of the claim is saturated, i.e.
+     * 1 − p(an important consideration on that side is still missing).
+     */
     fun saturation(ctx: ClaimContext, side: Side): Double
 
     /** EXP-05: probability that analysing the claim further matters for the question. */

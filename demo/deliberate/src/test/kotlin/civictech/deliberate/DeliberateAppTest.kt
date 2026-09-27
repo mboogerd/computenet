@@ -239,6 +239,7 @@ class DeliberateAppTest {
             arrayOf(
                 "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",
                 "--args-per-call", "3", "--max-processes", "2",
+                "--max-args-per-side", "5", "--saturation", "0.4", "--min-influence", "0.25",
             ),
         )
         assertEquals(9000, o.port)
@@ -247,9 +248,15 @@ class DeliberateAppTest {
         assertEquals(2, o.config.maxDepth)
         assertEquals(20, o.config.maxClaims)
         assertEquals(3, o.config.argsPerCall)
+        assertEquals(5, o.config.maxArgsPerSide)
+        assertEquals(0.4, o.config.saturation)
+        assertEquals(0.25, o.config.minInfluence)
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
         assertEquals(DeliberateApp.DEFAULT_PORT, Options(arrayOf("--max-depth", "2")).port.takeIf { System.getenv("PORT") == null } ?: DeliberateApp.DEFAULT_PORT)
-        assertEquals(4, Options(emptyArray()).maxProcesses)
+        assertEquals(8, Options(emptyArray()).maxProcesses)
+        assertEquals(1, Options(emptyArray()).config.argsPerCall)
+        assertEquals(6, Options(emptyArray()).config.maxArgsPerSide)
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--relevance", "0.5")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-processes", "0")) }
