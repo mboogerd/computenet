@@ -1,0 +1,51 @@
+id: 24-WL-DUP-01
+title: Duplicate and lower-lateness floor deliveries are fixpoints at the evicting cell
+covers: [24-WL-03]
+profile: core
+kind: example
+narrative:
+  given: >-
+    one set-source feeding three waterline cells (two identical, lateness 2; one lower,
+    lateness 5) that all gate one tumbling window (size 10, lateness 2), converged against
+    a twin window fed by only one of the three waterlines
+  when: every floor arrives at the evicting window twice (the identical pair) plus once
+    more lower (the third), in whichever order
+  then: >-
+    redelivery and a lower floor are fixpoints ([24-WL-03]) — a second eviction of an
+    already-evicted window would be a dead letter or a diverged view, and neither
+    happens: the gated window converges to its single-waterline twin
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: wl1, type: waterline, lateness: 2}
+    - {id: wl2, type: waterline, lateness: 2}
+    - {id: wl3, type: waterline, lateness: 5}
+    - {id: w, type: window, window: {kind: tumbling, size: 10}, lateness: 2}
+    - {id: v, type: count-view}
+    - {id: w2, type: window, window: {kind: tumbling, size: 10}, lateness: 2}
+    - {id: v2, type: count-view}
+  links:
+    - {from: a, to: wl1}
+    - {from: a, to: wl2}
+    - {from: a, to: wl3}
+    - {from: a, to: w}
+    - {from: a, to: w2}
+    - {from: wl1, to: w, inlet: waterline}
+    - {from: wl2, to: w, inlet: waterline}
+    - {from: wl3, to: w, inlet: waterline}
+    - {from: wl1, to: w2, inlet: waterline}
+    - {from: w, to: v}
+    - {from: w2, to: v2}
+script:
+  - {type: apply, on: a, op: add, value: [3, x1]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [12, x2]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [25, x3]}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [38, x4]}
+  - {type: quiesce}
+checks:
+  - {type: views-converge, views: [v, v2]}
+  - {type: final-view, view: v, equals: {"30": 1}}
+  - {type: no-dead-letters}

@@ -148,12 +148,12 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-TMAP-03 | 24-TMAP-LWW-01 | covered |
 | 24-TMAP-04 | 24-TMAP-RESET-01 | covered |
 | 24-WL-01 | — | gap |
-| 24-WL-02 | — | gap |
-| 24-WL-03 | — | gap |
+| 24-WL-02 | 24-WL-FLOOR-01, 24-WL-JOINLOW-01 | covered |
+| 24-WL-03 | 24-WL-DUP-01, 24-WL-FLOOR-01 | covered |
 | 24-WL-04 | — | gap |
 | 24-WL-05 | — | gap |
 | 24-WL-06 | — | gap |
-| 24-WL-07 | — | gap |
+| 24-WL-07 | 24-WL-JOINLOW-01 | covered |
 | 24-WL-08 | — | gap |
 | 24-WL-09 | — | gap |
 | 24-WL-10 | — | gap |
@@ -166,7 +166,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-WL-17 | — | gap |
 | 24-WL-18 | — | gap |
 | 24-WL-19 | — | gap |
-| 24-WL-20 | — | gap |
+| 24-WL-20 | 24-WL-JOINLOW-01 | covered |
 | 33-MOVE-01 | 33-MIGRATE-01 | covered |
 | 41-LOC-01 | 41-SPLIT-01 | covered |
 | 42-INT-01 | 42-INTEREST-01 | covered |
@@ -236,12 +236,9 @@ None.
 - Coverage gap: requirement '24-TAG-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-01' (20-dataflow-semantics/21-propagation.md) has no covering scenario
-- Coverage gap: requirement '24-WL-02' (20-dataflow-semantics/22-consistency.md) has no covering scenario
-- Coverage gap: requirement '24-WL-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-04' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '24-WL-05' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-06' (20-dataflow-semantics/22-consistency.md) has no covering scenario
-- Coverage gap: requirement '24-WL-07' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '24-WL-08' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '24-WL-09' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-10' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
@@ -254,7 +251,6 @@ None.
 - Coverage gap: requirement '24-WL-17' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-18' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-19' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-WL-20' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '42-WM-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '42-WM-02' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-03' (40-distribution/42-replication.md) has no covering scenario
