@@ -50,10 +50,9 @@ names that model.)
 - **CRED-01** Every claim receives a Jev *plausibility* judgment — a Score over
   five ordered levels (almost certainly false … almost certainly true) mapped
   linearly to [0,1] — judged on a state holding only `root_question` and
-  `claim`: no path, parent, direction or date, and not its arguments (a live
-  investigation measured the path pulling the judgment towards the claim's
-  role in the argument, e.g. 0.31 with the path vs 0.53 without; dropping it
-  shifts fresh arguments by −0.011 on average). The instruction tells Jev the
+  `claim`: no path, parent, direction or date, and not its arguments (the
+  path biases the judgment towards the claim's role in the argument; evidence
+  in `CALIBRATION.md`). The instruction tells Jev the
   question only names the topic, and not to reward or penalise the claim for
   the answer it favours. It is applied as the stance of user `jev` on
   that claim. An argument is judged the moment it is attached: plausibility
@@ -183,8 +182,8 @@ names that model.)
   when it already holds its cap: `maxArgsPerSide` (default 6) for the root,
   `maxArgsPerSideChild` (default 3) below it. **Balance:** a side below its
   cap that holds fewer arguments than the other side is never saturated by
-  Jev's judgment (Jev's saturation reads systematically higher for con, so
-  con sides stopped early — one root ended 5 pro / 2 con). Saturation is
+  Jev's judgment (Jev's saturation reads systematically higher for con; see
+  `CALIBRATION.md`). Saturation is
   judged once per round, after every proposer had its turn. Saturated sides
   receive no further proposals, and a round never attaches beyond the cap.
   Expansion ends when both sides are saturated or `maxRounds` (default 3) is
@@ -201,11 +200,10 @@ names that model.)
   `reach × relevance × quality`. An undercutter's reach is
   `reach(parent) × strength(its edge) × strength(the undercut edge)`. A
   non-root claim whose contribution is below `minInfluence` (default 0.10,
-  §10 iteration 5) is `PRUNED` without being explored — an irrelevant or
-  poorly constructed argument never is. (Iteration 4 multiplied a
-  canonical-form Noul into quality; it anti-correlated with relevance,
-  r −0.3 to −0.54, and pruned the most on-point arguments, so iteration 5
-  removed it: canonical form is asked of the proposers only, EXP-02.) If the assessment fails, strength 0.5 is used and
+  see §10) is `PRUNED` without being explored — an irrelevant or
+  poorly constructed argument never is. Quality carries no canonical-form
+  factor: canonical form is asked of the proposers only (EXP-02; why, in
+  `CALIBRATION.md`). If the assessment fails, strength 0.5 is used and
   relevance and quality count as 1. The root is always expanded. Beyond
   `maxDepth` (default 5) claims are `DEPTH_LIMIT` — a safety net, not the
   primary stop.
@@ -256,7 +254,7 @@ names that model.)
   `yieldEarlier` (mean before it) and `stoppedBy` (`"diminishing"`,
   `"budget"` or null); the yields and the stop are durable (DUR-02). The
   relative, per-question comparison is the point: absolute yields differ
-  several-fold between questions (§10 iteration 5), so any absolute threshold
+  several-fold between questions (`CALIBRATION.md`), so any absolute threshold
   would again starve one question and overgrow another.
 
 ### Exploration order
@@ -421,50 +419,35 @@ Every status change is broadcast.
 ## 8. Non-goals (v1)
 
 Multiple users; human stances; editing claims; cross-tree links; merging
-equivalent claims across branches. (Exploring an edge as a claim of its own,
-a residual of iteration 4, is now §3 "Links as claims".)
+equivalent claims across branches. (Exploring an edge as a claim of its own
+is in scope: §3 "Links as claims".)
 
 ## 9. Acceptance
 
-1. Engine tests with fake proposers/judge prove EXP-02..08 and CTL-01..05
-   deterministically (no network in `./gradlew :demo:deliberate:test`).
+1. Engine tests with fake proposers/judge prove EXP-02..08 and CTL-01..05.
+   Their inputs are deterministic — the fakes return scripted proposals and
+   judgments, and `./gradlew :demo:deliberate:test` makes no network or CLI
+   call — but the engine runs on real (virtual) threads, so the tests
+   synchronise with latches and bounded waits (`awaitIdle`, `awaitUntil`)
+   rather than a simulated clock, and assert outcomes, not interleavings.
 2. Jev client and CLI proposer parsing are unit-tested against recorded
    payloads; a live smoke test runs only when `DELIBERATE_LIVE=1`.
 3. A live manual run against a real question grows a multi-level graph whose
    credences move in the UI, and both overrides visibly work.
 
-## 10. Calibration (iteration 2)
+## 10. Calibration
 
-The first live runs showed both Jev gates inert (saturation 0.04–0.43 vs a
-0.7 threshold; relevance never below 0.5), so exploration was stopped only by
-hard limits. Thresholds are therefore set from evidence: a calibration run
-over real claims at depths 0–3 with 0–6 arguments per side, recorded in
-`demo/deliberate/CALIBRATION.md`, must show that with the defaults (a) a side
-typically saturates by 3–4 arguments and (b) a typical question tree stops
-growing through `PRUNED` before `DEPTH_LIMIT` for most depth-2 claims.
-Criterion (a) is met on the median; the per-side cap remains the dependable
-stop because Jev's saturation signal is shallow.
+Jev's gate signals are weaker and differently scaled than their prompts
+suggest, so the thresholds that consume them (`saturation`, `minInfluence`,
+and the EXP-10 yield parameters) are set from evidence, never by intuition. A
+calibration run over real claims at depths 0–3 with 0–6 arguments per side,
+recorded in `demo/deliberate/CALIBRATION.md`, must show that with the
+defaults (a) a side typically saturates by 3–4 arguments and (b) a typical
+question tree stops growing through `PRUNED` before `DEPTH_LIMIT` for most
+depth-2 claims.
 
-Iteration 4 changed plausibility's state (CRED-01) and added the canonical
-factor to quality (EXP-05) after this calibration, so `saturation` and
-`minInfluence` were calibrated under the old judgments. The first live run
-under the new ones showed the influence gate misbehaving (every depth-1
-argument `PRUNED`), so `minInfluence` was rescaled to 0.15.
-
-Iteration 5 (`CALIBRATION.md`) found tree size decided at depth 1 and very
-uneven across questions (21 vs 57 and 110 claims in one run): the canonical
-factor pruned the most on-point arguments, two prompt examples about a real
-politician were copied into one question's root arguments, and a flat
-threshold cannot suit questions whose argument quality differs. So quality
-lost its canonical factor (EXP-05), the prompt examples became topic-neutral
-(EXP-02), `minInfluence` became 0.10 (an offline replay of the recorded trees
-balanced best there), and each question now stops by its own diminishing
-returns (EXP-10) rather than by the budget. Root rounds are excluded from its
-history, and a diminishing stop is recorded only when it actually halts a
-`QUEUED` claim; these corrections prevent a high-yield root from depressing
-the apparent return of its children and prevent exhausted trees from claiming
-they were stopped. A full recalibration of
-`saturation` is still residual.
+The measurements, the history of each default, and what remains to
+recalibrate live in `CALIBRATION.md`; this section states only the criteria.
 
 ## 11. Durability (requirements DUR-*)
 
