@@ -116,11 +116,20 @@ object Checks {
      * View equals the harness-side batch oracle over the accepted-op multiset.
      *
      * **`view: '*'` must resolve to at least one target** (computenet-2ee6c). It
-     * expands to [BatchOracle.allViewValues]'s keys — the graph's view cells —
-     * and a graph with none makes that set empty, so the comparison loop never
-     * ran and the check returned `Passed` having compared nothing: the same
-     * vacuous-coverage shape `replicas-converge` was closed for. Fails instead,
-     * naming that nothing was resolved to compare.
+     * expands to [viewCells] — the graph's view cells, identified without
+     * folding — and a graph with none makes that set empty, so the comparison
+     * loop never ran and the check returned `Passed` having compared nothing:
+     * the same vacuous-coverage shape `replicas-converge` was closed for.
+     * Fails instead, naming that nothing was resolved to compare.
+     *
+     * **Resolved without [BatchOracle.allViewValues]** (computenet-vu274):
+     * that method folds every view immediately and throws [OracleUnsupported]
+     * outside any per-view arm when one view is unmodelled, so a single
+     * refused view (e.g. a lateness view this oracle cannot fold) would throw
+     * instead of reporting `Failed` for that view. Resolving ids via
+     * [viewCells] instead defers each view's fold to the per-view loop below,
+     * whose `catch (e: OracleUnsupported)` already turns a refusal into a
+     * named `Failed`.
      */
     fun incrementalEqualsBatch(check: IncrementalEqualsBatch, ctx: CheckContext): CheckResult {
         val oracle = try {
@@ -128,7 +137,7 @@ object Checks {
         } catch (e: OracleUnsupported) {
             return CheckResult.Failed("incremental-equals-batch: oracle cannot model this scenario — ${e.message}")
         }
-        val targets = if (check.view == "*") oracle.allViewValues().keys.toList() else listOf(check.view)
+        val targets = if (check.view == "*") viewCells(ctx.scenario) else listOf(check.view)
         if (targets.isEmpty()) {
             return CheckResult.Failed(
                 "incremental-equals-batch(*): no view cell in the graph to compare — nothing observed",
