@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, type NodeDto, type QuestionDto, type Status } from '../api/types';
+import { ACTIVE_STATUSES, type Activity, type NodeDto, type QuestionDto, type Status } from '../api/types';
 
 export const pct = (x: number | undefined): string => (x === undefined ? '—' : `${Math.round(x * 100)}%`);
 
@@ -180,16 +180,84 @@ export function spreadOf(n: NodeDto): { low: number; high: number } {
 export const AGREE_POINTS = 10;
 
 /**
- * Plain words for how far the credence rules agree on a node:
- * "rules agree within 6 points", or "rules disagree: 31–72%".
+ * Why a node with no arguments has no spread band: every rule starts from the
+ * same first impression (the `jev` stance) and has nothing to weigh, so they
+ * agree by construction — not a bug, and not evidence of consensus.
  */
-export function agreementText(n: NodeDto): string {
+export const LEAF_AGREEMENT = 'no arguments yet — all rules agree with the first impression';
+
+/**
+ * Plain words for how far the credence rules agree on a node:
+ * "rules agree within 6 points", or "rules disagree: 31–72%". A `leaf` (no
+ * arguments yet) whose rules coincide says so ({@link LEAF_AGREEMENT}).
+ */
+export function agreementText(n: NodeDto, leaf = false): string {
   const { low, high } = spreadOf(n);
   const lo = Math.round(clamp01(low) * 100);
   const hi = Math.round(clamp01(high) * 100);
   const width = hi - lo;
+  if (leaf && width === 0) return LEAF_AGREEMENT;
   if (width <= AGREE_POINTS) return width === 0 ? 'rules agree' : `rules agree within ${width} point${width === 1 ? '' : 's'}`;
   return `rules disagree: ${lo}–${hi}%`;
+}
+
+// ---------- SPEC §3 "Links as claims" ----------
+
+/** A link's claim split into its ends: “argument” is a reason for|against “parent”. */
+export interface LinkParts {
+  argument: string;
+  relation: 'is a reason for' | 'is a reason against';
+  parent: string;
+}
+
+export function linkParts(text: string | undefined): LinkParts | undefined {
+  const m = text === undefined ? null : /^“([\s\S]*)” (is a reason (?:for|against)) “([\s\S]*)”$/.exec(text);
+  return m ? { argument: m[1], relation: m[2] as LinkParts['relation'], parent: m[3] } : undefined;
+}
+
+/** Where a status reads differently for a link than for a claim. */
+export const LINK_STATUS_HINT: Partial<Record<Status, string>> = {
+  QUEUED: 'Waiting for its turn: the proposers will be asked whether this argument really bears on the claim',
+  EXPLORING: 'Claude and Codex are proposing reasons this link holds, and reasons it fails',
+  PRUNED:
+    "Not explored: the argument matters little, or Jev's link strength is already clear-cut (near 0 or 1). Expand to explore it anyway",
+  SATURATED: 'Jev judged both sides of this link complete',
+};
+
+export const statusHint = (s: Status, link = false): string => (link ? LINK_STATUS_HINT[s] : undefined) ?? STATUS_HINT[s];
+
+/** One line of the "now exploring" ticker. */
+export interface ActivityItem {
+  ref: string;
+  /** A claim, or a link (an EDGE explored as a claim). */
+  kind: 'claim' | 'link';
+  activity: Activity;
+  text: string;
+}
+
+const ACTIVITY_ORDER: Record<Activity, number> = { exploring: 0, judging: 1, assessing: 2 };
+
+/** Present-tense verbs for the ticker. */
+export const ACTIVITY_VERB: Record<Activity, string> = {
+  exploring: 'gathering arguments on',
+  judging: 'weighing',
+  assessing: 'judging new argument',
+};
+
+/** What the deliberation of question `root` is doing right now, exploring first, then in snapshot order. */
+export function activityOf(nodes: readonly NodeDto[], root: string): ActivityItem[] {
+  return nodes
+    .filter((n) => n.root === root && n.activity !== undefined)
+    .map((n) => ({ ref: n.ref, kind: n.kind === 'EDGE' ? ('link' as const) : ('claim' as const), activity: n.activity!, text: n.text ?? '' }))
+    .sort((a, b) => ACTIVITY_ORDER[a.activity] - ACTIVITY_ORDER[b.activity]);
+}
+
+/** A ticker entry's text, cut at a word boundary. */
+export function clip(text: string, max = 64): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 /** Plain names of the credence rules (SPEC §2 "Credence layers and consensus"). */

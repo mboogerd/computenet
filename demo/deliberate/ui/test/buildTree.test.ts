@@ -90,31 +90,39 @@ describe('buildTree', () => {
     expect(countClaims(buildTree(g, 'p')!)).toBe(2);
   });
 
-  it('attaches an undercutter under the argument whose link it attacks', () => {
+  it('places link arguments under the link, never under a claim', () => {
     const g: GraphDto = {
       questions: [],
       nodes: [
         { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q' },
         { ref: 'a', kind: 'CLAIM', credence: 0.5, root: 'q' },
-        { ref: 'a-q', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'q' },
+        { ref: 'a-q', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'q', text: '“a” is a reason for “q”' },
         { ref: 'x', kind: 'CLAIM', credence: 0.5, root: 'q' },
         { ref: 'x-a', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'ATTACK', source: 'x', target: 'a' },
-        { ref: 'u', kind: 'CLAIM', credence: 0.5, root: 'q', undercuts: 'a-q' },
+        { ref: 'u', kind: 'CLAIM', credence: 0.5, root: 'q', undercuts: 'a-q', onLink: 'a-q' },
         { ref: 'u-aq', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'ATTACK', source: 'u', target: 'a-q' },
+        { ref: 'h', kind: 'CLAIM', credence: 0.5, root: 'q', onLink: 'a-q' },
+        { ref: 'h-aq', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'SUPPORT', source: 'h', target: 'a-q' },
         { ref: 'v', kind: 'CLAIM', credence: 0.5, root: 'q' },
         { ref: 'v-u', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'SUPPORT', source: 'v', target: 'u' },
+        { ref: 'w', kind: 'CLAIM', credence: 0.5, root: 'q', onLink: 'h-aq' },
+        { ref: 'w-haq', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'ATTACK', source: 'w', target: 'h-aq' },
       ],
     };
     const tree = buildTree(g, 'q')!;
-    // the root holds one argument; the undercutter is not a con of the root
+    // the root holds one argument, and so does `a`: the link's arguments belong to neither
     expect(tree.children.map((c) => c.node.claim.ref)).toEqual(['a']);
-    const a = tree.children[0].node;
-    expect(a.children.map((c) => [c.node.claim.ref, c.undercut ?? false])).toEqual([
-      ['x', false],
-      ['u', true],
+    const arg = tree.children[0];
+    expect(arg.node.children.map((c) => c.node.claim.ref)).toEqual(['x']);
+    // the link a → q: why it holds first, then the undercutter
+    expect(arg.linkArgs.map((c) => [c.node.claim.ref, c.edge.polarity, c.onLink])).toEqual([
+      ['h', 'SUPPORT', true],
+      ['u', 'ATTACK', true],
     ]);
-    // an undercutter is explored like a claim: its own arguments hang under it
-    expect(a.children[1].node.children.map((c) => c.node.claim.ref)).toEqual(['v']);
-    expect(countClaims(tree)).toBe(5);
+    // an argument about a link is explored like a claim, and has a link of its own
+    expect(arg.linkArgs[1].node.children.map((c) => c.node.claim.ref)).toEqual(['v']);
+    expect(arg.linkArgs[0].linkArgs.map((c) => c.node.claim.ref)).toEqual(['w']);
+    expect(arg.node.children[0].linkArgs).toEqual([]);
+    expect(countClaims(tree)).toBe(7);
   });
 });

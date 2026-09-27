@@ -33,6 +33,7 @@ const graph: GraphDto = {
     {
       ref: 'a-q', kind: 'EDGE', credence: 0.8, root: 'q', polarity: 'SUPPORT',
       source: 'a', target: 'q', strength: 0.8,
+      text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'PRUNED', override: 'AUTO', rounds: 0,
     },
     {
       ref: 'b', kind: 'CLAIM', credence: 0.3, root: 'q', text: 'It has a cost.', depth: 2,
@@ -53,7 +54,7 @@ const layered: GraphDto = {
       ? { ...n, consensus: 0.41, spreadLow: 0.31, spreadHigh: 0.72, credences: { dfquad: 0.63, wlo: 0.41, mlp: 0.31, euler: 0.72 } }
       : n,
   ).concat([
-    { ref: 'u', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Helping is not the point.', depth: 1, status: 'QUEUED', undercuts: 'a-q' },
+    { ref: 'u', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Helping is not the point.', depth: 2, status: 'QUEUED', undercuts: 'a-q', onLink: 'a-q' },
     { ref: 'u-aq', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'ATTACK', source: 'u', target: 'a-q', strength: 0.5 },
   ]),
 };
@@ -156,11 +157,86 @@ describe('SPEC UI contract', () => {
     expect(facts).toContain('rules disagree: 31–72%');
   });
 
-  it('renders an undercutter under the argument whose link it attacks', () => {
+  it('renders an undercutter under the link it attacks, not under the claim', () => {
     const html = renderToString(() => <TreeView graph={layered} root="q" />);
     expect(html).toContain('Undercuts the link');
     expect(html).toContain('branch--undercut');
-    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('0 pro · 1 con · 1 undercut');
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    // the claim keeps its own arguments; the undercutter sits in its link's panel
+    expect(text).toContain('0 pro · 1 con');
+    expect(text).not.toContain('undercut ·');
+    expect(html).toMatch(/<section[^>]*class="linkpanel[^"]*"[^>]*id="link-a-q"/);
+    expect(text).toContain('Why it fails');
+    const panel = html.slice(html.indexOf('id="link-a-q"'));
+    expect(panel.indexOf('Helping is not the point.')).toBeGreaterThan(-1);
+    expect(panel.indexOf('Helping is not the point.')).toBeLessThan(panel.indexOf('id="children-a"'));
+  });
+
+  it('makes the connector a control that previews and opens the link as a claim', () => {
+    const html = renderToString(() => <TreeView graph={layered} root="q" />);
+    // the chip on a's connector: link strength, expandable into the link panel, described by its preview
+    expect(html).toMatch(/<button[^>]*class="linkchip[^"]*"[^>]*aria-expanded="false"[^>]*aria-controls="link-a-q"/);
+    expect(html).toContain('aria-describedby="peek-a-q"');
+    expect(html).toContain('id="peek-a-q"');
+    expect(html).toContain('role="tooltip"');
+    const peek = html.slice(html.indexOf('id="peek-a-q"'), html.indexOf('id="peek-a-q"') + 1200).replace(/<!--[^>]*-->/g, '');
+    expect(peek).toContain('is a reason for');
+    expect(peek).toContain('“It would help.”');
+    expect(peek).toContain('set aside');
+    expect(peek).toContain('0 for · 1 against');
+    // its count of link arguments is shown on the connector itself
+    expect(html).toContain('linkchip__count');
+  });
+
+  it('opens a link panel with its credence, status, arguments and override', async () => {
+    const { LinkPanel, indexTree } = await import('../src/components/ClaimCard');
+    const { buildTree } = await import('../src/tree/buildTree');
+    const index = indexTree(buildTree(layered, 'q')!);
+    const edge = layered.nodes.find((n) => n.ref === 'a-q')!;
+    const sel = { selected: () => undefined, toggle: () => undefined };
+    const html = renderToString(() => (
+      <LinkPanel edge={edge} args={index.get('a')!.linkArgs} open index={() => index} sel={sel} onClose={() => undefined} />
+    ));
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    expect(html).toContain('aria-label="Link exploration override"');
+    expect(text).toContain('holds');
+    expect(text).toContain('set aside');
+    expect(text).toContain('Why it holds');
+    expect(text).toContain('No reasons yet that it holds.');
+    expect(text).toContain('Helping is not the point.');
+    expect(text).toContain('“Should we?”');
+  });
+
+  it('says why a claim with no arguments has no spread band', () => {
+    const leaf = layered.nodes.find((n) => n.ref === 'b')!;
+    const flat = { ...leaf, consensus: 0.3, spreadLow: 0.3, spreadHigh: 0.3, credences: { dfquad: 0.3, wlo: 0.3 } };
+    const facts = renderToString(() => <Facts id="f" claim={flat} leaf />);
+    expect(facts).toContain('no arguments yet — all rules agree with the first impression');
+    const notLeaf = renderToString(() => <Facts id="f" claim={flat} />);
+    expect(notLeaf).toContain('rules agree');
+    expect(notLeaf).not.toContain('no arguments yet');
+    // the card draws a tick for the single value instead of an invisible band
+    const tree: GraphDto = { ...graph, nodes: graph.nodes.map((n) => (n.ref === 'b' ? flat : n)) };
+    const html = renderToString(() => <TreeView graph={tree} root="q" />);
+    expect(html).toContain('bar--leaf');
+    expect(html).toContain('bar__tick');
+    expect(html).toContain('no arguments yet — all rules agree with the first impression');
+  });
+
+  it('shows what the deliberation is doing now, links included', () => {
+    const busy: GraphDto = {
+      ...layered,
+      nodes: layered.nodes.map((n) =>
+        n.ref === 'a' ? { ...n, activity: 'exploring' } : n.ref === 'a-q' ? { ...n, activity: 'judging' } : n,
+      ),
+    };
+    const text = renderToString(() => <TreeView graph={busy} root="q" />).replace(/<!--[^>]*-->/g, '');
+    expect(text).toContain('aria-label="Now exploring"');
+    expect(text).toContain('gathering arguments on');
+    expect(text).toContain('weighing');
+    expect(text).toMatch(/weighing <span[^>]*class="tag tag--link">link<\/span>/);
+    const idle = renderToString(() => <TreeView graph={graph} root="q" />);
+    expect(idle).toContain('nothing in flight');
   });
 
   it('uses native or labelled controls for help and theme disclosure', () => {

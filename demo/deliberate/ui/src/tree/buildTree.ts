@@ -3,30 +3,35 @@ import type { GraphDto, NodeDto } from '../api/types';
 /** A claim together with the arguments attached to it. */
 export interface TreeNode {
   claim: NodeDto;
-  /**
-   * Pro (SUPPORT) arguments first, then con (ATTACK), then undercutters of the
-   * link attaching this claim to its parent; each group in first-appearance order.
-   */
+  /** Pro (SUPPORT) arguments first, then con (ATTACK); each group in first-appearance order. */
   children: ArgumentNode[];
 }
 
-/** One argument: the edge (child → parent) and the subtree of its source claim. */
+/**
+ * One argument: the edge (child → parent) and the subtree of its source
+ * claim. The edge is also a **link** — the claim "“child” is a reason
+ * for/against “parent”" (SPEC §3 "Links as claims") — with arguments of its
+ * own, kept here rather than under either claim.
+ */
 export interface ArgumentNode {
   edge: NodeDto;
   node: TreeNode;
-  /** EXP-03 UNDERCUT: `edge` attacks the link above this subtree's parent, not a claim. */
-  undercut?: boolean;
+  /** Arguments about this link: why it holds (SUPPORT) first, then why it fails (ATTACK: undercutters). */
+  linkArgs: ArgumentNode[];
+  /** This argument is about a link (it sits in its parent argument's `linkArgs`), not about a claim. */
+  onLink?: boolean;
 }
 
 /**
- * Builds the tree under `root` from a flat graph snapshot. Children of a claim
- * are the EDGE nodes whose `target` is that claim, each paired with its
- * `source` claim, followed by its undercutters: the claims whose edge targets
- * the edge attaching the claim to its parent (EXP-03 UNDERCUT — "this does
- * not show that"), rendered under the argument whose link they attack. Edges whose source claim is absent from the snapshot are
- * skipped (a frame can carry an edge before its source). Cycles cannot occur
- * in a deliberation tree, but a visited set guards against rendering forever
- * if one ever did. Returns undefined when the root claim is not present.
+ * Builds the tree under `root` from a flat graph snapshot. Arguments of a
+ * node — a claim, or a link, which is an EDGE node — are the EDGE nodes whose
+ * `target` is that node, each paired with its `source` claim; an argument's
+ * own link carries the arguments whose edges target that edge (undercutters
+ * and link supporters), so they render under the link, never under a claim.
+ * Edges whose source claim is absent from the snapshot are skipped (a frame
+ * can carry an edge before its source). Cycles cannot occur in a deliberation
+ * tree, but a visited set guards against rendering forever if one ever did.
+ * Returns undefined when the root claim is not present.
  */
 export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
   const allClaims = new Map<string, NodeDto>();
@@ -54,27 +59,29 @@ export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
   }
 
   const visited = new Set<string>();
-  const build = (claim: NodeDto, via?: NodeDto): TreeNode => {
-    visited.add(claim.ref);
-    const edges = edgesByTarget.get(claim.ref) ?? [];
-    const ordered: Array<[NodeDto, boolean]> = [
-      ...edges.filter((e) => e.polarity === 'SUPPORT').map((e): [NodeDto, boolean] => [e, false]),
-      ...edges.filter((e) => e.polarity === 'ATTACK').map((e): [NodeDto, boolean] => [e, false]),
-      ...(via ? edgesByTarget.get(via.ref) ?? [] : []).map((e): [NodeDto, boolean] => [e, true]),
-    ];
-    const children: ArgumentNode[] = [];
-    for (const [edge, undercut] of ordered) {
+  /** The arguments whose edges target `ref` (a claim or an edge): pro first, then con. */
+  const argsOf = (ref: string, onLink: boolean): ArgumentNode[] => {
+    const edges = edgesByTarget.get(ref) ?? [];
+    const out: ArgumentNode[] = [];
+    for (const edge of [...edges.filter((e) => e.polarity === 'SUPPORT'), ...edges.filter((e) => e.polarity === 'ATTACK')]) {
       const src = edge.source === undefined ? undefined : claims.get(edge.source);
       if (!src || visited.has(src.ref)) continue;
-      children.push(undercut ? { edge, node: build(src, edge), undercut } : { edge, node: build(src, edge) });
+      const node = build(src);
+      const arg: ArgumentNode = { edge, node, linkArgs: argsOf(edge.ref, true) };
+      out.push(onLink ? { ...arg, onLink } : arg);
     }
-    return { claim, children };
+    return out;
+  };
+  const build = (claim: NodeDto): TreeNode => {
+    visited.add(claim.ref);
+    return { claim, children: argsOf(claim.ref, false) };
   };
 
   return build(rootClaim);
 }
 
-/** Number of claims in a tree, including its root. */
+/** Number of claims in a tree, including its root and every argument about a link. */
 export function countClaims(tree: TreeNode): number {
-  return 1 + tree.children.reduce((sum, a) => sum + countClaims(a.node), 0);
+  const args = (list: ArgumentNode[]): number => list.reduce((sum, a) => sum + countClaims(a.node) + args(a.linkArgs), 0);
+  return 1 + args(tree.children);
 }

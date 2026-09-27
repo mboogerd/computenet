@@ -56,10 +56,12 @@ type ExpectedNodeDto = {
   depth?: number;
   status?: Status;
   override?: Override;
+  activity?: 'exploring' | 'judging' | 'assessing';
   proposer?: string;
   alsoProposedBy?: string[];
   merged?: boolean;
   undercuts?: string;
+  onLink?: string;
   plausibility?: number;
   relevance?: number;
   quality?: number;

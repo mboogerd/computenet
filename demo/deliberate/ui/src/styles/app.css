@@ -802,6 +802,342 @@ button {
   opacity: 0.8;
 }
 
+/* ---------- links as claims (SPEC §3): the connector is interactive ---------- */
+
+/* An argument about a link: a dashed stripe — pro-coloured when it says the link holds. */
+.branch--holds > .card::before {
+  background: repeating-linear-gradient(to bottom, var(--pro) 0 3px, transparent 3px 6px);
+}
+
+.branch--holds > .card .side__word {
+  color: var(--pro);
+  font-style: italic;
+}
+
+/* The link chip: side + link strength, on the card's connector edge. */
+.linkchip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.linkchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-left: -6px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.linkchip:hover,
+.linkchip:focus-visible,
+.linkchip.is-open {
+  background: var(--surface-sunk);
+  border-color: var(--line);
+}
+
+.linkchip.is-open {
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+
+/* The knot: where the connector ties the argument to its claim. Its fill is the link strength. */
+.linkchip__knot {
+  position: relative;
+  width: 14px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.linkchip__knot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--text-3);
+  transform: scaleX(var(--s, 0));
+  transform-origin: left;
+  transition: transform 500ms var(--ease);
+}
+
+.branch--pro > .card .linkchip__knot::after,
+.branch--holds > .card .linkchip__knot::after {
+  background: var(--pro);
+}
+
+.branch--con > .card .linkchip__knot::after,
+.branch--undercut > .card .linkchip__knot::after {
+  background: var(--con);
+}
+
+.linkchip.is-busy .linkchip__knot {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+
+.linkchip__count {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 7px;
+  padding-left: 7px;
+  border-left: 1px dashed var(--line-strong);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Hover/focus preview of the link as a claim; hidden once the link is open. */
+.linkchip__peek {
+  position: absolute;
+  z-index: 20;
+  left: -6px;
+  bottom: calc(100% + 6px);
+  display: grid;
+  gap: 5px;
+  width: max-content;
+  max-width: min(360px, 80vw);
+  padding: 9px 11px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease), visibility 0s linear var(--dur);
+}
+
+.linkchip:hover + .linkchip__peek,
+.linkchip:focus-visible + .linkchip__peek {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 250ms, 250ms, 0s;
+}
+
+.linkchip.is-open + .linkchip__peek {
+  display: none;
+}
+
+.linkchip__peek-tag,
+.tag--link {
+  justify-self: start;
+  padding: 0 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 15px;
+}
+
+.linkchip__peek-meta {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.linksentence {
+  color: var(--text-2);
+  text-wrap: pretty;
+}
+
+.linksentence__end {
+  color: var(--text);
+}
+
+.linksentence__rel {
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* The link panel: drawn on the connector's side, dashed and indented, below the argument. */
+.linkpanel {
+  position: relative;
+  margin: 2px 0 4px calc(var(--indent) - 2px);
+  padding: 4px 0 2px 12px;
+  border-left: 1.5px dashed var(--line-strong);
+  animation: enter 260ms var(--ease) both;
+}
+
+.linkpanel.is-open {
+  padding: 10px 12px 8px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-sunk);
+}
+
+.linkpanel.is-busy.is-open {
+  border-color: var(--text-3);
+}
+
+.linkpanel__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.linkpanel__head {
+  display: grid;
+  gap: 6px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.linkpanel__cred {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.linkpanel__num {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.linkpanel__cred .bar {
+  width: 64px;
+}
+
+.linkpanel__meta {
+  margin-top: 4px;
+}
+
+.linkpanel .facts {
+  margin-top: 4px;
+}
+
+/* Why it holds | why it fails: a small debate, side by side when there is room. */
+.linkpanel__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 4px 14px;
+}
+
+.linkpanel.is-open .linkpanel__cols {
+  margin-top: 6px;
+}
+
+.linkcol__title {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.linkcol--holds .linkcol__title {
+  color: var(--pro);
+}
+
+.linkcol--fails .linkcol__title {
+  color: var(--con);
+}
+
+.linkcol__empty {
+  margin: 2px 0 4px;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
+.children--link {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+/* A leaf's rules coincide: a tick marks the single value instead of a band. */
+.bar--leaf {
+  overflow: visible;
+}
+
+.bar__tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1.5px;
+  margin-left: -0.75px;
+  z-index: 2;
+  background: var(--text-2);
+  opacity: 0.55;
+}
+
+/* "now": what the deliberation is doing this moment. */
+.now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  margin: 6px 0 0;
+  min-height: 20px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.now__label {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.now__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  animation: enter 300ms var(--ease) both;
+}
+
+.now__item .tag--link {
+  align-self: center;
+}
+
+.now__text {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now__dot {
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+.now__item--exploring .now__dot {
+  background: var(--text);
+}
+
+.now__more,
+.now__idle {
+  font-style: italic;
+}
+
 /* status: plain words; live ones shimmer instead of shouting */
 .status--halted {
   font-style: italic;
@@ -1103,6 +1439,18 @@ button {
   }
   .card__main {
     gap: 12px;
+  }
+  .linkpanel {
+    margin-left: 0;
+  }
+  .linkpanel.is-open {
+    padding: 8px 8px 6px 10px;
+  }
+  .linkchip__peek {
+    display: none;
+  }
+  .now__text {
+    white-space: normal;
   }
   .facts {
     grid-template-columns: 1fr auto;

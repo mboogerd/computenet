@@ -23,6 +23,16 @@ export function mockLayers(n: NodeDto): Pick<NodeDto, 'credences' | 'consensus' 
 }
 import type { ConnState, GraphSource } from '../sync/source';
 
+/** Every layer at the node's own credence: what a node with no arguments looks like. */
+export function flatLayers(n: NodeDto): Pick<NodeDto, 'credences' | 'consensus' | 'spreadLow' | 'spreadHigh'> {
+  return {
+    credences: Object.fromEntries(LAYERS.map((id) => [id, n.credence])),
+    consensus: n.credence,
+    spreadLow: n.credence,
+    spreadHigh: n.credence,
+  };
+}
+
 /** `?mock`: a scripted deliberation that grows over ~20 s, so the UI can be
  *  developed and eyeballed without the backend. `?mock=empty` starts with no
  *  questions (the welcome screen); asking anything then runs the script with
@@ -85,7 +95,8 @@ export class MockSource implements GraphSource {
   async override(id: string, mode: Override): Promise<void> {
     console.info('[mock] POST /override', { id, mode });
     const node = this.nodes.get(id);
-    if (node?.kind !== 'CLAIM') throw new Error(`unknown claim ${id}`);
+    // A link (an EDGE) is steered like a claim (SPEC §3 "Links as claims").
+    if (node?.status === undefined) throw new Error(`unknown claim ${id}`);
     const status = mode === 'STOP'
       ? 'STOPPED'
       : mode === 'AUTO' && node.status === 'STOPPED'
@@ -116,18 +127,26 @@ export class MockSource implements GraphSource {
     });
   }
 
+  /**
+   * [ref] argues [polarity] about [parent] — a claim, or a link (an EDGE ref,
+   * then it says why that link holds or, ATTACK, undercuts it). Its edge is a
+   * link too, with the claim-like fields the backend sends (SPEC §3 "Links as claims").
+   */
   arg(ref: string, root: string, parent: string, polarity: Polarity, text: string, proposer: string, patch: Partial<NodeDto> = {}): void {
-    const depth = (this.nodes.get(parent)?.depth ?? 0) + 1;
-    this.claim(ref, root, text, depth, proposer, patch);
-    this.nodes.set(`${ref}>${parent}`, { ref: `${ref}>${parent}`, kind: 'EDGE', credence: 0.5, root, polarity, source: ref, target: parent });
+    const target = this.nodes.get(parent);
+    const onLink = target?.kind === 'EDGE';
+    const depth = (target?.depth ?? 0) + 1;
+    this.claim(ref, root, text, depth, proposer, onLink ? { onLink: parent, ...(polarity === 'ATTACK' ? { undercuts: parent } : {}), ...patch } : patch);
+    const relation = polarity === 'SUPPORT' ? 'is a reason for' : 'is a reason against';
+    this.nodes.set(`${ref}>${parent}`, {
+      ref: `${ref}>${parent}`, kind: 'EDGE', credence: 0.5, root, polarity, source: ref, target: parent,
+      text: `“${text}” ${relation} “${target?.text ?? ''}”`, depth, status: 'QUEUED', override: 'AUTO', rounds: 0,
+    });
   }
 
-  /** EXP-03 UNDERCUT: [ref] attacks the link from argument [arg] to [parent]. */
-  undercut(ref: string, root: string, arg: string, parent: string, text: string, proposer: string, patch: Partial<NodeDto> = {}): void {
-    const link = `${arg}>${parent}`;
-    const depth = this.nodes.get(arg)?.depth ?? 1;
-    this.claim(ref, root, text, depth, proposer, { undercuts: link, ...patch });
-    this.nodes.set(`${ref}>${link}`, { ref: `${ref}>${link}`, kind: 'EDGE', credence: 0.5, root, polarity: 'ATTACK', source: ref, target: link });
+  /** The link from argument [arg] to [parent], as its EDGE ref. */
+  link(arg: string, parent: string): string {
+    return `${arg}>${parent}`;
   }
 
   set(ref: string, patch: Partial<NodeDto>): void {
@@ -158,7 +177,20 @@ export class MockSource implements GraphSource {
       return pr === undefined || e?.strength === undefined ? undefined : pr * e.strength;
     };
     for (const n of nodes) if (n.kind === 'CLAIM') n.reach = reachOf(n);
-    for (const n of nodes) Object.assign(n, mockLayers(n));
+    // A link's reach is its argument's; its contribution adds how unsettled its strength is.
+    for (const n of nodes) {
+      if (n.kind !== 'EDGE') continue;
+      const arg = n.source === undefined ? undefined : byRef.get(n.source);
+      n.reach = arg?.reach;
+      if (n.reach !== undefined && n.strength !== undefined) n.contribution = n.reach * 4 * n.strength * (1 - n.strength);
+    }
+    const targeted = new Set(nodes.filter((n) => n.kind === 'EDGE').map((e) => e.target));
+    for (const n of nodes) {
+      // Without arguments every rule keeps the first impression: no spread, by construction.
+      Object.assign(n, targeted.has(n.ref) ? mockLayers(n) : flatLayers(n));
+      if (n.status === 'JUDGING') n.activity = 'judging';
+      else if (n.status === 'EXPLORING') n.activity = 'exploring';
+    }
     const roots = nodes.filter((n) => n.kind === 'CLAIM' && n.depth === 0);
     const questions = roots.map((r) => {
       const claims = nodes.filter((n) => n.kind === 'CLAIM' && n.root === r.ref);
@@ -226,10 +258,19 @@ function seedFinished(m: MockSource): void {
   });
   m.arg('w1', q, q, 'SUPPORT', 'Trials report stable output with fewer hours worked.', 'claude', { status: 'SATURATED', credence: 0.71, plausibility: 0.75, relevance: 0.83, rounds: 1 });
   m.arg('w2', q, q, 'ATTACK', 'Customer support coverage would drop on the fifth day.', 'codex', { status: 'PRUNED', credence: 0.42, plausibility: 0.5, relevance: 0.31 });
-  m.arg('w3', q, 'w1', 'ATTACK', 'Trial participants self-selected and are not representative.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.55, plausibility: 0.5 });
   m.edge('w1', q, 0.72);
   m.edge('w2', q, 0.48);
+  m.arg('w3', q, 'w1', 'ATTACK', 'Trial participants self-selected and are not representative.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.55, plausibility: 0.5 });
   m.edge('w3', 'w1', 0.61);
+  // The link w1 → w0 explored as a claim: one reason it holds, one that it fails.
+  const link = m.link('w1', q);
+  m.set(link, { status: 'ROUND_LIMIT', rounds: 1, credence: 0.64, triage: { ADD: 2 } });
+  m.arg('w4', q, link, 'SUPPORT', 'The trials measured output with the same metrics used before the change.', 'claude', { status: 'DEPTH_LIMIT', credence: 0.7, plausibility: 0.75 });
+  m.arg('w5', q, link, 'ATTACK', 'Output in the trials was measured over six months, too short to show attrition effects.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.62, plausibility: 0.75 });
+  m.edge('w4', link, 0.7);
+  m.edge('w5', link, 0.66);
+  m.set(m.link('w2', q), { status: 'PRUNED' });
+  m.set(m.link('w3', 'w1'), { status: 'DEPTH_LIMIT' });
 }
 
 function script(
@@ -253,9 +294,14 @@ function script(
     ) => source.arg(scoped(ref), scoped(treeRoot), scoped(parent), polarity, claimText, proposer, patch),
     set: (ref: string, patch: Partial<NodeDto>) => source.set(scoped(ref), patch),
     edge: (child: string, parent: string, strength: number) => source.edge(scoped(child), scoped(parent), strength),
-    undercut: (ref: string, treeRoot: string, arg: string, parent: string, claimText: string, proposer: string, patch?: Partial<NodeDto>) =>
-      source.undercut(scoped(ref), scoped(treeRoot), scoped(arg), scoped(parent), claimText, proposer, patch),
+    /** The link from argument [arg] to [parent]: a ref to argue about, or to set. */
+    link: (arg: string, parent: string) => source.link(scoped(arg), scoped(parent)),
   };
+  /** Argue about the link [arg] → [parent] (SPEC §3 "Links as claims"). */
+  const onLink = (ref: string, arg: string, parent: string, polarity: Polarity, claimText: string, proposer: string, patch?: Partial<NodeDto>) =>
+    source.arg(scoped(ref), root, m.link(arg, parent), polarity, claimText, proposer, patch);
+  const setLink = (arg: string, parent: string, patch: Partial<NodeDto>) => source.set(m.link(arg, parent), patch);
+  const edgeOnLink = (ref: string, arg: string, parent: string, strength: number) => source.edge(scoped(ref), m.link(arg, parent), strength);
   const q = 'q0';
   const steps = [
     () => m.claim(q, q, text, 0, 'question'),
@@ -294,10 +340,28 @@ function script(
     () => {
       m.edge('c1b', 'c1', 0.8);
       m.set('c1', { credence: 0.69 });
-      m.undercut('c1bu', q, 'c1b', 'c1', 'The Saturday reading room lost half its seats to a renovation in the same months.', 'codex', {
+      // EXP-03 UNDERCUT, re-targeted by triage: it attacks the link c1b → c1.
+      onLink('c1bu', 'c1b', 'c1', 'ATTACK', 'The Saturday reading room lost half its seats to a renovation in the same months.', 'codex', {
         status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.72,
       });
       m.set('c2', { status: 'PRUNED', relevance: 0.34, plausibility: 0.5, credence: 0.47 });
+      // The link c1 → q is wide open (strength 0.78, contribution high): queued to be explored.
+      setLink('c2', q, { status: 'PRUNED' });
+    },
+    () => {
+      edgeOnLink('c1bu', 'c1b', 'c1', 0.66);
+      setLink('c1b', 'c1', { credence: 0.62 });
+      setLink('c1', q, { status: 'JUDGING' });
+    },
+    () => setLink('c1', q, { status: 'EXPLORING' }),
+    () => {
+      onLink('c1h', 'c1', q, 'SUPPORT', 'Visitors who come on weekends are mostly unable to visit on weekdays.', 'claude');
+      onLink('c1f', 'c1', q, 'ATTACK', 'Weekend visitor counts at the Northfield library are driven by Saturday children\'s events.', 'codex');
+    },
+    () => {
+      edgeOnLink('c1h', 'c1', q, 0.7);
+      edgeOnLink('c1f', 'c1', q, 0.72);
+      setLink('c1', q, { credence: 0.71, rounds: 1, triage: { ADD: 2, DUPLICATE: 1 }, duplicatesDropped: 1 });
     },
     () => m.set('c3', { status: 'JUDGING' }),
     () => m.set('c3', { status: 'EXPLORING', relevance: 0.66, plausibility: 0.75 }),
@@ -335,6 +399,15 @@ function script(
       m.set('c4', { credence: 0.52 });
       m.set('c1a', { status: 'PRUNED', relevance: 0.44, plausibility: 0.5 });
       m.set(q, { credence: 0.63 });
+    },
+    () => {
+      setLink('c1', q, { status: 'ROUND_LIMIT', proSaturation: 0.6, conSaturation: 0.55 });
+      m.set('c1h', { status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.75 });
+      m.set('c1f', { status: 'DEPTH_LIMIT', plausibility: 0.5, credence: 0.5 });
+      setLink('c1b', 'c1', { status: 'DEPTH_LIMIT' });
+      setLink('c3', q, { status: 'PRUNED' });
+      setLink('c4', q, { status: 'PRUNED' });
+      setLink('c5', q, { status: 'PRUNED' });
     },
     () => {
       m.set('c4', { status: 'SATURATED', rounds: 1, proSaturation: 0.74, conSaturation: 0.8 });
