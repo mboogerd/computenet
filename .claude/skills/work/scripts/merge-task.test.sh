@@ -315,6 +315,11 @@ touch "$CTRL/regen-fail"
 out=$(runregen "$TASK" "$FBR"); rc=$?
 [ "$rc" -eq 1 ] && ok "failed regen exits 1" || bad "failed regen exits $rc, wanted 1"
 closed && bad "closed after a failed regen" || ok "failed regen: nothing closed"
+# ...and a re-run once the cause is fixed resumes the in-progress merge
+rm -f "$CTRL/regen-fail"
+out=$(runregen "$TASK" "$FBR"); rc=$?
+[ "$rc" -eq 0 ] && ok "re-run after failed regen exits 0" || bad "re-run exits $rc, wanted 0"
+merged_local && closed && ok "re-run merged and closed" || bad "re-run did not finish the merge"
 
 # ...and any other conflicted path keeps the stop, regen untouched
 fixture

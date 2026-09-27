@@ -170,7 +170,7 @@ if ! git -C "$FWT" merge --no-ff "$tbr" -m "Merge $task"; then
     && (cd "$FWT" && "${MERGE_TASK_REGEN:-./gradlew}" :concord:concordance) \
     && git -C "$FWT" add -- "$CONC" \
     && git -C "$FWT" commit --no-edit --quiet; } \
-    || { echo "merge-task: regenerating $CONC FAILED — merge left in progress in $FWT; task NOT closed" >&2; exit 1; }
+    || { echo "merge-task: regenerating $CONC FAILED — merge left in progress in $FWT; fix the cause and re-run (it resumes), or merge --abort; task NOT closed" >&2; exit 1; }
 fi
 git -C "$FWT" push \
   || { echo "merge-task: push FAILED — the merge exists only locally; task NOT closed" >&2; exit 1; }
