@@ -89,14 +89,24 @@ internal object WaterlineEviction {
      * as dropped, because they were admitted, not late — exactly what the
      * ungated cell under the same arrival order does (admit, then evict at the
      * rise), so the settled state holds no row the floor has passed
-     * (`[24-WL-16]`, `[24-WL-19]`, `[24-WL-10]`). An exclusive add is kept: it
-     * lands live and the next rise refuses it per row (`[24-WL-17]`), never
-     * silently dropped. Dels are untouched (`[24-WL-08]`). Returns [value]
-     * itself when nothing passed.
+     * (`[24-WL-16]`, `[24-WL-19]`, `[24-WL-10]`). An exclusive add is kept — it
+     * lands live rather than being silently dropped — and returned in the
+     * second component, one entry per kept row, for the caller to record as an
+     * immediate `[24-WL-17]` refusal (`ExclusiveEvictionRefused`) rather than
+     * waiting for the next floor rise to re-evaluate it (`[24-WL-17]`,
+     * `[24-WL-10]`'s "less any whose eviction refused"). Dels are untouched
+     * (`[24-WL-08]`). Returns [value] itself (with an empty refusal list) when
+     * nothing passed.
      */
-    fun <E> dropPassedAdds(lateness: Windows.Lateness<E>, floor: Long, value: SetDelta<E>): SetDelta<E> {
-        val kept = value.adds.filterKeys { lateness.timeFn(it) >= floor || ExclusiveEntry.isExclusive(it) }
-        return if (kept.size == value.adds.size) value else SetDelta(kept, value.dels)
+    fun <E> dropPassedAdds(lateness: Windows.Lateness<E>, floor: Long, value: SetDelta<E>): Pair<SetDelta<E>, List<E>> {
+        val refused = mutableListOf<E>()
+        val kept = value.adds.filterKeys { row ->
+            val passed = lateness.timeFn(row) < floor
+            if (passed && ExclusiveEntry.isExclusive(row)) refused += row
+            !passed || ExclusiveEntry.isExclusive(row)
+        }
+        val result = if (kept.size == value.adds.size) value else SetDelta(kept, value.dels)
+        return result to refused
     }
 
     /**

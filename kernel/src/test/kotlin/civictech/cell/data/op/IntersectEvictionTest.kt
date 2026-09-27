@@ -466,6 +466,10 @@ class IntersectEvictionTest {
         val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Long>>>())
     }
 
+    private class AnySource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Any>>>())
+    }
+
     @Test
     fun `gated - the waterline evicts immediately while buffered data waves stay buffered`() {
         val cell = intersect(gated = true)
@@ -550,6 +554,69 @@ class IntersectEvictionTest {
         // admitted at arrival, so evicted rather than late: never forwarded, never counted as dropped
         lateL.shouldBeEmpty()
         cell.droppedBelowFloorLeft shouldBe 0L
+    }
+
+    @Test
+    fun `gated - an Owned add a floor rise passed while buffered lands live and is refused at that same flush`() {
+        // computenet-7y4sm: the flush-time drop of passed adds (WaterlineEviction.dropPassedAdds)
+        // must not silently drop an exclusive (23 §Taps) AND must not silently omit the [24-WL-17]
+        // diagnostic either. The ungated cell under the same arrival order admits the Owned element
+        // at floor 10, refuses its eviction at the rise to 15 (stays live, refused right then) — the
+        // gated cell must agree at quiescence with no further rise (`[24-WL-10]`): it lands the
+        // element at flush and records the same refusal immediately, not deferred to the next rise.
+        val owned = Owned(12L)
+        val ref = CellRef(UUID.randomUUID())
+        val cell = IntersectSetCell<Any>(
+            ref = ref,
+            emitOnFrontier = true,
+            leftLateness = Windows.Lateness({ e: Any -> if (e is Owned<*>) 12L else e as Long }, 0),
+            rightLateness = Windows.Lateness({ e: Any -> e as Long }, 0),
+        )
+        val lateL = collect(cell.lateLeft)
+        val leftSrc = AnySource()
+        val rightSrc = AnySource()
+        @Suppress("UNCHECKED_CAST")
+        leftSrc.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<Any>>>)
+        @Suppress("UNCHECKED_CAST")
+        rightSrc.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<Any>>>)
+        val s = UUID(8, 8)
+        val w = UUID(9, 9)
+        underWave(w, 1) { cell.waterline.call.propagate(WaterlineDelta(10)) }
+
+        // the Owned element (t=12) is at/above floor 10 at arrival: admitted, buffered
+        val ownedTag = tag(1)
+        underWave(s, 1) { leftSrc.outlet.call.propagate(SetDelta(adds = mapOf<Any, Set<Timestamp>>(owned to setOf(ownedTag)))) }
+        cell.bufferedWaves shouldBe 1
+
+        // the floor passes it while buffered; it is not in state yet, so this rise refuses nothing
+        underWave(w, 2) { cell.waterline.call.propagate(WaterlineDelta(15)) }
+        cell.refusedRows().shouldBeEmpty()
+
+        // flush: the exclusive is kept — it lands live, never dropped, never late — and the flush
+        // records the refusal itself, right here, with no further rise needed. An unrelated plain
+        // element completes the right side's wave so the flush actually fires.
+        underWave(s, 1) { rightSrc.outlet.call.propagate(SetDelta(adds = mapOf<Any, Set<Timestamp>>(16L to setOf(tag(2))))) }
+        cell.bufferedWaves shouldBe 0
+        leftOf(cell) shouldBe setOf<Any>(owned)
+        rightOf(cell) shouldBe setOf<Any>(16L)
+        lateL.shouldBeEmpty()
+        cell.droppedBelowFloorLeft shouldBe 0L
+        val flushRefusal = cell.refusedRows().single()
+        flushRefusal.cellRef shouldBe ref
+        flushRefusal.unit shouldBe "row"
+        flushRefusal.message!! shouldContain "[24-WL-17]"
+        cell.refusedEvictions shouldBe 1L
+
+        // the next rise re-evaluates it like any passed row and refuses it again per row
+        underWave(w, 3) { cell.waterline.call.propagate(WaterlineDelta(16)) }
+        val refusal = cell.refusedRows().single()
+        refusal.cellRef shouldBe ref
+        refusal.unit shouldBe "row"
+        cell.refusedEvictions shouldBe 2L
+        leftOf(cell) shouldBe setOf<Any>(owned)
+
+        // the cell never consumed the exclusive
+        owned.take() shouldBe 12L
     }
 
     // ------------------------------------------ [24-WL-19]/[KE4-32] direct exit-tag regression

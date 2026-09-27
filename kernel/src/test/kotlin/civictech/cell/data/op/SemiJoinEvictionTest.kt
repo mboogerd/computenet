@@ -199,6 +199,10 @@ class SemiJoinEvictionTest {
         val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Row>>>())
     }
 
+    private class AnySource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Any>>>())
+    }
+
     // ------------------------------------------------------ [24-WL-11] identity
 
     @Test
@@ -616,6 +620,74 @@ class SemiJoinEvictionTest {
         // admitted at arrival, so evicted rather than late: never forwarded, never counted as dropped
         lateL.shouldBeEmpty()
         cell.droppedBelowFloorLeft shouldBe 0L
+    }
+
+    @Test
+    fun `gated - an Owned add a floor rise passed while buffered lands live and is refused at that same flush`() {
+        // computenet-7y4sm: the flush-time drop of passed adds (WaterlineEviction.dropPassedAdds)
+        // must not silently drop an exclusive (23 §Taps) AND must not silently omit the [24-WL-17]
+        // diagnostic either. The ungated cell under the same arrival order admits the Owned row at
+        // floor 10, refuses its eviction at the rise to 15 (stays live, refused right then), then
+        // advertises it — the gated cell must agree at quiescence with no further rise (`[24-WL-10]`):
+        // it lands the row at flush and records the same refusal immediately.
+        val owned = Owned(Row("a", 12))
+        val rowOf = IdentityHashMap<Any, Row>().apply { put(owned, Row("a", 12)) }
+        val asRow: (Any) -> Row = { e -> e as? Row ?: rowOf.getValue(e) }
+        val ref = CellRef(UUID.randomUUID())
+        val cell = SemiJoinCell<Any, Row, String>(
+            ref = ref,
+            leftKey = { e -> key(asRow(e)) },
+            rightKey = ::key,
+            emitOnFrontier = true,
+            leftLateness = Windows.Lateness({ e: Any -> asRow(e).t }, 0),
+            rightLateness = Windows.Lateness(RowTime, 0),
+        )
+        val out = collect(cell.outlet)
+        val lateL = collect(cell.lateLeft)
+        val leftSrc = AnySource()
+        val rightSrc = RowSource()
+        @Suppress("UNCHECKED_CAST")
+        leftSrc.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<Any>>>)
+        @Suppress("UNCHECKED_CAST")
+        rightSrc.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<Row>>>)
+        val s = UUID(8, 8)
+        val w = UUID(9, 9)
+        underWave(w, 1) { cell.waterline.call.propagate(WaterlineDelta(10)) }
+
+        // the Owned row (t=12) is at/above floor 10 at arrival: admitted, buffered
+        val ownedTag = tag(1)
+        underWave(s, 1) { leftSrc.outlet.call.propagate(SetDelta(adds = mapOf<Any, Set<Timestamp>>(owned to setOf(ownedTag)))) }
+        cell.bufferedWaves shouldBe 1
+
+        // the floor passes it while buffered; it is not in state yet, so this rise refuses nothing
+        underWave(w, 2) { cell.waterline.call.propagate(WaterlineDelta(15)) }
+        cell.refusedRows().shouldBeEmpty()
+
+        // flush: the exclusive is kept — it lands live and advertises, never dropped, never late —
+        // and the flush records the refusal itself, right here, with no further rise needed
+        underWave(s, 1) { rightSrc.outlet.call.propagate(adds(Row("a", 16) to tag(2))) }
+        cell.bufferedWaves shouldBe 0
+        leftRows(cell) shouldBe setOf<Any>(owned)
+        tagFold(out) shouldBe setOf<Any>(owned)
+        lateL.shouldBeEmpty()
+        cell.droppedBelowFloorLeft shouldBe 0L
+        val flushRefusal = cell.refusedRows().single()
+        flushRefusal.cellRef shouldBe ref
+        flushRefusal.unit shouldBe "row"
+        flushRefusal.message!! shouldContain "[24-WL-17]"
+        cell.refusedEvictions shouldBe 1L
+
+        // the next rise re-evaluates it like any passed row and refuses it again per row
+        underWave(w, 3) { cell.waterline.call.propagate(WaterlineDelta(16)) }
+        val refusal = cell.refusedRows().single()
+        refusal.cellRef shouldBe ref
+        refusal.unit shouldBe "row"
+        cell.refusedEvictions shouldBe 2L
+        leftRows(cell) shouldBe setOf<Any>(owned)
+        tagFold(out) shouldBe setOf<Any>(owned)
+
+        // the cell never consumed the exclusive
+        owned.take() shouldBe Row("a", 12)
     }
 
     @Test
