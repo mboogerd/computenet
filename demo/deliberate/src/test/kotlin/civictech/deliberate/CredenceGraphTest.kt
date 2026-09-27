@@ -7,8 +7,10 @@ import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.testkit.SimWorld
 import civictech.testkit.awaitUntil
 import java.nio.file.Files
+import java.util.UUID
 import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -130,5 +132,49 @@ class CredenceGraphTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `influence folding reaches the same fixpoint in every arrival order`() {
+        fun ref(name: String) = CellRef(UUID.nameUUIDFromBytes(name.toByteArray()))
+        fun evaluate(reverse: Boolean): List<Double> {
+            val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val g = CredenceGraph(world.host, world.registry, LayerSet.of(SemanticsCatalog.IDS))
+            val root = g.createClaim("root", ref("order-root"))
+            val a = g.createClaim("a", ref("order-a"))
+            val b = g.createClaim("b", ref("order-b"))
+            val specs = listOf(
+                Triple(ref("order-edge-a"), a, Polarity.SUPPORT),
+                Triple(ref("order-edge-b"), b, Polarity.ATTACK),
+            )
+            (if (reverse) specs.reversed() else specs).forEach { (edge, source, polarity) ->
+                g.createEdge(source, root, polarity, edge)
+            }
+            val stances = listOf(root to 0.61, a to 0.83, b to 0.37, specs[0].first to 0.72, specs[1].first to 0.58)
+            (if (reverse) stances.reversed() else stances).forEach { (node, value) -> g.setStance(node, "jev", value) }
+            world.runToIdle()
+            return g.credenceOf(root)!!.values
+        }
+
+        assertEquals(evaluate(false), evaluate(true))
+    }
+
+    @Test
+    fun `the cycle-closing edge is a head and the vector graph quiesces`() {
+        val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+        val g = CredenceGraph(world.host, world.registry, LayerSet.of(SemanticsCatalog.IDS), quiescence = 1e-3)
+        val a = g.createClaim("A")
+        val b = g.createClaim("B")
+        g.createEdge(a, b, Polarity.ATTACK)
+        val head = g.createEdge(b, a, Polarity.ATTACK)
+        assertTrue(g.nodeInfo(head)!!.head)
+        g.setStance(a, "jev", 0.99)
+        g.setStance(b, "jev", 0.99)
+
+        val steps = world.runToIdle()
+        assertTrue(steps > 0)
+        assertEquals(0, world.runToIdle(), "a quiescent cycle must not leave another lap queued")
+        assertTrue(g.credenceOf(a)!!.values.all { it in 0.0..1.0 })
+        assertTrue(g.credenceOf(b)!!.values.all { it in 0.0..1.0 })
     }
 }

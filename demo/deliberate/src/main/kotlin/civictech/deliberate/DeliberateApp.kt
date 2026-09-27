@@ -177,7 +177,7 @@ class DeliberateApp(
      */
     internal fun compactIfGrown() {
         val length = journalFile()?.length() ?: return
-        if (length - checkpointedBytes < maxOf(COMPACT_MIN_BYTES, checkpointedBytes)) return
+        if (length - checkpointedBytes <= maxOf(COMPACT_MIN_BYTES, checkpointedBytes)) return
         checkpointNow()
     }
 
@@ -197,8 +197,14 @@ class DeliberateApp(
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         }
-        compactor?.shutdown()
-        compactor?.awaitTermination(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        compactor?.shutdownNow()
+        try {
+            if (compactor != null && !compactor.awaitTermination(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                System.err.println("deliberate: metadata compactor did not stop within ${STOP_TIMEOUT_SECONDS}s")
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
         engine.close() // persists the metadata one last time
         try {
             checkpointNow()
@@ -210,6 +216,7 @@ class DeliberateApp(
     }
 
     internal val flusherTerminated: Boolean get() = flusher.isTerminated
+    internal val compactorTerminated: Boolean get() = compactor?.isTerminated ?: true
 
     // ------------------------------------------------------------ handlers
 
@@ -278,7 +285,7 @@ class DeliberateApp(
          */
         internal fun refuseOldFormat(dir: File) {
             val old = dir.listFiles { f -> f.name.startsWith("graph-") && f.name.endsWith(".jsonl") }.orEmpty()
-            require(old.isEmpty() || File(dir, STRUCTURE_LOG).exists()) {
+            require(old.isEmpty()) {
                 "--data $dir holds a deliberation in the old per-layer format (${old.joinToString { it.name }}); " +
                     "start with a fresh data directory"
             }

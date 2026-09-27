@@ -331,11 +331,17 @@ class DeliberateAppTest {
     }
 
     @Test
-    fun `stop joins the SSE flusher`() {
-        val (running, _) = app()
-        running.stop()
-        apps.remove(running)
-        assertTrue(running.flusherTerminated)
+    fun `stop joins the SSE flusher and metadata compactor`() {
+        val dir = Files.createTempDirectory("deliberate-stop").toFile()
+        try {
+            val (running, _) = app(dataDir = dir)
+            running.stop()
+            apps.remove(running)
+            assertTrue(running.flusherTerminated)
+            assertTrue(running.compactorTerminated)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test
@@ -610,6 +616,7 @@ class DeliberateAppTest {
         val dir = Files.createTempDirectory("deliberate-old").toFile()
         try {
             File(dir, "graph-dfquad.jsonl").writeText("")
+            File(dir, DeliberateApp.STRUCTURE_LOG).writeText("")
             val e = assertFailsWith<IllegalArgumentException> {
                 DeliberateApp(port = 0, judge = FixedJudge(), proposers = emptyList(), uiDir = null, dataDir = dir)
             }

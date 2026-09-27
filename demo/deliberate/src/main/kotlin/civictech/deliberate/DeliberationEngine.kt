@@ -229,7 +229,7 @@ class DeliberationEngine(
 
     /** EXP-01: create the root claim and start expanding it; returns at once. */
     fun ask(question: String): CellRef {
-        val ref = synchronized(serviceLock) { service.createClaim(question) }
+        val ref = synchronized(serviceLock) { service.createClaim(question, question = true) }
         val root = Claim(ref, ref, null, null, question, 0, "question", config.maxRounds)
         synchronized(lock) {
             claims[ref] = root
@@ -991,8 +991,8 @@ class DeliberationEngine(
      */
     @Serializable
     private data class ClaimRecord(
-        /** The root of a question tree (SPEC EXP-01). */
-        val question: Boolean = false,
+        /** The root ref of the question tree this claim belongs to. */
+        val question: String? = null,
         val text: String? = null,
         val proposer: String? = null,
         val status: Status = Status.QUEUED,
@@ -1019,7 +1019,7 @@ class DeliberationEngine(
 
     /** Caller holds [lock]. */
     private fun recordOf(c: Claim) = ClaimRecord(
-        question = c.parent == null,
+        question = c.root.id.toString(),
         text = c.text.takeIf { it != c.structureText }, proposer = c.proposer, status = c.status, override = c.override,
         roundLimit = c.roundLimit, rounds = c.rounds, forceRound = c.forceRound,
         plausibility = c.plausibility, relevance = c.relevance, quality = c.quality,
@@ -1058,7 +1058,7 @@ class DeliberationEngine(
                 if (n.info.kind != CredenceGraph.Kind.CLAIM) continue
                 val rec = records[n.ref]
                 val structureText = n.info.text.orEmpty()
-                val claim = if (rec?.question == true) {
+                val claim = if (n.info.question || rec?.question == n.ref.id.toString()) {
                     questions[n.ref] = structureText
                     Claim(n.ref, n.ref, null, null, structureText, 0, "question", config.maxRounds)
                 } else run {

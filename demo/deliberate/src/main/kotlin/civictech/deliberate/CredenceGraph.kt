@@ -46,6 +46,8 @@ class CredenceGraph(
     data class NodeInfo(
         val kind: Kind,
         val text: String? = null,
+        /** True only for the root claim of a question tree. */
+        val question: Boolean = false,
         val polarity: Polarity? = null,
         val source: CellRef? = null,
         val target: CellRef? = null,
@@ -62,6 +64,9 @@ class CredenceGraph(
 
     private val cells = HashMap<CellRef, ClaimNode>()
 
+    /** Serializes structure-log appends and graph mutations, including direct callers outside the engine. */
+    private val mutationLock = Any()
+
     /** Readers ([graph], [nodeInfo]) run off the mutation thread; see `AgoraService.nodesLock`. */
     private val nodesLock = Any()
     private val nodes = LinkedHashMap<CellRef, NodeInfo>()
@@ -74,6 +79,7 @@ class CredenceGraph(
         val op: String,
         val ref: String,
         val text: String? = null,
+        val question: Boolean = false,
         val polarity: Polarity? = null,
         val source: String? = null,
         val target: String? = null,
@@ -89,7 +95,7 @@ class CredenceGraph(
                 readStructure(log).forEach { op ->
                     val ref = CellRef(UUID.fromString(op.ref))
                     when (op.op) {
-                        "claim" -> createClaim(op.text ?: "", ref)
+                        "claim" -> createClaim(op.text ?: "", ref, op.question)
                         "edge" -> createEdge(
                             CellRef(UUID.fromString(op.source!!)),
                             CellRef(UUID.fromString(op.target!!)),
@@ -123,14 +129,20 @@ class CredenceGraph(
         if (!replaying) structureLog?.appendText(JSON.encodeToString(StructureOp.serializer(), op) + "\n")
     }
 
-    fun createClaim(text: String, ref: CellRef = CellRef(UUID.randomUUID())): CellRef {
+    fun createClaim(
+        text: String,
+        ref: CellRef = CellRef(UUID.randomUUID()),
+        question: Boolean = false,
+    ): CellRef = synchronized(mutationLock) {
         val cell = ClaimNode(ref, layers)
+        // Persist before any hosted operation can block or fail. A logged but
+        // incompletely wired node is rebuilt in full on the next replay.
+        log(StructureOp("claim", ref.id.toString(), text = text, question = question))
         manage.spawn(cell)
         cells[ref] = cell
-        synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text) }
-        log(StructureOp("claim", ref.id.toString(), text = text))
         cell.credenceOutlet.streamTo(routedHub())
-        return ref
+        synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text, question = question) }
+        ref
     }
 
     fun createEdge(
@@ -138,14 +150,12 @@ class CredenceGraph(
         target: CellRef,
         polarity: Polarity,
         ref: CellRef = CellRef(UUID.randomUUID()),
-    ): CellRef {
+    ): CellRef = synchronized(mutationLock) {
         val head = synchronized(nodesLock) {
             require(source in nodes) { "unknown source ${source.id}" }
             require(target in nodes) { "unknown target ${target.id}" }
             // Every elementary cycle runs through the edge that closed it (agora's cycle model).
-            val h = reaches(from = target, to = source)
-            nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = h)
-            h
+            reaches(from = target, to = source)
         }
         log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
         val edge = EdgeNode(polarity, ref, layers, quiescence = if (head) quiescence else 0.0)
@@ -154,16 +164,19 @@ class CredenceGraph(
         edge.credenceOutlet.streamTo(routedHub())
         edge.influenceOutlet.streamTo(registry.inlet<Influence>(target, "influenceInlet"))
         cells.getValue(source).credenceOutlet.streamTo(registry.inlet<Credence>(ref, "sourceInlet"))
-        return ref
+        synchronized(nodesLock) {
+            nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = head)
+        }
+        ref
     }
 
     /** Routes [user]'s stance to node [id]; a stance the node already holds is not sent again. */
-    fun setStance(id: CellRef, user: String, value: Double?) {
+    fun setStance(id: CellRef, user: String, value: Double?) = synchronized(mutationLock) mutation@{
         synchronized(nodesLock) {
             require(id in nodes) { "unknown node ${id.id}" }
             value?.let { require(it in 0.0..1.0) { "stance must be between 0 and 1 (was $it)" } }
             val mine = held.getOrPut(id) { HashMap() }
-            if (mine[user] == value) return
+            if (mine[user] == value) return@mutation
             if (value == null) mine.remove(user) else mine[user] = value
         }
         registry.inlet<Stance>(id, "stanceInlet").propagate(Stance(user, value))

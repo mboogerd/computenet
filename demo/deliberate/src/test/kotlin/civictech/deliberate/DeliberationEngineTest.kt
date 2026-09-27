@@ -85,6 +85,7 @@ class DeliberationEngineTest {
         private val inner = InMemoryMetaStore().apply { initial.forEach { (k, v) -> put(k, v) } }
         val writes = AtomicInteger()
         val fieldsWritten = AtomicInteger()
+        val deltas = CopyOnWriteArrayList<Pair<String, Map<String, String?>>>()
 
         override fun load() = inner.load()
 
@@ -92,6 +93,7 @@ class DeliberationEngineTest {
             inner.put(key, fields)
             writes.incrementAndGet()
             fieldsWritten.addAndGet(fields.size)
+            deltas += key to fields.toMap()
         }
     }
 
@@ -1325,7 +1327,7 @@ class DeliberationEngineTest {
         // and its root record before interrupting the worker.
         first.close()
         val saved = store.load()
-        val root = saved.values.single { it["question"] == "true" }
+        val root = saved.entries.single { (key, fields) -> fields["question"] == "\"${key.removePrefix("c:")}\"" }.value
         // The structure log holds the text; the record holds it only after a rewrite.
         assertNull(root["text"], root.toString())
         assertTrue(saved.keys.all { it.startsWith("c:") }, saved.keys.toString())
@@ -1340,6 +1342,37 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `metadata persistence writes field deltas and removes fields returned to defaults`() {
+        val store = RecordingMetaStore()
+        val engine = DeliberationEngine(
+            service, FakeJudge(), emptyList(),
+            DeliberationEngine.Config(maxRounds = 0),
+            store = store, persistEveryMs = 60_000,
+        ).also { engines += it }
+        val root = engine.ask("Fields?")
+        engine.idle()
+        engine.persistNow()
+        val key = "c:${root.id}"
+        assertTrue(store.load().getValue(key).keys.containsAll(listOf("question", "proposer", "status", "roundLimit")))
+
+        store.deltas.clear()
+        engine.persistNow()
+        assertTrue(store.deltas.isEmpty(), "an unchanged record must write no fields")
+
+        engine.setOverride(root, Override.STOP)
+        engine.persistNow()
+        assertEquals(setOf("status", "override"), store.deltas.single().second.keys)
+
+        store.deltas.clear()
+        engine.setOverride(root, Override.AUTO)
+        engine.idle()
+        engine.persistNow()
+        val reset = store.deltas.single().second
+        assertEquals(setOf("status", "override"), reset.keys)
+        assertNull(reset.getValue("override"), "AUTO is the default and must be persisted as a field removal")
+    }
+
+    @Test
     fun `restart rebuilds missing metadata, omits an unplaced claim, and does not attach a duplicate`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-torn-restore").toFile()
         val log = java.io.File(dir, "graph.jsonl")
@@ -1347,8 +1380,9 @@ class DeliberationEngineTest {
         val placed = service.createClaim("P")
         service.createEdge(placed, root, Polarity.SUPPORT)
         val orphan = service.createClaim("orphan") // crash before its placing edge was written
-        // Only the root's question flag reached the journal: neither claim record did.
-        val store = RecordingMetaStore(mapOf("c:${root.id}" to mapOf("question" to "true")))
+        // No metadata reached the journal. The structure still identifies the
+        // root, while the trailing claim without a placing edge remains an orphan.
+        val store = RecordingMetaStore()
 
         val scheduler2 = VirtualThreadScheduler("deliberate-torn-restore-2")
         try {
@@ -1357,7 +1391,7 @@ class DeliberationEngineTest {
             val schedulerLog = VirtualThreadScheduler("deliberate-torn-restore-log")
             try {
                 val logService = CredenceGraph(ManagedHost(scheduler = schedulerLog, registry = registryLog), registryLog, dfquad, structureLog = log)
-                val loggedRoot = logService.createClaim("Q?", root)
+                val loggedRoot = logService.createClaim("Q?", root, question = true)
                 val loggedPlaced = logService.createClaim("P", placed)
                 logService.createEdge(loggedPlaced, loggedRoot, Polarity.SUPPORT)
                 logService.createClaim("orphan", orphan)
