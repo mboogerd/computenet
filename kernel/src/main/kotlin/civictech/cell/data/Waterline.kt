@@ -46,7 +46,11 @@ import java.util.*
  *   the set shrinks, and an emptied set leaves the floor as it is):
  *   - `EdgeClose` (`[24-WL-12]`, `[KE4-22]`): when an inlet link closes, every
  *     `sourceId` whose deliveries arrived with `MessageContext.sourcePort ==
- *     link.from` is retired in one step, with at most one emission. The
+ *     link.from` is retired in one step, with at most one emission — except a
+ *     source that has also arrived over another still-open link (a diamond:
+ *     one `sourceId` reaching this inlet through two relays), which stays
+ *     live until the last link carrying it closes, so the floor never passes
+ *     the promise of a source that is still arriving. The
  *     link→source mapping relies on the emitting outlet stamping itself as
  *     `sourcePort`, which holds for **in-process** links (`FanOutlet`'s call
  *     proxy); whether a `:wire` bridge preserves `sourcePort == link.from` is
@@ -109,8 +113,12 @@ class WaterlineCell<E> internal constructor(
             override fun propagate(value: SetDelta<E>) = onDelta(value)
         })
         // [24-WL-12]: retire what a closing link carried. EdgeOpen needs nothing.
+        // A source still arriving over another open link (a diamond) stays live.
         inlet.onEdgeEvent { link, event ->
-            if (event == EdgeClose) retireAll(sourcesByPort.remove(link.from).orEmpty())
+            if (event == EdgeClose) {
+                val carried = sourcesByPort.remove(link.from).orEmpty()
+                retireAll(carried.filter { id -> sourcesByPort.values.none { id in it } })
+            }
         }
         // [KE4-24]: a late consumer receives the current floor as its baseline.
         outlet.catchUpOnLinked { floor?.let { WaterlineDelta(it) } }

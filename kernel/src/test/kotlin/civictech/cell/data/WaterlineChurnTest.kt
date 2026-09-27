@@ -96,6 +96,19 @@ private class ChurnObserver<T>(clazz: Class<Propagate<T>>, override val ref: Cel
 @Suppress("UNCHECKED_CAST")
 private val waterlineApi = Propagate::class.java as Class<Propagate<WaterlineDelta>>
 
+/** A pass-through relay: forwards under the arriving wave, so the `sourceId` survives and `sourcePort` becomes this relay's outlet. */
+private class ChurnRelay(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    @Suppress("UNCHECKED_CAST")
+    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<Long>>>))
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Long>>>())
+
+    init {
+        inlet.serve(object : Propagate<SetDelta<Long>> {
+            override fun propagate(value: SetDelta<Long>) = outlet.call.propagate(value)
+        })
+    }
+}
+
 /** Proxy shape for poisoning a hosted [ChurnProducer] (RestartReBaselineTest's fixture). */
 interface ChurnProducerProxy {
     val inlet: Use<Consumer<Long>>
@@ -528,6 +541,41 @@ class WaterlineChurnTest {
 
         send(f.c, 30) // min(100, 100, 30) - 5 = 25: the first rise C takes part in
         f.rec.floors shouldBe listOf(5L, 15L, 25L)
+    }
+
+    /**
+     * `[24-WL-12]` on a diamond: S reaches the inlet through two relays, so
+     * closing one of them leaves S arriving over the other. Retiring S there
+     * would raise the floor to A's 50 - 5 = 45, past S's live promise 10 - 5.
+     */
+    @Test
+    fun `B10 - EdgeClose of one diamond arm keeps a source the other arm still carries`() {
+        val cell = WaterlineCell(lateness = lateness)
+        val rec = record(cell)
+        val s = ChurnSource()
+        val a = ChurnSource()
+        val r1 = ChurnRelay()
+        val r2 = ChurnRelay()
+        @Suppress("UNCHECKED_CAST")
+        s.outlet.linkTo(r1.inlet as LinkFrom<Propagate<SetDelta<Long>>>)
+        @Suppress("UNCHECKED_CAST")
+        s.outlet.linkTo(r2.inlet as LinkFrom<Propagate<SetDelta<Long>>>)
+        @Suppress("UNCHECKED_CAST")
+        val arm1 = (r1.outlet.linkTo(cell.inlet as LinkFrom<Propagate<SetDelta<Long>>>) as LinkResult.Connected).link
+        @Suppress("UNCHECKED_CAST")
+        val arm2 = (r2.outlet.linkTo(cell.inlet as LinkFrom<Propagate<SetDelta<Long>>>) as LinkResult.Connected).link
+        link(a, cell)
+        val idS = send(s, 10)
+        val idA = send(a, 50)
+        rec.floors shouldBe listOf(5L)
+
+        unlink(arm1)
+        rec.floors shouldBe listOf(5L)
+        cell.maxima() shouldBe mapOf(idS to 10L, idA to 50L)
+
+        unlink(arm2) // the last arm carrying S: now it retires
+        rec.floors shouldBe listOf(5L, 45L)
+        cell.maxima() shouldBe mapOf(idA to 50L)
     }
 
     /** 6gkou.1-D3: manual `retire` emits detached even when called inside another wave. */
