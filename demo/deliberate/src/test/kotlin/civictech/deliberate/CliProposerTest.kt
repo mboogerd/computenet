@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class CliProposerTest {
@@ -75,6 +76,32 @@ class CliProposerTest {
     }
 
     @Test
+    fun `built-in proposer commands disable tool access`() {
+        val out = File("answer.json").absoluteFile
+        val claude = CliProposer.claude(ProcessGate(1), model = "claude-test").commandLine("prompt", out)
+        assertTrue(claude.hasPair("--tools", ""))
+        assertTrue("--safe-mode" in claude)
+        assertTrue("--restricted" in claude)
+        assertTrue("--disable-slash-commands" in claude)
+        assertTrue("--strict-mcp-config" in claude)
+        assertTrue(claude.hasPair("--permission-prompts", "none"))
+        assertTrue(claude.hasPair("--model", "claude-test"))
+
+        val codex = CliProposer.codex(ProcessGate(1), model = "codex-test").commandLine("prompt", out)
+        assertTrue("--ignore-user-config" in codex)
+        assertTrue("--ignore-rules" in codex)
+        assertTrue("--strict-config" in codex)
+        for (feature in listOf("shell_tool", "unified_exec", "multi_agent", "apps")) {
+            assertTrue(codex.hasPair("--disable", feature), "Codex command does not disable $feature")
+        }
+        assertTrue(codex.hasPair("-c", "web_search=\"disabled\""))
+        assertTrue(codex.hasPair("-c", "tools.view_image=false"))
+        assertTrue(codex.hasPair("-s", "read-only"))
+        assertTrue(codex.hasPair("-m", "codex-test"))
+        assertTrue(codex.hasPair("-o", out.absolutePath))
+    }
+
+    @Test
     fun `runs in an empty temp dir, reads out file, and cleans up`() {
         val proposer = CliProposer("fake", { _, out ->
             listOf("sh", "-c", "ls -A | wc -l | tr -d ' ' > '${out.absolutePath}'; pwd")
@@ -100,17 +127,23 @@ class CliProposerTest {
         try {
             val proposer = CliProposer(
                 "slow",
-                { _, _ -> listOf("sh", "-c", "sleep 60 & echo \$! > '${pidFile.absolutePath}'; wait") },
+                { _, _ -> listOf("sh", "-c", "pwd > '${pidFile.absolutePath}'; sleep 60 & echo \$! >> '${pidFile.absolutePath}'; wait") },
                 ProcessGate(1),
-                timeout = Duration.ofSeconds(2),
+                timeout = Duration.ofMillis(200),
+                descendantsOf = {
+                    val childPid = pidFile.readLines()[1].toLong()
+                    listOf(ProcessHandle.of(childPid).orElseThrow())
+                },
             )
-            val started = System.nanoTime()
-            assertFailsWith<IllegalStateException> { proposer.run("p") }
-            assertTrue(Duration.ofNanos(System.nanoTime() - started) < Duration.ofSeconds(10))
-            val child = ProcessHandle.of(pidFile.readText().trim().toLong())
+            val error = assertFailsWith<IllegalStateException> { proposer.run("p") }
+            assertTrue("timed out" in error.message!!)
+            val lines = pidFile.readLines()
+            val workDir = File(lines[0])
+            val child = ProcessHandle.of(lines[1].toLong())
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (child.map { it.isAlive }.orElse(false) && System.nanoTime() < deadline) Thread.sleep(20)
             assertFalse(child.map { it.isAlive }.orElse(false), "grandchild sleep must be killed")
+            assertFalse(workDir.exists(), "temp dir must be deleted after timeout")
         } finally {
             pidFile.delete()
         }
@@ -139,4 +172,15 @@ class CliProposerTest {
         assertEquals(3, peak.get())
         assertEquals(0, inside.get())
     }
+
+    @Test
+    fun `gate validates its bound and releases a permit after failure`() {
+        assertFailsWith<IllegalArgumentException> { ProcessGate(0) }
+        val gate = ProcessGate(1)
+        assertFailsWith<IllegalStateException> { gate.run { error("boom") } }
+        assertNotNull(gate.run { Any() })
+    }
+
+    private fun List<String>.hasPair(first: String, second: String): Boolean =
+        windowed(2).any { it[0] == first && it[1] == second }
 }

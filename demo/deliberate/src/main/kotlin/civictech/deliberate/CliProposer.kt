@@ -12,6 +12,10 @@ import java.util.concurrent.TimeUnit
 
 /** Bounds concurrent CLI processes app-wide (EXP-07); share one instance. Fair, so no caller starves. */
 class ProcessGate(maxProcesses: Int = 4) {
+    init {
+        require(maxProcesses > 0) { "maxProcesses must be positive" }
+    }
+
     private val permits = Semaphore(maxProcesses, true)
 
     fun <T> run(block: () -> T): T {
@@ -31,14 +35,19 @@ class ProcessGate(maxProcesses: Int = 4) {
  * destroyed. The answer is [outFile][command]'s content when the command wrote
  * one, else stdout; it must contain a JSON array of strings ([parseArguments]).
  */
-class CliProposer(
+class CliProposer internal constructor(
     override val id: String,
     private val command: (prompt: String, outFile: File) -> List<String>,
     private val gate: ProcessGate,
     private val timeout: Duration = Duration.ofSeconds(120),
+    private val descendantsOf: (Process) -> List<ProcessHandle> = { it.descendants().toList() },
 ) : Proposer {
 
-    override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> =
+    init {
+        require(!timeout.isNegative && !timeout.isZero) { "timeout must be positive" }
+    }
+
+    override fun propose(ctx: ClaimContext, side: Polarity, max: Int): List<String> =
         parseArguments(run(prompt(ctx, side, max)), max)
 
     /** Runs the CLI once and returns its answer text; throws on non-zero exit or timeout. */
@@ -50,19 +59,26 @@ class CliProposer(
             val stdout = File(scratch, "stdout.txt")
             val stderr = File(scratch, "stderr.txt")
             val process = gate.run {
-                val p = ProcessBuilder(command(prompt, out))
+                val p = ProcessBuilder(commandLine(prompt, out))
                     .directory(work)
                     .redirectOutput(stdout)
                     .redirectError(stderr)
                     .start()
-                p.outputStream.close()
-                if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                    p.descendants().forEach { it.destroyForcibly() }
-                    p.destroyForcibly()
-                    p.waitFor(5, TimeUnit.SECONDS)
-                    throw IllegalStateException("$id timed out after ${timeout.toSeconds()} s")
+                try {
+                    p.outputStream.close()
+                    if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                        destroyTree(p)
+                        throw IllegalStateException("$id timed out after ${timeout.toMillis()} ms")
+                    }
+                    p
+                } catch (e: InterruptedException) {
+                    destroyTree(p)
+                    Thread.currentThread().interrupt()
+                    throw e
+                } catch (e: Exception) {
+                    if (p.isAlive) destroyTree(p)
+                    throw e
                 }
-                p
             }
             check(process.exitValue() == 0) {
                 "$id exited ${process.exitValue()}: ${stderr.readText().takeLast(500)}"
@@ -73,24 +89,50 @@ class CliProposer(
         }
     }
 
+    internal fun commandLine(prompt: String, outFile: File): List<String> = command(prompt, outFile)
+
+    private fun destroyTree(process: Process) {
+        val descendants = try {
+            descendantsOf(process)
+        } catch (_: RuntimeException) {
+            emptyList()
+        }
+        descendants.asReversed().forEach { it.destroyForcibly() }
+        // Let the direct process reap terminated children before forcing it down;
+        // otherwise a killed child can remain observable as a zombie.
+        if (!process.waitFor(1, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            process.waitFor(5, TimeUnit.SECONDS)
+        }
+    }
+
     companion object {
         /** Claude Code CLI in print mode with every tool disabled. */
         fun claude(gate: ProcessGate, model: String? = null) = CliProposer("claude", { prompt, _ ->
             // `--tools` is variadic: `--` stops it from swallowing the prompt as a tool name.
-            listOf("claude", "-p", "--output-format", "text", "--tools", "", "--strict-mcp-config", "--no-session-persistence") +
+            listOf(
+                "claude", "-p", "--output-format", "text", "--safe-mode", "--restricted",
+                "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+                "--permission-prompts", "none", "--no-session-persistence",
+            ) +
                 model.flag("--model") + listOf("--", prompt)
         }, gate)
 
-        /** Codex CLI, read-only sandbox; the last message goes to the out file (stdout carries logs). */
+        /** Codex CLI with local/hosted tools disabled; the last message goes to the out file (stdout carries logs). */
         fun codex(gate: ProcessGate, model: String? = null) = CliProposer("codex", { prompt, out ->
-            listOf("codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
-                "-c", "model_reasoning_effort=\"low\"") +
+            listOf(
+                "codex", "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
+                "--ignore-rules", "--strict-config", "--disable", "shell_tool", "--disable", "unified_exec",
+                "--disable", "multi_agent", "--disable", "apps", "-s", "read-only",
+                "-c", "web_search=\"disabled\"", "-c", "tools.view_image=false",
+                "-c", "model_reasoning_effort=\"low\"",
+            ) +
                 model.flag("-m") + listOf("-o", out.absolutePath, "--", prompt)
         }, gate)
 
         private fun String?.flag(name: String) = if (this == null) emptyList() else listOf(name, this)
 
-        fun prompt(ctx: ClaimContext, side: Side, max: Int): String {
+        fun prompt(ctx: ClaimContext, side: Polarity, max: Int): String {
             val direction = if (side == Polarity.SUPPORT) "FOR (supporting)" else "AGAINST (attacking)"
             fun bullets(items: List<String>) = if (items.isEmpty()) "  (none yet)" else items.joinToString("\n") { "  - $it" }
             val path = if (ctx.path.isEmpty()) "  (the claim is the question itself)"

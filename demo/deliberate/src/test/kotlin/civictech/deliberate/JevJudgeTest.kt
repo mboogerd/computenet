@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.time.Duration
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.test.AfterTest
@@ -39,6 +40,17 @@ class JevJudgeTest {
         backoff = Duration.ofMillis(1),
     )
 
+    private fun judge(
+        maxAttempts: Int = 4,
+        sleeper: (Duration) -> Unit,
+    ) = JevJudge(
+        apiKey = "test-key",
+        baseUrl = "http://127.0.0.1:${server.address.port}",
+        maxAttempts = maxAttempts,
+        backoff = Duration.ofMillis(3),
+        sleeper = sleeper,
+    )
+
     @AfterTest
     fun stop() = server.stop(0)
 
@@ -66,10 +78,18 @@ class JevJudgeTest {
         val req = seen.single()
         assertEquals("Bearer test-key", req.auth)
         assertEquals("jev-latest", req.body["model"]!!.jsonPrimitive.content)
-        assertEquals("Claim.", req.body["state"]!!.jsonObject["claim"]!!.jsonPrimitive.content)
+        val state = req.body["state"]!!.jsonObject
+        assertEquals(setOf("root_question", "path_from_root", "claim"), state.keys)
+        assertEquals("Q?", state["root_question"]!!.jsonPrimitive.content)
+        assertEquals("Claim.", state["claim"]!!.jsonPrimitive.content)
         val q = question(req.body, "plausibility")
         assertEquals("score", q["type"]!!.jsonPrimitive.content)
-        assertEquals(5, (q["criteria"] as JsonArray).size)
+        val criteria = (q["criteria"] as JsonArray).map { it.jsonPrimitive.content }
+        assertEquals(5, criteria.size)
+        assertTrue(criteria.first().startsWith("Almost certainly false:"))
+        assertTrue("directly contradict" in criteria.first())
+        assertTrue(criteria.last().startsWith("Almost certainly true:"))
+        assertTrue("directly support" in criteria.last())
     }
 
     @Test
@@ -77,8 +97,13 @@ class JevJudgeTest {
         scoreReply("strength", 1.0)
         assertEquals(0.25, judge.relationStrength("Q?", "Parent.", "Child.", Polarity.ATTACK), 1e-9)
         val body = seen.single().body
-        assertEquals("attacks", body["state"]!!.jsonObject["direction"]!!.jsonPrimitive.content)
-        assertEquals(5, (question(body, "strength")["criteria"] as JsonArray).size)
+        val state = body["state"]!!.jsonObject
+        assertEquals(setOf("root_question", "parent_claim", "child_claim", "direction"), state.keys)
+        assertEquals("attacks", state["direction"]!!.jsonPrimitive.content)
+        val criteria = (question(body, "strength")["criteria"] as JsonArray).map { it.jsonPrimitive.content }
+        assertEquals(5, criteria.size)
+        assertTrue("opposite direction" in criteria.first())
+        assertTrue("settled" in criteria.last())
     }
 
     @Test
@@ -96,8 +121,10 @@ class JevJudgeTest {
         val q = question(body, "c1")
         assertEquals("choice", q["type"]!!.jsonPrimitive.content)
         assertEquals(setOf("none", "0", "1"), q["criteria"]!!.jsonObject.keys)
+        assertTrue("substantively new point" in q["criteria"]!!.jsonObject["none"]!!.jsonPrimitive.content)
         assertEquals("e1", q["criteria"]!!.jsonObject["1"]!!.jsonPrimitive.content)
         assertEquals("e1 again", q["instructions"]!!.jsonObject["candidate_argument"]!!.jsonPrimitive.content)
+        assertTrue("same reason" in q["instructions"]!!.jsonObject["question"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -116,39 +143,87 @@ class JevJudgeTest {
         val q = question(body, "saturated")
         assertEquals("noul", q["type"]!!.jsonPrimitive.content)
         assertEquals(setOf("true", "false"), q["criteria"]!!.jsonObject.keys)
+        assertTrue("another argument would mostly restate" in q["criteria"]!!.jsonObject["true"]!!.jsonPrimitive.content)
+        assertTrue("still missing" in q["criteria"]!!.jsonObject["false"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `relevance is a noul over question and path`() {
         noulReply("relevant", 0.3)
         assertEquals(0.3, judge.relevance(ctx), 1e-9)
-        val state = seen.single().body["state"]!!.jsonObject
+        val body = seen.single().body
+        val state = body["state"]!!.jsonObject
         assertEquals(setOf("root_question", "path_from_root", "claim"), state.keys)
+        val criteria = question(body, "relevant")["criteria"]!!.jsonObject
+        assertTrue("alter at least one important reason" in criteria["true"]!!.jsonPrimitive.content)
+        assertTrue("remain effectively the same" in criteria["false"]!!.jsonPrimitive.content)
     }
 
     @Test
-    fun `retries 429 and 529 then succeeds`() {
+    fun `retries 429 and 529 with exponential backoff then succeeds`() {
+        val delays = mutableListOf<Duration>()
         reply(429, """{"error":"rate limited"}""")
         reply(529, """{"error":"overloaded"}""")
         noulReply("relevant", 0.6)
-        assertEquals(0.6, judge.relevance(ctx), 1e-9)
+        assertEquals(0.6, judge(sleeper = { delays += it }).relevance(ctx), 1e-9)
         assertEquals(3, seen.size)
+        assertEquals(listOf(Duration.ofMillis(3), Duration.ofMillis(6)), delays)
     }
 
     @Test
     fun `gives up after four attempts`() {
-        repeat(4) { reply(503, "down") }
-        val e = assertFailsWith<JevException> { judge.relevance(ctx) }
-        assertEquals(503, e.status)
+        repeat(4) { reply(529, "down") }
+        val e = assertFailsWith<JevException> { judge(sleeper = { _ -> }).relevance(ctx) }
+        assertEquals(529, e.status)
         assertEquals(4, seen.size)
     }
 
     @Test
-    fun `422 and 401 fail without retry`() {
+    fun `non-retryable HTTP statuses fail once`() {
         reply(422, """{"detail":"criteria: field required"}""")
         assertEquals(422, assertFailsWith<JevException> { judge.relevance(ctx) }.status)
-        reply(401, """{"detail":"bad key"}""")
-        assertEquals(401, assertFailsWith<JevException> { judge.relevance(ctx) }.status)
+        reply(503, """{"detail":"unavailable"}""")
+        assertEquals(503, assertFailsWith<JevException> { judge.relevance(ctx) }.status)
         assertEquals(2, seen.size)
+    }
+
+    @Test
+    fun `malformed successful response fails without retry`() {
+        reply(200, """{"model":"jev-1.13.0"}""")
+        val error = assertFailsWith<JevException> { judge.relevance(ctx) }
+        assertEquals(200, error.status)
+        assertEquals(1, seen.size)
+    }
+
+    @Test
+    fun `unknown duplicate choice fails`() {
+        reply(200, """{"answers":{"c0":{"type":"choice","choice":"99"}}}""")
+        val error = assertFailsWith<JevException> {
+            judge.duplicates("Claim.", Polarity.SUPPORT, listOf("existing"), listOf("candidate"))
+        }
+        assertEquals(null, error.status)
+        assertTrue("unknown duplicate option" in error.message!!)
+    }
+
+    @Test
+    fun `IO failure is not retried`() {
+        val unusedPort = ServerSocket(0).use { it.localPort }
+        val delays = mutableListOf<Duration>()
+        val offline = JevJudge(
+            apiKey = "test-key",
+            baseUrl = "http://127.0.0.1:$unusedPort",
+            backoff = Duration.ZERO,
+            requestTimeout = Duration.ofSeconds(1),
+            sleeper = { delays += it },
+        )
+        val error = assertFailsWith<JevException> { offline.relevance(ctx) }
+        assertEquals(null, error.status)
+        assertTrue(delays.isEmpty())
+    }
+
+    @Test
+    fun `retry attempt cap cannot exceed four`() {
+        assertFailsWith<IllegalArgumentException> { judge(maxAttempts = 0, sleeper = { _ -> }) }
+        assertFailsWith<IllegalArgumentException> { judge(maxAttempts = 5, sleeper = { _ -> }) }
     }
 }

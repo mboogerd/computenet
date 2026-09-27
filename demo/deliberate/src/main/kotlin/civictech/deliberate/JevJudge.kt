@@ -29,8 +29,8 @@ class JevException(val status: Int?, message: String, cause: Throwable? = null) 
  * Every judgment is one request carrying structured JSON `state`; question ids
  * are not seen by the model, so each question is self-contained. Scores over n
  * levels are mapped linearly to [0,1] as `score / (n-1)` (CRED-01, CRED-02).
- * 429/529/5xx and IO errors are retried with exponential backoff, at most
- * [maxAttempts] attempts in total (EXP-07); any other status fails at once.
+ * 429/529 responses are retried with exponential backoff, at most [maxAttempts]
+ * attempts in total (EXP-07); any other failure fails at once.
  */
 class JevJudge(
     private val apiKey: String = System.getenv("TYPESAFE_API_KEY") ?: error("TYPESAFE_API_KEY is not set"),
@@ -39,7 +39,14 @@ class JevJudge(
     private val maxAttempts: Int = 4,
     private val backoff: Duration = Duration.ofMillis(500),
     private val requestTimeout: Duration = Duration.ofSeconds(60),
+    private val sleeper: (Duration) -> Unit = { Thread.sleep(it.toMillis()) },
 ) : Judge {
+
+    init {
+        require(maxAttempts in 1..4) { "maxAttempts must be between 1 and 4" }
+        require(!backoff.isNegative) { "backoff must not be negative" }
+        require(!requestTimeout.isNegative && !requestTimeout.isZero) { "requestTimeout must be positive" }
+    }
 
     private val endpoint = URI.create(baseUrl.trimEnd('/') + "/v1/systemone")
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
@@ -143,10 +150,11 @@ class JevJudge(
             "`claim` arose while deliberating `root_question`, via the chain of claims in `path_from_root`. Would " +
                 "analysing `claim` further — examining the arguments for and against it — materially change how " +
                 "`root_question` should be answered?",
-            yes = "Material: the answer to `root_question` depends noticeably on whether `claim` holds, and the " +
-                "claim is open enough that deeper analysis could shift it.",
-            no = "Immaterial: `claim` is peripheral, already settled, or too remote from `root_question` for further " +
-                "analysis to change its answer.",
+            yes = "Material: if examining arguments changed whether `claim` is believed, that change would alter at " +
+                "least one important reason for answering `root_question`.",
+            no = "Immaterial: even if examining arguments changed whether `claim` is believed, the answer to " +
+                "`root_question` would remain effectively the same because the claim is peripheral, redundant, or " +
+                "too remote.",
         )
         return noulOf(evaluate(state, mapOf("relevant" to q)).getValue("relevant"))
     }
@@ -164,21 +172,19 @@ class JevJudge(
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build()
-        var failure: JevException? = null
         for (attempt in 1..maxAttempts) {
-            if (attempt > 1) Thread.sleep(backoff.toMillis() shl (attempt - 2))
-            failure = try {
+            try {
                 val response = http.send(request, HttpResponse.BodyHandlers.ofString())
                 val status = response.statusCode()
                 if (status == 200) return answersOf(response.body(), questions.keys)
                 val error = JevException(status, "Jev HTTP $status: ${response.body().take(500)}")
-                if (status != 429 && status < 500) throw error
-                error
+                if (status != 429 && status != 529 || attempt == maxAttempts) throw error
+                sleeper(backoff.multipliedBy(1L shl (attempt - 1)))
             } catch (e: IOException) {
-                JevException(null, "Jev IO failure: $e", e)
+                throw JevException(null, "Jev IO failure: $e", e)
             }
         }
-        throw failure!!
+        error("retry loop exhausted")
     }
 
     private fun answersOf(body: String, expected: Set<String>): Map<String, JsonElement> {
@@ -193,19 +199,28 @@ class JevJudge(
         const val NONE = "none"
 
         val PLAUSIBILITY_LEVELS = listOf(
-            "Almost certainly false",
-            "Probably false",
-            "Uncertain: about as likely true as false",
-            "Probably true",
-            "Almost certainly true",
+            "Almost certainly false: available facts or well-established knowledge directly contradict the claim; " +
+                "it would require exceptional contrary evidence to be true.",
+            "Probably false: available evidence or well-established knowledge weighs against the claim, although " +
+                "the claim remains reasonably possible.",
+            "Uncertain: evidence is absent, balanced, or conflicting, so neither truth nor falsity is more likely.",
+            "Probably true: available evidence or well-established knowledge supports the claim, although meaningful " +
+                "uncertainty remains.",
+            "Almost certainly true: available facts or well-established knowledge directly support the claim; it " +
+                "would require exceptional contrary evidence to be false.",
         )
 
         val STRENGTH_LEVELS = listOf(
-            "Irrelevant: even if true, it does not bear on the parent claim in the stated direction",
-            "Weak: a minor consideration that barely moves the parent claim",
-            "Moderate: a real consideration, but one among several of similar weight",
-            "Strong: an important consideration that substantially moves the parent claim",
-            "Decisive: if true, it would on its own settle the parent claim in the stated direction",
+            "Irrelevant: assuming the child claim is true, it would not change the likelihood of the parent claim in " +
+                "the stated direction, or would bear only in the opposite direction.",
+            "Weak: assuming the child claim is true, it would move the parent claim only slightly in the stated " +
+                "direction because it is peripheral or readily outweighed.",
+            "Moderate: assuming the child claim is true, it would make a meaningful difference to the parent claim, " +
+                "but several ordinary considerations could still outweigh it.",
+            "Strong: assuming the child claim is true, it would substantially move the parent claim as one of the " +
+                "main considerations, though it would not settle the parent claim by itself.",
+            "Decisive: assuming the child claim is true, the parent claim would be settled in the stated direction " +
+                "except under exceptional conditions.",
         )
 
         val Side.preposition get() = if (this == Polarity.SUPPORT) "for" else "against"
