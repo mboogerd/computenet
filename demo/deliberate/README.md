@@ -3,8 +3,8 @@
 Ask a question and watch a deliberation graph grow for it live. Two LLM
 CLIs (Claude Code and Codex) propose arguments for and against each claim,
 recursively. **Jev** (TypeSafe System One, `jev-latest`) makes every judgment
-that steers the exploration: duplicate detection, saturation, relevance, and
-the stances credence is computed from. The kernel-hosted agora argumentation
+that steers the exploration: triage of new arguments, their quality and
+relevance, saturation, and the stances credence is computed from. The kernel-hosted agora argumentation
 graph propagates credence. You can override the explorer per claim: force it
 to expand a claim, or stop it. The goal specification is [`SPEC.md`](SPEC.md).
 
@@ -12,15 +12,34 @@ to expand a claim, or stop it. The goal specification is [`SPEC.md`](SPEC.md).
 
 1. Every claim gets a Jev *plausibility* judgment (five levels, false … true, mapped to [0,1]). It is judged on the claim alone, with the question as context.
 2. Every pro/con edge gets a Jev *relation strength* judgment: how strongly the child would bear on the parent if it were true.
+   A new argument gets both judgments the moment it is attached, in one Jev request that also asks its quality and relevance (see *Exploration*).
 3. Both judgments are recorded as stances of the agora user `jev`.
 4. Agora propagates credence with DF-QuAD: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge.
 5. The UI shows the credence agora propagates. The deliberation code never computes credence itself.
+
+## Exploration
+
+Each round asks the proposers for new arguments, then Jev sorts every proposal
+in one request (SPEC EXP-03): **add** it, drop it as a **duplicate** (its
+proposer is noted on the existing argument), **replace** a weaker wording,
+**merge** it with an overlapping argument (Claude rewrites the two as one
+sentence), **refine** an existing argument (it is nested under that argument
+as evidence), move it to the **other side**, or **drop** it as not a real
+argument. Rewording and merging only touch arguments nobody explored yet.
+
+Every attached argument gets a **contribution**: reach × relevance × quality.
+Exploration is best-first by contribution across one queue, one round per
+task. A claim with rounds left goes back into the queue at
+contribution × `--round-decay` per round it already ran, so a strong claim's
+second round still beats a weak sibling's first. Arguments below
+`--min-influence` are never explored (`PRUNED`), so irrelevant or badly built
+ones cost nothing, and the claim budget is spent on the strongest ones first.
 
 ## Prerequisites
 
 - JDK 21 (the Gradle toolchain provisions it) and Node 22+ for the UI.
 - `TYPESAFE_API_KEY` in the environment. Jev judges every step, and the backend refuses to start without the key.
-- The `claude` and `codex` CLIs on `PATH` and logged in. Each proposer call runs one CLI process with no tools, in an empty temp directory, with a 120 s timeout. Use `--proposers claude` or `--proposers codex` to run with just one of them.
+- The `claude` and `codex` CLIs on `PATH` and logged in. Each proposer call runs one CLI process with no tools, in an empty temp directory, with a 120 s timeout. Use `--proposers claude` or `--proposers codex` to run with just one of them. Merges (above) always ask `claude`; if it fails, the proposal counts as a duplicate.
 
 ## Run
 
@@ -48,10 +67,12 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--args-per-call <n>` | 1 | arguments per proposer call, per side |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
 | `--max-depth <n>` | 3 | claims deeper than this are `DEPTH_LIMIT` |
-| `--max-claims <n>` | 60 | claims per question; the rest become `BUDGET` |
-| `--max-args-per-side <n>` | 6 | a side holding n arguments is saturated; a round never attaches beyond it |
+| `--max-claims <n>` | 60 | claims per question; unexplored claims past it become `BUDGET`, explored ones end `ROUND_LIMIT` ("budget exhausted") |
+| `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
+| `--max-args-per-side-child <n>` | 3 | the same cap for every claim below the root |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
-| `--min-influence <p>` | 0.35 | a non-root claim is expanded only if Jev relevance × reach ≥ p, else `PRUNED` |
+| `--min-influence <p>` | 0.35 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
+| `--round-decay <f>` | 0.5 | a claim's next round is queued at contribution × f^(rounds run) |
 
 **Reach** is how much a claim can still matter to the question. The root has
 reach 1, and an argument's reach is its parent's reach times the Jev strength
@@ -64,10 +85,10 @@ only weakly with the number of arguments, so `--max-args-per-side` is the
 dependable stop. Most depth-2 claims fall below `--min-influence`, so
 `DEPTH_LIMIT` is a safety net that rarely fires.
 
-The budget is spent in breadth-first order. With the defaults, the per-side
-cap bounds any one claim to 12 arguments. Each default round offers two new
-arguments per side, giving Jev a chance to stop a side after 2 and 4 arguments
-before the cap supplies the dependable stop at 6.
+The budget is spent in contribution order (see *Exploration*). With the
+defaults, the per-side caps bound the root to 12 arguments and any other claim
+to 6. Each default round offers two new arguments per side, giving Jev a
+chance to stop a side before the cap supplies the dependable stop.
 
 ## HTTP
 

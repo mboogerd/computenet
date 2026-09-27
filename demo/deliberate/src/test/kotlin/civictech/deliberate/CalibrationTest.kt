@@ -152,8 +152,10 @@ class CalibrationTest {
                     for (c in candidates) {
                         if (list.size >= PER_SIDE + 2) break
                         val existing = list.map { it.text }
-                        val dup = runCatching { jev.duplicates(claim, side, existing, listOf(c.text)).single() }.getOrNull()
-                        if (dup == null && existing.none { it.equals(c.text, ignoreCase = true) }) list += c
+                        val now = ClaimContext(question, path, claim, pros.map { it.text }, cons.map { it.text })
+                        val verdict = runCatching { jev.triage(now, listOf(Candidate(c.text, side))).single().action }.getOrNull()
+                        val dup = verdict == TriageAction.DUPLICATE || verdict == TriageAction.REPLACE
+                        if (!dup && existing.none { it.equals(c.text, ignoreCase = true) }) list += c
                     }
                 }
             }

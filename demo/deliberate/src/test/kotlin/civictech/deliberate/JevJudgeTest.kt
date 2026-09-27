@@ -106,32 +106,94 @@ class JevJudgeTest {
         assertTrue("settled" in criteria.last())
     }
 
+    private fun choice(id: String, choice: String) = """"$id":{"type":"choice","choice":"$choice","probabilities":{},"confidence":0.8}"""
+
     @Test
-    fun `duplicates is one request with one choice per candidate`() {
+    fun `triage is one request with an action and a target choice per candidate`() {
+        // ctx: pros [p1], cons [c1, c2]; target options 0..2 are existing, 3 is candidate 0.
         reply(
             200,
-            """{"model":"jev-1.13.0","answers":{
-               "c0":{"type":"choice","choice":"none","probabilities":{"none":0.9,"0":0.05,"1":0.05},"confidence":0.8},
-               "c1":{"type":"choice","choice":"1","probabilities":{"none":0.1,"0":0.0,"1":0.9},"confidence":0.8}},
-               "usage":{"input_tokens":1,"output_tokens":1}}""",
+            """{"model":"jev-1.13.0","answers":{${choice("a0", "ADD")},${choice("t0", "none")},
+               ${choice("a1", "REFINE")},${choice("t1", "0")},
+               ${choice("a2", "DUPLICATE")},${choice("t2", "3")}},"usage":{"input_tokens":1,"output_tokens":1}}""",
         )
-        assertEquals(listOf(null, 1), judge.duplicates("Claim.", Polarity.SUPPORT, listOf("e0", "e1"), listOf("new", "e1 again")))
+        val out = judge.triage(
+            ctx,
+            listOf(Candidate("new", Polarity.SUPPORT), Candidate("p1 instance", Polarity.SUPPORT), Candidate("new again", Polarity.ATTACK)),
+        )
+        assertEquals(listOf(Triage(TriageAction.ADD), Triage(TriageAction.REFINE, 0), Triage(TriageAction.DUPLICATE, 3)), out)
         val body = seen.single().body
-        assertEquals(setOf("c0", "c1"), body["questions"]!!.jsonObject.keys)
-        val q = question(body, "c1")
-        assertEquals("choice", q["type"]!!.jsonPrimitive.content)
-        assertEquals(setOf("none", "0", "1"), q["criteria"]!!.jsonObject.keys)
-        assertTrue("substantively new point" in q["criteria"]!!.jsonObject["none"]!!.jsonPrimitive.content)
-        assertEquals("e1", q["criteria"]!!.jsonObject["1"]!!.jsonPrimitive.content)
-        assertEquals("e1 again", q["instructions"]!!.jsonObject["candidate_argument"]!!.jsonPrimitive.content)
-        assertTrue("same reason" in q["instructions"]!!.jsonObject["question"]!!.jsonPrimitive.content)
+        assertEquals(setOf("a0", "t0", "a1", "t1", "a2", "t2"), body["questions"]!!.jsonObject.keys)
+        val state = body["state"]!!.jsonObject
+        assertEquals(listOf("p1"), (state["existing_arguments_for"] as JsonArray).map { it.jsonPrimitive.content })
+        assertEquals(listOf("c1", "c2"), (state["existing_arguments_against"] as JsonArray).map { it.jsonPrimitive.content })
+        val a2 = question(body, "a2")
+        assertEquals("choice", a2["type"]!!.jsonPrimitive.content)
+        assertEquals(TriageAction.entries.map { it.name }.toSet(), a2["criteria"]!!.jsonObject.keys)
+        assertTrue("against" in a2["criteria"]!!.jsonObject["ADD"]!!.jsonPrimitive.content)
+        assertTrue("for the claim" in a2["criteria"]!!.jsonObject["OTHER_SIDE"]!!.jsonPrimitive.content)
+        assertEquals(2, (a2["instructions"]!!.jsonObject["earlier_new_arguments"] as JsonArray).size)
+        // Later candidates may target earlier ones, labelled by side.
+        val t2 = question(body, "t2")["criteria"]!!.jsonObject
+        assertEquals(setOf("none", "0", "1", "2", "3", "4"), t2.keys)
+        assertTrue(t2["0"]!!.jsonPrimitive.content.startsWith("(existing argument for the claim)"))
+        assertTrue(t2["2"]!!.jsonPrimitive.content.startsWith("(existing argument against the claim)"))
+        assertEquals("(another new argument for the claim) new", t2["3"]!!.jsonPrimitive.content)
     }
 
     @Test
-    fun `duplicates against nothing needs no call`() {
-        assertEquals(listOf<Int?>(null), judge.duplicates("Claim.", Polarity.ATTACK, emptyList(), listOf("x")))
-        assertEquals(emptyList(), judge.duplicates("Claim.", Polarity.ATTACK, listOf("e"), emptyList()))
+    fun `a first candidate with nothing to compare against gets no target question`() {
+        reply(
+            200,
+            """{"model":"jev-1.13.0","answers":{${choice("a0", "ADD")},${choice("a1", "REPLACE")},${choice("t1", "0")}},
+               "usage":{"input_tokens":1,"output_tokens":1}}""",
+        )
+        val empty = ClaimContext("Q?", listOf("Q?"), "Claim.", emptyList(), emptyList())
+        val out = judge.triage(empty, listOf(Candidate("a", Polarity.SUPPORT), Candidate("a, better", Polarity.SUPPORT)))
+        assertEquals(listOf(Triage(TriageAction.ADD), Triage(TriageAction.REPLACE, 0)), out)
+        val body = seen.single().body
+        assertEquals(setOf("a0", "a1", "t1"), body["questions"]!!.jsonObject.keys)
+        // Without targets only ADD / OTHER_SIDE / DROP are offered.
+        assertEquals(setOf("ADD", "OTHER_SIDE", "DROP"), question(body, "a0")["criteria"]!!.jsonObject.keys)
+        assertEquals(setOf("none", "0"), question(body, "t1")["criteria"]!!.jsonObject.keys)
+    }
+
+    @Test
+    fun `a triage target pointing at a later candidate is rejected`() {
+        reply(200, """{"answers":{${choice("a0", "ADD")},${choice("a1", "DUPLICATE")},${choice("t1", "1")}}}""")
+        val empty = ClaimContext("Q?", listOf("Q?"), "Claim.", emptyList(), emptyList())
+        val error = assertFailsWith<JevException> {
+            judge.triage(empty, listOf(Candidate("a", Polarity.SUPPORT), Candidate("b", Polarity.SUPPORT)))
+        }
+        assertTrue("unknown triage target" in error.message!!)
+    }
+
+    @Test
+    fun `triage of nothing needs no call`() {
+        assertEquals(emptyList(), judge.triage(ctx, emptyList()))
         assertTrue(seen.isEmpty())
+    }
+
+    @Test
+    fun `assess asks plausibility, strength, quality and relevance in one request`() {
+        reply(
+            200,
+            """{"model":"jev-1.13.0","answers":{
+               "plausibility":{"type":"score","score":3.0},"strength":{"type":"score","score":2.0},
+               "quality":{"type":"noul","noul":0.9},"relevant":{"type":"noul","noul":0.4}},
+               "usage":{"input_tokens":1,"output_tokens":1}}""",
+        )
+        val a = judge.assess("Q?", listOf("Q?", "Parent."), "Child.", Polarity.ATTACK)
+        assertEquals(Assessment(plausibility = 0.75, strength = 0.5, quality = 0.9, relevance = 0.4), a)
+        val body = seen.single().body
+        assertEquals(setOf("plausibility", "strength", "quality", "relevant"), body["questions"]!!.jsonObject.keys)
+        val state = body["state"]!!.jsonObject
+        assertEquals("Parent.", state["parent_claim"]!!.jsonPrimitive.content)
+        assertEquals("Child.", state["claim"]!!.jsonPrimitive.content)
+        assertEquals("attacks", state["direction"]!!.jsonPrimitive.content)
+        assertEquals("noul", question(body, "quality")["type"]!!.jsonPrimitive.content)
+        assertTrue("well-constructed" in question(body, "quality")["instructions"]!!.jsonPrimitive.content)
+        assertTrue("`claim`" in question(body, "strength")["instructions"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -198,13 +260,11 @@ class JevJudgeTest {
     }
 
     @Test
-    fun `unknown duplicate choice fails`() {
-        reply(200, """{"answers":{"c0":{"type":"choice","choice":"99"}}}""")
-        val error = assertFailsWith<JevException> {
-            judge.duplicates("Claim.", Polarity.SUPPORT, listOf("existing"), listOf("candidate"))
-        }
+    fun `unknown triage action fails`() {
+        reply(200, """{"answers":{"a0":{"type":"choice","choice":"SPLIT"},"t0":{"type":"choice","choice":"none"}}}""")
+        val error = assertFailsWith<JevException> { judge.triage(ctx, listOf(Candidate("candidate", Polarity.SUPPORT))) }
         assertEquals(null, error.status)
-        assertTrue("unknown duplicate option" in error.message!!)
+        assertTrue("unknown triage action" in error.message!!)
     }
 
     @Test

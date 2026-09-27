@@ -29,8 +29,8 @@ class DeliberateAppTest {
     private class FixedJudge : Judge {
         override fun plausibility(question: String, path: List<String>, claim: String) = 0.6
         override fun relationStrength(question: String, parent: String, child: String, side: Side) = 0.7
-        override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>) =
-            candidates.map { null }
+        override fun quality(question: String, parent: String, child: String, side: Side) = 0.9
+        override fun triage(ctx: ClaimContext, candidates: List<Candidate>) = candidates.map { Triage(TriageAction.ADD) }
         override fun saturation(ctx: ClaimContext, side: Side) = 0.0
         override fun relevance(ctx: ClaimContext) = 1.0
     }
@@ -239,7 +239,7 @@ class DeliberateAppTest {
             arrayOf(
                 "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",
                 "--args-per-call", "3", "--max-processes", "2",
-                "--max-args-per-side", "5", "--saturation", "0.4", "--min-influence", "0.25",
+                "--max-args-per-side", "5", "--max-args-per-side-child", "2", "--saturation", "0.4", "--min-influence", "0.25",
             ),
         )
         assertEquals(9000, o.port)
@@ -249,6 +249,7 @@ class DeliberateAppTest {
         assertEquals(20, o.config.maxClaims)
         assertEquals(3, o.config.argsPerCall)
         assertEquals(5, o.config.maxArgsPerSide)
+        assertEquals(2, o.config.maxArgsPerSideChild)
         assertEquals(0.4, o.config.saturation)
         assertEquals(0.25, o.config.minInfluence)
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
@@ -256,6 +257,7 @@ class DeliberateAppTest {
         assertEquals(8, Options(emptyArray()).maxProcesses)
         assertEquals(1, Options(emptyArray()).config.argsPerCall)
         assertEquals(6, Options(emptyArray()).config.maxArgsPerSide)
+        assertEquals(3, Options(emptyArray()).config.maxArgsPerSideChild)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--relevance", "0.5")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }

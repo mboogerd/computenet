@@ -42,10 +42,18 @@ data class NodeDto(
     val override: Override? = null,
     /** "question" for a root, else the proposer id ("claude" | "codex"). */
     val proposer: String? = null,
+    /** EXP-03: other proposers that proposed the same point (DUPLICATE) or the replaced wording (REPLACE). */
+    val alsoProposedBy: List<String>? = null,
+    /** EXP-03 MERGE: true when this argument's text was rewritten together with an overlapping one. */
+    val merged: Boolean? = null,
     /** Jev plausibility stance (CRED-01), once judged. */
     val plausibility: Double? = null,
-    /** Last Jev relevance probability (EXP-05), when judged. */
+    /** Jev relevance probability (EXP-05), judged when the argument was attached. */
     val relevance: Double? = null,
+    /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent. */
+    val quality: Double? = null,
+    /** SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1). */
+    val contribution: Double? = null,
     /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1). */
     val reach: Double? = null,
     /** Last Jev saturation probabilities per side (EXP-04). */
@@ -53,6 +61,8 @@ data class NodeDto(
     val conSaturation: Double? = null,
     val rounds: Int? = null,
     val duplicatesDropped: Int? = null,
+    /** EXP-03: triage actions taken on this claim's proposals, by action name (ADD, DUPLICATE, …). */
+    val triage: Map<String, Int>? = null,
     val error: String? = null,
     // --- EDGE only (child → parent) ---
     val polarity: String? = null, // "SUPPORT" | "ATTACK"

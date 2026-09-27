@@ -35,14 +35,15 @@ class DeliberationEngineTest {
     private class FakeJudge(
         val plausibility: (String) -> Double = { 0.5 },
         val strength: (child: String) -> Double = { 0.8 },
-        val duplicates: (existing: List<String>, candidates: List<String>) -> List<Int?> = { _, c -> c.map { null } },
+        val triage: (ClaimContext, List<Candidate>) -> List<Triage> = { _, c -> c.map { Triage(TriageAction.ADD) } },
+        val quality: (child: String) -> Double = { 1.0 },
         val saturation: (ClaimContext, Side) -> Double = { _, _ -> 0.0 },
         val relevance: (ClaimContext) -> Double = { 1.0 },
     ) : Judge {
         val relevanceCalls = CopyOnWriteArrayList<String>()
         val plausibilityCalls = CopyOnWriteArrayList<Triple<String, List<String>, String>>()
         val relationCalls = CopyOnWriteArrayList<RelationCall>()
-        val duplicateCalls = CopyOnWriteArrayList<Pair<List<String>, List<String>>>()
+        val triageCalls = CopyOnWriteArrayList<Pair<ClaimContext, List<Candidate>>>()
         override fun plausibility(question: String, path: List<String>, claim: String): Double {
             plausibilityCalls += Triple(question, path, claim)
             return plausibility(claim)
@@ -51,9 +52,10 @@ class DeliberationEngineTest {
             relationCalls += RelationCall(question, parent, child, side)
             return strength(child)
         }
-        override fun duplicates(claim: String, side: Side, existing: List<String>, candidates: List<String>): List<Int?> {
-            duplicateCalls += existing to candidates
-            return duplicates(existing, candidates)
+        override fun quality(question: String, parent: String, child: String, side: Side) = quality(child)
+        override fun triage(ctx: ClaimContext, candidates: List<Candidate>): List<Triage> {
+            triageCalls += ctx to candidates
+            return triage.invoke(ctx, candidates)
         }
         val saturationCalls = AtomicInteger()
         override fun saturation(ctx: ClaimContext, side: Side): Double {
@@ -106,7 +108,8 @@ class DeliberationEngineTest {
             maxDepth = 0,
             maxArgsPerSide = 5,
         ),
-    ) = DeliberationEngine(service, judge, proposers, config).also { engines += it }
+        merger: Merger? = null,
+    ) = DeliberationEngine(service, judge, proposers, config, merger).also { engines += it }
 
     private fun DeliberationEngine.idle() = assertTrue(awaitIdle(20.seconds), "engine did not go idle")
     private fun GraphDto.node(ref: CellRef) = nodes.single { it.ref == ref.id.toString() }
@@ -120,6 +123,7 @@ class DeliberationEngineTest {
         val config = DeliberationEngine.Config()
         assertEquals(1, config.argsPerCall)
         assertEquals(6, config.maxArgsPerSide)
+        assertEquals(3, config.maxArgsPerSideChild)
         assertEquals(0.22, config.saturation)
         assertEquals(0.35, config.minInfluence)
     }
@@ -224,7 +228,9 @@ class DeliberationEngineTest {
             else if (ctx.pros.isEmpty()) listOf("  cars   POLLUTE ") // intra-round duplicate of claude's
             else listOf("Land is freed")
         }
-        val judge = FakeJudge(duplicates = { _, cands -> cands.map { if (it.startsWith("dup")) 0 else null } })
+        val judge = FakeJudge(triage = { _, cands ->
+            cands.map { if (it.text.startsWith("dup")) Triage(TriageAction.DUPLICATE, 0) else Triage(TriageAction.ADD) }
+        })
         val e = engine(
             judge = judge,
             proposers = listOf(a, b),
@@ -236,9 +242,13 @@ class DeliberationEngineTest {
         val texts = g.childrenOf(root).map { g.claim(it.source!!).text }.toSet()
         assertEquals(setOf("Cars pollute.", "Streets get safer", "Noise drops", "Land is freed"), texts)
         assertEquals(2, g.node(root).duplicatesDropped)
-        assertTrue(judge.duplicateCalls.any { (existing, candidates) ->
-            existing.isEmpty() && candidates == listOf("Cars pollute.", "Streets get safer")
+        assertTrue(judge.triageCalls.any { (ctx, candidates) ->
+            ctx.pros.isEmpty() && candidates.map { it.text } == listOf("Cars pollute.", "Streets get safer")
         })
+        // The judged duplicate's proposer is recorded on the argument it duplicates.
+        val cars = g.childrenOf(root).map { g.claim(it.source!!) }.single { it.text == "Cars pollute." }
+        assertEquals(listOf("codex"), cars.alsoProposedBy)
+        assertEquals(mapOf("ADD" to 4, "DUPLICATE" to 2), g.node(root).triage)
     }
 
     @Test
@@ -264,15 +274,19 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `claims beyond maxDepth are DEPTH_LIMIT without a relevance call`() {
+    fun `claims beyond maxDepth are DEPTH_LIMIT and never explored`() {
         val judge = FakeJudge()
         val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1))
         e.ask("Q?")
         e.idle()
         val g = e.snapshot()
         assertEquals(1 + 4 + 16, g.claims().size)
-        g.claims().filter { it.depth == 2 }.forEach { assertEquals(Status.DEPTH_LIMIT, it.status); assertNull(it.relevance) }
-        assertEquals(4, judge.relevanceCalls.size) // depth-1 claims only
+        g.claims().filter { it.depth == 2 }.forEach {
+            assertEquals(Status.DEPTH_LIMIT, it.status)
+            assertEquals(0, it.rounds)
+            assertEquals(1.0, it.relevance) // assessed when attached, like every argument
+        }
+        assertEquals(4 + 16, judge.relevanceCalls.size) // one assessment per argument, none at dequeue
     }
 
     @Test
@@ -282,8 +296,10 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         assertEquals(5, g.claims().size)
-        assertEquals(Status.BUDGET, g.node(root).status)
-        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.BUDGET })
+        // The root explored before the budget ran out, so it is not BUDGET (EXP-06).
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertEquals(DeliberationEngine.Config.BUDGET_EXHAUSTED, g.node(root).error)
+        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.BUDGET && it.rounds == 0 })
         assertEquals(5, g.questions.single().claims)
     }
 
@@ -345,6 +361,7 @@ class DeliberationEngineTest {
             override fun plausibility(question: String, path: List<String>, claim: String): Double = error("429")
             override fun relationStrength(question: String, parent: String, child: String, side: Side) = 2.0
             override fun saturation(ctx: ClaimContext, side: Side): Double = error("529")
+            override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment = error("429")
         }
         val e = engine(judge = judge, config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 2, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
@@ -420,8 +437,9 @@ class DeliberationEngineTest {
         assertEquals(Status.ROUND_LIMIT, g2.claim(kid).status)
         assertEquals(1, g2.claim(kid).rounds)
         assertEquals(4, g2.childrenOf(kidRef).size)
-        // gates skipped for the forced claim itself; its depth-2 children hit DEPTH_LIMIT
-        assertEquals(relevanceCallsBefore, judge.relevanceCalls.size)
+        // gates skipped for the forced claim itself (no judgment at dequeue); only its 4 new
+        // arguments are assessed, and those depth-2 children hit DEPTH_LIMIT
+        assertEquals(relevanceCallsBefore + 4, judge.relevanceCalls.size)
         assertTrue(g2.childrenOf(kidRef).all { g2.claim(it.source!!).status == Status.DEPTH_LIMIT })
     }
 
@@ -554,12 +572,13 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `a failed strength judgment gives reach the fallback strength and records the error`() {
+    fun `a failed assessment falls back to the fallback strength and records the error`() {
+        // JevJudge asks all four judgments in one request, so they fail together.
         val judge = object : Judge by FakeJudge() {
-            override fun relationStrength(question: String, parent: String, child: String, side: Side): Double = error("jev down")
+            override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment = error("jev down")
         }
         val e = engine(judge = judge, proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0, argsPerCall = 1))
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, minInfluence = 0.5))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -567,18 +586,20 @@ class DeliberationEngineTest {
         assertEquals(2, kids.size)
         kids.forEach {
             assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.reach)
-            assertTrue(it.error!!.contains("relationStrength"), it.error)
+            // relevance and quality fall back to 1: contribution = reach alone (0.5 ≥ 0.5, expanded)
+            assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.contribution)
+            assertNull(it.relevance)
+            assertNull(it.quality)
+            assertEquals(Status.ROUND_LIMIT, it.status)
+            assertEquals(0.5, it.plausibility) // judged on its own when the claim was started
         }
+        assertTrue(g.claims().filter { it.depth == 2 }.all { it.error!!.contains("jev assess") })
         assertTrue(g.childrenOf(root).all { it.strength == null })
     }
 
     @Test
-    fun `a failed relevance judgment gates on reach alone`() {
-        val judge = object : Judge by FakeJudge(strength = { child ->
-            if (child.contains("support")) 0.8 else 0.4
-        }) {
-            override fun relevance(ctx: ClaimContext): Double = error("jev down")
-        }
+    fun `contribution below the floor prunes an argument without asking anything at dequeue`() {
+        val judge = FakeJudge(strength = { child -> if (child.contains("support")) 0.8 else 0.4 })
         val e = engine(
             judge = judge,
             proposers = listOf(FakeProposer("claude")),
@@ -592,10 +613,8 @@ class DeliberationEngineTest {
         val decayed = kids.single { it.text!!.contains("attack") }
         assertEquals(Status.ROUND_LIMIT, reachable.status)
         assertEquals(Status.PRUNED, decayed.status)
-        kids.forEach { child ->
-            assertNull(child.relevance)
-            assertTrue(child.error!!.contains("jev relevance"), child.error)
-        }
+        assertEquals(0.4, decayed.contribution)
+        assertEquals(0, decayed.rounds)
     }
 
     @Test
@@ -695,5 +714,238 @@ class DeliberationEngineTest {
         assertEquals(4, kids.size)
         assertTrue(kids.filter { it.proposer == "codex" }.all { it.status == Status.PRUNED })
         assertTrue(kids.filter { it.proposer == "claude" }.all { it.status == Status.BUDGET })
+    }
+
+    @Test
+    fun `exploration follows contribution and a strong claim's next round competes via roundDecay`() {
+        // Root: 4 arguments per side in one round (its cap) → 8 depth-1 claims with
+        // contribution = strength (relevance 1) × quality.
+        val strength = mapOf("a1" to 0.95, "s1" to 0.9, "s4" to 0.8, "s3" to 0.7, "a2" to 0.6, "s2" to 0.5, "a3" to 0.42, "a4" to 0.85)
+        val firstCalls = CopyOnWriteArrayList<String>()
+        val n = AtomicInteger()
+        val p = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.path.isEmpty() -> if (side == Polarity.SUPPORT) listOf("s1", "s2", "s3", "s4") else listOf("a1", "a2", "a3", "a4")
+                else -> {
+                    if (side == Polarity.SUPPORT) firstCalls += ctx.claim
+                    listOf("x${n.incrementAndGet()}")
+                }
+            }
+        }
+        val judge = FakeJudge(
+            strength = { strength[it] ?: 0.8 },
+            quality = { if (it == "a4") 0.2 else 1.0 }, // a4: strong link, badly constructed
+        )
+        // Budget: 1 + 8 + 6 first rounds × 2 + 2 second rounds × 2 = 25.
+        val e = engine(
+            judge = judge,
+            proposers = listOf(p),
+            config = DeliberationEngine.Config(
+                argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25,
+                maxArgsPerSide = 4, maxArgsPerSideChild = 3, roundDecay = 0.5, workers = 1,
+            ),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(25, g.claims().size)
+        assertEquals(1.0, g.node(root).contribution)
+        // Firsts in contribution order; then a1 (0.95 × 0.5) and s1 (0.9 × 0.5) go before a3's first
+        // round (0.42) — which then finds the budget spent.
+        assertEquals(listOf("a1", "s1", "s4", "s3", "a2", "s2", "a1", "s1"), firstCalls.toList())
+        val level1 = g.claims().filter { it.depth == 1 }.associateBy { it.text }
+        assertEquals(0.2 * 0.85, level1.getValue("a4").contribution!!, 1e-9)
+        assertEquals(0.2, level1.getValue("a4").quality)
+        // Low quality: never expanded, whatever the budget.
+        assertEquals(Status.PRUNED, level1.getValue("a4").status)
+        assertEquals(0, level1.getValue("a4").rounds)
+        // The weakest one that passed the floor never got the budget.
+        assertEquals(Status.BUDGET, level1.getValue("a3").status)
+        assertEquals(0, level1.getValue("a3").rounds)
+        // The explored ones end ROUND_LIMIT: by their round limit, or on the budget.
+        for (t in listOf("a1", "s1")) assertEquals(2, level1.getValue(t).rounds)
+        for (t in listOf("s4", "s3", "a2", "s2")) {
+            val k = level1.getValue(t)
+            assertEquals(1, k.rounds)
+            assertEquals(Status.ROUND_LIMIT, k.status)
+            assertEquals(DeliberationEngine.Config.BUDGET_EXHAUSTED, k.error)
+        }
+    }
+
+    @Test
+    fun `triage adds, merges duplicates, drops, moves sides, replaces and refines`() {
+        val claude = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.path.isNotEmpty() -> emptyList()
+                ctx.pros.isEmpty() -> if (side == Polarity.SUPPORT) listOf("P1") else listOf("Off topic")
+                else -> if (side == Polarity.SUPPORT) listOf("P1 better") else listOf("C1")
+            }
+        }
+        val codex = FakeProposer("codex") { ctx, side, _ ->
+            when {
+                ctx.path.isNotEmpty() -> emptyList()
+                ctx.pros.isEmpty() -> if (side == Polarity.SUPPORT) listOf("P1 again") else listOf("Really pro")
+                else -> if (side == Polarity.SUPPORT) listOf("P1 example") else emptyList()
+            }
+        }
+        // Round 1 candidates: P1, P1 again, Off topic, Really pro (no existing: candidate j is index j).
+        // Round 2: existing pros [P1, Really pro], cons [] ; candidates P1 better, P1 example, C1.
+        val verdicts = mapOf(
+            "P1" to Triage(TriageAction.ADD),
+            "P1 again" to Triage(TriageAction.DUPLICATE, 0),
+            "Off topic" to Triage(TriageAction.DROP),
+            "Really pro" to Triage(TriageAction.OTHER_SIDE),
+            "P1 example" to Triage(TriageAction.REFINE, 0),
+            "P1 better" to Triage(TriageAction.REPLACE, 0),
+            "C1" to Triage(TriageAction.ADD),
+        )
+        val judge = FakeJudge(triage = { _, cands -> cands.map { verdicts.getValue(it.text) } })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(claude, codex),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 2, maxDepth = 0),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val kids = g.childrenOf(root).associate { g.claim(it.source!!).text!! to it.polarity!! }
+        assertEquals(mapOf("P1 better" to "SUPPORT", "Really pro" to "SUPPORT", "C1" to "ATTACK"), kids)
+        // REPLACE swapped the unexplored P1's text; DUPLICATE had recorded codex on it.
+        val p1 = g.claims().single { it.text == "P1 better" }
+        assertEquals("claude", p1.proposer)
+        assertEquals(listOf("codex"), p1.alsoProposedBy)
+        assertTrue(judge.relationCalls.any { it.child == "P1 better" }, "a replaced argument is re-assessed")
+        // REFINE attached the example under P1, as support.
+        val refinement = g.edges().single { g.claim(it.source!!).text == "P1 example" }
+        assertEquals(p1.ref, refinement.target)
+        assertEquals("SUPPORT", refinement.polarity)
+        assertEquals(2, g.claim(refinement.source!!).depth)
+        assertEquals(
+            mapOf("ADD" to 2, "DUPLICATE" to 1, "REPLACE" to 1, "REFINE" to 1, "OTHER_SIDE" to 1, "DROP" to 1),
+            g.node(root).triage,
+        )
+        assertEquals(1, g.node(root).duplicatesDropped)
+        assertEquals(2, judge.triageCalls.size) // one request per round
+    }
+
+    /** Round 1: claude "A", codex "B" (B MERGEs into candidate 0 = A); ATTACK side empty. */
+    private fun mergeRun(merger: Merger?): Pair<FakeJudge, GraphDto> {
+        val claude = FakeProposer("claude") { _, side, _ -> if (side == Polarity.SUPPORT) listOf("A") else emptyList() }
+        val codex = FakeProposer("codex") { _, side, _ -> if (side == Polarity.SUPPORT) listOf("B") else emptyList() }
+        val judge = FakeJudge(triage = { _, cands -> cands.map { if (it.text == "B") Triage(TriageAction.MERGE, 0) else Triage(TriageAction.ADD) } })
+        val e = engine(
+            judge = judge, proposers = listOf(claude, codex), merger = merger,
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0),
+        )
+        e.ask("Q?")
+        e.idle()
+        return judge to e.snapshot()
+    }
+
+    @Test
+    fun `MERGE rewrites the unexplored target as one argument and re-judges it`() {
+        val asked = CopyOnWriteArrayList<List<String>>()
+        val (judge, g) = mergeRun { claim, side, a, b ->
+            asked += listOf(claim, side.name, a, b)
+            "A and B."
+        }
+        assertEquals(listOf(listOf("Q?", "SUPPORT", "A", "B")), asked.toList())
+        val node = g.claims().single { it.depth == 1 }
+        assertEquals("A and B.", node.text)
+        assertEquals(true, node.merged)
+        assertEquals("claude", node.proposer)
+        assertEquals(listOf("codex"), node.alsoProposedBy)
+        assertEquals(mapOf("ADD" to 1, "MERGE" to 1), g.claims().single { it.depth == 0 }.triage)
+        // plausibility and link strength are judged again on the merged text
+        assertTrue(judge.plausibilityCalls.any { it.third == "A and B." })
+        assertTrue(judge.relationCalls.any { it.child == "A and B." })
+    }
+
+    @Test
+    fun `a failed merge falls back to DUPLICATE and records the error`() {
+        val (_, g) = mergeRun { _, _, _, _ -> error("claude timed out") }
+        val node = g.claims().single { it.depth == 1 }
+        assertEquals("A", node.text)
+        assertNull(node.merged)
+        assertEquals(listOf("codex"), node.alsoProposedBy)
+        val root = g.claims().single { it.depth == 0 }
+        assertEquals(mapOf("ADD" to 1, "DUPLICATE" to 1), root.triage)
+        assertEquals(1, root.duplicatesDropped)
+        assertTrue(root.error!!.contains("merge") && root.error!!.contains("claude timed out"), root.error)
+    }
+
+    @Test
+    fun `REPLACE of an argument that is already explored only merges it as a duplicate`() {
+        val p = FakeProposer("claude") { ctx, side, _ ->
+            if (side == Polarity.ATTACK || ctx.path.isNotEmpty()) emptyList() else if (ctx.pros.isEmpty()) listOf("A") else listOf("A, better")
+        }
+        val judge = FakeJudge(triage = { _, cands -> cands.map { if (it.text == "A, better") Triage(TriageAction.REPLACE, 0) else Triage(TriageAction.ADD) } })
+        val merges = AtomicInteger()
+        val e = engine(judge = judge, proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1),
+            merger = { _, _, _, _ -> merges.incrementAndGet(); "never" })
+        val root = e.ask("Q?")
+        e.idle()
+        val a = e.snapshot().claims().single { it.text == "A" }
+        assertEquals(Status.ROUND_LIMIT, a.status)
+        // CTL-02 re-runs the finished root; A has been explored meanwhile, so it keeps its text.
+        e.setOverride(root, Override.EXPAND)
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(listOf("A"), g.childrenOf(root).map { g.claim(it.source!!).text })
+        assertEquals(mapOf("ADD" to 1, "DUPLICATE" to 1), g.node(root).triage)
+    }
+
+    @Test
+    fun `claims below the root use the smaller per-side cap`() {
+        val judge = FakeJudge(saturation = { _, _ -> 0.0 })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(FakeProposer("claude")),
+            config = DeliberationEngine.Config(argsPerCall = 5, maxRounds = 1, maxDepth = 1, maxArgsPerSide = 5, maxArgsPerSideChild = 2),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(5, g.childrenOf(root).count { it.polarity == "SUPPORT" })
+        g.claims().filter { it.depth == 1 }.forEach { k ->
+            val ref = CellRef(java.util.UUID.fromString(k.ref))
+            assertEquals(2, g.childrenOf(ref).count { it.polarity == "SUPPORT" })
+            assertEquals(2, g.childrenOf(ref).count { it.polarity == "ATTACK" })
+            assertEquals(Status.SATURATED, k.status)
+        }
+    }
+
+    @Test
+    fun `STOP on a claim waiting for its next round stops it at once and releases its children`() {
+        val q2Asked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val blocked = CountDownLatch(1)
+        val p = FakeProposer("claude") { ctx, _, _ ->
+            if (ctx.claim == "Q1?") {
+                if (ctx.pros.isEmpty()) q2Asked.await(10, TimeUnit.SECONDS)
+                else { blocked.countDown(); release.await(10, TimeUnit.SECONDS) }
+            }
+            null
+        }
+        val e = engine(
+            proposers = listOf(p),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, workers = 1),
+        )
+        e.ask("Q1?")
+        val q2 = e.ask("Q2?")
+        q2Asked.countDown()
+        // Queue: Q1 round 1, Q2 round 1, then Q1's round 2 blocks the only worker with Q2 waiting.
+        assertTrue(blocked.await(10, TimeUnit.SECONDS))
+        assertEquals(1, e.snapshot().node(q2).rounds)
+        assertEquals(Status.EXPLORING, e.snapshot().node(q2).status)
+        e.setOverride(q2, Override.STOP)
+        assertEquals(Status.STOPPED, e.snapshot().node(q2).status)
+        release.countDown()
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(1, g.node(q2).rounds)
+        val kids = g.childrenOf(q2).map { g.claim(it.source!!) }
+        assertEquals(2, kids.size)
+        assertTrue(kids.all { it.status == Status.DEPTH_LIMIT }, kids.toString())
     }
 }

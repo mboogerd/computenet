@@ -18,10 +18,13 @@ credences. The human can override the explorer's depth decisions per claim.
   (Codex CLI). Every argument records which proposer produced it.
 - **Judge** — Jev. Judgments are typed (score / noul / choice), never prose.
 - **Round** — one pass over a claim: ask every proposer for new pro and con
-  arguments on the unsaturated sides, dedupe, attach survivors, re-judge
-  saturation.
+  arguments on the unsaturated sides, triage the proposals, attach survivors,
+  assess them, re-judge saturation.
 - **Expansion** — running rounds on a claim until it is saturated or its round
-  limit is hit, then enqueuing its children.
+  limit is hit, then enqueuing its children. Each round is one task in the
+  exploration queue (§3 "Exploration order").
+- **Contribution** — how much exploring a claim is worth: reach × relevance ×
+  quality (EXP-05); 1 for the root.
 - **Override** — the human's per-claim setting: `AUTO` (Jev decides),
   `EXPAND` (force expansion), `STOP` (force no further expansion).
 
@@ -31,11 +34,15 @@ credences. The human can override the explorer's depth decisions per claim.
   five ordered levels (almost certainly false … almost certainly true) mapped
   linearly to [0,1] — judged on the claim alone plus the root question as
   context, not on its arguments. It is applied as the agora stance of user
-  `jev` on that claim.
+  `jev` on that claim. An argument is judged the moment it is attached, in
+  one Jev request together with its CRED-02 strength and its EXP-05 quality
+  and relevance (independent questions over one state); the root, or an
+  argument whose assessment failed, is judged when its expansion starts.
 - **CRED-02** Every edge receives a Jev *relation strength* judgment — a Score:
   "if the child claim were true, how strongly would it bear on the parent in
   the stated direction" (irrelevant … decisive), mapped to [0,1]. Applied as the
-  `jev` stance on the edge node.
+  `jev` stance on the edge node. An argument whose text changes (EXP-03
+  REPLACE or MERGE) is assessed again.
 - **CRED-03** Displayed credence is the agora-propagated credence (DF-QuAD over
   stances and incoming edges). The deliberation code never computes credence
   itself.
@@ -48,35 +55,65 @@ credences. The human can override the explorer's depth decisions per claim.
   `argsPerCall` (default 1) new arguments per unsaturated side, giving each
   proposer the root question, the path from root to the claim, and the
   existing pro/con arguments of the claim (so it proposes *new* ones).
-- **EXP-03** Before attaching, Jev judges each candidate for **duplication**
-  (a Choice among the claim's existing arguments on that side plus `none`, one
-  question per candidate in one request). Duplicates are dropped and counted.
-  Candidates from the same round are also deduped against each other.
+- **EXP-03** Before attaching, exact-text repeats are dropped, then Jev
+  **triages** every remaining candidate of the round in one request: per
+  candidate an *action* Choice and, when there is anything to point at, an
+  independent *target* Choice (`none` + the claim's existing arguments on both
+  sides, labelled by side, + the candidates before it in the list — so
+  near-duplicates within one round are caught in the same request). Actions:
+  - `ADD` — a new point on its stated side: attached there;
+  - `DUPLICATE` — the same point as the target: dropped, counted in
+    `duplicatesDropped`, its proposer recorded in the target's
+    `alsoProposedBy`;
+  - `REPLACE` — a clearly stronger/clearer version of the target: the target
+    takes its text and provenance;
+  - `MERGE` — overlaps the target, each adding something: Claude (the `claude`
+    CLI, same process gate, sandbox and timeout as EXP-09) rewrites the two as
+    one sentence, which becomes the target's text (`merged: true`, the
+    candidate's proposer in `alsoProposedBy`);
+  - `REFINE` — a specific instance of / evidence for the target: attached as a
+    `SUPPORT` argument under the target instead of under the claim;
+  - `OTHER_SIDE` — argues the opposite side: attached there;
+  - `DROP` — not a real argument about the claim (off-topic, incoherent, a
+    question, a restatement of the claim).
+
+  REPLACE and MERGE only rewrite a target nobody has explored yet (still
+  `QUEUED`, no children); otherwise, or if the merge call fails (error
+  recorded), they fall back to `DUPLICATE`. A targeted action without a target
+  becomes `ADD` (`DUPLICATE`: dropped). The claim counts each action taken in
+  `triage`. Rewording lives in the deliberation layer (agora's claim text is
+  immutable); if the triage request fails, every candidate is `ADD`.
 - **EXP-04** After each round, Jev judges **saturation** per side (a Noul:
   "is an important consideration on this side still missing from the existing
   arguments?", read as saturated = 1 − p). A side is saturated when that value
   ≥ `saturation` (default 0.22, calibrated on live Jev samples, see §10), or
-  when it already holds `maxArgsPerSide` (default 6) arguments. Saturated sides
-  receive no further proposals. Expansion ends when both sides are saturated
-  or `maxRounds` (default 3) is reached.
+  when it already holds its cap: `maxArgsPerSide` (default 6) for the root,
+  `maxArgsPerSideChild` (default 3) below it. Saturated sides receive no
+  further proposals, and a round never attaches beyond the cap. Expansion
+  ends when both sides are saturated or `maxRounds` (default 3) is reached.
 - **EXP-05** Relevance decays along the tree. Each claim has a **reach**:
   1 for the root, `reach(parent) × strength(edge)` for an argument (CRED-02
-  strength of the edge attaching it). Before expanding a non-root claim, Jev
-  judges **relevance** (a Noul given the root question and the full path:
+  strength of the edge attaching it). When an argument is attached, Jev also
+  judges its **relevance** (a Noul given the root question and the full path:
   "would analysing this claim further materially change how the root question
-  should be answered?"). The claim is expanded only when
-  `relevance × reach ≥ minInfluence` (default 0.35, calibrated in §10);
-  otherwise it is `PRUNED`. If the relevance judgment fails, reach alone is
-  used; if a relation-strength judgment fails, strength 0.5 is used. The root
-  is always expanded. Beyond `maxDepth` (default 3)
-  claims are `DEPTH_LIMIT` without a relevance call — a safety net, not the
+  should be answered?") and its **quality** (a Noul: "is this a
+  well-constructed argument — a self-contained, coherent claim that actually
+  bears on its parent in the stated direction, not a restatement, off-topic or
+  a rhetorical question?"). Its **contribution** is
+  `reach × relevance × quality`. A non-root claim whose contribution is below
+  `minInfluence` (default 0.35, calibrated in §10 on relevance × reach) is
+  `PRUNED` without being explored — an irrelevant or poorly constructed
+  argument never is. If the assessment fails, strength 0.5 is used and
+  relevance and quality count as 1. The root is always expanded. Beyond
+  `maxDepth` (default 3) claims are `DEPTH_LIMIT` — a safety net, not the
   primary stop.
 - **EXP-06** A global `maxClaims` budget (default 60 per question) is enforced:
-  no argument is attached once the tree holds that many claims; remaining
-  queued claims become `BUDGET`. Together with `maxArgsPerSide` this keeps
-  any one claim from consuming the budget. Gates run in the order plausibility
-  → depth → influence → budget, so `BUDGET` means the claim would otherwise
-  have expanded.
+  no argument is attached once the tree holds that many claims. The budget is
+  spent in exploration order (below), so it goes to the most contributing
+  claims first. Gates run in the order depth → contribution → budget, so
+  `BUDGET` means the claim would otherwise have expanded and never did; a
+  claim that already ran a round and then meets the budget ends `ROUND_LIMIT`
+  with `error = "budget exhausted"`.
 - **EXP-07** Concurrency is bounded: at most `maxProcesses` (default 8) CLI
   processes run at once across the whole app. Jev calls are not rate-limited
   by us but retry 429/529 with exponential backoff (≤ 4 attempts).
@@ -89,11 +126,22 @@ credences. The human can override the explorer's depth decisions per claim.
   strings, tolerating surrounding prose/code fences; anything unparseable is a
   failed call.
 
+### Exploration order
+
+Work is one priority queue across all questions; each task is one round of
+one claim. A claim's first round is queued at its contribution (the root at
+1); after each round a claim that is not finished goes back into the queue at
+`contribution × roundDecay^rounds` (`roundDecay` default 0.5), so a strong
+claim's second round competes fairly with a weaker sibling's first. Ties go
+first-in, first-out. Children are queued only when their parent finishes. A
+claim the human forces with `EXPAND` is queued ahead of all contributions.
+
 ## 4. Human control (requirements CTL-*)
 
 - **CTL-01** The human can set any claim's override to `AUTO`, `EXPAND` or
   `STOP` at any time.
-- **CTL-02** `EXPAND` skips the relevance and depth gates for that claim and,
+- **CTL-02** `EXPAND` skips the contribution and depth gates for that claim,
+  queues it ahead of all contributions, and,
   if the claim already finished (saturated/pruned/limit), runs it again with
   one extra round allowance. That forced round ignores both Jev saturation and
   the per-side cap. It does not bypass `maxClaims`.

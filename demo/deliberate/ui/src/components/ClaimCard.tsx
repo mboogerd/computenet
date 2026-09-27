@@ -5,6 +5,7 @@ import {
   pct,
   phaseOf,
   reachTier,
+  triageText,
   reachWeight,
   STATUS_HINT,
   STATUS_LABEL,
@@ -176,11 +177,16 @@ export function Facts(props: { id: string; claim: NodeDto; edge?: NodeDto }) {
       <Show when={c().depth !== 0}>
         {row('Reach', p(c().reach), 'How much this can matter to the question: link strengths multiplied from the top')}
         {row('Relevance', p(c().relevance), 'Would exploring it further change the answer? (Jev)')}
+        {row('Quality', p(c().quality), 'Is it a well-made argument: self-contained, coherent, on point? (Jev)')}
+        {row('Contribution', p(c().contribution), 'Reach × relevance × quality: stronger claims are explored first; too low and it is set aside')}
       </Show>
       {row('Sides covered', sides(), 'How complete Jev judges each side of the argument')}
       {row('Rounds', c().rounds?.toString(), 'Proposal rounds run on this claim')}
       {row('Duplicates dropped', c().duplicatesDropped?.toString(), 'Proposed arguments Jev recognised as repeats')}
+      {row('Sorted proposals', triageText(c().triage), 'What Jev did with each argument proposed for this claim')}
       <Show when={c().proposer}>{row('Proposed by', c().proposer!, 'The model that wrote this claim')}</Show>
+      {row('Also proposed by', c().alsoProposedBy?.join(', '), 'Other models that made the same point')}
+      <Show when={c().merged}>{row('Merged', 'yes', 'Rewritten as one argument together with an overlapping one')}</Show>
       <Show when={c().error}>
         <dt>Error</dt>
         <dd class="facts__error">{c().error}</dd>

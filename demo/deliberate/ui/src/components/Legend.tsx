@@ -33,8 +33,15 @@ export function Legend() {
           <dd>If the argument were true, how much it would move the claim above.</dd>
           <dt>Reach</dt>
           <dd>How much a claim can matter to the question: its link strengths multiplied up to the top. Faint claims barely can.</dd>
+          <dt>Quality</dt>
+          <dd>Whether an argument is well made: self-contained, coherent and actually about the claim above.</dd>
+          <dt>Contribution</dt>
+          <dd>Reach × relevance × quality. The strongest claims are explored first; too low and a claim is set aside.</dd>
           <dt>Jev</dt>
-          <dd>The AI judge. It scores every claim and link, spots repeats, and decides what is worth exploring.</dd>
+          <dd>
+            The AI judge. It scores every claim and link, sorts new arguments (added, repeat, reworded, merged, nested as
+            evidence, moved sides, dropped), and decides what is worth exploring.
+          </dd>
           <dt>Status</dt>
           <dd>
             <em>gathering arguments</em> and <em>weighing</em> are live; <em>fully argued</em> means both sides are

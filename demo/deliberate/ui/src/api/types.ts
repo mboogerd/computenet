@@ -46,10 +46,18 @@ export interface NodeDto {
   override?: Override;
   /** "question" for a root, else the proposer id ("claude" | "codex"). */
   proposer?: string;
+  /** EXP-03: other proposers that proposed the same point (DUPLICATE) or the replaced wording (REPLACE). */
+  alsoProposedBy?: string[];
+  /** EXP-03 MERGE: true when this argument's text was rewritten together with an overlapping one. */
+  merged?: boolean;
   /** Jev plausibility stance (CRED-01), once judged. */
   plausibility?: number;
-  /** Last Jev relevance probability (EXP-05), when judged. */
+  /** Jev relevance probability (EXP-05), judged when the argument was attached. */
   relevance?: number;
+  /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent. */
+  quality?: number;
+  /** SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1). */
+  contribution?: number;
   /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1). */
   reach?: number;
   /** Last Jev saturation probabilities per side (EXP-04). */
@@ -57,6 +65,8 @@ export interface NodeDto {
   conSaturation?: number;
   rounds?: number;
   duplicatesDropped?: number;
+  /** EXP-03: triage actions taken on this claim's proposals, by action name (ADD, DUPLICATE, …). */
+  triage?: Record<string, number>;
   error?: string;
   // --- EDGE only (child → parent) ---
   polarity?: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeDto } from '../src/api/types';
-import { phaseOf, questionProgress, reachTier, reachWeight, REACH_FLOOR, strengthWord, verdict } from '../src/util/format';
+import { phaseOf, questionProgress, reachTier, reachWeight, REACH_FLOOR, strengthWord, triageText, verdict } from '../src/util/format';
 import { nextTheme, resolvedTheme } from '../src/util/theme';
 import { easeOut, tweenAt } from '../src/util/tween';
 
@@ -9,8 +9,11 @@ describe('verdict', () => {
     expect(verdict(0.68).text).toBe('leaning yes · 68%');
     expect(verdict(0.5).text).toBe('too close to call · 50%');
     expect(verdict(0.3).label).toBe('leaning no');
-    expect(verdict(0.05).label).toBe('very likely no');
-    expect(verdict(0.93).label).toBe('very likely yes');
+    expect(verdict(0.05).label).toBe('strong no');
+    expect(verdict(0.93).label).toBe('strong yes');
+    // the live defect: 62% is a lean, not a toss-up
+    expect(verdict(0.62).text).toBe('leaning yes · 62%');
+    expect(verdict(0.38).text).toBe('leaning no · 38%');
   });
 
   it('puts band edges on the rounded percentage the user sees', () => {
@@ -20,15 +23,18 @@ describe('verdict', () => {
     expect(verdict(0.4).lean).toBe(0);
     expect(verdict(0.394).lean).toBe(-1);
     expect(verdict(0.8).lean).toBe(1);
+    expect(verdict(0.804).label).toBe('leaning yes'); // shows 80%
+    expect(verdict(0.806).label).toBe('strong yes'); // shows 81%
     expect(verdict(0.2).lean).toBe(-1);
     expect(verdict(0.19).lean).toBe(-2);
+    expect(verdict(0.19).label).toBe('strong no');
   });
 
   it('speaks likelihood for claims and clamps junk input', () => {
     expect(verdict(0.75, 'claim').text).toBe('plausible · 75%');
     expect(verdict(0.1, 'claim').label).toBe('very unlikely');
-    expect(verdict(1.7).text).toBe('very likely yes · 100%');
-    expect(verdict(Number.NaN).text).toBe('very likely no · 0%');
+    expect(verdict(1.7).text).toBe('strong yes · 100%');
+    expect(verdict(Number.NaN).text).toBe('strong no · 0%');
   });
 });
 
@@ -118,5 +124,13 @@ describe('tween easing', () => {
     expect(tweenAt(0.2, 0.8, 1)).toBeCloseTo(0.8);
     expect(tweenAt(0.2, 0.8, 2)).toBeCloseTo(0.8);
     expect(easeOut(0.5)).toBeGreaterThan(0.5); // ease-out: most of the move happens early
+  });
+});
+
+describe('triage wording', () => {
+  it('lists the non-zero triage counts in plain words, in a fixed order', () => {
+    expect(triageText(undefined)).toBeUndefined();
+    expect(triageText({})).toBeUndefined();
+    expect(triageText({ DROP: 1, ADD: 3, MERGE: 1, DUPLICATE: 0 })).toBe('3 added · 1 merged · 1 dropped');
   });
 });

@@ -2,9 +2,9 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-j
 import type { GraphDto } from '../api/types';
 import { buildTree } from '../tree/buildTree';
 import { questionProgress, STATUS_HINT, STATUS_LABEL, verdict } from '../util/format';
+import { createTween } from '../util/tween';
 import { ClaimCard, Facts, indexTree, sideCounts, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
 import { OverrideControl } from './OverrideControl';
-import { TweenPct } from './Tween';
 
 export function TreeView(props: { graph: GraphDto; root: string }) {
   const tree = createMemo(() => buildTree(props.graph, props.root));
@@ -45,7 +45,9 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
     <Show when={entry()}>
       {(e) => {
         const claim = () => e().node.claim;
-        const v = () => verdict(claim().credence, 'question');
+        // Label and number come from the same (animated) value, so they never disagree mid-glide.
+        const shown = createTween(() => claim().credence);
+        const v = () => verdict(shown(), 'question');
         const counts = () => sideCounts(e().node);
         const open = () => props.sel.selected() === claim().ref;
         const busy = () => progress().active > 0;
@@ -70,7 +72,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                   <span class="verdict__label">{v().label}</span>
                   <span class="verdict__sep" aria-hidden="true">·</span>
                   <span class="verdict__num">
-                    <TweenPct value={claim().credence} />
+                    {`${v().percent}%`}
                   </span>
                 </p>
                 <button
