@@ -1279,6 +1279,10 @@ class DeliberationEngineTest {
         assertEquals(Status.DEPTH_LIMIT, holds.status)
         assertEquals(even.text, judge.relationCalls.single { it.child == "Even holds" }.parent)
         assertEquals(mapOf("ADD" to 2), even.triage)
+        assertEquals(0.0, even.proSaturation)
+        assertEquals(0.0, even.conSaturation)
+        assertEquals(0, even.duplicatesDropped)
+        assertNull(even.error)
         // Link rounds are non-root work and therefore participate in the
         // question's diminishing-return yield series (EXP-10).
         assertEquals(3, g.questions.single().yieldRounds)
@@ -1355,6 +1359,39 @@ class DeliberationEngineTest {
         assertEquals(1, links.sumOf { it.rounds ?: 0 })
         assertTrue(links.any { it.status == Status.BUDGET }, "$links")
         assertTrue(g.nodes.none { it.status in setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING) })
+    }
+
+    @Test
+    fun `an in-flight link exposes edge activity and keeps its question active and queued for cost`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val inner = linkProposer(rootPros = listOf("P"))
+        val gated = object : Proposer by inner {
+            override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> {
+                if (ctx.link?.argument == "P" && side == Polarity.SUPPORT) {
+                    entered.countDown()
+                    release.await(20, TimeUnit.SECONDS)
+                }
+                return inner.propose(ctx, side, max)
+            }
+        }
+        val e = engine(
+            judge = FakeJudge(strength = { if (it == "P") 0.5 else 0.8 }), proposers = listOf(gated),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, workers = 1),
+        )
+        val root = e.ask("Q?")
+        try {
+            assertTrue(entered.await(20, TimeUnit.SECONDS))
+            val g = e.snapshot()
+            val link = g.linkOf(g.text("P"))
+            assertEquals("exploring", link.activity)
+            assertEquals(true, g.questions.single { it.root == root.id.toString() }.active)
+            assertEquals(1, g.questions.single { it.root == root.id.toString() }.cost.queued)
+        } finally {
+            release.countDown()
+        }
+        e.idle()
+        assertNull(e.snapshot().linkOf(e.snapshot().text("P")).activity)
     }
 
     @Test

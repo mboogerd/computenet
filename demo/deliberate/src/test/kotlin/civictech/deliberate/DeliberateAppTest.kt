@@ -341,6 +341,12 @@ class DeliberateAppTest {
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-processes", "0")) }
+        // LINK-04: link exploration is on by default and has an explicit,
+        // fail-closed on|off command-line switch.
+        assertEquals(true, Options(emptyArray()).config.exploreLinks)
+        assertEquals(true, Options(arrayOf("--explore-links", "on")).config.exploreLinks)
+        assertEquals(false, Options(arrayOf("--explore-links", "off")).config.exploreLinks)
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--explore-links", "maybe")) }
         // EXP-10 knobs
         assertEquals(DeliberationEngine.YieldStop(), Options(emptyArray()).config.yieldStop)
         assertEquals(null, Options(arrayOf("--yield-stop", "off")).config.yieldStop)
