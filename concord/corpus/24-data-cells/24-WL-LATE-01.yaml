@@ -13,6 +13,21 @@
 # because a `set-source`'s re-add of an already-live element is not something
 # this scenario should depend on (`b` is a genuinely different source, so its
 # add is a distinct tag on the same element value).
+#
+# Verification note (computenet-t4od7.3, evidence.md's schedule-dependence
+# check): deleting the quiesce between `add a [25, z]` and the `[4, late]` /
+# `[19, late2]` / `[22, w]` block does NOT redden this file's checks under the
+# 20-run schedule sweep. Two independent reasons cover the three affected
+# adds: `4` is below every floor this run ever reaches (even the pre-25 floor
+# of 7), so it is late regardless of which hop wins the race; and `19`, even
+# if transiently mis-admitted into window 10 by a stale floor, sits in a
+# window `[24-WL-06]` eviction (triggered once the delayed floor update
+# reaches 20) sweeps away anyway, so the final `MapDelta`/`late` observables
+# converge to the same state either way. The general hazard the quiesce rule
+# guards against is real (an add strictly between the pre- and post-rise
+# floor, inadmissible under a schedule-dependent race) — this file's chosen
+# values just do not sit in that gap, so the deletion experiment is a
+# negative result, recorded rather than assumed.
 id: 24-WL-LATE-01
 title: A window with lateness folds an out-of-order-but-above-floor add as ordinary, late-drops a below-floor add onto its late outlet, and never retracts a live copy
 covers: [24-WL-01, 24-WL-06, 24-WL-07, 24-OP-WINDOW-02]
