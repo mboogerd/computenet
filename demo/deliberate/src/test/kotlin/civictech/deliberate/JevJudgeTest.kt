@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.test.AfterTest
@@ -333,6 +334,19 @@ class JevJudgeTest {
             val error = assertFailsWith<JevException> { offline.relevance(ctx) }
             assertEquals(null, error.status)
             assertTrue(delays.isEmpty())
+            // No backoff sleep alone does not prove one attempt: a retry that skips the sleeper
+            // would pass the line above. Each attempt leaves one connection in the backlog.
+            stub.soTimeout = 500
+            var attempts = 0
+            while (true) {
+                try {
+                    stub.accept().close()
+                    attempts++
+                } catch (_: SocketTimeoutException) {
+                    break
+                }
+            }
+            assertEquals(1, attempts, "IO failure must be attempted exactly once")
         } finally {
             stub.close()
         }
