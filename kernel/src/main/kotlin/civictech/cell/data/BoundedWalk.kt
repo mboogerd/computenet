@@ -124,15 +124,18 @@ internal object EntryOrder : Comparator<Any?> {
  *
  * **A mistyped bound is refused, not answered (D9, maintainer decision
  * 2026-09-27, option (b)).** When a non-null end's runtime class differs from a
- * non-null [key]'s, this throws [IllegalArgumentException] naming both classes.
- * Rule 3 (compare by class name) would otherwise answer — `KeyBound(1, 10)`
- * over `Long` keys admits nothing, `KeyBound(100, null)` admits everything —
- * and the second is exactly the "full state as though the bound had been
- * applied" that `BoundedStateful` obligation 5 forbids. The throw is the
- * refusal surface because a walk has nowhere else to carry one: every family
- * calls this only while freezing its walk order at walk open (never on a
- * resumed page), so the refusal fires on the first page, before any entry is
- * answered. Behind `ManagedHost.readState` it surfaces as
+ * non-null [key]'s, this throws [civictech.cell.KeyBoundMistypedException] (an
+ * [IllegalArgumentException] subtype) naming both classes. Rule 3 (compare by
+ * class name) would otherwise answer — `KeyBound(1, 10)` over `Long` keys
+ * admits nothing, `KeyBound(100, null)` admits everything — and the second is
+ * exactly the "full state as though the bound had been applied" that
+ * `BoundedStateful` obligation 5 forbids. The throw is the refusal surface
+ * because a walk has nowhere else to carry one: every family calls this only
+ * while freezing its walk order at walk open (never on a resumed page), so
+ * the refusal fires on the first page, before any entry is answered. Behind
+ * `ManagedHost.readState` this dedicated exception type is named
+ * `StateReadResult.Reason.KEY_BOUND_MISTYPED`; every other throw from a
+ * cell's `readBounded`/`snapshot` still surfaces as
  * `StateReadResult.Reason.READ_FAILED`. A `null` key has no class and is
  * ordered by rule 1 as before; a key the walk's `scope` already rejected is
  * never compared, because the families conjoin scope first.
@@ -149,9 +152,11 @@ internal fun EntryOrder.admits(key: Any?, bound: civictech.cell.KeyBound?): Bool
 }
 
 private fun requireSameClass(key: Any, end: Any?, side: String, bound: civictech.cell.KeyBound) {
-    require(end == null || end.javaClass == key.javaClass) {
-        "KeyBound refused (D9): `$side` end is ${end!!.javaClass.name} but the walked key is " +
-            "${key.javaClass.name}; a bound's ends must be the keys' runtime class ($bound)"
+    if (end != null && end.javaClass != key.javaClass) {
+        throw civictech.cell.KeyBoundMistypedException(
+            "KeyBound refused (D9): `$side` end is ${end.javaClass.name} but the walked key is " +
+                "${key.javaClass.name}; a bound's ends must be the keys' runtime class ($bound)"
+        )
     }
 }
 

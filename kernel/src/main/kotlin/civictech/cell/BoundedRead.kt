@@ -150,10 +150,13 @@ interface BoundedStateful : Stateful {
  *
  * **A non-null end must be the same runtime class as the keys it is compared
  * against, or the walk is refused (D9, maintainer decision 2026-09-27).** A
- * cell's `readBounded` throws [IllegalArgumentException] naming both classes
- * when its walk compares a non-null key against an end of another class — at
- * walk open, before any entry is answered — and [civictech.cell.host.ManagedHost.readState]
- * answers that as [StateReadResult.Reason.READ_FAILED]. It is never answered by
+ * cell's `readBounded` throws [civictech.cell.KeyBoundMistypedException]
+ * (an [IllegalArgumentException] subtype) naming both classes when its walk
+ * compares a non-null key against an end of another class — at walk open,
+ * before any entry is answered — and [civictech.cell.host.ManagedHost.readState]
+ * answers that as [StateReadResult.Reason.KEY_BOUND_MISTYPED], distinct from
+ * [StateReadResult.Reason.READ_FAILED], which every other throw from
+ * `readBounded` still answers. It is never answered by
  * [civictech.cell.data.EntryOrder]'s cross-class rule (compare by class name),
  * which would silently return nothing for `KeyBound(1, 10)` over `Long` keys
  * and *everything* for `KeyBound(100, null)` — the silent widening obligation 5
@@ -169,6 +172,22 @@ data class KeyBound(val from: Any?, val to: Any?) : Serializable {
         require(from != null || to != null) { "KeyBound requires at least one non-null end" }
     }
 }
+
+/**
+ * Thrown by [civictech.cell.data.EntryOrder.admits] when a bounded walk's
+ * [KeyBound] end is a different runtime class than the key it is compared
+ * against (D9, maintainer decision 2026-09-27). A dedicated
+ * [IllegalArgumentException] subtype — rather than a bare
+ * `IllegalArgumentException` — so [civictech.cell.host.ManagedHost.readState]
+ * can name this specific refusal
+ * [StateReadResult.Reason.KEY_BOUND_MISTYPED] instead of folding it into
+ * [StateReadResult.Reason.READ_FAILED] with every other throw from
+ * `readBounded`. Lives in this package, not `civictech.cell.data`, purely so
+ * [civictech.cell.host.ManagedHost] can name it without adding a new
+ * `host -> data` package edge to `ArchitectureRatchetTest`'s baseline: `host`
+ * and `data` both already import from `civictech.cell` root.
+ */
+internal class KeyBoundMistypedException(message: String) : IllegalArgumentException(message)
 
 /**
  * What a caller asks of [BoundedStateful.readBounded] (V1C-KERNEL).
@@ -558,5 +577,18 @@ sealed interface StateReadResult {
          * not turn a broken cell into a broken caller.
          */
         READ_FAILED,
+
+        /**
+         * [StateRead.keyBound] had a non-null end whose runtime class differs
+         * from the runtime class of a key the walk compared it against (D9,
+         * maintainer decision 2026-09-27) — a caller error (the bound is
+         * mistyped for this cell's key space), not a broken cell. Thrown by
+         * [civictech.cell.data.EntryOrder.admits] as
+         * [civictech.cell.KeyBoundMistypedException], a dedicated
+         * [IllegalArgumentException] subtype [civictech.cell.host.ManagedHost]
+         * recognizes and names here rather than folding into [READ_FAILED]
+         * with every other throw from `readBounded`.
+         */
+        KEY_BOUND_MISTYPED,
     }
 }

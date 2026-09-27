@@ -4,6 +4,7 @@ import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Cursor
 import civictech.cell.KeyBound
+import civictech.cell.KeyBoundMistypedException
 import civictech.cell.ReadCaveat
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -222,6 +223,11 @@ class BoundedRangeScanTest {
         // cross-class rule these would answer silently: KeyBound(40, 80) (Int
         // ends) over Long keys would admit nothing, KeyBound(100, null) would
         // admit every key — full state as though the bound had been applied.
+        // The throw is `KeyBoundMistypedException`, a dedicated IllegalArgumentException
+        // subtype: `ManagedHost.readState` (computenet-5woy9) names it
+        // `StateReadResult.Reason.KEY_BOUND_MISTYPED` rather than folding it
+        // into `READ_FAILED` with every other `readBounded` throw — see
+        // `BoundedStateReadTest`'s host-level pin of both arms.
         val longKeys = (0L until 100L).toList()
         val longMap = MapCell<Long, String>().also { cell -> longKeys.forEach { cell.inlet.call.put(it, "v$it") } }
         val longKeyedSet = KeyedSetCell<Long, String>().also { cell -> longKeys.forEach { cell.inlet.call.put(it, "e$it") } }
@@ -230,7 +236,7 @@ class BoundedRangeScanTest {
         listOf("MapCell" to longMap, "KeyedSetCell" to longKeyedSet, "ShardCell" to longShard).forEach { (name, cell) ->
             mistyped.forEach { bound ->
                 withClue("$name $bound") {
-                    val refusal = shouldThrow<IllegalArgumentException> { drive(cell, limit = 7, keyBound = bound) }
+                    val refusal = shouldThrow<KeyBoundMistypedException> { drive(cell, limit = 7, keyBound = bound) }
                     refusal.message!! shouldContain "java.lang.Integer"
                     refusal.message!! shouldContain "java.lang.Long"
                 }
@@ -242,7 +248,7 @@ class BoundedRangeScanTest {
             }
         }
         // the refusal is at EntryOrder.admits itself, so every family inherits it
-        shouldThrow<IllegalArgumentException> { EntryOrder.admits(5L, KeyBound(1, 10)) }
+        shouldThrow<KeyBoundMistypedException> { EntryOrder.admits(5L, KeyBound(1, 10)) }
         EntryOrder.admits(5L, KeyBound(1L, 10L)).shouldBeTrue()
         // a null key has no class to mismatch; it is ordered first, as before
         EntryOrder.admits(null, KeyBound(1L, 10L)).shouldBeFalse()
