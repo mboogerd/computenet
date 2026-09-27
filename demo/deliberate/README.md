@@ -93,7 +93,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
 | `--args-per-call <n>` | 1 | arguments per proposer call, per side |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
-| `--max-depth <n>` | 3 | claims deeper than this are `DEPTH_LIMIT` |
+| `--max-depth <n>` | 5 | claims deeper than this are `DEPTH_LIMIT` |
 | `--max-claims <n>` | 180 | claims per question; unexplored claims past it become `BUDGET`, explored ones end `ROUND_LIMIT` ("budget exhausted"). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--max-args-per-side-child <n>` | 3 | the same cap for every claim below the root |

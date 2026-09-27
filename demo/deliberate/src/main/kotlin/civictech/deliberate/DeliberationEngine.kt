@@ -79,7 +79,7 @@ class DeliberationEngine(
         val minInfluence: Double = DEFAULT_MIN_INFLUENCE,
         /** SPEC §3 "Exploration order": a claim's next round is queued at contribution × roundDecay^(rounds run). */
         val roundDecay: Double = 0.5,
-        val maxDepth: Int = 3,
+        val maxDepth: Int = 5,
         val maxClaims: Int = 180,
         val workers: Int = 8,
         /** EXP-10: the per-question diminishing-returns stop; null disables it (yields are still recorded). */

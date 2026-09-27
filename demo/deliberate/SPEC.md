@@ -198,7 +198,7 @@ names that model.)
   r −0.3 to −0.54, and pruned the most on-point arguments, so iteration 5
   removed it: canonical form is asked of the proposers only, EXP-02.) If the assessment fails, strength 0.5 is used and
   relevance and quality count as 1. The root is always expanded. Beyond
-  `maxDepth` (default 3) claims are `DEPTH_LIMIT` — a safety net, not the
+  `maxDepth` (default 5) claims are `DEPTH_LIMIT` — a safety net, not the
   primary stop.
 - **EXP-06** A global `maxClaims` budget (default 180 per question) is enforced:
   no argument is attached once the tree holds that many claims. The budget is

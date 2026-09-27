@@ -99,6 +99,10 @@ class CliProposerTest {
         assertFalse("tools.view_image=false" in codex, "codex 0.155 rejects this key under --strict-config")
         assertTrue(codex.hasPair("-s", "read-only"))
         assertTrue(codex.hasPair("-m", "codex-test"))
+        // --ignore-user-config drops the user's model choice; unpinned, codex 0.155 fell back to
+        // gpt-6-astra, which rejects effort "none" and is not what the cost rates assume.
+        val unpinned = CliProposer.codex(ProcessGate(1)).commandLine("prompt", out)
+        assertTrue(unpinned.hasPair("-m", Pricing.DEFAULT_CODEX_MODEL))
         assertTrue(codex.hasPair("-o", out.absolutePath))
         assertTrue("--json" in codex, "SPEC §12: usage comes from the JSONL event stream")
     }

@@ -225,7 +225,10 @@ class CliProposer internal constructor(
                 // (model experiment, 2026-09-27; see README "Models").
                 "-c", "model_reasoning_effort=\"none\"",
             ) +
-                model.flag("-m") + listOf("--json", "-o", out.absolutePath, "--", prompt)
+                // Always pin the model: under --ignore-user-config codex otherwise falls back to
+                // its built-in default (gpt-6-astra on 0.155), which rejects effort "none" and is
+                // not what the cost rates or the model experiment assume.
+                listOf("-m", model ?: Pricing.DEFAULT_CODEX_MODEL) + listOf("--json", "-o", out.absolutePath, "--", prompt)
         }, gate, reader = codexReader(model ?: Pricing.DEFAULT_CODEX_MODEL))
 
         /**
