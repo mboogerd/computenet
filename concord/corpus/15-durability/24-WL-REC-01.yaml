@@ -24,23 +24,30 @@
 # `EventTimeOfPair` reads it as the event time and the window/waterline
 # arithmetic is unchanged; each element below is named by its time.
 #
-# WHAT DISCRIMINATES (measured, computenet-t4od7.8). With `journal-window`
-# made volatile (its checkpoint restore lost) the window is rebuilt empty and
-# refilled only by the journaled source's replayed tail (28): its floor is
-# gone, so the rebuilt waterline's first live floor (3) admits 5 into a
-# re-created window 0 — `l` reads `[]` — and window 20 holds {28, 29}, so the
-# `jv` fold reads `{"20": 2, "30": 1}`. Both checks redden, on 20 of 20 runs.
+# WHAT DISCRIMINATES (measured, computenet-t4od7.8, 20 of 20 runs each).
+# (1) `journal-window` made volatile in `KernelDriverDur` (its checkpoint
+# restore lost; the checkpoint itself still taken, on `s`): the window is
+# rebuilt empty and refilled only by the source's replayed tail 28, its floor
+# is gone, so the rebuilt waterline's first live floor (3) admits 5 into a
+# re-created window 0 and window 20 ends as {28, 29}: `jv` reads
+# `{"20": 2, "30": 1}` and `l` reads `[]`. Both checks redden.
+# (2) The `snapshot` step deleted (no checkpoint, the whole WAL replays): `jv`
+# still reads `{"20": 3, "30": 1}` — the window's own full journal
+# reconstructs its state and floor — which is recovery by replay alone, not
+# the checkpoint-restore this file is about. `l` reddens, reading
+# `[12, 25, 3, 5]`: the source's full-history re-emission reaches the window
+# after its replayed floor is back at 26, so the historical 3, 12 and 25 are
+# late-dropped as duplicates onto `late`.
 #
-# Why the post-recovery add 29 is in the script (a correction to the
-# breakdown's sketch, which ended on `jv == {"20": 2, "30": 1}` and predicted
-# the restore-lost mutant would read `{"20": 1, "30": 1}`): measured, that
-# mutant read `{"20": 2, "30": 1}` — the golden itself — because `jv` is
-# journaled too, and its own replayed tail frame (`20 -> 2`) re-installs the
-# pre-crash count for window 20 whatever the rebuilt window emitted. Without
-# a post-recovery add INTO window 20, `jv` never reads that window's
-# recovered state at all, and only `l` discriminated. 29 makes the window
-# re-emit its count for 20 from its recovered state: 3 when {25, 28} were
-# restored and replayed, 2 when only the replayed 28 survived.
+# Two corrections to the breakdown's sketch, both measured. The CHECKPOINT
+# is taken `on: s`, not `on: jw`: `snapshot` of a journaled cell is a
+# host-wide checkpoint whichever journaled cell it names, but naming `jw`
+# makes mutation (1) also silently drop the checkpoint (a volatile cell's
+# `snapshot` is a raw round-trip), so the mutant replayed the full history
+# and matched the golden. And the post-recovery add 29 is in the script:
+# without an add INTO window 20 after recovery, `jv` never re-reads that
+# window's recovered count — its own replayed tail re-installs `20 -> 2`
+# whatever the rebuilt window holds — so only `l` could discriminate.
 #
 # WHY THE FLOOR AFTER RECOVERY IS THE WINDOW'S, NOT THE WATERLINE'S. `wl` is
 # volatile: the crash re-mints it empty, and the journaled source's replayed
@@ -105,8 +112,9 @@ script:
   - {type: quiesce}
   - {type: apply, on: s, op: add, value: 25}    # floor 23: window 10 (end 20) evicted -> jv {"20": 1}
   - {type: quiesce}
-  # CHECKPOINT (host-wide: s, jw, jv): jw's state {20: [25]} + floor 23, jv {"20": 1}; the WAL compacts
-  - {type: snapshot, on: jw, as: ck}
+  # CHECKPOINT: host-wide over every journaled cell (s, jw, jv) whichever one the step
+  # names — jw's state {20: [25]} + floor 23, jv {"20": 1}; the WAL compacts
+  - {type: snapshot, on: s, as: ck}
   # JOURNAL TAIL: floor 26, window 20 (end 30 > 26) stays live -> jv {"20": 2}
   - {type: apply, on: s, op: add, value: 28}
   - {type: quiesce}
