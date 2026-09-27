@@ -21,6 +21,9 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   log and body file in it. Never write to the shared scratchpad directly:
   other agents keep files there under the names you would pick. Shell
   variables do not survive between Bash calls, so spell the path out.
+- Your shell starts in the orchestrator's session worktree, not yours. First
+  `cd` into the worktree your dispatch names and check `git branch
+  --show-current` against it; never edit or commit under `.claude/worktrees/`.
 - Edit only the files your dispatch or your item's `metadata.files` names.
   Siblings run in parallel on the assumption the claim is accurate. If the
   work needs a file outside it, report that rather than working around it.
@@ -52,8 +55,8 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   fails KSP with `Operation not permitted`.
 - `gradle.properties (Operation not permitted)` is not a build failure. A
   daemon started from a sandboxed call survives it and poisons later calls,
-  other agents' worktrees included. Run `./gradlew --stop`, then re-run with
-  the sandbox disabled.
+  other agents' worktrees included. Run `./gradlew --stop` (sanctioned for
+  this signature only), then re-run with the sandbox disabled.
 - **Never write an unquoted `=` separator between batched commands.** zsh
   expands an `=`-initial word to that command's path, so `echo ===` fails with
   `(eval):1: == not found` **and kills every command batched after it** — the
@@ -111,6 +114,11 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   message: a job that outlives you keeps waking the orchestrator with stale
   copies of your report. An empty ledger is the positive answer that you
   started none.
+- **Stop only what you started**: a PID in your ledger, or a background task
+  through the harness's stop tool. Never `pkill`, `killall`, `kill $(pgrep …)`
+  or `./gradlew --stop` outside a signature this file or evidence.md names:
+  sibling agents run Gradle on this host, and a build you kill reads to them
+  as a flaky red. Tear down an app run by its own PID.
 
 ## Your final message
 
