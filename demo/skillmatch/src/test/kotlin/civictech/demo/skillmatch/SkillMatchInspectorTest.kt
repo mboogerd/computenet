@@ -1,9 +1,13 @@
 package civictech.demo.skillmatch
 
+import civictech.inspect.CatalogueDto
 import civictech.inspect.InspectorServer
 import civictech.inspect.edit.Capability
+import civictech.inspect.edit.KernelEntries
+import civictech.inspect.edit.ParamKind
 import civictech.inspect.edit.WritePlane
 import civictech.testkit.HttpProbe
+import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -116,6 +120,40 @@ class SkillMatchInspectorTest {
         } finally {
             disabledApp.stop()
             enabledApp.stop()
+        }
+    }
+
+    /**
+     * WKB2 F12 task 4 (va0c4-D10): an enabled write plane populates
+     * [KernelEntries] into the process-wide catalogue before the server
+     * starts. The registry is process-wide, so this does not assert a
+     * disabled app's catalogue is empty (another test in this JVM may already
+     * have populated it) — only that the three kernel entries are present and
+     * carry the schema the design fixes for `filter.string.prefix`.
+     */
+    @Test
+    fun `an enabled write plane registers the kernel entries in the catalogue`() {
+        val app = SkillMatchApp(port = 0).start()
+        try {
+            val port = app.startInspector(port = 0, writePlane = WritePlane.Enabled(Capability("t"))).boundPort
+
+            val body = HttpProbe("http://localhost:$port").state(InspectorServer.CATALOGUE_PATH)
+            val dto = Json.decodeFromString(CatalogueDto.serializer(), body)
+            val byId = dto.entries.associateBy { it.id }
+
+            assertTrue(
+                setOf(KernelEntries.SET_STRING, KernelEntries.FILTER_STRING_PREFIX, KernelEntries.TRAFFIC_LIGHT_STRING)
+                    .all { it in byId },
+                "expected all three kernel entries, got ${byId.keys}: $body",
+            )
+
+            val filterEntry = byId.getValue(KernelEntries.FILTER_STRING_PREFIX)
+            assertEquals(1, filterEntry.schema.params.size, "prefix schema: $body")
+            val prefixParam = filterEntry.schema.params.single()
+            assertEquals("prefix", prefixParam.name, "prefix schema: $body")
+            assertEquals(ParamKind.STRING, prefixParam.kind, "prefix schema: $body")
+        } finally {
+            app.stop()
         }
     }
 }
