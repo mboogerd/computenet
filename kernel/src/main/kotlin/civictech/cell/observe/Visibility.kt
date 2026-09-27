@@ -99,13 +99,19 @@ interface FrontierWitness {
      * one default-pool worker. A caller needing isolation uses
      * `thenAcceptAsync(fn, ownExecutor)`.
      *
-     * One JDK exception to "runs there": a thread *waiting* on the handle with
-     * `get`/`join` may itself run a still-pending plain dependent, because
-     * those calls help drain the dependents once they see the result
-     * (`CompletableFuture`'s "any other caller of a completion method"). So
-     * never block on a handle from the scheduler thread — that would stall the
-     * host anyway — and poll `isDone`/`getNow` where a waiter must not run
-     * dependents (computenet-517q4).
+     * That "runs there" has two exceptions, not one. First, a handle can come
+     * back already complete — a closed sink (`SINK_CLOSED`), a wave already at
+     * or behind the flushed frontier, or the outstanding-handle bound
+     * exceeded (`BOUND_EXCEEDED`) — and a plain dependent registered on an
+     * already-complete future runs synchronously on the *registering* thread,
+     * per plain `CompletableFuture` semantics, never touching the async pool.
+     * Second, a thread *waiting* on the handle with `get`/`join` may itself run
+     * a still-pending plain dependent, because those calls help drain the
+     * dependents once they see the result (`CompletableFuture`'s "any other
+     * caller of a completion method"). So never block on a handle from the
+     * scheduler thread — that would stall the host anyway — and poll
+     * `isDone`/`getNow` where a waiter must not run dependents
+     * (computenet-517q4, computenet-kwhx8).
      */
     fun visibilityOf(wave: Timestamp): CompletableFuture<Visibility>
 
