@@ -193,6 +193,7 @@ class BoundedRangeScanTest {
         for (bound in listOf(KeyBound("m", "m"), KeyBound("q", "f"))) {
             listOf(
                 "MapCell" to mapCellOf(letters),
+                "KeyedSetCell" to keyedSetOf(letters),
                 "ShardCell" to shardOf(letters, keyFn = { it }),
             ).forEach { (name, cell) ->
                 withClue("$name $bound") {
