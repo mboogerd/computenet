@@ -91,11 +91,11 @@ class CliProposerTest {
         assertTrue("--ignore-user-config" in codex)
         assertTrue("--ignore-rules" in codex)
         assertTrue("--strict-config" in codex)
-        for (feature in listOf("shell_tool", "unified_exec", "multi_agent", "apps")) {
+        for (feature in listOf("shell_tool", "unified_exec", "multi_agent", "apps", "view_image", "image_generation", "browser_use", "computer_use", "in_app_browser")) {
             assertTrue(codex.hasPair("--disable", feature), "Codex command does not disable $feature")
         }
         assertTrue(codex.hasPair("-c", "web_search=\"disabled\""))
-        assertTrue(codex.hasPair("-c", "tools.view_image=false"))
+        assertFalse("tools.view_image=false" in codex, "codex 0.155 rejects this key under --strict-config")
         assertTrue(codex.hasPair("-s", "read-only"))
         assertTrue(codex.hasPair("-m", "codex-test"))
         assertTrue(codex.hasPair("-o", out.absolutePath))

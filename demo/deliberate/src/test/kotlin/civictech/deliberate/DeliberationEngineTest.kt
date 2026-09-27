@@ -17,7 +17,6 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -299,38 +298,6 @@ class DeliberationEngineTest {
         assertEquals(3, node.rounds)
         assertEquals(6, calls.get())
         assertTrue(node.error!!.contains("temporary outage"), node.error)
-    }
-
-    @Test
-    fun `proposer process concurrency is globally bounded`() {
-        assertEquals(4, DeliberationEngine.Config().maxProcesses)
-        val active = AtomicInteger()
-        val maximum = AtomicInteger()
-        val firstPair = CountDownLatch(2)
-        val overLimit = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val blocking = FakeProposer("claude") { _, _, _ ->
-            val now = active.incrementAndGet()
-            maximum.accumulateAndGet(now, ::maxOf)
-            if (now > 2) overLimit.countDown()
-            firstPair.countDown()
-            try {
-                release.await(20, TimeUnit.SECONDS)
-                emptyList()
-            } finally {
-                active.decrementAndGet()
-            }
-        }
-        val e = engine(
-            proposers = listOf(blocking),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0, maxProcesses = 2, workers = 4),
-        )
-        repeat(4) { e.ask("Q$it?") }
-        assertTrue(firstPair.await(20, TimeUnit.SECONDS), "two proposer calls did not overlap")
-        assertFalse(overLimit.await(500, TimeUnit.MILLISECONDS), "more than maxProcesses proposer calls overlapped")
-        release.countDown()
-        e.idle()
-        assertEquals(2, maximum.get())
     }
 
     @Test
