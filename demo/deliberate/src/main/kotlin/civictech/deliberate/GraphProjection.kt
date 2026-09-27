@@ -70,7 +70,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 yieldRounds = ys.size,
                 yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
                 yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
-                stoppedBy = policy.stoppedBy(state.questionView(root)),
+                stoppedBy = policy.stoppedBy(state.projectionQuestionView(root)),
                 paused = root in state.paused,
             ).withCost(ledger.costOf(root, rounds = tree.sumOf { it.rounds }, queued = queued))
         }

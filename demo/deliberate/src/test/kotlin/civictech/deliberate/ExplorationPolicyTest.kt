@@ -64,18 +64,20 @@ class ExplorationPolicyTest {
         assertEquals(null, off.scheduleGate(fresh.copy(isLink = true, override = Override.EXPAND), q), "EXPAND still explores a link")
     }
 
-    // ---------------------------------------------------------------- startGate (EXP-06 then EXP-10)
+    // ---------------------------------------------------------------- start gates (EXP-06 then EXP-10)
 
     @Test
-    fun `start gate — budget, then diminishing, and a forced round passes`() {
-        val full = q.copy(treeSize = 180)
+    fun `start gates — budget, then diminishing, and a forced round passes`() {
         table(
-            Case("room left", fresh to q, null),
-            Case("a full tree", fresh to full, Status.BUDGET),
-            Case("a stopped question", fresh to q.copy(diminished = true), Status.DIMINISHING),
-            Case("budget first", fresh to full.copy(diminished = true), Status.BUDGET),
-            Case("forced passes both", fresh.copy(forceRound = true) to full.copy(diminished = true), null),
-        ) { (c, qv) -> defaults.startGate(c, qv) }
+            Case("room left", false to 179, null),
+            Case("a full tree", false to 180, Status.BUDGET),
+            Case("forced passes budget", true to 180, null),
+        ) { (forced, size) -> defaults.startBudgetGate(forced, size) }
+        table(
+            Case("growing", false to false, null),
+            Case("a stopped question", false to true, Status.DIMINISHING),
+            Case("forced passes diminishing", true to true, null),
+        ) { (forced, diminished) -> defaults.startDiminishingGate(forced, diminished) }
     }
 
     // ---------------------------------------------------------------- terminalStatus

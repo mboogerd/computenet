@@ -117,16 +117,13 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
             else -> null
         }
 
-    /**
-     * EXP-06 after EXP-05, then EXP-10, once a dequeued claim was judged: the
-     * status that stops its first round, or null. A forced round (CTL-02) passes.
-     */
-    fun startGate(c: ClaimView, q: QuestionView): Status? = when {
-        c.forceRound -> null
-        q.treeSize >= config.maxClaims -> Status.BUDGET
-        q.diminished -> Status.DIMINISHING
-        else -> null
-    }
+    /** EXP-06 after EXP-05, once a dequeued claim was judged. A forced round (CTL-02) passes. */
+    fun startBudgetGate(forceRound: Boolean, treeSize: Int): Status? =
+        Status.BUDGET.takeIf { !forceRound && treeSize >= config.maxClaims }
+
+    /** EXP-10 after the budget gate, once a dequeued claim was judged. A forced round (CTL-02) passes. */
+    fun startDiminishingGate(forceRound: Boolean, diminished: Boolean): Status? =
+        Status.DIMINISHING.takeIf { !forceRound && diminished }
 
     /**
      * The status that ends [c]'s expansion before its next round, or null if

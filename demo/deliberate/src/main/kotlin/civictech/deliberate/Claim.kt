@@ -131,6 +131,11 @@ internal class EngineState {
 
     /** What [ExplorationPolicy] sees of question [root]. */
     fun questionView(root: CellRef) = QuestionView(
+        treeSize = treeSize.getValue(root), diminished = root in diminished, paused = root in paused,
+    )
+
+    /** The snapshot's tolerant view: the old projection reported an absent tree as empty. */
+    fun projectionQuestionView(root: CellRef) = QuestionView(
         treeSize = treeSize[root] ?: 0, diminished = root in diminished, paused = root in paused,
     )
 

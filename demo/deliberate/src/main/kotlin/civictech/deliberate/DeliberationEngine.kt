@@ -569,10 +569,19 @@ class DeliberationEngine(
             onChange()
             return false
         }
-        // EXP-06 after EXP-05 (schedule()): BUDGET means "would have been expanded";
-        // EXP-10: the question stopped while this claim was being judged.
-        val gate = synchronized(lock) { policy.startGate(c.view(), questionView(c)) }
-        if (gate != null) return finish(c, gate)
+        // Preserve the original observations at this race boundary: EXPAND can arrive
+        // between the force read and the budget read, or between budget and EXP-10.
+        val forcedAtBudgetGate = synchronized(lock) { c.forceRound }
+        if (!forcedAtBudgetGate) {
+            val budgetGate = synchronized(lock) {
+                policy.startBudgetGate(forceRound = false, treeSize = treeSize.getValue(c.root))
+            }
+            if (budgetGate != null) return finish(c, budgetGate)
+        }
+        val diminishingGate = synchronized(lock) {
+            policy.startDiminishingGate(c.forceRound, c.root in state.diminished)
+        }
+        if (diminishingGate != null) return finish(c, diminishingGate)
         update { c.status = Status.EXPLORING }
         return step(c)
     }
