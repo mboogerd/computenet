@@ -148,7 +148,7 @@ data class NodeDto(
     val quality: Double? = null,
     /**
      * SPEC §3 "Exploration order" priority: reach × relevance × quality × 4·p·(1 − p),
-     * p its plausibility (root = 1; model B); for a link, its argument's contribution × 4·s·(1 − s), s its strength.
+     * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
      */
     val contribution: Double? = null,
     /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */

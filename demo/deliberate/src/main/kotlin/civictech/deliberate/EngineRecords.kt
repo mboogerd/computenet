@@ -101,6 +101,8 @@ internal object EngineRecords {
         c.quality = r.quality
         if (c.parent != null) {
             c.reach = r.reach
+            // Restored as stored: a contribution persisted before model B lacks the 4·p·(1 − p)
+            // factor, and is not recomputed here.
             c.contribution = r.contribution
         }
         c.proSaturation = r.proSaturation
