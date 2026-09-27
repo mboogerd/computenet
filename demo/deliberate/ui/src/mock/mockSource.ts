@@ -1,4 +1,26 @@
-import { ACTIVE_STATUSES, type GraphDto, type NodeDto, type Override, type Polarity } from '../api/types';
+import { ACTIVE_STATUSES, DEFAULT_CONSENSUS, type GraphDto, type NodeDto, type Override, type Polarity } from '../api/types';
+
+/** The backend's credence layers, and per-layer log-odds shifts that make the mock's rules disagree plausibly. */
+const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp'] as const;
+const LAYER_SHIFT = [0, 0.18, -0.12, 0.08, 0.5, -0.4, 0.3];
+const logit = (p: number) => Math.log(p / (1 - p));
+const sigmoid = (z: number) => 1 / (1 + Math.exp(-z));
+const clampP = (p: number) => Math.min(0.999, Math.max(0.001, p));
+
+/** Mock credence layers around `credence`: disagreement grows with how far the claim is from neutral. */
+export function mockLayers(n: NodeDto): Pick<NodeDto, 'credences' | 'consensus' | 'spreadLow' | 'spreadHigh'> {
+  const z = logit(clampP(n.credence));
+  const scale = 0.4 + Math.abs(z);
+  const credences = Object.fromEntries(LAYERS.map((id, i) => [id, sigmoid(z + LAYER_SHIFT[i] * scale)]));
+  const members = DEFAULT_CONSENSUS.map((id) => logit(clampP(credences[id])));
+  const values = Object.values(credences);
+  return {
+    credences,
+    consensus: sigmoid(members.reduce((a, b) => a + b, 0) / members.length),
+    spreadLow: Math.min(...values),
+    spreadHigh: Math.max(...values),
+  };
+}
 import type { ConnState, GraphSource } from '../sync/source';
 
 /** `?mock`: a scripted deliberation that grows over ~20 s, so the UI can be
@@ -68,7 +90,7 @@ export class MockSource implements GraphSource {
       ? 'STOPPED'
       : mode === 'AUTO' && node.status === 'STOPPED'
         ? 'QUEUED'
-        : mode === 'EXPAND' && node.status !== 'BUDGET' && (node.status === undefined || !ACTIVE_STATUSES.has(node.status))
+        : mode === 'EXPAND' && (node.status === undefined || !ACTIVE_STATUSES.has(node.status))
           ? 'EXPLORING'
           : node.status;
     this.set(id, { override: mode, status });
@@ -100,6 +122,14 @@ export class MockSource implements GraphSource {
     this.nodes.set(`${ref}>${parent}`, { ref: `${ref}>${parent}`, kind: 'EDGE', credence: 0.5, root, polarity, source: ref, target: parent });
   }
 
+  /** EXP-03 UNDERCUT: [ref] attacks the link from argument [arg] to [parent]. */
+  undercut(ref: string, root: string, arg: string, parent: string, text: string, proposer: string, patch: Partial<NodeDto> = {}): void {
+    const link = `${arg}>${parent}`;
+    const depth = this.nodes.get(arg)?.depth ?? 1;
+    this.claim(ref, root, text, depth, proposer, { undercuts: link, ...patch });
+    this.nodes.set(`${ref}>${link}`, { ref: `${ref}>${link}`, kind: 'EDGE', credence: 0.5, root, polarity: 'ATTACK', source: ref, target: link });
+  }
+
   set(ref: string, patch: Partial<NodeDto>): void {
     const n = this.nodes.get(ref);
     if (n) {
@@ -128,6 +158,7 @@ export class MockSource implements GraphSource {
       return pr === undefined || e?.strength === undefined ? undefined : pr * e.strength;
     };
     for (const n of nodes) if (n.kind === 'CLAIM') n.reach = reachOf(n);
+    for (const n of nodes) Object.assign(n, mockLayers(n));
     const roots = nodes.filter((n) => n.kind === 'CLAIM' && n.depth === 0);
     const questions = roots.map((r) => {
       const claims = nodes.filter((n) => n.kind === 'CLAIM' && n.root === r.ref);
@@ -138,7 +169,7 @@ export class MockSource implements GraphSource {
         active: claims.some((c) => c.status !== undefined && ACTIVE_STATUSES.has(c.status)),
       };
     });
-    return { questions, nodes };
+    return { questions, nodes, consensusMembers: [...DEFAULT_CONSENSUS] };
   }
 }
 
@@ -176,6 +207,8 @@ function script(
     ) => source.arg(scoped(ref), scoped(treeRoot), scoped(parent), polarity, claimText, proposer, patch),
     set: (ref: string, patch: Partial<NodeDto>) => source.set(scoped(ref), patch),
     edge: (child: string, parent: string, strength: number) => source.edge(scoped(child), scoped(parent), strength),
+    undercut: (ref: string, treeRoot: string, arg: string, parent: string, claimText: string, proposer: string, patch?: Partial<NodeDto>) =>
+      source.undercut(scoped(ref), scoped(treeRoot), scoped(arg), scoped(parent), claimText, proposer, patch),
   };
   const q = 'q0';
   const steps = [
@@ -215,6 +248,9 @@ function script(
     () => {
       m.edge('c1b', 'c1', 0.8);
       m.set('c1', { credence: 0.69 });
+      m.undercut('c1bu', q, 'c1b', 'c1', 'Madrid renewed its bus fleet in the same years that its central NO₂ fell.', 'codex', {
+        status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.72,
+      });
       m.set('c2', { status: 'PRUNED', relevance: 0.34, plausibility: 0.5, credence: 0.47 });
     },
     () => m.set('c3', { status: 'JUDGING' }),

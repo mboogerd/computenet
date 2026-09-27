@@ -3,6 +3,7 @@ package civictech.deliberate
 import civictech.agora.AgoraService
 import civictech.cell.CellRef
 import civictech.cell.control.AttentionPolicy
+import civictech.cell.durability.FileJournal
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
@@ -39,20 +40,79 @@ class DeliberateApp(
     private val uiDir: File? = defaultUiDir(),
     merger: Merger? = null,
     private val flushIntervalMs: Long = 100,
+    /** SPEC §11: with a directory, deliberations survive restarts (and `kill -9`); null is volatile. */
+    private val dataDir: File? = null,
+    private val semantics: SemanticsConfig = SemanticsConfig(),
 ) {
+    /**
+     * SPEC §2 "Credence layers and consensus". [layers] always includes the
+     * structural layer `dfquad` (agora's own semantics, whose refs are the
+     * deliberation's identity); [headline] picks the layer shown as
+     * `NodeDto.credence`; [consensus] the layers averaged into `consensus`.
+     */
+    data class SemanticsConfig(
+        val headline: String = SemanticsCatalog.DEFAULT_PRIMARY,
+        val layers: List<String> = SemanticsCatalog.IDS,
+        val consensus: List<String> = Consensus.DEFAULT_MEMBERS,
+        val wlo: WeightedLogOdds = WeightedLogOdds(),
+    ) {
+        /** Every layer that runs, the structural one first. */
+        val running: List<String> = (listOf(SemanticsCatalog.DEFAULT_PRIMARY) + layers).distinct()
+
+        init {
+            (layers + consensus + headline).forEach {
+                require(it in SemanticsCatalog.IDS) { "unknown semantics '$it' (${SemanticsCatalog.IDS.joinToString()})" }
+            }
+            require(headline in running) { "--semantics $headline is not among the layers ${running.joinToString()}" }
+            require(consensus.all { it in running }) { "--consensus ${consensus.joinToString()} names a layer that does not run (${running.joinToString()})" }
+            require(consensus.isNotEmpty()) { "--consensus is empty" }
+        }
+    }
+
     // Bind before starting any scheduler/executor threads. A bind failure must
     // not leave a half-constructed app running in the background.
     private val shell = DemoShell(port)
     private val scheduler = VirtualThreadScheduler("deliberate-host")
     private val registry = LocationRegistry()
+    private val journal = dataDir?.let { FileJournal(File(it.apply { mkdirs() }, "host.journal")) }
     private val host = ManagedHost(
         scheduler = scheduler,
         registry = registry,
         attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+        journal = journal,
     )
     private val dirty = AtomicBoolean(false)
-    private val service = AgoraService(host, registry, onCredence = { _, _ -> dirty.set(true) })
-    val engine = DeliberationEngine(service, judge, proposers, config, merger) { dirty.set(true) }
+    private val metaStore = dataDir?.let { JournaledMetaStore(host, registry) }
+
+    /** One agora graph per semantics layer; each replays its own structure log, all share the host journal. */
+    private fun layer(id: String) = AgoraService(
+        host,
+        registry,
+        semantics = SemanticsCatalog.of(id, semantics.wlo),
+        structureLog = dataDir?.let { File(it, "graph-$id.jsonl") },
+        hubRef = if (id == SemanticsCatalog.DEFAULT_PRIMARY) AgoraService.DEFAULT_HUB_REF else AgoraLayers.hubRef(id),
+        onCredence = { _, _ -> dirty.set(true) },
+    )
+
+    private val layers = AgoraLayers(
+        primaryId = SemanticsCatalog.DEFAULT_PRIMARY,
+        primary = layer(SemanticsCatalog.DEFAULT_PRIMARY),
+        mirrors = semantics.running.drop(1).associateWith(::layer),
+        consensusMembers = semantics.consensus,
+        headlineId = semantics.headline,
+    )
+
+    init {
+        // Rebuild (the layers' constructors replayed their structure logs) → replay the
+        // host journal → wait until the engine's metadata records are folded again.
+        // No startup checkpoint, for the reason AgoraApp gives.
+        if (journal != null) {
+            host.recoverFrom(journal)
+            metaStore!!.awaitReplayed(kotlin.time.Duration.parse("60s"))
+        }
+    }
+
+    val engine = DeliberationEngine(layers, judge, proposers, config, merger, store = metaStore) { dirty.set(true) }
 
     val boundPort: Int get() = shell.boundPort
 
@@ -266,6 +326,26 @@ internal class Options(args: Array<String>) {
         )
     }
 
+    /** SPEC §11: the durable data directory, or null (volatile). */
+    val data get() = values["--data"]?.let(::File)
+
+    private fun list(flag: String) = values[flag]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+
+    val semantics: DeliberateApp.SemanticsConfig = DeliberateApp.SemanticsConfig().let { d ->
+        val w = d.wlo
+        DeliberateApp.SemanticsConfig(
+            headline = values["--semantics"]?.trim() ?: d.headline,
+            layers = list("--semantics-layers") ?: d.layers,
+            consensus = list("--consensus") ?: d.consensus,
+            wlo = WeightedLogOdds(
+                alpha = double("--wlo-alpha") ?: w.alpha,
+                k = double("--wlo-k") ?: w.k,
+                p = double("--wlo-p") ?: w.p,
+                gamma = double("--wlo-gamma") ?: w.gamma,
+            ),
+        )
+    }
+
     private fun int(flag: String) = values[flag]?.let { requireNotNull(it.toIntOrNull()) { "$flag must be an integer: $it" } }
     private fun double(flag: String) = values[flag]?.let { requireNotNull(it.toDoubleOrNull()) { "$flag must be a number: $it" } }
 
@@ -276,6 +356,8 @@ internal class Options(args: Array<String>) {
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
             "--args-per-call", "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
             "--max-args-per-side-child", "--saturation", "--min-influence", "--round-decay",
+            "--data", "--semantics", "--semantics-layers", "--consensus",
+            "--wlo-alpha", "--wlo-k", "--wlo-p", "--wlo-gamma",
         )
         private val D = DeliberationEngine.Config()
         val USAGE = """
@@ -293,6 +375,11 @@ internal class Options(args: Array<String>) {
               --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
               --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
               --round-decay <f>           a claim's next round is queued at contribution x f^rounds (${D.roundDecay})
+              --data <dir>                keep deliberations in <dir> across restarts (default: volatile)
+              --semantics <id>            the layer shown as a node's credence (${SemanticsCatalog.DEFAULT_PRIMARY})
+              --semantics-layers <ids>    credence layers to propagate (${SemanticsCatalog.IDS.joinToString(",")}); dfquad always runs
+              --consensus <ids>           layers averaged (in log-odds) into the consensus (${Consensus.DEFAULT_MEMBERS.joinToString(",")})
+              --wlo-k/--wlo-p/--wlo-gamma/--wlo-alpha <x>  weighted log-odds parameters (2.4, 2, 1.3, 1)
               --ui <dir>                  built UI directory (default ui/dist)
             requires TYPESAFE_API_KEY and logged-in `claude` / `codex` CLIs.
         """.trimIndent()
@@ -325,11 +412,16 @@ fun main(args: Array<String>) {
     val uiDir = opts.ui ?: DeliberateApp.defaultUiDir()
     // EXP-03 MERGE always asks Claude, whichever CLIs propose.
     val merger = CliMerger(proposers.filterIsInstance<CliProposer>().firstOrNull { it.id == "claude" } ?: CliProposer.claude(gate, opts.claudeModel))
-    val app = DeliberateApp(opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger).start()
+    val app = DeliberateApp(
+        opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger,
+        dataDir = opts.data, semantics = opts.semantics,
+    ).start()
     Runtime.getRuntime().addShutdownHook(Thread { app.stop() })
     announcePort("http", app.boundPort)
     println("deliberate: http://localhost:${app.boundPort}  (proposers: ${proposers.joinToString { it.id }}, ${opts.config})")
     println(if (uiDir != null && File(uiDir, "index.html").isFile) "  serving UI from $uiDir" else "  UI not built — see demo/deliberate/README.md")
+    println("  layers: ${opts.semantics.running.joinToString()}  (headline ${opts.semantics.headline}, consensus ${opts.semantics.consensus.joinToString()})")
+    println(if (opts.data != null) "  keeping deliberations in ${opts.data} (kill -9 safe)" else "  volatile: add --data <dir> to survive restarts")
 }
 
 /**

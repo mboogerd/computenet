@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeDto } from '../src/api/types';
-import { phaseOf, questionProgress, reachTier, reachWeight, REACH_FLOOR, strengthWord, triageText, verdict } from '../src/util/format';
+import {
+  agreementText,
+  layerLines,
+  phaseOf,
+  questionProgress,
+  reachTier,
+  reachWeight,
+  REACH_FLOOR,
+  shown,
+  spreadOf,
+  strengthWord,
+  triageText,
+  verdict,
+} from '../src/util/format';
 import { nextTheme, resolvedTheme } from '../src/util/theme';
 import { easeOut, tweenAt } from '../src/util/tween';
 
@@ -132,5 +145,38 @@ describe('triage wording', () => {
     expect(triageText(undefined)).toBeUndefined();
     expect(triageText({})).toBeUndefined();
     expect(triageText({ DROP: 1, ADD: 3, MERGE: 1, DUPLICATE: 0 })).toBe('3 added · 1 merged · 1 dropped');
+  });
+});
+
+describe('credence layers', () => {
+  const node = (patch: Partial<NodeDto>): NodeDto => ({ ref: 'n', kind: 'CLAIM', credence: 0.4, root: 'n', ...patch });
+
+  it('shows the consensus, falling back to the primary credence', () => {
+    expect(shown(node({ consensus: 0.62 }))).toBe(0.62);
+    expect(shown(node({}))).toBe(0.4);
+    expect(spreadOf(node({ consensus: 0.62, spreadLow: 0.31, spreadHigh: 0.72 }))).toEqual({ low: 0.31, high: 0.72 });
+    // the band always contains the number it is drawn behind
+    expect(spreadOf(node({}))).toEqual({ low: 0.4, high: 0.4 });
+  });
+
+  it('says in plain words how far the rules agree', () => {
+    expect(agreementText(node({ consensus: 0.5, spreadLow: 0.47, spreadHigh: 0.53 }))).toBe('rules agree within 6 points');
+    expect(agreementText(node({ consensus: 0.5, spreadLow: 0.5, spreadHigh: 0.51 }))).toBe('rules agree within 1 point');
+    expect(agreementText(node({ consensus: 0.5, spreadLow: 0.5, spreadHigh: 0.5 }))).toBe('rules agree');
+    expect(agreementText(node({ consensus: 0.5, spreadLow: 0.45, spreadHigh: 0.55 }))).toBe('rules agree within 10 points');
+    expect(agreementText(node({ consensus: 0.55, spreadLow: 0.31, spreadHigh: 0.72 }))).toBe('rules disagree: 31–72%');
+  });
+
+  it('lists every rule and marks the consensus members', () => {
+    const n = node({ credences: { dfquad: 0.41, wlo: 0.62, mlp: 0.7 } });
+    expect(layerLines(n, ['wlo', 'jnb', 'woe'])).toEqual([
+      'DF-QuAD · 41%',
+      'weighted log-odds · 62% · in consensus',
+      'MLP-based · 70%',
+    ]);
+  });
+
+  it('names the UNDERCUT triage action', () => {
+    expect(triageText({ ADD: 1, UNDERCUT: 2 })).toBe('1 added · 2 undercut a link');
   });
 });

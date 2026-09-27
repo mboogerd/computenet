@@ -55,3 +55,12 @@ In the "cross estimate" column, each depth-1 strength (36 claims) is paired with
 **`minInfluence` = 0.35.** Relevance alone barely decays with depth (median 0.70 → 0.62 → 0.60), which is why a relevance-only gate never pruned. Reach supplies the decay: 0.64 → 0.51 → 0.32. At 0.35 the gate expands about 72% of depth-1 claims, pruning the weakly connected ones (strength ≤ ~0.5). It expands only 12–25% of depth-2 claims and no depth-3 claim. Most depth-2 claims therefore end `PRUNED`, and `DEPTH_LIMIT` (depth > 3) is practically unreachable, which meets §10(b).
 
 With the defaults of two proposers × `argsPerCall` 1, each round offers up to two new arguments per side. Jev's saturation judgment is therefore consulted at 2 and 4 arguments per side, before the dependable `maxArgsPerSide` cap of 6 ends a side that Jev has not already saturated.
+
+## Iteration 4: judgments changed after this calibration
+
+Plausibility no longer sees the path from the question (its state is only the
+question and the claim), quality now includes a canonical-form factor, and
+proposers write canonical arguments. The `saturation` and `minInfluence`
+defaults above were calibrated under the old judgments and prompts; a
+recalibration under the new ones is residual unless a live run shows the gates
+misbehaving (see README, *Cost and time*, for the iteration-4 run).

@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
 data class GraphDto(
     val questions: List<QuestionDto>,
     val nodes: List<NodeDto>,
+    /** SPEC §2: the layers averaged into every node's `consensus` (`--consensus`). */
+    val consensusMembers: List<String> = emptyList(),
 )
 
 @Serializable
@@ -31,10 +33,17 @@ enum class Override { AUTO, EXPAND, STOP }
 data class NodeDto(
     val ref: String,
     val kind: String, // "CLAIM" | "EDGE"
-    /** Propagated agora credence, [0,1]. */
+    /** Propagated agora credence in the primary semantics layer (`--semantics`), [0,1]. */
     val credence: Double,
     /** The question tree this node belongs to (its root claim ref). */
     val root: String,
+    /** SPEC §2 "Credence layers and consensus": propagated credence per semantics layer id. */
+    val credences: Map<String, Double> = emptyMap(),
+    /** Geometric-odds mean of the consensus member layers' credences (the headline number). */
+    val consensus: Double = credence,
+    /** Lowest and highest credence over all layers. */
+    val spreadLow: Double = credence,
+    val spreadHigh: Double = credence,
     // --- CLAIM only ---
     val text: String? = null,
     val depth: Int? = null,
@@ -46,6 +55,11 @@ data class NodeDto(
     val alsoProposedBy: List<String>? = null,
     /** EXP-03 MERGE: true when this argument's text was rewritten together with an overlapping one. */
     val merged: Boolean? = null,
+    /**
+     * EXP-03 UNDERCUT: the ref of the EDGE this claim attacks — it denies that
+     * that edge's source bears on its target. Its own edge's `target` is that ref.
+     */
+    val undercuts: String? = null,
     /** Jev plausibility stance (CRED-01), once judged. */
     val plausibility: Double? = null,
     /** Jev relevance probability (EXP-05), judged when the argument was attached. */
@@ -64,7 +78,7 @@ data class NodeDto(
     /** EXP-03: triage actions taken on this claim's proposals, by action name (ADD, DUPLICATE, …). */
     val triage: Map<String, Int>? = null,
     val error: String? = null,
-    // --- EDGE only (child → parent) ---
+    // --- EDGE only (child → parent; the parent is an EDGE for an undercutter) ---
     val polarity: String? = null, // "SUPPORT" | "ATTACK"
     val source: String? = null,
     val target: String? = null,

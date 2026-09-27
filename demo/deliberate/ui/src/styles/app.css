@@ -368,6 +368,16 @@ button {
   transition: transform 700ms var(--ease);
 }
 
+.gauge__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--text-2);
+  opacity: 0.22;
+  border-radius: 3px;
+  transition: left 700ms var(--ease), width 700ms var(--ease);
+}
+
 .gauge__mid {
   position: absolute;
   left: 50%;
@@ -598,12 +608,29 @@ button {
   overflow: hidden;
 }
 
-.bar > span {
+.bar__fill {
   position: absolute;
   inset: 0;
   background: var(--credence);
   transform-origin: left;
   transition: transform 700ms var(--ease);
+}
+
+/* Where the credence rules disagree: a thin translucent band over the bar. */
+.bar__band {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  z-index: 1;
+  background: var(--text-2);
+  opacity: 0.3;
+  transition: left 700ms var(--ease), width 700ms var(--ease);
+}
+
+.facts__layers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .card__meta {
@@ -627,6 +654,16 @@ button {
 
 .branch--con > .card .side__word {
   color: var(--con);
+}
+
+/* EXP-03 UNDERCUT: attacks the link above, not a claim — a dashed con stripe. */
+.branch--undercut > .card::before {
+  background: repeating-linear-gradient(to bottom, var(--con) 0 3px, transparent 3px 6px);
+}
+
+.branch--undercut > .card .side__word {
+  color: var(--con);
+  font-style: italic;
 }
 
 .branch--pro > .card .side__word {

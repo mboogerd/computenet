@@ -7,7 +7,7 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ?
     : false
   : false;
 
-type ExpectedGraphDto = { questions: QuestionDto[]; nodes: NodeDto[] };
+type ExpectedGraphDto = { questions: QuestionDto[]; nodes: NodeDto[]; consensusMembers?: string[] };
 type ExpectedQuestionDto = { root: string; text: string; claims: number; active: boolean };
 type ExpectedStatus =
   | 'QUEUED' | 'JUDGING' | 'EXPLORING' | 'SATURATED' | 'ROUND_LIMIT'
@@ -18,6 +18,10 @@ type ExpectedNodeDto = {
   kind: string;
   credence: number;
   root: string;
+  credences?: Record<string, number>;
+  consensus?: number;
+  spreadLow?: number;
+  spreadHigh?: number;
   text?: string;
   depth?: number;
   status?: Status;
@@ -25,6 +29,7 @@ type ExpectedNodeDto = {
   proposer?: string;
   alsoProposedBy?: string[];
   merged?: boolean;
+  undercuts?: string;
   plausibility?: number;
   relevance?: number;
   quality?: number;

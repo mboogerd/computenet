@@ -45,6 +45,19 @@ const graph: GraphDto = {
   ],
 };
 
+const layered: GraphDto = {
+  ...graph,
+  consensusMembers: ['wlo', 'jnb', 'woe'],
+  nodes: graph.nodes.map((n) =>
+    n.ref === 'q'
+      ? { ...n, consensus: 0.41, spreadLow: 0.31, spreadHigh: 0.72, credences: { dfquad: 0.63, wlo: 0.41, mlp: 0.31, euler: 0.72 } }
+      : n,
+  ).concat([
+    { ref: 'u', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Helping is not the point.', depth: 1, status: 'QUEUED', undercuts: 'a-q' },
+    { ref: 'u-aq', kind: 'EDGE', credence: 0.5, root: 'q', polarity: 'ATTACK', source: 'u', target: 'a-q', strength: 0.5 },
+  ]),
+};
+
 describe('SPEC UI contract', () => {
   it('UI-01 renders one labelled question input and submit action', () => {
     const html = renderToString(() => <QuestionInput ask={async () => true} />);
@@ -113,6 +126,28 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('2 added · 1 merged');
     expect(html).toContain('codex');
     expect(html).toContain('58%');
+  });
+
+  it('headlines the consensus with the rules\' spread as a band, and lists every rule', () => {
+    const html = renderToString(() => <TreeView graph={layered} root="q" />);
+    // consensus 41% drives the verdict, not the primary layer's 63%
+    expect(html).toContain('too close to call');
+    expect(html).not.toContain('leaning yes');
+    expect(html).toContain('41%');
+    expect(html).toContain('gauge__band');
+    expect(html).toMatch(/left:\s*31%/);
+    expect(html).toContain('rules disagree: 31–72%');
+    const facts = renderToString(() => <Facts id="f" claim={layered.nodes[0]} members={layered.consensusMembers} />);
+    expect(facts).toContain('weighted log-odds · 41% · in consensus');
+    expect(facts).toContain('Euler-based · 72%');
+    expect(facts).toContain('rules disagree: 31–72%');
+  });
+
+  it('renders an undercutter under the argument whose link it attacks', () => {
+    const html = renderToString(() => <TreeView graph={layered} root="q" />);
+    expect(html).toContain('Undercuts the link');
+    expect(html).toContain('branch--undercut');
+    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('0 pro · 1 con · 1 undercut');
   });
 
   it('uses native or labelled controls for help and theme disclosure', () => {

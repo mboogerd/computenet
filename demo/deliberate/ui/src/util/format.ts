@@ -132,6 +132,7 @@ const TRIAGE_WORDS: Record<string, string> = {
   MERGE: 'merged',
   REFINE: 'nested as evidence',
   OTHER_SIDE: 'moved sides',
+  UNDERCUT: 'undercut a link',
   DROP: 'dropped',
 };
 
@@ -142,4 +143,47 @@ export function triageText(t: Record<string, number> | undefined): string | unde
     .filter((k) => (t[k] ?? 0) > 0)
     .map((k) => `${t[k]} ${TRIAGE_WORDS[k]}`);
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+/** The credence the UI shows for a node: the consensus of the credence layers (falls back to the primary layer). */
+export const shown = (n: NodeDto): number => n.consensus ?? n.credence;
+
+/** The [low, high] credence over every layer; a single point when only one layer runs. */
+export function spreadOf(n: NodeDto): { low: number; high: number } {
+  const c = shown(n);
+  return { low: Math.min(n.spreadLow ?? c, c), high: Math.max(n.spreadHigh ?? c, c) };
+}
+
+/** Spreads up to this many percentage points read as agreement. */
+export const AGREE_POINTS = 10;
+
+/**
+ * Plain words for how far the credence rules agree on a node:
+ * "rules agree within 6 points", or "rules disagree: 31–72%".
+ */
+export function agreementText(n: NodeDto): string {
+  const { low, high } = spreadOf(n);
+  const lo = Math.round(clamp01(low) * 100);
+  const hi = Math.round(clamp01(high) * 100);
+  const width = hi - lo;
+  if (width <= AGREE_POINTS) return width === 0 ? 'rules agree' : `rules agree within ${width} point${width === 1 ? '' : 's'}`;
+  return `rules disagree: ${lo}–${hi}%`;
+}
+
+/** Plain names of the credence rules (SPEC §2 "Credence layers and consensus"). */
+export const LAYER_NAMES: Record<string, string> = {
+  dfquad: 'DF-QuAD',
+  wlo: 'weighted log-odds',
+  jnb: 'Jeffrey / naive Bayes',
+  woe: 'weight of evidence',
+  euler: 'Euler-based',
+  qe: 'quadratic energy',
+  mlp: 'MLP-based',
+};
+
+/** One line per rule, e.g. "weighted log-odds · 62% · in consensus", in the backend's layer order. */
+export function layerLines(n: NodeDto, members: readonly string[]): string[] {
+  return Object.entries(n.credences ?? {}).map(
+    ([id, c]) => `${LAYER_NAMES[id] ?? id} · ${pct(c)}${members.includes(id) ? ' · in consensus' : ''}`,
+  );
 }

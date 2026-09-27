@@ -3,7 +3,10 @@ import type { GraphDto, NodeDto } from '../api/types';
 /** A claim together with the arguments attached to it. */
 export interface TreeNode {
   claim: NodeDto;
-  /** Pro (SUPPORT) arguments first, then con (ATTACK); each group in first-appearance order. */
+  /**
+   * Pro (SUPPORT) arguments first, then con (ATTACK), then undercutters of the
+   * link attaching this claim to its parent; each group in first-appearance order.
+   */
   children: ArgumentNode[];
 }
 
@@ -11,12 +14,16 @@ export interface TreeNode {
 export interface ArgumentNode {
   edge: NodeDto;
   node: TreeNode;
+  /** EXP-03 UNDERCUT: `edge` attacks the link above this subtree's parent, not a claim. */
+  undercut?: boolean;
 }
 
 /**
  * Builds the tree under `root` from a flat graph snapshot. Children of a claim
  * are the EDGE nodes whose `target` is that claim, each paired with its
- * `source` claim. Edges whose source claim is absent from the snapshot are
+ * `source` claim, followed by its undercutters: the claims whose edge targets
+ * the edge attaching the claim to its parent (EXP-03 UNDERCUT — "this does
+ * not show that"), rendered under the argument whose link they attack. Edges whose source claim is absent from the snapshot are
  * skipped (a frame can carry an edge before its source). Cycles cannot occur
  * in a deliberation tree, but a visited set guards against rendering forever
  * if one ever did. Returns undefined when the root claim is not present.
@@ -47,18 +54,19 @@ export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
   }
 
   const visited = new Set<string>();
-  const build = (claim: NodeDto): TreeNode => {
+  const build = (claim: NodeDto, via?: NodeDto): TreeNode => {
     visited.add(claim.ref);
     const edges = edgesByTarget.get(claim.ref) ?? [];
-    const ordered = [
-      ...edges.filter((e) => e.polarity === 'SUPPORT'),
-      ...edges.filter((e) => e.polarity === 'ATTACK'),
+    const ordered: Array<[NodeDto, boolean]> = [
+      ...edges.filter((e) => e.polarity === 'SUPPORT').map((e): [NodeDto, boolean] => [e, false]),
+      ...edges.filter((e) => e.polarity === 'ATTACK').map((e): [NodeDto, boolean] => [e, false]),
+      ...(via ? edgesByTarget.get(via.ref) ?? [] : []).map((e): [NodeDto, boolean] => [e, true]),
     ];
     const children: ArgumentNode[] = [];
-    for (const edge of ordered) {
+    for (const [edge, undercut] of ordered) {
       const src = edge.source === undefined ? undefined : claims.get(edge.source);
       if (!src || visited.has(src.ref)) continue;
-      children.push({ edge, node: build(src) });
+      children.push(undercut ? { edge, node: build(src, edge), undercut } : { edge, node: build(src, edge) });
     }
     return { claim, children };
   };

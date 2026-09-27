@@ -2,8 +2,12 @@ import { createMemo, createSignal, For, Show, type Accessor } from 'solid-js';
 import type { NodeDto } from '../api/types';
 import type { TreeNode } from '../tree/buildTree';
 import {
+  agreementText,
+  layerLines,
   pct,
   phaseOf,
+  shown,
+  spreadOf,
   reachTier,
   triageText,
   reachWeight,
@@ -18,13 +22,13 @@ import { TweenPct } from './Tween';
 /** Every claim of the rendered tree, by ref, with the edge that attaches it to
  *  its parent. Cards look themselves up here by ref, so a new snapshot (all
  *  new objects) updates cards in place rather than re-creating them. */
-export type TreeIndex = Map<string, { node: TreeNode; edge?: NodeDto }>;
+export type TreeIndex = Map<string, { node: TreeNode; edge?: NodeDto; undercut?: boolean }>;
 
 export function indexTree(tree: TreeNode): TreeIndex {
   const idx: TreeIndex = new Map();
-  const walk = (t: TreeNode, edge?: NodeDto) => {
-    idx.set(t.claim.ref, { node: t, edge });
-    for (const a of t.children) walk(a.node, a.edge);
+  const walk = (t: TreeNode, edge?: NodeDto, undercut?: boolean) => {
+    idx.set(t.claim.ref, undercut ? { node: t, edge, undercut } : { node: t, edge });
+    for (const a of t.children) walk(a.node, a.edge, a.undercut);
   };
   walk(tree);
   return idx;
@@ -34,6 +38,8 @@ export function indexTree(tree: TreeNode): TreeIndex {
 export interface Selection {
   selected: Accessor<string | undefined>;
   toggle: (ref: string) => void;
+  /** The layers averaged into the consensus, for the facts panel. */
+  members?: Accessor<readonly string[]>;
 }
 
 /** Stable child refs of a tree entry, so a new frame with the same children keeps their DOM. */
@@ -43,9 +49,23 @@ export function useChildRefs(entry: Accessor<{ node: TreeNode } | undefined>) {
   });
 }
 
-export function sideCounts(node: TreeNode): { pro: number; con: number } {
-  const pro = node.children.filter((a) => a.edge.polarity === 'SUPPORT').length;
-  return { pro, con: node.children.length - pro };
+/** Pro and con arguments of a claim; undercutters of its own link are counted apart. */
+export function sideCounts(node: TreeNode): { pro: number; con: number; undercuts: number } {
+  const args = node.children.filter((a) => !a.undercut);
+  const pro = args.filter((a) => a.edge.polarity === 'SUPPORT').length;
+  return { pro, con: args.length - pro, undercuts: node.children.length - args.length };
+}
+
+/** A thin translucent band over a credence track: where the credence rules disagree. */
+export function SpreadBand(props: { node: NodeDto; class: string }) {
+  const s = () => spreadOf(props.node);
+  return (
+    <span
+      class={props.class}
+      aria-hidden="true"
+      style={{ left: `${s().low * 100}%`, width: `${Math.max(0, s().high - s().low) * 100}%` }}
+    />
+  );
 }
 
 export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel: Selection }) {
@@ -58,7 +78,8 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
       {(e) => {
         const claim = () => e().node.claim;
         const edge = () => e().edge;
-        const side = () => (edge()?.polarity === 'SUPPORT' ? 'pro' : 'con');
+        const undercut = () => e().undercut === true;
+        const side = () => (undercut() ? 'undercut' : edge()?.polarity === 'SUPPORT' ? 'pro' : 'con');
         const open = () => props.sel.selected() === claim().ref;
         const phase = () => phaseOf(claim().status);
         const counts = () => sideCounts(e().node);
@@ -80,19 +101,27 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                 onClick={() => props.sel.toggle(claim().ref)}
               >
                 <span class="card__text">{claim().text}</span>
-                <span class="card__cred" title={`Credence: ${verdict(claim().credence, 'claim').text}`}>
+                <span class="card__cred" title={`Credence: ${verdict(shown(claim()), 'claim').text} (${agreementText(claim())})`}>
                   <span class="card__num">
-                    <TweenPct value={claim().credence} />
+                    <TweenPct value={shown(claim())} />
                   </span>
                   <span class="bar" aria-hidden="true">
-                    <span style={{ transform: `scaleX(${claim().credence})` }} />
+                    <SpreadBand node={claim()} class="bar__band" />
+                    <span class="bar__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
                   </span>
                 </span>
               </button>
 
               <div class="card__meta">
-                <span class="side" title="Relation strength: if this were true, how strongly it bears on the claim above">
-                  <span class="side__word">{side() === 'pro' ? 'Pro' : 'Con'}</span>
+                <span
+                  class="side"
+                  title={
+                    undercut()
+                      ? 'Undercuts the link: it does not dispute the claim above, it denies that the argument above bears on it'
+                      : 'Relation strength: if this were true, how strongly it bears on the claim above'
+                  }
+                >
+                  <span class="side__word">{undercut() ? 'Undercuts the link' : side() === 'pro' ? 'Pro' : 'Con'}</span>
                   <span class="side__strength">
                     {' · '}
                     {strengthWord(edge()?.strength)}
@@ -123,6 +152,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                   >
                     <span class="chevron" classList={{ 'is-collapsed': collapsed() }} aria-hidden="true" />
                     {counts().pro} pro · {counts().con} con
+                    {counts().undercuts > 0 ? ` · ${counts().undercuts} undercut${counts().undercuts === 1 ? '' : 's'}` : ''}
                   </button>
                 </Show>
                 <span class="card__spacer" />
@@ -135,7 +165,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
               </div>
 
               <Show when={open()}>
-                <Facts id={panelId()} claim={claim()} edge={edge()} />
+                <Facts id={panelId()} claim={claim()} edge={edge()} members={props.sel.members?.()} />
               </Show>
             </article>
 
@@ -152,7 +182,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
 }
 
 /** Jev's raw judgments, in plain language, for the open claim. */
-export function Facts(props: { id: string; claim: NodeDto; edge?: NodeDto }) {
+export function Facts(props: { id: string; claim: NodeDto; edge?: NodeDto; members?: readonly string[] }) {
   const c = () => props.claim;
   // Rows Jev has not judged yet are left out rather than shown as dashes.
   const row = (label: string, value: string | undefined, hint: string) =>
@@ -169,7 +199,16 @@ export function Facts(props: { id: string; claim: NodeDto; edge?: NodeDto }) {
       : `pro ${pct(c().proSaturation)} · con ${pct(c().conSaturation)}`;
   return (
     <dl class="facts" id={props.id}>
-      {row('Credence', verdict(c().credence, c().depth === 0 ? 'question' : 'claim').text, 'How likely this is true, after weighing its arguments')}
+      {row('Credence', verdict(shown(c()), c().depth === 0 ? 'question' : 'claim').text, 'The consensus of the credence rules: how likely this is true, after weighing its arguments')}
+      {row('Rules', c().credences ? agreementText(c()) : undefined, 'How far the credence rules (ways of weighing arguments) agree on this claim')}
+      <Show when={c().credences}>
+        <dt title="Each rule's credence; the consensus averages the marked ones">By rule</dt>
+        <dd>
+          <ul class="facts__layers">
+            <For each={layerLines(c(), props.members ?? [])}>{(line) => <li>{line}</li>}</For>
+          </ul>
+        </dd>
+      </Show>
       {row('Plausible on its own', p(c().plausibility), "Jev's judgment of the claim alone, before arguments")}
       <Show when={props.edge}>
         {row('Link strength', p(props.edge!.strength), 'If this were true, how strongly it bears on the claim above')}

@@ -5,6 +5,8 @@
 export interface GraphDto {
   questions: QuestionDto[];
   nodes: NodeDto[];
+  /** SPEC §2: the layers averaged into every node's `consensus` (`--consensus`); always sent, see NodeDto. */
+  consensusMembers?: string[];
 }
 
 export interface QuestionDto {
@@ -35,10 +37,20 @@ export type Polarity = 'SUPPORT' | 'ATTACK';
 export interface NodeDto {
   ref: string;
   kind: string;
-  /** Propagated agora credence, [0,1]. */
+  /** Propagated agora credence in the primary semantics layer (`--semantics`), [0,1]. */
   credence: number;
   /** The question tree this node belongs to (its root claim ref). */
   root: string;
+  // The four fields below have Kotlin defaults and the backend always sends
+  // them (encodeDefaults); they are optional here only so hand-written
+  // fixtures without them stay valid. Read them through `shown()`/`spreadOf()`.
+  /** SPEC §2 "Credence layers and consensus": propagated credence per semantics layer id. */
+  credences?: Record<string, number>;
+  /** Geometric-odds mean of the consensus member layers' credences (the headline number). */
+  consensus?: number;
+  /** Lowest and highest credence over all layers. */
+  spreadLow?: number;
+  spreadHigh?: number;
   // --- CLAIM only ---
   text?: string;
   depth?: number;
@@ -50,6 +62,11 @@ export interface NodeDto {
   alsoProposedBy?: string[];
   /** EXP-03 MERGE: true when this argument's text was rewritten together with an overlapping one. */
   merged?: boolean;
+  /**
+   * EXP-03 UNDERCUT: the ref of the EDGE this claim attacks — it denies that
+   * that edge's source bears on its target. Its own edge's `target` is that ref.
+   */
+  undercuts?: string;
   /** Jev plausibility stance (CRED-01), once judged. */
   plausibility?: number;
   /** Jev relevance probability (EXP-05), judged when the argument was attached. */
@@ -68,7 +85,7 @@ export interface NodeDto {
   /** EXP-03: triage actions taken on this claim's proposals, by action name (ADD, DUPLICATE, …). */
   triage?: Record<string, number>;
   error?: string;
-  // --- EDGE only (child → parent) ---
+  // --- EDGE only (child → parent; the parent is an EDGE for an undercutter) ---
   polarity?: string;
   source?: string;
   target?: string;
@@ -83,3 +100,6 @@ export interface QuestionCreated {
 
 /** Statuses during which the explorer is still working on a claim. */
 export const ACTIVE_STATUSES: ReadonlySet<Status> = new Set(['QUEUED', 'JUDGING', 'EXPLORING']);
+
+/** The layers a node's consensus averages over by default (`--consensus`). */
+export const DEFAULT_CONSENSUS: readonly string[] = ['wlo', 'jnb', 'woe'];
