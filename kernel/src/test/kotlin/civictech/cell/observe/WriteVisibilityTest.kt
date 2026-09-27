@@ -348,14 +348,17 @@ class WriteVisibilityTest {
 
         val gate = CountDownLatch(1)
         val entered = CountDownLatch(1)
-        val dependentThreads = Collections.synchronizedList(mutableListOf<Thread>())
-        val heldLock = Collections.synchronizedList(mutableListOf<Boolean>())
+        // One append per dependent run — its thread and its lock-holding together —
+        // so the await below and the assertions read the same record. Two separate
+        // lists let `size == 2` on the first pass while the second list still
+        // lacked its entry (computenet-517q4, the `:379` variant).
+        data class Run(val thread: Thread, val heldLock: Boolean)
+        val runs = Collections.synchronizedList(mutableListOf<Run>())
 
         val (w1, _) = ingress.driveStamped { ops.add(2) }
         val h1 = sink.visibilityOf(w1)
         h1.thenAccept {
-            dependentThreads += Thread.currentThread()
-            heldLock += Thread.holdsLock(lock)
+            runs += Run(Thread.currentThread(), Thread.holdsLock(lock))
             entered.countDown()
             gate.await()
         }
@@ -364,19 +367,25 @@ class WriteVisibilityTest {
 
         val (w2, _) = ingress.driveStamped { ops.add(4) }
         val h2 = sink.visibilityOf(w2)
-        h2.thenAccept {
-            dependentThreads += Thread.currentThread()
-            heldLock += Thread.holdsLock(lock)
-        }
+        h2.thenAccept { runs += Run(Thread.currentThread(), Thread.holdsLock(lock)) }
         graph.controller.runToIdle()
 
         sink.current() shouldBe mapOf("items" to setOf(2, 4), "filtered" to setOf(2, 4))
-        h2.get(5, SECONDS) shouldBe Visible(w2)
+        // Wait for h2 WITHOUT a completion method. `h2.get(...)` on this (scheduler)
+        // thread made the JDK run h2's still-pending plain dependent right here:
+        // `CompletableFuture.get`/`join` call `postComplete()` once they see the
+        // result, and whichever thread pops a dependent off the stack runs it — the
+        // pool thread that completed h2, or this waiter (computenet-517q4, the
+        // `:378` variant; ~1.6% of runs locally). `isDone`/`getNow` only read the
+        // result, so the dependent can run only on the thread that completed it.
+        awaitUntil("h2 completes while h1's dependent is blocked", 5_000) { h2.isDone }
+        h2.getNow(null) shouldBe Visible(w2)
         gate.countDown()
-        awaitUntil("both dependents ran", 5_000) { dependentThreads.size == 2 }
+        awaitUntil("both dependents ran", 5_000) { runs.size == 2 }
 
-        dependentThreads.none { it === schedulerThread } shouldBe true
-        heldLock shouldBe listOf(false, false)
+        val recorded = runs.toList()
+        recorded.none { it.thread === schedulerThread } shouldBe true
+        recorded.map { it.heldLock } shouldBe listOf(false, false)
         (threadsNamed("aligned-observe-") - dispatchersBefore).shouldBeEmpty()
         sink.close()
     }

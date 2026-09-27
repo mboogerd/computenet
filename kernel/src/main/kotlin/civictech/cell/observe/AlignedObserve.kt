@@ -203,7 +203,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * JDK default async pool (`CompletableFuture.runAsync`), so the `complete` call
  * and every plain `thenAccept`/`thenApply` dependent run on a pool thread —
  * never on the host scheduler thread, never under [lock], and never on the
- * listener dispatcher (which a handle-only sink therefore never mints). Handles
+ * listener dispatcher (which a handle-only sink therefore never mints) — save
+ * that a thread blocked in `get`/`join` on the handle may run a pending plain
+ * dependent itself, per [FrontierWitness.visibilityOf]. Handles
  * carry no ordering guarantee relative to each other or to listener
  * notifications.
  */
