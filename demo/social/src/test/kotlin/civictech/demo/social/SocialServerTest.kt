@@ -160,6 +160,7 @@ class SocialServerTest {
         val app = SocialApp(port = 0, source = SnbGenerator(42, scale)).start()
         try {
             val settled = awaitStable(quietMs = 500) { app.broadcastCount.get() }
+            println("computenet-l3msn: startup broadcasts at scale $scale: $settled")
             assertTrue(
                 settled <= STARTUP_BROADCAST_BOUND,
                 "expected at most $STARTUP_BROADCAST_BOUND startup broadcasts at scale $scale " +
