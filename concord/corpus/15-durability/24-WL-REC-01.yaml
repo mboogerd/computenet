@@ -44,7 +44,8 @@
 # host-wide checkpoint whichever journaled cell it names, but naming `jw`
 # makes mutation (1) also silently drop the checkpoint (a volatile cell's
 # `snapshot` is a raw round-trip), so the mutant replayed the full history
-# and matched the golden. And the post-recovery add 29 is in the script:
+# and `jv` matched its golden (only `l` reddened, reading `[]`; measured
+# 20 of 20 runs in task review). And the post-recovery add 29 is in the script:
 # without an add INTO window 20 after recovery, `jv` never re-reads that
 # window's recovered count — its own replayed tail re-installs `20 -> 2`
 # whatever the rebuilt window holds — so only `l` could discriminate.
