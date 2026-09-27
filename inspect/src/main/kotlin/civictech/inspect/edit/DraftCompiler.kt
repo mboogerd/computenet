@@ -38,11 +38,26 @@ import java.util.UUID
  * The browser's draft graph (va0c4-D6). **This is the wire DTO for
  * `POST /apply/precheck` too: WKB2 F6 imports it from here and must not
  * redefine it.** kotlinx-serializable and `inspectorJson`-compatible.
+ *
+ * F6 (wczst-D1) added [host] and [despawns], both defaulted so a draft
+ * written without them still decodes. [DraftCompiler.compile] reads neither;
+ * the write-plane route maps them onto `Draft.host` / `Draft.despawns`.
  */
 @Serializable
 data class DraftDto(
     val nodes: List<DraftNodeDto>,
     val edges: List<DraftEdgeDto> = emptyList(),
+    /**
+     * The target host: a key of the inspector's `hosts` map. Null means the
+     * sole host; the route resolves it (and refuses null when there are
+     * several hosts, or an unknown key) — the compiler does not validate it.
+     */
+    val host: String? = null,
+    /**
+     * Live cells to despawn once the apply has committed, as encoded refs
+     * (`"<uuid>:<instanceId>"`). Decoded by the route, not by the compiler.
+     */
+    val despawns: List<String> = emptyList(),
 )
 
 /**
@@ -104,6 +119,8 @@ object DraftCompiler {
      * duplicate handle, or a `parent` on an instance set. An edge naming a
      * handle no node declares is not a compile error: its `ConnectStep` or
      * `BoundaryLink` is emitted and precheck refuses it `UNRESOLVED_HANDLE`.
+     * [DraftDto.host] and [DraftDto.despawns] are ignored: the write-plane
+     * route maps them onto `Draft.host` / `Draft.despawns` (wczst-D1).
      */
     fun compile(draft: DraftDto): Compiled {
         checkShape(draft)

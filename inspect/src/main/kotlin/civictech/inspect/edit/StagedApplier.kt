@@ -14,6 +14,7 @@ import civictech.cell.graph.PlannedAction
 import civictech.cell.graph.PlannedStep
 import civictech.cell.graph.RefusalCode
 import civictech.cell.graph.StepCheck
+import civictech.cell.graph.StepEvent
 import civictech.cell.graph.StepResult
 import civictech.cell.graph.Verdict
 import civictech.cell.graph.precheck
@@ -94,24 +95,42 @@ import kotlin.concurrent.withLock
  * overrides only `spawnBound`, the 4-arg `connect` and `despawn`.
  *
  * One apply runs at a time: a second caller blocks on the apply lock
- * (admission is F7's, in front of this). [abort] and [record] never take that
- * lock.
+ * (admission is F7's, in front of this). Its record is registered **before**
+ * it takes that lock (wczst-D2.4), so [record] answers a PRECHECK record for
+ * an apply still queued behind another, and a reused apply id is refused at
+ * once rather than after the wait. [abort], [record], [plan] and
+ * [stagedApplyOf] never take that lock.
+ *
+ * **Observation** (WKB2 F6, wczst-D2.1): an [ApplyListener] sees every phase
+ * entered (the initial PRECHECK included), every STAGE step event, every
+ * staged spawn — after [ApplyRecord.stagedRefs] already holds it — and the
+ * outcome exactly once, the first time it is set. It is called synchronously
+ * on the applying thread; a throw from it propagates into the apply, as a
+ * throw from `ApplyProgress` does. [stagedApplyOf] answers, lock-free, which
+ * in-flight apply a ref was staged by (wczst-D2.2).
+ *
+ * **Planning without applying** (wczst-D2.3): [plan] computes the PRECHECK
+ * plan [apply] would record for a draft, through the same code, without the
+ * apply lock, without staging and without minting a record.
  *
  * @param skipPrecheck test-only (e1ojt-D11): still plans, stores the plan,
- *   but ignores a `NotAppliable` verdict.
+ *   but ignores a `NotAppliable` verdict. [plan] ignores it: a plan is a plan.
  * @param afterStage test-only (e1ojt-D8): invoked on the applying thread once
  *   STAGE succeeded, before CUT_OVER — the one pause point where [abort] is
- *   honoured.
+ *   honoured. A `var` (wczst-D2.5) so a route test can install a pause on an
+ *   applier it did not construct.
  * @param beforeBoundaryLink test-only (e1ojt-D8): invoked with the list index
- *   before each boundary `connect`.
+ *   before each boundary `connect`. A `var` for the same reason.
+ * @param listener the apply observer (wczst-D2.1); [ApplyListener.None] by default.
  */
 class StagedApplier(
     private val hosts: Map<String, ManagedHost>,
     private val registry: LocationRegistry,
     private val clock: () -> Long,
     internal val skipPrecheck: Boolean = false,
-    internal val afterStage: (ApplyRecord) -> Unit = {},
-    internal val beforeBoundaryLink: (Int) -> Unit = {},
+    @Volatile internal var afterStage: (ApplyRecord) -> Unit = {},
+    @Volatile internal var beforeBoundaryLink: (Int) -> Unit = {},
+    private val listener: ApplyListener = ApplyListener.None,
 ) {
     private val applyLock = ReentrantLock()
 
@@ -128,6 +147,10 @@ class StagedApplier(
      * verbatim draft as the caller received it (`[WKB2-04]`); the applier only
      * carries it.
      *
+     * The record is registered under [applyId] before the apply lock is taken
+     * (wczst-D2.4): while this call waits behind another apply, [record]
+     * already answers its PRECHECK record.
+     *
      * @throws IllegalArgumentException when [Draft.host] is not a known host,
      *   [Draft.promotions] is non-empty (`NOT_YET_SUPPORTED`, F9), a despawn
      *   target is listed twice, or [applyId] was already used.
@@ -139,25 +162,20 @@ class StagedApplier(
         baseTopologyVersion: Long,
         submittedDraft: JsonElement = JsonNull,
     ): ApplyRecord {
-        require(draft.host in hosts) { "unknown host '${draft.host}' (known: ${hosts.keys})" }
-        require(draft.promotions.isEmpty()) {
-            "NOT_YET_SUPPORTED: promotion requests are applied by WKB2 F9, not by this applier"
+        val host = admit(draft)
+        val initial = ApplyRecord(
+            applyId = applyId,
+            identity = identity,
+            submittedDraft = submittedDraft,
+            baseTopologyVersion = baseTopologyVersion,
+            submittedAtMs = clock(),
+        )
+        // putIfAbsent counts toward removeEldestEntry like put, so the bound holds.
+        synchronized(records) {
+            require(records.putIfAbsent(applyId, initial) == null) { "apply id '$applyId' was already used" }
         }
-        require(draft.despawns.distinct().size == draft.despawns.size) { "a despawn target is listed more than once" }
         applyLock.withLock {
-            require(record(applyId) == null) { "apply id '$applyId' was already used" }
-            val run = Run(
-                applyId,
-                hosts.getValue(draft.host),
-                draft,
-                ApplyRecord(
-                    applyId = applyId,
-                    identity = identity,
-                    submittedDraft = submittedDraft,
-                    baseTopologyVersion = baseTopologyVersion,
-                    submittedAtMs = clock(),
-                ),
-            )
+            val run = Run(applyId, host, draft, initial)
             inFlight = run
             try {
                 run.execute()
@@ -181,8 +199,81 @@ class StagedApplier(
         return true
     }
 
-    /** The latest snapshot of [applyId]'s record — in flight or terminal — or null. */
+    /** The latest snapshot of [applyId]'s record — queued, in flight or terminal — or null. */
     fun record(applyId: String): ApplyRecord? = synchronized(records) { records[applyId] }
+
+    /**
+     * The PRECHECK plan [apply] would record for [draft] (wczst-D2.3), from
+     * the same planning code, without taking the apply lock, without staging
+     * and without registering a record. Precheck constructs each spawn once,
+     * cold (F2) — that is its only effect, and it touches no host.
+     * [skipPrecheck] does not apply: the verdict is reported as found.
+     *
+     * @throws IllegalArgumentException for the same caller faults as [apply]
+     *   (unknown host, non-empty promotions, a despawn listed twice).
+     */
+    fun plan(draft: Draft): PlanDto = planFor(admit(draft), draft).toDto()
+
+    /**
+     * The id of the in-flight apply that staged [ref] (wczst-D2.2): non-null
+     * only while that apply is in STAGE, CUT_OVER or UNWIND and [ref] is in
+     * its [ApplyRecord.stagedRefs]. RETIRE answers null — a committed cell is
+     * live. Lock-free: two volatile reads.
+     */
+    fun stagedApplyOf(ref: CellRef): String? {
+        val record = inFlight?.record ?: return null
+        if (record.phase !in STAGED_PHASES) return null
+        return record.applyId.takeIf { InspectorServer.encodeRef(ref) in record.stagedRefs }
+    }
+
+    /** The caller-fault checks [apply] and [plan] share; the draft's target host. */
+    private fun admit(draft: Draft): ManagedHost {
+        require(draft.host in hosts) { "unknown host '${draft.host}' (known: ${hosts.keys})" }
+        require(draft.promotions.isEmpty()) {
+            "NOT_YET_SUPPORTED: promotion requests are applied by WKB2 F9, not by this applier"
+        }
+        require(draft.despawns.distinct().size == draft.despawns.size) { "a despawn target is listed more than once" }
+        return hosts.getValue(draft.host)
+    }
+
+    /**
+     * The PRECHECK plan (e1ojt-D6): a drained target host is one refused
+     * synthetic step; otherwise F2's cold precheck plus one DESPAWN step per
+     * [Draft.despawns].
+     */
+    private fun planFor(host: ManagedHost, draft: Draft): Plan {
+        if (host.isDrained) {
+            val refused = PlannedStep(
+                HOST_STEP, null, PlannedAction.SPAWN, emptySet(),
+                StepCheck.Refused(RefusalCode.UNREACHABLE_REF, "target host '${draft.host}' is drained"),
+            )
+            return Plan(listOf(refused), Verdict.NotAppliable(listOf(refused)))
+        }
+        val planned = draft.spec.precheck(draft.boundary, HostLiveView(host, registry)).steps +
+            draft.despawns.map { planDespawn(host, draft, it) }
+        val refusals = planned.filter { it.result is StepCheck.Refused }
+        return Plan(planned, if (refusals.isEmpty()) Verdict.Appliable else Verdict.NotAppliable(refusals))
+    }
+
+    /** e1ojt-D6: a despawn target must be a reachable cell local to the target host. */
+    private fun planDespawn(host: ManagedHost, draft: Draft, ref: CellRef): PlannedStep {
+        val result = when (val location = registry.location(ref)) {
+            null -> StepCheck.Refused(RefusalCode.UNKNOWN_REF, "despawn target $ref is not located by the registry")
+            is LocationRegistry.Remote -> StepCheck.Refused(RefusalCode.MULTI_HOST, notLocal(draft, ref))
+            is LocationRegistry.Local -> when {
+                location.host !== host -> StepCheck.Refused(RefusalCode.MULTI_HOST, notLocal(draft, ref))
+                host.isDrained || host.isSuspended(ref) -> StepCheck.Refused(
+                    RefusalCode.UNREACHABLE_REF,
+                    "despawn target $ref is not reachable: its host is drained or the cell is suspended",
+                )
+                else -> StepCheck.Ok
+            }
+        }
+        return PlannedStep(despawnKey(ref), null, PlannedAction.DESPAWN, setOf(ref), result)
+    }
+
+    private fun notLocal(draft: Draft, ref: CellRef) =
+        "despawn target $ref is not local to target host '${draft.host}' — one host per draft (e1ojt-D5)"
 
     /** A boundary link CUT_OVER connected, with the tap around its live interval. */
     private class Attachment(
@@ -231,6 +322,7 @@ class StagedApplier(
                 delegate.spawnBound(factory, identity, parent).also { ref ->
                     stagedRefs += ref
                     publish()
+                    listener.onStaged(applyId, ref)
                 }
 
             override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult =
@@ -252,13 +344,25 @@ class StagedApplier(
             cutOver()
         }
 
+        /** The phase last announced to [listener]; null before the first publish. */
+        private var announcedPhase: ApplyPhase? = null
+
+        /** Whether [ApplyListener.onDone] has fired — exactly once per apply. */
+        private var doneAnnounced = false
+
+        /**
+         * Writes the next record snapshot, then tells [listener] (wczst-D2.1):
+         * `onPhase` when the phase differs from the last one announced (so
+         * the first publish announces PRECHECK), `onDone` the first time the
+         * outcome is non-null.
+         */
         private fun publish(
             phase: ApplyPhase = record.phase,
             outcome: ApplyOutcome? = record.outcome,
             plan: PlanDto? = record.plan,
             completedAtMs: Long? = record.completedAtMs,
         ) {
-            record = record.copy(
+            val next = record.copy(
                 phase = phase,
                 outcome = outcome,
                 plan = plan,
@@ -266,7 +370,16 @@ class StagedApplier(
                 steps = LinkedHashMap(steps),
                 stagedRefs = stagedRefs.map(InspectorServer::encodeRef),
             )
-            synchronized(records) { records[applyId] = record }
+            record = next
+            synchronized(records) { records[applyId] = next }
+            if (next.phase != announcedPhase) {
+                announcedPhase = next.phase
+                listener.onPhase(next)
+            }
+            if (next.outcome != null && !doneAnnounced) {
+                doneAnnounced = true
+                listener.onDone(next)
+            }
         }
 
         private fun finish(outcome: ApplyOutcome) = publish(outcome = outcome, completedAtMs = clock())
@@ -275,7 +388,7 @@ class StagedApplier(
 
         /** True when STAGE may run. */
         private fun precheck(): Boolean {
-            val plan = plan()
+            val plan = planFor(host, draft)
             plan.steps.forEach { steps[it.key] = StepOutcome.NotRun }
             publish(plan = plan.toDto())
             if (plan.verdict is Verdict.NotAppliable && !skipPrecheck) {
@@ -284,40 +397,6 @@ class StagedApplier(
             }
             return true
         }
-
-        private fun plan(): Plan {
-            if (host.isDrained) {
-                val refused = PlannedStep(
-                    HOST_STEP, null, PlannedAction.SPAWN, emptySet(),
-                    StepCheck.Refused(RefusalCode.UNREACHABLE_REF, "target host '${draft.host}' is drained"),
-                )
-                return Plan(listOf(refused), Verdict.NotAppliable(listOf(refused)))
-            }
-            val planned = draft.spec.precheck(draft.boundary, HostLiveView(host, registry)).steps +
-                draft.despawns.map(::planDespawn)
-            val refusals = planned.filter { it.result is StepCheck.Refused }
-            return Plan(planned, if (refusals.isEmpty()) Verdict.Appliable else Verdict.NotAppliable(refusals))
-        }
-
-        /** e1ojt-D6: a despawn target must be a reachable cell local to the target host. */
-        private fun planDespawn(ref: CellRef): PlannedStep {
-            val result = when (val location = registry.location(ref)) {
-                null -> StepCheck.Refused(RefusalCode.UNKNOWN_REF, "despawn target $ref is not located by the registry")
-                is LocationRegistry.Remote -> StepCheck.Refused(RefusalCode.MULTI_HOST, notLocal(ref))
-                is LocationRegistry.Local -> when {
-                    location.host !== host -> StepCheck.Refused(RefusalCode.MULTI_HOST, notLocal(ref))
-                    host.isDrained || host.isSuspended(ref) -> StepCheck.Refused(
-                        RefusalCode.UNREACHABLE_REF,
-                        "despawn target $ref is not reachable: its host is drained or the cell is suspended",
-                    )
-                    else -> StepCheck.Ok
-                }
-            }
-            return PlannedStep(despawnKey(ref), null, PlannedAction.DESPAWN, setOf(ref), result)
-        }
-
-        private fun notLocal(ref: CellRef) =
-            "despawn target $ref is not local to target host '${draft.host}' — one host per draft (e1ojt-D5)"
 
         // ---- STAGE ---------------------------------------------------------
 
@@ -336,6 +415,7 @@ class StagedApplier(
                     refByHandle[event.handle] = spawned
                     handleByRef[spawned] = event.handle
                 }
+                listener.onStep(applyId, event)
                 publish()
             }
             val allApplied = try {
@@ -522,6 +602,9 @@ class StagedApplier(
         /** The synthetic step a drained target host is refused under (e1ojt-D6). */
         const val HOST_STEP = "host"
 
+        /** The phases in which an in-flight apply's staged refs are not live (wczst-D2.2). */
+        val STAGED_PHASES = setOf(ApplyPhase.STAGE, ApplyPhase.CUT_OVER, ApplyPhase.UNWIND)
+
         fun despawnKey(ref: CellRef) = "despawn:${InspectorServer.encodeRef(ref)}"
 
         /** F2's boundary step key, so plan keys and record step keys agree. */
@@ -533,5 +616,44 @@ class StagedApplier(
                 Direction.OUTBOUND -> "$stagedSide->$liveSide"
             }
         }
+    }
+}
+
+/**
+ * Observes one [StagedApplier]'s applies (WKB2 F6, wczst-D2.1) — the producer
+ * half of the write plane's `apply.*` events (`[WKB2-38]`, `[WKB2-39]`).
+ * Every call is synchronous on the applying thread, in the order the apply
+ * reaches it; a throw propagates into the apply (the applier's own callback,
+ * the same rule as `ApplyProgress`).
+ */
+interface ApplyListener {
+    /**
+     * The apply entered [ApplyRecord.phase]: once for the initial PRECHECK
+     * record, then once per phase change — a committed apply announces
+     * PRECHECK, STAGE, CUT_OVER, RETIRE; a STAGE failure PRECHECK, STAGE,
+     * UNWIND; a precheck refusal PRECHECK only.
+     */
+    fun onPhase(record: ApplyRecord)
+
+    /** One STAGE step's outcome, after the record's step map holds it and before it is published. */
+    fun onStep(applyId: String, event: StepEvent)
+
+    /** STAGE spawned [ref]; [StagedApplier.record] already lists it in `stagedRefs`. */
+    fun onStaged(applyId: String, ref: CellRef)
+
+    /**
+     * The apply's outcome was set, exactly once per apply. For a committed
+     * apply this is the RETIRE record, before its despawns run (e1ojt-D7), so
+     * later step updates to those despawns are reachable through
+     * [StagedApplier.record] only.
+     */
+    fun onDone(record: ApplyRecord)
+
+    /** The listener that observes nothing. */
+    object None : ApplyListener {
+        override fun onPhase(record: ApplyRecord) = Unit
+        override fun onStep(applyId: String, event: StepEvent) = Unit
+        override fun onStaged(applyId: String, ref: CellRef) = Unit
+        override fun onDone(record: ApplyRecord) = Unit
     }
 }
