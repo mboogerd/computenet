@@ -1,0 +1,142 @@
+package civictech.deliberate
+
+import civictech.agora.cell.Polarity
+import java.io.File
+import java.nio.file.Files
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class CliProposerTest {
+
+    private fun parse(text: String, max: Int = 5) = CliProposer.parseArguments(text, max)
+
+    @Test
+    fun `bare array`() {
+        assertEquals(listOf("A is cheap.", "B is fast."), parse("""["A is cheap.", "B is fast."]"""))
+    }
+
+    @Test
+    fun `fenced array with prose around it`() {
+        val text = """
+            Here are two new arguments:
+
+            ```json
+            [
+              "Remote work cuts commuting emissions.",
+              "  Offices enable spontaneous collaboration.  "
+            ]
+            ```
+            Let me know if you need more [or fewer].
+        """.trimIndent()
+        assertEquals(
+            listOf("Remote work cuts commuting emissions.", "Offices enable spontaneous collaboration."),
+            parse(text),
+        )
+    }
+
+    @Test
+    fun `nested quotes, escapes and brackets inside strings`() {
+        val text = """Sure [see below]: ["He said \"no\" [twice].", "Path C:\\tmp is \u00e9crit.", "Tab\there"]"""
+        assertEquals(listOf("He said \"no\" [twice].", "Path C:\\tmp is écrit.", "Tab\there"), parse(text))
+    }
+
+    @Test
+    fun `skips non-string arrays and drops blanks`() {
+        assertEquals(listOf("Real one."), parse("""refs [1, 2] then ["", "  ", "Real one."]"""))
+    }
+
+    @Test
+    fun `over-long array is capped`() {
+        assertEquals(listOf("a", "b"), parse("""["a","b","c","d"]""", max = 2))
+    }
+
+    @Test
+    fun `garbage throws`() {
+        assertFailsWith<IllegalArgumentException> { parse("I cannot help with that.") }
+        assertFailsWith<IllegalArgumentException> { parse("""["unterminated", "array"""") }
+        assertFailsWith<IllegalArgumentException> { parse("[1, 2, 3]") }
+    }
+
+    @Test
+    fun `prompt carries context, side and cap`() {
+        val ctx = ClaimContext("Should X?", listOf("Should X?"), "X is cheap.", listOf("pro one"), listOf("con one"))
+        val prompt = CliProposer.prompt(ctx, Polarity.ATTACK, 3)
+        listOf("Should X?", "X is cheap.", "pro one", "con one", "AGAINST", "at most 3").forEach {
+            assertTrue(it in prompt, "prompt lacks '$it'")
+        }
+    }
+
+    @Test
+    fun `runs in an empty temp dir, reads out file, and cleans up`() {
+        val proposer = CliProposer("fake", { _, out ->
+            listOf("sh", "-c", "ls -A | wc -l | tr -d ' ' > '${out.absolutePath}'; pwd")
+        }, ProcessGate(1))
+        assertEquals("0", proposer.run("p").trim())
+        val echo = CliProposer("echo", { prompt, _ -> listOf("sh", "-c", "cat; pwd; printf '%s' \"\$1\"", "sh", prompt) }, ProcessGate(1))
+        val lines = echo.run("[\"x\"]").lines()
+        val seenDir = File(lines[0])
+        assertEquals("[\"x\"]", lines[1], "stdin must be closed (cat reads nothing)")
+        assertFalse(seenDir.exists(), "temp dir must be deleted")
+    }
+
+    @Test
+    fun `non-zero exit fails`() {
+        val proposer = CliProposer("fail", { _, _ -> listOf("sh", "-c", "echo boom >&2; exit 3") }, ProcessGate(1))
+        val e = assertFailsWith<IllegalStateException> { proposer.run("p") }
+        assertTrue("boom" in e.message!!)
+    }
+
+    @Test
+    fun `timeout destroys the process tree`() {
+        val pidFile = Files.createTempFile("deliberate-pid", ".txt").toFile()
+        try {
+            val proposer = CliProposer(
+                "slow",
+                { _, _ -> listOf("sh", "-c", "sleep 60 & echo \$! > '${pidFile.absolutePath}'; wait") },
+                ProcessGate(1),
+                timeout = Duration.ofSeconds(2),
+            )
+            val started = System.nanoTime()
+            assertFailsWith<IllegalStateException> { proposer.run("p") }
+            assertTrue(Duration.ofNanos(System.nanoTime() - started) < Duration.ofSeconds(10))
+            val child = ProcessHandle.of(pidFile.readText().trim().toLong())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (child.map { it.isAlive }.orElse(false) && System.nanoTime() < deadline) Thread.sleep(20)
+            assertFalse(child.map { it.isAlive }.orElse(false), "grandchild sleep must be killed")
+        } finally {
+            pidFile.delete()
+        }
+    }
+
+    @Test
+    fun `gate never exceeds its bound`() {
+        val gate = ProcessGate(3)
+        val inside = AtomicInteger()
+        val peak = AtomicInteger()
+        val pool = Executors.newFixedThreadPool(12)
+        val start = CountDownLatch(1)
+        val futures = (1..48).map {
+            pool.submit {
+                start.await()
+                gate.run {
+                    peak.accumulateAndGet(inside.incrementAndGet(), ::maxOf)
+                    Thread.sleep(5)
+                    inside.decrementAndGet()
+                }
+            }
+        }
+        start.countDown()
+        futures.forEach { it.get(30, TimeUnit.SECONDS) }
+        pool.shutdown()
+        assertEquals(3, peak.get())
+        assertEquals(0, inside.get())
+    }
+}
