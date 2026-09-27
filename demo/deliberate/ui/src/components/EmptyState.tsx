@@ -1,7 +1,7 @@
 import { For } from 'solid-js';
 
 export const EXAMPLES = [
-  'Is it worth learning a second language as an adult?',
+  'Is it worth learning a musical instrument as an adult?',
   'Is remote work better for junior engineers?',
   'Should schools replace homework with projects?',
 ] as const;

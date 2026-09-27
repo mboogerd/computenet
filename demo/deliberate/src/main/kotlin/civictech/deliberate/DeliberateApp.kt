@@ -461,7 +461,7 @@ internal class Options(args: Array<String>) {
               --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
               --round-decay <f>           a claim's next round is queued at contribution x f^rounds (${D.roundDecay})
               --yield-stop on|off         stop a question once its returns diminish (on)
-              --yield-window <n>          ...when the mean yield of its last n rounds (${Y.window})
+              --yield-window <n>          ...when the mean yield of its last n non-root rounds (${Y.window})
               --yield-ratio <f>           ...falls below f x the mean of its earlier rounds (${Y.ratio})
               --yield-min-claims <n>      ...and it holds at least n claims (${Y.minClaims})
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)

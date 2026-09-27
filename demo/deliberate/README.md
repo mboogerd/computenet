@@ -49,13 +49,15 @@ second round still beats a weak sibling's first. Arguments below
 `--min-influence` are never explored (`PRUNED`), so irrelevant or badly built
 ones cost nothing, and the claim budget is spent on the strongest ones first.
 
-Each question also watches its own **returns**. Every round records a yield —
-the value of the arguments it attached (strength × relevance × quality),
+Each question also watches its own **returns**. Every non-root round records a
+yield — the value of the arguments it attached (strength × relevance × quality),
 discounted by the share of proposals triage threw away as repeats or drops,
-per argument asked for. Once a question holds 40 claims and 16 rounds, it
-stops when its last 8 rounds yielded less than 0.6 × its earlier average:
-no new round starts, and its waiting claims end `DIMINISHING` ("returns
-diminished"). Rounds in flight still attach what they found. The question
+per argument asked for. Once a question holds 40 claims and 16 non-root rounds,
+it stops when its last 8 rounds yielded less than 0.6 × its earlier average
+and there is a queued claim to halt: no new round starts, and its waiting
+claims end `DIMINISHING` ("returns diminished"). Root rounds are excluded
+because their yields are naturally higher. Rounds in flight still attach what
+they found. A tree that ran out of work on its own does not report a stop. The question
 header then says "stopped: returns diminished" (or "stopped: claim budget
 spent" when `--max-claims` ended it). An `EXPAND` still explores a
 `DIMINISHING` claim.
@@ -99,7 +101,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--min-influence <p>` | 0.10 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
 | `--round-decay <f>` | 0.5 | a claim's next round is queued at contribution × f^(rounds run) |
 | `--yield-stop on\|off` | on | stop a question once its returns diminish (EXP-10); `off` leaves only `--max-claims` |
-| `--yield-window <n>` | 8 | …when the mean yield of its last n rounds (and never before 2n rounds) |
+| `--yield-window <n>` | 8 | …when the mean yield of its last n non-root rounds (and never before 2n such rounds) |
 | `--yield-ratio <f>` | 0.6 | …falls below f × the mean yield of all its earlier rounds |
 | `--yield-min-claims <n>` | 40 | …and never before the question holds n claims |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
@@ -168,11 +170,11 @@ and three restarts, most of it host journal — see *Durability* for what it
 holds now.
 
 Iteration 5 (quality without the canonical factor, `--min-influence 0.10`,
-the per-question yield stop), measured on 2026-09-27 with the defaults and
-three questions asked at once: "Does God exist?" 162 claims, "Is Trump
-intelligent?" 55, "Do animals employ language?" 64 (57 / 21 / 110 before), all
-three ended by the yield stop, none by the budget, in about 5.4 minutes and
-332 CLI calls in total. See `CALIBRATION.md`, iteration 5.
+the per-question yield stop) was measured on 2026-09-27. That historical run
+included root rounds and could label an already exhausted tree as stopped;
+the final rule excludes root rounds and records a diminishing stop only when
+queued work is actually halted. See `CALIBRATION.md`, iteration 5, for the raw
+measurements and the correction.
 
 ## Durability
 

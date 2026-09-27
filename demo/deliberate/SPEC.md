@@ -221,24 +221,29 @@ names that model.)
   strings, tolerating surrounding prose/code fences; anything unparseable is a
   failed call.
 - **EXP-10** Every question stops by its own **diminishing returns**. Each
-  round of any claim in the question that asked for at least one argument
-  records a **yield**: Σ over the arguments it attached (REFINE and UNDERCUT
+  round of any **non-root** claim in the question that asked for at least one
+  argument records a **yield**: Σ over the arguments it attached (REFINE and UNDERCUT
   included) of `strength × relevance × quality` (the EXP-05 fallbacks for a
   failed assessment), × `1 − (DUPLICATE + DROP) / triaged` (the round's triage
   counts, exact-text repeats included; 1 when nothing was triaged), ÷ the
-  number of arguments asked for. The question keeps its yields in completion
-  order. Once it holds ≥ `yieldMinClaims` (default 40) claims and
-  ≥ 2 × `yieldWindow` (default 8) yields, and is below its budget, it stops
+  number of arguments asked for. Root rounds are excluded because their
+  naturally high yields otherwise inflate the earlier mean. The question
+  keeps its non-root yields in completion order. Once it holds ≥
+  `yieldMinClaims` (default 40) claims and ≥ 2 × `yieldWindow` (default 8)
+  non-root yields, and is below its budget, it stops
   when mean(last `yieldWindow` yields) < `yieldRatio` (default 0.6) ×
-  mean(all earlier yields). Stopping: no new round starts in the question;
-  every claim waiting for its first or next round, and every argument
+  mean(all earlier yields), **provided at least one claim in `QUEUED` can
+  actually be halted**. If the threshold is first observed after the question
+  ran out of queued work on its own, no stop is recorded and `stoppedBy`
+  remains null. Stopping: no new round starts in the question; every claim
+  waiting for its first or next round, and every argument
   attached later that passes the depth and contribution gates, ends
   `DIMINISHING` (terminal); rounds in flight complete and attach, but their
   yields are not recorded (the series is frozen at the stop, so it shows why
   the question stopped). `EXPAND` still forces a round on a `DIMINISHING`
   claim (CTL-02), whose new arguments then meet the stop like any other.
   `--yield-stop off` disables the stop (yields are still recorded). The
-  question reports `yieldRounds`, `yieldRecent` (mean of the last window),
+  question reports `yieldRounds` (non-root rounds), `yieldRecent` (mean of the last window),
   `yieldEarlier` (mean before it) and `stoppedBy` (`"diminishing"`,
   `"budget"` or null); the yields and the stop are durable (DUR-02). The
   relative, per-question comparison is the point: absolute yields differ
@@ -357,7 +362,11 @@ threshold cannot suit questions whose argument quality differs. So quality
 lost its canonical factor (EXP-05), the prompt examples became topic-neutral
 (EXP-02), `minInfluence` became 0.10 (an offline replay of the recorded trees
 balanced best there), and each question now stops by its own diminishing
-returns (EXP-10) rather than by the budget. A full recalibration of
+returns (EXP-10) rather than by the budget. Root rounds are excluded from its
+history, and a diminishing stop is recorded only when it actually halts a
+`QUEUED` claim; these corrections prevent a high-yield root from depressing
+the apparent return of its children and prevent exhausted trees from claiming
+they were stopped. A full recalibration of
 `saturation` is still residual.
 
 ## 11. Durability (requirements DUR-*)

@@ -103,6 +103,10 @@ class DeliberateAppTest {
 
         val q = g.questions.single()
         assertEquals("Should cities make public transit free?", q.text)
+        assertEquals(4, q.yieldRounds, "only the four non-root rounds contribute yields")
+        assertNotNull(q.yieldRecent)
+        assertNull(q.yieldEarlier)
+        assertNull(q.stoppedBy)
         val claims = g.nodes.filter { it.kind == "CLAIM" }
         // root + 4 children (2 proposers x 2 sides x 1) + 4 grandchildren each (depth 2 > maxDepth=1: DEPTH_LIMIT)
         assertEquals(21, claims.size)

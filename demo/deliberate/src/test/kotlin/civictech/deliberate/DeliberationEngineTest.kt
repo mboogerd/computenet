@@ -22,7 +22,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
-/** Engine behaviour (SPEC EXP-02..08, CTL-01..04) with a fake judge and fake proposers. */
+/** Engine behaviour (SPEC EXP-02..10, CTL-01..04) with a fake judge and fake proposers. */
 class DeliberationEngineTest {
 
     private data class RelationCall(
@@ -175,10 +175,10 @@ class DeliberationEngineTest {
             assertTrue(child.text!!.contains(if (edge.polarity == "SUPPORT") "-support-" else "-attack-"))
         }
         assertEquals(setOf("claude", "codex"), g.claims().filter { it.depth == 1 }.map { it.proposer }.toSet())
-        // EXP-10: one recorded round, 8 arguments asked, 8 attached at strength 0.8 × relevance 1 × quality 1.
+        // EXP-10: root rounds are excluded from per-question yield history.
         val q = g.questions.single()
-        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, yieldRounds = 1, yieldRecent = q.yieldRecent), q)
-        assertEquals(0.8, q.yieldRecent!!, 1e-12)
+        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false), q)
+        assertNull(q.yieldRecent)
     }
 
     @Test
@@ -1461,17 +1461,30 @@ class DeliberationEngineTest {
 
     @Test
     fun `round yield is value x novelty per argument asked`() {
-        // 4 asked (2 per side); triage keeps 3 and drops 1: novelty 3/4.
+        // The root attaches one child but records no yield. The child's round asks
+        // for 4 (2 per side), then triage keeps 3 and drops 1: novelty 3/4.
         val judge = FakeJudge(
             strength = { 0.8 },
             relevance = { 0.5 },
             quality = { 0.9 },
-            triage = { _, c -> c.mapIndexed { i, _ -> Triage(if (i == 3) TriageAction.DROP else TriageAction.ADD) } },
+            triage = { ctx, c ->
+                c.mapIndexed { i, _ ->
+                    Triage(if (ctx.claim == "seed" && i == 3) TriageAction.DROP else TriageAction.ADD)
+                }
+            },
         )
+        val proposer = FakeProposer("claude") { ctx, side, max ->
+            when {
+                ctx.path.isEmpty() && side == Polarity.SUPPORT -> listOf("seed")
+                ctx.path.isEmpty() -> emptyList()
+                ctx.claim == "seed" -> List(max) { "${side.name.lowercase()}-$it" }
+                else -> emptyList()
+            }
+        }
         val e = engine(
             judge = judge,
-            proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 0),
+            proposers = listOf(proposer),
+            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1, minInfluence = 0.0),
         )
         e.ask("Q?")
         e.idle()
@@ -1480,6 +1493,66 @@ class DeliberationEngineTest {
         assertEquals(3 * 0.8 * 0.5 * 0.9 * 0.75 / 4, q.yieldRecent!!, 1e-12)
         assertNull(q.yieldEarlier)
         assertNull(q.stoppedBy)
+    }
+
+    @Test
+    fun `a high-yield root followed by flat child yields does not stop`() {
+        val proposer = FakeProposer("claude") { ctx, side, max ->
+            when {
+                ctx.path.isEmpty() -> List(max) { "root-${side.name.lowercase()}-$it" }
+                ctx.path.size == 1 -> listOf("flat-${ctx.claim}-${side.name.lowercase()}")
+                else -> emptyList()
+            }
+        }
+        val judge = FakeJudge(strength = { if (it.startsWith("root-")) 1.0 else 0.1 })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(proposer),
+            config = DeliberationEngine.Config(
+                argsPerCall = 3, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, workers = 1,
+                yieldStop = DeliberationEngine.YieldStop(window = 2, ratio = 0.6, minClaims = 0),
+            ),
+        )
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        assertEquals(6, q.yieldRounds, "the root's high-yield round must not be in the history")
+        assertEquals(q.yieldEarlier!!, q.yieldRecent!!, 1e-12)
+        assertNull(q.stoppedBy)
+        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
+    }
+
+    @Test
+    fun `a decline after the question exhausts itself records no diminishing stop`() {
+        val proposer = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.path.isEmpty() -> listOf(if (side == Polarity.SUPPORT) "first" else "second")
+                ctx.claim == "first" -> listOf("high-${side.name.lowercase()}")
+                ctx.claim == "second" -> listOf("low-${side.name.lowercase()}")
+                else -> emptyList()
+            }
+        }
+        val judge = FakeJudge(
+            strength = { 1.0 },
+            triage = { ctx, c -> c.map { Triage(if (ctx.claim == "second") TriageAction.DROP else TriageAction.ADD) } },
+        )
+        val e = engine(
+            judge = judge,
+            proposers = listOf(proposer),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, workers = 1,
+                yieldStop = DeliberationEngine.YieldStop(window = 1, ratio = 0.6, minClaims = 0),
+            ),
+        )
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        assertEquals(2, q.yieldRounds)
+        assertTrue(q.yieldRecent!! < 0.6 * q.yieldEarlier!!, q.toString())
+        assertNull(q.stoppedBy, "the decline halted no QUEUED claim")
+        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
     }
 
     @Test
@@ -1581,6 +1654,32 @@ class DeliberationEngineTest {
         assertEquals(4, kids.size) // 2 proposers × 1 per side
         assertTrue(kids.all { it.status == Status.DIMINISHING && it.rounds == 0 }, kids.toString())
         assertEquals("diminishing", g2.questions.single().stoppedBy)
+    }
+
+    @Test
+    fun `budget gate wins over a prior diminishing stop for later forced arguments`() {
+        val allowAll = AtomicBoolean(false)
+        val e = engine(
+            judge = decayingJudge(keep = 50, allowAll = allowAll),
+            config = deepConfig.copy(maxClaims = 55),
+        )
+        e.ask("Q?")
+        e.idle()
+        val stopped = e.snapshot()
+        assertEquals(51, stopped.questions.single().claims)
+        assertEquals("diminishing", stopped.questions.single().stoppedBy)
+        val target = stopped.claims().first { it.status == Status.DIMINISHING && it.rounds == 0 && it.depth!! < 3 }
+
+        allowAll.set(true)
+        e.setOverride(stopped.ref(target), Override.EXPAND)
+        e.idle()
+
+        val resumed = e.snapshot()
+        val kids = resumed.childrenOf(stopped.ref(target)).map { resumed.claim(it.source!!) }
+        assertEquals(4, kids.size)
+        assertTrue(kids.all { it.status == Status.BUDGET }, kids.toString())
+        assertEquals(55, resumed.questions.single().claims)
+        assertEquals("budget", resumed.questions.single().stoppedBy)
     }
 
     @Test

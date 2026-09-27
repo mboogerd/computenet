@@ -103,8 +103,8 @@ class DeliberationEngine(
 
     /**
      * EXP-10: a question stops when, once it holds at least [minClaims] claims
-     * and 2 × [window] recorded round yields, the mean yield of its last
-     * [window] rounds falls below [ratio] × the mean of all its earlier ones.
+     * and 2 × [window] recorded non-root round yields, the mean yield of its
+     * last [window] rounds falls below [ratio] × the mean of all its earlier ones.
      */
     data class YieldStop(val window: Int = 8, val ratio: Double = 0.6, val minClaims: Int = 40) {
         init {
@@ -197,7 +197,7 @@ class DeliberationEngine(
     private val edges = LinkedHashMap<CellRef, Edge>()
     private val questions = LinkedHashMap<CellRef, String>()
     private val treeSize = HashMap<CellRef, Int>()
-    /** EXP-10: per question, the yield of every recorded round in completion order. */
+    /** EXP-10: per question, the yield of every recorded non-root round in completion order. */
     private val yields = HashMap<CellRef, MutableList<Double>>()
     /** EXP-10: questions stopped because their returns diminished. */
     private val diminished = HashSet<CellRef>()
@@ -487,6 +487,7 @@ class DeliberationEngine(
             else when {
                 c.depth > config.maxDepth -> Status.DEPTH_LIMIT
                 contributionOf(c) < config.minInfluence -> Status.PRUNED
+                treeSize.getValue(c.root) >= config.maxClaims -> Status.BUDGET
                 c.root in diminished -> Status.DIMINISHING
                 else -> null
             }
@@ -824,14 +825,15 @@ class DeliberationEngine(
      * [requested] asked-for arguments, triaged as [counts]: Σ (strength ×
      * relevance × quality) over the attached arguments × the share of triaged
      * proposals that were neither DUPLICATE nor DROP, per argument asked for.
-     * A round that asked for nothing records no yield. When the question's
-     * yields have diminished ([YieldStop.diminished]) it stops: no new round
+     * A root round or a round that asked for nothing records no yield. When
+     * the question's yields have diminished ([YieldStop.diminished]) and at
+     * least one QUEUED claim can actually be halted, it stops: no new round
      * starts in it; its queued claims end DIMINISHING (a round in flight
      * finishes and attaches what it found, but records no further yield).
      */
     private fun recordYield(c: Claim, attached: List<Claim>, counts: Map<TriageAction, Int>, requested: Int) {
-        if (requested == 0) return
-        val halted = update {
+        if (c.parent == null || requested == 0) return
+        val stopped = update {
             // The series is frozen at the stop, so it shows why the question stopped;
             // rounds that were in flight then still attach what they found.
             if (c.root in diminished) return@update null
@@ -846,28 +848,35 @@ class DeliberationEngine(
             val stop = config.yieldStop ?: return@update null
             val size = treeSize.getValue(c.root)
             if (size >= config.maxClaims || !stop.diminished(ys, size)) return@update null
-            diminished += c.root
-            claims.values.filter { n ->
+            val halted = claims.values.filter { n ->
                 n.root == c.root && !n.forceRound && n.override != Override.EXPAND && !n.rewriteInFlight &&
                     (n.status == Status.QUEUED || (n.status == Status.EXPLORING && n.waiting))
-            }.onEach { n ->
+            }
+            // A decline observed only after the last work finished did not stop
+            // the question. Record DIMINISHING only when a first round that was
+            // actually queued is prevented from starting.
+            if (halted.none { it.status == Status.QUEUED }) return@update null
+            diminished += c.root
+            halted.onEach { n ->
                 n.waiting = false
                 n.queueGeneration++ // its queued task, if any, falls through
                 n.status = if (n.override == Override.STOP) Status.STOPPED else Status.DIMINISHING
             }
+            halted to ys.size
         }
-        if (halted != null) {
+        if (stopped != null) {
+            val (halted, rounds) = stopped
             System.err.println(
                 "deliberate: question ${c.root.id} stopped, returns diminished " +
-                    "(${yields[c.root]?.size} rounds, ${halted.size} claims left unexplored)",
+                    "($rounds rounds, ${halted.size} claims left unexplored)",
             )
         }
     }
 
     /** Caller holds [lock]. Why [root]'s tree stopped growing early, if it did (QuestionDto.stoppedBy). */
     private fun stoppedBy(root: CellRef): String? = when {
-        root in diminished -> "diminishing"
         (treeSize[root] ?: 0) >= config.maxClaims -> "budget"
+        root in diminished -> "diminishing"
         else -> null
     }
 
@@ -1131,9 +1140,13 @@ class DeliberationEngine(
         anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
     )
 
-    /** EXP-10: a question's record — its round yields in completion order and whether they diminished. */
+    /** EXP-10: a question's record — its non-root round yields and whether they halted queued work. */
     @Serializable
-    private data class QuestionRecord(val yields: List<Double> = emptyList(), val diminished: Boolean = false)
+    private data class QuestionRecord(
+        /** Required so a question with no non-root round yet still has its one durable record (DUR-03). */
+        val yields: List<Double>,
+        val diminished: Boolean = false,
+    )
 
     /** Caller holds [lock]. */
     private fun questionFieldsOf(q: CellRef): Map<String, String> =

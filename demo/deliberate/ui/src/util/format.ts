@@ -51,8 +51,8 @@ export function stoppedHint(q: QuestionDto | undefined): string | undefined {
   if (q?.stoppedBy !== 'diminishing') return undefined;
   const recent = q.yieldRecent === undefined ? undefined : q.yieldRecent.toFixed(2);
   const earlier = q.yieldEarlier === undefined ? undefined : q.yieldEarlier.toFixed(2);
-  const numbers = recent && earlier ? ` (recent rounds ${recent} vs ${earlier} earlier, per argument asked)` : '';
-  return `New rounds were adding much less than earlier ones${numbers}, so no further rounds were started`;
+  const numbers = recent && earlier ? ` (recent non-root rounds ${recent} vs ${earlier} earlier, per argument asked)` : '';
+  return `New non-root rounds were adding much less than earlier ones${numbers}, so queued work was halted`;
 }
 
 /** How a status reads at a glance: still moving, finished, halted early, or broken. */

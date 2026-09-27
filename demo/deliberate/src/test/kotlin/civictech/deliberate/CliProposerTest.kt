@@ -226,7 +226,8 @@ class CliProposerTest {
         )
         val deny = Regex(
             "\\b(trump|donald|god|gods|divine|religio\\w*|mystical|collagen|cars?|pedestrian\\w*|animals?|language|" +
-                "coffee|diabetes|elections?|president\\w*|politic\\w*|paris|madrid|oslo)\\b",
+                "coffee|diabetes|elections?|president\\w*|politic\\w*|paris|madrid|oslo|northfield|librar\\w*|" +
+                "homework|four-day|sundays?|junior engineers?)\\b",
             RegexOption.IGNORE_CASE,
         )
         for (p in prompts) {

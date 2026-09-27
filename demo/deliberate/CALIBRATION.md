@@ -134,9 +134,17 @@ alone — the canonical Noul is no longer asked at all, canonical form is only
 urged in the proposer and merger prompts; the prompt examples use invented,
 mundane subjects (a test keeps demo-run topics out of the prompts);
 `minInfluence` = 0.10; the yield stop (window 8, ratio 0.6, at least 40
-claims and 16 rounds) ends each question; `maxClaims` stays 180 as a ceiling.
+claims and 16 **non-root** rounds) ends a question only when it actually halts
+at least one `QUEUED` claim; `maxClaims` stays 180 as a ceiling. Root rounds
+are excluded because their naturally high yield distorted the earlier mean.
 
-### Live result (2026-09-27, defaults, fresh `--data`, the same three questions asked at once)
+### Historical live result before the final yield-history correction
+
+This 2026-09-27 run used the first iteration-5 implementation: it included
+root rounds and reported `diminishing` even when no queued claim was halted.
+The raw measurements remain useful for the quality and influence decisions,
+but the stop labels and yield summaries below are not measurements of the
+final EXP-10 rule.
 
 | question | claims before → after | stopped by | depth 0/1/2/3/4/5 | explored (rounds > 0) by depth | depth-1 explored | yield rounds, recent vs earlier | done after |
 |---|---|---|---|---|---|---|---|
@@ -164,13 +172,13 @@ a checkable, relevant fact rather than a copy of a prompt example. Its root
 relevance stays low (0.16–0.57, cause 4), so it still ends mostly by `PRUNED`;
 its yield stop fired on its last rounds with no claim left waiting.
 
-**Residual.** The stop fired for "Do animals employ language?" at the first
-moment it could (16 rounds, 53 claims), cutting all 8 explored depth-1 claims
-after one or two rounds: that question's earliest rounds are the root's,
-whose yields are naturally high, so a 16-round history compares the tree's
-second level against its root. The replay predicted this spread (sd ≈ 45
-claims per question). A later iteration could exclude the root's rounds from
-the "earlier" mean or raise the minimum history; the knobs
-(`--yield-window`, `--yield-ratio`, `--yield-min-claims`) allow trying either
-without code changes. Saturation is still calibrated under iteration-2
-judgments.
+**Final correction.** The animals stop exposed a biased comparison: the root's
+naturally high yields occupied the earlier window, so the first 16 recorded
+rounds compared child work against root work. EXP-10 now excludes root rounds
+and counts its 2 × window minimum over non-root rounds. The Trump label exposed
+a separate reporting error: its threshold crossed only after no claim was
+left to halt. The final rule records `stoppedBy = "diminishing"` only when at
+least one `QUEUED` claim is actually halted; an exhausted tree reports no
+stop. Deterministic engine tests cover both cases. Saturation is still
+calibrated under iteration-2 judgments; a fresh live run of the corrected
+stop remains useful calibration work, not a condition of this correction.

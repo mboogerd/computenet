@@ -18,13 +18,13 @@ export interface QuestionDto {
   active: boolean;
   // EXP-10. yieldRounds has a Kotlin default and is always sent; optional so
   // hand-written fixtures without it stay valid.
-  /** Rounds whose yield was recorded (rounds that asked for at least one proposal). */
+  /** Non-root rounds whose yield was recorded (rounds that asked for at least one proposal). */
   yieldRounds?: number;
   /** Mean yield of the last `yieldWindow` recorded rounds (all of them while there are fewer). */
   yieldRecent?: number;
   /** Mean yield of every recorded round before those; absent until there are more than `yieldWindow`. */
   yieldEarlier?: number;
-  /** Why the tree stopped growing early: the claim budget (EXP-06) or diminishing returns (EXP-10). */
+  /** Why the tree stopped growing early: the claim budget, or diminishing returns that halted queued work. */
   stoppedBy?: StoppedBy;
 }
 
