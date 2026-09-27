@@ -110,7 +110,20 @@ def jev_vote(brief, options, out):
             "reason": "distribution " + ", ".join(f"{k} {v:.2f}" for k, v in top)}
 
 
-FORMAT_OPTIONS = '[{"title": "<short name>", "summary": "<what it means and its practical consequences, 2-4 sentences>"}]'
+def norm_vote(x, ids):
+    """'a', 'A ', 'Option A', 'B: Change' mean that id. Anything else, such as
+    'A or B' or prose opening with the article 'a', stays as written, so it
+    agrees with no other vote. Confidence is its first number, capped at 100:
+    '80%' and '80-90' are 80, never 8090."""
+    c = str(x["choice"]).strip()
+    hit = [i for i in ids if re.fullmatch(rf"(?:option\s+)?{re.escape(i)}(?:\s*[.):—-].*)?", c, re.I | re.S)]
+    x["choice"] = hit[0] if len(hit) == 1 else c
+    n = re.search(r"\d+(?:\.\d+)?", str(x["confidence"]))
+    v = min(float(n.group()), 100.0) if n else 0.0
+    x["confidence"] = int(v) if v.is_integer() else v
+
+
+FORMAT_OPTIONS ='[{"title": "<short name>", "summary": "<what it means and its practical consequences, 2-4 sentences>"}]'
 
 
 def run(brief, out):
@@ -178,13 +191,8 @@ def run(brief, out):
     fut = {m: pool.submit(ask_json, m, vote, out, f"4-vote.{m}") for m in ("opus", "sol")}
     fut["jev"] = pool.submit(jev_vote, brief, options, out)
     votes = {m: f.result() for m, f in fut.items()}
-    ids = [o["id"] for o in options]
-    for m, x in votes.items():  # "a", "A ", "Option A" all mean A; "80%" means 80
-        c = str(x["choice"]).strip()
-        hit = [i for i in ids if c.upper() == i.upper()] or \
-              [i for i in ids if re.search(rf"\b{re.escape(i)}\b", c, re.I)]
-        x["choice"] = hit[0] if len(hit) == 1 else c
-        x["confidence"] = float(re.sub(r"[^\d.]", "", str(x["confidence"])) or 0)
+    for x in votes.values():
+        norm_vote(x, [o["id"] for o in options])
 
     # 5 verdict
     choices = {v["choice"] for v in votes.values()}

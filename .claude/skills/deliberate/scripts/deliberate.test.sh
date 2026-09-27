@@ -19,4 +19,9 @@ DELIBERATE_DRY_MISKEY=1 "$here/deliberate.py" --brief "$t/brief.md" --out "$t/mi
 check "option without a case aborts" "[ $st -ne 0 ] && [ ! -e '$t/miskey/verdict.md' ]"
 DELIBERATE_DRY_MESSY=1 "$here/deliberate.py" --brief "$t/brief.md" --out "$t/messy" --dry-run >/dev/null 2>&1
 check "'Option a' / '80%' normalise to A / 80" "head -1 '$t/messy/verdict.md' | grep -q '^DECIDED: A'"
+norm() { python3 -B -c "import sys; sys.path.insert(0, '$here'); import deliberate as d; x={'choice': sys.argv[1], 'confidence': sys.argv[2]}; d.norm_vote(x, ['A','B','C']); print(x['choice'], x['confidence'])" "$1" "$2"; }
+check "'B: Change' is B"                "[ \"\$(norm 'B: Change' 70)\" = 'B 70' ]"
+check "'A or B' stays unmapped"         "[ \"\$(norm 'A or B' 70)\" = 'A or B 70' ]"
+check "article 'a' is not option A"     "[ \"\$(norm 'go with a staged rollout' 70)\" = 'go with a staged rollout 70' ]"
+check "'80-90' is 80, not 8090"         "[ \"\$(norm A 80-90)\" = 'A 80' ]"
 rm -rf "$t"; exit $fail
