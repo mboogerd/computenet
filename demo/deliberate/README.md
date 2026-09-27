@@ -201,6 +201,24 @@ claims × the mean cost per completed round, once 3 rounds have run). Caveats:
 `total_cost_usd`, Codex's `turn.completed` lines, Jev's `usage`), to check
 the totals against.
 
+## Models
+
+Defaults come from a model experiment (2026-09-27): 12–24 recorded proposer
+contexts per model, scored by Jev (contribution, novelty), a blind Opus
+fact-check and blind pairwise preference against each provider's default.
+
+| Job | Default | Why |
+|---|---|---|
+| Claude proposer | CLI default (`claude-sonnet-5`) | Haiku 4.5 only qualifies with thinking off and is not cheaper per call (Sonnet reads cached prompt tokens); Opus is ~4× the cost. |
+| Claude merger | CLI default (`claude-sonnet-5`) | Nothing cheaper qualified. |
+| Codex proposer | `gpt-5.6-sol`, `model_reasoning_effort="none"` | Same-or-better Jev contribution than effort `low`, ~6 s instead of ~17 s per call. |
+
+`gpt-5.6-luna` (effort `none`) scores as well by Jev at ~1/30 of the Codex
+cost, but a blind judge preferred Sol in 18 of 24 contexts (p = 0.011); use
+`--codex-model gpt-5.6-luna` plus its rate flags if that trade-off is
+acceptable. Sonnet's arguments were flagged false or unverifiable 15% of the
+time vs 2% for Sol — Jev does not catch this.
+
 ## Durability
 
 With `--data <dir>` a deliberation survives a restart, `kill -9` included.

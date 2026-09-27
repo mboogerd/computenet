@@ -221,7 +221,9 @@ class CliProposer internal constructor(
                 "--disable", "view_image", "--disable", "image_generation", "--disable", "browser_use",
                 "--disable", "computer_use", "--disable", "in_app_browser", "-s", "read-only",
                 "-c", "web_search=\"disabled\"",
-                "-c", "model_reasoning_effort=\"low\"",
+                // "none": same-or-better Jev contribution than "low" at ~6 s vs ~17 s per call
+                // (model experiment, 2026-09-27; see README "Models").
+                "-c", "model_reasoning_effort=\"none\"",
             ) +
                 model.flag("-m") + listOf("--json", "-o", out.absolutePath, "--", prompt)
         }, gate, reader = codexReader(model ?: Pricing.DEFAULT_CODEX_MODEL))

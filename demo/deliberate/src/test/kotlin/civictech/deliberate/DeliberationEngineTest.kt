@@ -1252,12 +1252,19 @@ class DeliberationEngineTest {
         val store = InMemoryMetaStore()
         val gate = CountDownLatch(1)
         val blocked = CountDownLatch(1)
+        // The restarted engine resumes claude-SUPPORT immediately; `resume` holds that round
+        // until the restored snapshot has been compared, or a fast worker bumps `rounds` first.
+        val resume = CountDownLatch(1)
         fun proposer(id: String, gated: Boolean) = FakeProposer(id) { ctx, side, _ ->
             when {
                 ctx.path.isEmpty() -> listOf("$id-${side.name}")
                 ctx.claim == "claude-SUPPORT" && gated -> {
                     blocked.countDown()
                     gate.await(20, TimeUnit.SECONDS)
+                    emptyList()
+                }
+                ctx.claim == "claude-SUPPORT" -> {
+                    resume.await(20, TimeUnit.SECONDS)
                     emptyList()
                 }
                 else -> emptyList()
@@ -1304,6 +1311,7 @@ class DeliberationEngineTest {
             }
             val resumed = before.claims().single { it.text == "claude-SUPPORT" }
             assertTrue(resumed.status in active)
+            resume.countDown()
             e2.idle()
             val done = e2.snapshot()
             assertEquals(Status.ROUND_LIMIT, done.claim(resumed.ref).status)
@@ -1314,6 +1322,7 @@ class DeliberationEngineTest {
             assertEquals(done.edges().single { it.source == done.claims().single { c -> c.text == "claude-SUPPORT" }.ref }.ref, u.undercuts)
         } finally {
             gate.countDown()
+            resume.countDown()
             scheduler2.shutdown()
         }
     }
