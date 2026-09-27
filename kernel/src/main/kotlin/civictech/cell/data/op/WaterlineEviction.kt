@@ -82,6 +82,24 @@ internal object WaterlineEviction {
     }
 
     /**
+     * A gated cell's flush-time counterpart of [lateSplit]: [value] was
+     * admitted at arrival, but a floor rise has since passed some of its adds
+     * while the wave sat in the `WaveGate`. Those rows are **evicted before
+     * they land** — removed from the adds, not forwarded late and not counted
+     * as dropped, because they were admitted, not late — exactly what the
+     * ungated cell under the same arrival order does (admit, then evict at the
+     * rise), so the settled state holds no row the floor has passed
+     * (`[24-WL-16]`, `[24-WL-19]`, `[24-WL-10]`). An exclusive add is kept: it
+     * lands live and the next rise refuses it per row (`[24-WL-17]`), never
+     * silently dropped. Dels are untouched (`[24-WL-08]`). Returns [value]
+     * itself when nothing passed.
+     */
+    fun <E> dropPassedAdds(lateness: Windows.Lateness<E>, floor: Long, value: SetDelta<E>): SetDelta<E> {
+        val kept = value.adds.filterKeys { lateness.timeFn(it) >= floor || ExclusiveEntry.isExclusive(it) }
+        return if (kept.size == value.adds.size) value else SetDelta(kept, value.dels)
+    }
+
+    /**
      * The row-form eviction units of [state] at [floor] (`[24-WL-16]`): every
      * live row whose `lateness.timeFn(row)` is strictly below [floor], split
      * into the evictees (to hand to [evict]) and the rows refused because they

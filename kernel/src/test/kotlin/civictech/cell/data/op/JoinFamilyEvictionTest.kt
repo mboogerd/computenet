@@ -579,6 +579,46 @@ class JoinFamilyEvictionTest {
         cell.droppedBelowFloorLeft shouldBe 1L
     }
 
+    @Test
+    fun `gated - a row admitted before a floor rise but still buffered is evicted, not landed, at flush`() {
+        // [24-WL-16]/[24-WL-19]/[24-WL-10]: the ungated cell under the same arrival order admits
+        // l12 at floor 10, evicts it at the rise to 15, and never pairs it with r16 — the gated
+        // cell's settled state must be the same, not hold a sub-floor row (and its pair) until
+        // some later rise.
+        val cell = joined(gated = true, keyFn = { r: Row -> window(r.t) })
+        val seen = recordWaves(cell.outlet)
+        val lateL = collect(cell.lateLeft)
+        val leftSrc = RowSource()
+        val rightSrc = RowSource()
+        @Suppress("UNCHECKED_CAST")
+        leftSrc.outlet.linkTo(cell.left as LinkFrom<Propagate<SetDelta<Row>>>)
+        @Suppress("UNCHECKED_CAST")
+        rightSrc.outlet.linkTo(cell.right as LinkFrom<Propagate<SetDelta<Row>>>)
+        val s = UUID(8, 8)
+        val w = UUID(9, 9)
+        underWave(w, 1) { cell.waterline.call.propagate(WaterlineDelta(10)) }
+
+        // l12 is at/above floor 10 at arrival: admitted (not late), buffered
+        underWave(s, 1) { leftSrc.outlet.call.propagate(adds(Row("l", 12) to tag(1))) }
+        cell.bufferedWaves shouldBe 1
+        lateL.shouldBeEmpty()
+
+        // the floor passes l12 while its wave is still buffered
+        underWave(w, 2) { cell.waterline.call.propagate(WaterlineDelta(15)) }
+
+        // the right arm completes the wave: l12 must not land, so no (l12, r16) pair is minted
+        underWave(s, 1) { rightSrc.outlet.call.propagate(adds(Row("r", 16) to tag(2))) }
+        cell.bufferedWaves shouldBe 0
+        tagFold(seen.map { it.first }) shouldBe emptySet()
+        ledger(cell).size shouldBe 0
+        leftRows(cell) shouldBe emptySet()
+        rightRows(cell) shouldBe setOf(Row("r", 16))
+        indexes(cell).first shouldBe emptyMap<Any, Any>()
+        // admitted at arrival, so evicted rather than late: never forwarded, never counted as dropped
+        lateL.shouldBeEmpty()
+        cell.droppedBelowFloorLeft shouldBe 0L
+    }
+
     // ------------------------------------------ [24-WL-19] structural, rows
 
     @Test

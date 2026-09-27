@@ -107,10 +107,11 @@ interface JoinSetApi<A, B, C> {
  *
  * **The waterline is not gated (3vd7k-D9).** With `emitOnFrontier = true` the
  * eviction is still applied and emitted on the `WaterlineDelta`'s own
- * delivery, while buffered data waves stay buffered. Residual: a data wave
- * buffered **before** a floor rise is late-split against the floor it
- * *arrived* under, so its sub-(new-)floor adds land at flush and are evicted
- * only by the next rise.
+ * delivery, while buffered data waves stay buffered. A buffered wave's adds
+ * were late-split against the floor they *arrived* under; any a later rise
+ * has passed by flush are evicted before they land
+ * ([WaterlineEviction.dropPassedAdds]) — admitted, so not forwarded late —
+ * which is the ungated cell's admit-then-evict under the same arrival order.
  *
  * **Single-instance only (`[24-WL-18]`)**, checked in [WaterlineEviction.evict].
  */
@@ -199,7 +200,7 @@ class JoinSetCell<A, B, K, C>(
         // [24-WL-07] guard at arrival, before the gate offer (3vd7k-D4)
         val admitted = guardLeft(value)
         lateRight.absorbAck() // every delivery acks both late outlets, so a linked consumer's frontier advances
-        if (gate?.offerLeft(GatedFold { applyLeft(admitted) }) == true) return
+        if (gate?.offerLeft(GatedFold { applyLeft(sinceArrival(admitted, leftLateness)) }) == true) return
         // The ungated path below is the shipped handler verbatim — including its
         // per-row interleaving of index-then-reconcile — so `emitOnFrontier =
         // false` stays byte-identical. A gated cell also lands here for a delta
@@ -219,7 +220,7 @@ class JoinSetCell<A, B, K, C>(
     override fun onRight(value: SetDelta<B>) {
         val admitted = guardRight(value)
         lateLeft.absorbAck()
-        if (gate?.offerRight(GatedFold { applyRight(admitted) }) == true) return
+        if (gate?.offerRight(GatedFold { applyRight(sinceArrival(admitted, rightLateness)) }) == true) return
         // ungated (or gate-exempt) — the shipped handler verbatim; see [onLeft].
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
@@ -304,6 +305,17 @@ class JoinSetCell<A, B, K, C>(
             lateRight.absorbAck()
         }
         return admitted
+    }
+
+    /**
+     * Gated flush only: evict the adds of a buffered, arrival-admitted delta
+     * that a floor rise has passed since it arrived (see
+     * [WaterlineEviction.dropPassedAdds]). The identity without a floor or
+     * without this side's declaration.
+     */
+    private fun <E> sinceArrival(value: SetDelta<E>, lateness: Windows.Lateness<E>?): SetDelta<E> {
+        val current = floor
+        return if (lateness == null || current == null) value else WaterlineEviction.dropPassedAdds(lateness, current, value)
     }
 
     private fun onWaterline(delta: WaterlineDelta) {
