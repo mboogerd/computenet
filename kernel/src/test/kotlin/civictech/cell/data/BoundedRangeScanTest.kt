@@ -26,6 +26,7 @@ import io.kotest.matchers.ints.shouldBeLessThan
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
@@ -39,8 +40,9 @@ import java.util.UUID
  * Rules pinned here: BS-30 `[KAGG-R-20]` (containment, no duplicate, exact
  * union), BS-31 `[KAGG-R-21]` (ascending across pages), BS-33 `[KAGG-R-23]`
  * (empty and inverted bounds), BS-34 `[KAGG-R-25]` (scope ∩ bound), BS-36 (a
- * mid-walk mutation inside the bound smears as documented), the opt-in half of
- * `[KAGG-R-27]`, and `[KAGG-R-28]`'s additivity (a null bound walks everything).
+ * mid-walk mutation inside the bound smears as documented), D9 (a bound whose
+ * end is another runtime class than the keys is refused, never answered), the
+ * opt-in half of `[KAGG-R-27]`, and `[KAGG-R-28]`'s additivity (a null bound walks everything).
  */
 class BoundedRangeScanTest {
 
@@ -214,14 +216,36 @@ class BoundedRangeScanTest {
     }
 
     @Test
-    fun `BS-33 residual D9 - a bound whose ends differ in runtime class from the key compares by class name`() {
-        // Documented residual, not a desirable outcome: Int ends against a Long
-        // key are different runtime classes, so EntryOrder orders them by class
-        // name ("java.lang.Integer" < "java.lang.Long") and the numeric values
-        // never meet. 5L is therefore "after" both 1 and 10 and is NOT admitted.
-        // A caller bounding a Long key space must use Long ends (BS-34 does).
-        EntryOrder.admits(5L, KeyBound(1, 10)).shouldBeFalse()
+    fun `D9 a bound whose end differs in runtime class from the keys is refused by name, never answered`() {
+        // Maintainer decision 2026-09-27, option (b) REFUSE. Under EntryOrder's
+        // cross-class rule these would answer silently: KeyBound(40, 80) (Int
+        // ends) over Long keys would admit nothing, KeyBound(100, null) would
+        // admit every key — full state as though the bound had been applied.
+        val longKeys = (0L until 100L).toList()
+        val longMap = MapCell<Long, String>().also { cell -> longKeys.forEach { cell.inlet.call.put(it, "v$it") } }
+        val longKeyedSet = KeyedSetCell<Long, String>().also { cell -> longKeys.forEach { cell.inlet.call.put(it, "e$it") } }
+        val longShard = shardOf(longKeys, keyFn = { it })
+        val mistyped = listOf(KeyBound(40, 80), KeyBound(100, null), KeyBound(null, 100), KeyBound(40L, 80))
+        listOf("MapCell" to longMap, "KeyedSetCell" to longKeyedSet, "ShardCell" to longShard).forEach { (name, cell) ->
+            mistyped.forEach { bound ->
+                withClue("$name $bound") {
+                    val refusal = shouldThrow<IllegalArgumentException> { drive(cell, limit = 7, keyBound = bound) }
+                    refusal.message!! shouldContain "java.lang.Integer"
+                    refusal.message!! shouldContain "java.lang.Long"
+                }
+            }
+            // the same bound with ends of the keys' class is answered, so the
+            // refusal is about the class, not the values
+            withClue("$name KeyBound(40L, 80L)") {
+                keysOf(drive(cell, limit = 7, keyBound = KeyBound(40L, 80L))) shouldContainExactly (40L until 80L).toList()
+            }
+        }
+        // the refusal is at EntryOrder.admits itself, so every family inherits it
+        shouldThrow<IllegalArgumentException> { EntryOrder.admits(5L, KeyBound(1, 10)) }
         EntryOrder.admits(5L, KeyBound(1L, 10L)).shouldBeTrue()
+        // a null key has no class to mismatch; it is ordered first, as before
+        EntryOrder.admits(null, KeyBound(1L, 10L)).shouldBeFalse()
+        EntryOrder.admits(null, KeyBound(null, 10L)).shouldBeTrue()
     }
 
     // -- BS-34 [KAGG-R-25] ---------------------------------------------------
