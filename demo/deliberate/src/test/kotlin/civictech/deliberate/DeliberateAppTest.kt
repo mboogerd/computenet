@@ -274,14 +274,13 @@ class DeliberateAppTest {
         assertEquals(200, probe.postForm("root=$root&paused=true", "/question/pause").statusCode())
         val paused = probe.awaitGraph { g -> g.questions.single().paused }
         assertTrue(paused.questions.single().paused)
-        // Nothing starts while paused: the tree stops growing once the round in flight attached.
-        var before = probe.graph()
-        awaitUntil("the in-flight round attaches and the paused tree holds still") {
-            Thread.sleep(400)
-            val next = probe.graph()
-            (next.nodes.map { it.ref to it.status } == before.nodes.map { it.ref to it.status }).also { before = next }
+        // The round in flight attaches and finishes; its children remain queued.
+        val held = probe.awaitGraph { g ->
+            val rootNode = g.nodes.single { it.ref == root }
+            val children = g.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }
+            rootNode.rounds == 1 && children.size == 4 && children.all { it.status == Status.QUEUED }
         }
-        assertTrue(before.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.status == Status.QUEUED })
+        assertTrue(held.questions.single().active, "queued work keeps a paused question active")
         assertEquals(200, probe.postForm("root=$root&paused=false", "/question/pause").statusCode())
         val done = probe.awaitGraph { g -> !g.questions.single().paused && g.idle(root) }
         assertTrue(done.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.status == Status.ROUND_LIMIT })

@@ -194,6 +194,13 @@ class DeliberationEngine(
         val saturated = mutableSetOf<Side>()
         /** CTL-02: the next round is forced (saturation, depth, contribution and budget ignored). */
         var forceRound = false
+        /**
+         * CTL-05: this process received the EXPAND that authorized [forceRound].
+         * Deliberately not durable: DUR-06 must hold a forced round restored by
+         * `--start-paused` until resume, while an EXPAND issued to an already
+         * paused question must still run.
+         */
+        var liveForce = false
         var roundInFlight = false
         /** Its attach-time assessment (CRED-01/02, EXP-05) is in flight — for the UI's activity line. */
         var assessing = false
@@ -327,11 +334,20 @@ class DeliberationEngine(
     /** CTL-01..04. */
     fun setOverride(ref: CellRef, mode: Override) {
         var enqueueAgain: Claim? = null
+        var assessBeforeSchedule: Claim? = null
         val toSchedule: List<Claim> = synchronized(lock) {
             val c = requireNotNull(claims[ref]) { "unknown claim ${ref.id}" }
             c.override = mode
+            if (mode == Override.EXPAND) {
+                c.liveForce = true
+            } else {
+                // STOP cancels queued work; AUTO returns to ordinary gates.
+                // Neither may retain an earlier pause-bypass authorization.
+                c.forceRound = false
+                c.liveForce = false
+            }
             if (mode == Override.EXPAND && c.error == Config.LEGACY_LINK) c.error = null
-            when (mode) {
+            val scheduled = when (mode) {
                 // CTL-03: queued work is cancelled at once; a running claim stops at its next round boundary.
                 Override.STOP -> when {
                     c.status == Status.EXPLORING && c.waiting -> {
@@ -375,10 +391,21 @@ class DeliberationEngine(
                     }
                 }
             }
+            if (c.needsAssessment && (c in scheduled || enqueueAgain === c)) {
+                c.needsAssessment = false
+                c.parked = false
+                assessBeforeSchedule = c
+                enqueueAgain = null
+                emptyList()
+            } else scheduled
         }
         onChange()
-        toSchedule.forEach(::schedule)
-        enqueueAgain?.let(::enqueue)
+        if (assessBeforeSchedule != null) {
+            assessThenSchedule(listOf(assessBeforeSchedule!!))
+        } else {
+            toSchedule.forEach(::schedule)
+            enqueueAgain?.let(::enqueue)
+        }
     }
 
     /**
@@ -409,7 +436,8 @@ class DeliberationEngine(
      */
     private fun resume(withheld: List<Claim>) {
         val (unassessed, rest) = synchronized(lock) {
-            withheld.partition { it.needsAssessment }.also { (u, _) -> u.forEach { it.needsAssessment = false } }
+            withheld.partition { it.needsAssessment && it.status == Status.QUEUED }
+                .also { (u, _) -> u.forEach { it.needsAssessment = false } }
         }
         rest.forEach { c ->
             val waiting = synchronized(lock) { c.status == Status.EXPLORING && c.waiting }
@@ -424,8 +452,19 @@ class DeliberationEngine(
             pending.incrementAndGet()
             calls.submit {
                 try {
-                    assess(group)
-                    group.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
+                    // Resume and pause can race: authorization is checked in the
+                    // task that is about to start the Jev calls, not only where
+                    // the task was submitted.
+                    val ready = synchronized(lock) {
+                        if (held(group.first())) {
+                            group.forEach { it.needsAssessment = true; it.parked = true }
+                            emptyList()
+                        } else group
+                    }
+                    if (ready.isNotEmpty()) {
+                        assess(ready)
+                        ready.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
+                    }
                 } finally {
                     done()
                 }
@@ -591,8 +630,28 @@ class DeliberationEngine(
     /** Caller holds [lock]. A claim whose assessment failed falls back to its reach (EXP-05). */
     private fun contributionOf(c: Claim): Double = c.contribution ?: c.reach ?: Config.FALLBACK_STRENGTH
 
-    /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one. */
-    private fun held(c: Claim) = c.root in paused && !c.forceRound
+    /**
+     * Caller holds [lock]. CTL-05: [c]'s question is paused and this process
+     * has not received an EXPAND authorizing its next forced round. A durable
+     * [Claim.forceRound] alone is insufficient: DUR-06 holds all restored work.
+     */
+    private fun held(c: Claim) = c.root in paused && !(c.forceRound && c.liveForce)
+
+    /**
+     * Stops work that was dequeued just before its question paused. The task
+     * has not started a round yet, so a judging claim returns to QUEUED; a
+     * claim between rounds remains EXPLORING and waiting, as CTL-05 specifies.
+     */
+    private fun parkIfHeld(c: Claim): Boolean = synchronized(lock) {
+        if (!held(c)) return@synchronized false
+        c.parked = true
+        when (c.status) {
+            Status.JUDGING -> c.status = Status.QUEUED
+            Status.EXPLORING -> c.waiting = true
+            else -> Unit
+        }
+        true
+    }
 
     private fun enqueue(c: Claim) {
         if (closed) return
@@ -697,6 +756,10 @@ class DeliberationEngine(
      * it has rounds left.
      */
     private fun start(c: Claim): Boolean {
+        if (parkIfHeld(c)) {
+            onChange()
+            return false
+        }
         // CRED-01 (a link's stance is its argument's CRED-02 strength, judged at attach time)
         if (synchronized(lock) { !c.isLink && c.plausibility == null }) {
             val (path, text) = synchronized(lock) { pathOf(c) to c.text }
@@ -707,6 +770,12 @@ class DeliberationEngine(
             }?.let { p ->
                 update { c.plausibility = p }
             }
+        }
+        // A pause may have arrived while the plausibility call was in flight.
+        // It may finish, but it must not lead into a new round.
+        if (parkIfHeld(c)) {
+            onChange()
+            return false
         }
         // EXP-06 after EXP-05 (schedule()): BUDGET means "would have been expanded".
         if (!synchronized(lock) { c.forceRound } && budgetExhausted(c)) return finish(c, Status.BUDGET)
@@ -723,12 +792,18 @@ class DeliberationEngine(
      */
     private fun step(c: Claim): Boolean {
         val (sides, forcedRound, terminal) = synchronized(lock) {
+            if (held(c)) {
+                c.parked = true
+                c.waiting = true
+                return false
+            }
             val forcedRound = c.forceRound
             val nextStatus = terminalStatus(c)
             val nextSides = if (forcedRound) SIDES else SIDES - saturatedSides(c)
             if (nextStatus == null) {
                 if (forcedRound) c.saturated.clear()
                 c.forceRound = false
+                if (forcedRound) c.liveForce = false
                 c.roundInFlight = true
             }
             Triple(nextSides, forcedRound, nextStatus)

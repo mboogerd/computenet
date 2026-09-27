@@ -2282,6 +2282,97 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `the pause gate covers every live requeue path and only EXPAND may spend`() {
+        val firstRoundGate = CountDownLatch(1)
+        val firstRoundBlocked = CountDownLatch(1)
+        val forcedRoundGate = CountDownLatch(1)
+        val forcedRoundBlocked = CountDownLatch(1)
+        val triageTurns = AtomicInteger()
+        val claude = FakeProposer("claude") { ctx, side, _ ->
+            if (ctx.path.isEmpty() && side == Polarity.SUPPORT) {
+                if (ctx.pros.isEmpty()) {
+                    firstRoundBlocked.countDown()
+                    firstRoundGate.await(20, TimeUnit.SECONDS)
+                } else {
+                    forcedRoundBlocked.countDown()
+                    forcedRoundGate.await(20, TimeUnit.SECONDS)
+                }
+            }
+            listOf("claude ${side.name.lowercase()} ${ctx.pros.size + ctx.cons.size}")
+        }
+        val codex = FakeProposer("codex") { ctx, side, _ ->
+            listOf("codex ${side.name.lowercase()} ${ctx.pros.size + ctx.cons.size}")
+        }
+        val judge = FakeJudge(
+            triage = { ctx, candidates ->
+                val turn = triageTurns.incrementAndGet()
+                candidates.map { candidate ->
+                    if (ctx.path.isEmpty() && turn > 2) {
+                        // The forced second round rewrites already-assessed arguments;
+                        // their Jev assessment is allowed as part of that in-flight round.
+                        val target = if (candidate.side == Polarity.SUPPORT) 0 else ctx.pros.size
+                        Triage(TriageAction.REPLACE, target)
+                    } else Triage(TriageAction.ADD)
+                }
+            },
+        )
+        val e = engine(
+            judge = judge,
+            proposers = listOf(claude, codex),
+            config = DeliberationEngine.Config(
+                argsPerCall = 1, maxRounds = 3, maxDepth = 2, minInfluence = 0.0,
+                maxArgsPerSide = 10, exploreLinks = false, workers = 1,
+            ),
+        )
+        try {
+            val root = e.ask("Q?")
+            assertTrue(firstRoundBlocked.await(20, TimeUnit.SECONDS))
+            e.setPaused(root, true)
+            firstRoundGate.countDown()
+            e.idle()
+
+            val held = e.snapshot()
+            val child = held.childrenOf(root).first().source!!
+            val callsBefore = claude.contexts.size + codex.contexts.size +
+                judge.plausibilityCalls.size + judge.relationCalls.size + judge.triageCalls.size +
+                judge.relevanceCalls.size + judge.saturationCalls.get()
+            val relationsBefore = judge.relationCalls.size
+
+            // AUTO after STOP re-enters the normal gates and must remain held.
+            e.setOverride(CellRef(java.util.UUID.fromString(child)), Override.STOP)
+            e.setOverride(CellRef(java.util.UUID.fromString(child)), Override.AUTO)
+            e.idle()
+            val callsAfterAuto = claude.contexts.size + codex.contexts.size +
+                judge.plausibilityCalls.size + judge.relationCalls.size + judge.triageCalls.size +
+                judge.relevanceCalls.size + judge.saturationCalls.get()
+            assertEquals(callsBefore, callsAfterAuto, "AUTO after STOP spent while paused")
+
+            // EXPAND is the sole bypass. While its round owns the only worker,
+            // resume then pause again: everything resume queued must meet held()
+            // when the worker reaches it (the resume race).
+            e.setOverride(root, Override.EXPAND)
+            assertTrue(forcedRoundBlocked.await(20, TimeUnit.SECONDS))
+            e.setPaused(root, false)
+            e.setPaused(root, true)
+            forcedRoundGate.countDown()
+            e.idle()
+
+            val after = e.snapshot()
+            assertTrue(after.questions.single().paused)
+            assertEquals(2, after.node(root).rounds, "only the in-flight and explicitly forced rounds ran")
+            assertEquals(Status.EXPLORING, after.node(root).status, "the next round is held, not finished")
+            assertTrue(after.claims().filter { it.depth == 1 }.all { it.rounds == 0 && it.status == Status.QUEUED })
+            val laterContexts = (claude.contexts + codex.contexts).drop(4)
+            assertTrue(laterContexts.isNotEmpty() && laterContexts.all { it.claim == "Q?" }, laterContexts.toString())
+            assertTrue(judge.relationCalls.size > relationsBefore,
+                "the forced rewrite was assessed again inside its allowed round")
+        } finally {
+            firstRoundGate.countDown()
+            forcedRoundGate.countDown()
+        }
+    }
+
+    @Test
     fun `start-paused restores every question paused and durable, runs no call, and new questions run`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-start-paused").toFile()
         val log = java.io.File(dir, "graph.jsonl")
@@ -2307,6 +2398,10 @@ class DeliberationEngineTest {
             val kid = e1.snapshot().let { g -> g.childrenOf(q1).first().source!! }
             store.put("c:$kid", mapOf("plausibility" to null, "relevance" to null, "quality" to null, "edgeStrength" to null,
                 "reach" to null, "contribution" to null, "status" to null))
+            // A durable EXPAND was requested before this safe-upgrade boot.
+            // DUR-06 still holds it: only an EXPAND issued in this process may
+            // bypass the boot pause.
+            store.put("c:${q1.id}", mapOf("override" to "\"EXPAND\"", "forceRound" to "true"))
 
             val judge = FakeJudge(strength = { 0.5 })
             val p = FakeProposer("claude") { _, _, _ -> emptyList() }
