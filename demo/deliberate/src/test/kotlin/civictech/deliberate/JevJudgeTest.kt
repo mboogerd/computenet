@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.test.AfterTest
@@ -316,18 +317,39 @@ class JevJudgeTest {
 
     @Test
     fun `IO failure is not retried`() {
-        val unusedPort = ServerSocket(0).use { it.localPort }
-        val delays = mutableListOf<Duration>()
-        val offline = JevJudge(
-            apiKey = "test-key",
-            baseUrl = "http://127.0.0.1:$unusedPort",
-            backoff = Duration.ZERO,
-            requestTimeout = Duration.ofSeconds(1),
-            sleeper = { delays += it },
-        )
-        val error = assertFailsWith<JevException> { offline.relevance(ctx) }
-        assertEquals(null, error.status)
-        assertTrue(delays.isEmpty())
+        // Bound but never accept()ed: the port stays reserved to this process for the whole
+        // test, so it cannot be grabbed by another process the way a freed port could (seen
+        // once locally). The connection sits in the backlog and the request times out instead
+        // of being refused, which is still an IOException the client wraps the same way.
+        val stub = ServerSocket(0)
+        try {
+            val delays = mutableListOf<Duration>()
+            val offline = JevJudge(
+                apiKey = "test-key",
+                baseUrl = "http://127.0.0.1:${stub.localPort}",
+                backoff = Duration.ZERO,
+                requestTimeout = Duration.ofMillis(300),
+                sleeper = { delays += it },
+            )
+            val error = assertFailsWith<JevException> { offline.relevance(ctx) }
+            assertEquals(null, error.status)
+            assertTrue(delays.isEmpty())
+            // No backoff sleep alone does not prove one attempt: a retry that skips the sleeper
+            // would pass the line above. Each attempt leaves one connection in the backlog.
+            stub.soTimeout = 500
+            var attempts = 0
+            while (true) {
+                try {
+                    stub.accept().close()
+                    attempts++
+                } catch (_: SocketTimeoutException) {
+                    break
+                }
+            }
+            assertEquals(1, attempts, "IO failure must be attempted exactly once")
+        } finally {
+            stub.close()
+        }
     }
 
     @Test
