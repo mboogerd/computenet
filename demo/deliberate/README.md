@@ -109,6 +109,8 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--consensus <ids>` | `wlo,jnb,woe` | layers averaged into the headline consensus |
 | `--semantics <id>` | `dfquad` | the layer reported as a node's `credence` |
 | `--wlo-k` / `--wlo-p` / `--wlo-gamma` / `--wlo-alpha` | 2.4 / 2 / 1.3 / 1 | weighted log-odds parameters |
+| `--codex-input-rate` / `--codex-cached-rate` / `--codex-output-rate` | 4.00 / 0.40 / 20.00 | Codex price in USD per 1M tokens (SPEC §12); required for a `--codex-model` other than `gpt-5.6-sol`, else its cost is "rate unknown" and left out of the total |
+| `--jev-input-rate` / `--jev-output-rate` | 0.042 / 0 | Jev price in USD per 1M tokens — an assumption (third-party listing; TypeSafe publishes none) |
 
 **Reach** is how much a claim can still matter to the question. The root has
 reach 1, and an argument's reach is its parent's reach times the Jev strength
@@ -175,6 +177,29 @@ included root rounds and could label an already exhausted tree as stopped;
 the final rule excludes root rounds and records a diminishing stop only when
 queued work is actually halted. See `CALIBRATION.md`, iteration 5, for the raw
 measurements and the correction.
+
+### The cost figure (SPEC §12)
+
+The dollar figure next to a question is what its model calls have cost so
+far; click it for the breakdown per backend and a projection (spent + queued
+claims × the mean cost per completed round, once 3 rounds have run). Caveats:
+
+- **Claude** is priced by the CLI's own `total_cost_usd`: the API-equivalent
+  cost, **not your bill** if you use Claude Code on a subscription.
+- **Codex** is priced from its reported tokens at the published
+  `gpt-5.6-sol` rates (looked up 2026-09-27; the input price is promotional
+  through at least 2026-11-21). A Codex subscription bills differently too.
+- **Jev**'s price is **assumed**: TypeSafe publishes none; $0.042 per 1M input
+  tokens is a third-party listing.
+- The projection assumes one more round per queued claim at the question's
+  mean so far; new arguments those rounds add are not in it.
+- Questions restored from data written before cost tracking show `—`. If they
+  run more rounds, the new spend is shown as an “at least” lower bound; their
+  earlier spend and a whole-question projection remain unknown.
+
+`DELIBERATE_LOG_USAGE=1` logs each call's raw usage to stderr (Claude's
+`total_cost_usd`, Codex's `turn.completed` lines, Jev's `usage`), to check
+the totals against.
 
 ## Durability
 

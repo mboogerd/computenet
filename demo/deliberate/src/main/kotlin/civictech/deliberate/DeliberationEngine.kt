@@ -45,6 +45,11 @@ import kotlin.time.Duration
  * records rebuilds its trees from the graph's structure plus those records,
  * re-applies the stances — the graph recomputes every credence from them —
  * and re-queues whatever was still active ([restore]).
+ *
+ * Cost (SPEC §12): every Judge/Proposer/Merger call runs with its question's
+ * [UsageSink] bound ([Usage.within]); the adapters report what each call
+ * used, and the engine prices it ([pricing]) into per-question, per-backend
+ * counters that are part of the question's durable record.
  */
 class DeliberationEngine(
     private val service: CredenceGraph,
@@ -54,6 +59,8 @@ class DeliberationEngine(
     /** EXP-03 MERGE; without one, a MERGE verdict is handled as DUPLICATE. */
     private val merger: Merger? = null,
     private val store: MetaStore? = null,
+    /** SPEC §12: how each backend's usage is priced. */
+    private val pricing: Pricing = Pricing(),
     private val persistEveryMs: Long = 100,
     private val onChange: () -> Unit = {},
 ) : AutoCloseable {
@@ -201,6 +208,10 @@ class DeliberationEngine(
     private val yields = HashMap<CellRef, MutableList<Double>>()
     /** EXP-10: questions stopped because their returns diminished. */
     private val diminished = HashSet<CellRef>()
+    /** SPEC §12: per question, per backend, the usage of every call made for it. */
+    private val costs = HashMap<CellRef, MutableMap<String, BackendTally>>()
+    /** Questions whose complete lifetime is covered by [costs]; absent for records created before cost tracking. */
+    private val completeCosts = HashSet<CellRef>()
 
     private val pending = AtomicInteger()
     private val idle = Object()
@@ -232,6 +243,11 @@ class DeliberationEngine(
         /** EXP-10: one record per question holding its round yields and whether they diminished. */
         const val QUESTION_KEY = "q:"
         const val JEV = "jev"
+        /** SPEC §12: a question record's per-backend cost field is `cost.<backend>`. */
+        const val COST_FIELD = "cost."
+        val BACKEND_ORDER = listOf(Pricing.CLAUDE, Pricing.CODEX, Pricing.JEV)
+        /** SPEC §12: the projection needs at least this many completed rounds. */
+        const val PROJECTION_MIN_ROUNDS = 3
         /** A node's credence before its first emission reached the hub. */
         const val NEUTRAL = 0.5
     }
@@ -264,6 +280,7 @@ class DeliberationEngine(
             claims[ref] = root
             questions[ref] = question
             treeSize[ref] = 1
+            completeCosts += ref
         }
         onChange()
         enqueue(root)
@@ -376,7 +393,7 @@ class DeliberationEngine(
                     yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
                     yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
                     stoppedBy = stoppedBy(root),
-                )
+                ).withCost(costOf(root, tree))
             }
             GraphDto(qs, nodes, layers.members)
         }
@@ -679,7 +696,7 @@ class DeliberationEngine(
             // EXP-02: this proposer, every side it is asked about concurrently.
             val futures = turnSides.map { side ->
                 val ask = minOf(config.argsPerCall, room.getValue(side))
-                side to calls.submit<List<String>> { p.propose(ctx, side, ask).take(ask) }
+                side to calls.submit<List<String>> { Usage.within(sinkFor(c.root)) { p.propose(ctx, side, ask).take(ask) } }
             }
             asked += futures.size
             requested += turnSides.sumOf { minOf(config.argsPerCall, room.getValue(it)) }
@@ -873,6 +890,56 @@ class DeliberationEngine(
         }
     }
 
+    /**
+     * Caller holds [lock]. SPEC §12: [root]'s spend, its projection — spent +
+     * claims still to explore × mean cost per completed round, once
+     * [PROJECTION_MIN_ROUNDS] rounds completed — and the per-backend details.
+     */
+    private fun costOf(root: CellRef, tree: List<Claim>): CostDto {
+        val tallies = costs[root].orEmpty()
+        val backends = (BACKEND_ORDER + tallies.keys.sorted()).distinct().mapNotNull { b ->
+            val t = tallies[b] ?: return@mapNotNull null
+            val info = pricing.info(b)
+            BackendCostDto(
+                backend = b, models = t.models, calls = t.calls,
+                inputTokens = t.inputTokens, cachedInputTokens = t.cachedInputTokens, cacheWriteTokens = t.cacheWriteTokens,
+                outputTokens = t.outputTokens, reasoningTokens = t.reasoningTokens,
+                usd = t.usd.takeIf { t.unpricedCalls < t.calls }, unpricedCalls = t.unpricedCalls,
+                rate = info.rate, rateSource = info.source, rateDate = info.date, assumed = info.assumed, note = info.note,
+            )
+        }
+        val rounds = tree.sumOf { it.rounds }
+        val spent = tallies.values.sumOf { it.usd }
+        return CostDto(
+            complete = root in completeCosts,
+            backends = backends,
+            rounds = rounds,
+            queued = tree.count { it.status in ACTIVE },
+            // A legacy question's earlier spend and cost-per-round denominator are unknown.
+            perRoundUsd = if (root in completeCosts && rounds >= PROJECTION_MIN_ROUNDS) spent / rounds else null,
+        )
+    }
+
+    private fun QuestionDto.withCost(c: CostDto): QuestionDto {
+        val spent = c.backends.sumOf { it.usd ?: 0.0 }
+        return copy(costUsd = spent, projectedUsd = c.perRoundUsd?.let { spent + c.queued * it }, cost = c)
+    }
+
+    /** SPEC §12: the sink bound around every call made for question [root]. */
+    private fun sinkFor(root: CellRef) = UsageSink { u -> recordUsage(root, u) }
+
+    private fun recordUsage(root: CellRef, u: CallUsage) {
+        val usd = try {
+            pricing.price(u)
+        } catch (e: Exception) {
+            null
+        }
+        update {
+            val tallies = costs.getOrPut(root) { LinkedHashMap() }
+            tallies[u.backend] = (tallies[u.backend] ?: BackendTally()).plus(u, usd)
+        }
+    }
+
     /** Caller holds [lock]. Why [root]'s tree stopped growing early, if it did (QuestionDto.stoppedBy). */
     private fun stoppedBy(root: CellRef): String? = when {
         (treeSize[root] ?: 0) >= config.maxClaims -> "budget"
@@ -1014,7 +1081,7 @@ class DeliberationEngine(
         val reservation = beginRewrite(t) ?: return false
         val (claim, current) = synchronized(lock) { c.text to t.text }
         val merged = try {
-            m.merge(claim, t.side!!, current, f.text)
+            Usage.within(sinkFor(c.root)) { m.merge(claim, t.side!!, current, f.text) }
         } catch (e: Exception) {
             update { c.error = "merge: $e" }
             cancelRewrite(t, reservation)
@@ -1146,14 +1213,18 @@ class DeliberationEngine(
         /** Required so a question with no non-root round yet still has its one durable record (DUR-03). */
         val yields: List<Double>,
         val diminished: Boolean = false,
+        /** Missing/false identifies a record written before cost tracking existed. */
+        val costComplete: Boolean = false,
     )
 
     /** Caller holds [lock]. */
     private fun questionFieldsOf(q: CellRef): Map<String, String> =
         RECORDS.encodeToJsonElement(
             QuestionRecord.serializer(),
-            QuestionRecord(yields[q].orEmpty().toList(), q in diminished),
-        ).jsonObject.mapValues { it.value.toString() }
+            QuestionRecord(yields[q].orEmpty().toList(), q in diminished, q in completeCosts),
+        ).jsonObject.mapValues { it.value.toString() } +
+            // SPEC §12: one field per backend, so a call rewrites only its backend's counters.
+            costs[q].orEmpty().map { (b, t) -> COST_FIELD + b to RECORDS.encodeToString(BackendTally.serializer(), t) }
 
     private fun fieldsOf(r: ClaimRecord): Map<String, String> =
         RECORDS.encodeToJsonElement(ClaimRecord.serializer(), r).jsonObject.mapValues { it.value.toString() }
@@ -1179,8 +1250,14 @@ class DeliberationEngine(
         val questionRecords = meta.filterKeys { it.startsWith(QUESTION_KEY) }.entries.associate { (k, v) ->
             CellRef(UUID.fromString(k.removePrefix(QUESTION_KEY))) to RECORDS.decodeFromJsonElement(
                 QuestionRecord.serializer(),
-                JsonObject(v.mapValues { RECORDS.parseToJsonElement(it.value) }),
+                JsonObject(v.filterKeys { !it.startsWith(COST_FIELD) }.mapValues { RECORDS.parseToJsonElement(it.value) }),
             )
+        }
+        // SPEC §12: the cost counters; an unreadable one is dropped rather than failing the boot.
+        val costRecords = meta.filterKeys { it.startsWith(QUESTION_KEY) }.entries.associate { (k, v) ->
+            CellRef(UUID.fromString(k.removePrefix(QUESTION_KEY))) to v.filterKeys { it.startsWith(COST_FIELD) }.mapNotNull { (f, json) ->
+                runCatching { f.removePrefix(COST_FIELD) to RECORDS.decodeFromString(BackendTally.serializer(), json) }.getOrNull()
+            }.toMap()
         }
         val graph = service.graph()
         val attaching = graph.filter { it.info.kind == CredenceGraph.Kind.EDGE }.groupBy { it.info.source }
@@ -1216,6 +1293,10 @@ class DeliberationEngine(
                 if (q !in questions) continue
                 yields[q] = r.yields.toMutableList()
                 if (r.diminished) diminished += q
+                if (r.costComplete) completeCosts += q
+            }
+            for ((q, tallies) in costRecords) {
+                if (q in questions && tallies.isNotEmpty()) costs[q] = LinkedHashMap(tallies)
             }
         }
         val stances = synchronized(lock) {
@@ -1277,7 +1358,7 @@ class DeliberationEngine(
     /** EXP-08: run a judge call; on failure record the error and return null. */
     private fun <T> attempt(c: Claim, what: String, call: () -> T): T? =
         try {
-            call()
+            Usage.within(sinkFor(c.root), call)
         } catch (e: Exception) {
             update { c.error = "jev $what: $e" }
             null

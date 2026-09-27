@@ -300,7 +300,7 @@ Every status change is broadcast.
   undercutting claim carries `undercuts` (the edge it attacks, which is also
   its edge's `target`); the graph carries `consensusMembers`; every question
   carries `yieldRounds`, `yieldRecent`, `yieldEarlier` and `stoppedBy`
-  (EXP-10).
+  (EXP-10), and `costUsd`, `projectedUsd` and `cost` (§12).
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
 
@@ -413,3 +413,70 @@ they were stopped. A full recalibration of
 - **DUR-04** A data directory in the earlier one-agora-graph-per-layer format
   (`graph-<layer>.jsonl`) is refused at startup with a message; it is not
   migrated.
+
+## 12. Cost (requirements COST-*)
+
+- **COST-01** Every external call records what it used, attributed to the
+  question whose claim caused it: the engine binds that question's usage sink
+  around every Judge, Proposer and Merger call (`Usage.within`), and the
+  adapters report into it — so the `Proposer`/`Judge`/`Merger` interfaces
+  carry no cost plumbing, and a call that hands work to another thread (Jev's
+  parallel plausibility request) passes the sink along. Reading usage never
+  fails a call: an unreadable usage is logged and dropped.
+  - **Claude CLI** (proposer and merger) runs with `--output-format json`:
+    the answer is the envelope's `result` (parsed as before, EXP-09), an
+    envelope with `is_error` fails the call, and the usage is `usage`
+    (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`,
+    `output_tokens`), the models are the keys of `modelUsage`, and the cost is
+    the CLI's own `total_cost_usd`.
+  - **Codex CLI** runs with `--json`: stdout is a JSONL event stream whose
+    `turn.completed.usage` (`input_tokens`, `cached_input_tokens`,
+    `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`) is
+    summed over the call's turns; the answer is still read from `-o`.
+    Cached input and cache writes are part of `input_tokens`, and reasoning
+    tokens are part of `output_tokens` (verified live: a 13-reasoning-token
+    answer reported 20 output tokens where the same answer without reasoning
+    reported 7), so neither is counted twice.
+  - **Jev**: every successful response's `usage` (`input_tokens`,
+    `output_tokens`) is one call; a retried 429/529 is not.
+- **COST-02** Prices (flags; defaults below, each shown with its source and
+  date):
+  - Codex `gpt-5.6-sol` (`--codex-input-rate`, `--codex-cached-rate`,
+    `--codex-output-rate`, USD per 1M tokens): $4.00 input, $0.40 cached
+    input, $20.00 output; reasoning billed as output; cache writes 1.25×
+    input; a call whose longest prompt exceeds 272K tokens pays 2× on input
+    and 1.5× on output. Source: developers.openai.com/api/docs/models/gpt-5.6-sol,
+    looked up 2026-09-27 (the input price is promotional through at least
+    2026-11-21). With another `--codex-model` the rate flags must be given,
+    else the rate is **unknown**: its tokens are shown, its cost is left out
+    of every total and the details say so.
+  - Jev (`--jev-input-rate`, `--jev-output-rate`): $0.042 per 1M input
+    tokens, output free — a third-party listing (OpenRouter
+    typesafe/jev-1.13, MindStudio), since TypeSafe publishes no pricing, so
+    it is labelled **assumed**.
+  - Claude: the CLI's reported `total_cost_usd`, labelled "API-equivalent as
+    reported by Claude Code; not your bill if you use a subscription".
+- **COST-03** Every question reports `costUsd` (the sum of its priced calls),
+  `projectedUsd` (`costUsd` + claims still `QUEUED`/`JUDGING`/`EXPLORING` ×
+  the mean cost per completed round in the question — one more round each;
+  null until the question completed 3 rounds) and `cost`: per backend its
+  calls, tokens by kind, USD, the rate applied, its source and date, whether
+  it is assumed, and its caveat, plus the rounds, queued claims and cost per
+  round behind the projection. A question restored from a durable record made
+  before cost tracking is marked incomplete: it has no projection, and any
+  newly tracked spend is only a lower bound.
+- **COST-04** The cost is durable (DUR-02): per question and backend one
+  aggregate counter set (calls, token sums, USD, unpriced calls, models) —
+  never a per-call log — stored in the question's record as one field per
+  backend (`cost.claude`, `cost.codex`, `cost.jev`), so a call rewrites only
+  its backend's field. A restart restores it unchanged.
+- **COST-05** UI: the question header shows only the dollar figure (e.g.
+  `$0.84`; `<$0.01` below a cent), subtle and in tabular figures. It is a
+  button; it opens a compact popover — per backend calls, tokens, estimated
+  cost, the price with its source and date (marked *assumed* where it is),
+  the projection ("≈$2.10 if the 9 queued claims are explored") and the
+  Claude subscription caveat — that closes on Escape or a click outside.
+  A restored pre-cost question shows `—` and “cost not tracked for this
+  question (created before cost tracking)”; after new tracked calls it shows
+  “at least $X (earlier rounds not tracked)”.
+  `?mock` shows plausible figures. The legend says what the figure means.

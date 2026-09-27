@@ -3,7 +3,13 @@ package civictech.deliberate
 import civictech.agora.cell.Polarity
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 import java.nio.file.Files
 import java.time.Duration
@@ -93,11 +99,26 @@ class CliMerger(private val cli: CliProposer) : Merger {
 }
 
 /**
+ * How a finished CLI call's output becomes its answer text (SPEC EXP-09, §12).
+ * A reader also [Usage.report]s what the call used; a failure to read the
+ * usage never fails the call.
+ */
+fun interface CliReader {
+    fun read(stdout: String, outFile: String?): String
+
+    companion object {
+        /** The out file when the command wrote one, else stdout; no usage. */
+        val PLAIN = CliReader { stdout, outFile -> outFile?.takeIf { it.isNotEmpty() } ?: stdout }
+    }
+}
+
+/**
  * [Proposer] that shells out to an LLM CLI (EXP-09). Each call runs [command]'s
  * argv inside the [gate], in a fresh empty temp directory (deleted afterwards),
  * with stdin closed and a [timeout] after which the whole process tree is
- * destroyed. The answer is [outFile][command]'s content when the command wrote
- * one, else stdout; it must contain a JSON array of strings ([parseArguments]).
+ * destroyed. The [reader] turns its output into the answer text (by default
+ * [outFile][command]'s content when the command wrote one, else stdout); it
+ * must contain a JSON array of strings ([parseArguments]).
  */
 class CliProposer internal constructor(
     override val id: String,
@@ -105,6 +126,7 @@ class CliProposer internal constructor(
     private val gate: ProcessGate,
     private val timeout: Duration = Duration.ofSeconds(120),
     private val descendantsOf: (Process) -> List<ProcessHandle> = { it.descendants().toList() },
+    private val reader: CliReader = CliReader.PLAIN,
 ) : Proposer {
 
     init {
@@ -147,7 +169,7 @@ class CliProposer internal constructor(
             check(process.exitValue() == 0) {
                 "$id exited ${process.exitValue()}: ${stderr.readText().takeLast(500)}"
             }
-            return if (out.isFile && out.length() > 0) out.readText() else stdout.readText()
+            return reader.read(stdout.readText(), out.takeIf { it.isFile }?.readText())
         } finally {
             scratch.deleteRecursively()
         }
@@ -171,18 +193,24 @@ class CliProposer internal constructor(
     }
 
     companion object {
-        /** Claude Code CLI in print mode with every tool disabled. */
+        /**
+         * Claude Code CLI in print mode with every tool disabled. `--output-format json`
+         * wraps the answer (`result`) with the call's usage and cost ([CLAUDE_JSON]).
+         */
         fun claude(gate: ProcessGate, model: String? = null) = CliProposer("claude", { prompt, _ ->
             // `--tools` is variadic: `--` stops it from swallowing the prompt as a tool name.
             listOf(
-                "claude", "-p", "--output-format", "text", "--safe-mode", "--restricted",
+                "claude", "-p", "--output-format", "json", "--safe-mode", "--restricted",
                 "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
                 "--permission-prompts", "none", "--no-session-persistence",
             ) +
                 model.flag("--model") + listOf("--", prompt)
-        }, gate)
+        }, gate, reader = CLAUDE_JSON)
 
-        /** Codex CLI with local/hosted tools disabled; the last message goes to the out file (stdout carries logs). */
+        /**
+         * Codex CLI with local/hosted tools disabled; the last message goes to the out
+         * file, and `--json` makes stdout a JSONL event stream carrying the usage ([codexReader]).
+         */
         fun codex(gate: ProcessGate, model: String? = null) = CliProposer("codex", { prompt, out ->
             listOf(
                 "codex", "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
@@ -195,8 +223,102 @@ class CliProposer internal constructor(
                 "-c", "web_search=\"disabled\"",
                 "-c", "model_reasoning_effort=\"low\"",
             ) +
-                model.flag("-m") + listOf("-o", out.absolutePath, "--", prompt)
-        }, gate)
+                model.flag("-m") + listOf("--json", "-o", out.absolutePath, "--", prompt)
+        }, gate, reader = codexReader(model ?: Pricing.DEFAULT_CODEX_MODEL))
+
+        /**
+         * SPEC §12: reads Claude Code's `--output-format json` envelope. The answer is
+         * its `result`; an envelope flagged `is_error` fails the call. Output that is
+         * not a JSON object is taken as the answer itself (no usage).
+         */
+        val CLAUDE_JSON = CliReader { stdout, _ ->
+            val envelope = claudeEnvelope(stdout)
+                ?: return@CliReader stdout
+            val result = (envelope["result"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            val isError = (envelope["is_error"] as? JsonPrimitive)?.booleanOrNull == true
+            Usage.raw("claude") { "total_cost_usd=${envelope["total_cost_usd"]} usage=${envelope["usage"]}" }
+            Usage.capture("claude") { claudeUsage(envelope) }
+            check(!isError && result != null) {
+                "claude reported an error: ${(result ?: envelope["subtype"]?.toString() ?: "no result").take(300)}"
+            }
+            result
+        }
+
+        /**
+         * Claude normally emits one JSON object. Tolerate non-JSON diagnostic
+         * lines around that object without handing the envelope's own arrays
+         * to [parseArguments] as though they were the answer.
+         */
+        private fun claudeEnvelope(stdout: String): JsonObject? {
+            fun parse(text: String) = runCatching { Json.parseToJsonElement(text.trim()) as? JsonObject }.getOrNull()
+            fun JsonObject.isEnvelope() = string("type") == "result" || "result" in this || "is_error" in this
+            return parse(stdout)?.takeIf { it.isEnvelope() }
+                ?: stdout.lineSequence().mapNotNull(::parse).firstOrNull { it.isEnvelope() }
+        }
+
+        /**
+         * The usage in a Claude Code JSON envelope: Anthropic reports cache reads and
+         * writes beside `input_tokens`, so they are added in ([CallUsage] counts them
+         * as part of the input); the cost is the CLI's own `total_cost_usd`.
+         */
+        fun claudeUsage(envelope: JsonObject): CallUsage {
+            val u = envelope["usage"]?.jsonObject ?: throw IllegalArgumentException("no usage")
+            val plain = u.long("input_tokens")
+            val read = u.long("cache_read_input_tokens")
+            val write = u.long("cache_creation_input_tokens")
+            return CallUsage(
+                backend = Pricing.CLAUDE,
+                models = (envelope["modelUsage"] as? JsonObject)?.keys?.toList().orEmpty(),
+                inputTokens = plain + read + write,
+                cachedInputTokens = read,
+                cacheWriteTokens = write,
+                outputTokens = u.long("output_tokens"),
+                reasoningTokens = (u["output_tokens_details"] as? JsonObject)?.long("thinking_tokens") ?: 0,
+                reportedUsd = (envelope["total_cost_usd"] as? JsonPrimitive)?.doubleOrNull,
+            )
+        }
+
+        /**
+         * SPEC §12: the answer is the `-o` out file (the last agent message in the
+         * JSONL stream if the file is missing); the usage is every
+         * `turn.completed.usage` of the stream, summed ([codexUsage]).
+         */
+        fun codexReader(model: String) = CliReader { stdout, outFile ->
+            Usage.raw("codex") { stdout.lineSequence().filter { "turn.completed" in it }.joinToString(" ") }
+            Usage.capture("codex") { codexUsage(stdout, model) }
+            outFile?.takeIf { it.isNotEmpty() } ?: lastCodexMessage(stdout) ?: stdout
+        }
+
+        /** Sums `turn.completed.usage` over a `codex exec --json` stream; null when it holds none. */
+        fun codexUsage(jsonl: String, model: String): CallUsage? {
+            val turns = codexEvents(jsonl).filter { it.string("type") == "turn.completed" }
+                .mapNotNull { it["usage"] as? JsonObject }
+            if (turns.isEmpty()) return null
+            return CallUsage(
+                backend = Pricing.CODEX,
+                models = listOf(model),
+                inputTokens = turns.sumOf { it.long("input_tokens") },
+                cachedInputTokens = turns.sumOf { it.long("cached_input_tokens") },
+                cacheWriteTokens = turns.sumOf { it.long("cache_write_input_tokens") },
+                outputTokens = turns.sumOf { it.long("output_tokens") },
+                reasoningTokens = turns.sumOf { it.long("reasoning_output_tokens") },
+                longestPromptTokens = turns.maxOf { it.long("input_tokens") },
+            )
+        }
+
+        private fun lastCodexMessage(jsonl: String): String? = codexEvents(jsonl)
+            .filter { it.string("type") == "item.completed" }
+            .mapNotNull { it["item"] as? JsonObject }
+            .lastOrNull { it.string("type") == "agent_message" }
+            ?.string("text")
+
+        private fun codexEvents(jsonl: String): List<JsonObject> = jsonl.lineSequence()
+            .map { it.trim() }.filter { it.startsWith("{") }
+            .mapNotNull { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+            .toList()
+
+        private fun JsonObject.long(key: String): Long = (this[key] as? JsonPrimitive)?.longOrNull ?: 0
+        private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
         private fun String?.flag(name: String) = if (this == null) emptyList() else listOf(name, this)
 

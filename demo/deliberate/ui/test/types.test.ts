@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { GraphDto, NodeDto, Override, QuestionDto, Status } from '../src/api/types';
+import type { BackendCostDto, CostDto, GraphDto, NodeDto, Override, QuestionDto, Status } from '../src/api/types';
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
   ? (<T>() => T extends B ? 1 : 2) extends <T>() => T extends A ? 1 : 2
@@ -17,6 +17,27 @@ type ExpectedQuestionDto = {
   yieldRecent?: number;
   yieldEarlier?: number;
   stoppedBy?: 'budget' | 'diminishing';
+  costUsd?: number;
+  projectedUsd?: number;
+  cost?: CostDto;
+};
+type ExpectedCostDto = { complete?: boolean; backends: BackendCostDto[]; rounds: number; queued: number; perRoundUsd?: number };
+type ExpectedBackendCostDto = {
+  backend: string;
+  models: string[];
+  calls: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  usd?: number;
+  unpricedCalls: number;
+  rate: string;
+  rateSource: string;
+  rateDate?: string;
+  assumed: boolean;
+  note?: string;
 };
 type ExpectedStatus =
   | 'QUEUED' | 'JUDGING' | 'EXPLORING' | 'SATURATED' | 'ROUND_LIMIT'
@@ -61,9 +82,11 @@ const questionMatches: Equal<QuestionDto, ExpectedQuestionDto> = true;
 const statusMatches: Equal<Status, ExpectedStatus> = true;
 const overrideMatches: Equal<Override, ExpectedOverride> = true;
 const nodeMatches: Equal<NodeDto, ExpectedNodeDto> = true;
+const costMatches: Equal<CostDto, ExpectedCostDto> = true;
+const backendCostMatches: Equal<BackendCostDto, ExpectedBackendCostDto> = true;
 
 it('mirrors the Dto.kt wire contract field for field', () => {
-  expect([graphMatches, questionMatches, statusMatches, overrideMatches, nodeMatches]).toEqual([
-    true, true, true, true, true,
+  expect([graphMatches, questionMatches, statusMatches, overrideMatches, nodeMatches, costMatches, backendCostMatches]).toEqual([
+    true, true, true, true, true, true, true,
   ]);
 });

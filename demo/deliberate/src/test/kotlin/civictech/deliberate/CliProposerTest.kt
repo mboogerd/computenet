@@ -86,6 +86,7 @@ class CliProposerTest {
         assertTrue("--strict-mcp-config" in claude)
         assertTrue(claude.hasPair("--permission-prompts", "none"))
         assertTrue(claude.hasPair("--model", "claude-test"))
+        assertTrue(claude.hasPair("--output-format", "json"), "SPEC §12: usage comes from the JSON envelope")
 
         val codex = CliProposer.codex(ProcessGate(1), model = "codex-test").commandLine("prompt", out)
         assertTrue("--ignore-user-config" in codex)
@@ -99,6 +100,7 @@ class CliProposerTest {
         assertTrue(codex.hasPair("-s", "read-only"))
         assertTrue(codex.hasPair("-m", "codex-test"))
         assertTrue(codex.hasPair("-o", out.absolutePath))
+        assertTrue("--json" in codex, "SPEC §12: usage comes from the JSONL event stream")
     }
 
     @Test
@@ -242,5 +244,97 @@ class CliProposerTest {
             listOf("sh", "-c", "case \"\$1\" in *'Argument B'*) echo '\"A and B.\"';; *) exit 4;; esac", "sh", prompt)
         }, ProcessGate(1))
         assertEquals("A and B.", CliMerger(cli).merge("C.", Polarity.SUPPORT, "A.", "B."))
+    }
+
+    // ------------------------------------------------------------ SPEC §12 usage
+
+    /** A recorded `claude -p --output-format json` envelope (shape verified live, 2026-09-27). */
+    private val claudeEnvelope = """
+        {"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0323,
+         "usage":{"input_tokens":2,"cache_creation_input_tokens":7902,"cache_read_input_tokens":3397,"output_tokens":40,
+                  "output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0}},
+         "modelUsage":{"claude-sonnet-5":{"inputTokens":2,"outputTokens":40,"costUSD":0.0323}},
+         "permission_denials":[],
+         "result":"Here you go:\n```json\n[\"The Model K2 kettle boils water in three minutes.\", \"Second.\"]\n```"}
+    """.trimIndent()
+
+    /** A recorded `codex exec --json` stream, with a second turn added to exercise summing. */
+    private val codexEvents = """
+        {"type":"thread.started","thread_id":"t"}
+        {"type":"turn.started"}
+        {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"[\"from stream\"]"}}
+        {"type":"turn.completed","usage":{"input_tokens":12608,"cached_input_tokens":8448,"cache_write_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":13}}
+        not json at all
+        {"type":"turn.completed","usage":{"input_tokens":300000,"cached_input_tokens":1000,"cache_write_input_tokens":500,"output_tokens":7,"reasoning_output_tokens":0}}
+    """.trimIndent()
+
+    private fun <T> recording(block: () -> T): Pair<T, List<CallUsage>> {
+        val seen = java.util.concurrent.CopyOnWriteArrayList<CallUsage>()
+        return Usage.within({ seen += it }, block) to seen
+    }
+
+    @Test
+    fun `claude JSON envelope yields the result text for the parser and the call's usage`() {
+        val (text, usage) = recording { CliProposer.CLAUDE_JSON.read(claudeEnvelope, null) }
+        assertEquals(
+            listOf("The Model K2 kettle boils water in three minutes.", "Second."),
+            CliProposer.parseArguments(text, 5),
+            "the envelope's own arrays (permission_denials) must never be read as the answer",
+        )
+        val u = usage.single()
+        assertEquals("claude", u.backend)
+        assertEquals(listOf("claude-sonnet-5"), u.models)
+        assertEquals(2L + 3397 + 7902, u.inputTokens)
+        assertEquals(3397L, u.cachedInputTokens)
+        assertEquals(7902L, u.cacheWriteTokens)
+        assertEquals(40L, u.outputTokens)
+        assertEquals(0.0323, u.reportedUsd)
+    }
+
+    @Test
+    fun `a claude error envelope fails the call, plain text passes through, bad usage never fails it`() {
+        assertFailsWith<IllegalStateException> {
+            CliProposer.CLAUDE_JSON.read("""{"type":"result","is_error":true,"subtype":"error_max_turns","result":"nope"}""", null)
+        }
+        val (plain, none) = recording { CliProposer.CLAUDE_JSON.read("[\"a\"]", null) }
+        assertEquals("[\"a\"]", plain)
+        assertTrue(none.isEmpty())
+        val (text, noUsage) = recording { CliProposer.CLAUDE_JSON.read("""{"is_error":false,"result":"[\"b\"]","usage":"garbled"}""", null) }
+        assertEquals("[\"b\"]", text)
+        assertTrue(noUsage.isEmpty())
+    }
+
+    @Test
+    fun `claude diagnostics around its envelope cannot expose envelope arrays to argument parsing`() {
+        val noisy = "diagnostic: credential helper was slow\n" + claudeEnvelope.replace("\n", " ") + "\ndiagnostic: done"
+        val (text, usage) = recording { CliProposer.CLAUDE_JSON.read(noisy, null) }
+        assertEquals(
+            listOf("The Model K2 kettle boils water in three minutes.", "Second."),
+            CliProposer.parseArguments(text, 5),
+        )
+        assertEquals(0.0323, usage.single().reportedUsd)
+    }
+
+    @Test
+    fun `codex usage sums every completed turn and the answer comes from the out file`() {
+        val u = assertNotNull(CliProposer.codexUsage(codexEvents, "gpt-5.6-sol"))
+        assertEquals(CallUsage("codex", listOf("gpt-5.6-sol"), 312_608, 9_448, 500, 27, 13, longestPromptTokens = 300_000), u)
+        assertEquals(null, CliProposer.codexUsage("{\"type\":\"turn.started\"}", "m"))
+        val reader = CliProposer.codexReader("gpt-5.6-sol")
+        val (fromFile, usage) = recording { reader.read(codexEvents, "[\"from file\"]") }
+        assertEquals("[\"from file\"]", fromFile)
+        assertEquals(listOf(u), usage)
+        val (fromStream, _) = recording { reader.read(codexEvents, null) }
+        assertEquals("[\"from stream\"]", fromStream)
+    }
+
+    @Test
+    fun `a CLI run reports its usage to the bound sink`() {
+        val envelope = claudeEnvelope.replace("\n", " ")
+        val cli = CliProposer("claude", { _, _ -> listOf("sh", "-c", "printf '%s' \"\$1\"", "sh", envelope) }, ProcessGate(1), reader = CliProposer.CLAUDE_JSON)
+        val ctx = ClaimContext("Q?", emptyList(), "Q?", emptyList(), emptyList())
+        val (args, usage) = recording { cli.propose(ctx, Polarity.SUPPORT, 1) }
+        assertEquals(listOf("The Model K2 kettle boils water in three minutes."), args)
+        assertEquals(0.0323, usage.single().reportedUsd)
     }
 }

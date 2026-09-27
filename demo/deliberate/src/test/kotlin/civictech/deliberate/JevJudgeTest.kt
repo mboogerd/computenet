@@ -310,4 +310,40 @@ class JevJudgeTest {
         assertFailsWith<IllegalArgumentException> { judge(maxAttempts = 0, sleeper = { _ -> }) }
         assertFailsWith<IllegalArgumentException> { judge(maxAttempts = 5, sleeper = { _ -> }) }
     }
+
+    // ------------------------------------------------------------ SPEC §12 usage
+
+    private fun <T> recording(block: () -> T): Pair<T, List<CallUsage>> {
+        val seen = java.util.concurrent.CopyOnWriteArrayList<CallUsage>()
+        return Usage.within({ seen += it }, block) to seen
+    }
+
+    @Test
+    fun `every successful request reports its usage, retried ones do not`() {
+        reply(429, """{"error":"rate limited"}""")
+        scoreReply("plausibility", 3.0)
+        val (_, usage) = recording { judge(sleeper = {}).plausibility("Q?", emptyList(), "C.") }
+        assertEquals(listOf(CallUsage("jev", listOf("jev-1.13.0"), inputTokens = 300, outputTokens = 20)), usage)
+    }
+
+    @Test
+    fun `assess reports both of its parallel requests to the caller's sink`() {
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":3.0}},
+               "usage":{"input_tokens":70,"output_tokens":2}}"""
+        routed["strength"] = """{"model":"jev-1.13.0","answers":{
+               "strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},
+               "relevant":{"type":"noul","noul":0.4}},
+               "usage":{"input_tokens":500,"output_tokens":9}}"""
+        val (_, usage) = recording { judge.assess("Q?", listOf("Q?", "Parent."), "Child.", Polarity.SUPPORT) }
+        assertEquals(setOf(70L, 500L), usage.map { it.inputTokens }.toSet())
+        assertEquals(2, usage.size)
+    }
+
+    @Test
+    fun `a response without usage still answers and reports nothing`() {
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":4.0}}}"""
+        val (p, usage) = recording { judge.plausibility("Q?", emptyList(), "C.") }
+        assertEquals(1.0, p, 1e-9)
+        assertTrue(usage.isEmpty())
+    }
 }

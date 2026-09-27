@@ -50,6 +50,11 @@ export function Legend() {
             The AI judge. It scores every claim and link, sorts new arguments (added, repeat, reworded, merged, nested as
             evidence, moved sides, undercut a link, dropped), and decides what is worth exploring.
           </dd>
+          <dt>Cost</dt>
+          <dd>
+            The dollar figure by the question: an estimate of what its model calls have cost so far (Claude as its CLI
+            reports it, Codex and Jev from token prices). Click it for the breakdown and a projection.
+          </dd>
           <dt>Status</dt>
           <dd>
             <em>gathering arguments</em> and <em>weighing</em> are live; <em>fully argued</em> means both sides are
