@@ -37,6 +37,7 @@ import civictech.cell.graph.requireBoundRef
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.control.ParkQueue
+import civictech.cell.KeyBoundMistypedException
 import civictech.nature.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
@@ -2026,7 +2027,14 @@ open class ManagedHost(
                             else page
                         )
                     },
-                    onFailure = { unavailable(StateReadResult.Reason.READ_FAILED) },
+                    // A mistyped KeyBound (D9) is a caller error, named apart from
+                    // every other readBounded throw — see [KeyBoundMistypedException].
+                    onFailure = { thrown ->
+                        unavailable(
+                            if (thrown is KeyBoundMistypedException) StateReadResult.Reason.KEY_BOUND_MISTYPED
+                            else StateReadResult.Reason.READ_FAILED
+                        )
+                    },
                 )
         }
     }
