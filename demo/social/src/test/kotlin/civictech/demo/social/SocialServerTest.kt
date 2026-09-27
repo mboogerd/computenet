@@ -117,6 +117,62 @@ class SocialServerTest {
         }
     }
 
+    // --- computenet-1uf0s: startup broadcast is bounded, not per-sink ------
+
+    /**
+     * Polls [read] until it stops changing for [quietMs], or [timeoutMs]
+     * elapses — used below because the late-join catch-up broadcasts
+     * (computenet-1uf0s) land asynchronously, one per preloaded sink's own
+     * dispatcher thread, so there is no single event to await; the count is
+     * read as settled once it has been steady for a while.
+     */
+    private fun awaitStable(timeoutMs: Long = 15_000, quietMs: Long = 300, read: () -> Long): Long {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var last = read()
+        var lastChange = System.currentTimeMillis()
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(20)
+            val now = read()
+            if (now != last) {
+                last = now
+                lastChange = System.currentTimeMillis()
+            } else if (System.currentTimeMillis() - lastChange >= quietMs) {
+                return last
+            }
+        }
+        return last
+    }
+
+    @Test
+    fun `computenet-1uf0s a preloaded source's late-join catch-up computes state a bounded number of times`() {
+        // SnbGenerator(42, 0.05) mints roughly 297 preloaded sinks (per the
+        // bead's probe): start()'s graph.onChange attaches to every one of
+        // them, and each fires its own late-join catch-up on its own
+        // dispatcher thread. Uncoalesced that is ~297 stateJson()
+        // computations (confirmed by temporarily reverting the [broadcast]
+        // fix while developing this test: it measured exactly 297). The
+        // single-flight coalescing in [SocialApp.broadcast] does not reduce
+        // that to a small constant — how many separate broadcasts a burst
+        // this size produces depends on OS thread-scheduling jitter across
+        // ~297 near-simultaneous dispatcher threads, observed between ~15
+        // (isolated run) and ~36 (full-suite run, more contention). The
+        // bound below is intentionally generous — well under half of the
+        // sink count, and stable across repeated runs — to assert what the
+        // acceptance criterion actually requires (not tied to N, nowhere
+        // near one-broadcast-per-sink) without being sensitive to scheduler
+        // noise.
+        val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
+        try {
+            val settled = awaitStable { app.broadcastCount.get() }
+            assertTrue(
+                settled in 1..100,
+                "expected a bounded number of startup broadcasts (independent of the ~297 sinks), got $settled",
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
     // --- SOC1-SCHEMA-02 (state half, pinned in jo2jk-D6) -------------------
 
     @Test

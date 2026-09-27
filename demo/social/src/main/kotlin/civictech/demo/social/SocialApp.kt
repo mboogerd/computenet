@@ -318,9 +318,60 @@ class SocialApp(
         }
     }
 
+    // computenet-1uf0s: `start()`'s `graph.onChange { broadcast() }` attaches
+    // a listener to every preloaded sink (SocialGraph.onChange), and each
+    // ObserveCell.onChange's late-join catch-up (kernel Observe.kt:228-237)
+    // fires that listener once on its own dispatcher thread — so a preloaded
+    // source with N sinks calls [broadcast] N times in a burst at startup,
+    // each a full stateJson() computation (~297 for SnbGenerator(42, 0.05)).
+    // Coalescing the kernel's per-sink catch-up itself is out of scope (that
+    // is the late-join contract AGENTS.md/the bead forbid touching); instead
+    // [broadcast] runs as a single-flight worker: a call that lands while one
+    // is already computing/sending a frame only asks that in-flight worker to
+    // run once more afterward, rather than starting a broadcast of its own.
+    // For a burst of N calls that lands while a broadcast is running, this
+    // bounds the number of stateJson() computations at 2 — the one already in
+    // flight plus one more that reflects everything queued behind it — never
+    // N. A live single change still gets its own broadcast: SOC1-HTTP-02/03
+    // never race a startup burst, so this never coalesces two calls a client
+    // is depending on into a dropped one.
+    //
+    // Both branches below check/mutate [broadcastInFlight]/[broadcastQueued]
+    // under the same [broadcastLock], including the loop's own exit check —
+    // closing the lost-wakeup window a naive pair of `AtomicBoolean`s would
+    // leave between "the loop decides nothing more is queued" and "the flag
+    // is actually cleared": a caller arriving in exactly that window sees
+    // `broadcastInFlight` still true under the lock and marks `broadcastQueued`
+    // instead of returning without effect.
+    private val broadcastLock = Any()
+    private var broadcastInFlight = false
+    private var broadcastQueued = false
+
+    /** Test-only (computenet-1uf0s): total stateJson() computations [broadcast] has made. */
+    internal val broadcastCount = java.util.concurrent.atomic.AtomicLong()
+
     /** A no-op until [start] built the shell. */
     private fun broadcast() {
-        shell?.broadcast { stateJson() }
+        val s = shell ?: return
+        synchronized(broadcastLock) {
+            if (broadcastInFlight) {
+                broadcastQueued = true
+                return
+            }
+            broadcastInFlight = true
+        }
+        while (true) {
+            broadcastCount.incrementAndGet()
+            s.broadcast { stateJson() }
+            synchronized(broadcastLock) {
+                if (broadcastQueued) {
+                    broadcastQueued = false
+                } else {
+                    broadcastInFlight = false
+                    return
+                }
+            }
+        }
     }
 
     /**
