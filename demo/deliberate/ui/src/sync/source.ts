@@ -10,4 +10,6 @@ export interface GraphSource {
   /** Submits a question; resolves to the new root claim ref. */
   ask(text: string): Promise<string>;
   override(id: string, mode: Override): Promise<void>;
+  /** CTL-05: pauses or resumes a question. */
+  pause(root: string, paused: boolean): Promise<void>;
 }

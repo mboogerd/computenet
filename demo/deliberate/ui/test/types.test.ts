@@ -17,6 +17,7 @@ type ExpectedQuestionDto = {
   yieldRecent?: number;
   yieldEarlier?: number;
   stoppedBy?: 'budget' | 'diminishing';
+  paused?: boolean;
   costUsd?: number;
   projectedUsd?: number;
   cost?: CostDto;

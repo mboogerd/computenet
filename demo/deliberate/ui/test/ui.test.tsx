@@ -13,6 +13,7 @@ vi.mock('../src/sync/store', () => ({
   source: {
     ask: vi.fn(),
     override: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -115,6 +116,23 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('stopped: returns diminished');
     expect(html).toContain('returns diminished');
     expect(html).toContain('0.05 vs 0.20');
+  });
+
+  it('CTL-05 offers pause beside the cost, and says "paused" in the header when paused', () => {
+    const running = renderToString(() => <TreeView graph={graph} root="q" />);
+    expect(running).toMatch(/<button[^>]*class="pause\s*"[^>]*>Pause<\/button>/);
+    expect(running).not.toContain('hero__paused');
+    expect(running).toContain('deliberating');
+    const paused: GraphDto = { ...graph, questions: [{ ...graph.questions[0], paused: true }] };
+    const html = renderToString(() => <TreeView graph={paused} root="q" />);
+    expect(html).toMatch(/<button[^>]*class="pause\s+is-on\s*"[^>]*>Resume<\/button>/);
+    expect(html).toContain('class="hero__paused"');
+    expect(html).toContain('2 of 3 claims settled');
+    // Waiting, not working: no "deliberating" and no busy animation.
+    expect(html).not.toContain('deliberating');
+    expect(html).not.toMatch(/class="hero[^"]*is-busy/);
+    // Next to the cost figure.
+    expect(html.indexOf('class="cost"')).toBeLessThan(html.search(/class="pause\s+is-on/));
   });
 
   it('makes every progressive disclosure keyboard/touch reachable and relates it to its panel', () => {

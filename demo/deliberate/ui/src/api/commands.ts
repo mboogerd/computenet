@@ -16,6 +16,11 @@ export async function postQuestion(text: string): Promise<string> {
   return ((await res.json()) as QuestionCreated).root;
 }
 
+/** CTL-05: POST /question/pause root=…&paused=true|false → "ok". */
+export async function postPause(root: string, paused: boolean): Promise<void> {
+  await postForm('/question/pause', { root, paused: String(paused) });
+}
+
 /** POST /override id=…&mode=… → "ok". */
 export async function postOverride(id: string, mode: Override): Promise<void> {
   await postForm('/override', { id, mode });

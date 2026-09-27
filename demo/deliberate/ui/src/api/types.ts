@@ -26,6 +26,11 @@ export interface QuestionDto {
   yieldEarlier?: number;
   /** Why the tree stopped growing early: the claim budget, or diminishing returns that halted queued work. */
   stoppedBy?: StoppedBy;
+  /**
+   * CTL-05: the question is paused — no new round starts until it is resumed.
+   * Has a Kotlin default and is always sent; optional so older fixtures stay valid.
+   */
+  paused?: boolean;
   // SPEC §12. costUsd and cost have Kotlin defaults and are always sent;
   // optional so hand-written fixtures without them stay valid.
   /** USD spent on this question so far — the sum of every priced call (unpriced calls are left out). */

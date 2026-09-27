@@ -19,6 +19,7 @@ import { createTween } from '../util/tween';
 import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
 import { CostBadge } from './CostBadge';
 import { OverrideControl } from './OverrideControl';
+import { PauseControl } from './PauseControl';
 
 export function TreeView(props: { graph: GraphDto; root: string }) {
   const tree = createMemo(() => buildTree(props.graph, props.root));
@@ -67,7 +68,9 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
         const v = () => verdict(tweened(), 'question');
         const counts = () => sideCounts(e().node);
         const open = () => props.sel.selected() === claim().ref;
-        const busy = () => progress().active > 0;
+        const paused = () => question()?.paused === true;
+        // A paused question with queued claims is waiting, not working (CTL-05).
+        const busy = () => progress().active > 0 && !paused();
         const override = () => claim().override ?? 'AUTO';
 
         return (
@@ -123,10 +126,17 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                   <span class="pro-text">{counts().pro} pro</span> · <span class="con-text">{counts().con} con</span>
                 </span>
                 <span>
-                  {busy()
-                    ? `deliberating · ${progress().settled} of ${progress().total} claims settled`
-                    : `settled · ${progress().total} claims`}
+                  {paused()
+                    ? `${progress().settled} of ${progress().total} claims settled`
+                    : busy()
+                      ? `deliberating · ${progress().settled} of ${progress().total} claims settled`
+                      : `settled · ${progress().total} claims`}
                 </span>
+                <Show when={paused()}>
+                  <span class="hero__paused" title="Paused: no new round starts until you resume this question">
+                    paused
+                  </span>
+                </Show>
                 <Show when={stoppedText(question())}>
                   {(text) => (
                     <span class="hero__stopped" title={stoppedHint(question())}>
@@ -141,6 +151,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                 </Show>
                 <span class="card__spacer" />
                 <Show when={question()}>{(q) => <CostBadge question={q()} />}</Show>
+                <Show when={question()}>{(q) => <PauseControl root={q().root} paused={q().paused === true} />}</Show>
                 <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
                   <OverrideControl id={claim().ref} value={override()} />
                 </span>

@@ -1,4 +1,4 @@
-import { postOverride, postQuestion } from '../api/commands';
+import { postOverride, postPause, postQuestion } from '../api/commands';
 import type { GraphDto } from '../api/types';
 import type { ConnState, GraphSource } from './source';
 
@@ -82,5 +82,9 @@ export class LiveSource implements GraphSource {
 
   override(id: string, mode: Parameters<typeof postOverride>[1]): Promise<void> {
     return postOverride(id, mode);
+  }
+
+  pause(root: string, paused: boolean): Promise<void> {
+    return postPause(root, paused);
   }
 }

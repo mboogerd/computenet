@@ -489,6 +489,29 @@ button {
   cursor: help;
 }
 
+/* CTL-05: a paused question — a plain word, the control beside the cost */
+.hero__paused {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.pause {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.pause:hover,
+.pause.is-on {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
 /* ---------- cost (SPEC §12) ---------- */
 
 .cost {

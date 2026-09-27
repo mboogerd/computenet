@@ -42,6 +42,23 @@ describe('MockSource', () => {
     source.stop();
   });
 
+  it('holds a paused question still and resumes it (CTL-05)', async () => {
+    const source = new MockSource(10, true);
+    source.start(() => undefined, () => undefined);
+    const root = await source.ask('Pause?');
+    await source.pause(root, true);
+    expect(source.snapshot().questions.find((q) => q.root === root)?.paused).toBe(true);
+    const size = source.snapshot().nodes.length;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(source.snapshot().nodes.length).toBe(size);
+    await source.pause(root, false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(source.snapshot().nodes.length).toBeGreaterThan(size);
+    expect(source.snapshot().questions.find((q) => q.root === root)?.paused).toBe(false);
+    await expect(source.pause('missing', true)).rejects.toThrow('unknown question missing');
+    source.stop();
+  });
+
   it('mirrors STOP/AUTO status transitions and rejects unknown claims', async () => {
     const source = new MockSource(10, true);
     source.start(() => undefined, () => undefined);

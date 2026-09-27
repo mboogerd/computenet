@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { postOverride, postQuestion } from '../src/api/commands';
+import { postOverride, postPause, postQuestion } from '../src/api/commands';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,6 +26,20 @@ describe('HTTP command contract', () => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'id=claim%3A2&mode=EXPAND',
     });
+  });
+
+  it('posts the exact pause fields (CTL-05)', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await postPause('q:1', true);
+    expect(fetch).toHaveBeenCalledWith('/question/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'root=q%3A1&paused=true',
+    });
+    await postPause('q:1', false);
+    expect(fetch).toHaveBeenLastCalledWith('/question/pause', expect.objectContaining({ body: 'root=q%3A1&paused=false' }));
   });
 
   it('rejects failed commands with the response status and body', async () => {
