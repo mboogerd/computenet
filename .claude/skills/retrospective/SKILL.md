@@ -81,7 +81,8 @@ with the new instances instead.
 - **NO-CONSENSUS:** file one item with the `human` label that carries the
   votes and the options, parked per /work's `references/recovery.md`
   "Parks". That item is how the question reaches the user.
-- Close every retro record you read with `consumed: <summary bead id>`,
+- Once §6 has filed the summary bead, close every retro record you read with
+  `consumed: <summary bead id>`,
   including those that fed no pattern. An open record is one no
   retrospective has read yet.
 
