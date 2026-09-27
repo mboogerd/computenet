@@ -426,7 +426,7 @@ the E3.4↔E2.3 seam.
 
 ---
 
-## Milestone E4 — Lateness / waterline eviction ⚠ IN PROGRESS (E4.1-E4.6 landed; concord corpus coverage open, `computenet-t4od7`)
+## Milestone E4 — Lateness / waterline eviction ✅ LANDED (E4.1-E4.6; concord corpus coverage `computenet-t4od7`, with `[24-WL-04/15/17/18]` filed in `concord/corpus/DISPUTES.md`)
 
 Gap 6, event-time state: windowing shipped as key derivation with the honest caveat
 "windows never evict" — window-keyed `TagState` and `GroupByCell` state grow forever.

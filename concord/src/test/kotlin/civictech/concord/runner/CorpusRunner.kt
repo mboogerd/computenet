@@ -740,7 +740,13 @@ class CorpusRunner {
         }
     }
 
-    private fun params(cell: CellSpec): Map<String, Value> = buildMap {
+    /**
+     * Lower a cell's typed descriptor params to the map `KernelCatalog.build`
+     * reads. `internal` (not private) so `ScenarioParseTest` can pin that a typed
+     * param actually reaches the driver — a field parsed here but not lowered is
+     * as silently dropped as one the lenient parser ignores.
+     */
+    internal fun params(cell: CellSpec): Map<String, Value> = buildMap {
         cell.of?.let { put("of", Value.StrVal(it)) }
         cell.fn?.let { put("fn", Value.StrVal(it)) }
         cell.agg?.let { put("agg", Value.StrVal(it)) }
@@ -751,6 +757,7 @@ class CorpusRunner {
         cell.interest?.let { put("interest", interestValue(it)) }
         cell.window?.let { put("window", windowValue(it)) }
         cell.views?.let { put("views", Value.MapVal(it.mapValues { (_, id) -> Value.StrVal(id) })) }
+        cell.lateness?.let { put("lateness", Value.IntVal(it)) }
     }
 
     /** Lower a scenario's `window:` descriptor to the neutral [Value] model (24-OP-WINDOW-01/02). */

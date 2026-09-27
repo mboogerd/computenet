@@ -6,7 +6,12 @@ import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.Expect
 import civictech.concord.schema.LinkSpec
+import civictech.concord.schema.QuiesceStep
+import civictech.concord.schema.ReadStateStep
+import civictech.concord.schema.RestartStep
 import civictech.concord.schema.Scenario
+import civictech.concord.schema.SnapshotStep
+import civictech.concord.schema.Step
 import civictech.concord.schema.WindowKind
 import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
@@ -63,9 +68,9 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  *   falls in, `slide` apart — then group-by's own `agg` fold runs over the
  *   value components, exactly mirroring the kernel binding
  *   (`Windows.tumbling`/`sliding` + `GroupByCell`, `KernelCatalog`/
- *   `WindowSlidingCell`). Windows never close: the fold is over the whole
- *   accepted-op multiset, so a late add is just another member — there is no
- *   separate eviction step to model. `partition` is a sharded group-by
+ *   `WindowSlidingCell`). Without `lateness`, windows never close
+ *   (`[24-WL-11]`): the fold is over the whole accepted-op multiset, so a late
+ *   add is just another member. `partition` is a sharded group-by
  *   (PartitionedCell) whose union of shard aggregates equals the
  *   unpartitioned group-by twin, so it folds identically to `group-by`.
  * - **`join` family element shape.** With no pilot pinning the joined element, the
@@ -74,6 +79,18 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  *   `semi-join` keeps left elements whose key is present on the right.
  * - **`map-source` op payload.** `put` accepts either a `[key, value]` pair or a
  *   `{key:, value:}` object; `remove` takes the bare key.
+ * - **Lateness** (spec 24 §Lateness and waterlines, t4od7-D7) is the one
+ *   exception to order-independence: a `waterline` cell and a cell declaring
+ *   `lateness` are folded in script order by [Lateness]. The floor is `[24-WL-02]`'s
+ *   running max of min-over-sources (max event time − lateness); an add is late
+ *   iff its event time is strictly below the floor as of the **last `quiesce`
+ *   preceding it**; an add between that floor and the highest floor that can
+ *   have reached the cell first (on one host, the floor the adds applied before
+ *   it in its quiesce block raise) is refused ([OracleUnsupported], "insert a
+ *   `quiesce`") unless both outcomes fold alike. `[24-WL-10]`'s batch side then follows: a window
+ *   folds its late-filtered input and drops every window whose end the final
+ *   floor has passed; the join family drops every row strictly below the final
+ *   floor. See [Lateness] for the whole model and what it refuses.
  * - **Durable set bindings** (`journal-set-source`, `journal-set-view`) fold
  *   exactly as their volatile twins — see [DURABLE_SET_SOURCE]/[DURABLE_SET_VIEW]
  *   for the adjudication and its one recorded residual.
@@ -133,10 +150,32 @@ class BatchOracle(private val scenario: Scenario) {
         memo[id]?.let { return it }
         if (!visiting.add(id)) throw OracleUnsupported("feedback cycle at cell '$id' — not a batch-oracle topology")
         val cell = cellsById[id] ?: throw OracleUnsupported("unknown cell '$id'")
-        val result = if (inputsByCell[id].isNullOrEmpty()) sourceFold(cell) else operatorFold(cell)
+        // Lateness (spec 24 §Lateness and waterlines) is folded by the script-order
+        // model in [Lateness] below, not by the multiset folds (t4od7-D7).
+        val result = when {
+            cell.type == WATERLINE -> Fold.ScalarF(Value.IntVal(latenessModel.floorTimeline(cell).lastOrNull() ?: 0L))
+            cell.lateness != null -> latenessModel.gate(cell).mainFold()
+            inputsByCell[id].isNullOrEmpty() -> sourceFold(cell)
+            else -> operatorFold(cell)
+        }
         visiting.remove(id)
         memo[id] = result
         return result
+    }
+
+    /**
+     * The fold a [link] carries: its source cell's ordinary fold, except a link
+     * from a lateness-declaring cell's late outlet (`late`, `lateLeft`,
+     * `lateRight`), which carries the adds that cell late-dropped ([24-WL-07]).
+     */
+    private fun foldOfLink(link: LinkSpec): Fold {
+        val outlet = link.outlet
+        val from = cellsById[link.from]
+        return if (outlet != null && outlet in LATE_OUTLETS && from?.lateness != null) {
+            latenessModel.gate(from).lateFold(outlet)
+        } else {
+            foldOf(link.from)
+        }
     }
 
     private fun sourceFold(cell: CellSpec): Fold {
@@ -269,15 +308,15 @@ class BatchOracle(private val scenario: Scenario) {
 
     private fun operatorFold(cell: CellSpec): Fold {
         val ins = inputsByCell[cell.id].orEmpty()
-        fun single(): Fold = foldOf(ins.singleOrNull()?.from ?: error("${cell.id}: expected one inlet, got ${ins.size}"))
+        fun single(): Fold = foldOfLink(ins.singleOrNull() ?: error("${cell.id}: expected one inlet, got ${ins.size}"))
         return when (cell.type) {
             "filter" -> Fold.SetF(asSet(single()).filterTo(LinkedHashSet(), Functions.predicate(fn(cell))))
             "map" -> mapFold(single(), fn(cell))
             "flatmap" -> flatMapFold(asSet(single()), fn(cell))
             "union" -> Fold.SetF(LinkedHashSet(asSet(inlet(ins, "left", 0)) + asSet(inlet(ins, "right", 1))))
-            "intersect" -> Fold.SetF(asSet(inlet(ins, "left", 0)).filterTo(LinkedHashSet()) { it in asSet(inlet(ins, "right", 1)) })
-            "join" -> joinFold(cell, ins)
-            "semi-join" -> semiJoinFold(cell, ins)
+            "intersect" -> intersectOf(asSet(inlet(ins, "left", 0)), asSet(inlet(ins, "right", 1)))
+            "join" -> joinOf(asSet(inlet(ins, "left", 0)), asSet(inlet(ins, "right", 1)))
+            "semi-join" -> semiJoinOf(asSet(inlet(ins, "left", 0)), asSet(inlet(ins, "right", 1)))
             "lookup-join" -> lookupJoinFold(cell, ins)
             "group-by" -> groupByFold(cell, single())
             // partition is a sharded group-by (kernel PartitionedCell); its union of
@@ -287,7 +326,7 @@ class BatchOracle(private val scenario: Scenario) {
             "combine-latest" -> Fold.ScalarF(Functions.aggregate(fn(cell), ins.map { asScalar(foldOf(it.from)) }))
             "count" -> Fold.ScalarF(Value.IntVal(asSet(single()).size.toLong()))
             "presence-count" -> presenceCountFold(ins)
-            "window" -> windowFold(cell, single())
+            "window" -> windowFold(cell, asSet(single()))
             // Views are pass-throughs of their upstream fold; renderView converts to Value.
             in VIEW_TYPES -> single()
             else -> throw OracleUnsupported("operator type '${cell.type}' has no oracle fold")
@@ -316,9 +355,10 @@ class BatchOracle(private val scenario: Scenario) {
         return Fold.SetF(out)
     }
 
-    private fun joinFold(cell: CellSpec, ins: List<LinkSpec>): Fold {
-        val left = asSet(inlet(ins, "left", 0))
-        val right = asSet(inlet(ins, "right", 1))
+    private fun intersectOf(left: Set<Value>, right: Set<Value>): Fold =
+        Fold.SetF(left.filterTo(LinkedHashSet()) { it in right })
+
+    private fun joinOf(left: Set<Value>, right: Set<Value>): Fold {
         val out = LinkedHashSet<Value>()
         for (l in left) for (r in right) {
             if (Values.compare(Functions.keyOf(l), Functions.keyOf(r)) == 0) {
@@ -328,9 +368,8 @@ class BatchOracle(private val scenario: Scenario) {
         return Fold.SetF(out)
     }
 
-    private fun semiJoinFold(cell: CellSpec, ins: List<LinkSpec>): Fold {
-        val left = asSet(inlet(ins, "left", 0))
-        val rightKeys = asSet(inlet(ins, "right", 1)).map { Functions.keyOf(it) }.toSet()
+    private fun semiJoinOf(left: Set<Value>, right: Set<Value>): Fold {
+        val rightKeys = right.map { Functions.keyOf(it) }.toSet()
         return Fold.SetF(left.filterTo(LinkedHashSet()) { Functions.keyOf(it) in rightKeys })
     }
 
@@ -363,15 +402,17 @@ class BatchOracle(private val scenario: Scenario) {
      * `agg` fold runs over the value components — the same shape
      * `groupByFold` uses, just keyed by window instead of `Functions.keyOf`.
      * Mirrors the kernel `Windows.tumbling`/`sliding` formulas exactly (see
-     * `kernel/.../data/Windows.kt`, proven by `WindowingTest`). Windows never
-     * close: this is a whole-multiset fold, so a late add is simply another
-     * member of its window(s) — there is no separate eviction step.
+     * `kernel/.../data/Windows.kt`, proven by `WindowingTest`). Without
+     * `lateness` windows never close: this is a whole-multiset fold, so a late
+     * add is simply another member of its window(s). A window that declares
+     * `lateness` is folded here too, but over the late-filtered input
+     * [Lateness.Gate] hands it, which then drops every passed window.
      */
-    private fun windowFold(cell: CellSpec, input: Fold): Fold {
+    private fun windowFold(cell: CellSpec, members: Set<Value>): Fold.MapF {
         val spec = cell.window ?: error("${cell.id} (window): needs a `window:` descriptor")
         val aggId = cell.agg ?: "count"
         val groups = LinkedHashMap<Value, MutableList<Value>>()
-        for (el in asSet(input)) {
+        for (el in members) {
             val at = Values.asLong(Functions.keyOf(el))
                 ?: error("${cell.id}: window element's event-time key is not an integer: $el")
             windowsOf(spec, at).forEach { w -> groups.getOrPut(Value.IntVal(w)) { ArrayList() }.add(el) }
@@ -425,6 +466,365 @@ class BatchOracle(private val scenario: Scenario) {
         return Fold.MapF(counts.mapValues { (_, c) -> Value.IntVal(c.toLong()) })
     }
 
+    // --- lateness (spec 24 §Lateness and waterlines, t4od7-D7) ---------------
+
+    private val latenessModel = Lateness()
+
+    /**
+     * The oracle's lateness model: the one part of this oracle that is **not** a
+     * multiset fold, because a late drop and a window eviction depend on which
+     * adds a waterline floor has passed, and so on script order (t4od7-D7).
+     *
+     * - **Floor** ([floorTimeline]): a `waterline` cell's floor after every script
+     *   step, per `[24-WL-02]`. Each upstream source cell is one `sourceId`
+     *   (`[22-SRC-01]`), reached directly or through `map fn: identity` relays
+     *   (transparent flow — any other cell on the way is refused). Only an
+     *   *emitted* add contributes its head `at` to that source's maximum (a
+     *   `set-source` emits an add only for an element it does not hold; a
+     *   remove never contributes). Candidate = min over contributing sources of
+     *   (max − lateness); floor = running max of the candidate, absent (the
+     *   identity) until a source contributes; a source joining below the floor
+     *   leaves it unchanged (`[24-WL-20]`). A `disconnect` of an edge into the
+     *   waterline retires every source that edge carried unless another still-open
+     *   edge carried it too (`[24-WL-12]`'s diamond); a `restart` of a
+     *   `rebaseline-source` retires its epoch at the restart step (`[24-WL-13]`:
+     *   retired when the notice supersedes it), and its later adds contribute
+     *   from scratch. A `value-view` of a waterline reads 0 before any floor,
+     *   the driver's `scalarView` convention.
+     * - **Floor at an evicting cell**: the maximum over the waterline cells linked
+     *   into its `waterline` inlet (`WaterlineDelta` merges by maximum, so several
+     *   waterlines are a max). The operator's own `lateness` number is never read:
+     *   the kernel reads only its `timeFn`, and the threshold comes entirely from
+     *   the waterline cells (t4od7.1's review).
+     * - **Late filter and the quiesce rule** ([Gate]): an add reaching a
+     *   lateness-declaring inlet is late iff its event time is strictly below
+     *   the floor **as of the last `quiesce` preceding it** (`[24-WL-07]`; that
+     *   floor has certainly been delivered by then). An add at or above the
+     *   highest floor that can have reached the cell before it is certainly
+     *   admitted: on one host (FIFO scheduling, [singleHost]) that is the floor
+     *   the adds applied **before** it in its quiesce block raise — a later add's
+     *   floor is queued behind this add's delivery, and so is its own; on several
+     *   hosts it is the floor at the end of its quiesce block (t4od7-D7's literal
+     *   rule). An add between the two depends on delivery order the corpus does
+     *   not control, and is
+     *   refused with [OracleUnsupported] naming the step — *unless* both outcomes
+     *   fold the same: a window whose end the final floor has passed, or any
+     *   join-family row (its time is below that block's floor, so below the final
+     *   floor, so evicted either way). A late outlet's fold is refused on any such
+     *   add, since there the two outcomes always differ. Dels are never
+     *   time-filtered (`[24-WL-08]`): a remove deletes the element from its link's
+     *   live set when it is there and is a no-op otherwise.
+     * - **Eviction restriction** (`[24-WL-10]`): a tumbling `window` folds the
+     *   late-filtered input and then drops every window `k` with
+     *   `k + size <= finalFloor` (`keyTime` is the exclusive end, `[24-WL-06]`);
+     *   a `join`/`semi-join`/`intersect` removes every row with event time
+     *   strictly below the final floor from both sides, then folds as usual.
+     * - **Event time**, the catalog conventions (`concord/schema/scenario.md`
+     *   §lateness; the driver's `EventTimeOfPair`/`EventTimeOfRow`): `window`,
+     *   `intersect` and `waterline` elements are `[at, value]` → `at`; `join`/
+     *   `semi-join` rows are `[k, at]` → `at` or `[k, [at, payload]]` → `at`.
+     *   This is an independent copy — the two agreeing is part of what
+     *   `incremental-equals-batch` checks.
+     *
+     * Out of the model, refused rather than guessed: `sliding` + lateness (the
+     * catalog refuses it too), a data input that is not a set source (a
+     * `rebaseline-source`'s re-asserted state included), a `connect`/`disconnect`
+     * into the evicting cell or into a relay, and any step verb other than
+     * apply, quiesce, connect, disconnect, restart (of a `rebaseline-source`),
+     * snapshot and read-state.
+     */
+    private inner class Lateness {
+        private val steps = scenario.script
+
+        /**
+         * One host, so one FIFO scheduler: every delivery an add causes is queued
+         * behind the deliveries of every add applied before it (`SimulationController`
+         * randomises only *across* hosts — "per-host FIFO holds under every seed").
+         */
+        private val singleHost = graph.hosts.isNullOrEmpty() && graph.cells.none { it.host != null }
+        private val timelines = HashMap<String, List<Long?>>()
+        private val gates = HashMap<String, Gate>()
+        private val emissions = HashMap<String, List<Emission>>()
+
+        /** What a source emitted downstream at one script step. */
+        private inner class Emission(val adds: List<Value>, val removes: List<Value>)
+
+        private val none = Emission(emptyList(), emptyList())
+
+        /** Source [id]'s emission at every script step (index-aligned with the script). */
+        private fun emissionsOf(id: String): List<Emission> = emissions.getOrPut(id) {
+            val cell = cellsById[id] ?: throw OracleUnsupported("unknown cell '$id'")
+            when (cell.type) {
+                "set-source", DURABLE_SET_SOURCE -> {
+                    val members = HashSet<Value>()
+                    steps.map { step ->
+                        if (step !is ApplyStep || step.on != id) return@map none
+                        val adds = ArrayList<Value>()
+                        val removes = ArrayList<Value>()
+                        repeat(step.times ?: 1) {
+                            val v = step.value ?: error("$id: ${step.op} needs a value")
+                            when (step.op) {
+                                "add" -> if (members.add(v)) adds += v
+                                "remove" -> if (members.remove(v)) removes += v
+                                else -> error("$id (${cell.type}): unsupported op '${step.op}'")
+                            }
+                        }
+                        Emission(adds, removes)
+                    }
+                }
+                // Add-only; every add mints a fresh tag, so every add emits.
+                "rebaseline-source" -> steps.map { step ->
+                    if (step !is ApplyStep || step.on != id) return@map none
+                    if (step.op != "add") error("$id (rebaseline-source): unsupported op '${step.op}'")
+                    Emission(List(step.times ?: 1) { step.value ?: error("$id: add needs a value") }, emptyList())
+                }
+                else -> throw OracleUnsupported(
+                    "'$id' (${cell.type}) feeds a waterline or a lateness-declaring cell; the lateness model " +
+                        "folds set-source / $DURABLE_SET_SOURCE there (and rebaseline-source into a waterline) only",
+                )
+            }
+        }
+
+        private fun topologyStepsInto(id: String): List<Step> = steps.filter {
+            (it is ConnectStep && it.to == id && it.expect != Expect.REJECTED) ||
+                (it is DisconnectStep && it.to == id && it.expect != Expect.REJECTED)
+        }
+
+        /** The source cell whose adds arrive over a link from [id], resolving identity relays. */
+        private fun originOf(id: String, consumer: String): String {
+            val cell = cellsById[id] ?: throw OracleUnsupported("unknown cell '$id'")
+            val ins = inputsByCell[id].orEmpty()
+            if (ins.isEmpty()) {
+                emissionsOf(id) // refuses a source type the model cannot fold
+                return id
+            }
+            val relay = cell.type == "map" && (cell.fn == null || cell.fn == "identity") && ins.size == 1
+            if (relay && topologyStepsInto(id).isEmpty()) return originOf(ins.single().from, consumer)
+            throw OracleUnsupported(
+                "'$consumer' is fed by '$id' (${cell.type}); the lateness model follows only sources and " +
+                    "`map fn: identity` relays with a fixed topology (a relay is transparent flow, [22-SRC-01])",
+            )
+        }
+
+        private fun requireModelledSteps(consumer: String) {
+            steps.forEachIndexed { i, step ->
+                val ok = when (step) {
+                    is ApplyStep, is QuiesceStep, is ConnectStep, is DisconnectStep, is SnapshotStep, is ReadStateStep -> true
+                    is RestartStep -> cellsById[step.on]?.type == "rebaseline-source"
+                    else -> false
+                }
+                if (!ok) {
+                    throw OracleUnsupported(
+                        "script step ${i + 1} (${step::class.simpleName}) is outside the oracle's lateness model " +
+                            "(the cone of '$consumer' reaches lateness)",
+                    )
+                }
+            }
+        }
+
+        /** Waterline [wl]'s floor after each script step (`null` = no source has contributed yet). */
+        fun floorTimeline(wl: CellSpec): List<Long?> = timelines.getOrPut(wl.id) {
+            requireModelledSteps(wl.id)
+            val lateness = wl.lateness ?: throw OracleUnsupported("waterline '${wl.id}' declares no lateness")
+            val open = graph.links.filter { it.to == wl.id }.mapTo(LinkedHashSet()) { it.from }
+            val maxima = LinkedHashMap<String, Long>()
+            val carried = HashMap<String, MutableSet<String>>() // edge (by from) -> sources it has carried
+            var floor: Long? = null
+            fun raise() {
+                val candidate = (maxima.values.minOrNull() ?: return) - lateness
+                val current = floor
+                if (current == null || candidate > current) floor = candidate
+            }
+            fun retire(sources: Collection<String>) {
+                sources.forEach { s -> maxima.remove(s); carried.values.forEach { it -= s } }
+                raise()
+            }
+            steps.mapIndexed { i, step ->
+                when (step) {
+                    is ApplyStep -> {
+                        for (from in open) {
+                            val src = originOf(from, wl.id)
+                            if (src != step.on) continue
+                            val adds = emissionsOf(src)[i].adds
+                            if (adds.isEmpty()) continue
+                            for (e in adds) {
+                                val t = headTime(e, "waterline '${wl.id}'")
+                                maxima[src] = maxOf(maxima[src] ?: t, t)
+                            }
+                            carried.getOrPut(from) { mutableSetOf() } += src
+                        }
+                        raise()
+                    }
+                    is ConnectStep -> if (step.to == wl.id && step.expect != Expect.REJECTED) open += step.from
+                    is DisconnectStep -> if (step.to == wl.id && step.expect != Expect.REJECTED) {
+                        open -= step.from
+                        val gone = carried.remove(step.from).orEmpty()
+                        retire(gone.filter { s -> carried.values.none { s in it } })
+                    }
+                    is RestartStep -> if (open.any { originOf(it, wl.id) == step.on }) retire(listOf(step.on))
+                    else -> {}
+                }
+                floor
+            }
+        }
+
+        fun gate(cell: CellSpec): Gate = gates.getOrPut(cell.id) { Gate(cell) }
+
+        /** One add whose lateness the script's quiesces do not settle. */
+        private inner class Ambiguous(val step: Int, val on: String, val element: Value, val time: Long, val lo: Long?, val hi: Long?) {
+            fun refuse(cellId: String): Nothing = throw OracleUnsupported(
+                "script step ${step + 1} (apply on '$on', add ${Values.render(element)}) has event time $time, at or " +
+                    "above the floor as of the preceding quiesce (${lo ?: "none"}) but below the floor " +
+                    "${if (singleHost) "the adds applied before it in its quiesce block raise" else "at the end of its quiesce block"} " +
+                    "($hi): whether '$cellId' late-drops it depends on delivery order the corpus does not control — " +
+                    "insert a `quiesce` before this add",
+            )
+        }
+
+        /**
+         * A lateness-declaring cell's late filter, replayed over the script: per
+         * data link, the live elements (certainly admitted, or [Ambiguous]); per
+         * inlet side, the late-dropped adds.
+         */
+        inner class Gate(private val cell: CellSpec) {
+            private val window: WindowSpec?
+            private val rowTimed: Boolean
+            private val finalFloor: Long?
+            private val live = LinkedHashMap<String, MutableList<LinkedHashMap<Value, Ambiguous?>>>()
+            private val late = LinkedHashMap<String, LinkedHashMap<Value, Ambiguous?>>()
+
+            init {
+                requireModelledSteps(cell.id)
+                when (cell.type) {
+                    "window" -> {
+                        window = cell.window ?: error("${cell.id} (window): needs a `window:` descriptor")
+                        if (window.kind != WindowKind.TUMBLING) {
+                            throw OracleUnsupported("'${cell.id}': a sliding window with lateness is unbound (t4od7-D4)")
+                        }
+                        rowTimed = false
+                    }
+                    "join", "semi-join" -> { window = null; rowTimed = true }
+                    "intersect" -> { window = null; rowTimed = false }
+                    else -> throw OracleUnsupported(
+                        "'${cell.id}' (${cell.type}) declares lateness; the oracle models it on window (tumbling), " +
+                            "join, semi-join and intersect only",
+                    )
+                }
+                if (topologyStepsInto(cell.id).isNotEmpty()) {
+                    throw OracleUnsupported("a connect/disconnect into lateness-declaring '${cell.id}' is outside the lateness model")
+                }
+                val ins = inputsByCell[cell.id].orEmpty()
+                val waterlines = ins.filter { it.inlet == WATERLINE_INLET }.map { link ->
+                    cellsById[link.from]?.takeIf { it.type == WATERLINE }
+                        ?: throw OracleUnsupported("'${cell.id}''s waterline inlet is fed by '${link.from}', not a waterline cell")
+                }.map { floorTimeline(it) }
+                val floorAfter: List<Long?> = steps.indices.map { i -> waterlines.mapNotNull { it[i] }.maxOrNull() }
+                finalFloor = floorAfter.lastOrNull()
+                val quiesces = steps.indices.filter { steps[it] is QuiesceStep }
+
+                val data = ins.filter { it.inlet != WATERLINE_INLET }
+                val sides = data.mapIndexed { idx, link ->
+                    when {
+                        window != null -> IN
+                        link.inlet == LEFT || link.inlet == RIGHT -> link.inlet
+                        link.inlet == null && idx < 2 -> if (idx == 0) LEFT else RIGHT
+                        else -> throw OracleUnsupported("'${cell.id}': data link from '${link.from}' names no left/right inlet")
+                    }
+                }
+                val origins = data.map { link ->
+                    originOf(link.from, cell.id).also { o ->
+                        if (cellsById.getValue(o).type == "rebaseline-source") {
+                            throw OracleUnsupported(
+                                "'${cell.id}' is fed data by rebaseline-source '$o'; its re-asserted state is not modelled",
+                            )
+                        }
+                    }
+                }
+                val perLink = data.map { LinkedHashMap<Value, Ambiguous?>() }
+                sides.forEachIndexed { k, side -> live.getOrPut(side) { mutableListOf() } += perLink[k] }
+
+                for ((i, step) in steps.withIndex()) {
+                    if (step !is ApplyStep) continue
+                    val lo = quiesces.lastOrNull { it < i }?.let { floorAfter[it] }
+                    val hi = if (singleHost) {
+                        if (i == 0) null else floorAfter[i - 1]
+                    } else {
+                        floorAfter[(quiesces.firstOrNull { it > i } ?: steps.size) - 1]
+                    }
+                    data.indices.filter { origins[it] == step.on }.forEach { k ->
+                        val emission = emissionsOf(step.on)[i]
+                        emission.removes.forEach { perLink[k].remove(it) } // [24-WL-08]: liveness, not time
+                        for (e in emission.adds) {
+                            val t = timeOf(e)
+                            val lateSide = late.getOrPut(sides[k]) { LinkedHashMap() }
+                            when {
+                                lo != null && t < lo -> lateSide[e] = null
+                                hi == null || t >= hi -> perLink[k][e] = null
+                                else -> Ambiguous(i, step.on, e, t, lo, hi).let {
+                                    perLink[k][e] = it
+                                    if (e !in lateSide) lateSide[e] = it
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            private fun timeOf(e: Value): Long =
+                if (rowTimed) rowTime(e, "'${cell.id}'") else headTime(e, "'${cell.id}'")
+
+            /** A side's live elements after the final eviction; an ambiguous add that survives it is refused. */
+            private fun survivors(side: String): Set<Value> {
+                val out = LinkedHashSet<Value>()
+                val links = live[side].orEmpty()
+                for (link in links) for ((e, ambiguous) in link) {
+                    if (e in out || evicted(e)) continue
+                    if (ambiguous != null && links.none { it.containsKey(e) && it[e] == null }) ambiguous.refuse(cell.id)
+                    out += e
+                }
+                return out
+            }
+
+            /** `[24-WL-10]`'s restriction: a row strictly below the final floor, or an element of a passed window. */
+            private fun evicted(e: Value): Boolean {
+                val floor = finalFloor ?: return false
+                val t = timeOf(e)
+                return if (window != null) Math.floorDiv(t, window.size) * window.size + window.size <= floor else t < floor
+            }
+
+            fun mainFold(): Fold = when (cell.type) {
+                "window" -> windowFold(cell, survivors(IN))
+                "join" -> joinOf(survivors(LEFT), survivors(RIGHT))
+                "semi-join" -> semiJoinOf(survivors(LEFT), survivors(RIGHT))
+                else -> intersectOf(survivors(LEFT), survivors(RIGHT))
+            }
+
+            fun lateFold(outlet: String): Fold {
+                val side = when (outlet) {
+                    "late" -> IN
+                    "lateLeft" -> LEFT
+                    else -> RIGHT
+                }
+                if ((side == IN) != (window != null)) {
+                    throw OracleUnsupported("'${cell.id}' (${cell.type}) has no '$outlet' outlet")
+                }
+                val entries = late[side].orEmpty()
+                entries.values.firstOrNull { it != null }?.refuse(cell.id)
+                return Fold.SetF(LinkedHashSet(entries.keys))
+            }
+        }
+
+        private fun headTime(e: Value, where: String): Long = Values.asLong(Functions.keyOf(e))
+            ?: throw OracleUnsupported("$where: element ${Values.render(e)} has no integer event time at its head ([at, value])")
+
+        private fun rowTime(e: Value, where: String): Long {
+            val v = Functions.valueOf(e)
+            return Values.asLong(v)
+                ?: (if (v is Value.ListVal) Values.asLong(Functions.keyOf(v)) else null)
+                ?: throw OracleUnsupported("$where: row ${Values.render(e)} has no integer event time ([k, at] or [k, [at, payload]])")
+        }
+    }
+
     // --- rendering ----------------------------------------------------------
 
     private fun renderView(type: String, fold: Fold): Value = when (if (type == DURABLE_SET_VIEW) "set-view" else type) {
@@ -460,7 +860,7 @@ class BatchOracle(private val scenario: Scenario) {
     private fun inlet(ins: List<LinkSpec>, name: String, index: Int): Fold {
         val link = ins.firstOrNull { it.inlet == name } ?: ins.getOrNull(index)
         ?: error("missing inlet '$name'/[$index] among ${ins.map { it.inlet }}")
-        return foldOf(link.from)
+        return foldOfLink(link)
     }
 
     private fun keyValue(v: Value): Pair<Value, Value> = when {
@@ -594,6 +994,20 @@ class BatchOracle(private val scenario: Scenario) {
         const val TAGGED_MAP_VIEW = "tagged-map-view"
 
         val VIEW_TYPES: Set<String> = Values.VIEW_TYPES + DURABLE_SET_VIEW + TAGGED_MAP_VIEW
+
+        /** The catalog id of the cell that computes a waterline floor (`[24-WL-03]`). */
+        const val WATERLINE = "waterline"
+
+        /** The inlet a lateness-declaring cell reads its floor on. */
+        const val WATERLINE_INLET = "waterline"
+
+        /** Lateness-model inlet sides: a window's one data inlet, a join family's two. */
+        const val IN = "in"
+        const val LEFT = "left"
+        const val RIGHT = "right"
+
+        /** A lateness-declaring cell's late outlets (`[24-WL-07]`): window `late`, join family `lateLeft`/`lateRight`. */
+        val LATE_OUTLETS = setOf("late", "lateLeft", "lateRight")
     }
 
     /** The oracle's intermediate stream state — a pure fold, one per cell. */

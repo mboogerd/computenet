@@ -52,16 +52,17 @@ quantifies over".
 | `map` | `fn` (transform) | Applies a pure transform to each element of the stream. |
 | `flatmap` | `fn` (transform→set) | Expands each element to zero-or-more elements, folded into a set. |
 | `union` | — | Set union of its inlets' streams (inlets `left`/`right`). |
-| `intersect` | — | Set intersection of its inlets' streams. |
-| `join` | `fn` (`key-of`) | Inner-joins two keyed streams on a shared key. |
-| `semi-join` | `fn` (`key-of`) | Emits left elements whose key is present on the right. |
+| `intersect` | `lateness?` | Set intersection of its inlets' streams. With `lateness`, see note 3. |
+| `join` | `fn` (`key-of`), `lateness?` | Inner-joins two keyed streams on a shared key. With `lateness`, see note 3. |
+| `semi-join` | `fn` (`key-of`), `lateness?` | Emits left elements whose key is present on the right. With `lateness`, see note 3. |
 | `lookup-join` | `fn` (`key-of`) | Enriches a stream with values looked up from a keyed side. |
 | `group-by` | `fn` (`key-of`), `agg` | Partitions elements by key and folds each group with an aggregator (`agg` = `count`\|`sum`\|`min`\|`max`, default `count`; non-count aggregators fold the elements' value components). Observed through a `count-view`/`map-view`. |
 | `combine-latest` | `fn`, `glitch-free?` | Combines the latest value of each inlet with a pure function. **Only `fn: sum` is bound**, in two forms: plain — independent inlets, order-independent at quiescence but not wave-aligned; `glitch-free: true` — a wave-coalescing fork-join combine emitting one delta per completed wave. See note 1. |
 | `count` | — | Distinct-element count of a set stream; emits a counter delta. |
 | `presence-count` | — | Count of currently-present elements (presence, not distinct history). |
 | `quorum-set` | `k` | **Fan-in operator** over set streams (kernel `QuorumSetCell`): one link per source; an element is emitted once `k` of the `n` live source links assert it. `k` optional, default `n` (all sources ⇒ an intersection). k-of-n admission observable (24-OP-QUORUM-01). |
-| `window` | `window` (descriptor), `agg` | Windowing = key derivation (M11.6): assigns each `[at, value]` element to one (`tumbling`) or several (`sliding`) window-start keys derived from `at` alone (no wall clock), then folds each window with `agg` (as `group-by`). `window: {kind: tumbling\|sliding, size, slide?}` — `slide` required for `sliding`, ignored for `tumbling`. Windows never close: a late element is an ordinary add, retractions flow like any other view (`24-OP-WINDOW-01`/`-02`). |
+| `window` | `window` (descriptor), `agg`, `lateness?` | Windowing = key derivation (M11.6): assigns each `[at, value]` element to one (`tumbling`) or several (`sliding`) window-start keys derived from `at` alone (no wall clock), then folds each window with `agg` (as `group-by`). `window: {kind: tumbling\|sliding, size, slide?}` — `slide` required for `sliding`, ignored for `tumbling`. Windows never close **unless** the cell declares `lateness` — then windows whose end the waterline floor has passed are evicted through ordinary retractions (`24-WL-06`) and adds below the floor leave on the `late` outlet (`24-WL-07`); without it a late element is an ordinary add and retractions flow like any other view (`24-OP-WINDOW-01`/`-02`, `24-WL-11`). Ports: `inlet`, `outlet`, and with `lateness` a `waterline` inlet (fed by a `waterline` cell) and a `late` outlet. `lateness` is legal on `kind: tumbling` only; `kind: sliding` with `lateness` is refused. |
+| `waterline` | `lateness` (required) | The event-time **waterline** (spec 24 §Lateness and waterlines, `24-WL-02`/`24-WL-03`): an ordinary data cell whose floor is the running maximum of `min` over its sources of (max observed event time − `lateness`), monotone, reading each `[at, value]` element's `at`. Ports: `inlet` (fan-in, set streams — one link per source) and `outlet` (the floor, a `WaterlineDelta`). Linked by the scenario into an operator's `waterline` inlet (`{from: wl, to: w, inlet: waterline}`); the driver never spawns one. **Observed through a `value-view`**, which reads the floor, or `0` before any source has contributed. |
 | `partition` | `fn` (`key-of`), `agg` | A **sharded group-by** (kernel `PartitionedCell`): partitions elements by key across shards and folds each with `agg`; the union of shard aggregates equals the unpartitioned `group-by` twin. Observed through a `count-view`. |
 
 ## Views (terminal sinks the checks read)
@@ -71,7 +72,7 @@ quantifies over".
 | `set-view` | Folds a set-delta stream into live membership (`readView` → a set). |
 | `map-view` | Folds a map-delta stream into a queryable map. |
 | `count-view` | Folds a per-key count stream into queryable counts. |
-| `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value. |
+| `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value; over a `waterline` outlet, the max-merged floor (`0` before the first floor). |
 | `list-view` | Folds a positional list-delta stream (`list-source`) into an ordered list (W3-0). |
 | `tagged-map-view` | Folds a **tagged** map-delta stream (an `ormap-source` outlet) into the current `{key → exposed value}` map: a key is present while it holds at least one uncovered dot, and its exposed value is the one that dot order selects. Rendered like a `map-view`. |
 | `aligned-view` | The wave-aligned multi-view sink (`[22-OBS-01]`/`[22-OBS-02]`): several named member folds (`views: {name: set-view\|map-view\|count-view\|value-view, …}`), one per inlet named by the member, assembled into one composite only when every member has settled the wave; `readView` → `{name → member value}` (computenet-5ubdv). |
@@ -95,27 +96,35 @@ The cycle-closing edge names its ports explicitly: `{from: fb, to: fb, outlet: l
 
 ## Durability (`dur` profile, `24-DUR-*`)
 
-The four ids a `dur`-profile scenario is built from. All of them live on the
-reserved host id `dur` (`host: dur`, `scenario.md`). They were bound driver-side by
-W4-B and recorded in `concord/corpus/DISPUTES.md` §"How it is driven"; this section
-**catalogues** them rather than minting them — no id, op or descriptor field changes
-with it.
+The six ids a `dur`-profile scenario is built from. All of them live on the
+reserved host id `dur` (`host: dur`, `scenario.md`). The first four were bound
+driver-side by W4-B and recorded in `concord/corpus/DISPUTES.md` §"How it is driven";
+`journal-window` and `journal-count-view` were added by computenet-t4od7.8 (t4od7-D8,
+the durable evicting-window pipeline) — the journaled twins of the core `window` and
+`count-view`, with no new op or descriptor field.
 
 | id | ops | semantic |
 |---|---|---|
 | `journal-set-source` | `add`, `remove` | The durable `set-source`: an observed-remove set whose accepted ops tee to the write-ahead journal, so a crash replays them. Its outlet's wave identity is replay-stable (ref-derived `sourceId`; the epoch is journaled at checkpoint and rewound on recovery), which is what lets a downstream `effect-sink` recognise a replayed re-emission as already-acted (`24-DUR-04`/`24-DUR-05`). A member of the set-source family above — an unkeyed `effect-count` accepts it as a direct upstream. |
 | `journal-set-view` | — | The durable `set-view`: a journaled set fold recovered from its checkpoint plus the journal tail after it, so `readView` after a crash reads the pre-crash membership (`24-DUR-01`/`24-DUR-02`). Observed through the ordinary view checks. |
 | `effect-sink` | — | The **effect boundary**: a journaled sink that fires one external effect per delivered added element, **keyed by that element**, into the log `effect-count` reads. Guarded by the `Effectful` processed frontier, so an invocation at or behind the frontier — replayed or live-duplicated — is suppressed instead of re-fired (`24-DUR-05`). Required by the unkeyed `effect-count` derivation. One of two `retransmit` targets the kernel binding admits — the other is a `replica-of` replica's `Replicable.deltaInlet`, where the dot algebra decides the duplicate instead (`scenario.md`'s driver-capability note). It is also the kernel binding's only `drive-stamped` target (`computenet-8ohq`) — the admitted twin, where an external actor's lane position IS judged by that same frontier — and its only `drive-contextless` target (`computenet-em9i`), for the same reason: an effect boundary reads a delta's added elements and decides on the message context, so a delivery carrying none is judged by the `Effectful` admission rule (`24-DUR-06`) rather than by a tag the scenario never named. |
+| `journal-window` | — | The durable tumbling `window` (computenet-t4od7.8): the same cell the core `window` id binds with `kind: tumbling` — `window: {kind: tumbling, size}`, `agg`, `lateness?`, ports `inlet`/`outlet` and, with `lateness`, `waterline`/`late` — but journaled, so a checkpoint carries its per-window state **and its waterline floor**. A recovered window therefore neither re-creates a window evicted before the checkpoint nor re-admits an add below the restored floor (`22-REC-01`, `24-WL-05`, `24-WL-07`). `kind: sliding` is refused. Its elements travel through the write-ahead journal, whose codec encodes scalar elements but not list-valued ones, so a `dur` scenario feeds it bare event times (an integer is its own head) rather than `[at, value]` pairs. |
+| `journal-count-view` | — | The durable `count-view`: a journaled per-key count fold recovered from its checkpoint plus the journal tail, the count twin of `journal-set-view`. Observed through the ordinary view checks. |
 | `journal` | — | The **crash handle**: a controller pseudo-cell, not a real cell (no ports, no links, no ops). `despawn`-ing it crashes and recovers the whole durable host in one step — every live instance discarded, the graph rebuilt under the same refs, then recovered from the surviving journal. A `snapshot` of a journaled cell lowers to a host checkpoint (state + frontier compaction). |
 
-`set-source`, `set-view` and `quorum-set` may also be placed on `host: dur`. There
+`set-source`, `set-view`, `quorum-set` and `waterline` may also be placed on `host: dur`. There
 they are **volatile** members of the durable host — rebuilt fresh on a crash, never
-journaled or replayed. That is how per-cell durability is expressed
+journaled or replayed. A volatile `waterline` recomputes its floor from live traffic
+only: a journaled source's replayed re-emission reaches it as a baseline, which a
+waterline ignores, so across a crash it is the evicting cell's restored floor that
+keeps late-dropping (`24-WL-REC-01`). That is how per-cell durability is expressed
 (`24-DUR-01`/`24-DUR-03`), and the volatile fan-in is what a journaled arm replays
 *into* (`24-REPLAY-01`; with `glitch-free: true`, `DUR-GF-01`).
 
-These four bind in `KernelDriverDur` rather than `KernelCatalog`, so they are absent
-from the core/dist binding table below.
+These six bind in `KernelDriverDur` rather than `KernelCatalog`, so they are absent
+from the core/dist binding table below. A link among `dur` cells may name `inlet:`/`outlet:`
+exactly as on the core profile (`{from: wl, to: jw, inlet: waterline}`, `{from: jw, to: l,
+outlet: late}`); a port the cell does not register is refused.
 
 ---
 
@@ -134,7 +143,9 @@ scalar/list view folds and the `feedback` head live in the driver's
 `intersect`→`IntersectSetCell`, `count`→`CountCell`,
 `presence-count`→`PresenceCountCell`, `group-by`→`GroupByCell`,
 `partition`→`PartitionedCell`, `quorum-set`→`QuorumSetCell`,
-`set-view`/`map-view`/`count-view`→`View.set/map/count`.
+`set-view`/`map-view`/`count-view`→`View.set/map/count`,
+`waterline`→`WaterlineCell` (with `Windows.Lateness(EventTimeOfPair, L)`,
+computenet-t4od7).
 
 **Bound via a driver adapter** (kernel unmodified): `map fn:identity`→`IdentityCell`
 (pass-through, works for set *and* scalar arms); `map fn:<other>`/`flatmap`→
@@ -143,13 +154,16 @@ streams of pairs, with different `combine`); `semi-join`→`SemiJoinCell`;
 plain `combine-latest fn:sum`→`ScalarSumCombineCell` (the wave-aligned form,
 `combine-latest fn:sum, glitch-free:true`, binds **directly** to the kernel's
 `CoalescingCombineCell` — see note 1); `value-view`→a scalar `View` folding
-both `CounterDelta` and `PnCounterDelta`; `list-view`→a list `View`; `feedback`/
+`CounterDelta`, `PnCounterDelta` and `WaterlineDelta`; `list-view`→a list `View`; `feedback`/
 `feedback-undamped`→`FeedbackCell` (a `CycleHead`); `nature-gate`→
 `NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
 required nature onto its inlet — CP-F2/F3, W4-A followup); `exclusive-source`/
 `exclusive-sink`→`ExclusiveSourceCell`/`ExclusiveSinkCell` (an `Owned`-carrying
 `FanOutlet` contract, likewise hand-registered — M5.6, W4-A followup); `window
-kind:tumbling`→a bare `GroupByCell` whose `keyFn` composes `Windows.tumbling`;
+kind:tumbling`→a bare `GroupByCell` whose `keyFn` composes `Windows.tumbling`, and
+`window kind:tumbling lateness:L`→the same `GroupByCell` constructed with
+`lateness = Windows.Lateness(EventTimeOfPair, L)` and `keyTime(start) = start + size`
+(the window's exclusive end);
 `window kind:sliding`→`WindowSlidingCell` (a real `FlatMapSetCell` over
 `Windows.sliding` linked into a real `GroupByCell`, packaged as one `Cell` — the
 same two-cell composition kernel `WindowingTest` exercises directly);
@@ -211,6 +225,21 @@ set sources.
    `combine-latest`" — the one remaining glitch-free `kernel-gap`. The kernel
    capability landed (D-COMBINE), the driver binds it, and the positive assertion
    is authored; see `concord/corpus/DISPUTES.md`.*
+
+3. **`lateness` on the join family and `intersect`** (computenet-t4od7, spec 24
+   §Lateness and waterlines). One integer `lateness: L` declares the same
+   `Windows.Lateness(_, L)` on **both** data inlets — per-side lateness is not
+   expressible. The cell gains a `waterline` inlet (linked from a `waterline`
+   cell) and two late outlets that keep their kernel names, **`lateLeft`** and
+   **`lateRight`** (`window`'s is `late`): a row whose event time is strictly
+   below the floor is excluded from the fold and leaves verbatim on its side's
+   late outlet (`24-WL-07`), and a floor rise evicts every declaring side's rows
+   below it through ordinary retractions (`24-WL-06`/`24-WL-16`). Event time:
+   a `join`/`semi-join` row `[k, v]` reads `v` when it is an integer
+   (`[k, at]`) or the head of `v` when it is a list (`[k, [at, payload]]`); an
+   `intersect` element is `[at, value]` and reads `at`, as `window` does. Both
+   readers are named `Serializable` objects (`24-WL-01`). `lookup-join` takes no
+   `lateness`. Without `lateness` all four bind exactly as before (`24-WL-11`).
 
 `window` was resolved (R2-B, `24-OP-WINDOW-01`/`-02`): the dispute filed it as a
 `kernel-gap`, but spec 24 §Grouped aggregation names the exact composition —

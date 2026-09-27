@@ -24,6 +24,7 @@ import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.WaterlineCell
 import civictech.cell.data.Windows
 import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObserveCell
@@ -112,6 +113,11 @@ internal object KernelCatalog {
         // because one binding — the scalar `combine-latest` — has two honest
         // kernel forms and the param selects between them.
         val glitchFreeRequested = (params["glitch-free"] as? Value.BoolVal)?.value == true
+        // `lateness: L` (scenario.md §lateness, spec 24 §Lateness and waterlines,
+        // computenet-t4od7.1): legal only on the catalog ids whose kernel cell
+        // takes a `Windows.Lateness` — anywhere else it would be silently
+        // meaningless, so it is refused by name.
+        val lateness = lateness(type, params)
         val built = when (type) {
             // ---- sources ----------------------------------------------------
             "set-source" -> Built(SetCell<Any?>())
@@ -141,7 +147,14 @@ internal object KernelCatalog {
 
             // ---- operators --------------------------------------------------
             "union" -> Built(UnionSetCell<Any?>())
-            "intersect" -> Built(IntersectSetCell<Any?>())
+            "intersect" -> Built(
+                // `lateness` declares the same bound on both inlets (t4od7-D3); an
+                // intersect element is `[at, value]` like a window's (t4od7-D2).
+                lateness?.let { l ->
+                    val lat = Windows.Lateness<Any?>(EventTimeOfPair, l)
+                    IntersectSetCell<Any?>(leftLateness = lat, rightLateness = lat)
+                } ?: IntersectSetCell<Any?>(),
+            )
             "count" -> Built(CountCell<Any?>())
             "presence-count" -> Built(PresenceCountCell<Any?>())
             "filter" -> Built(FilterCell<Any?>(predicate = KernelFunctions.predicate(requireFn(type, fn))))
@@ -160,6 +173,10 @@ internal object KernelCatalog {
                 JoinSetCell<Any?, Any?, Any?, Any?>(
                     leftKey = { KernelFunctions.keyOf(it) },
                     rightKey = { KernelFunctions.keyOf(it) },
+                    // `lateness` declares both inlets (t4od7-D3); a row's event time is
+                    // its value (`[k, at]`) or the value's head (`[k, [at, payload]]`).
+                    leftLateness = rowLateness(lateness),
+                    rightLateness = rowLateness(lateness),
                     // inner equi-join → [key, leftValue, rightValue] (matches the oracle joinFold)
                     combine = { a, b -> listOf(KernelFunctions.keyOf(a), KernelFunctions.valueOf(a), KernelFunctions.valueOf(b)) },
                 ),
@@ -169,6 +186,8 @@ internal object KernelCatalog {
                     leftKey = { KernelFunctions.keyOf(it) },
                     rightKey = { KernelFunctions.keyOf(it) },
                     negated = false,
+                    leftLateness = rowLateness(lateness),
+                    rightLateness = rowLateness(lateness),
                 ),
             )
             "lookup-join" -> Built(
@@ -215,7 +234,22 @@ internal object KernelCatalog {
             // event-time → key-derivation functions the frozen `window:` descriptor
             // (CellSpec, W3-0-followup) feeds straight into the real `GroupByCell`
             // aggregation, exactly the composition kernel `WindowingTest` exercises.
-            "window" -> Built(window(params, KernelFunctions.aggregator(agg)))
+            "window" -> Built(window(params, KernelFunctions.aggregator(agg), lateness))
+            // `waterline` (spec 24 §Lateness and waterlines, `[24-WL-02]`/`[24-WL-03]`):
+            // the event-time floor as an ordinary data cell. The scenario wires it
+            // explicitly (t4od7-D1) — `{from: src, to: wl}`, then `{from: wl, to: op,
+            // inlet: waterline}` into an evicting operator — and observes the floor
+            // through a `value-view` (`scalarView` folds `WaterlineDelta`).
+            "waterline" -> Built(
+                WaterlineCell<Any?>(
+                    lateness = Windows.Lateness(
+                        EventTimeOfPair,
+                        lateness ?: throw UnsupportedCatalogBinding(
+                            "waterline requires a `lateness: <non-negative int>` param (spec 24 [24-WL-01])",
+                        ),
+                    ),
+                ),
+            )
 
             // ---- views ------------------------------------------------------
             "set-view" -> observeCell(View.set<Any?>(), ViewKind.SET, singleWriter)
@@ -276,6 +310,32 @@ internal object KernelCatalog {
         return if (glitchFreeRequested && !built.waveAligned) built.copy(glitchFree = true) else built
     }
 
+    /** The catalog ids whose kernel cell takes a `Windows.Lateness` (scenario.md §lateness). */
+    private val LATENESS_TYPES = setOf("window", "join", "semi-join", "intersect", "waterline")
+
+    /**
+     * The validated `lateness` param, or `null` when absent. Refuses it on a
+     * catalog id outside [LATENESS_TYPES], and refuses a non-integer or negative
+     * value (`Windows.Lateness` requires `lateness >= 0`).
+     */
+    private fun lateness(type: String, params: Map<String, Value>): Long? {
+        val raw = params["lateness"] ?: return null
+        if (type !in LATENESS_TYPES) {
+            throw UnsupportedCatalogBinding(
+                "catalog '$type' takes no `lateness` param — only ${LATENESS_TYPES.joinToString()} bind one " +
+                    "(spec 24 §Lateness and waterlines; scenario.md §lateness)",
+            )
+        }
+        val l = (raw as? Value.IntVal)?.value
+            ?: throw UnsupportedCatalogBinding("`lateness` on '$type' must be an integer; got $raw")
+        if (l < 0) throw UnsupportedCatalogBinding("`lateness` on '$type' must be non-negative; got $l")
+        return l
+    }
+
+    /** A join/semi-join inlet's lateness over `[k, at]` / `[k, [at, payload]]` rows (t4od7-D2), or `null`. */
+    private fun rowLateness(lateness: Long?): Windows.Lateness<Any?>? =
+        lateness?.let { Windows.Lateness(EventTimeOfRow, it) }
+
     private fun requireFn(type: String, fn: String?): String =
         fn ?: throw UnsupportedCatalogBinding("catalog '$type' requires an `fn` param")
 
@@ -293,20 +353,30 @@ internal object KernelCatalog {
      * element is a `[at, value]` pair — `at` the event-time/sequence
      * attribute (`KernelFunctions.keyOf`), `value` the payload
      * (`KernelFunctions.valueOf`) — matching the `[k, v]` convention `join`/
-     * `group-by` already use. Windows never close (`24-OP-WINDOW-02`): neither
-     * arm below evicts on a timer, so a late element is an ordinary add and a
-     * retraction flows exactly as any other view.
+     * `group-by` already use. Without [lateness] windows never close
+     * (`24-OP-WINDOW-02`, `[24-WL-11]`): neither arm evicts, so a late element
+     * is an ordinary add and a retraction flows exactly as any other view.
      * - **tumbling**: a 1:1 function of the event time, so it needs no
      *   fan-out stage — the window start folds straight into `GroupByCell`'s
-     *   `keyFn` (`24-OP-WINDOW-01`: "tumbling as a composite key").
+     *   `keyFn` (`24-OP-WINDOW-01`: "tumbling as a composite key"). With
+     *   [lateness] the same cell is built with `Windows.Lateness(EventTimeOfPair,
+     *   L)` and `keyTime(start) = start + size` (the window's exclusive end, as
+     *   `GroupByCell`'s KDoc requires), so a floor delivered on its `waterline`
+     *   inlet evicts passed windows (`[24-WL-06]`) and a below-floor add leaves
+     *   on its `late` outlet (`[24-WL-07]`).
      * - **sliding**: one element can belong to several windows, so it binds
      *   to `WindowSlidingCell` — the real kernel `FlatMapSetCell` (per-element
      *   window-start expansion over `Windows.sliding`) linked into a real
      *   `GroupByCell` (24-OP-WINDOW-01: "sliding as per-element expansion
      *   then group"), the same two-cell composition kernel `WindowingTest`
-     *   proves incremental-equals-batch on directly.
+     *   proves incremental-equals-batch on directly. It has no `waterline` inlet
+     *   and no `late` outlet, so sliding + [lateness] is refused (t4od7-D4).
      */
-    private fun <ACC : Serializable> window(params: Map<String, Value>, a: Aggregator<Any?, Long, ACC>): Cell {
+    private fun <ACC : Serializable> window(
+        params: Map<String, Value>,
+        a: Aggregator<Any?, Long, ACC>,
+        lateness: Long?,
+    ): Cell {
         val descriptor = (params["window"] as? Value.MapVal)?.entries
             ?: throw UnsupportedCatalogBinding("window requires a `window: {kind, size, slide?}` descriptor")
         val kind = (descriptor["kind"] as? Value.StrVal)?.value
@@ -316,9 +386,25 @@ internal object KernelCatalog {
         return when (kind) {
             "tumbling" -> {
                 val bucket = Windows.tumbling(size)
-                GroupByCell(keyFn = { e: Any? -> bucket(eventTime(e)) }, aggregator = a)
+                if (lateness == null) {
+                    GroupByCell(keyFn = { e: Any? -> bucket(eventTime(e)) }, aggregator = a)
+                } else {
+                    GroupByCell(
+                        keyFn = { e: Any? -> bucket(eventTime(e)) },
+                        aggregator = a,
+                        lateness = Windows.Lateness(EventTimeOfPair, lateness),
+                        keyTime = WindowEnd(size),
+                    )
+                }
             }
             "sliding" -> {
+                if (lateness != null) {
+                    throw UnsupportedCatalogBinding(
+                        "window kind 'sliding' with `lateness` is unbound — it binds to WindowSlidingCell, which " +
+                            "has no `waterline` inlet and no `late` outlet (t4od7-D4); only kind 'tumbling' " +
+                            "declares lateness",
+                    )
+                }
                 val slide = (descriptor["slide"] as? Value.IntVal)?.value
                     ?: throw UnsupportedCatalogBinding("sliding window descriptor needs an integer `slide`")
                 WindowSlidingCell(Windows.sliding(size, slide), a)
@@ -600,6 +686,45 @@ internal object KernelCatalog {
         }
         ViewKind.NONE -> error("readView on a non-view cell")
     }
+}
+
+/**
+ * The event time of a `[at, value]` element — the head (`window`, `intersect`,
+ * `waterline`; t4od7-D2). A named `Serializable` object, because
+ * `Windows.Lateness.timeFn` must be one (`[24-WL-01]`: it survives graph-spec
+ * capture); a lambda would not.
+ */
+internal object EventTimeOfPair : (Any?) -> Long, Serializable {
+    override fun invoke(e: Any?): Long =
+        KernelFunctions.asLong(KernelFunctions.keyOf(e))
+            ?: throw IllegalArgumentException("element's event time (the head of [at, value]) is not an integer: $e")
+
+    private fun readResolve(): Any = EventTimeOfPair
+}
+
+/**
+ * The event time of a `join`/`semi-join` row `[k, v]` (t4od7-D2): `v` itself
+ * when it is an integer (`[k, at]`), else the head of `v` when `v` is a list
+ * (`[k, [at, payload]]`). Named and `Serializable` for the same reason as
+ * [EventTimeOfPair].
+ */
+internal object EventTimeOfRow : (Any?) -> Long, Serializable {
+    override fun invoke(e: Any?): Long {
+        val v = KernelFunctions.valueOf(e)
+        return KernelFunctions.asLong(v)
+            ?: (if (v is List<*>) KernelFunctions.asLong(KernelFunctions.keyOf(v)) else null)
+            ?: throw IllegalArgumentException(
+                "row's event time is neither an integer value ([k, at]) nor the head of a list value " +
+                    "([k, [at, payload]]): $e",
+            )
+    }
+
+    private fun readResolve(): Any = EventTimeOfRow
+}
+
+/** A tumbling window key's exclusive end (`keyTime` of a lateness-declaring `window`): `start + size`. */
+internal data class WindowEnd(val size: Long) : (Long) -> Long, Serializable {
+    override fun invoke(start: Long): Long = start + size
 }
 
 /** A catalog id / op the kernel driver cannot honestly bind — a real gap, not a soft failure. */
