@@ -384,7 +384,11 @@ class DeliberateAppTest {
         assertNull(d.data)
         assertEquals(180, d.config.maxClaims)
         assertEquals(SemanticsCatalog.IDS, d.semantics.running)
-        assertEquals("dfquad", d.semantics.headline)
+        assertEquals(LayerSet.CONSENSUS, d.semantics.headline) // credence shows the consensus by default
+        val layers = LayerSet.of(d.semantics.running, d.semantics.consensus, d.semantics.headline)
+        val values = List(layers.ids.size) { 0.1 + 0.1 * it }
+        assertEquals(layers.consensus(values), layers.headlineOf(values, layers.consensus(values)))
+        assertEquals("consensus", Options(arrayOf("--semantics", "consensus")).semantics.headline)
         assertEquals(listOf("wlo", "jnb", "woe"), d.semantics.consensus)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics", "nope")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--semantics-layers", "wlo", "--semantics", "jnb")) }

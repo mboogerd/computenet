@@ -194,7 +194,8 @@ object Consensus {
  * claim and edge cell computes one credence per layer, so a credence is a
  * vector indexed like [ids]. [consensusMembers] are the layers [Consensus]
  * averages (those that do not run are skipped; none running means all);
- * [headline] is the layer shown as `NodeDto.credence`.
+ * [headline] is what `NodeDto.credence` shows: a layer id, or [CONSENSUS]
+ * (the default) for the consensus value itself.
  */
 class LayerSet(
     val ids: List<String>,
@@ -206,13 +207,17 @@ class LayerSet(
         require(ids.isNotEmpty()) { "at least one credence layer must run" }
         require(ids.size == semantics.size) { "one semantics per layer id" }
         require(ids.distinct() == ids) { "duplicate layer ids: $ids" }
-        require(headline in ids) { "unknown headline layer '$headline'" }
+        require(headline == CONSENSUS || headline in ids) { "unknown headline layer '$headline'" }
     }
 
     /** The consensus members that run, in their configured order; every layer when none does. */
     val members: List<String> = consensusMembers.filter { it in ids }.ifEmpty { ids }
     private val memberIndex = members.map(ids::indexOf)
-    val headlineIndex = ids.indexOf(headline)
+    private val headlineIndex = ids.indexOf(headline)
+
+    /** The value `NodeDto.credence` shows for a node with this credence vector and consensus. */
+    fun headlineOf(values: List<Double>, consensus: Double): Double =
+        if (headline == CONSENSUS) consensus else values[headlineIndex]
 
     /** One credence per layer for a node with these [stances] and arguments. */
     fun evaluate(stances: Collection<Double>, attacks: List<List<Arg>>, supports: List<List<Arg>>): List<Double> =
@@ -225,6 +230,9 @@ class LayerSet(
     fun named(values: List<Double>): Map<String, Double> = ids.zip(values).toMap()
 
     companion object {
+        /** Headline value meaning "show the consensus" rather than one layer (the default). */
+        const val CONSENSUS = "consensus"
+
         /** Every layer in [ids] from the catalog. */
         fun of(
             ids: List<String>,

@@ -55,7 +55,7 @@ class DeliberateApp(
      * into `consensus`.
      */
     data class SemanticsConfig(
-        val headline: String = SemanticsCatalog.DEFAULT_PRIMARY,
+        val headline: String = LayerSet.CONSENSUS,
         val layers: List<String> = SemanticsCatalog.IDS,
         val consensus: List<String> = Consensus.DEFAULT_MEMBERS,
         val wlo: WeightedLogOdds = WeightedLogOdds(),
@@ -64,10 +64,10 @@ class DeliberateApp(
         val running: List<String> = (listOf(SemanticsCatalog.DEFAULT_PRIMARY) + layers).distinct()
 
         init {
-            (layers + consensus + headline).forEach {
+            (layers + consensus + listOf(headline).filter { it != LayerSet.CONSENSUS }).forEach {
                 require(it in SemanticsCatalog.IDS) { "unknown semantics '$it' (${SemanticsCatalog.IDS.joinToString()})" }
             }
-            require(headline in running) { "--semantics $headline is not among the layers ${running.joinToString()}" }
+            require(headline == LayerSet.CONSENSUS || headline in running) { "--semantics $headline is not among the layers ${running.joinToString()}" }
             require(consensus.all { it in running }) { "--consensus ${consensus.joinToString()} names a layer that does not run (${running.joinToString()})" }
             require(consensus.isNotEmpty()) { "--consensus is empty" }
         }
@@ -485,7 +485,7 @@ internal class Options(args: Array<String>) {
               --yield-ratio <f>           ...falls below f x the mean of its earlier rounds (${Y.ratio})
               --yield-min-claims <n>      ...and it holds at least n claims (${Y.minClaims})
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)
-              --semantics <id>            the layer shown as a node's credence (${SemanticsCatalog.DEFAULT_PRIMARY})
+              --semantics <id>            what a node's credence shows: a layer id or ${LayerSet.CONSENSUS} (${LayerSet.CONSENSUS})
               --semantics-layers <ids>    credence layers to propagate (${SemanticsCatalog.IDS.joinToString(",")}); dfquad always runs
               --consensus <ids>           layers averaged (in log-odds) into the consensus (${Consensus.DEFAULT_MEMBERS.joinToString(",")})
               --wlo-k/--wlo-p/--wlo-gamma/--wlo-alpha <x>  weighted log-odds parameters (2.4, 2, 1.3, 1)
