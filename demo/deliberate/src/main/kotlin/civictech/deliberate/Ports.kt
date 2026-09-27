@@ -19,14 +19,25 @@ data class ClaimContext(
     val claim: String,
     val pros: List<String>,
     val cons: List<String>,
+    /**
+     * SPEC §3 "Links as claims": set when [claim] is a *link* — the statement
+     * that [LinkContext.argument] is a reason for/against [LinkContext.parent].
+     * Its pros then say why the connection holds, its cons why it fails
+     * (undercutters); proposers are asked about the connection, not about
+     * whether either claim is true.
+     */
+    val link: LinkContext? = null,
 )
+
+/** The two ends of a link: [argument] is offered as a reason [side] ([Polarity.SUPPORT] = for) [parent]. */
+data class LinkContext(val argument: String, val parent: String, val side: Side)
 
 /** An argument generator (SPEC EXP-02, EXP-09). Throws on failure. */
 interface Proposer {
     /** Stable short id recorded as provenance, e.g. "claude" or "codex". */
     val id: String
 
-    /** Up to [max] new one-sentence arguments on [side] of `ctx.claim`. */
+    /** Up to [max] new one-sentence arguments on [side] of `ctx.claim` (of the link, when `ctx.link` is set). */
     fun propose(ctx: ClaimContext, side: Side, max: Int): List<String>
 }
 

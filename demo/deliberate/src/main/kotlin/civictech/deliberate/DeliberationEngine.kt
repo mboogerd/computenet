@@ -84,6 +84,11 @@ class DeliberationEngine(
         val workers: Int = 8,
         /** EXP-10: the per-question diminishing-returns stop; null disables it (yields are still recorded). */
         val yieldStop: YieldStop? = YieldStop(),
+        /**
+         * SPEC §3 "Links as claims": links compete in the queue like claims. Off, a
+         * link is never explored automatically (it ends PRUNED); EXPAND still explores it.
+         */
+        val exploreLinks: Boolean = true,
     ) {
         init {
             require(workers > 0) { "workers must be positive" }
@@ -129,21 +134,34 @@ class DeliberationEngine(
         }
     }
 
+    /**
+     * A claim — or a **link** (SPEC §3 "Links as claims"): the statement that
+     * an argument bears on its parent. A link's [ref] is the argument's edge
+     * ref, its [text] is built from its two ends ([linkText]), its [parent] is
+     * the argument's parent and its [depth] the argument's depth; its
+     * [children] are the arguments about the connection (SUPPORT: why it
+     * holds; ATTACK: undercutters), attached by edges targeting the edge. It
+     * is explored exactly like a claim, but is never assessed itself: its
+     * `jev` stance is the argument's CRED-02 strength.
+     */
     private class Claim(
         val ref: CellRef,
         val root: CellRef,
-        /** The claim this one argues about: its edge's target, or for an undercutter the undercut edge's target. */
+        /** The claim (or link) this one argues about: its edge's target. For a link: its argument's parent. */
         val parent: Claim?,
-        /** The polarity of the edge attaching it (ATTACK for an undercutter). */
+        /** The polarity of the edge attaching it; for a link, its argument's polarity. */
         val side: Side?,
         /** EXP-03 REPLACE may swap it while the claim is still unexplored (the graph's text is immutable). */
         var text: String,
         val depth: Int,
         var proposer: String,
         var roundLimit: Int,
-        /** EXP-03 UNDERCUT: the argument whose link to [parent] this claim attacks; null for an ordinary argument. */
-        val undercuts: Claim? = null,
+        /** Set only on a link: the argument whose connection to [parent] it states. */
+        val argument: Claim? = null,
     ) {
+        val isLink get() = argument != null
+        /** On an argument: its link — the claim-like node of its edge. */
+        var link: Claim? = null
         /** The text the structure log holds for it; the record stores [text] only when a rewrite changed it. */
         val structureText: String = text
         var status = Status.QUEUED
@@ -169,6 +187,8 @@ class DeliberationEngine(
         /** CTL-02: the next round is forced (saturation, depth, contribution and budget ignored). */
         var forceRound = false
         var roundInFlight = false
+        /** Its attach-time assessment (CRED-01/02, EXP-05) is in flight — for the UI's activity line. */
+        var assessing = false
         /** EXPLORING with rounds left; its next round is queued. */
         var waiting = false
         /** Invalidates stale priority-queue entries when a queued claim is reprioritized. */
@@ -179,10 +199,8 @@ class DeliberationEngine(
         var rewriteWasQueued = false
         var anyCallSucceeded = false
         var edge: Edge? = null
-        /** Its pro and con arguments (never its undercutters). */
+        /** Its pro and con arguments; for a link, its supporters and undercutters. */
         val children = mutableListOf<Claim>()
-        /** EXP-03 UNDERCUT: claims attacking this argument's edge. */
-        val undercutters = mutableListOf<Claim>()
     }
 
     private class Edge(val ref: CellRef, val root: CellRef, val source: CellRef, val target: CellRef, val side: Side) {
@@ -200,6 +218,7 @@ class DeliberationEngine(
 
     private val lock = Any()
     private val serviceLock = Any()
+    /** Every claim by its ref, and every link (SPEC §3 "Links as claims") by its edge's ref. */
     private val claims = LinkedHashMap<CellRef, Claim>()
     private val edges = LinkedHashMap<CellRef, Edge>()
     private val questions = LinkedHashMap<CellRef, String>()
@@ -240,9 +259,13 @@ class DeliberationEngine(
         fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?', ';')
         val RECORDS = Json { encodeDefaults = false; ignoreUnknownKeys = true }
         const val CLAIM_KEY = "c:"
+        /** SPEC §3 "Links as claims": a link's record, keyed by its edge ref. */
+        const val LINK_KEY = "l:"
         /** EXP-10: one record per question holding its round yields and whether they diminished. */
         const val QUESTION_KEY = "q:"
         const val JEV = "jev"
+        /** The proposer field of a link (it has none; its arguments do). */
+        const val LINK = "link"
         /** SPEC §12: a question record's per-backend cost field is `cost.<backend>`. */
         const val COST_FIELD = "cost."
         val BACKEND_ORDER = listOf(Pricing.CLAUDE, Pricing.CODEX, Pricing.JEV)
@@ -360,7 +383,23 @@ class DeliberationEngine(
                 val consensus = n.credence?.consensus ?: NEUTRAL
                 val low = n.credence?.spreadLow ?: NEUTRAL
                 val high = n.credence?.spreadHigh ?: NEUTRAL
-                claims[n.ref]?.let { c ->
+                edges[n.ref]?.let { e ->
+                    // SPEC §3 "Links as claims": an edge carries its link's exploration state.
+                    val l = claims[n.ref]
+                    NodeDto(
+                        ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
+                        credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                        polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
+                        strength = e.strength,
+                        text = l?.text, depth = l?.depth, status = l?.status, override = l?.override,
+                        reach = l?.reach, contribution = l?.contribution,
+                        proSaturation = l?.proSaturation, conSaturation = l?.conSaturation, rounds = l?.rounds,
+                        duplicatesDropped = l?.duplicatesDropped, error = l?.error,
+                        triage = l?.triage?.mapKeys { it.key.name }?.ifEmpty { null },
+                        activity = l?.let(::activityOf),
+                    )
+                } ?: claims[n.ref]?.let { c ->
+                    val onLink = c.parent?.takeIf { it.isLink }
                     NodeDto(
                         ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
                         credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
@@ -372,23 +411,19 @@ class DeliberationEngine(
                         alsoProposedBy = c.alsoProposedBy.toList().ifEmpty { null },
                         merged = c.merged.takeIf { it },
                         triage = c.triage.mapKeys { it.key.name }.ifEmpty { null },
-                        undercuts = c.undercuts?.edge?.ref?.id?.toString(),
-                    )
-                } ?: edges[n.ref]?.let { e ->
-                    NodeDto(
-                        ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
-                        credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
-                        polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
-                        strength = e.strength,
+                        activity = activityOf(c),
+                        undercuts = onLink?.takeIf { c.side == Polarity.ATTACK }?.ref?.id?.toString(),
+                        onLink = onLink?.ref?.id?.toString(),
                     )
                 }
             }
             val window = config.yieldStop?.window ?: YieldStop().window
             val qs = questions.map { (root, text) ->
+                // Links are part of the question's work (activity, rounds, cost), not of its claim count.
                 val tree = claims.values.filter { it.root == root }
                 val ys = yields[root].orEmpty()
                 QuestionDto(
-                    root.id.toString(), text, tree.size, tree.any { it.status in ACTIVE },
+                    root.id.toString(), text, tree.count { !it.isLink }, tree.any { it.status in ACTIVE },
                     yieldRounds = ys.size,
                     yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
                     yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
@@ -397,6 +432,14 @@ class DeliberationEngine(
             }
             GraphDto(qs, nodes, layers.members)
         }
+    }
+
+    /** Caller holds [lock]. What [c] is doing right now, for the UI's "now exploring" line; null when idle. */
+    private fun activityOf(c: Claim): String? = when {
+        c.roundInFlight -> "exploring"
+        c.status == Status.JUDGING -> "judging"
+        c.assessing -> "assessing"
+        else -> null
     }
 
     /** Wait until no claim is queued or being expanded. */
@@ -421,7 +464,7 @@ class DeliberationEngine(
     fun persistNow() {
         val s = store ?: return
         val current = synchronized(lock) {
-            claims.values.map { c -> CLAIM_KEY + c.ref.id to fieldsOf(recordOf(c)) } +
+            claims.values.map { c -> (if (c.isLink) LINK_KEY else CLAIM_KEY) + c.ref.id to fieldsOf(recordOf(c)) } +
                 questions.keys.map { q -> QUESTION_KEY + q.id to questionFieldsOf(q) }
         }
         for ((key, fields) in current) {
@@ -502,6 +545,7 @@ class DeliberationEngine(
             if (c.status != Status.QUEUED) return
             if (c.parent == null || c.override == Override.EXPAND || c.forceRound) null
             else when {
+                c.isLink && !config.exploreLinks -> Status.PRUNED
                 c.depth > config.maxDepth -> Status.DEPTH_LIMIT
                 contributionOf(c) < config.minInfluence -> Status.PRUNED
                 treeSize.getValue(c.root) >= config.maxClaims -> Status.BUDGET
@@ -567,8 +611,8 @@ class DeliberationEngine(
      * it has rounds left.
      */
     private fun start(c: Claim): Boolean {
-        // CRED-01
-        if (synchronized(lock) { c.plausibility } == null) {
+        // CRED-01 (a link's stance is its argument's CRED-02 strength, judged at attach time)
+        if (synchronized(lock) { !c.isLink && c.plausibility == null }) {
             val (path, text) = synchronized(lock) { pathOf(c) to c.text }
             attempt(c, "plausibility") {
                 val p = judge.plausibility(questionOf(c), path, text)
@@ -672,19 +716,15 @@ class DeliberationEngine(
             return attach(parent, side, f).also { attached += it }
         }
 
-        fun undercut(target: Claim, f: Fresh): Claim? {
-            if (budgetHit) return null
-            if (!reserve(c.root, forced)) { budgetHit = true; return null }
-            return attachUndercut(target, f).also { attached += it }
-        }
+        // EXP-03 UNDERCUT: attached to the target's link, as one of its con arguments.
+        fun undercut(target: Claim, f: Fresh): Claim? = add(synchronized(lock) { target.link!! }, Polarity.ATTACK, f)
 
         for (p in proposers) {
             if (budgetHit) break
             val (ctx, existing) = synchronized(lock) {
                 val pros = c.children.filter { it.side == Polarity.SUPPORT }
                 val cons = c.children.filter { it.side == Polarity.ATTACK }
-                ClaimContext(questions.getValue(c.root), pathOf(c), c.text, pros.map { it.text }, cons.map { it.text }) to
-                    (pros + cons)
+                contextOf(c) to (pros + cons)
             }
             // EXP-04: never attach beyond the cap within a round. Both sides, since OTHER_SIDE
             // may move an argument onto a side that was not asked this round.
@@ -747,7 +787,7 @@ class DeliberationEngine(
                     }
                     TriageAction.REFINE -> if (target == null) TriageAction.ADD else TriageAction.REFINE
                     // Only an argument (a claim with an edge) has a link to undercut.
-                    TriageAction.UNDERCUT -> if (target?.edge == null) TriageAction.ADD else TriageAction.UNDERCUT
+                    TriageAction.UNDERCUT -> if (target?.link == null) TriageAction.ADD else TriageAction.UNDERCUT
                     else -> v.action
                 }
                 count(action)
@@ -775,7 +815,7 @@ class DeliberationEngine(
                         resolved[i] = if (fits) add(target!!, Polarity.SUPPORT, f) else target
                     }
                     TriageAction.UNDERCUT -> {
-                        val fits = synchronized(lock) { forced || target!!.undercutters.size < capOf(target) }
+                        val fits = synchronized(lock) { target!!.link!!.let { l -> forced || countOf(l, Polarity.ATTACK) < capOf(l) } }
                         resolved[i] = if (fits) undercut(target!!, f) else target
                     }
                     TriageAction.DROP -> Unit
@@ -806,7 +846,9 @@ class DeliberationEngine(
             // round immediately after assessment. Rewrite reservations are released
             // only now, so a stale task cannot explore wording with old judgments.
             // The finally also prevents an infrastructure failure from stranding a target.
-            ready.forEach { n ->
+            // A link joins the queue with its argument (SPEC §3 "Links as claims"), once the
+            // argument's strength — the link's stance and uncertainty — is known.
+            ready.flatMap { listOfNotNull(it, it.link) }.forEach { n ->
                 val queueNow = update {
                     if (n.rewriteInFlight) {
                         n.rewriteInFlight = false
@@ -821,7 +863,7 @@ class DeliberationEngine(
 
         // EXP-04: saturation per side, judged once every proposer had its turn
         // (a forced round's sides are re-judged too). A side at its cap needs no Jev call.
-        val after = context(c)
+        val after = synchronized(lock) { contextOf(c) }
         for (side in sides) {
             if (synchronized(lock) { atCap(c, side) }) continue
             val p = attempt(c, "saturation") { judge.saturation(after, side) } ?: continue
@@ -954,10 +996,11 @@ class DeliberationEngine(
      */
     private fun assess(nodes: List<Claim>) {
         val futures = nodes.map { n ->
-            val (question, path, text) = synchronized(lock) {
-                // EXP-03 UNDERCUT: an undercutter is judged against the link it attacks.
-                val p = pathOf(n).let { path -> n.undercuts?.let { path + linkOf(it) } ?: path }
-                Triple(questions.getValue(n.root), p, n.text)
+            val (question, path, text) = update {
+                n.assessing = true
+                // An argument about a link (an undercutter, a link supporter) is judged against the
+                // link's text: the link is the last entry of its path (SPEC §3 "Links as claims").
+                Triple(questions.getValue(n.root), pathOf(n), n.text)
             }
             n to calls.submit<Assessment?> { attempt(n, "assess") { judge.assess(question, path, text, n.side!!) } }
         }
@@ -973,6 +1016,7 @@ class DeliberationEngine(
                 service.setStance(edge.ref, JEV, a.strength)
             }
             update {
+                n.assessing = false
                 if (a != null) {
                     n.plausibility = a.plausibility
                     n.relevance = a.relevance
@@ -982,28 +1026,58 @@ class DeliberationEngine(
                 val reach = reachOf(n)
                 n.reach = reach
                 n.contribution = reach * (n.relevance ?: 1.0) * (n.quality ?: 1.0)
+                updateLink(n)
             }
         }
     }
 
     /**
      * Caller holds [lock]. EXP-05: reach decays by the edge strength; a failed
-     * judgment assumes FALLBACK_STRENGTH. An undercutter's reach also decays by
-     * the strength of the link it attacks: reach(parent) × strength(its edge)
-     * × strength(the undercut edge).
+     * judgment assumes FALLBACK_STRENGTH. A link's reach is its argument's, so
+     * an argument about a link (e.g. an undercutter) has reach(the argument's
+     * parent) × strength(the argument's edge) × strength(its own edge).
      */
-    private fun reachOf(n: Claim): Double {
-        fun strength(e: Edge?) = (e?.strength ?: Config.FALLBACK_STRENGTH).coerceIn(0.0, 1.0)
-        val base = (n.parent!!.reach ?: 1.0) * strength(n.edge)
-        return n.undercuts?.let { base * strength(it.edge) } ?: base
+    private fun reachOf(n: Claim): Double = (n.parent!!.reach ?: 1.0) * strengthOf(n.edge)
+
+    private fun strengthOf(e: Edge?) = (e?.strength ?: Config.FALLBACK_STRENGTH).coerceIn(0.0, 1.0)
+
+    /**
+     * Caller holds [lock]. SPEC §3 "Links as claims": a link is worth exploring
+     * in proportion to how much its argument can move the parent — the
+     * argument's contribution (reach(argument) = reach(parent) × strength,
+     * × relevance × quality) — times how unsettled its strength s still is,
+     * 4·s·(1 − s): 1 at s = ½, 0 for a link judged irrelevant or decisive. So
+     * a link never outranks its own argument, and a clear-cut link is left
+     * alone unless the human expands it.
+     */
+    private fun updateLink(arg: Claim) {
+        val l = arg.link ?: return
+        val s = strengthOf(arg.edge)
+        l.reach = arg.reach
+        l.contribution = (arg.contribution ?: arg.reach ?: Config.FALLBACK_STRENGTH) * 4 * s * (1 - s)
     }
 
-    /** Caller holds [lock]. The statement an undercutter of [arg] denies: that [arg] bears on its parent. */
-    private fun linkOf(arg: Claim): String {
-        val direction = if (arg.side == Polarity.SUPPORT) "is a reason to accept" else "is a reason to reject"
-        return "The argument \"${arg.text}\" $direction the claim \"${arg.parent!!.text}\"."
+    /** Caller holds [lock]. A link's claim text, built from its two ends (never stored). */
+    private fun linkText(arg: Claim): String {
+        val direction = if (arg.side == Polarity.SUPPORT) "for" else "against"
+        return "“${arg.text}” is a reason $direction “${arg.parent!!.text}”"
     }
 
+    /** Caller holds [lock]. What proposers and Jev are told about [c] (a claim or a link). */
+    private fun contextOf(c: Claim): ClaimContext = ClaimContext(
+        question = questions.getValue(c.root),
+        path = pathOf(c),
+        claim = c.text,
+        pros = c.children.filter { it.side == Polarity.SUPPORT }.map { it.text },
+        cons = c.children.filter { it.side == Polarity.ATTACK }.map { it.text },
+        link = c.argument?.let { a -> LinkContext(a.text, a.parent!!.text, a.side!!) },
+    )
+
+    /**
+     * Attaches [f] as an argument on [side] of [parent] — a claim, or a link
+     * (then its edge targets the link's edge: SPEC §3 "Links as claims") —
+     * together with the argument's own link.
+     */
     private fun attach(parent: Claim, side: Side, f: Fresh): Claim {
         val (childRef, edgeRef) = synchronized(serviceLock) {
             val child = service.createClaim(f.text)
@@ -1017,36 +1091,28 @@ class DeliberationEngine(
             claims[childRef] = child
             edges[edgeRef] = edge
             parent.children += child
+            linkFor(child)
         }
         return child
+    }
+
+    /** Caller holds [lock]. Creates and registers [arg]'s link: at its depth, about its parent. */
+    private fun linkFor(arg: Claim): Claim {
+        val edge = arg.edge!!
+        return Claim(edge.ref, arg.root, arg.parent, arg.side, linkText(arg), arg.depth, LINK, config.maxRounds, argument = arg)
+            .also { l ->
+                arg.link = l
+                claims[edge.ref] = l
+            }
     }
 
     /**
-     * EXP-03 UNDERCUT: [f] attacks the *edge* of argument [target], so it lowers
-     * the edge's credence and with it the argument's influence. For paths and
-     * context it is a claim about [target]'s parent, at [target]'s depth.
+     * Caller holds [lock]. EXP-03 REPLACE only rewords an argument nobody has
+     * explored yet — neither the argument nor its link (whose text quotes it).
      */
-    private fun attachUndercut(target: Claim, f: Fresh): Claim {
-        val (targetEdge, parent) = synchronized(lock) { target.edge!! to target.parent!! }
-        val (childRef, edgeRef) = synchronized(serviceLock) {
-            val child = service.createClaim(f.text)
-            child to service.createEdge(child, targetEdge.ref, Polarity.ATTACK)
-        }
-        val child = Claim(childRef, parent.root, parent, Polarity.ATTACK, f.text, parent.depth + 1, f.proposer, config.maxRounds, undercuts = target)
-        val edge = Edge(edgeRef, parent.root, childRef, targetEdge.ref, Polarity.ATTACK)
-        update {
-            child.edge = edge
-            child.alsoProposedBy += f.also
-            claims[childRef] = child
-            edges[edgeRef] = edge
-            target.undercutters += child
-        }
-        return child
-    }
-
-    /** Caller holds [lock]. EXP-03 REPLACE only rewords an argument nobody has explored or undercut yet. */
     private fun replaceable(t: Claim) = t.parent != null && t.status == Status.QUEUED &&
-        t.children.isEmpty() && t.undercutters.isEmpty() && t.rounds == 0
+        t.children.isEmpty() && t.rounds == 0 &&
+        t.link.let { l -> l == null || (l.children.isEmpty() && l.rounds == 0 && l.status !in setOf(Status.JUDGING, Status.EXPLORING)) }
 
     /** Reserve an unexplored queued target and invalidate any task carrying its old priority/text. */
     private fun beginRewrite(t: Claim): RewriteReservation? = update {
@@ -1056,18 +1122,26 @@ class DeliberationEngine(
         t.rewriteInFlight = true
         t.rewriteWasQueued = wasQueued
         t.queueGeneration++
+        // Its link quotes the old wording: hold it too until the rewrite is assessed.
+        t.link?.let { l ->
+            l.rewriteInFlight = true
+            l.queueGeneration++
+        }
         RewriteReservation(created = true, wasQueued = wasQueued)
     }
 
     /** Undo a failed first rewrite reservation and restore the target's invalidated queue entry. */
     private fun cancelRewrite(t: Claim, reservation: RewriteReservation) {
         if (!reservation.created) return
-        val resume = update {
+        val (resume, link) = update {
             t.rewriteInFlight = false
             t.rewriteWasQueued = false
-            reservation.wasQueued && t.status == Status.QUEUED
+            val l = t.link?.also { it.rewriteInFlight = false }
+            // Its link had been queued only once the argument was assessed.
+            (reservation.wasQueued && t.status == Status.QUEUED) to l?.takeIf { t.contribution != null && it.status == Status.QUEUED }
         }
         if (resume) enqueue(t)
+        link?.let(::schedule)
     }
 
     /**
@@ -1091,6 +1165,7 @@ class DeliberationEngine(
             (t.rewriteInFlight && replaceable(t)).also { ok ->
                 if (ok) {
                     t.text = merged
+                    t.link?.text = linkText(t)
                     t.merged = true
                     (listOf(f.proposer) + f.also).filter { it != t.proposer && it !in t.alsoProposedBy }.distinct()
                         .forEach { t.alsoProposedBy += it }
@@ -1110,6 +1185,7 @@ class DeliberationEngine(
                     t.alsoProposedBy += others
                     t.proposer = f.proposer
                     t.text = f.text
+                    t.link?.text = linkText(t)
                 }
             }
         }.also { if (!it) cancelRewrite(t, reservation) }
@@ -1126,6 +1202,9 @@ class DeliberationEngine(
             val reach = reachOf(n)
             n.reach = reach
             n.contribution = reach
+            updateLink(n)
+            // The link is re-gated with the new wording's judgments (replaceable() kept it unexplored).
+            n.link?.let { l -> if (l.status in FINISHED && l.override != Override.STOP) l.status = Status.QUEUED }
         }
         synchronized(serviceLock) {
             service.setStance(n.ref, JEV, null)
@@ -1197,7 +1276,9 @@ class DeliberationEngine(
     /** Caller holds [lock]. */
     private fun recordOf(c: Claim) = ClaimRecord(
         question = c.root.id.toString(),
-        text = c.text.takeIf { it != c.structureText }, proposer = c.proposer, status = c.status, override = c.override,
+        // A link's text is built from its ends and it has no proposer: neither is stored.
+        text = c.text.takeIf { !c.isLink && it != c.structureText }, proposer = c.proposer.takeIf { !c.isLink },
+        status = c.status, override = c.override,
         roundLimit = c.roundLimit, rounds = c.rounds, forceRound = c.forceRound,
         plausibility = c.plausibility, relevance = c.relevance, quality = c.quality,
         reach = c.reach.takeIf { c.parent != null }, contribution = c.contribution.takeIf { c.parent != null },
@@ -1247,6 +1328,9 @@ class DeliberationEngine(
         val records = meta.filterKeys { it.startsWith(CLAIM_KEY) }.entries.associate { (k, v) ->
             CellRef(UUID.fromString(k.removePrefix(CLAIM_KEY))) to recordFrom(v)
         }
+        val linkRecords = meta.filterKeys { it.startsWith(LINK_KEY) }.entries.associate { (k, v) ->
+            CellRef(UUID.fromString(k.removePrefix(LINK_KEY))) to recordFrom(v)
+        }
         val questionRecords = meta.filterKeys { it.startsWith(QUESTION_KEY) }.entries.associate { (k, v) ->
             CellRef(UUID.fromString(k.removePrefix(QUESTION_KEY))) to RECORDS.decodeFromJsonElement(
                 QuestionRecord.serializer(),
@@ -1272,22 +1356,24 @@ class DeliberationEngine(
                 } else run {
                     val e = attaching[n.ref]?.firstOrNull() ?: return@run null
                     val target = e.info.target!!
-                    val undercut = edges[target]?.let { claims[it.source] }
-                    val parent = undercut?.parent ?: claims[target] ?: return@run null
+                    // The target is a claim, or an edge — then the parent is that edge's link
+                    // (an undercutter or link supporter; created with its argument, just below).
+                    val parent = claims[target] ?: return@run null
                     val side = e.info.polarity!!
                     Claim(
                         n.ref, parent.root, parent, side, structureText, parent.depth + 1,
-                        "unknown", config.maxRounds, undercut,
+                        "unknown", config.maxRounds,
                     ).also { child ->
                         val edge = Edge(e.ref, parent.root, n.ref, target, side)
                         child.edge = edge
                         edges[e.ref] = edge
-                        if (undercut != null) undercut.undercutters += child else parent.children += child
+                        parent.children += child
                     }
                 } ?: continue
                 rec?.let { r -> apply(claim, r) }
                 claims[n.ref] = claim
                 treeSize.merge(claim.root, 1, Int::plus)
+                if (claim.edge != null) linkFor(claim).also { l -> linkRecords[l.ref]?.let { r -> apply(l, r) } }
             }
             for ((q, r) in questionRecords) {
                 if (q !in questions) continue
@@ -1306,16 +1392,20 @@ class DeliberationEngine(
         // The graph skips a stance a node already holds (CredenceGraph.setStance).
         synchronized(serviceLock) { stances.forEach { (ref, v) -> service.setStance(ref, JEV, v) } }
         val (unassessed, queued) = synchronized(lock) {
-            claims.values.filter { it.status == Status.QUEUED }
+            claims.values.filter { it.status == Status.QUEUED && !it.isLink }
                 .partition { it.parent != null && it.plausibility == null && it.edge?.strength == null }
         }
-        queued.forEach(::schedule)
+        // A link is queued with its argument: after it, and only once the argument is assessed.
+        queued.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
+        synchronized(lock) {
+            claims.values.filter { it.isLink && it.status == Status.QUEUED && it.argument!!.status != Status.QUEUED }
+        }.forEach(::schedule)
         unassessed.groupBy { it.root }.values.forEach { group ->
             pending.incrementAndGet()
             calls.submit {
                 try {
                     assess(group)
-                    group.forEach(::schedule)
+                    group.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
                 } finally {
                     done()
                 }
@@ -1386,14 +1476,4 @@ class DeliberationEngine(
     /** Caller holds [lock]. Texts from the root down to (excluding) [c]. */
     private fun pathOf(c: Claim): List<String> =
         generateSequence(c.parent) { it.parent }.map { it.text }.toList().asReversed()
-
-    private fun context(c: Claim): ClaimContext = synchronized(lock) {
-        ClaimContext(
-            question = questions.getValue(c.root),
-            path = pathOf(c),
-            claim = c.text,
-            pros = c.children.filter { it.side == Polarity.SUPPORT }.map { it.text },
-            cons = c.children.filter { it.side == Polarity.ATTACK }.map { it.text },
-        )
-    }
 }
