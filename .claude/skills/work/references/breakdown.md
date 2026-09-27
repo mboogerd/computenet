@@ -46,8 +46,8 @@ park if it would change what the spec already means.
 **Tag every factual claim with how you know it.** Later agents execute what you
 write literally and cannot tell a guess from a check. A claim about existing
 code or tools, a claim that a test proves a property, a cost or duration, a
-prescribed command, reproduction or check (mutation route and the assertion
-it should redden, fixture values, expected result) is either `observed:` with the command, run or sha, or
+prescribed command, reproduction or check (mutation route, fixture values,
+expected result) is either `observed:` with the command, run or sha, or
 `unverified:` so the implementer checks it first. A negative assertion over
 values you chose ("not any member's row") can be false by coincidence; do the
 arithmetic before writing it. A bug reproduction you did not watch fail on the
@@ -238,8 +238,9 @@ bd update <feature-id> --design-file <scratch>/<feature-id>-design.md
   verification command.
 - Size by read-surface (what a fresh agent must read and hold), so a task
   fits one implementer session ([implement.md](implement.md#hand-off)).
-- A test-only task names how its implementer will show the tests are not
-  vacuous without leaving its claim ([evidence.md](evidence.md#mutation-checks)).
+- A prescribed or reserved mutation names the assertion it must redden
+  ([evidence.md](evidence.md#mutation-checks)); a test-only task also says
+  how its implementer shows the tests are not vacuous without leaving its claim.
 - Anchors in code a blocker has not landed yet are `unverified:`.
 - If the feature's `metadata.files` omits a file a task must edit, widen it
   with `bd update <feature-id> --set-metadata files=<list>`, since the feature

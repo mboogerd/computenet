@@ -96,40 +96,39 @@ checks on it prove the build is not broken, and nothing about content.
 
 A mutation counts when it lands where you aimed, compiles, reddens the
 criterion's own assertion at class scope, and is provably reverted. Mutate
-inside your `metadata.files` claim; outside it is the reviewer's, whose
-dispatch grants it. Bash editing (`perl -pi`, `sed -i ''`) is for a file you
-may edit when the Edit tool refuses, never for one you may not. Undo only from
-your own copy: `git checkout -- <file>` also discards uncommitted work, and
-`git stash` is one stack shared by every worktree and session on this host.
+inside your `metadata.files` claim; outside it, the reviewer mutates, as its
+dispatch grants. Bash editing (`perl -pi`, `sed -i ''`) is for a file you may
+edit when the Edit tool refuses, never for one you may not.
 
-1. Commit your deliverable; nothing uncommitted sits under a mutation.
+1. Commit your deliverable; `git checkout -- <file>` would take it with the
+   mutation, and `git stash` is one stack shared by every session here.
 2. Leave the marker, for test mutations too, and never commit while it exists
    (SKILL.md 5a reads it as a half-applied mutation):
    `echo "<file and call site, what you removed>" > <your-worktree>/.mutation-in-progress`
 3. Copy each file aside: `cp <file> "<scratch>/pre-mutation-<basename>"`.
-4. Edit the file where it lives, never with a git command and never as a
-   relocated copy: a script resolving siblings from its own directory fails
-   wholesale when moved, and that red reads as discrimination. (An old
-   revision is tested the same way, written over the file.) Don't overlap the
-   original under any matcher: rename `DenialReason` to `Foo`, not
-   `DenialReasonRenamed`; a scripted anchor counts once under `grep -cF`.
+4. Edit the file where it lives, never through git's index or stash and never
+   as a relocated copy: a script resolving siblings from its own directory
+   fails wholesale when moved, and that red reads as discrimination. An old
+   revision is written over it: `git show <rev>:<path> > <path>`. Don't overlap
+   the original under any matcher: rename `DenialReason` to `Foo`, not
+   `DenialReasonRenamed`; a scripted anchor's `grep -cF '<anchor>' <file>` is 1.
 5. Prove it landed: `git diff HEAD -- <file>` is non-empty and its hunk is in
-   the declaration you meant; read the whole output. For an untracked file,
-   grep it for the mutated text.
+   the declaration you meant; read the whole output, not a grep of it. For an
+   untracked file, grep it for the mutated text.
 6. Run the test's whole class, never the one test alone (an async or
-   order-dependent false pass shows only beside its siblings), with `--rerun
-   --no-build-cache` into `"<scratch>/mut.log"`, then
+   order-dependent false pass shows only beside its siblings), with
+   `--rerun --no-build-cache` into `"<scratch>/mut.log"`, then
    `grep -aE '^e:|BUILD' "<scratch>/mut.log"`. An `e:` line means it never
-   compiled: no test ran, and nothing was caught.
+   compiled: no test ran, the XML on disk is stale, and nothing was caught.
 7. Name the assertion that went red and its message. A red at setup, a
    fixture await, a throwing helper, an earlier assertion or another test is
-   not the criterion discriminating: narrow the mutation until its own
-   assertion fails. A mutant that passes at class scope does not discriminate,
-   however it fares alone.
-8. Revert from the copy and prove it — `cp "<scratch>/pre-mutation-<basename>"
-   <file> && diff "<scratch>/pre-mutation-<basename>" <file>` prints nothing.
-   If the mutation created the file, `rm` it instead.
-9. Remove the marker and `ls` it gone; it is gitignored, so `git status` can't.
+   not the criterion discriminating: narrow the mutation until the criterion's
+   own assertion fails. A mutant that passes at class scope does not count.
+8. Revert from your copy, never with `git stash` or `git checkout`, and prove
+   it: the `diff` prints nothing. If the mutation created the file, `rm` it.
+   `cp "<scratch>/pre-mutation-<basename>" <file> && diff "<scratch>/pre-mutation-<basename>" <file>`
+9. Remove the marker; `ls <your-worktree>/.mutation-in-progress` must say no
+   such file (`git status` cannot: it is gitignored).
 10. Run the confirming test green against the restored file.
 
 Report the file and call site, the test, the assertion and its message. If the
@@ -137,8 +136,9 @@ strongest mutation was unavailable, name it rather than silently substituting.
 
 **A test that SKIPs on this host** (multicast-gated, on macOS) is mutated in a
 local Linux container, not by pushing a mutated commit to CI. Copy the worktree
-in or mount it `:ro`, mount other host paths `:ro` or not at all, and install
-toolchains inside the container, never into a mounted host path.
+in, or mount it `:ro` with build output on a container path; mount other host
+paths `:ro` or not at all; install toolchains inside it. If a host path was
+written, report it rather than repairing it.
 
 **Concord scenarios:** mutate twice — flip the asserted value, then move the
 observation window until it reddens with a non-zero observed count, which
