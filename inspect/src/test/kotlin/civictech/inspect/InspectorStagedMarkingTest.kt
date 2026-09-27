@@ -126,6 +126,40 @@ class InspectorStagedMarkingTest {
         model.snapshot().seq shouldBe seqBefore
     }
 
+    /**
+     * Feature review (computenet-wczst): a staged↔live flip changes the
+     * navigator card ([GraphSummary.cells] / [GraphSummary.staged]) without
+     * moving component membership, so [InspectorModel.publishGraphChanges]'
+     * membership comparison alone never announces it — a client that refetched
+     * `GET /graphs` during STAGE kept `cells: 0, staged: n` after RETIRE.
+     */
+    @Test
+    fun `a restamp invalidates the navigator cards on the next graphs tick`() {
+        val a = spawn()
+        val b = spawn()
+        connect(a, b)
+        model.publishGraphChanges()
+        frames.clear()
+        model.publishGraphChanges()
+        frames shouldBe emptyList()
+
+        stagedOf = { ref -> if (ref == b) "apply-1" else null }
+        model.restamp(b)
+        frames.clear()
+        model.publishGraphChanges()
+        frames.map { it.kind } shouldBe listOf(Event.GRAPHS_CHANGED)
+
+        stagedOf = { null }
+        model.restamp(b)
+        frames.clear()
+        model.publishGraphChanges()
+        frames.map { it.kind } shouldBe listOf(Event.GRAPHS_CHANGED)
+
+        frames.clear()
+        model.publishGraphChanges()
+        frames shouldBe emptyList()
+    }
+
     // ------------------------------------------------------------- applyEvent
 
     @Test

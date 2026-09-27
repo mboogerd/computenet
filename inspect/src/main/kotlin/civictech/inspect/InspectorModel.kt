@@ -349,9 +349,15 @@ internal class InspectorModel(
      * upsert this relies on is the same one [mirroredPublish] already uses —
      * re-emitting an `added` op for a node whose content changed is exactly
      * the client's own semantics, not a new convention.
+     *
+     * A staged↔live flip also changes the navigator card
+     * ([GraphSummary.cells] / [GraphSummary.staged]) without moving
+     * membership, so it owes a `graphs.changed` the same way a lifecycle
+     * change does: coalesced through [lifecycleCardsDirty] onto the next tick.
      */
     internal fun restamp(ref: CellRef) = synchronized(lock) {
         val node = nodes[ref] ?: return@synchronized
+        lifecycleCardsDirty = true
         emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
             put("op", Event.ADDED)
             put("node", inspectorJson.encodeToJsonElement(stamped(ref, node)))
