@@ -1,23 +1,41 @@
 import { ACTIVE_STATUSES, type GraphDto, type NodeDto, type Override, type Polarity } from '../api/types';
 import type { ConnState, GraphSource } from '../sync/source';
 
-/** `?mock`: a scripted deliberation that grows over ~15 s, so the UI can be
- *  developed and eyeballed without the backend. Commands are logged no-ops. */
+/** `?mock`: a scripted deliberation that grows over ~20 s, so the UI can be
+ *  developed and eyeballed without the backend. `?mock=empty` starts with no
+ *  questions (the welcome screen); asking anything then runs the script with
+ *  that text. Overrides are applied locally so the control visibly works. */
 export class MockSource implements GraphSource {
   private timer?: ReturnType<typeof setTimeout>;
   private nodes = new Map<string, NodeDto>();
+  private onGraph?: (g: GraphDto) => void;
+  private running = false;
 
-  constructor(private stepMs = 550) {}
+  constructor(
+    private stepMs = 650,
+    private empty = false,
+  ) {}
 
   start(onGraph: (g: GraphDto) => void, onState: (s: ConnState) => void): void {
     onState('mock');
+    this.onGraph = onGraph;
     this.nodes.clear();
+    if (this.empty) {
+      onGraph(this.snapshot());
+      return;
+    }
     seedFinished(this);
-    const steps = script(this);
+    this.run();
+  }
+
+  private run(questionText?: string): void {
+    if (this.running) return;
+    this.running = true;
+    const steps = script(this, questionText);
     let i = 0;
     const tick = () => {
       if (i < steps.length) steps[i++]();
-      onGraph(this.snapshot());
+      this.onGraph?.(this.snapshot());
       if (i < steps.length) this.timer = setTimeout(tick, this.stepMs);
     };
     tick();
@@ -25,15 +43,21 @@ export class MockSource implements GraphSource {
 
   stop(): void {
     clearTimeout(this.timer);
+    this.running = false;
   }
 
   async ask(text: string): Promise<string | undefined> {
     console.info('[mock] POST /question', { text });
-    return undefined;
+    if (this.running) return undefined;
+    this.run(text);
+    return 'q0';
   }
 
   async override(id: string, mode: Override): Promise<void> {
     console.info('[mock] POST /override', { id, mode });
+    const status = mode === 'STOP' ? 'STOPPED' : mode === 'EXPAND' ? 'EXPLORING' : undefined;
+    this.set(id, status ? { override: mode, status } : { override: mode });
+    this.onGraph?.(this.snapshot());
   }
 
   // --- model helpers used by the script ---
@@ -72,6 +96,17 @@ export class MockSource implements GraphSource {
 
   snapshot(): GraphDto {
     const nodes = [...this.nodes.values()].map((n) => ({ ...n }));
+    // EXP-05 reach, derived as the backend does: root 1, child = parent × edge strength.
+    const byRef = new Map(nodes.map((n) => [n.ref, n]));
+    const parentEdge = new Map(nodes.filter((n) => n.kind === 'EDGE').map((e) => [e.source!, e]));
+    const reachOf = (c: NodeDto): number | undefined => {
+      if (c.depth === 0) return 1;
+      const e = parentEdge.get(c.ref);
+      const parent = e?.target === undefined ? undefined : byRef.get(e.target);
+      const pr = parent ? reachOf(parent) : undefined;
+      return pr === undefined || e?.strength === undefined ? undefined : pr * e.strength;
+    };
+    for (const n of nodes) if (n.kind === 'CLAIM') n.reach = reachOf(n);
     const roots = nodes.filter((n) => n.kind === 'CLAIM' && n.depth === 0);
     const questions = roots.map((r) => {
       const claims = nodes.filter((n) => n.kind === 'CLAIM' && n.root === r.ref);
@@ -99,10 +134,10 @@ function seedFinished(m: MockSource): void {
   m.edge('w3', 'w1', 0.61);
 }
 
-function script(m: MockSource): Array<() => void> {
+function script(m: MockSource, text = 'Should cities ban private cars from their centres?'): Array<() => void> {
   const q = 'q0';
   return [
-    () => m.claim(q, q, 'Should cities ban private cars from their centres?', 0, 'question'),
+    () => m.claim(q, q, text, 0, 'question'),
     () => m.set(q, { status: 'JUDGING' }),
     () => m.set(q, { status: 'EXPLORING', plausibility: 0.5 }),
     () => m.arg('c1', q, q, 'SUPPORT', 'Car-free centres measurably reduce air pollution and noise.', 'claude'),
@@ -166,6 +201,12 @@ function script(m: MockSource): Array<() => void> {
       m.set('c1a', { status: 'JUDGING' });
     },
     () => {
+      m.arg('c3a2', q, 'c3a', 'SUPPORT', 'Bus networks in most cities already run near capacity at peak hours.', 'codex', { status: 'QUEUED' });
+      m.arg('c4b', q, 'c4', 'SUPPORT', 'Paratransit services are often underfunded.', 'codex', { status: 'FAILED', error: 'claude: exit 1; codex: timed out after 120 s' });
+    },
+    () => {
+      m.edge('c3a2', 'c3a', 0.3);
+      m.edge('c4b', 'c4', 0.35);
       m.edge('c4a', 'c4', 0.75);
       m.set('c4', { credence: 0.52 });
       m.set('c1a', { status: 'PRUNED', relevance: 0.44, plausibility: 0.5 });
@@ -176,6 +217,7 @@ function script(m: MockSource): Array<() => void> {
       m.set('c5', { status: 'STOPPED', override: 'STOP', plausibility: 0.5, credence: 0.56 });
       m.set('c1b', { status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.76 });
       m.set('c4a', { status: 'BUDGET', plausibility: 0.75, credence: 0.75 });
+      m.set('c3a2', { status: 'BUDGET', plausibility: 0.5, credence: 0.5 });
     },
   ];
 }

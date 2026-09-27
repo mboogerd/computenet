@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { renderToString } from 'solid-js/web';
 import { describe, expect, it, vi } from 'vitest';
 import type { GraphDto } from '../src/api/types';
+import { EmptyState, EXAMPLES } from '../src/components/EmptyState';
 import { QuestionInput } from '../src/components/QuestionInput';
 import { TreeView } from '../src/components/TreeView';
 
@@ -21,7 +22,7 @@ const graph: GraphDto = {
     },
     {
       ref: 'a', kind: 'CLAIM', credence: 0.75, root: 'q', text: 'It would help.', depth: 1,
-      status: 'SATURATED', override: 'EXPAND', proposer: 'claude',
+      status: 'SATURATED', override: 'EXPAND', proposer: 'claude', reach: 0.8,
     },
     {
       ref: 'a-q', kind: 'EDGE', credence: 0.8, root: 'q', polarity: 'SUPPORT',
@@ -32,7 +33,7 @@ const graph: GraphDto = {
 
 describe('SPEC UI contract', () => {
   it('UI-01 renders one labelled question input and submit action', () => {
-    const html = renderToString(() => <QuestionInput onAsked={() => undefined} />);
+    const html = renderToString(() => <QuestionInput ask={async () => true} />);
     expect(html.match(/<input\b/g)).toHaveLength(1);
     expect(html).toContain('for="ask-input"');
     expect(html).toContain('type="submit"');
@@ -44,13 +45,33 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('aria-label="Deliberation tree"');
     expect(html).toContain('Should we?');
     expect(html).toContain('It would help.');
+    // the question is the hero, with a plain-language verdict
+    expect(html).toContain('aria-label="Question"');
+    expect(html).toContain('leaning yes');
     expect(html).toContain('63%');
-    expect(html).toContain('Exploring');
+    // claim: credence, status, proposer, override, polarity and relation strength
+    expect(html).toContain('75%');
+    expect(html).toContain('fully argued');
     expect(html).toContain('claude');
     expect(html).toContain('aria-label="Exploration override"');
     expect(html).toContain('branch--pro');
     expect(html).toContain('Pro');
-    expect(html).toContain('strength 80%');
+    expect(html).toContain('decisive link');
+    expect(html).toContain('80%');
+    // reach drives visual weight; a non-AUTO override stays visible at rest
+    expect(html).toContain('reach--high');
+    expect(html).toMatch(/--w:\s*0\.94/);
+    expect(html).toContain('is-pinned');
+    // the root is still active, so the progress line is shown as busy
+    expect(html).toContain('1 of 2 claims settled');
+  });
+
+  it('shows a helpful empty state with clickable examples', () => {
+    const picked: string[] = [];
+    const html = renderToString(() => <EmptyState onPick={(q) => picked.push(q)} />);
+    expect(html).toContain('Ask a question with two sides');
+    expect(html.match(/class="example"/g)).toHaveLength(3);
+    for (const q of EXAMPLES) expect(html).toContain(q);
   });
 
   it('UI-04 keeps neutral chrome, distinct pro/con colour, motion, and dark mode', () => {
@@ -61,6 +82,8 @@ describe('SPEC UI contract', () => {
     expect(tokensCss).toMatch(/--pro:\s*#[0-9a-f]+/i);
     expect(tokensCss).toMatch(/--con:\s*#[0-9a-f]+/i);
     expect(tokensCss).toContain('@media (prefers-color-scheme: dark)');
+    expect(tokensCss).toContain(':root[data-theme="dark"]');
+    expect(tokensCss).toContain(':root:not([data-theme="light"])');
     expect(appCss).toContain('.branch--pro');
     expect(appCss).toContain('.branch--con');
     expect(appCss).toContain('animation: enter');

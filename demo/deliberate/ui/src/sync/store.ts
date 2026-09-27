@@ -6,10 +6,11 @@ import { LiveSource } from './sse';
 
 const EMPTY: GraphDto = { questions: [], nodes: [] };
 
-export const isMock = new URLSearchParams(window.location.search).has('mock');
+const params = new URLSearchParams(window.location.search);
+export const isMock = params.has('mock');
 
 /** The one graph source for this page: live SSE, or the scripted mock. */
-export const source: GraphSource = isMock ? new MockSource() : new LiveSource();
+export const source: GraphSource = isMock ? new MockSource(undefined, params.get('mock') === 'empty') : new LiveSource();
 
 const [graph, setGraph] = createSignal<GraphDto>(EMPTY);
 const [conn, setConn] = createSignal<ConnState>('connecting');

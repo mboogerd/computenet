@@ -1,77 +1,87 @@
 /* Design tokens. Neutral greys carry the chrome; pro/con are the only
    saturated colours. Light values in :root, dark via the OS preference
-   (or an explicit data-theme, for a later toggle). */
+   unless the theme toggle pins one with data-theme on <html>. */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   --page: #f6f6f4;
   --surface: #ffffff;
-  --surface-sunk: #f0f0ed;
+  --surface-sunk: #efefec;
+  --hover: rgba(20, 20, 30, 0.035);
   --text: #17171a;
   --text-2: #5c5c62;
   --text-3: #8d8d93;
-  --line: rgba(20, 20, 30, 0.1);
+  --line: rgba(20, 20, 30, 0.09);
   --line-strong: rgba(20, 20, 30, 0.18);
-  --shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04);
+  --shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 4px 16px rgba(20, 20, 30, 0.05);
   --focus: rgba(20, 20, 30, 0.35);
 
   --pro: #1a9a6c;
   --con: #d2474c;
-  --pro-soft: color-mix(in srgb, var(--pro) 12%, var(--surface));
-  --con-soft: color-mix(in srgb, var(--con) 12%, var(--surface));
 
-  --credence: #3a3a40;
-  --track: #e6e6e2;
+  --credence: #2a2a2f;
+  --track: #e4e4e0;
+  --seg-on: #ffffff;
+  --sheen: rgba(255, 255, 255, 0.85);
 
-  --radius: 10px;
-  --radius-sm: 6px;
-  --gap: 12px;
-  --indent: 22px;
+  --radius: 12px;
+  --radius-sm: 7px;
+  --gap: 4px;
+  --indent: 18px;
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --text-xs: 11px;
+  --text-xs: 11.5px;
   --text-sm: 12.5px;
-  --text-md: 14.5px;
+  --text-md: 15px;
   --text-lg: 17px;
+  --text-hero: clamp(24px, 4.2vw, 34px);
 
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --dur: 220ms;
+  --dur: 200ms;
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --page: #111113;
-  --surface: #1b1b1e;
-  --surface-sunk: #151517;
+  --surface: #1a1a1d;
+  --surface-sunk: #202024;
+  --hover: rgba(255, 255, 255, 0.035);
   --text: #ececef;
   --text-2: #a4a4ab;
   --text-3: #6f6f77;
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.16);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --focus: rgba(255, 255, 255, 0.4);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
+  --focus: rgba(255, 255, 255, 0.45);
   --pro: #3cc28f;
   --con: #f06b6f;
-  --credence: #d6d6da;
+  --credence: #e2e2e6;
   --track: #2c2c30;
+  --seg-on: #34343a;
+  --sheen: rgba(255, 255, 255, 0.22);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --page: #111113;
-    --surface: #1b1b1e;
-    --surface-sunk: #151517;
+    --surface: #1a1a1d;
+    --surface-sunk: #202024;
+    --hover: rgba(255, 255, 255, 0.035);
     --text: #ececef;
     --text-2: #a4a4ab;
     --text-3: #6f6f77;
     --line: rgba(255, 255, 255, 0.08);
     --line-strong: rgba(255, 255, 255, 0.16);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --focus: rgba(255, 255, 255, 0.4);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
+    --focus: rgba(255, 255, 255, 0.45);
     --pro: #3cc28f;
     --con: #f06b6f;
-    --credence: #d6d6da;
+    --credence: #e2e2e6;
     --track: #2c2c30;
+    --seg-on: #34343a;
+    --sheen: rgba(255, 255, 255, 0.22);
   }
 }
