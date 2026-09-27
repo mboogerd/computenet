@@ -98,8 +98,14 @@ class DeliberationEngineTest {
     private fun engine(
         judge: Judge = FakeJudge(),
         proposers: List<Proposer> = listOf(FakeProposer("claude"), FakeProposer("codex")),
-        // maxArgsPerSide above the 4 a single default round produces, so ROUND_LIMIT (not the cap) ends it.
-        config: DeliberationEngine.Config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0, maxArgsPerSide = 5),
+        // Keep the original two-argument fixture explicit; maxArgsPerSide is above
+        // the 4 arguments it produces per side, so ROUND_LIMIT (not the cap) ends it.
+        config: DeliberationEngine.Config = DeliberationEngine.Config(
+            argsPerCall = 2,
+            maxRounds = 1,
+            maxDepth = 0,
+            maxArgsPerSide = 5,
+        ),
     ) = DeliberationEngine(service, judge, proposers, config).also { engines += it }
 
     private fun DeliberationEngine.idle() = assertTrue(awaitIdle(20.seconds), "engine did not go idle")
@@ -108,6 +114,15 @@ class DeliberationEngineTest {
     private fun GraphDto.edges() = nodes.filter { it.kind == "EDGE" }
     private fun GraphDto.childrenOf(ref: CellRef) = edges().filter { it.target == ref.id.toString() }
     private fun GraphDto.claim(ref: String) = nodes.single { it.ref == ref }
+
+    @Test
+    fun `calibrated exploration defaults are stable`() {
+        val config = DeliberationEngine.Config()
+        assertEquals(1, config.argsPerCall)
+        assertEquals(6, config.maxArgsPerSide)
+        assertEquals(0.22, config.saturation)
+        assertEquals(0.35, config.minInfluence)
+    }
 
     @Test
     fun `root expands and children attach with polarity, direction and provenance`() {
@@ -177,7 +192,7 @@ class DeliberationEngineTest {
     @Test
     fun `saturation stops one side early and both sides end the expansion`() {
         val conSaturated = FakeJudge(saturation = { _, side -> if (side == Polarity.ATTACK) 0.9 else 0.1 })
-        val e = engine(judge = conSaturated, config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
+        val e = engine(judge = conSaturated, config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -210,7 +225,11 @@ class DeliberationEngineTest {
             else listOf("Land is freed")
         }
         val judge = FakeJudge(duplicates = { _, cands -> cands.map { if (it.startsWith("dup")) 0 else null } })
-        val e = engine(judge = judge, proposers = listOf(a, b), config = DeliberationEngine.Config(maxRounds = 2, maxDepth = 0))
+        val e = engine(
+            judge = judge,
+            proposers = listOf(a, b),
+            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 2, maxDepth = 0),
+        )
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -327,7 +346,7 @@ class DeliberationEngineTest {
             override fun relationStrength(question: String, parent: String, child: String, side: Side) = 2.0
             override fun saturation(ctx: ClaimContext, side: Side): Double = error("529")
         }
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 2, maxDepth = 0, maxArgsPerSide = 100))
+        val e = engine(judge = judge, config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 2, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -359,7 +378,7 @@ class DeliberationEngineTest {
     @Test
     fun `STOP mid-round keeps the in-flight results and prevents further rounds`() {
         val p = GatedProposer("claude")
-        val e = engine(proposers = listOf(p), config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
+        val e = engine(proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 100))
         val root = e.ask("Q?")
         assertTrue(p.entered.await(20, TimeUnit.SECONDS))
         assertEquals(Status.EXPLORING, e.snapshot().node(root).status)
@@ -407,18 +426,20 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `EXPAND on a SATURATED claim runs exactly one extra round ignoring saturation`() {
-        val e = engine(judge = FakeJudge(saturation = { _, _ -> 1.0 }), config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0))
+    fun `EXPAND on a SATURATED claim runs exactly one extra round ignoring saturation and the cap`() {
+        val config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 3)
+        val e = engine(judge = FakeJudge(saturation = { _, _ -> 1.0 }), config = config)
         val root = e.ask("Q?")
         e.idle()
         assertEquals(Status.SATURATED, e.snapshot().node(root).status)
-        assertEquals(8, e.snapshot().childrenOf(root).size)
+        assertEquals(4, e.snapshot().childrenOf(root).size)
         e.setOverride(root, Override.EXPAND)
         e.idle()
         val g = e.snapshot()
         assertEquals(Status.SATURATED, g.node(root).status)
         assertEquals(2, g.node(root).rounds)
-        assertEquals(16, g.childrenOf(root).size)
+        assertEquals(8, g.childrenOf(root).size)
+        assertTrue(g.childrenOf(root).groupingBy { it.polarity }.eachCount().values.all { it > config.maxArgsPerSide })
     }
 
     @Test
@@ -427,7 +448,7 @@ class DeliberationEngineTest {
         val e = engine(
             judge = FakeJudge(saturation = { _, _ -> 1.0 }),
             proposers = listOf(p),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 0),
+            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 0),
         )
         val root = e.ask("Q?")
         assertTrue(p.entered.await(20, TimeUnit.SECONDS))
@@ -552,6 +573,32 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `a failed relevance judgment gates on reach alone`() {
+        val judge = object : Judge by FakeJudge(strength = { child ->
+            if (child.contains("support")) 0.8 else 0.4
+        }) {
+            override fun relevance(ctx: ClaimContext): Double = error("jev down")
+        }
+        val e = engine(
+            judge = judge,
+            proposers = listOf(FakeProposer("claude")),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, minInfluence = 0.5),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        val graph = e.snapshot()
+        val kids = graph.childrenOf(root).map { graph.claim(it.source!!) }
+        val reachable = kids.single { it.text!!.contains("support") }
+        val decayed = kids.single { it.text!!.contains("attack") }
+        assertEquals(Status.ROUND_LIMIT, reachable.status)
+        assertEquals(Status.PRUNED, decayed.status)
+        kids.forEach { child ->
+            assertNull(child.relevance)
+            assertTrue(child.error!!.contains("jev relevance"), child.error)
+        }
+    }
+
+    @Test
     fun `influence gate expands relevant-and-reachable claims and prunes decayed ones`() {
         // relevance 0.5 everywhere, strength 0.8: influence 0.4 at depth 1, 0.32 at depth 2.
         val judge = FakeJudge(relevance = { 0.5 })
@@ -587,7 +634,7 @@ class DeliberationEngineTest {
     @Test
     fun `a side at maxArgsPerSide is saturated without asking Jev and never overfilled in a round`() {
         val judge = FakeJudge(saturation = { _, _ -> 0.0 })
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 3, maxDepth = 0, maxArgsPerSide = 3))
+        val e = engine(judge = judge, config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 3))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -610,7 +657,7 @@ class DeliberationEngineTest {
                 return p.propose(ctx, side, max)
             }
         }
-        val e = engine(proposers = listOf(counting), config = DeliberationEngine.Config(maxRounds = 5, maxDepth = 0, maxArgsPerSide = 3))
+        val e = engine(proposers = listOf(counting), config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 5, maxDepth = 0, maxArgsPerSide = 3))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()

@@ -45,11 +45,11 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--proposers claude,codex` | both | which CLIs propose arguments |
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
-| `--args-per-call <n>` | 2 | arguments per proposer call, per side |
+| `--args-per-call <n>` | 1 | arguments per proposer call, per side |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
 | `--max-depth <n>` | 3 | claims deeper than this are `DEPTH_LIMIT` |
 | `--max-claims <n>` | 60 | claims per question; the rest become `BUDGET` |
-| `--max-args-per-side <n>` | 4 | a side holding n arguments is saturated; a round never attaches beyond it |
+| `--max-args-per-side <n>` | 6 | a side holding n arguments is saturated; a round never attaches beyond it |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
 | `--min-influence <p>` | 0.35 | a non-root claim is expanded only if Jev relevance × reach ≥ p, else `PRUNED` |
 
@@ -65,9 +65,9 @@ dependable stop. Most depth-2 claims fall below `--min-influence`, so
 `DEPTH_LIMIT` is a safety net that rarely fires.
 
 The budget is spent in breadth-first order. With the defaults, the per-side
-cap bounds any one claim to 8 arguments, so the root takes at most 8 claims of
-the budget. A single default round (2 proposers × 2 arguments) already fills a
-side, so the Jev saturation reading mostly matters with `--args-per-call 1`.
+cap bounds any one claim to 12 arguments. Each default round offers two new
+arguments per side, giving Jev a chance to stop a side after 2 and 4 arguments
+before the cap supplies the dependable stop at 6.
 
 ## HTTP
 
@@ -87,8 +87,8 @@ slot.
 Measured on 2026-09-27 with `--max-depth 2 --max-claims 30 --max-rounds 2
 --args-per-call 1`: a 30-claim tree took about 1–2 minutes. It ran 14–17 rounds,
 which is roughly 60 CLI invocations billed to your Claude and Codex accounts,
-plus a couple of hundred Jev requests. With the iteration-2
-defaults (per-side cap 4, `--min-influence 0.35`, 8 processes), a fresh
+plus a couple of hundred Jev requests. In a calibration run using a per-side
+cap of 4, 2 arguments per call, `--min-influence 0.35`, and 8 processes, a
 60-claim question took about 1 minute on 2026-09-27. It expanded the root and
 6 of the 8 depth-1 claims, one round each, before the cap saturated them.
 Of the 50 depth-2 claims, 37 were `PRUNED` and 13 were `BUDGET`, and no claim

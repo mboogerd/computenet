@@ -254,6 +254,8 @@ class DeliberateAppTest {
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
         assertEquals(DeliberateApp.DEFAULT_PORT, Options(arrayOf("--max-depth", "2")).port.takeIf { System.getenv("PORT") == null } ?: DeliberateApp.DEFAULT_PORT)
         assertEquals(8, Options(emptyArray()).maxProcesses)
+        assertEquals(1, Options(emptyArray()).config.argsPerCall)
+        assertEquals(6, Options(emptyArray()).config.maxArgsPerSide)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--relevance", "0.5")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }

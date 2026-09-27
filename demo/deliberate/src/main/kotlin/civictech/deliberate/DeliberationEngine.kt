@@ -34,12 +34,12 @@ class DeliberationEngine(
 
     /** Knobs of SPEC §3; the Jev thresholds' defaults come from `CALIBRATION.md` (SPEC §10). */
     data class Config(
-        val argsPerCall: Int = 2,
+        val argsPerCall: Int = 1,
         val maxRounds: Int = 3,
         /** EXP-04: a side whose Jev saturation (1 − p(missing)) reaches this gets no more proposals. */
         val saturation: Double = DEFAULT_SATURATION,
         /** EXP-04: a side holding this many arguments is saturated regardless of Jev. */
-        val maxArgsPerSide: Int = 4,
+        val maxArgsPerSide: Int = 6,
         /** EXP-05: a non-root claim is expanded only when relevance × reach reaches this. */
         val minInfluence: Double = DEFAULT_MIN_INFLUENCE,
         val maxDepth: Int = 3,
