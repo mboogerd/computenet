@@ -204,6 +204,36 @@ class ExplorationPolicyTest {
     }
 
     @Test
+    fun `model B — contribution is damped by the plausibility uncertainty 4·p·(1 − p)`() {
+        listOf(
+            Case("p = 0: a claim known false contributes nothing", 0.0, 0.0),
+            Case("p = ½ keeps it whole", 0.5, 0.12),
+            Case("p = 1: a claim known true contributes nothing", 1.0, 0.0),
+            Case("p = 0.9 keeps 0.36 of it", 0.9, 0.12 * 0.36),
+            Case("unjudged plausibility counts 1", null, 0.12),
+        ).forEach { (name, p, expected) -> near(expected, defaults.contribution(0.8, 0.5, 0.3, p), name) }
+        near(0.0, defaults.uncertainty(0.0), "4p(1-p) at 0")
+        near(1.0, defaults.uncertainty(0.5), "4p(1-p) at ½")
+        near(0.0, defaults.uncertainty(1.0), "4p(1-p) at 1")
+        near(0.0, defaults.uncertainty(1.5), "clamped to [0,1]")
+    }
+
+    @Test
+    fun `model B — the bearing question gates on a con that triage would ADD, at or above 0_8`() {
+        val at = ExplorationPolicy.BEARING_PLAUSIBILITY
+        assertEquals(0.8, at)
+        table(
+            Case("at the threshold", Triple(at, ATTACK, TriageAction.ADD), true),
+            Case("above it", Triple(1.0, ATTACK, TriageAction.ADD), true),
+            Case("just below it: unchanged triage path", Triple(0.7999, ATTACK, TriageAction.ADD), false),
+            Case("unjudged plausibility", Triple(null, ATTACK, TriageAction.ADD), false),
+            Case("a pro is never asked", Triple(0.9, SUPPORT, TriageAction.ADD), false),
+            Case("a con triage placed elsewhere keeps its verdict", Triple(0.9, ATTACK, TriageAction.DUPLICATE), false),
+            Case("a con triage dropped stays dropped", Triple(0.9, ATTACK, TriageAction.DROP), false),
+        ) { (p, side, action) -> defaults.asksBearing(p, side, action) }
+    }
+
+    @Test
     fun `link contribution — the argument's contribution times 4·s·(1 − s)`() {
         listOf(
             Case("undecided strength keeps it whole", Triple(0.6, 0.9, 0.5), 0.6),

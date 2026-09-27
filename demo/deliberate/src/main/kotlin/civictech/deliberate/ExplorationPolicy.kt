@@ -59,6 +59,15 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
         val ACTIVE = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
         val SIDES = listOf(Polarity.SUPPORT, Polarity.ATTACK)
         val Side.opposite get() = if (this == Polarity.SUPPORT) Polarity.ATTACK else Polarity.SUPPORT
+
+        /**
+         * Model B: a con candidate against a claim whose plausibility reaches this
+         * is asked whether it disputes the claim or only its bearing ([Judge.bearing]).
+         * Below it the triage path is unchanged. Motivated by a scratch model review
+         * (2026-09-27, not in the repo), not by a calibration run: treat it as a
+         * starting value, not a measured one.
+         */
+        const val BEARING_PLAUSIBILITY = 0.8
     }
 
     // ---------------------------------------------------------------- EXP-04 caps and saturation
@@ -184,16 +193,41 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
      */
     fun reachOf(parentReach: Double?, edgeStrength: Double?): Double = (parentReach ?: 1.0) * strengthOf(edgeStrength)
 
-    /** SPEC §3 "Exploration order": reach × relevance × quality, an unjudged factor counting 1. */
-    fun contribution(reach: Double, relevance: Double?, quality: Double?): Double =
-        reach * (relevance ?: 1.0) * (quality ?: 1.0)
+    /**
+     * SPEC §3 "Exploration order": reach × relevance × quality ×
+     * [uncertainty] (plausibility), an unjudged factor counting 1. Without a
+     * [plausibility] this is the argument's worth to its parent alone — what
+     * its link's [linkContribution] is built from.
+     */
+    fun contribution(reach: Double, relevance: Double?, quality: Double?, plausibility: Double? = null): Double =
+        reach * (relevance ?: 1.0) * (quality ?: 1.0) * uncertainty(plausibility)
+
+    /**
+     * Model B: how unsettled a claim of plausibility [p] still is, 4·p·(1 − p):
+     * 1 at p = ½, 0 for a claim Jev judged certainly true or false — exploring
+     * its premise further cannot move it. Unjudged (null) counts 1. The claim's
+     * bearing on its parent is its link's business ([linkContribution]).
+     */
+    fun uncertainty(p: Double?): Double = p?.coerceIn(0.0, 1.0)?.let { 4 * it * (1 - it) } ?: 1.0
+
+    /**
+     * Model B: whether a candidate proposed on [side] of a claim of plausibility
+     * [plausibility], which triage resolved to [action], is asked [Judge.bearing]:
+     * only a con that triage would ADD, against a claim at or above
+     * [BEARING_PLAUSIBILITY]. The caller also requires the claim to have a link.
+     */
+    fun asksBearing(plausibility: Double?, side: Side, action: TriageAction): Boolean =
+        side == Polarity.ATTACK && action == TriageAction.ADD && plausibility != null && plausibility >= BEARING_PLAUSIBILITY
 
     /**
      * SPEC §3 "Links as claims": a link is worth exploring in proportion to
      * how much its argument can move the parent — the argument's contribution
      * — times how unsettled its strength s still is, 4·s·(1 − s): 1 at s = ½,
-     * 0 for a link judged irrelevant or decisive. So a link never outranks its
-     * own argument, and a clear-cut link is left alone unless the human expands it.
+     * 0 for a link judged irrelevant or decisive. A clear-cut link is left
+     * alone unless the human expands it. [argContribution] is the argument's
+     * contribution *without* its own plausibility factor ([uncertainty]): a
+     * well-believed argument's premise is settled, but whether it bears on its
+     * parent is not (model B), so a link may outrank its own argument.
      */
     fun linkContribution(argContribution: Double?, argReach: Double?, edgeStrength: Double?): Double {
         val s = strengthOf(edgeStrength)

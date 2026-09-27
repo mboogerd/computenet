@@ -53,6 +53,11 @@ internal object EngineRecords {
         val duplicatesDropped: Int = 0,
         val triage: Map<String, Int> = emptyMap(),
         val alsoProposedBy: List<String> = emptyList(),
+        /**
+         * EXP-03 REFINE (model B). Optional with an empty default, so a record
+         * written before it existed decodes unchanged and an empty list is not stored.
+         */
+        val evidence: List<String> = emptyList(),
         val merged: Boolean = false,
         val error: String? = null,
         val anyCallSucceeded: Boolean = false,
@@ -79,7 +84,7 @@ internal object EngineRecords {
         reach = c.reach.takeIf { c.parent != null }, contribution = c.contribution.takeIf { c.parent != null },
         proSaturation = c.proSaturation, conSaturation = c.conSaturation, saturated = c.saturated.toList(),
         duplicatesDropped = c.duplicatesDropped, triage = c.triage.mapKeys { it.key.name },
-        alsoProposedBy = c.alsoProposedBy.toList(), merged = c.merged, error = c.error,
+        alsoProposedBy = c.alsoProposedBy.toList(), evidence = c.evidence.toList(), merged = c.merged, error = c.error,
         anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
     )
 
@@ -104,6 +109,7 @@ internal object EngineRecords {
         c.duplicatesDropped = r.duplicatesDropped
         r.triage.forEach { (k, v) -> TriageAction.entries.firstOrNull { it.name == k }?.let { c.triage[it] = v } }
         c.alsoProposedBy += r.alsoProposedBy
+        c.evidence += r.evidence
         c.merged = r.merged
         c.error = r.error
         c.anyCallSucceeded = r.anyCallSucceeded

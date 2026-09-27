@@ -537,5 +537,7 @@ internal object SlowCallLog {
         override fun triage(ctx: ClaimContext, candidates: List<Candidate>) =
             timed({ "jev triage (${candidates.size})" }) { j.triage(ctx, candidates) }
         override fun saturation(ctx: ClaimContext, side: Side) = timed({ "jev saturation" }) { j.saturation(ctx, side) }
+        override fun bearing(ctx: ClaimContext, link: LinkContext, candidates: List<String>) =
+            timed({ "jev bearing (${candidates.size})" }) { j.bearing(ctx, link, candidates) }
     }
 }

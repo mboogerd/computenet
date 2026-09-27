@@ -32,7 +32,9 @@ internal interface RoundHost {
  * One round of a claim (EXP-02..05) and what it sets off: the proposers'
  * turns, exact-text dedupe and Jev triage (EXP-03) with every verdict
  * applied — attaching arguments ([attach]), rewriting unexplored ones
- * (REPLACE, MERGE, under a rewrite reservation) — then the attach-time
+ * (REPLACE, MERGE, under a rewrite reservation), recording evidence (REFINE),
+ * and for a con against a well-believed claim, routing by what it denies
+ * ([askBearing], model B) — then the attach-time
  * assessment of the new arguments ([assess]), the round's yield (EXP-10)
  * and saturation (EXP-04). The rules come from [policy]; everything the
  * round reads or writes of the engine's state goes through [host].
@@ -120,14 +122,40 @@ internal class RoundProtocol(
         val verdicts = host.attempt(c, "triage") { judge.triage(ctx, fresh.map { Candidate(it.text, it.side) }) }
             ?.takeIf { it.size == fresh.size }
             ?: fresh.map { Triage(TriageAction.ADD) }
+        val bearings = askBearing(c, ctx, fresh, verdicts)
         val resolved = arrayOfNulls<Claim>(fresh.size)
         for ((i, f) in fresh.withIndex()) {
             val v = verdicts[i]
-            val target = v.target?.let { t -> if (t < existing.size) existing.getOrNull(t) else resolved.getOrNull(t - existing.size) }
-            val action = resolveAction(c, v.action, target, f)
+            val indexed = v.target?.let { t -> if (t < existing.size) existing.getOrNull(t) else resolved.getOrNull(t - existing.size) }
+            // Model B: a con that only denies the claim's bearing undercuts the claim's own link.
+            val (asked, target) = when (bearings[i]) {
+                Bearing.DENIES_BEARING -> TriageAction.UNDERCUT to c
+                Bearing.NEITHER -> TriageAction.DROP to null
+                Bearing.DISPUTES_CLAIM, null -> v.action to indexed
+            }
+            val action = resolveAction(c, asked, target, f)
             r.count(action)
             resolved[i] = applyVerdict(r, action, f, target, room)
         }
+    }
+
+    /**
+     * Model B: asks [Judge.bearing] about the candidates [ExplorationPolicy.asksBearing]
+     * selects — cons triage would ADD to [c], a well-believed claim with a link —
+     * in one request. Returns the answers by candidate index; a candidate not
+     * asked, or a failed call (error recorded on [c]), keeps its triage verdict.
+     */
+    private fun askBearing(c: Claim, ctx: ClaimContext, fresh: List<Fresh>, verdicts: List<Triage>): Map<Int, Bearing> {
+        val (link, plausibility) = host.locked {
+            val parent = c.parent?.takeIf { !c.isLink && c.link != null } ?: return@locked null
+            LinkContext(c.text, parent.text, c.side!!) to c.plausibility
+        } ?: return emptyMap()
+        val asked = fresh.indices.filter { policy.asksBearing(plausibility, fresh[it].side, verdicts[it].action) }
+        if (asked.isEmpty()) return emptyMap()
+        val answers = host.attempt(c, "bearing") { judge.bearing(ctx, link, asked.map { fresh[it].text }) }
+            ?.takeIf { it.size == asked.size }
+            ?: return emptyMap()
+        return asked.zip(answers).toMap()
     }
 
     /** EXP-02: [p] asked about every side in [turnSides] concurrently; a failed call records its error on the claim. */
@@ -222,11 +250,16 @@ internal class RoundProtocol(
                 r.replaced += target!!
                 target
             }
+            // Model B: evidence for the target is recorded on it, not attached as a child claim.
             TriageAction.REFINE -> {
-                val fits = host.locked { fits(target!!, Polarity.SUPPORT, r.forced) }
-                if (fits) add(r, target!!, Polarity.SUPPORT, f) else target
+                host.update {
+                    val t = target!!
+                    if (t.evidence.none { normalize(it) == normalize(f.text) }) t.evidence += f.text
+                }
+                target
             }
-            // EXP-03 UNDERCUT: attached to the target's link, as one of its con arguments.
+            // EXP-03 UNDERCUT: attached to the target's link, as one of its con arguments
+            // (model B: the target may be the round's claim itself, see askBearing).
             TriageAction.UNDERCUT -> {
                 val (link, fits) = host.locked { target!!.link!!.let { l -> l to fits(l, Polarity.ATTACK, r.forced) } }
                 if (fits) add(r, link, Polarity.ATTACK, f) else target
@@ -390,17 +423,24 @@ internal class RoundProtocol(
                 }
                 val reach = policy.reachOf(n.parent!!.reach, edge.strength)
                 n.reach = reach
-                n.contribution = policy.contribution(reach, n.relevance, n.quality)
-                updateLink(n)
+                // Model B: the claim's own worth is damped by how settled its premise is;
+                // its link is built from the undamped worth (the bearing is still open).
+                val worth = policy.contribution(reach, n.relevance, n.quality)
+                n.contribution = policy.contribution(reach, n.relevance, n.quality, n.plausibility)
+                updateLink(n, worth)
             }
         }
     }
 
-    /** Caller holds the engine lock. SPEC §3 "Links as claims": [arg]'s link takes its reach and [ExplorationPolicy.linkContribution]. */
-    private fun updateLink(arg: Claim) {
+    /**
+     * Caller holds the engine lock. SPEC §3 "Links as claims": [arg]'s link takes its reach
+     * and [ExplorationPolicy.linkContribution] of [worth], the argument's contribution
+     * without its plausibility factor.
+     */
+    private fun updateLink(arg: Claim, worth: Double?) {
         val l = arg.link ?: return
         l.reach = arg.reach
-        l.contribution = policy.linkContribution(arg.contribution, arg.reach, arg.edge?.strength)
+        l.contribution = policy.linkContribution(worth, arg.reach, arg.edge?.strength)
     }
 
     /**
@@ -521,7 +561,7 @@ internal class RoundProtocol(
             val reach = policy.reachOf(n.parent!!.reach, edge.strength)
             n.reach = reach
             n.contribution = reach
-            updateLink(n)
+            updateLink(n, reach)
             // The link is re-gated with the new wording's judgments (replaceable() kept it unexplored).
             n.link?.let { l -> if (l.status in FINISHED && l.override != Override.STOP) l.status = Status.QUEUED }
         }
