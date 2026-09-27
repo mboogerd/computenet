@@ -198,14 +198,20 @@ import java.util.concurrent.atomic.AtomicInteger
  * apply-all-arms-then-publish sequence, so its catch-up snapshot is a composite
  * from before that wave or after it, never inside it.
  *
- * **Write-visibility handles run elsewhere.** A [visibilityOf] handle is
- * registered and retired under [lock], but its completion is *submitted* to the
- * JDK default async pool (`CompletableFuture.runAsync`), so the `complete` call
- * and every plain `thenAccept`/`thenApply` dependent run on a pool thread —
- * never on the host scheduler thread, never under [lock], and never on the
- * listener dispatcher (which a handle-only sink therefore never mints) — save
- * that a thread blocked in `get`/`join` on the handle may run a pending plain
- * dependent itself, per [FrontierWitness.visibilityOf]. Handles
+ * **Write-visibility handles run elsewhere — except when already complete.**
+ * A [visibilityOf] handle that has to wait is registered and retired under
+ * [lock], but its completion is *submitted* to the JDK default async pool
+ * (`CompletableFuture.runAsync`), so the `complete` call and every plain
+ * `thenAccept`/`thenApply` dependent run on a pool thread — never on the host
+ * scheduler thread, never under [lock], and never on the listener dispatcher
+ * (which a handle-only sink therefore never mints) — save that a thread
+ * blocked in `get`/`join` on the handle may run a pending plain dependent
+ * itself, per [FrontierWitness.visibilityOf]. That pool guarantee is for the
+ * waiting case only: [visibilityOf] also returns an already-complete handle
+ * for a closed sink, a wave already at or behind the flushed frontier, or the
+ * outstanding-handle bound exceeded, and a plain dependent registered on one
+ * of those runs synchronously on the calling thread instead, per
+ * [FrontierWitness.visibilityOf]. Handles
  * carry no ordering guarantee relative to each other or to listener
  * notifications.
  */
