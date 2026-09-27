@@ -1,0 +1,1675 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.pro-text {
+  color: var(--pro-text);
+}
+
+.con-text {
+  color: var(--con-text);
+}
+
+/* ---------- layout ---------- */
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 22px 24px 96px;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.brand__mark {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, var(--pro) 50%, var(--con) 50%);
+}
+
+.conn {
+  margin-left: auto;
+  margin-right: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conn::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.conn--live::before {
+  background: var(--pro);
+}
+
+.conn--reconnecting::before {
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+.iconbtn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.iconbtn::-webkit-details-marker {
+  display: none;
+}
+
+.iconbtn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.theme__glyph {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+  transition: transform 400ms var(--ease);
+}
+
+.theme.is-dark .theme__glyph {
+  transform: rotate(180deg);
+}
+
+/* ---------- legend ---------- */
+
+.legend {
+  position: relative;
+}
+
+.legend[open] > summary {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.legend__panel {
+  position: absolute;
+  z-index: 10;
+  right: -38px;
+  top: 40px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  max-height: 70vh;
+  overflow-y: auto;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  animation: enter 220ms var(--ease) both;
+}
+
+.legend__panel dl {
+  margin: 0;
+}
+
+.legend__panel dt {
+  color: var(--text);
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.legend__panel dt:first-child {
+  margin-top: 0;
+}
+
+.legend__panel dd {
+  margin: 2px 0 0;
+}
+
+/* Inline samples of the marks the legend explains. */
+.glyph {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.glyph--bar {
+  width: 30px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+}
+
+.glyph__fill {
+  position: absolute;
+  inset: 0 40% 0 0;
+  border-radius: 3px;
+  background: var(--fill-soft);
+}
+
+.glyph__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 38%;
+  width: 36%;
+  background: var(--band);
+}
+
+.glyph__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 60%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--credence);
+}
+
+.glyph--stripe {
+  width: 3px;
+  height: 13px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+.glyph--pro {
+  background: var(--pro);
+}
+
+.glyph--con {
+  background: var(--con);
+}
+
+.glyph--dashed {
+  background: repeating-linear-gradient(to bottom, var(--pro) 0 3px, transparent 3px 6px);
+}
+
+.glyph--link {
+  width: 22px;
+  height: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+}
+
+.legend__tip {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+}
+
+/* ---------- question input ---------- */
+
+.ask {
+  position: relative;
+}
+
+.ask__input {
+  width: 100%;
+  padding: 14px 132px 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: var(--text-lg);
+  box-shadow: var(--shadow);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.ask__input::placeholder {
+  color: var(--text-3);
+}
+
+.ask__input:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow), 0 0 0 4px var(--hover);
+}
+
+.ask__submit {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--page);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.ask__submit:disabled {
+  opacity: 0.18;
+  cursor: default;
+}
+
+.ask__submit:not(:disabled):hover .ask__arrow {
+  transform: translateX(2px);
+}
+
+.ask__arrow {
+  transition: transform var(--dur) var(--ease);
+}
+
+.ask__error {
+  margin: 8px 18px 0;
+  color: var(--con-text);
+  font-size: var(--text-sm);
+}
+
+/* ---------- question switcher ---------- */
+
+.qlist {
+  display: flex;
+  gap: 4px;
+  margin-top: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.qlist__item {
+  flex: 0 1 auto;
+  max-width: 260px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.qlist__item:hover {
+  color: var(--text-2);
+}
+
+.qlist__item.is-selected {
+  background: var(--surface-sunk);
+  color: var(--text);
+}
+
+.qlist__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qlist__dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+.qlist__dot.is-active {
+  opacity: 1;
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* ---------- hero: the question ---------- */
+
+.stage {
+  margin-top: 40px;
+}
+
+.hero {
+  /* Its enter animation makes it a stacking context: lift it above the tree so the cost popover is not painted under the cards. */
+  position: relative;
+  z-index: 2;
+  animation: enter 480ms var(--ease) both;
+}
+
+.hero__q {
+  margin: 0 0 22px;
+  font-size: var(--text-hero);
+  font-weight: 620;
+  line-height: 1.18;
+  letter-spacing: -0.022em;
+  text-wrap: balance;
+}
+
+.gauge {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.gauge__track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+/* Soft fill up to the consensus; the band and the marker sit above it. */
+.gauge__fill {
+  position: absolute;
+  inset: 0;
+  background: var(--fill-soft);
+  transform-origin: left;
+  transition: transform 700ms var(--ease);
+}
+
+.gauge__band {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  background: var(--band);
+  border-radius: 2px;
+  transition: left 700ms var(--ease), width 700ms var(--ease);
+}
+
+.gauge__mark {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 1.5px;
+  background: var(--credence);
+  transition: left 700ms var(--ease);
+}
+
+.gauge__caption {
+  grid-column: 2;
+  margin: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge__mid {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--page);
+  opacity: 0.9;
+}
+
+.hero__row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.verdict {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+
+.verdict__label {
+  font-weight: 600;
+  transition: color 400ms var(--ease);
+}
+
+.verdict--1 .verdict__label,
+.verdict--2 .verdict__label {
+  color: var(--pro-text);
+}
+
+.verdict---1 .verdict__label,
+.verdict---2 .verdict__label {
+  color: var(--con-text);
+}
+
+.verdict__sep {
+  margin: 0 8px;
+  color: var(--text-3);
+}
+
+.verdict__num {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.more {
+  margin-left: auto;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.more:hover,
+.more[aria-expanded="true"] {
+  color: var(--text);
+}
+
+/* thin per-question progress line: settled claims / all claims */
+.activity {
+  position: relative;
+  height: 2px;
+  margin-top: 18px;
+  border-radius: 1px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.activity > span {
+  position: absolute;
+  inset: 0;
+  background: var(--text-3);
+  transform-origin: left;
+  transition: transform 700ms var(--ease);
+}
+
+.activity.is-busy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, var(--text-2), transparent);
+  animation: sweep 1.8s var(--ease) infinite;
+}
+
+.hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  min-height: 30px;
+  margin: 8px 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+/* EXP-06/EXP-10: why the tree stopped growing early — informative, not alarming */
+.hero__stopped {
+  font-style: italic;
+  cursor: help;
+}
+
+/* CTL-05: a paused question says so beside the verdict, with Resume right there. */
+.hero__pausedbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  font-size: var(--text-xs);
+}
+
+.hero__paused {
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.verdict--none .verdict__label {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.pause {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.pause:hover,
+.pause.is-on {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+/* ---------- cost (SPEC §12) ---------- */
+
+.cost {
+  position: relative;
+}
+
+.cost__btn {
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.cost__btn:hover,
+.cost__btn[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.cost__panel {
+  position: absolute;
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 10;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: var(--text-sm);
+  font-style: normal;
+  color: var(--text-2);
+  text-align: left;
+  cursor: auto;
+  animation: enter 220ms var(--ease) both;
+}
+
+.cost__panel p {
+  margin: 0;
+}
+
+.cost__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--text);
+}
+
+.cost__total strong,
+.cost__usd {
+  font-variant-numeric: tabular-nums;
+}
+
+.cost__projection,
+.cost__empty {
+  margin-top: 2px !important;
+  color: var(--text-3);
+}
+
+.cost__list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.cost__row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+}
+
+.cost__calls {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.cost__details {
+  margin-top: 10px;
+}
+
+.cost__details > summary {
+  width: max-content;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.cost__details > summary:hover,
+.cost__details[open] > summary {
+  color: var(--text);
+}
+
+.cost__details .cost__list {
+  margin-top: 6px;
+}
+
+.cost__detail {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.cost__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  color: var(--text);
+}
+
+.cost__name {
+  font-weight: 600;
+}
+
+.cost__model {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.cost__line {
+  margin-top: 2px !important;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.cost__source,
+.cost__note,
+.cost__foot {
+  color: var(--text-3);
+}
+
+.cost__tag {
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 10.5px;
+}
+
+.cost__warn,
+.cost__foot {
+  margin-top: 8px !important;
+  font-size: var(--text-xs);
+}
+
+.hero .facts {
+  margin-top: 12px;
+}
+
+/* ---------- tree ---------- */
+
+.tree,
+.children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree {
+  margin-top: 28px;
+}
+
+.children {
+  margin-left: var(--indent);
+  padding-left: 4px;
+  border-left: 1px solid var(--line);
+}
+
+.branch {
+  padding-top: var(--gap);
+  animation: enter 520ms var(--ease) both;
+}
+
+/* ---------- claim card: a quiet row until hovered or selected ---------- */
+
+.card {
+  position: relative;
+  padding: 9px 12px 8px 18px;
+  border-radius: var(--radius);
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+/* polarity stripe: colour = side, opacity = relation strength */
+.card::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--text-3);
+  opacity: calc(0.25 + 0.75 * var(--s, 0));
+  transition: opacity 500ms var(--ease);
+}
+
+.branch--pro > .card::before {
+  background: var(--pro);
+}
+
+.branch--con > .card::before {
+  background: var(--con);
+}
+
+.card:hover {
+  background: var(--hover);
+}
+
+.card.is-open {
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.card.is-busy::before {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+
+.card__main {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Low reach recedes by colour (never below --text-2, ≥ 4.5:1) and size, not by opacity. */
+.card__text {
+  text-wrap: pretty;
+  transition: color 500ms var(--ease);
+}
+
+.reach--low > .card .card__text {
+  color: var(--text-2);
+}
+
+.reach--high > .card .card__text {
+  font-weight: 520;
+}
+
+.reach--low > .card .card__text {
+  font-size: 14px;
+}
+
+.card:hover .card__text,
+.card.is-open .card__text,
+.card:focus-within .card__text {
+  color: var(--text);
+}
+
+.card__cred {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+/* Reach may fade the graphic, never the number beside it. */
+.card__cred .bar {
+  opacity: max(var(--w, 1), 0.6);
+}
+
+.card__num {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  line-height: 1;
+}
+
+.bar {
+  position: relative;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+}
+
+.bar__fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: var(--fill-soft);
+  transform-origin: left;
+  transition: transform 700ms var(--ease);
+}
+
+/* Where the credence rules disagree: drawn above the fill, so all of it shows. */
+.bar__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  border-radius: 1px;
+  background: var(--band);
+  transition: left 700ms var(--ease), width 700ms var(--ease);
+}
+
+.facts__layers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  min-height: 26px;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.card__spacer {
+  flex: 1;
+}
+
+.side__word {
+  font-weight: 650;
+}
+
+.branch--con > .card .side__word {
+  color: var(--con-text);
+}
+
+/* EXP-03 UNDERCUT: attacks the link above, not a claim — a dashed con stripe. */
+.branch--undercut > .card::before {
+  background: repeating-linear-gradient(to bottom, var(--con) 0 3px, transparent 3px 6px);
+}
+
+.branch--undercut > .card .side__word {
+  color: var(--con-text);
+  font-style: italic;
+}
+
+.branch--pro > .card .side__word {
+  color: var(--pro-text);
+}
+
+.side__num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- links as claims (SPEC §3): the connector is interactive ---------- */
+
+/* An argument about a link: a dashed stripe — pro-coloured when it says the link holds. */
+.branch--holds > .card::before {
+  background: repeating-linear-gradient(to bottom, var(--pro) 0 3px, transparent 3px 6px);
+}
+
+.branch--holds > .card .side__word {
+  color: var(--pro-text);
+  font-style: italic;
+}
+
+/* The link chip: side + link strength, on the card's connector edge. */
+.linkchip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.linkchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-left: -6px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.linkchip:hover,
+.linkchip:focus-visible,
+.linkchip.is-open {
+  background: var(--surface-sunk);
+  border-color: var(--line);
+}
+
+.linkchip.is-open {
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+
+/* The knot: where the connector ties the argument to its claim. Its fill is how far the link holds. */
+.linkchip__knot {
+  position: relative;
+  width: 14px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.linkchip__knot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--text-3);
+  transform: scaleX(var(--h, 0));
+  transform-origin: left;
+  transition: transform 500ms var(--ease);
+}
+
+.branch--pro > .card .linkchip__knot::after,
+.branch--holds > .card .linkchip__knot::after {
+  background: var(--pro);
+}
+
+.branch--con > .card .linkchip__knot::after,
+.branch--undercut > .card .linkchip__knot::after {
+  background: var(--con);
+}
+
+.linkchip.is-busy .linkchip__knot {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+
+.linkchip__count {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Preview of the link as a claim: rendered only while the chip is hovered or focused. */
+.linkchip__peek {
+  position: absolute;
+  z-index: 20;
+  left: -6px;
+  bottom: calc(100% + 6px);
+  display: grid;
+  gap: 5px;
+  width: max-content;
+  max-width: min(360px, 80vw);
+  padding: 9px 11px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  pointer-events: none;
+  animation: enter var(--dur) var(--ease) 250ms both;
+}
+
+.linkchip__peek-tag,
+.tag--link {
+  justify-self: start;
+  padding: 0 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 15px;
+}
+
+.linkchip__peek-meta {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.linksentence {
+  color: var(--text-2);
+  text-wrap: pretty;
+}
+
+.linksentence__end {
+  color: var(--text);
+}
+
+.linksentence__rel {
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* The link panel: drawn on the connector's side, dashed and indented, below the argument. */
+.linkpanel {
+  position: relative;
+  margin: 2px 0 4px calc(var(--indent) - 2px);
+  padding: 4px 0 2px 12px;
+  border-left: 1.5px dashed var(--line-strong);
+  animation: enter 260ms var(--ease) both;
+}
+
+.linkpanel.is-open {
+  padding: 10px 12px 8px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-sunk);
+}
+
+.linkpanel.is-busy.is-open {
+  border-color: var(--text-3);
+}
+
+.linkpanel__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.linkpanel__head {
+  display: grid;
+  gap: 6px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.linkpanel__cred {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.linkpanel__num {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.linkpanel__cred .bar {
+  width: 64px;
+}
+
+.linkpanel__meta {
+  margin-top: 4px;
+}
+
+.linkpanel .facts {
+  margin-top: 4px;
+}
+
+/* Why it holds | why it fails: a small debate, side by side when there is room. */
+.linkpanel__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 4px 14px;
+}
+
+.linkpanel.is-open .linkpanel__cols {
+  margin-top: 6px;
+}
+
+.linkcol__title {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.linkcol--holds .linkcol__title {
+  color: var(--pro-text);
+}
+
+.linkcol--fails .linkcol__title {
+  color: var(--con-text);
+}
+
+.linkcol__empty {
+  margin: 2px 0 4px;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
+.children--link {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+/* The consensus marker; a leaf (rules coincide, no band) gets a taller one. */
+.bar__tick {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  z-index: 2;
+  border-radius: 1px;
+  background: var(--credence);
+  transition: left 700ms var(--ease);
+}
+
+.bar--leaf .bar__tick {
+  top: -2px;
+  bottom: -2px;
+}
+
+/* "now": what the deliberation is doing this moment. */
+/* One line of fixed height whatever is in flight, so the tree below never shifts. */
+.now {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0 12px;
+  margin: 6px 0 0;
+  height: 20px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.now__label,
+.now__more {
+  flex: none;
+}
+
+.now__label {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.now__item {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  animation: enter 300ms var(--ease) both;
+}
+
+.now__item .tag--link {
+  align-self: center;
+}
+
+.now__text {
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now__dot {
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+.now__item--exploring .now__dot {
+  background: var(--text);
+}
+
+.now__more,
+.now__idle {
+  font-style: italic;
+}
+
+/* status: plain words; live ones shimmer instead of shouting */
+.status--halted {
+  font-style: italic;
+}
+
+.status--failed {
+  color: var(--con-text);
+}
+
+.status--active {
+  background: linear-gradient(90deg, var(--text-3) 30%, var(--text) 50%, var(--text-3) 70%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+
+.linkish {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.linkish:hover {
+  color: var(--text);
+}
+
+.chevron {
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  transition: transform var(--dur) var(--ease);
+}
+
+.chevron.is-collapsed {
+  transform: rotate(-45deg);
+}
+
+/* progressive disclosure: proposer + override appear on hover, focus or selection */
+.reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.card:hover .reveal,
+.card:focus-within .reveal,
+.hero:hover .reveal,
+.hero:focus-within .reveal,
+.card.is-open .reveal,
+.hero.is-open .reveal,
+.reveal.is-pinned {
+  opacity: 1;
+}
+
+.proposer {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* override segmented control */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+}
+
+.seg__btn {
+  padding: 1px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.seg__btn:hover {
+  color: var(--text);
+}
+
+.seg__btn.is-on {
+  background: var(--seg-on);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Jev's numbers, for the selected claim */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 18px;
+  margin: 8px 0 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: var(--text-xs);
+  animation: enter 260ms var(--ease) both;
+}
+
+.facts dt {
+  color: var(--text-3);
+  cursor: help;
+}
+
+.facts dd {
+  margin: 0;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.facts__error {
+  color: var(--con-text) !important;
+  word-break: break-word;
+}
+
+/* ---------- toasts: a command that did not go through ---------- */
+
+.toasts {
+  position: fixed;
+  z-index: 100;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--toast);
+  color: var(--toast-text);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  animation: enter 220ms var(--ease) both;
+}
+
+.toast__close {
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ---------- empty states ---------- */
+
+.empty {
+  color: var(--text-3);
+  text-align: center;
+  padding: 40px 0;
+}
+
+.empty--quiet {
+  text-align: left;
+  padding: 28px 0;
+  font-size: var(--text-sm);
+}
+
+.welcome {
+  max-width: 560px;
+  animation: enter 480ms var(--ease) both;
+}
+
+.welcome__lede {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  color: var(--text-2);
+  text-wrap: pretty;
+}
+
+.welcome__try {
+  margin: 36px 0 6px;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+
+.welcome__examples {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.example {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 13px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.example:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.example__arrow {
+  color: var(--text-3);
+  transition: transform var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.example:not(:disabled):hover .example__arrow {
+  color: var(--text);
+  transform: translateX(3px);
+}
+
+/* ---------- motion ---------- */
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .status--active {
+    color: var(--text-2);
+    background: none;
+  }
+}
+
+/* ---------- touch + narrow screens ---------- */
+
+/* No hover to reveal controls: keep them out of the layout until a claim is selected. */
+@media (hover: none) {
+  .reveal:not(.is-pinned) {
+    display: none;
+  }
+  .card.is-open .reveal,
+  .hero.is-open .reveal {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 560px) {
+  .app {
+    padding: 16px 16px 72px;
+  }
+  :root {
+    --indent: 6px;
+  }
+  .stage {
+    margin-top: 28px;
+  }
+  .ask__input {
+    padding-right: 56px;
+    font-size: 16px;
+  }
+  .ask__submit {
+    padding: 0 14px;
+  }
+  .ask__label {
+    display: none;
+  }
+  .reveal:not(.is-pinned) {
+    display: none;
+  }
+  .card.is-open .reveal,
+  .hero.is-open .reveal {
+    display: inline-flex;
+  }
+  .card {
+    padding: 8px 8px 6px 15px;
+  }
+  .card::before {
+    left: 5px;
+  }
+  .card__main {
+    gap: 12px;
+  }
+  .linkpanel {
+    margin-left: 0;
+  }
+  .linkpanel.is-open {
+    padding: 8px 8px 6px 10px;
+  }
+  .linkchip__peek {
+    display: none;
+  }
+  .facts {
+    grid-template-columns: 1fr auto;
+  }
+  .facts dd {
+    text-align: right;
+  }
+  .legend__panel {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    top: 60px;
+    width: auto;
+  }
+}

@@ -1,0 +1,87 @@
+package civictech.deliberate
+
+import civictech.agora.cell.Polarity
+import civictech.deliberate.CostLedger.Companion.withCost
+
+/**
+ * The UI's view (SPEC §6): the graph's nodes — every credence, the consensus
+ * and the spread from the hub fold, where the cells put them (CRED-06) —
+ * joined with the engine's exploration metadata. It only reads.
+ */
+internal class GraphProjection(private val policy: ExplorationPolicy, private val ledger: CostLedger) {
+
+    private companion object {
+        /** A node's credence before its first emission reached the hub. */
+        const val NEUTRAL = 0.5
+    }
+
+    /** Caller holds the engine's lock (guarding [state] and the [ledger]). */
+    fun project(graph: List<CredenceGraph.Node>, layers: LayerSet, state: EngineState): GraphDto {
+        val neutral = List(layers.ids.size) { NEUTRAL }
+        val nodes = graph.mapNotNull { n ->
+            val values = n.credence?.values ?: neutral
+            val named = layers.named(values)
+            val consensus = n.credence?.consensus ?: NEUTRAL
+            val credence = layers.headlineOf(values, consensus)
+            val low = n.credence?.spreadLow ?: NEUTRAL
+            val high = n.credence?.spreadHigh ?: NEUTRAL
+            state.edges[n.ref]?.let { e ->
+                // SPEC §3 "Links as claims": an edge carries its link's exploration state.
+                val l = state.claims[n.ref]
+                NodeDto(
+                    ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
+                    credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
+                    strength = e.strength,
+                    text = l?.text, depth = l?.depth, status = l?.status, override = l?.override,
+                    reach = l?.reach, contribution = l?.contribution,
+                    proSaturation = l?.proSaturation, conSaturation = l?.conSaturation, rounds = l?.rounds,
+                    duplicatesDropped = l?.duplicatesDropped, error = l?.error,
+                    triage = l?.triage?.mapKeys { it.key.name }?.ifEmpty { null },
+                    activity = l?.let(::activityOf),
+                )
+            } ?: state.claims[n.ref]?.let { c ->
+                val onLink = c.parent?.takeIf { it.isLink }
+                NodeDto(
+                    ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
+                    credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    text = c.text, depth = c.depth, status = c.status, override = c.override,
+                    proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
+                    quality = c.quality, contribution = c.contribution,
+                    proSaturation = c.proSaturation, conSaturation = c.conSaturation, rounds = c.rounds,
+                    duplicatesDropped = c.duplicatesDropped, error = c.error,
+                    alsoProposedBy = c.alsoProposedBy.toList().ifEmpty { null },
+                    merged = c.merged.takeIf { it },
+                    triage = c.triage.mapKeys { it.key.name }.ifEmpty { null },
+                    activity = activityOf(c),
+                    undercuts = onLink?.takeIf { c.side == Polarity.ATTACK }?.ref?.id?.toString(),
+                    onLink = onLink?.ref?.id?.toString(),
+                )
+            }
+        }
+        val window = policy.config.yieldStop?.window ?: DeliberationEngine.YieldStop().window
+        val qs = state.questions.map { (root, text) ->
+            // Links are part of the question's work (activity, rounds, cost), not of its claim count.
+            val tree = state.claims.values.filter { it.root == root }
+            val ys = state.yields[root].orEmpty()
+            val queued = tree.count { it.status in ExplorationPolicy.ACTIVE }
+            QuestionDto(
+                root.id.toString(), text, tree.count { !it.isLink }, queued > 0,
+                yieldRounds = ys.size,
+                yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
+                yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
+                stoppedBy = policy.stoppedBy(state.projectionQuestionView(root)),
+                paused = root in state.paused,
+            ).withCost(ledger.costOf(root, rounds = tree.sumOf { it.rounds }, queued = queued))
+        }
+        return GraphDto(qs, nodes, layers.members)
+    }
+
+    /** What [c] is doing right now, for the UI's "now exploring" line; null when idle. */
+    private fun activityOf(c: Claim): String? = when {
+        c.roundInFlight -> "exploring"
+        c.status == Status.JUDGING -> "judging"
+        c.assessing -> "assessing"
+        else -> null
+    }
+}

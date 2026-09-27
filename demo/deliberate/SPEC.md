@@ -1,0 +1,571 @@
+# deliberate — goal specification
+
+A demo in which a human poses a question and watches a **deliberation graph**
+grow for it in real time: LLM agents (Claude CLI and Codex CLI) recursively
+propose arguments for and against each claim; **Jev** (TypeSafe System One,
+`jev-latest`) supplies every judgment that steers the exploration and every
+credence; a kernel-hosted argumentation graph (agora's model) propagates those
+credences. The human can override the explorer's depth decisions per claim.
+
+(Credence is propagated by deliberate's own cell graph, modelled on agora's:
+claims and edges as cells, edges being claims. "agora `CLAIM`/`EDGE`" below
+names that model.)
+
+## 1. Vocabulary
+
+- **Question** — free text the human submits. It becomes the **root claim**
+  (a question like "Should X?" is restated by the root as-is; no rewriting).
+- **Claim** — an agora `CLAIM` node: one self-contained declarative sentence.
+- **Argument** — a claim linked to a **parent** claim by an agora `EDGE` of
+  polarity `SUPPORT` (pro) or `ATTACK` (con). Edge direction: child → parent.
+- **Link** — the claim an edge makes: "“<child>” is a reason for|against
+  “<parent>”". Every argument's edge is one; it is explored like a claim
+  (§3 "Links as claims").
+- **Undercutter** — a claim that does not dispute a claim but denies that one
+  of its arguments bears on it ("this does not show that"): an argument
+  *against that argument's link*, its `ATTACK` edge targeting the argument's
+  *edge* (agora edges are claims), lowering the edge's credence and with it
+  the argument's influence (EXP-03 `UNDERCUT`). A **link supporter** is the
+  converse: a `SUPPORT` edge on the link ("why this does bear on it").
+- **Proposer** — an argument generator: `claude` (Claude CLI) or `codex`
+  (Codex CLI). Every argument records which proposer produced it.
+- **Judge** — Jev. Judgments are typed (score / noul / choice), never prose.
+- **Round** — one pass over a claim: the proposers take turns, each asked
+  for new pro and con arguments on the unsaturated sides and its proposals
+  triaged and attached before the next proposer's turn; then the round's
+  arguments are assessed and saturation is re-judged.
+- **Expansion** — running rounds on a claim until it is saturated or its round
+  limit is hit. Each round is one task in the exploration queue; an attached
+  argument joins that queue as soon as its attach-time assessment completes
+  (§3 "Exploration order").
+- **Contribution** — how much exploring a claim is worth: reach × relevance ×
+  quality (EXP-05); 1 for the root.
+- **Yield** — what one round returned, per argument asked for (EXP-10); a
+  question stops when its recent yields fall well below its earlier ones.
+- **Override** — the human's per-claim setting: `AUTO` (Jev decides),
+  `EXPAND` (force expansion), `STOP` (force no further expansion).
+
+## 2. Credence model (requirements CRED-*)
+
+- **CRED-01** Every claim receives a Jev *plausibility* judgment — a Score over
+  five ordered levels (almost certainly false … almost certainly true) mapped
+  linearly to [0,1] — judged on a state holding only `root_question` and
+  `claim`: no path, parent, direction or date, and not its arguments (the
+  path biases the judgment towards the claim's role in the argument; evidence
+  in `CALIBRATION.md`). The instruction tells Jev the
+  question only names the topic, and not to reward or penalise the claim for
+  the answer it favours. It is applied as the stance of user `jev` on
+  that claim. An argument is judged the moment it is attached: plausibility
+  in its own request, in parallel with one request asking its CRED-02
+  strength and EXP-05 quality and relevance (independent questions over the
+  argument's full state); the root, or an argument whose assessment failed, is
+  judged when its expansion starts.
+- **CRED-02** Every edge receives a Jev *relation strength* judgment — a Score:
+  "if the child claim were true, how strongly would it bear on the parent in
+  the stated direction" (irrelevant … decisive), mapped to [0,1]. Applied as the
+  `jev` stance on the edge node. An argument whose text changes (EXP-03
+  REPLACE or MERGE) is assessed again.
+- **CRED-03** Credence is propagated over the `jev` stances and the incoming
+  edges by one kernel-hosted cell graph, under each of several gradual
+  semantics ("Credence layers and consensus" below). The deliberation code
+  never propagates credence itself; it only reads the graph's results.
+
+### Credence layers and consensus
+
+- **CRED-04** Every deliberation is propagated by **one** cell graph whose
+  credences are vectors: one `ClaimNode` per claim and one `EdgeNode` per
+  edge (an edge is a claim — "source supports/attacks target" — with its own
+  `jev` stance, its own incoming edges and its own credence, so an
+  undercutter attacks it), each computing one credence per semantics — a
+  **layer**. A node emits its **credence vector**; an edge emits an
+  **influence** carrying structured data: its ref, polarity, its own credence
+  vector (the **strength**: the strength stance, lowered by any undercutter)
+  and its source's credence vector. Each semantics computes its own energy
+  from the pair — `energy(strength, credence)`, DF-QuAD's product for most —
+  and combines a node's base with the energies of its attacks and supports.
+  Layers (all seven always run): `dfquad` (agora's
+  DF-QuAD), `wlo` (weighted log-odds: σ(α·logit(base) + k·(‖S^γ‖_p −
+  ‖A^γ‖_p)), α = 1, k = 2.4, p = 2, γ = 1.3), `jnb` (Jeffrey / naive-Bayes:
+  the argument's likelihood ratio LR(s) = ((1+s)/(1−s))^K is Jeffrey-
+  conditioned on its source's credence c, energy ln(c·LR + (1−c)·LR^−r),
+  exact because s and c arrive separately), `woe` (log-odds DF-QuAD, weight
+  of evidence −ln(1 − e)), `euler` (Euler-based), `qe` (quadratic energy),
+  `mlp` (MLP-based); formulas and defaults as in the prototype
+  `semantics.js`, and every layer keeps agora's base (the clamped mean of the
+  stances). `dfquad` always runs. Cycle handling is agora's: the edge that
+  closes a cycle is its head and absorbs a returning source update whose
+  largest per-layer change is below the quiescence threshold; a node's
+  arguments are folded in ref order, so emission is deterministic. Every
+  message carries a magnitude — the largest per-layer change — that the host
+  schedules by.
+- **CRED-05** A node's **consensus** is σ(mean over the member layers of
+  logit(cᵢ)), each cᵢ clamped to [0.001, 0.999] — the geometric mean of their
+  odds. Members (default `wlo,jnb,woe`: the rules that pass
+  every intuition check D1–D5c at their defaults). Its **spread** is the
+  [min, max] of the credence over *all* layers. The consensus is a summary:
+  nothing feeds it back into any layer or into a parent. The UI's headline
+  number and verdict are the consensus, drawn over the spread as a band.
+  `--semantics` names what `NodeDto.credence` shows: `consensus` (the
+  default) or one layer id. No averaging layer beyond this consensus exists.
+- **CRED-06** The consensus and spread are **derived by the cells**: a
+  claim or edge cell emits `{vector, consensus, spreadLow, spreadHigh}` with
+  every change of its vector, and the graph's hub folds those emissions. The
+  consensus is a pure function of the vector, so computing it where the
+  vector is computed is the simplest derived form — no second cell per node,
+  no second hop, no second fold. The snapshot only reads the hub.
+
+## 3. Exploration (requirements EXP-*)
+
+- **EXP-01** Submitting a question creates the root claim and starts its
+  expansion immediately. Several questions may coexist; each is its own tree.
+- **EXP-02** A round gives the proposers **turns**, in their configured order
+  (`--proposers`, default `claude,codex`): each is asked, concurrently per
+  side, for up to `argsPerCall` (default 1) new arguments per unsaturated side
+  that still has room, given the root question, the path from root to the
+  claim and the claim's existing pro/con arguments — *including those the
+  previous proposer contributed in this round, after triage* — so the second
+  focuses on what is still missing. Rounds of different claims still run in
+  parallel. Arguments are asked for in **canonical form** (one checkable
+  proposition, the reason rather than its bearing on the claim, explicit
+  subject and scope, no hedges, dated only when time matters, no invented
+  details, ≤ 25 words; `CliProposer.CANONICAL_RULES`, with examples about
+  invented, mundane subjects only — no real person, political figure or
+  contested topic may appear in a prompt, so no example content leaks into a
+  deliberation); proposers are not asked to label rebuttals and undercutters —
+  that is triage's job. Canonical form is **only** asked for: it is not
+  scored or gated anywhere (EXP-05).
+- **EXP-03** Before attaching, exact-text repeats are dropped, then Jev
+  **triages** every remaining candidate of the round in one request: per
+  candidate an *action* Choice and, when there is anything to point at, an
+  independent *target* Choice (`none` + the claim's existing arguments on both
+  sides, labelled by side, + the candidates before it in the list — so
+  near-duplicates within one round are caught in the same request). Triage
+  runs once per proposer turn (EXP-02), so a later turn's candidates are
+  compared with the earlier turns' arguments as existing ones. Actions:
+  - `ADD` — a new point on its stated side: attached there;
+  - `DUPLICATE` — the same point as the target: dropped, counted in
+    `duplicatesDropped`, its proposer recorded in the target's
+    `alsoProposedBy`;
+  - `REPLACE` — a clearly stronger/clearer version of the target: the target
+    takes its text and provenance;
+  - `MERGE` — overlaps the target, each adding something: Claude (the `claude`
+    CLI, same process gate, sandbox and timeout as EXP-09) rewrites the two as
+    one sentence, which becomes the target's text (`merged: true`, the
+    candidate's proposer in `alsoProposedBy`);
+  - `REFINE` — a specific instance of / evidence for the target: attached as a
+    `SUPPORT` argument under the target instead of under the claim;
+  - `OTHER_SIDE` — argues the opposite side: attached there. In a link round,
+    a genuine counter-argument is not attached to the link: it is attached as
+    an `ATTACK` on the link's parent claim (or `DROP`ped when it is not a real
+    counter-argument);
+  - `UNDERCUT` — does not dispute the claim but denies that the target
+    argument bears on it: attached as an undercutter — a con argument of the
+    target's *link* (§3 "Links as claims"), an `ATTACK` edge targeting the
+    target's *edge*. Like every argument of a link it sits one level below the
+    link (the link is at the target's depth), its path runs through the link's
+    text, it is assessed against the link (its `parent_claim` is "“X” is a
+    reason for|against “Y”"), and explored like any claim. A link holds at
+    most one per-side cap of undercutters;
+  - `DROP` — not a real argument about the claim (off-topic, incoherent, a
+    question, a restatement of the claim).
+
+  REPLACE and MERGE only rewrite a target nobody has explored yet (still
+  `QUEUED`, no children); otherwise, or if the merge call fails (error
+  recorded), they fall back to `DUPLICATE`. A targeted action without a target
+  becomes `ADD` (`DUPLICATE`: dropped). The claim counts each action taken in
+  `triage`. Rewording lives in the deliberation layer (the graph's claim text is
+  immutable); if the triage request fails, every candidate is `ADD`.
+- **EXP-04** After each round, Jev judges **saturation** per side (a Noul:
+  "is an important consideration on this side still missing from the existing
+  arguments?", read as saturated = 1 − p). A side is saturated when that value
+  ≥ `saturation` (default 0.22, calibrated on live Jev samples, see §10), or
+  when it already holds its cap: `maxArgsPerSide` (default 6) for the root,
+  `maxArgsPerSideChild` (default 3) below it. **Balance:** a side below its
+  cap that holds fewer arguments than the other side is never saturated by
+  Jev's judgment (Jev's saturation reads systematically higher for con; see
+  `CALIBRATION.md`). Saturation is
+  judged once per round, after every proposer had its turn. Saturated sides
+  receive no further proposals, and a round never attaches beyond the cap.
+  Expansion ends when both sides are saturated or `maxRounds` (default 3) is
+  reached.
+- **EXP-05** Relevance decays along the tree. Each claim has a **reach**:
+  1 for the root, `reach(parent) × strength(edge)` for an argument (CRED-02
+  strength of the edge attaching it). When an argument is attached, Jev also
+  judges its **relevance** (a Noul given the root question and the full path:
+  "would analysing this claim further materially change how the root question
+  should be answered?") and its **quality** (a Noul: "is this a
+  well-constructed argument — a self-contained, coherent claim that actually
+  bears on its parent in the stated direction, not a restatement, off-topic or
+  a rhetorical question?"). Its **contribution** is
+  `reach × relevance × quality`. An undercutter's reach is
+  `reach(parent) × strength(its edge) × strength(the undercut edge)`. A
+  non-root claim whose contribution is below `minInfluence` (default 0.10,
+  see §10) is `PRUNED` without being explored — an irrelevant or
+  poorly constructed argument never is. Quality carries no canonical-form
+  factor: canonical form is asked of the proposers only (EXP-02; why, in
+  `CALIBRATION.md`). If the assessment fails, strength 0.5 is used and
+  relevance and quality count as 1. The root is always expanded. Beyond
+  `maxDepth` (default 5) claims are `DEPTH_LIMIT` — a safety net, not the
+  primary stop.
+- **EXP-06** A global `maxClaims` budget (default 180 per question) is enforced:
+  no argument is attached once the tree holds that many claims. The budget is
+  spent in exploration order (below), so it goes to the most contributing
+  claims first. Gates run in the order depth → contribution → budget →
+  diminishing returns (EXP-10), so `BUDGET` means the claim would otherwise
+  have expanded and never did; a claim that already ran a round and then meets
+  the budget ends `ROUND_LIMIT` with `error = "budget exhausted"`. A question
+  at its budget reports `stoppedBy = "budget"`. The budget is a ceiling; the
+  per-question stop that normally ends a tree is EXP-10.
+- **EXP-07** Concurrency is bounded: at most `maxProcesses` (default 8) CLI
+  processes run at once across the whole app. Jev calls are not rate-limited
+  by us but retry 429/529 with exponential backoff (≤ 4 attempts).
+- **EXP-08** A proposer or Jev failure never kills the deliberation: the
+  failing call is logged, the claim records the error, and the round
+  continues with what it has (a claim where *every* call failed becomes
+  `FAILED`).
+- **EXP-09** Proposers run with no tool access, in an empty temp directory,
+  with a per-call timeout (default 120 s). Output is parsed as a JSON array of
+  strings, tolerating surrounding prose/code fences; anything unparseable is a
+  failed call.
+- **EXP-10** Every question stops by its own **diminishing returns**. Each
+  round of any **non-root** claim in the question that asked for at least one
+  argument records a **yield**: Σ over the arguments it attached (REFINE and UNDERCUT
+  included) of `strength × relevance × quality` (the EXP-05 fallbacks for a
+  failed assessment), × `1 − (DUPLICATE + DROP) / triaged` (the round's triage
+  counts, exact-text repeats included; 1 when nothing was triaged), ÷ the
+  number of arguments asked for. Root rounds are excluded because their
+  naturally high yields otherwise inflate the earlier mean. The question
+  keeps its non-root yields in completion order. Once it holds ≥
+  `yieldMinClaims` (default 40) claims and ≥ 2 × `yieldWindow` (default 8)
+  non-root yields, and is below its budget, it stops
+  when mean(last `yieldWindow` yields) < `yieldRatio` (default 0.6) ×
+  mean(all earlier yields), **provided at least one claim in `QUEUED` can
+  actually be halted**. If the threshold is first observed after the question
+  ran out of queued work on its own, no stop is recorded and `stoppedBy`
+  remains null. Stopping: no new round starts in the question; every claim
+  waiting for its first or next round, and every argument
+  attached later that passes the depth and contribution gates, ends
+  `DIMINISHING` (terminal); rounds in flight complete and attach, but their
+  yields are not recorded (the series is frozen at the stop, so it shows why
+  the question stopped). `EXPAND` still forces a round on a `DIMINISHING`
+  claim (CTL-02), whose new arguments then meet the stop like any other.
+  `--yield-stop off` disables the stop (yields are still recorded). The
+  question reports `yieldRounds` (non-root rounds), `yieldRecent` (mean of the last window),
+  `yieldEarlier` (mean before it) and `stoppedBy` (`"diminishing"`,
+  `"budget"` or null); the yields and the stop are durable (DUR-02). The
+  relative, per-question comparison is the point: absolute yields differ
+  several-fold between questions (`CALIBRATION.md`), so any absolute threshold
+  would again starve one question and overgrow another.
+
+### Exploration order
+
+Work is one priority queue across all questions; each task is one round of
+one claim. A claim's first round is queued at its contribution (the root at
+1); after each round a claim that is not finished goes back into the queue at
+`contribution × roundDecay^rounds` (`roundDecay` default 0.5), so a strong
+claim's second round competes fairly with a weaker sibling's first. Ties go
+first-in, first-out. An argument is queued, at its contribution priority, as
+soon as its attach-time assessment completes — at the end of the round that
+attached it, since a later turn may still reword it; it does not wait for its
+parent to finish later rounds. A claim the human forces with `EXPAND` is queued ahead
+of all contributions. Links (below) share this one queue.
+
+### Links as claims
+
+Every edge is also a claim — its **link**: "“<child>” is a reason for
+“<parent>”" (SUPPORT) or "… is a reason against …" (ATTACK). The engine builds
+that text from the two ends (it is never stored, so a REPLACE or MERGE of the
+child rewords its link), and explores the link exactly like a claim:
+
+- **LINK-01 Arguments.** A link's pro arguments say why the connection holds
+  ("why this does bear on the parent"), its con arguments why it fails — the
+  undercutters of EXP-03. Both attach by `SUPPORT`/`ATTACK` edges that target
+  the *edge node* (the cell model propagates edge-targeted edges: a link's
+  arguments move the edge's credence, and with it the argument's pull on its
+  parent). A link's `jev` stance is its argument's CRED-02 strength; a link is
+  never assessed itself.
+- **LINK-02 Place.** A link's parent (for paths and context) is its argument's
+  parent, and its depth its argument's depth; its arguments sit one level
+  below, their path running through the link text, and each is assessed
+  (CRED-01/02, EXP-05) with the link text as `parent_claim`. Arguments about
+  a link have links of their own.
+- **LINK-03 Contribution.** A link matters in proportion to how much its
+  argument can move the parent, and to how open its strength still is:
+  `contribution(link) = contribution(argument) × 4·s·(1 − s)`, with `s` the
+  argument's CRED-02 strength (0.5 when that judgment failed: factor 1), and
+  `reach(link) = reach(argument)`. The factor is the normalised variance of a
+  Bernoulli(s): 1 at s = ½, 0 for a link judged irrelevant or decisive, so a
+  link never outranks its argument and a clear-cut link is left alone unless
+  the human expands it. An argument about a link then has
+  `reach = reach(argument) × strength(its own edge)` — for an undercutter,
+  exactly EXP-05's formula.
+- **LINK-04 Scheduling.** A link joins the queue with its argument, once the
+  argument's attach-time assessment completed (its strength is then known),
+  at its contribution; the EXP-05/06/10 gates (depth, `minInfluence`, budget,
+  diminishing returns) apply as to a claim. `--explore-links off` (default
+  on) keeps links from being explored automatically — they end `PRUNED` —
+  while `EXPAND` still explores one.
+- **LINK-05 Rounds.** A link's round is EXP-02..04 with the link as the claim:
+  per-side cap `maxArgsPerSideChild`, triage against the link's own
+  arguments (EXP-03, so duplicates are caught against them; the claim-level
+  `UNDERCUT` re-targeting of EXP-03 is unchanged and lands here), saturation
+  per side, yields (EXP-10) recorded like any non-root round. Proposers get
+  `ClaimContext.link` (the argument, the parent, the direction) and a prompt
+  variant (`CliProposer.linkPrompt`, same canonical rules and examples): FOR
+  asks why, if the argument is true, it really does count as a reason for/
+  against the claim; AGAINST why, even if true, it does not — neither may
+  dispute the argument or argue the claim on other grounds. Its prompt gives a
+  topic-neutral example distinguishing an undercutter from a counter-argument,
+  and link triage sends a genuine counter-argument to `OTHER_SIDE` against the
+  parent claim (or `DROP`) rather than attaching it to the link.
+- **LINK-06 Accounting.** A link is part of its question's work, not of its
+  claims: its rounds count in `cost.rounds`, its calls are billed to the
+  question (COST-01), an active link keeps the question `active` and counts in
+  `cost.queued`, but `QuestionDto.claims` and the `maxClaims` budget count
+  claims only (the arguments a link gets are claims and count). This remains
+  bounded even with `--yield-stop off`: every non-root claim has exactly one
+  link, so a question under `maxClaims` has at most `maxClaims − 1` links, and
+  the budget gate prevents another automatic link round once the claim ceiling
+  is reached. Human-forced CTL-02 rounds remain deliberately outside the cap.
+
+## 4. Human control (requirements CTL-*)
+
+- **CTL-01** The human can set any claim's — or link's (§3 "Links as
+  claims"; the `/override` id is then the edge ref) — override to `AUTO`,
+  `EXPAND` or `STOP` at any time. CTL-02..04 apply to a link unchanged.
+- **CTL-02** `EXPAND` always explores: whatever the claim's status —
+  queued, running, or finished for any reason including `BUDGET` and
+  `DIMINISHING` — its next
+  round is **forced**, and it runs at least that round. It skips the
+  contribution and depth gates, is queued ahead of all contributions, and
+  raises the claim's round limit by one if needed. The forcing is not
+  durable: an `EXPAND` whose round a restart interrupted is not resumed —
+  the claim restores like any other and the human expands it again. The forced round ignores
+  Jev saturation, the round limit and `maxClaims`: it has its own allowance of
+  up to one per-side cap of new arguments per side (shared by the proposers'
+  turns), and they are attached even when the tree is at its budget. Triage
+  still applies. The new arguments then face the gates like any other.
+- **CTL-03** `STOP` cancels queued work for that claim and prevents future
+  rounds; an in-flight round finishes but its results are still attached
+  (arguments are never silently dropped once produced). Status becomes
+  `STOPPED`. Descendants are not affected.
+- **CTL-04** `AUTO` returns the decision to Jev; setting it on a `STOPPED`
+  claim re-queues it through the normal gates.
+- **CTL-05** The human can **pause** and **resume** a whole question
+  (`POST /question/pause`). A paused question starts no new round: a round
+  in flight finishes and its results are attached and assessed (as CTL-03);
+  its queued claims and links stay `QUEUED` — and a claim with rounds left
+  stays `EXPLORING` — without being dequeued, and no gate is applied to them
+  meanwhile; an argument restored unassessed (DUR-03) is not even assessed.
+  A forced round (CTL-02 `EXPAND` on one claim or link of the question) still
+  runs — the human asked for exactly that — and the arguments it attaches
+  wait like the rest. Resuming re-schedules everything the pause withheld
+  through the normal gates, exactly as a restart would (DUR-03). The pause is
+  durable: it is part of the question's record (DUR-02) and survives a
+  restart. `QuestionDto.paused` reports it; `active` still reports queued
+  work, so a paused question with queued claims is active and paused.
+
+## 5. Claim status (the state machine the UI renders)
+
+`QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
+alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`, `DIMINISHING` (EXP-10),
+`STOPPED`, `FAILED`.
+Every status change is broadcast.
+
+## 6. HTTP surface (the UI contract)
+
+- `POST /question` form `text=` → `{"root":"<ref>"}`
+- `POST /override` form `id=<ref>&mode=AUTO|EXPAND|STOP` → `ok` (a claim ref,
+  or an edge ref for its link)
+- `POST /question/pause` form `root=<question ref>&paused=true|false` → `ok`
+  (CTL-05); 400 on a malformed ref or flag, 404 on a ref that is not a question
+- `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
+  `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`; an
+  undercutting claim carries `undercuts` (the edge it attacks, which is also
+  its edge's `target`) and every argument about a link carries `onLink` (that
+  edge); an EDGE carries its link's claim-like fields (`text`, `depth`,
+  `status`, `override`, `reach`, `contribution`, `proSaturation`,
+  `conSaturation`, `rounds`, `duplicatesDropped`, `triage`, `error`); every
+  claim and link carries `activity` while it is being explored, judged or
+  assessed; the graph carries `consensusMembers`; every question
+  carries `yieldRounds`, `yieldRecent`, `yieldEarlier` and `stoppedBy`
+  (EXP-10), `paused` (CTL-05), and `costUsd`, `projectedUsd` and `cost` (§12).
+- `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
+- `GET  /` → the built UI (`ui/dist`) when present.
+
+## 7. UI (requirements UI-*)
+
+- **UI-01** A single input where the question is typed and submitted.
+- **UI-02** The deliberation graph of the selected question is shown as a tree
+  rooted at the question, growing live via SSE with no reload.
+- **UI-03** Each claim shows its text, its credence (bar/number: the
+  consensus, with the spread as a thin band), its status, the proposer that
+  produced it, and its override control. Each argument shows its polarity
+  (pro/con visually distinct) and relation strength. The facts panel lists
+  every layer's credence, marks the consensus members, and says how far the
+  rules agree; for a claim or link with no arguments yet it says "no
+  arguments yet — all rules agree with the first impression" (the spread is
+  zero by construction, not a bug), and its bar marks the single value.
+- **UI-04** Minimal, modern, slick: a calm neutral palette, pro/con as the only
+  saturated colours, smooth enter animation for new nodes, light and dark mode.
+- **UI-05** The connector between a claim and an argument is a control: it
+  shows the link strength and how many arguments the link has; hovering or
+  focusing it previews the link as a claim, pressing it (click, tap, Enter)
+  opens it — its text, credence (the edge's) with its spread, status, its
+  own Auto/Expand/Stop and its numbers. The link's arguments — "why it holds",
+  and "why it fails" (undercutters, labelled "undercuts the link") — are drawn
+  under the link, dashed and tagged "link", never under the claim.
+- **UI-06** Under each question a "now" line names what the deliberation is
+  doing this moment: which claims and links are being explored or judged.
+
+## 8. Non-goals (v1)
+
+Multiple users; human stances; editing claims; cross-tree links; merging
+equivalent claims across branches. (Exploring an edge as a claim of its own
+is in scope: §3 "Links as claims".)
+
+## 9. Acceptance
+
+1. Engine tests with fake proposers/judge prove EXP-02..08 and CTL-01..05.
+   Their inputs are deterministic — the fakes return scripted proposals and
+   judgments, and `./gradlew :demo:deliberate:test` makes no network or CLI
+   call — but the engine runs on real (virtual) threads, so the tests
+   synchronise with latches and bounded waits (`awaitIdle`, `awaitUntil`)
+   rather than a simulated clock, and assert outcomes, not interleavings.
+2. Jev client and CLI proposer parsing are unit-tested against recorded
+   payloads; a live smoke test runs only when `DELIBERATE_LIVE=1`.
+3. A live manual run against a real question grows a multi-level graph whose
+   credences move in the UI, and both overrides visibly work.
+
+## 10. Calibration
+
+Jev's gate signals are weaker and differently scaled than their prompts
+suggest, so the thresholds that consume them (`saturation`, `minInfluence`,
+and the EXP-10 yield parameters) are set from evidence, never by intuition. A
+calibration run over real claims at depths 0–3 with 0–6 arguments per side,
+recorded in `demo/deliberate/CALIBRATION.md`, must show that with the
+defaults (a) a side typically saturates by 3–4 arguments and (b) a typical
+question tree stops growing through `PRUNED` before `DEPTH_LIMIT` for most
+depth-2 claims.
+
+The measurements, the history of each default, and what remains to
+recalibrate live in `CALIBRATION.md`; this section states only the criteria.
+
+## 11. Durability (requirements DUR-*)
+
+- **DUR-01** With `--data <dir>`, deliberations survive restarts, including
+  `kill -9`; without it the app is volatile. Only **inputs** are durable:
+  the structure — every claim and edge, once, in creation order — in one
+  append-only log `graph.jsonl` (a torn last line is cut off on boot), and
+  the engine's metadata, which includes the `jev` stances, in the host
+  journal (`host.journal`, write-ahead, synced per frame). Nothing derived —
+  no credence vector, influence or hub update — is ever written: the
+  metadata cell is the only journaled cell on the host (a per-cell journal
+  selector), every credence cell is volatile, and on boot the graph
+  recomputes every credence from the structure and the re-applied stances,
+  with catch-up baselines enabled. A restart reproduces every layer's
+  credence and every consensus (within 1e-9), restart after restart.
+- **DUR-02** The engine's per-claim metadata (question membership, status,
+  override, proposer, rewritten text, Jev judgments — plausibility and edge
+  strength are the `jev` stances —, saturation, triage counts, rounds,
+  errors) is one record per claim of named fields — and one per link (§3
+  "Links as claims": status, override, rounds, saturation, triage, reach,
+  contribution…), keyed `l:<edge ref>` — written as routed
+  invocations into a hosted observation cell (a last-writer-wins fold per
+  field). Only the fields that changed are written (a field back at its
+  default is written as a removal), every 100 ms and when the engine closes
+  (before its workers are interrupted); the text is written only when a
+  rewrite changed it, since the structure log holds the original. The engine
+  seeds what it last wrote from the state it loaded, so an unchanged record
+  is never rewritten. After a restart the host journal replays into the fold;
+  a fence record tells the app when the replay has been folded. The journal
+  compacts itself to one checkpoint of the fold when **quiescent** — writes
+  held off and a fence folded, so every frame it holds has been applied: at
+  boot after the replay, at shutdown, and whenever it has grown by more than
+  64 KB and its own last checkpoint size.
+- **DUR-03** On restart the trees are rebuilt from the structure (claims and
+  the edges placing them, in creation order) plus those records. A claim
+  whose record never reached the journal is rebuilt from the structure alone
+  and queued afresh; a claim created without the edge that places it (the
+  process died between the two writes) is left out. Each question's EXP-10
+  record (its yields and whether it stopped) is one more record of the same
+  store. Every argument's link is rebuilt with it and its `l:` record
+  re-applied; an edge targeting an edge places its source under that edge's
+  link. A link whose `l:` record never reached the journal is rebuilt from
+  the structure alone and queued afresh, like any other such claim. With
+  `--explore-links off` a restored link — whatever status its record holds,
+  an interrupted `EXPLORING` one included — ends `PRUNED` at the LINK-04 gate
+  and runs no round unless expanded. Every known stance is
+  re-applied (the graph skips a stance a node already holds). Every claim
+  that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
+  round simply runs again — and an argument whose attach-time assessment
+  never completed is assessed first.
+- **DUR-06** `--start-paused` pauses (CTL-05) every question restored at boot
+  before anything is scheduled, so a boot runs no round and no Jev call until
+  the human resumes a question; questions asked afterwards run normally. The
+  pause is recorded, so it outlasts the boot that set it: a later restart
+  without the flag keeps those questions paused until each is resumed. No
+  forced round survives the restart (CTL-02), so nothing in a restored
+  question runs until it is resumed or a claim in it is expanded again.
+
+## 12. Cost (requirements COST-*)
+
+- **COST-01** Every external call records what it used, attributed to the
+  question whose claim caused it: the engine binds that question's usage sink
+  around every Judge, Proposer and Merger call (`Usage.within`), and the
+  adapters report into it — so the `Proposer`/`Judge`/`Merger` interfaces
+  carry no cost plumbing, and a call that hands work to another thread (Jev's
+  parallel plausibility request) passes the sink along. Reading usage never
+  fails a call: an unreadable usage is logged and dropped.
+  - **Claude CLI** (proposer and merger) runs with `--output-format json`:
+    the answer is the envelope's `result` (parsed as before, EXP-09), an
+    envelope with `is_error` fails the call, and the usage is `usage`
+    (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`,
+    `output_tokens`), the models are the keys of `modelUsage`, and the cost is
+    the CLI's own `total_cost_usd`.
+  - **Codex CLI** runs with `--json`: stdout is a JSONL event stream whose
+    `turn.completed.usage` (`input_tokens`, `cached_input_tokens`,
+    `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`) is
+    summed over the call's turns; the answer is still read from `-o`.
+    Cached input and cache writes are part of `input_tokens`, and reasoning
+    tokens are part of `output_tokens` (verified live: a 13-reasoning-token
+    answer reported 20 output tokens where the same answer without reasoning
+    reported 7), so neither is counted twice.
+  - **Jev**: every successful response's `usage` (`input_tokens`,
+    `output_tokens`) is one call; a retried 429/529 is not.
+- **COST-02** Prices (flags; defaults below, each shown with its source and
+  date):
+  - Codex `gpt-5.6-sol` (`--codex-input-rate`, `--codex-cached-rate`,
+    `--codex-output-rate`, USD per 1M tokens): $4.00 input, $0.40 cached
+    input, $20.00 output; reasoning billed as output; cache writes 1.25×
+    input; a call whose longest prompt exceeds 272K tokens pays 2× on input
+    and 1.5× on output. Source: developers.openai.com/api/docs/models/gpt-5.6-sol,
+    looked up 2026-09-27 (the input price is promotional through at least
+    2026-11-21). With another `--codex-model` the rate flags must be given,
+    else the rate is **unknown**: its tokens are shown, its cost is left out
+    of every total and the details say so.
+  - Jev (no flag): $0.042 per 1M input
+    tokens, output free — a third-party listing (OpenRouter
+    typesafe/jev-1.13, MindStudio), since TypeSafe publishes no pricing, so
+    it is labelled **assumed**.
+  - Claude: the CLI's reported `total_cost_usd`, labelled "API-equivalent as
+    reported by Claude Code; not your bill if you use a subscription".
+- **COST-03** Every question reports `costUsd` (the sum of its priced calls),
+  `projectedUsd` (`costUsd` + claims still `QUEUED`/`JUDGING`/`EXPLORING` ×
+  the mean cost per completed round in the question — one more round each;
+  null until the question completed 3 rounds) and `cost`: per backend its
+  calls, tokens by kind, USD, the rate applied, its source and date, whether
+  it is assumed, and its caveat, plus the rounds, queued claims and cost per
+  round behind the projection. A question simply has the costs it recorded.
+- **COST-04** The cost is durable (DUR-02): per question and backend one
+  aggregate counter set (calls, token sums, USD, unpriced calls, models) —
+  never a per-call log — stored in the question's record as one field per
+  backend (`cost.claude`, `cost.codex`, `cost.jev`), so a call rewrites only
+  its backend's field. A restart restores it unchanged.
+- **COST-05** UI: the question header shows only the dollar figure (e.g.
+  `$0.84`; `<$0.01` below a cent), subtle and in tabular figures. It is a
+  button; it opens a compact popover — per backend calls, tokens, estimated
+  cost, the price with its source and date (marked *assumed* where it is),
+  the projection ("≈$2.10 if the 9 queued claims are explored") and the
+  Claude subscription caveat — that closes on Escape or a click outside.
+  `?mock` shows plausible figures. The legend says what the figure means.
