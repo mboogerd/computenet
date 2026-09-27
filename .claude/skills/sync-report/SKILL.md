@@ -71,6 +71,11 @@ bd list --all --limit 0 --json | sed -n '/^[[{]/,/^[]}]/p' \
 bv --robot-triage        # up-next ranking; check the export is FRESH first (AGENTS.md), else bd ready
 ```
 
+Read every one of these outputs in full; never pipe them through `head`. `bd human
+list` prints "(N found)": count your items against N. A report truncated at 40
+lines once showed 10 of 26 parks and silently dropped the other 16
+(2026-09-27).
+
 Before listing an item as a pending question, read its last comment: an item
 whose thread already records the maintainer's answer is not a question, it is
 bookkeeping drift — a stale park to propose clearing (computenet-em9i sat on
@@ -271,10 +276,33 @@ order — so the user can answer "1: yes, 2: skip, 3: …".
 
 ## 7. Stop
 
-Deliver the report and **wait**. Do not start on item 1. Do not "prepare" the
-merge. Do not open a branch. The user's reply decides what happens next, and
-acting before it arrives is exactly the failure this skill exists to prevent.
+Deliver the report, launch the council pass (§8), and then **wait**. Do not
+start on item 1. Do not "prepare" the merge. Do not open a branch. The user's
+reply decides what happens next, and acting before it arrives is exactly the
+failure this skill exists to prevent. The council pass is the one exception,
+because it only works on parks, which are already stuck on a person.
 
 Then — and only then — write `.claude/last-sync.json` with the current
 `origin/main` SHA, the timestamp, the PR numbers seen, and the parked-question
 ids reported, so the next report starts where this one ended.
+
+## 8. Council pass
+
+Every parked decision in the report gets one last attempt before it costs the
+user's attention. Launch **one background subagent per parked bead**, after
+the report is delivered, so the user reads the report straight away and the
+verdicts arrive as they finish. Never batch several beads into one subagent,
+and never block the report on them.
+
+Pass over a park when its thread already carries a `COUNCIL` comment with
+nothing after it: that council has already run, and running it again only
+repeats the cost. Also pass over parks that are not decisions at all, such as
+a missing secret or a machine that has to be reached. The subagent screens
+out permission and reserved-choice parks itself, following
+[council.md](references/council.md), which is the prompt to hand each one.
+
+When a subagent reports, relay its one-line outcome to the user and then
+`bd dolt pull && bd dolt push`. Subagents do not push. A DECIDED verdict
+unparks the bead, so the next /work run picks it up with the decision
+attached. NO-CONSENSUS leaves the bead parked, with the votes recorded for the
+user.
