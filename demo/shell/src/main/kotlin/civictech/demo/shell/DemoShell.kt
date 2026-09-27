@@ -241,12 +241,27 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
      * that stopped reading must not hold shutdown hostage any more than it
      * may hold [broadcast]. Then the server stops (joining the dispatcher, so
      * an in-flight handler still completes) and every pump is interrupted.
+     *
+     * Both sweeps iterate [clients] directly rather than `clients.toList()`
+     * (computenet-ojxbs). A pump's own `finally` block ([Client.pump]) calls
+     * `clients.remove(this)` concurrently with either sweep — on ordinary
+     * exit, on a write failure, and on the [Client.stop] interrupt this method
+     * itself issues. `Iterable<T>.toList()` on a size-1 `Collection` that
+     * `is List` takes a `get(0)` fast path instead of using an iterator
+     * (kotlin-stdlib `_Collections.kt`): it reads `size` (1), and if a
+     * concurrent [Client.pump] removes that one client — replacing
+     * [CopyOnWriteArrayList]'s backing array with an empty one — before the
+     * `get(0)` call runs, `get(0)` throws `ArrayIndexOutOfBoundsException`
+     * against the now-empty array. `clients.forEach { ... }` instead uses
+     * `CopyOnWriteArrayList`'s own iterator, which snapshots the backing array
+     * once at `iterator()`/`forEach` call time — a concurrent add or remove
+     * changes a *later* snapshot, never the array this sweep already captured.
      */
     fun stop() {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(STOP_DRAIN_MS)
-        clients.toList().forEach { it.awaitDrained(deadline) }
+        clients.forEach { it.awaitDrained(deadline) }
         server.stop(0)
-        clients.toList().forEach { it.stop() }
+        clients.forEach { it.stop() }
     }
 
     // `internal`, not private, so `DemoShellBindTest` can pin the *named*-port
