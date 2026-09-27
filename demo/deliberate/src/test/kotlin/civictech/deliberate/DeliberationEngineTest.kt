@@ -1627,7 +1627,9 @@ class DeliberationEngineTest {
                 else -> emptyList()
             }
         }
-        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0)
+        // Links off: a running link round between persistNow() and the `before` snapshot would race
+        // the comparison (CI 36341232982); link restore has its own durability test.
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false)
         val judge = FakeJudge(
             strength = { if (it == "claude-SUPPORT") 0.9 else 0.8 },
             triage = { _, cands -> cands.map { if (it.text == "codex-ATTACK") Triage(TriageAction.UNDERCUT, 0) else Triage(TriageAction.ADD) } },

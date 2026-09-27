@@ -444,7 +444,7 @@ class DeliberateAppTest {
         val root = probe.ask("Layers?")
         val g = probe.awaitGraph { g -> g.idle(root) && g.nodes.all { it.credences.keys == SemanticsCatalog.IDS.toSet() } }
         g.nodes.forEach { n ->
-            assertEquals(n.credences.getValue("dfquad"), n.credence)
+            assertEquals(n.consensus, n.credence) // the default headline is the consensus
             assertEquals(Consensus.of(n.credences, Consensus.DEFAULT_MEMBERS), n.consensus, 1e-12)
             assertEquals(n.credences.values.min(), n.spreadLow)
             assertEquals(n.credences.values.max(), n.spreadHigh)
