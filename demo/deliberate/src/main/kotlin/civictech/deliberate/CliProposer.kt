@@ -123,8 +123,12 @@ class CliProposer internal constructor(
             listOf(
                 "codex", "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
                 "--ignore-rules", "--strict-config", "--disable", "shell_tool", "--disable", "unified_exec",
-                "--disable", "multi_agent", "--disable", "apps", "-s", "read-only",
-                "-c", "web_search=\"disabled\"", "-c", "tools.view_image=false",
+                "--disable", "multi_agent", "--disable", "apps",
+                // codex 0.155 rejects `-c tools.view_image=…` under --strict-config; image
+                // viewing/generation and browser/computer use are features there.
+                "--disable", "view_image", "--disable", "image_generation", "--disable", "browser_use",
+                "--disable", "computer_use", "--disable", "in_app_browser", "-s", "read-only",
+                "-c", "web_search=\"disabled\"",
                 "-c", "model_reasoning_effort=\"low\"",
             ) +
                 model.flag("-m") + listOf("-o", out.absolutePath, "--", prompt)

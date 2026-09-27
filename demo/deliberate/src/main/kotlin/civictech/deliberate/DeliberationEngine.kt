@@ -6,7 +6,6 @@ import civictech.cell.CellRef
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.Semaphore
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -19,8 +18,9 @@ import kotlin.time.Duration
  *
  * Threading: claims are expanded by `config.workers` threads pulling from one
  * FIFO queue (so trees grow roughly level by level); each round fans its
- * proposer calls out on a separate call executor. All engine metadata sits
- * behind [lock], held only for short reads/writes and never across a
+ * proposer calls out on a separate call executor. The app-wide bound on
+ * concurrent CLI processes (EXP-07) is not the engine's: it is the one
+ * [ProcessGate] the CLI proposers share. All engine metadata sits behind [lock], held only for short reads/writes and never across a
  * Judge/Proposer call. Agora mutations go through [serviceLock], preserving
  * the service's single-writer mutation model while worker threads expand.
  */
@@ -39,11 +39,9 @@ class DeliberationEngine(
         val relevance: Double = 0.5,
         val maxDepth: Int = 3,
         val maxClaims: Int = 60,
-        val maxProcesses: Int = 4,
         val workers: Int = 8,
     ) {
         init {
-            require(maxProcesses > 0) { "maxProcesses must be positive" }
             require(workers > 0) { "workers must be positive" }
         }
     }
@@ -92,7 +90,6 @@ class DeliberationEngine(
         config.workers, config.workers, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(),
     ) { r -> Thread(r, "deliberate-worker").apply { isDaemon = true } }
     private val calls: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
-    private val processPermits = Semaphore(config.maxProcesses)
 
     private companion object {
         val FINISHED = setOf(
@@ -319,14 +316,7 @@ class DeliberationEngine(
         // EXP-02: every proposer × side, concurrently.
         val futures = sides.flatMap { side ->
             proposers.map { p ->
-                Triple(side, p, calls.submit<List<String>> {
-                    processPermits.acquire()
-                    try {
-                        p.propose(ctx, side, config.argsPerCall).take(config.argsPerCall)
-                    } finally {
-                        processPermits.release()
-                    }
-                })
+                Triple(side, p, calls.submit<List<String>> { p.propose(ctx, side, config.argsPerCall).take(config.argsPerCall) })
             }
         }
         var failures = 0
