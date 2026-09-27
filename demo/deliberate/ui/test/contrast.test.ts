@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 // WCAG 2.x contrast of the text tokens against every surface text sits on,
 // read from tokens.css itself so a token change cannot silently regress it.
 const css = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+const appCss = readFileSync(new URL('../src/styles/app.css', import.meta.url), 'utf8');
 
 function block(selector: string): Record<string, string> {
   const start = css.indexOf(`${selector} {`);
@@ -31,20 +32,25 @@ const osDark = block(':root:not([data-theme="light"])');
 
 const TEXT = ['text', 'text-2', 'text-3', 'pro-text', 'con-text'] as const;
 const SURFACES = ['page', 'surface', 'surface-sunk'] as const;
+const SPECIAL_TEXT = ['page', 'toast-text'] as const;
 
 describe('text contrast (WCAG AA, 4.5:1)', () => {
+  it('covers every token actually used as a text colour', () => {
+    const used = [...appCss.matchAll(/^[ \t]*color:\s*var\(--([\w-]+)\)/gm)].map((m) => m[1]);
+    expect(new Set(used)).toEqual(new Set([...TEXT, ...SPECIAL_TEXT]));
+  });
+
   for (const [name, theme] of [['light', light], ['dark', dark]] as const) {
     it(`${name}: every text token on every surface`, () => {
-      const table: string[] = [];
       for (const t of TEXT)
         for (const s of SURFACES) {
           const r = contrast(theme[t], theme[s]);
-          table.push(`${t} ${theme[t]} on ${s} ${theme[s]}: ${r.toFixed(2)}`);
           expect(r, `${name} ${t} on ${s}`).toBeGreaterThanOrEqual(4.5);
         }
       const toast = contrast(theme['toast-text'], theme.toast);
       expect(toast).toBeGreaterThanOrEqual(4.5);
-      if (process.env.CONTRAST_REPORT) console.log([`-- ${name}`, ...table, `toast: ${toast.toFixed(2)}`].join('\n'));
+      expect(contrast(theme.page, theme.text), `${name} inverse button text`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(theme.text, theme['seg-on']), `${name} selected control text`).toBeGreaterThanOrEqual(4.5);
     });
   }
 
@@ -55,5 +61,27 @@ describe('text contrast (WCAG AA, 4.5:1)', () => {
   it('keeps the bright pro/con values for fills, distinct from the darker light-theme text values', () => {
     expect(light.pro).not.toBe(light['pro-text']);
     expect(light.con).not.toBe(light['con-text']);
+  });
+});
+
+function rule(selector: string): string {
+  const start = appCss.indexOf(`${selector} {`);
+  if (start < 0) throw new Error(`no ${selector} rule`);
+  return appCss.slice(start, appCss.indexOf('}', start));
+}
+
+describe('visual CSS contracts', () => {
+  it('draws the spread band and consensus marker above the soft fill', () => {
+    expect(rule('.gauge__fill')).toContain('background: var(--fill-soft)');
+    expect(rule('.gauge__band')).toContain('z-index: 1');
+    expect(rule('.gauge__band')).toContain('background: var(--band)');
+    expect(rule('.gauge__mark')).toContain('z-index: 2');
+  });
+
+  it('keeps the now line to one fixed-height row', () => {
+    expect(rule('.now')).toContain('flex-wrap: nowrap');
+    expect(rule('.now')).toContain('height: 20px');
+    expect(rule('.now')).toContain('overflow: hidden');
+    expect(rule('.now')).toContain('white-space: nowrap');
   });
 });

@@ -7,7 +7,9 @@ import {
   agreementText,
   bandCaption,
   clip,
+  LEAF_AGREEMENT,
   linkParts,
+  pct,
   questionProgress,
   shown,
   STATUS_HINT,
@@ -71,7 +73,8 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
         const open = () => props.sel.selected() === claim().ref;
         const paused = () => question()?.paused === true;
         // A paused question with queued claims is waiting, not working (CTL-05).
-        const busy = () => progress().active > 0 && !paused();
+        // QuestionDto.active includes active links (LINK-06), not only claims.
+        const busy = () => question()?.active === true && !paused();
         const override = () => claim().override ?? 'AUTO';
         // No arguments yet: no verdict to give, only the first impression.
         const unargued = () => e().node.children.length === 0;
@@ -86,23 +89,19 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                 classList={{ 'is-empty': unargued() }}
                 title={
                   unargued()
-                    ? 'No arguments yet: the credence appears once the first arguments are weighed'
+                    ? LEAF_AGREEMENT
                     : `Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())}). The band is the range from the lowest to the highest rule.`
                 }
               >
                 <span class="gauge__con" aria-hidden="true">no</span>
                 <span class="gauge__track" aria-hidden="true">
-                  <Show when={!unargued()}>
-                    <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
-                    <SpreadBand node={claim()} class="gauge__band" />
-                    <span class="gauge__mark" style={{ left: `${shown(claim()) * 100}%` }} />
-                  </Show>
+                  <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
+                  <SpreadBand node={claim()} class="gauge__band" />
+                  <span class="gauge__mark" style={{ left: `${shown(claim()) * 100}%` }} />
                   <span class="gauge__mid" />
                 </span>
                 <span class="gauge__pro" aria-hidden="true">yes</span>
-                <Show when={!unargued()}>
-                  <p class="gauge__caption">{bandCaption(claim())}</p>
-                </Show>
+                <p class="gauge__caption">{unargued() ? `first impression: ${pct(shown(claim()))}` : bandCaption(claim())}</p>
               </div>
 
               <div class="hero__row">
@@ -110,7 +109,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                   when={!unargued()}
                   fallback={
                     <p class="verdict verdict--none" aria-live="polite">
-                      <span class="verdict__label">no arguments yet</span>
+                      <span class="verdict__label">{LEAF_AGREEMENT}</span>
                     </p>
                   }
                 >

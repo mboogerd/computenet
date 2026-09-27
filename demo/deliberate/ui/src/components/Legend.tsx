@@ -60,6 +60,8 @@ export function Legend() {
           <dd>Low reach: the claim can barely change the answer to the question.</dd>
           <dt>Jev</dt>
           <dd>The AI judge: it scores claims and links, sorts new arguments and decides what is worth exploring.</dd>
+          <dt>Cost</dt>
+          <dd>The dollar figure is estimated model spend so far; press it for the backend breakdown and projection.</dd>
           <dt>Status</dt>
           <dd>
             <em>gathering arguments</em> and <em>weighing</em> are live; <em>fully argued</em> is done; <em>set aside</em>{' '}

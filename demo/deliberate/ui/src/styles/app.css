@@ -470,10 +470,6 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.gauge.is-empty .gauge__track {
-  background: repeating-linear-gradient(90deg, var(--track) 0 6px, transparent 6px 10px);
-}
-
 .gauge__mid {
   position: absolute;
   z-index: 3;
@@ -1026,7 +1022,7 @@ button {
   border-color: var(--line-strong);
 }
 
-/* The knot: where the connector ties the argument to its claim. Its fill is the link strength. */
+/* The knot: where the connector ties the argument to its claim. Its fill is how far the link holds. */
 .linkchip__knot {
   position: relative;
   width: 14px;
@@ -1059,6 +1055,11 @@ button {
 
 .linkchip.is-busy .linkchip__knot {
   animation: breathe 1.8s ease-in-out infinite;
+}
+
+.linkchip__count {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Preview of the link as a claim: rendered only while the chip is hovered or focused. */

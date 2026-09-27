@@ -145,15 +145,36 @@ describe('SPEC UI contract', () => {
     const settled: GraphDto = { ...graph, questions: [{ ...graph.questions[0], active: false }] };
     const html = renderToString(() => <TreeView graph={settled} root="q" />);
     expect(html).not.toMatch(/class="pause/);
+    expect(html).toContain('settled · 3 claims');
+    expect(html).not.toContain('deliberating');
+    expect(html).not.toMatch(/class="hero[^"]*is-busy/);
   });
 
-  it('says "no arguments yet" instead of a verdict on a question without arguments', () => {
+  it('treats active link work as deliberating even when every claim is settled', () => {
+    const linkBusy: GraphDto = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.kind === 'CLAIM'
+          ? { ...n, status: 'SATURATED' }
+          : n.ref === 'a-q'
+            ? { ...n, status: 'EXPLORING', activity: 'exploring' }
+            : n,
+      ),
+    };
+    const html = renderToString(() => <TreeView graph={linkBusy} root="q" />);
+    expect(html).toMatch(/class="hero[^"].*is-busy/);
+    expect(html).toContain('deliberating · 3 of 3 claims settled');
+    expect(html).toMatch(/<button[^>]*class="pause/);
+  });
+
+  it('shows the single first-impression value, not a verdict, on a question without arguments', () => {
     const bare: GraphDto = { ...graph, nodes: [graph.nodes[0]] };
     const html = renderToString(() => <TreeView graph={bare} root="q" />);
-    expect(html).toContain('no arguments yet');
+    expect(html).toContain('no arguments yet — all rules agree with the first impression');
     expect(html).not.toContain('leaning yes');
-    expect(html).not.toContain('gauge__band');
-    expect(html).not.toContain('gauge__caption');
+    expect(html).toContain('gauge__band');
+    expect(html).toMatch(/class="gauge__mark"[^>]*left:\s*63%/);
+    expect(html).toContain('first impression: 63%');
   });
 
   it('makes every progressive disclosure keyboard/touch reachable and relates it to its panel', () => {
@@ -225,8 +246,9 @@ describe('SPEC UI contract', () => {
     const chip = html.slice(html.search(/<button[^>]*class="linkchip/), html.indexOf('</button>', html.search(/<button[^>]*class="linkchip/)));
     expect(chip.replace(/<!--[^>]*-->/g, '')).toContain('holds 80%');
     expect(chip).not.toContain('decisive link 80%<');
-    // no cryptic +1 −1 counters, and no preview until the chip is hovered or focused
-    expect(html).not.toContain('linkchip__count');
+    // a readable total replaces cryptic +1/−1 counters; no preview until hover/focus
+    expect(chip.replace(/<!--[^>]*-->/g, '')).toContain('1 argument');
+    expect(html).toContain('linkchip__count');
     expect(html).not.toContain('role="tooltip"');
     expect(html).not.toContain('aria-describedby="peek-');
   });
@@ -290,6 +312,8 @@ describe('SPEC UI contract', () => {
     expect(legend).toContain('<details');
     expect(legend).toContain('<summary');
     expect(legend).toContain('aria-label="How to read this"');
+    expect(legend).toContain('Cost');
+    expect(legend).toContain('estimated model spend so far');
     expect(theme).toContain('type="button"');
     expect(theme).toContain('aria-label="Switch to dark theme"');
   });

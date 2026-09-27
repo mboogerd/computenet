@@ -18,16 +18,17 @@ export function QuestionList(props: { questions: QuestionDto[]; selected?: strin
           {(root) => {
             const q = () => byRoot().get(root);
             const selected = () => root === props.selected;
+            const state = () => (q()?.paused ? 'paused' : q()?.active ? 'deliberating' : 'settled');
             return (
               <button
                 type="button"
                 class="qlist__item"
                 classList={{ 'is-selected': selected() }}
                 aria-current={selected() ? 'true' : undefined}
-                title={`${q()?.text ?? ''} — ${q()?.claims ?? 0} claims${q()?.active ? ', deliberating' : ''}`}
+                title={`${q()?.text ?? ''} — ${q()?.claims ?? 0} claims, ${state()}`}
                 onClick={() => props.onSelect(root)}
               >
-                <span class="qlist__dot" classList={{ 'is-active': q()?.active === true }} aria-label={q()?.active ? 'deliberating' : 'settled'} />
+                <span class="qlist__dot" classList={{ 'is-active': state() === 'deliberating' }} aria-label={state()} />
                 <span class="qlist__text">{q()?.text}</span>
               </button>
             );

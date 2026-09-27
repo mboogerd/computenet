@@ -50,6 +50,13 @@ describe('question list across SSE frames', () => {
     expect(after[1]).toBe(before[1]);
     expect(document.activeElement).toBe(before[1]);
     expect(after[1].title).toContain('3 claims');
+
+    setQuestions(frame(3).map((q) => (q.root === 'q1' ? { ...q, paused: true } : q)));
+    const paused = host.querySelectorAll('button');
+    expect(paused[1]).toBe(before[1]);
+    expect(paused[1].title).toContain('paused');
+    expect(paused[1].querySelector('.qlist__dot')?.getAttribute('aria-label')).toBe('paused');
+    expect(paused[1].querySelector('.qlist__dot')?.classList.contains('is-active')).toBe(false);
   });
 });
 
@@ -67,7 +74,9 @@ describe('failed commands say so', () => {
     expect(expand.getAttribute('aria-pressed')).toBe('true'); // optimistic
     await flush();
     expect(expand.getAttribute('aria-pressed')).toBe('false');
-    expect(host.querySelector('.toast')?.textContent).toContain("Couldn't set Expand on this claim — /override failed: 503");
+    const notice = host.querySelector('.toast')!;
+    expect(notice.textContent).toContain("Couldn't set Expand on this claim — /override failed: 503");
+    (notice.querySelector('.toast__close') as HTMLButtonElement).click();
   });
 
   it('a pause that fails reverts and shows a toast', async () => {
@@ -126,6 +135,13 @@ describe('link preview', () => {
     expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
     chip.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(host.querySelector('[role="tooltip"]')).toBeNull();
+
+    chip.click();
+    expect(chip.getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('#link-a-q')?.classList.contains('is-open')).toBe(true);
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    chip.click();
+    expect(chip.getAttribute('aria-expanded')).toBe('false');
 
     // a new frame (all-new objects) keeps the chip, and brings no preview with it
     setG({ ...graph, nodes: graph.nodes.map((n) => ({ ...n })) });

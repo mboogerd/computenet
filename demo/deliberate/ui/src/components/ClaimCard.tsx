@@ -281,6 +281,11 @@ function LinkChip(props: {
           {'\u00a0· '}
           <span class="side__num">{linkHoldsText(props.edge)}</span>
         </span>
+        <Show when={props.args.length > 0}>
+          <span class="linkchip__count">
+            {' · '}{props.args.length} argument{props.args.length === 1 ? '' : 's'}
+          </span>
+        </Show>
       </button>
       <Show when={peeking()}>
         <span class="linkchip__peek" role="tooltip" id={peekId()}>

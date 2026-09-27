@@ -14,15 +14,21 @@ export const TOAST_MS = 6000;
 /** At most this many at once; the oldest goes first. */
 const MAX = 3;
 let next = 0;
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
 export function dismiss(id: number): void {
+  const timer = timers.get(id);
+  if (timer !== undefined) clearTimeout(timer);
+  timers.delete(id);
   setToasts((t) => t.filter((x) => x.id !== id));
 }
 
 export function toast(msg: string, ms = TOAST_MS): void {
   const id = ++next;
+  const current = toasts();
+  for (const dropped of current.slice(0, Math.max(0, current.length - (MAX - 1)))) dismiss(dropped.id);
   setToasts((t) => [...t.slice(-(MAX - 1)), { id, msg }]);
-  setTimeout(() => dismiss(id), ms);
+  timers.set(id, setTimeout(() => dismiss(id), ms));
 }
 
 /** "Couldn't pause this question — /question/pause failed: 503", the reason clipped to one line. */
