@@ -268,6 +268,44 @@ class DeliberateAppTest {
     }
 
     @Test
+    fun `a question is paused and resumed over HTTP (CTL-05)`() {
+        val (_, probe) = app(delayMs = 200)
+        val root = probe.ask("Pause me?")
+        assertEquals(200, probe.postForm("root=$root&paused=true", "/question/pause").statusCode())
+        val paused = probe.awaitGraph { g -> g.questions.single().paused }
+        assertTrue(paused.questions.single().paused)
+        // Nothing starts while paused: the tree stops growing once the round in flight attached.
+        var before = probe.graph()
+        awaitUntil("the in-flight round attaches and the paused tree holds still") {
+            Thread.sleep(400)
+            val next = probe.graph()
+            (next.nodes.map { it.ref to it.status } == before.nodes.map { it.ref to it.status }).also { before = next }
+        }
+        assertTrue(before.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.status == Status.QUEUED })
+        assertEquals(200, probe.postForm("root=$root&paused=false", "/question/pause").statusCode())
+        val done = probe.awaitGraph { g -> !g.questions.single().paused && g.idle(root) }
+        assertTrue(done.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.status == Status.ROUND_LIMIT })
+        // Bad input.
+        assertEquals(405, probe.get("/question/pause").statusCode())
+        assertEquals(400, probe.postForm("root=nope&paused=true", "/question/pause").statusCode())
+        assertEquals(400, probe.postForm("root=$root&paused=maybe", "/question/pause").statusCode())
+        assertEquals(400, probe.postForm("root=$root", "/question/pause").statusCode())
+        val claim = done.nodes.first { it.kind == "CLAIM" && it.depth == 1 }.ref
+        assertEquals(404, probe.postForm("root=$claim&paused=true", "/question/pause").statusCode(), "a claim is not a question")
+        assertEquals(404, probe.postForm("root=00000000-0000-0000-0000-000000000000&paused=true", "/question/pause").statusCode())
+    }
+
+    @Test
+    fun `command line --start-paused takes no value`() {
+        assertEquals(false, Options(emptyArray()).config.startPaused)
+        val o = Options(arrayOf("--start-paused", "8205", "--explore-links", "off"))
+        assertEquals(true, o.config.startPaused)
+        assertEquals(8205, o.port)
+        assertEquals(false, o.config.exploreLinks)
+        assertTrue("--start-paused" in Options.USAGE)
+    }
+
+    @Test
     fun `serves the built UI, and a hint page when there is none`() {
         val dist = Files.createTempDirectory("deliberate-ui").toFile()
         try {

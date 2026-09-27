@@ -138,6 +138,7 @@ class DeliberateApp(
 
     init {
         shell.route("/question") { handleQuestion(it) }
+        shell.route("/question/pause") { handlePause(it) }
         shell.route("/override") { handleOverride(it) }
         shell.route("/graph") { ex ->
             if (ex.requestMethod != "GET") return@route ex.respond(405, "GET only")
@@ -230,6 +231,25 @@ class DeliberateApp(
         if (text.length > MAX_QUESTION) return ex.respond(400, "question longer than $MAX_QUESTION characters")
         val root = engine.ask(text)
         ex.respond(200, """{"root":"${root.id}"}""", "application/json")
+    }
+
+    /** CTL-05: `POST /question/pause` with `root=<question ref>&paused=true|false`. */
+    private fun handlePause(ex: HttpExchange) {
+        if (ex.requestMethod != "POST") return ex.respond(405, "POST only")
+        val params = readForm(ex) ?: return
+        val root = params["root"]?.let { runCatching { UUID.fromString(it.trim()) }.getOrNull() }
+            ?: return ex.respond(400, "root must be a question ref")
+        val paused = when (params["paused"]?.trim()?.lowercase()) {
+            "true" -> true
+            "false" -> false
+            else -> return ex.respond(400, "paused must be true or false")
+        }
+        try {
+            engine.setPaused(CellRef(root), paused)
+        } catch (_: IllegalArgumentException) {
+            return ex.respond(404, "unknown question $root")
+        }
+        ex.respond(200, "ok")
     }
 
     private fun handleOverride(ex: HttpExchange) {
@@ -355,6 +375,7 @@ internal class Options(args: Array<String>) {
             val a = args[i]
             when {
                 a == "--help" || a == "-h" -> values["--help"] = "true"
+                a in SWITCHES -> values[a] = "true"
                 a.startsWith("--") -> {
                     require(a in FLAGS) { "unknown option $a" }
                     require(i + 1 < args.size) { "$a needs a value" }
@@ -403,6 +424,7 @@ internal class Options(args: Array<String>) {
                 "off" -> false
                 else -> throw IllegalArgumentException("--explore-links must be on or off: $mode")
             },
+            startPaused = "--start-paused" in values,
             yieldStop = when (val mode = values["--yield-stop"]?.trim()?.lowercase()) {
                 null, "on" -> (d.yieldStop ?: DeliberationEngine.YieldStop()).let { y ->
                     DeliberationEngine.YieldStop(
@@ -462,6 +484,8 @@ internal class Options(args: Array<String>) {
             "--wlo-alpha", "--wlo-k", "--wlo-p", "--wlo-gamma",
             "--codex-input-rate", "--codex-cached-rate", "--codex-output-rate", "--jev-input-rate", "--jev-output-rate",
         )
+        /** Flags that take no value. */
+        val SWITCHES = setOf("--start-paused")
         private val D = DeliberationEngine.Config()
         private val Y = DeliberationEngine.YieldStop()
         val USAGE = """
@@ -485,6 +509,8 @@ internal class Options(args: Array<String>) {
               --yield-ratio <f>           ...falls below f x the mean of its earlier rounds (${Y.ratio})
               --yield-min-claims <n>      ...and it holds at least n claims (${Y.minClaims})
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)
+              --start-paused              every restored question starts paused: nothing runs until you resume
+                                          one (safe after an upgrade); new questions run normally
               --semantics <id>            what a node's credence shows: a layer id or ${LayerSet.CONSENSUS} (${LayerSet.CONSENSUS})
               --semantics-layers <ids>    credence layers to propagate (${SemanticsCatalog.IDS.joinToString(",")}); dfquad always runs
               --consensus <ids>           layers averaged (in log-odds) into the consensus (${Consensus.DEFAULT_MEMBERS.joinToString(",")})

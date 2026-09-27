@@ -31,6 +31,8 @@ data class QuestionDto(
     val yieldEarlier: Double? = null,
     /** Why the tree stopped growing early: "budget", "diminishing" (only when queued work was halted), or null. */
     val stoppedBy: String? = null,
+    /** CTL-05: the question is paused — no new round starts in it until it is resumed (`POST /question/pause`). */
+    val paused: Boolean = false,
     /** SPEC §12: USD spent on this question so far — the sum of every priced call (unpriced calls are left out). */
     val costUsd: Double = 0.0,
     /** SPEC §12: costUsd + claims still to explore × mean cost per completed round; null until 3 rounds completed. */

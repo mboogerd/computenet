@@ -2083,4 +2083,269 @@ class DeliberationEngineTest {
             dir.deleteRecursively()
         }
     }
+
+    // ------------------------------------------------------------ restart safety: DUR-05, DUR-06, CTL-05
+
+    private val restartSchedulers = mutableListOf<VirtualThreadScheduler>()
+
+    @AfterTest
+    fun stopRestartSchedulers() = restartSchedulers.forEach { it.shutdown() }
+
+    /** A fresh host over the same structure [log] and [store]: a process restart. */
+    private fun restart(
+        log: java.io.File,
+        store: MetaStore,
+        config: DeliberationEngine.Config,
+        judge: Judge = FakeJudge(),
+        proposers: List<Proposer> = listOf(FakeProposer("claude")),
+    ): DeliberationEngine {
+        val s = VirtualThreadScheduler("deliberate-restart").also { restartSchedulers += it }
+        val r = LocationRegistry()
+        val h = ManagedHost(scheduler = s, registry = r, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+        return DeliberationEngine(CredenceGraph(h, r, dfquad, structureLog = log), judge, proposers, config, store = store)
+            .also { engines += it }
+    }
+
+    /** Copies [from] into a new store, record by record, leaving out keys [drop] rejects. */
+    private fun copyOf(from: MetaStore, drop: (String) -> Boolean = { false }) = InMemoryMetaStore().also { to ->
+        from.load().forEach { (k, v) -> if (!drop(k)) to.put(k, v) }
+    }
+
+    /** A root with one pro "A" and one con "B"; every link explored once (it proposes nothing). */
+    private fun twoLinkRun(dir: java.io.File, store: MetaStore): DeliberationEngine {
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true)
+        val e = DeliberationEngine(
+            CredenceGraph(host, registry, dfquad, structureLog = java.io.File(dir, "graph.jsonl")),
+            FakeJudge(strength = { 0.5 }), listOf(linkProposer(rootPros = listOf("A"), rootCons = listOf("B"))), config, store = store,
+        ).also { engines += it }
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertTrue(g.edges().all { it.rounds == 1 }, "both links explored in the first run: ${g.edges()}")
+        e.close()
+        return e
+    }
+
+    /** Records every proposer call made about a link. */
+    private class LinkCounter : Proposer {
+        override val id = "claude"
+        val linkCalls = CopyOnWriteArrayList<String>()
+        val calls = AtomicInteger()
+        override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> {
+            calls.incrementAndGet()
+            if (ctx.link != null) linkCalls += ctx.link!!.argument
+            return emptyList()
+        }
+    }
+
+    @Test
+    fun `with link exploration off a restored link runs no round whatever state it was recorded in, until EXPANDed`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-links-off").toFile()
+        try {
+            val store1 = InMemoryMetaStore()
+            twoLinkRun(dir, store1)
+            val edges = store1.load().keys.filter { it.startsWith("l:") }
+            assertEquals(2, edges.size)
+            // As if the process had been killed mid-exploration: one link EXPLORING with rounds left, one QUEUED.
+            val store = copyOf(store1)
+            store.put(edges[0], mapOf("status" to "\"EXPLORING\"", "rounds" to "1", "roundLimit" to "3"))
+            store.put(edges[1], mapOf("status" to null, "rounds" to null))
+            val p = LinkCounter()
+            val e = restart(java.io.File(dir, "graph.jsonl"), store,
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 1, exploreLinks = false), proposers = listOf(p))
+            e.idle()
+            assertEquals(emptyList(), p.linkCalls.toList())
+            val g = e.snapshot()
+            assertTrue(g.edges().all { it.status == Status.PRUNED }, "${g.edges().map { it.status }}")
+            assertTrue(g.questions.none { it.active })
+            // CTL-02: EXPAND is the one way to explore a link with exploration off.
+            val queued = g.nodes.single { "l:${it.ref}" == edges[1] }
+            e.setOverride(g.ref(queued), Override.EXPAND)
+            e.idle()
+            assertEquals(1, p.linkCalls.toSet().size, "only the expanded link ran")
+            assertEquals(1, e.snapshot().nodes.single { it.ref == queued.ref }.rounds)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a link without a record restores PRUNED with a note instead of joining the queue`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-legacy-links").toFile()
+        try {
+            val store1 = InMemoryMetaStore()
+            twoLinkRun(dir, store1)
+            // Data written before links existed: claim and question records, no link records.
+            val store = copyOf(store1) { it.startsWith("l:") }
+            val p = LinkCounter()
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true)
+            val e = restart(java.io.File(dir, "graph.jsonl"), store, config, judge = FakeJudge(strength = { 0.5 }), proposers = listOf(p))
+            e.idle()
+            assertEquals(0, p.calls.get(), "a restart of settled legacy data asks nobody anything")
+            val g = e.snapshot()
+            assertEquals(2, g.edges().size)
+            g.edges().forEach {
+                assertEquals(Status.PRUNED, it.status)
+                assertEquals(DeliberationEngine.Config.LEGACY_LINK, it.error)
+                assertEquals(0, it.rounds)
+            }
+            assertTrue(g.questions.none { it.active })
+            // Now recorded: a later restart keeps it PRUNED without the legacy rule.
+            e.persistNow()
+            assertTrue(store.load().keys.count { it.startsWith("l:") } == 2)
+            // EXPAND explores it and clears the note.
+            val link = g.edges().first()
+            e.setOverride(g.ref(link), Override.EXPAND)
+            e.idle()
+            val after = e.snapshot().nodes.single { it.ref == link.ref }
+            assertEquals(1, after.rounds)
+            assertNull(after.error)
+            assertEquals(listOf(link.ref), e.snapshot().edges().filter { (it.rounds ?: 0) > 0 }.map { it.ref }, "only the expanded link ran")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a paused question finishes its round in flight, starts no other, runs an EXPAND, and resumes`() {
+        val gate = CountDownLatch(1)
+        val blocked = CountDownLatch(1)
+        val asked = CopyOnWriteArrayList<String>()
+        val p = FakeProposer("claude") { ctx, _, _ ->
+            asked += ctx.claim
+            if (ctx.path.isEmpty()) {
+                blocked.countDown()
+                gate.await(20, TimeUnit.SECONDS)
+            }
+            null
+        }
+        val e = engine(proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = false))
+        val root = e.ask("Q?")
+        assertTrue(blocked.await(20, TimeUnit.SECONDS))
+        e.setPaused(root, true)
+        gate.countDown()
+        e.idle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        assertTrue(q.paused)
+        assertTrue(q.active, "its claims are still queued")
+        // The round in flight attached what it found; nothing else started.
+        val kids = g.childrenOf(root).map { g.claim(it.source!!) }
+        assertEquals(2, kids.size)
+        assertTrue(kids.all { it.status == Status.QUEUED && it.rounds == 0 }, "$kids")
+        assertEquals(listOf("Q?", "Q?"), asked.toList())
+        // CTL-02 in a paused question: the one expanded claim runs its forced round, nothing else.
+        val first = kids.first()
+        e.setOverride(g.ref(first), Override.EXPAND)
+        e.idle()
+        val g2 = e.snapshot()
+        assertEquals(1, g2.claim(first.ref).rounds)
+        assertEquals(Status.QUEUED, g2.claim(kids.last().ref).status)
+        assertTrue(asked.none { it == kids.last().text })
+        assertTrue(g2.childrenOf(g2.ref(first)).all { g2.claim(it.source!!).status == Status.QUEUED })
+        // Resume: back through the normal gates (depth 2 > maxDepth: DEPTH_LIMIT without a call).
+        e.setPaused(root, false)
+        e.idle()
+        val g3 = e.snapshot()
+        assertTrue(!g3.questions.single().paused && !g3.questions.single().active)
+        assertEquals(Status.ROUND_LIMIT, g3.claim(kids.last().ref).status)
+        assertEquals(1, g3.claim(kids.last().ref).rounds)
+        assertTrue(g3.childrenOf(g3.ref(first)).all { g3.claim(it.source!!).status == Status.DEPTH_LIMIT })
+    }
+
+    @Test
+    fun `a claim waiting for its next round is held by a pause and continues on resume`() {
+        val gate = CountDownLatch(1)
+        val blocked = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        val p = FakeProposer("claude") { _, _, _ ->
+            if (first.getAndSet(false)) {
+                blocked.countDown()
+                gate.await(20, TimeUnit.SECONDS)
+            }
+            emptyList()
+        }
+        val e = engine(proposers = listOf(p),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, exploreLinks = false, workers = 1))
+        val root = e.ask("Q?")
+        assertTrue(blocked.await(20, TimeUnit.SECONDS))
+        e.setPaused(root, true)
+        gate.countDown()
+        e.idle()
+        val held = e.snapshot().node(root)
+        assertEquals(1, held.rounds, "the round in flight completed, the next did not start")
+        assertEquals(Status.EXPLORING, held.status)
+        e.setPaused(root, false)
+        e.idle()
+        assertEquals(3, e.snapshot().node(root).rounds)
+        assertEquals(Status.ROUND_LIMIT, e.snapshot().node(root).status)
+    }
+
+    @Test
+    fun `start-paused restores every question paused and durable, runs no call, and new questions run`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-start-paused").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val gate = CountDownLatch(1)
+        try {
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true, minInfluence = 0.0)
+            val blocked = CountDownLatch(2)
+            val gated = FakeProposer("claude") { ctx, _, _ ->
+                if (ctx.path.size == 1 && ctx.link == null) {
+                    blocked.countDown()
+                    gate.await(20, TimeUnit.SECONDS)
+                }
+                null
+            }
+            val store1 = InMemoryMetaStore()
+            val e1 = DeliberationEngine(CredenceGraph(host, registry, dfquad, structureLog = log), FakeJudge(strength = { 0.5 }),
+                listOf(gated), config, store = store1).also { engines += it }
+            val q1 = e1.ask("Q1?")
+            assertTrue(blocked.await(20, TimeUnit.SECONDS))
+            e1.persistNow()
+            // The kill instant; one argument also lost its assessment (killed between attach and assess).
+            val store = copyOf(store1)
+            val kid = e1.snapshot().let { g -> g.childrenOf(q1).first().source!! }
+            store.put("c:$kid", mapOf("plausibility" to null, "relevance" to null, "quality" to null, "edgeStrength" to null,
+                "reach" to null, "contribution" to null, "status" to null))
+
+            val judge = FakeJudge(strength = { 0.5 })
+            val p = FakeProposer("claude") { _, _, _ -> emptyList() }
+            val e2 = restart(log, store, config.copy(startPaused = true), judge, listOf(p))
+            e2.idle()
+            assertEquals(0, p.contexts.size, "no proposer call")
+            assertEquals(0, judge.relationCalls.size + judge.plausibilityCalls.size + judge.triageCalls.size + judge.saturationCalls.get(),
+                "no Jev call, not even the deferred assessment")
+            val g2 = e2.snapshot()
+            assertTrue(g2.questions.single().paused)
+            assertTrue(g2.claims().filter { it.depth == 1 }.all { it.status == Status.QUEUED })
+            // A question asked after the boot runs normally.
+            val q2 = e2.ask("Q2?")
+            e2.idle()
+            val g2b = e2.snapshot()
+            assertTrue(!g2b.questions.single { it.root == q2.id.toString() }.paused)
+            assertEquals(1, g2b.node(q2).rounds)
+            val callsBefore = p.contexts.size
+            e2.close()
+
+            // Durable: the next boot, without the flag, keeps Q1 paused.
+            val judge3 = FakeJudge(strength = { 0.5 })
+            val p3 = FakeProposer("claude") { _, _, _ -> emptyList() }
+            val e3 = restart(log, store, config, judge3, listOf(p3))
+            e3.idle()
+            assertTrue(callsBefore > 0)
+            assertEquals(0, p3.contexts.size)
+            assertTrue(e3.snapshot().questions.single { it.root == q1.id.toString() }.paused)
+            assertTrue(!e3.snapshot().questions.single { it.root == q2.id.toString() }.paused)
+            // Resume assesses the argument that lost its assessment, then explores through the gates.
+            e3.setPaused(q1, false)
+            e3.idle()
+            val g3 = e3.snapshot()
+            assertTrue(judge3.relationCalls.any { it.child == g3.claim(kid).text })
+            assertTrue(g3.claims().filter { it.depth == 1 && it.root == q1.id.toString() }.all { it.status == Status.ROUND_LIMIT })
+            assertTrue(g3.questions.none { it.active || it.paused })
+        } finally {
+            gate.countDown()
+            dir.deleteRecursively()
+        }
+    }
 }

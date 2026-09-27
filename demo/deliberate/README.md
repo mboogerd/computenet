@@ -139,6 +139,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--yield-ratio <f>` | 0.6 | …falls below f × the mean yield of all its earlier rounds |
 | `--yield-min-claims <n>` | 40 | …and never before the question holds n claims |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
+| `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Safe upgrades*) |
 | `--semantics-layers <ids>` | all seven | credence layers to propagate (`dfquad` always runs) |
 | `--consensus <ids>` | `wlo,jnb,woe` | layers averaged into the headline consensus |
 | `--semantics <id>` | `consensus` | what a node's `credence` reports: the consensus, or one layer id |
@@ -166,6 +167,7 @@ chance to stop a side before the cap supplies the dependable stop.
 
 - `POST /question` with form field `text=…` returns `{"root":"<ref>"}`.
 - `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. The ref is a claim's, or an edge's to steer its link. Bad input returns 400, and an unknown ref returns 404.
+- `POST /question/pause` with form fields `root=<question ref>&paused=true|false` returns `ok` (SPEC CTL-05). A paused question finishes its rounds in flight and starts no new one; `EXPAND` on one of its claims or links still runs that one. The UI's **Pause/Resume** button sits next to the question's cost figure.
 - `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow` and `spreadHigh`; an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`.
 - `GET /events` is an SSE stream. Every message is a full `GraphDto`, and messages are coalesced to at most about 10 per second.
 
@@ -277,6 +279,23 @@ after a SIGTERM, and still 36 KB after two more restarts — SIGTERM, then
 each restart. The one-graph-per-layer design used about 71 KB per claim and
 grew about five-fold over three restarts. A data directory from that design is
 refused with a message; start a fresh one.
+
+### Safe upgrades
+
+A restart re-queues whatever was still running, and a new build may restore
+old data under new rules — so restarting after an upgrade can start spending
+on questions you considered finished. Restart with `--start-paused`: every
+restored question comes back paused (SPEC DUR-06), nothing runs, and you
+resume only the questions you want to continue, each with the **Resume**
+button in its header (or `POST /question/pause` `paused=false`). The pause is
+recorded, so later restarts keep those questions paused until you resume them.
+Links of edges created before links existed come back `PRUNED` ("created
+before link exploration — expand to explore") rather than queued (DUR-05);
+expand one to explore it.
+
+```bash
+build/install/deliberate/bin/deliberate 8091 --data <dir> --start-paused
+```
 
 ## Tests
 

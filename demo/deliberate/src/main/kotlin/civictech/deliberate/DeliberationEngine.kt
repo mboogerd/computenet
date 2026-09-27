@@ -89,6 +89,12 @@ class DeliberationEngine(
          * link is never explored automatically (it ends PRUNED); EXPAND still explores it.
          */
         val exploreLinks: Boolean = true,
+        /**
+         * SPEC §11 DUR-06 (`--start-paused`): every question restored at boot starts
+         * paused (CTL-05), so nothing runs until the human resumes one. Questions asked
+         * afterwards run normally.
+         */
+        val startPaused: Boolean = false,
     ) {
         init {
             require(workers > 0) { "workers must be positive" }
@@ -110,6 +116,8 @@ class DeliberationEngine(
             const val BUDGET_EXHAUSTED = "budget exhausted"
             /** CTL-02: a claim the human forced to expand is queued ahead of every contribution (≤ 1). */
             const val FORCED_PRIORITY = 2.0
+            /** DUR-05: the error of a link restored for an edge created before links existed (it has no record). */
+            const val LEGACY_LINK = "created before link exploration — expand to explore"
         }
     }
 
@@ -198,6 +206,10 @@ class DeliberationEngine(
         /** Whether the first rewrite reservation invalidated an already queued task. */
         var rewriteWasQueued = false
         var anyCallSucceeded = false
+        /** CTL-05: work its paused question withheld (a queued first round, or a waiting next one); resume re-schedules it. */
+        var parked = false
+        /** CTL-05: restored unassessed in a paused question; resume assesses it before scheduling it. */
+        var needsAssessment = false
         var edge: Edge? = null
         /** Its pro and con arguments; for a link, its supporters and undercutters. */
         val children = mutableListOf<Claim>()
@@ -231,6 +243,8 @@ class DeliberationEngine(
     private val costs = HashMap<CellRef, MutableMap<String, BackendTally>>()
     /** Questions whose complete lifetime is covered by [costs]; absent for records created before cost tracking. */
     private val completeCosts = HashSet<CellRef>()
+    /** CTL-05: paused questions — no new round starts in them except a forced one (CTL-02). */
+    private val paused = HashSet<CellRef>()
 
     private val pending = AtomicInteger()
     private val idle = Object()
@@ -316,6 +330,7 @@ class DeliberationEngine(
         val toSchedule: List<Claim> = synchronized(lock) {
             val c = requireNotNull(claims[ref]) { "unknown claim ${ref.id}" }
             c.override = mode
+            if (mode == Override.EXPAND && c.error == Config.LEGACY_LINK) c.error = null
             when (mode) {
                 // CTL-03: queued work is cancelled at once; a running claim stops at its next round boundary.
                 Override.STOP -> when {
@@ -364,6 +379,58 @@ class DeliberationEngine(
         onChange()
         toSchedule.forEach(::schedule)
         enqueueAgain?.let(::enqueue)
+    }
+
+    /**
+     * CTL-05: pauses or resumes question [root]. A paused question starts no new
+     * round — a round in flight finishes and attaches what it found (as CTL-03),
+     * and its queued claims and links stay QUEUED (a waiting claim stays
+     * EXPLORING) without being dequeued. Only a forced round (CTL-02 EXPAND) still
+     * runs in it: the human asked for that one. Resuming re-schedules everything
+     * the pause withheld through the normal gates. Durable (the question record).
+     */
+    fun setPaused(root: CellRef, paused: Boolean) {
+        val withheld = synchronized(lock) {
+            require(root in questions) { "unknown question ${root.id}" }
+            if (paused) {
+                this.paused += root
+                null
+            } else if (this.paused.remove(root)) {
+                claims.values.filter { it.root == root && it.parked }.onEach { it.parked = false }
+            } else null
+        }
+        onChange()
+        withheld?.let(::resume)
+    }
+
+    /**
+     * CTL-05: re-schedules work a pause withheld, exactly as a restart would
+     * ([restore]): unassessed arguments are assessed first, then queued with their links.
+     */
+    private fun resume(withheld: List<Claim>) {
+        val (unassessed, rest) = synchronized(lock) {
+            withheld.partition { it.needsAssessment }.also { (u, _) -> u.forEach { it.needsAssessment = false } }
+        }
+        rest.forEach { c ->
+            val waiting = synchronized(lock) { c.status == Status.EXPLORING && c.waiting }
+            if (waiting) enqueue(c) else schedule(c)
+        }
+        assessThenSchedule(unassessed)
+    }
+
+    /** Assesses [nodes] (unassessed arguments) per question, then schedules them and their links. */
+    private fun assessThenSchedule(nodes: List<Claim>) {
+        nodes.groupBy { it.root }.values.forEach { group ->
+            pending.incrementAndGet()
+            calls.submit {
+                try {
+                    assess(group)
+                    group.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
+                } finally {
+                    done()
+                }
+            }
+        }
     }
 
     /**
@@ -428,6 +495,7 @@ class DeliberationEngine(
                     yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
                     yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
                     stoppedBy = stoppedBy(root),
+                    paused = root in paused,
                 ).withCost(costOf(root, tree))
             }
             GraphDto(qs, nodes, layers.members)
@@ -523,10 +591,18 @@ class DeliberationEngine(
     /** Caller holds [lock]. A claim whose assessment failed falls back to its reach (EXP-05). */
     private fun contributionOf(c: Claim): Double = c.contribution ?: c.reach ?: Config.FALLBACK_STRENGTH
 
+    /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one. */
+    private fun held(c: Claim) = c.root in paused && !c.forceRound
+
     private fun enqueue(c: Claim) {
         if (closed) return
         val (priority, generation) = synchronized(lock) {
             c.queueGeneration++
+            if (held(c)) {
+                // CTL-05: withheld until the question resumes; a task already queued goes stale.
+                c.parked = true
+                return
+            }
             priorityOf(c) to c.queueGeneration
         }
         pending.incrementAndGet()
@@ -538,11 +614,16 @@ class DeliberationEngine(
      * judgment ends it first (EXP-05; CTL-02 skips them): beyond `maxDepth` it
      * is DEPTH_LIMIT, below the `minInfluence` floor it is PRUNED — so an
      * irrelevant or poorly constructed argument is never explored — and in a
-     * question whose returns diminished (EXP-10) it is DIMINISHING.
+     * question whose returns diminished (EXP-10) it is DIMINISHING. In a paused
+     * question (CTL-05) it stays QUEUED, gates unapplied, until the question resumes.
      */
     private fun schedule(c: Claim) {
         val gate = synchronized(lock) {
             if (c.status != Status.QUEUED) return
+            if (held(c)) {
+                c.parked = true
+                return
+            }
             if (c.parent == null || c.override == Override.EXPAND || c.forceRound) null
             else when {
                 c.isLink && !config.exploreLinks -> Status.PRUNED
@@ -573,6 +654,11 @@ class DeliberationEngine(
         val continuing = synchronized(lock) {
             when {
                 task.generation != c.queueGeneration || c.rewriteInFlight -> null
+                // CTL-05: queued before its question paused; it waits, unstarted, for the resume.
+                (c.status == Status.QUEUED || (c.status == Status.EXPLORING && c.waiting)) && held(c) -> {
+                    c.parked = true
+                    null
+                }
                 c.status == Status.QUEUED -> false.also { c.status = Status.JUDGING }
                 c.status == Status.EXPLORING && c.waiting -> true.also { c.waiting = false }
                 else -> null
@@ -1309,13 +1395,15 @@ class DeliberationEngine(
         val diminished: Boolean = false,
         /** Missing/false identifies a record written before cost tracking existed. */
         val costComplete: Boolean = false,
+        /** CTL-05: the question is paused. */
+        val paused: Boolean = false,
     )
 
     /** Caller holds [lock]. */
     private fun questionFieldsOf(q: CellRef): Map<String, String> =
         RECORDS.encodeToJsonElement(
             QuestionRecord.serializer(),
-            QuestionRecord(yields[q].orEmpty().toList(), q in diminished, q in completeCosts),
+            QuestionRecord(yields[q].orEmpty().toList(), q in diminished, q in completeCosts, q in paused),
         ).jsonObject.mapValues { it.value.toString() } +
             // SPEC §12: one field per backend, so a call rewrites only its backend's counters.
             costs[q].orEmpty().map { (b, t) -> COST_FIELD + b to RECORDS.encodeToString(BackendTally.serializer(), t) }
@@ -1386,14 +1474,28 @@ class DeliberationEngine(
                 rec?.let { r -> apply(claim, r) }
                 claims[n.ref] = claim
                 treeSize.merge(claim.root, 1, Int::plus)
-                if (claim.edge != null) linkFor(claim).also { l -> linkRecords[l.ref]?.let { r -> apply(l, r) } }
+                if (claim.edge != null) linkFor(claim).also { l ->
+                    val lr = linkRecords[l.ref]
+                    when {
+                        lr != null -> apply(l, lr)
+                        // DUR-05: its argument was recorded but it never was — the edge predates
+                        // links. Exploring it now would be spend nobody asked for.
+                        rec != null -> {
+                            l.status = Status.PRUNED
+                            l.error = Config.LEGACY_LINK
+                        }
+                    }
+                }
             }
             for ((q, r) in questionRecords) {
                 if (q !in questions) continue
                 yields[q] = r.yields.toMutableList()
                 if (r.diminished) diminished += q
                 if (r.costComplete) completeCosts += q
+                if (r.paused) paused += q
             }
+            // DUR-06: --start-paused pauses every restored question before anything is scheduled.
+            if (config.startPaused) paused += questions.keys
             for ((q, tallies) in costRecords) {
                 if (q in questions && tallies.isNotEmpty()) costs[q] = LinkedHashMap(tallies)
             }
@@ -1408,22 +1510,15 @@ class DeliberationEngine(
             claims.values.filter { it.status == Status.QUEUED && !it.isLink }
                 .partition { it.parent != null && it.plausibility == null && it.edge?.strength == null }
         }
+        // CTL-05: in a paused question even the assessment waits for the resume (it is spend too).
+        val (deferred, assessNow) = synchronized(lock) { unassessed.partition { it.root in paused } }
+        synchronized(lock) { deferred.forEach { it.needsAssessment = true; it.parked = true } }
         // A link is queued with its argument: after it, and only once the argument is assessed.
         queued.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
         synchronized(lock) {
             claims.values.filter { it.isLink && it.status == Status.QUEUED && it.argument!!.status != Status.QUEUED }
         }.forEach(::schedule)
-        unassessed.groupBy { it.root }.values.forEach { group ->
-            pending.incrementAndGet()
-            calls.submit {
-                try {
-                    assess(group)
-                    group.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
-                } finally {
-                    done()
-                }
-            }
-        }
+        assessThenSchedule(assessNow)
         if (claims.isNotEmpty()) onChange()
     }
 

@@ -42,6 +42,8 @@ export class MockSource implements GraphSource {
   private nodes = new Map<string, NodeDto>();
   private onGraph?: (g: GraphDto) => void;
   private nextQuestion = 0;
+  /** CTL-05: paused questions; their script holds still until resumed. */
+  private paused = new Set<string>();
 
   constructor(
     private stepMs = 650,
@@ -53,6 +55,7 @@ export class MockSource implements GraphSource {
     onState('mock');
     this.onGraph = onGraph;
     this.nodes.clear();
+    this.paused.clear();
     this.nextQuestion = 0;
     if (this.empty) {
       onGraph(this.snapshot());
@@ -66,7 +69,7 @@ export class MockSource implements GraphSource {
     const { root, steps } = script(this, this.nextQuestion++, questionText);
     let i = 0;
     const tick = () => {
-      if (i < steps.length) steps[i++]();
+      if (i < steps.length && !this.paused.has(root)) steps[i++]();
       this.onGraph?.(this.snapshot());
       if (i < steps.length) {
         let timer!: ReturnType<typeof setTimeout>;
@@ -105,6 +108,14 @@ export class MockSource implements GraphSource {
           ? 'EXPLORING'
           : node.status;
     this.set(id, { override: mode, status });
+    this.onGraph?.(this.snapshot());
+  }
+
+  async pause(root: string, paused: boolean): Promise<void> {
+    console.info('[mock] POST /question/pause', { root, paused });
+    if (this.nodes.get(root)?.depth !== 0) throw new Error(`unknown question ${root}`);
+    if (paused) this.paused.add(root);
+    else this.paused.delete(root);
     this.onGraph?.(this.snapshot());
   }
 
@@ -199,6 +210,7 @@ export class MockSource implements GraphSource {
         text: r.text ?? '',
         claims: claims.length,
         active: claims.some((c) => c.status !== undefined && ACTIVE_STATUSES.has(c.status)),
+        paused: this.paused.has(r.ref),
         ...mockCost(claims),
       };
     });

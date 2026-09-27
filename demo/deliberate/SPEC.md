@@ -351,6 +351,19 @@ child rewords its link), and explores the link exactly like a claim:
   `STOPPED`. Descendants are not affected.
 - **CTL-04** `AUTO` returns the decision to Jev; setting it on a `STOPPED`
   claim re-queues it through the normal gates.
+- **CTL-05** The human can **pause** and **resume** a whole question
+  (`POST /question/pause`). A paused question starts no new round: a round
+  in flight finishes and its results are attached and assessed (as CTL-03);
+  its queued claims and links stay `QUEUED` — and a claim with rounds left
+  stays `EXPLORING` — without being dequeued, and no gate is applied to them
+  meanwhile; an argument restored unassessed (DUR-03) is not even assessed.
+  A forced round (CTL-02 `EXPAND` on one claim or link of the question) still
+  runs — the human asked for exactly that — and the arguments it attaches
+  wait like the rest. Resuming re-schedules everything the pause withheld
+  through the normal gates, exactly as a restart would (DUR-03). The pause is
+  durable: it is part of the question's record (DUR-02) and survives a
+  restart. `QuestionDto.paused` reports it; `active` still reports queued
+  work, so a paused question with queued claims is active and paused.
 
 ## 5. Claim status (the state machine the UI renders)
 
@@ -364,6 +377,8 @@ Every status change is broadcast.
 - `POST /question` form `text=` → `{"root":"<ref>"}`
 - `POST /override` form `id=<ref>&mode=AUTO|EXPAND|STOP` → `ok` (a claim ref,
   or an edge ref for its link)
+- `POST /question/pause` form `root=<question ref>&paused=true|false` → `ok`
+  (CTL-05); 400 on a malformed ref or flag, 404 on a ref that is not a question
 - `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
   `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`; an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
@@ -374,7 +389,7 @@ Every status change is broadcast.
   claim and link carries `activity` while it is being explored, judged or
   assessed; the graph carries `consensusMembers`; every question
   carries `yieldRounds`, `yieldRecent`, `yieldEarlier` and `stoppedBy`
-  (EXP-10), and `costUsd`, `projectedUsd` and `cost` (§12).
+  (EXP-10), `paused` (CTL-05), and `costUsd`, `projectedUsd` and `cost` (§12).
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
 
@@ -411,7 +426,7 @@ a residual of iteration 4, is now §3 "Links as claims".)
 
 ## 9. Acceptance
 
-1. Engine tests with fake proposers/judge prove EXP-02..08 and CTL-01..04
+1. Engine tests with fake proposers/judge prove EXP-02..08 and CTL-01..05
    deterministically (no network in `./gradlew :demo:deliberate:test`).
 2. Jev client and CLI proposer parsing are unit-tested against recorded
    payloads; a live smoke test runs only when `DELIBERATE_LIVE=1`.
@@ -500,6 +515,23 @@ they were stopped. A full recalibration of
 - **DUR-04** A data directory in the earlier one-agora-graph-per-layer format
   (`graph-<layer>.jsonl`) is refused at startup with a message; it is not
   migrated.
+- **DUR-05** A restart or an upgrade never starts spending that nobody asked
+  for. In particular, an edge whose argument has a record but whose link has
+  none — data written before links existed (§3 "Links as claims") — gets its
+  link restored as terminal `PRUNED` with the error "created before link
+  exploration — expand to explore", never `QUEUED`; `EXPAND` explores it (and
+  clears the note). The status is then recorded like any other, so later
+  restarts keep it. (An argument with no record at all was never persisted;
+  it and its link are rebuilt and queued afresh, as DUR-03 says.) With
+  `--explore-links off` a restored link — whatever status its record holds,
+  an interrupted `EXPLORING` one included — ends `PRUNED` at the LINK-04 gate
+  and runs no round unless expanded.
+- **DUR-06** `--start-paused` pauses (CTL-05) every question restored at boot
+  before anything is scheduled, so a boot runs no round and no Jev call until
+  the human resumes a question; questions asked afterwards run normally. The
+  pause is recorded, so it outlasts the boot that set it: a later restart
+  without the flag keeps those questions paused until each is resumed. It is
+  the safe way to restart after an upgrade whose restore rules may differ.
 
 ## 12. Cost (requirements COST-*)
 
