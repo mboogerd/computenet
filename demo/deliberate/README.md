@@ -205,7 +205,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
-| `--max-claims <n>` | 180 | hard cap: claims per question; unexplored claims past it become `BUDGET`, explored ones end `ROUND_LIMIT` ("budget exhausted"). An `EXPAND` still explores past it |
+| `--max-claims <n>` | 180 | hard cap: claims per question; claims that meet it become `BUDGET` (whether or not they already ran a round). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
 | `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its value of information, `\|d answer/d node\| × 4·p·(1 − p)`, is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |

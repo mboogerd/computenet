@@ -6,6 +6,10 @@ import kotlinx.serialization.Serializable
  * The UI contract (SPEC §6): `GET /graph` and every `/events` frame.
  * `ui/src/api/types.ts` mirrors this file field for field; change both or
  * neither. Encoded with `explicitNulls = false, encodeDefaults = true`.
+ * The wire JSON of every DTO below is pinned by `DtoGoldenTest` against
+ * `ui/test/fixtures/golden.json`, shared with the UI's `golden.test.ts`;
+ * change the contract by editing both and regenerating the fixture with
+ * `DELIBERATE_GOLDEN_REGEN=1`.
  */
 @Serializable
 data class GraphDto(

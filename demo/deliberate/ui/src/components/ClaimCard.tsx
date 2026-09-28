@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show, type Accessor } from 'solid-js';
+import { createMemo, createSignal, For, onCleanup, onMount, Show, type Accessor } from 'solid-js';
 import type { NodeDto } from '../api/types';
 import type { ArgumentNode, TreeNode } from '../tree/buildTree';
 import {
@@ -26,18 +26,97 @@ import { TweenPct } from './Tween';
  *  attaches it to its parent and that link's own arguments. Cards look
  *  themselves up here by ref, so a new snapshot (all new objects) updates
  *  cards in place rather than re-creating them. */
-export type TreeIndex = Map<string, { node: TreeNode; edge?: NodeDto; onLink?: boolean; linkArgs: ArgumentNode[] }>;
+export type TreeIndex = Map<
+  string,
+  { node: TreeNode; edge?: NodeDto; onLink?: boolean; linkArgs: ArgumentNode[]; parent?: string }
+>;
 
 export function indexTree(tree: TreeNode): TreeIndex {
   const idx: TreeIndex = new Map();
-  const walk = (t: TreeNode, a?: ArgumentNode) => {
-    const entry = { node: t, edge: a?.edge, linkArgs: a?.linkArgs ?? [] };
+  const walk = (t: TreeNode, parent: string | undefined, a?: ArgumentNode) => {
+    const entry = { node: t, edge: a?.edge, linkArgs: a?.linkArgs ?? [], parent };
     idx.set(t.claim.ref, a?.onLink ? { ...entry, onLink: true } : entry);
-    for (const c of t.children) walk(c.node, c);
-    for (const c of a?.linkArgs ?? []) walk(c.node, c);
+    for (const c of t.children) walk(c.node, t.claim.ref, c);
+    for (const c of a?.linkArgs ?? []) walk(c.node, t.claim.ref, c);
   };
-  walk(tree);
+  walk(tree, undefined);
   return idx;
+}
+
+/** ms a card brought into view from the cruxes or "where the rules disagree"
+ *  panel stays visibly marked ({@link focusInTree}); the `.is-focused` CSS
+ *  animation (app.css) runs for the same span. */
+const FOCUS_MS = 1600;
+
+/**
+ * Each mounted ClaimCard's own collapse setter, by claim ref — so
+ * {@link focusInTree} can expand a collapsed ancestor before scrolling to a
+ * claim outside a panel's own subtree. Solid updates the DOM synchronously
+ * when a signal changes, so expanding top-down mounts each next ancestor's
+ * children before its setter is looked up. Registered on mount, removed on
+ * cleanup (an ancestor collapsing over it again, or the claim leaving the
+ * graph) so a stale setter is never called.
+ */
+const collapseSetters = new Map<string, (collapsed: boolean) => void>();
+
+let focusTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** The rendered element for a claim or link ref: a ClaimCard's `.card`, the
+ *  tree's hero `<section>`, or (for a link ref) its `LinkChip` wrap —
+ *  whichever carries this `data-claim-ref`. */
+function cardElement(ref: string): HTMLElement | undefined {
+  for (const el of document.querySelectorAll<HTMLElement>('[data-claim-ref]')) {
+    if (el.dataset.claimRef === ref) return el;
+  }
+  return undefined;
+}
+
+/**
+ * Focuses a claim or link's card in the rendered tree (computenet-lmfg8):
+ * for a link ref — which has no entry of its own, since it renders inside
+ * the claim that carries it — first finds that owning claim; expands every
+ * collapsed ancestor of it, top-down so each expansion mounts the next; then
+ * scrolls the ref's own element into view and marks it `is-focused` for
+ * {@link FOCUS_MS}. `index` should cover every claim the tree can show
+ * (TreeView merges the root tree with each framed position's own subtree);
+ * an ancestor beyond what it covers is simply left as it is. Shared by
+ * CruxesPanel and DisagreementPanel so both panels focus the tree the same
+ * way.
+ *
+ * The scroll/highlight step is deferred a microtask past the ancestor
+ * expansion: this runs inside TreeView's focus effect, and Solid queues the
+ * `setCollapsed` writes made during an effect until that effect returns, so
+ * a just-expanded ancestor's children are not mounted yet here. They are
+ * mounted synchronously once it returns, before the activating handler does,
+ * so one microtask is always enough (no async scheduling is involved).
+ */
+export function focusInTree(ref: string, index: TreeIndex): void {
+  let owner = ref;
+  if (!index.has(owner)) {
+    for (const [claimRef, entry] of index) {
+      if (entry.edge?.ref === ref) {
+        owner = claimRef;
+        break;
+      }
+    }
+  }
+  const ancestors: string[] = [];
+  let cur = index.get(owner)?.parent;
+  while (cur !== undefined) {
+    ancestors.unshift(cur);
+    cur = index.get(cur)?.parent;
+  }
+  for (const anc of ancestors) collapseSetters.get(anc)?.(false);
+
+  queueMicrotask(() => {
+    const el = cardElement(ref);
+    if (!el) return;
+    el.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    if (focusTimer !== undefined) clearTimeout(focusTimer);
+    for (const prev of document.querySelectorAll('.is-focused')) prev.classList.remove('is-focused');
+    el.classList.add('is-focused');
+    focusTimer = setTimeout(() => el.classList.remove('is-focused'), FOCUS_MS);
+  });
 }
 
 /** Which claim is open (showing its controls and Jev's numbers). One at a time. */
@@ -104,6 +183,12 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
   const [collapsed, setCollapsed] = createSignal(false);
   const [linkOpen, setLinkOpen] = createSignal(false);
   const childRefs = useChildRefs(entry);
+  // computenet-lmfg8: let a cruxes/disagreement entry elsewhere on the page
+  // expand this card open before it scrolls to something inside it.
+  onMount(() => collapseSetters.set(props.claimRef, setCollapsed));
+  onCleanup(() => {
+    if (collapseSetters.get(props.claimRef) === setCollapsed) collapseSetters.delete(props.claimRef);
+  });
 
   return (
     <Show when={entry()}>
@@ -128,7 +213,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
             classList={{ 'branch--onlink': onLink(), 'is-link-open': linkOpen() }}
             style={{ '--w': String(reachWeight(claim().reach)), '--s': String(edge()?.strength ?? 0) }}
           >
-            <article class="card" classList={{ 'is-open': open(), 'is-busy': phase() === 'active' }}>
+            <article class="card" classList={{ 'is-open': open(), 'is-busy': phase() === 'active' }} data-claim-ref={claim().ref}>
               <button
                 type="button"
                 class="card__main"
@@ -221,9 +306,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
   );
 }
 
-/** The engine's EXP-06 note on a claim that explored and then met the budget: not a failed call. */
-const BUDGET_EXHAUSTED = 'budget exhausted';
-const callFailed = (n: NodeDto) => n.error !== undefined && n.error !== BUDGET_EXHAUSTED;
+const callFailed = (n: NodeDto) => n.error !== undefined;
 
 const SIDE_WORD = { pro: 'Pro', con: 'Con', holds: 'Link holds', undercut: 'Undercuts the link' } as const;
 
@@ -264,7 +347,7 @@ function LinkChip(props: {
   const peeking = () => peek() && !props.open;
   const first = () => firstImpressionText(props.edge);
   return (
-    <span class="linkchip-wrap">
+    <span class="linkchip-wrap" data-claim-ref={props.edge.ref}>
       <button
         type="button"
         class="linkchip"

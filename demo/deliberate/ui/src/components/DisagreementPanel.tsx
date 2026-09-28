@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from 'solid-js';
 import type { GraphDto } from '../api/types';
 import { AGREE_POINTS, pct, spreadOf } from '../util/format';
+import { onActivateKey } from './CruxesPanel';
 
 /** One claim as the "where the rules disagree" view shows it. */
 export interface Disagreement {
@@ -38,10 +39,11 @@ export function disagreementsOf(graph: GraphDto, root: string): Disagreement[] {
 /**
  * "Where the rules disagree": the question's claims with the widest spread
  * between the credence rules, widest first. Like the cruxes panel
- * (CruxesPanel.tsx), each entry carries only a `data-ref` marker: nothing
- * reads it yet, so selecting an entry does not focus the claim in the tree.
+ * (CruxesPanel.tsx), activating an entry (click, or Enter/Space when
+ * focused) focuses that claim in the tree — computenet-lmfg8,
+ * ClaimCard.focusInTree, via the same `onActivateKey` helper.
  */
-export function DisagreementPanel(props: { graph: GraphDto; root: string }) {
+export function DisagreementPanel(props: { graph: GraphDto; root: string; onFocus?: (ref: string) => void }) {
   const rows = createMemo(() => disagreementsOf(props.graph, props.root));
   return (
     <Show when={rows().length > 0}>
@@ -50,11 +52,19 @@ export function DisagreementPanel(props: { graph: GraphDto; root: string }) {
         <ol class="disagreement__list">
           <For each={rows()}>
             {(r) => (
-              <li class="disagree" data-ref={r.ref}>
-                <span class="disagree__text">{r.text}</span>
-                <span class="disagree__meta" title="Lowest and highest credence over every rule">
-                  {pct(r.low)}–{pct(r.high)}
-                </span>
+              <li class="disagree">
+                <button
+                  type="button"
+                  class="disagree__btn"
+                  data-ref={r.ref}
+                  onClick={() => props.onFocus?.(r.ref)}
+                  onKeyDown={onActivateKey(() => props.onFocus?.(r.ref))}
+                >
+                  <span class="disagree__text">{r.text}</span>
+                  <span class="disagree__meta" title="Lowest and highest credence over every rule">
+                    {pct(r.low)}–{pct(r.high)}
+                  </span>
+                </button>
               </li>
             )}
           </For>
