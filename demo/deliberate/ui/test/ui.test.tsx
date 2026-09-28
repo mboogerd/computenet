@@ -9,6 +9,7 @@ import { QuestionInput } from '../src/components/QuestionInput';
 import { ThemeToggle } from '../src/components/ThemeToggle';
 import { TreeView } from '../src/components/TreeView';
 import { Facts } from '../src/components/ClaimCard';
+import { MockSource } from '../src/mock/mockSource';
 
 vi.mock('../src/sync/store', () => ({
   source: {
@@ -525,6 +526,49 @@ describe('UI-09 model A: framing', () => {
     expect(rowTexts).toEqual(['Under 100.', 'Between 100 and 300.', 'Over 300.']);
     const widths = [...framing.matchAll(/scaleX\(([\d.]+)\)/g)].map((m) => Number(m[1]));
     expect(widths).toEqual([0.7, 0.26, 0.04]);
+  });
+
+  it('computenet-qkngi: framed hero sums pro/con over every position\'s subtree, not the rootless root', () => {
+    const html = renderToString(() => <TreeView graph={readingsGraph} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const readingsAt = text.indexOf('class="readings"');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
+
+    // p1's subtree carries one SUPPORT argument (a-p1); p2's subtree carries none;
+    // the root itself has no direct children at all (FRA-02) — the old
+    // sideCounts(root) read "0 pro · 0 con" here regardless.
+    const pro = hero.match(/class="pro-text"[^>]*>([^<]+)</)?.[1];
+    const con = hero.match(/class="con-text"[^>]*>([^<]+)</)?.[1];
+    expect(pro).toBe('1 pro');
+    expect(con).toBe('0 con');
+  });
+
+  it('computenet-qkngi: the ?mock framed question counts each position\'s direct arguments, the level the unframed hero counts', () => {
+    // ?mock's framed READINGS question w0 (seedFinished): reading w0p1 has direct args
+    // w1 SUPPORT and w2 ATTACK, reading w0p2 has w6 ATTACK. Deeper claims — w3 attacking
+    // w1, and w4/w5 on the w1→w0p1 link — are replies to arguments, not to a position,
+    // so they are not counted: an unframed hero counts only the root's direct arguments.
+    const mock = new MockSource(10);
+    mock.start(() => undefined, () => undefined);
+    const g = mock.snapshot();
+    mock.stop();
+    const html = renderToString(() => <TreeView graph={g} root="w0" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), text.indexOf('class="readings"'));
+    expect(hero.match(/class="pro-text"[^>]*>([^<]+)</)?.[1]).toBe('1 pro');
+    expect(hero.match(/class="con-text"[^>]*>([^<]+)</)?.[1]).toBe('2 con');
+    expect(hero).not.toContain('aria-label="Exploration override"');
+  });
+
+  it('computenet-qkngi: framed hero has no question-level override control (EXPAND on a framed root runs no round)', () => {
+    const html = renderToString(() => <TreeView graph={readingsGraph} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const readingsAt = text.indexOf('class="readings"');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
+
+    expect(hero).not.toContain('aria-label="Exploration override"');
+    // each reading still keeps its own control (unaffected by this change).
+    expect((text.slice(readingsAt).match(/aria-label="Exploration override"/g) ?? []).length).toBeGreaterThan(0);
   });
 
   it('an unframed question renders exactly as before (no framing line, no readings block)', () => {

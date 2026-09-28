@@ -61,6 +61,23 @@ export function TreeView(props: { graph: GraphDto; root: string; research?: bool
   );
 }
 
+/**
+ * UI-09: a framed question's hero pro/con — each reading/position's own direct
+ * arguments ({@link sideCounts}), summed. That is the level an unframed hero
+ * counts (the root's direct arguments); deeper claims reply to an argument, not
+ * to the question, so their polarity is not counted for it. A framed root has
+ * no arguments of its own to count (they live under its readings/positions).
+ */
+function framedSideCounts(positions: TreeNode[]): { pro: number; con: number } {
+  const acc = { pro: 0, con: 0 };
+  for (const p of positions) {
+    const c = sideCounts(p);
+    acc.pro += c.pro;
+    acc.con += c.con;
+  }
+  return acc;
+}
+
 /** The question is the hero: large text, one credence gauge, a plain verdict, and progress. */
 function Question(props: { root: string; index: () => TreeIndex; tree: () => TreeNode | undefined; graph: () => GraphDto; sel: Selection }) {
   const entry = () => props.index().get(props.root);
@@ -74,6 +91,10 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
     for (const t of props.tree()?.positions ?? []) map.set(t.claim.ref, t);
     return map;
   });
+  // UI-09: a framed root has no arguments of its own (they live under its
+  // readings/positions), so its hero meta line sums each position's own
+  // direct pro/con instead of sideCounts(root).
+  const frameCounts = createMemo(() => (framing() ? framedSideCounts(props.tree()?.positions ?? []) : undefined));
 
   return (
     <Show when={entry()}>
@@ -83,7 +104,7 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
         // The headline is the consensus of the credence rules; the band behind it is their spread.
         const tweened = createTween(() => shown(claim()));
         const v = () => verdict(tweened(), 'question');
-        const counts = () => sideCounts(e().node);
+        const counts = () => frameCounts() ?? sideCounts(e().node);
         const open = () => props.sel.selected() === claim().ref;
         const paused = () => question()?.paused === true;
         // A paused question with queued claims is waiting, not working (CTL-05).
@@ -208,9 +229,12 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                 <span class="card__spacer" />
                 <Show when={question()}>{(q) => <CostBadge question={q()} />}</Show>
                 <Show when={question()?.active && !paused() && question()}>{(q) => <PauseControl root={q().root} paused={false} />}</Show>
-                <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
-                  <OverrideControl id={claim().ref} value={override()} />
-                </span>
+                {/* UI-09: a framed root's EXPAND/STOP would run no round (FRA-02) — no question-level override for it. */}
+                <Show when={!framing()}>
+                  <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
+                    <OverrideControl id={claim().ref} value={override()} />
+                  </span>
+                </Show>
               </p>
 
               <Show when={!unargued() && priorDecidesText(question())}>
