@@ -281,17 +281,27 @@ class CredenceGraphTest {
         val root = g.createClaim("Which is best?", question = true)
         val positions = g.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2", "P3"))
         positions.zip(stances3).forEach { (p, v) -> g.setStance(p, "jev", v) }
-        awaitUntil("shares settle") { g.sharesMatch(root, positions) && g.near(positions[0], List(4) { 0.8 }) }
-        val before = g.sharesOf(root)!!
+        // Read the settled Shares from inside the predicate itself, not with a second, separate
+        // call afterwards: sharesOf() and sharesMatch() each re-read the live hub, so a read taken
+        // after awaitUntil returns can race a further, unrelated update and no longer be the value
+        // the predicate actually observed (computenet-y6cj6).
+        lateinit var before: Shares
+        awaitUntil("shares settle") {
+            (g.sharesMatch(root, positions) && g.near(positions[0], List(4) { 0.8 })).also { settled ->
+                if (settled) before = g.sharesOf(root)!!
+            }
+        }
 
         val a = g.createClaim("for P1")
         val e = g.createEdge(a, positions[0], Polarity.SUPPORT)
         g.setStance(a, "jev", 0.9)
         g.setStance(e, "jev", 0.8)
+        lateinit var after: Shares
         awaitUntil("the first position's credence rises in every layer and the shares follow it") {
-            g.credenceOf(positions[0])!!.values.all { it > 0.8 + 1e-6 } && g.sharesMatch(root, positions)
+            val settled = g.credenceOf(positions[0])!!.values.all { it > 0.8 + 1e-6 } && g.sharesMatch(root, positions)
+            if (settled) after = g.sharesOf(root)!!
+            settled
         }
-        val after = g.sharesOf(root)!!
         for (l in g.layers.ids.indices) {
             assertTrue(after.values[0][l] > before.values[0][l], "layer $l: the supported position's share rises")
             assertTrue(after.values[1][l] < before.values[1][l] && after.values[2][l] < before.values[2][l], "layer $l: the others fall")

@@ -268,13 +268,34 @@ class CostTest {
             // Cruxes (model C) come from sensitivity cells a restart rebuilds from scratch; they are not compared.
             fun durable(q: QuestionDto) = q.copy(cruxes = emptyList())
             // Idle means no claim is pending, not that credence propagation has settled: the model D
-            // neutral-prior verdict (derived from the root cell) is taken once two reads agree.
-            var before = durable(e1.snapshot().questions.single())
-            awaitUntil("the root's verdicts settle before the restart") {
-                Thread.sleep(100)
-                val next = durable(e1.snapshot().questions.single())
-                (next == before).also { before = next }
+            // neutral-prior verdict (derived from the root cell) keeps moving briefly after idle(), and
+            // a heuristic "settled" read (e.g. two reads N ms apart agreeing) can false-positive on that
+            // gap under load, whatever N is — it is still guessing, not knowing, that propagation is done.
+            // PricedJudge/PricedProposer are fully deterministic here (fixed plausibility 0.5, strength
+            // 0.8, quality/relevance 1.0, no randomness) and argsPerCall=1/maxRounds=3/maxDepth=0/
+            // maxArgsPerSide=10 is symmetric: jevSaturates(0.0) is false at the default saturation
+            // threshold (0.22), so neither side ever saturates before the round limit, and the root always
+            // ends with exactly 3 supports and 3 attacks (7 claims total), each of DF-QuAD energy
+            // 0.8 x 0.5 = 0.4. DF-QuAD's probSum is then equal on both sides (1 - 0.6^3 = 0.784) so
+            // `combine` leaves the base (0.5, the average of the root's one 0.5 plausibility stance)
+            // exactly unchanged — for the ordinary verdict AND the neutral-prior one (shrinking a base
+            // that is already 0.5 towards the 0.5 neutral prior is a no-op regardless of weight). So the
+            // converged neutralCredence is the known constant 0.5, not a heuristically-guessed value;
+            // confirmed empirically as deterministic across 5/5 runs (computenet-y6cj6: claims=7,
+            // neutralCredence=0.5 every time — see also the model D `settledQuestion()` idiom at
+            // DeliberationEngineTest.kt:2131, which this mirrors). The bead's "converged 0.5421875"
+            // reading was never this test's true fixed point: it was the *restarted* engine's own
+            // not-yet-converged snapshot (the second engine replays and re-converges independently and
+            // can be caught mid-flight the same way), which is why both reads below wait on the same
+            // known target instead of on each other.
+            val expectedNeutral = 0.5
+            fun DeliberationEngine.settledDurable(): QuestionDto {
+                awaitUntil("the root's neutral-prior verdict settles on $expectedNeutral", timeoutMs = 30_000) {
+                    durable(snapshot().questions.single()).neutralCredence == expectedNeutral
+                }
+                return durable(snapshot().questions.single())
             }
+            val before = e1.settledDurable()
             e1.close()
             assertNotNull(before.neutralCredence)
             assertTrue(before.costUsd > 0)
@@ -285,9 +306,10 @@ class CostTest {
             val e2 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
                 .also { engines += it }
             e2.idle()
-            // A restart recomputes the neutral-prior verdict from the replayed inputs: it must converge to where it was.
-            runCatching { awaitUntil("the restarted question matches", timeoutMs = 20_000) { durable(e2.snapshot().questions.single()) == before } }
-            assertEquals(before, durable(e2.snapshot().questions.single()))
+            // A restart recomputes the neutral-prior verdict from the replayed inputs: it must converge
+            // to the same known target, not merely to whatever `before` happened to be read as.
+            val after = e2.settledDurable()
+            assertEquals(before, after)
         } finally {
             dir.deleteRecursively()
         }
