@@ -32,11 +32,30 @@ export function pullOf(sensitivity: number | undefined): string {
 }
 
 /**
+ * Enter or Space activates an entry the same way a click does. The entries
+ * are real `<button>`s, so a browser already does this on its own; the
+ * explicit handler (shared with DisagreementPanel.tsx) makes the behavior
+ * the acceptance criteria ask for — not just a `<button>`'s default —
+ * something a test can drive directly, and keeps the two panels identical.
+ */
+export function onActivateKey(fn: () => void): (ev: KeyboardEvent) => void {
+  return (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      fn();
+    }
+  };
+}
+
+/**
  * Model C, "what would change the answer": the question's top cruxes — the
  * claims and links whose settling could move the answer most, |sensitivity| ×
- * 4·p·(1 − p). Nothing is shown until the backend names one.
+ * 4·p·(1 − p). Nothing is shown until the backend names one. Activating an
+ * entry (click, or Enter/Space when focused) focuses that claim or link in
+ * the tree — computenet-lmfg8, ClaimCard.focusInTree, shared with
+ * DisagreementPanel.
  */
-export function CruxesPanel(props: { graph: GraphDto; root: string }) {
+export function CruxesPanel(props: { graph: GraphDto; root: string; onFocus?: (ref: string) => void }) {
   const cruxes = createMemo(() => cruxesOf(props.graph, props.root));
   return (
     <Show when={cruxes().length > 0}>
@@ -45,20 +64,28 @@ export function CruxesPanel(props: { graph: GraphDto; root: string }) {
         <ol class="cruxes__list">
           <For each={cruxes()}>
             {(c) => (
-              <li class="crux" data-ref={c.ref}>
-                <span class="crux__text">
-                  <Show when={c.link}>
-                    <span class="crux__kind">link</span>
-                  </Show>
-                  {c.text}
-                </span>
-                <span
-                  class="crux__meta"
-                  title="Sway: how far the answer moves per unit change in this claim (d answer / d claim); certainty: how settled it is now"
+              <li class="crux">
+                <button
+                  type="button"
+                  class="crux__btn"
+                  data-ref={c.ref}
+                  onClick={() => props.onFocus?.(c.ref)}
+                  onKeyDown={onActivateKey(() => props.onFocus?.(c.ref))}
                 >
-                  sway {num(c.sensitivity === undefined ? undefined : Math.abs(c.sensitivity))} · {pct(c.p)} {c.link ? 'strong' : 'plausible'}
-                  <Show when={pullOf(c.sensitivity)}>{(w) => <> · {w()}</>}</Show>
-                </span>
+                  <span class="crux__text">
+                    <Show when={c.link}>
+                      <span class="crux__kind">link</span>
+                    </Show>
+                    {c.text}
+                  </span>
+                  <span
+                    class="crux__meta"
+                    title="Sway: how far the answer moves per unit change in this claim (d answer / d claim); certainty: how settled it is now"
+                  >
+                    sway {num(c.sensitivity === undefined ? undefined : Math.abs(c.sensitivity))} · {pct(c.p)} {c.link ? 'strong' : 'plausible'}
+                    <Show when={pullOf(c.sensitivity)}>{(w) => <> · {w()}</>}</Show>
+                  </span>
+                </button>
               </li>
             )}
           </For>

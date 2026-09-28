@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type Accessor } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildForest } from '../tree/buildTree';
 import type { TreeNode } from '../tree/buildTree';
@@ -24,17 +24,36 @@ import {
   verdict,
 } from '../util/format';
 import { createTween } from '../util/tween';
-import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
+import { ClaimCard, Facts, focusInTree, indexTree, sideCounts, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
 import { CostBadge } from './CostBadge';
 import { OverrideControl } from './OverrideControl';
 import { PauseControl } from './PauseControl';
 
-/** [research]: model D's research view — per-rule values shown (default: the `?research` URL flag). */
-export function TreeView(props: { graph: GraphDto; root: string; research?: boolean }) {
+/**
+ * [research]: model D's research view — per-rule values shown (default: the
+ * `?research` URL flag). `focus`: computenet-lmfg8 — set by App when a
+ * cruxes or "where the rules disagree" entry is activated, `{ ref, n }` with
+ * `n` bumped on every activation so re-selecting the same entry re-scrolls.
+ */
+export function TreeView(props: { graph: GraphDto; root: string; research?: boolean; focus?: Accessor<{ ref: string; n: number } | undefined> }) {
   const tree = createMemo(() => buildForest(props.graph, props.root));
+  // Indexes the root tree and, for a framed question, every reading/position
+  // subtree too (Framing.tsx's Reading builds its own index for rendering;
+  // this one exists only so focusInTree can find a claim's ancestor chain
+  // wherever in the page it renders).
   const index = createMemo<TreeIndex>(() => {
     const t = tree();
-    return t ? indexTree(t) : new Map();
+    if (!t) return new Map();
+    const idx = indexTree(t);
+    for (const p of t.positions ?? []) {
+      for (const [ref, entry] of indexTree(p)) idx.set(ref, entry);
+    }
+    return idx;
+  });
+
+  createEffect(() => {
+    const f = props.focus?.();
+    if (f !== undefined) focusInTree(f.ref, index());
   });
 
   const [selected, setSelected] = createSignal<string>();
@@ -116,7 +135,7 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
 
         return (
           <>
-            <section class="hero" classList={{ 'is-open': open(), 'is-busy': busy() }} aria-label="Question">
+            <section class="hero" classList={{ 'is-open': open(), 'is-busy': busy() }} aria-label="Question" data-claim-ref={claim().ref}>
               <h2 class="hero__q">{claim().text}</h2>
 
               <Show

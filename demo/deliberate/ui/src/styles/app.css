@@ -616,6 +616,23 @@ button {
   gap: 2px;
 }
 
+/* The entry is a real <button> (computenet-lmfg8, activates the matching
+   card in the tree); reset it back to the plain-text look the list had. */
+.crux__btn {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.crux__btn:hover .crux__text {
+  text-decoration: underline;
+}
+
 .crux__text {
   font-size: var(--text-md);
   color: var(--text);
@@ -677,6 +694,22 @@ button {
 .disagree {
   display: grid;
   gap: 2px;
+}
+
+/* Same reset as .crux__btn: the entry is a real <button> now. */
+.disagree__btn {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disagree__btn:hover .disagree__text {
+  text-decoration: underline;
 }
 
 .disagree__text {
@@ -1812,6 +1845,23 @@ button {
   }
   to {
     transform: translateX(340%);
+  }
+}
+
+/* A card brought into view from the cruxes or "where the rules disagree"
+   panel (computenet-lmfg8, ClaimCard.focusInTree): a ring that fades over
+   the same span the JS timer holds the `.is-focused` class for. */
+.is-focused {
+  animation: focus-ring 1.6s var(--ease);
+}
+
+@keyframes focus-ring {
+  0%,
+  70% {
+    box-shadow: 0 0 0 3px var(--focus);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
   }
 }
 
