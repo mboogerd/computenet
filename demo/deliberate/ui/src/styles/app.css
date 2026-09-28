@@ -637,6 +637,60 @@ button {
   cursor: help;
 }
 
+/* Session sparkline of the selected question's root credence, above its tree. */
+.qheader {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px 0 0;
+}
+
+.spark {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* "Where the rules disagree" — the question's widest-spread claims, below its cruxes. */
+.disagreement {
+  margin: 20px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.disagreement__title {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 620;
+  color: var(--text-2);
+}
+
+.disagreement__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.disagree {
+  display: grid;
+  gap: 2px;
+}
+
+.disagree__text {
+  font-size: var(--text-md);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.disagree__meta {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  cursor: help;
+}
+
 /* Model D: the first impression, not the arguments, decides the side — a quiet note under the gauge */
 .hero__prior {
   margin: 6px 0 0;

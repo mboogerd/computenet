@@ -1,14 +1,16 @@
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { CruxesPanel } from './components/CruxesPanel';
+import { DisagreementPanel } from './components/DisagreementPanel';
 import { EmptyState } from './components/EmptyState';
 import { Legend } from './components/Legend';
 import { QuestionInput } from './components/QuestionInput';
 import { QuestionList } from './components/QuestionList';
+import { accumulate, Sparkline, type SparkState } from './components/Sparkline';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Toasts } from './components/Toasts';
 import { TreeView } from './components/TreeView';
 import { conn, graph, source, startSync } from './sync/store';
-import { isResearch } from './util/format';
+import { isResearch, shown } from './util/format';
 
 const CONN_LABEL = { connecting: 'connecting', live: 'live', reconnecting: 'reconnecting', mock: 'mock data' } as const;
 
@@ -18,6 +20,10 @@ export function App() {
   const [askError, setAskError] = createSignal<string>();
   // Model D: only the consensus by default; each rule's values in the research view.
   const [research, setResearch] = createSignal(isResearch());
+  // Session sparkline of the selected question's root credence: accumulated
+  // client-side across snapshots, reset when a different question is selected.
+  let sparkState: SparkState | undefined;
+  const [sparkPoints, setSparkPoints] = createSignal<number[]>([]);
 
   onMount(() => onCleanup(startSync()));
 
@@ -27,6 +33,16 @@ export function App() {
     const sel = selected();
     if (qs.length === 0) return;
     if (sel === undefined || !qs.some((q) => q.root === sel)) setSelected(qs[qs.length - 1].root);
+  });
+
+  // One point per snapshot in which the selected question's shown root
+  // credence changed; a different `root` starts a fresh series.
+  createEffect(() => {
+    const root = selected();
+    if (root === undefined) return;
+    const node = graph().nodes.find((n) => n.ref === root);
+    sparkState = accumulate(sparkState, root, node === undefined ? undefined : shown(node));
+    setSparkPoints(sparkState.points);
   });
 
   const ask = async (text: string): Promise<boolean> => {
@@ -77,8 +93,12 @@ export function App() {
         <Show when={selected()} fallback={<EmptyState onPick={(q) => void ask(q)} disabled={asking()} />}>
           {(root) => (
             <>
+              <div class="qheader">
+                <Sparkline points={sparkPoints()} />
+              </div>
               <TreeView graph={graph()} root={root()} research={research()} />
               <CruxesPanel graph={graph()} root={root()} />
+              <DisagreementPanel graph={graph()} root={root()} />
             </>
           )}
         </Show>
