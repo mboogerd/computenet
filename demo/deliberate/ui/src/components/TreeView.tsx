@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type Accessor } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack, type Accessor } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildForest } from '../tree/buildTree';
 import type { TreeNode } from '../tree/buildTree';
@@ -51,9 +51,12 @@ export function TreeView(props: { graph: GraphDto; root: string; research?: bool
     return idx;
   });
 
+  // Only a new focus request re-runs this: the index is read untracked, or
+  // every live snapshot (a new index) would re-scroll to the last-picked
+  // claim and re-expand any ancestor the user has since collapsed.
   createEffect(() => {
     const f = props.focus?.();
-    if (f !== undefined) focusInTree(f.ref, index());
+    if (f !== undefined) untrack(() => focusInTree(f.ref, index()));
   });
 
   const [selected, setSelected] = createSignal<string>();

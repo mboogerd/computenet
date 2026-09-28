@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { createSignal, type Accessor } from 'solid-js';
 import { render } from 'solid-js/web';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { GraphDto, NodeDto } from '../../src/api/types';
@@ -60,15 +60,16 @@ const graph: GraphDto = {
 };
 
 /** Mirrors app.tsx's wiring: one focus signal shared by TreeView and both panels. */
-function Stage() {
+function Stage(props: { graph?: Accessor<GraphDto> }) {
   let seq = 0;
   const [focusRequest, setFocusRequest] = createSignal<{ ref: string; n: number }>();
   const focusClaim = (ref: string) => setFocusRequest({ ref, n: ++seq });
+  const g = () => props.graph?.() ?? graph;
   return (
     <>
-      <TreeView graph={graph} root="q" focus={focusRequest} />
-      <CruxesPanel graph={graph} root="q" onFocus={focusClaim} />
-      <DisagreementPanel graph={graph} root="q" onFocus={focusClaim} />
+      <TreeView graph={g()} root="q" focus={focusRequest} />
+      <CruxesPanel graph={g()} root="q" onFocus={focusClaim} />
+      <DisagreementPanel graph={g()} root="q" onFocus={focusClaim} />
     </>
   );
 }
@@ -124,5 +125,26 @@ describe('cruxes and disagreement entries focus the matching card (computenet-lm
     const linkEl = host.querySelector('[data-claim-ref="a-q"]') as HTMLElement;
     expect(linkEl).not.toBeNull();
     expect(linkEl.classList.contains('is-focused')).toBe(true);
+  });
+
+  it('a later snapshot does not re-scroll or re-expand what the user collapsed', async () => {
+    const [g, setG] = createSignal<GraphDto>(graph);
+    const host = mount(() => <Stage graph={g} />);
+
+    (host.querySelector('.disagree__btn[data-ref="b"]') as HTMLButtonElement).click();
+    await flush();
+    const scroll = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+    expect(scroll).toHaveBeenCalledTimes(1);
+
+    // The user collapses "a" again, then a live snapshot (all new objects) arrives.
+    const chevron = [...host.querySelectorAll('button.linkish')].find(
+      (b) => b.getAttribute('aria-controls') === 'children-a',
+    ) as HTMLButtonElement;
+    chevron.click();
+    setG({ ...graph, nodes: graph.nodes.map((n) => (n.ref === 'q' ? { ...n, credence: 0.61 } : { ...n })) });
+    await flush();
+
+    expect(chevron.getAttribute('aria-expanded')).toBe('false');
+    expect(scroll).toHaveBeenCalledTimes(1);
   });
 });
