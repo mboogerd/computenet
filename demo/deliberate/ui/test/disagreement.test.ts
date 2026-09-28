@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphDto, NodeDto } from '../src/api/types';
 import { disagreementsOf } from '../src/components/DisagreementPanel';
+import { AGREE_POINTS } from '../src/util/format';
 
 const node = (over: Partial<NodeDto> & { ref: string }): NodeDto => ({
   kind: 'CLAIM',
@@ -14,7 +15,7 @@ describe('disagreementsOf (where the rules disagree)', () => {
     const graph: GraphDto = {
       questions: [],
       nodes: [
-        node({ ref: 'a', text: 'A', spreadLow: 0.4, spreadHigh: 0.5 }), // width 0.1
+        node({ ref: 'a', text: 'A', spreadLow: 0.35, spreadHigh: 0.5 }), // width 0.15, clears AGREE_POINTS
         node({ ref: 'b', text: 'B', spreadLow: 0.1, spreadHigh: 0.9 }), // width 0.8
         node({ ref: 'c', text: 'C', spreadLow: 0.3, spreadHigh: 0.6 }), // width 0.3
       ],
@@ -22,6 +23,9 @@ describe('disagreementsOf (where the rules disagree)', () => {
     const rows = disagreementsOf(graph, 'q');
     expect(rows.map((r) => r.ref)).toEqual(['b', 'c', 'a']);
     expect(rows[0]).toMatchObject({ low: 0.1, high: 0.9, width: 0.8 });
+    expect(rows[2].low).toBeCloseTo(0.35);
+    expect(rows[2].high).toBeCloseTo(0.5);
+    expect(rows[2].width).toBeCloseTo(0.15);
   });
 
   it('excludes claims with no spread fields at all, rather than scoring them a zero-width tie', () => {
@@ -34,6 +38,38 @@ describe('disagreementsOf (where the rules disagree)', () => {
     };
     const rows = disagreementsOf(graph, 'q');
     expect(rows.map((r) => r.ref)).toEqual(['wide']);
+  });
+
+  it('excludes a claim whose spread is a zero-width tie (both fields present, equal), not just claims missing spread fields', () => {
+    const graph: GraphDto = {
+      questions: [],
+      nodes: [
+        node({ ref: 'wide', text: 'wide', spreadLow: 0.1, spreadHigh: 0.9 }),
+        node({ ref: 'tie', text: 'tie', spreadLow: 0.47, spreadHigh: 0.47 }), // width 0
+      ],
+    };
+    const rows = disagreementsOf(graph, 'q');
+    expect(rows.map((r) => r.ref)).toEqual(['wide']);
+  });
+
+  it('excludes a claim whose spread reads as agreement under AGREE_POINTS, not only an exact tie', () => {
+    const graph: GraphDto = {
+      questions: [],
+      nodes: [
+        node({ ref: 'wide', text: 'wide', spreadLow: 0.1, spreadHigh: 0.9 }),
+        node({ ref: 'within', text: 'within', spreadLow: 0.4, spreadHigh: 0.4 + AGREE_POINTS / 100 }), // width == AGREE_POINTS
+      ],
+    };
+    const rows = disagreementsOf(graph, 'q');
+    expect(rows.map((r) => r.ref)).toEqual(['wide']);
+  });
+
+  it('renders nothing when no claim clears the agreement threshold', () => {
+    const graph: GraphDto = {
+      questions: [],
+      nodes: [node({ ref: 'tie', text: 'tie', spreadLow: 0.5, spreadHigh: 0.5 })],
+    };
+    expect(disagreementsOf(graph, 'q')).toEqual([]);
   });
 
   it('excludes nodes outside the question, and non-CLAIM nodes', () => {
