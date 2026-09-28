@@ -217,6 +217,53 @@ class JevJudgeTest {
         assertTrue(seen.isEmpty())
     }
 
+    private val link = LinkContext("Cars pollute.", "Cities should ban cars.", Polarity.SUPPORT)
+
+    @Test
+    fun `bearing is one request with a choice per candidate over the link state`() {
+        reply(
+            200,
+            """{"model":"jev-1.13.0","answers":{${choice("b0", "DISPUTES_CLAIM")},${choice("b1", "DENIES_BEARING")}},
+               "usage":{"input_tokens":1,"output_tokens":1}}""",
+        )
+        val out = judge.bearing(
+            ctx,
+            link,
+            listOf("Cars don't really pollute much.", "Even if cars pollute, banning them won't help the parent claim."),
+        )
+        assertEquals(listOf(Bearing.DISPUTES_CLAIM, Bearing.DENIES_BEARING), out)
+        val body = seen.single().body
+        assertEquals(setOf("b0", "b1"), body["questions"]!!.jsonObject.keys)
+        val state = body["state"]!!.jsonObject
+        assertEquals(setOf("root_question", "path_from_root", "parent_claim", "claim", "claim_direction"), state.keys)
+        assertEquals(ctx.question, state["root_question"]!!.jsonPrimitive.content)
+        assertEquals(ctx.path, (state["path_from_root"] as JsonArray).map { it.jsonPrimitive.content })
+        assertEquals(link.parent, state["parent_claim"]!!.jsonPrimitive.content)
+        assertEquals(ctx.claim, state["claim"]!!.jsonPrimitive.content)
+        assertEquals("supports", state["claim_direction"]!!.jsonPrimitive.content)
+        val b0 = question(body, "b0")
+        assertEquals("choice", b0["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            setOf(Bearing.DISPUTES_CLAIM.name, Bearing.DENIES_BEARING.name, Bearing.NEITHER.name),
+            b0["criteria"]!!.jsonObject.keys,
+        )
+        assertEquals("Cars don't really pollute much.", b0["instructions"]!!.jsonObject["candidate_argument"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `an unknown bearing answer fails`() {
+        reply(200, """{"answers":{${choice("b0", "MAYBE")}}}""")
+        val error = assertFailsWith<JevException> { judge.bearing(ctx, link, listOf("x")) }
+        assertEquals(null, error.status)
+        assertTrue("unknown bearing answer" in error.message!!)
+    }
+
+    @Test
+    fun `bearing of nothing needs no call`() {
+        assertEquals(emptyList(), judge.bearing(ctx, link, emptyList()))
+        assertTrue(seen.isEmpty())
+    }
+
     @Test
     fun `assess asks plausibility alone and strength, quality and relevance together`() {
         routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":3.0}}}"""
