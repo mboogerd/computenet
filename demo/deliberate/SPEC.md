@@ -696,11 +696,12 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   rewrite changed it, since the structure log holds the original. The engine
   seeds what it last wrote from the state it loaded, so an unchanged record
   is never rewritten. After a restart the host journal replays into the fold;
-  a fence record tells the app when the replay has been folded. The journal
-  compacts itself to one checkpoint of the fold when **quiescent** — writes
-  held off and a fence folded, so every frame it holds has been applied: at
-  boot after the replay, at shutdown, and whenever it has grown by more than
-  64 KB and its own last checkpoint size.
+  the kernel's quiescence fence (`Recovery.awaitApplied`) tells the app when
+  the replay has been folded. The journal compacts itself to one checkpoint
+  of the fold when **quiescent** — writes held off and the kernel's fence
+  (`ManagedHost.quiescence().await(...)`) awaited, so every frame it holds
+  has been applied: at boot after the replay, at shutdown, and whenever it
+  has grown by more than 64 KB and its own last checkpoint size.
 - **DUR-03** On restart the trees are rebuilt from the structure (claims and
   the edges placing them, in creation order) plus those records. A claim
   whose record never reached the journal is rebuilt from the structure alone
