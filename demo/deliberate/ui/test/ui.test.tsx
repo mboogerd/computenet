@@ -397,3 +397,141 @@ describe('SPEC UI contract', () => {
     expect(appCss).toContain('@media (prefers-reduced-motion: reduce)');
   });
 });
+
+describe('UI-09 model A: framing', () => {
+  const readingsGraph: GraphDto = {
+    questions: [
+      {
+        root: 'q',
+        text: 'Do fish sleep?',
+        claims: 4,
+        active: false,
+        framing: {
+          mode: 'READINGS',
+          term: 'sleep',
+          positions: [
+            {
+              ref: 'p1',
+              text: 'Do fish enter a rest state with lowered responsiveness?',
+              credence: 0.55,
+              firstImpression: 0.9,
+              neutralCredence: 0.55,
+              verdictsDisagree: false,
+            },
+            {
+              ref: 'p2',
+              text: 'Do fish show REM-like brain activity?',
+              credence: 0.4,
+              firstImpression: 0.1,
+              neutralCredence: 0.4,
+              verdictsDisagree: true,
+            },
+          ],
+        },
+      },
+    ],
+    nodes: [
+      { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Do fish sleep?', depth: 0, status: 'FRAMED', proposer: 'question' },
+      {
+        ref: 'p1', kind: 'CLAIM', credence: 0.55, root: 'q', text: 'Do fish enter a rest state with lowered responsiveness?',
+        depth: 0, positionOf: 'q', status: 'SATURATED', override: 'AUTO', proposer: 'reading', plausibility: 0.9,
+      },
+      {
+        ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Do fish show REM-like brain activity?',
+        depth: 0, positionOf: 'q', status: 'QUEUED', override: 'AUTO', proposer: 'reading', plausibility: 0.1,
+      },
+      {
+        ref: 'a', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'They stop responding to stimuli at night.',
+        depth: 1, status: 'SATURATED', proposer: 'claude',
+      },
+      { ref: 'a-p1', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'p1', strength: 0.6 },
+    ],
+  };
+
+  const positionsGraph: GraphDto = {
+    questions: [
+      {
+        root: 'q',
+        text: 'How many will attend?',
+        claims: 4,
+        active: false,
+        framing: {
+          mode: 'POSITIONS',
+          positions: [
+            { ref: 'p1', text: 'Under 100.', credence: 0.7, share: 0.7 },
+            { ref: 'p2', text: 'Between 100 and 300.', credence: 0.4, share: 0.26 },
+            { ref: 'p3', text: 'Over 300.', credence: 0.1, share: 0.04 },
+          ],
+        },
+      },
+    ],
+    nodes: [
+      { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'How many will attend?', depth: 0, status: 'FRAMED', proposer: 'question' },
+      { ref: 'p1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'Under 100.', depth: 0, positionOf: 'q', status: 'SATURATED', proposer: 'reading' },
+      { ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Between 100 and 300.', depth: 0, positionOf: 'q', status: 'SATURATED', proposer: 'reading' },
+      { ref: 'p3', kind: 'CLAIM', credence: 0.1, root: 'q', text: 'Over 300.', depth: 0, positionOf: 'q', status: 'QUEUED', proposer: 'reading' },
+    ],
+  };
+
+  it('A-8 READINGS: hides the question gauge, shows the framing line, and one reading section per position', () => {
+    const html = renderToString(() => <TreeView graph={readingsGraph} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const readingsAt = text.indexOf('class="readings"');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
+
+    expect(text).toContain('Do fish sleep?');
+    expect(hero).toContain('depends on what you mean by sleep');
+    expect(hero).not.toContain('gauge__track');
+    expect(hero).not.toContain('gauge__fill');
+
+    const sections = [...text.slice(readingsAt).matchAll(/<section[^]*?class="reading"[^]*?<\/section>/g)].map((m) => m[0]);
+    expect(sections).toHaveLength(2);
+    const [p1Section, p2Section] = sections;
+    expect(p1Section).toContain('Do fish enter a rest state with lowered responsiveness?');
+    expect(p1Section).toContain('first impression 90% · arguments alone 55%');
+    expect(p2Section).toContain('Do fish show REM-like brain activity?');
+    expect(p2Section).toContain('first impression 10% · arguments alone 40%');
+    // the disagreement note appears only for the second reading
+    expect(p1Section).not.toContain('role="note"');
+    expect(p2Section).toContain('role="note"');
+    expect(p2Section).toContain('The first impression decides the side');
+    // a pro under p1 renders inside p1's section, not p2's
+    expect(p1Section).toContain('They stop responding to stimuli at night.');
+    expect(p2Section).not.toContain('They stop responding to stimuli at night.');
+    expect(p1Section).toContain('branch--pro');
+    // each reading has its own override control (p1's section also carries its argument's)
+    expect((p1Section.match(/aria-label="Exploration override"/g) ?? []).length).toBe(2);
+    expect((p2Section.match(/aria-label="Exploration override"/g) ?? []).length).toBe(1);
+  });
+
+  it('A-8 READINGS without a term: the heading reads "depends on the reading"', () => {
+    const noTerm: GraphDto = {
+      ...readingsGraph,
+      questions: [{ ...readingsGraph.questions[0], framing: { mode: 'READINGS', positions: readingsGraph.questions[0].framing!.positions } }],
+    };
+    const html = renderToString(() => <TreeView graph={noTerm} root="q" />);
+    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depends on the reading');
+  });
+
+  it('A-8 POSITIONS: lists a distribution in order with proportional bars and percentages', () => {
+    const html = renderToString(() => <TreeView graph={positionsGraph} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const framing = text.match(/<div[^]*?class="framing"[^]*?<\/div>/)?.[0] ?? '';
+
+    expect(framing).toContain('several possible answers');
+    const pcts = [...framing.matchAll(/class="framing__pct"[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(pcts).toEqual(['70%', '26%', '4%']);
+    const rowTexts = [...framing.matchAll(/class="framing__text"[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(rowTexts).toEqual(['Under 100.', 'Between 100 and 300.', 'Over 300.']);
+    const widths = [...framing.matchAll(/scaleX\(([\d.]+)\)/g)].map((m) => Number(m[1]));
+    expect(widths).toEqual([0.7, 0.26, 0.04]);
+  });
+
+  it('an unframed question renders exactly as before (no framing line, no readings block)', () => {
+    const unframed: GraphDto = { ...readingsGraph, questions: [{ ...readingsGraph.questions[0], framing: undefined }] };
+    const html = renderToString(() => <TreeView graph={unframed} root="q" />);
+    expect(html).not.toContain('class="framing"');
+    expect(html).not.toContain('class="readings"');
+    expect(html).toContain('gauge__track');
+  });
+});
