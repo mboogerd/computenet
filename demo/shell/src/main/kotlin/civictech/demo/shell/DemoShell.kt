@@ -164,10 +164,12 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
      */
     fun sse(path: String, closeOnFailure: Boolean = false, coalesce: Duration? = null, initialFrame: () -> String) {
         closeOnSendFailure = closeOnFailure
-        // Published under [coalesceLock]: [invalidate] may already be running
-        // on another thread (agora's `onCredence` runs on its host's
-        // VirtualThreadScheduler, which may still be dispatching replayed
-        // changes while AgoraApp's `init` calls this), and these are plain fields.
+        // Published under [coalesceLock]: [invalidate] may run on another
+        // thread (agora's `onCredence` runs on its host's scheduler), and these
+        // are plain fields. AgoraApp fences its replay with
+        // `recoverFrom(..).awaitApplied(..)` before calling this
+        // (computenet-q5jzk), so there it is defensive; an adopter without
+        // that fence can have [invalidate] race this registration.
         if (coalesce != null) synchronized(coalesceLock) {
             coalesceFrame = initialFrame
             coalesceWindowMs = coalesce.toMillis().coerceAtLeast(1)
