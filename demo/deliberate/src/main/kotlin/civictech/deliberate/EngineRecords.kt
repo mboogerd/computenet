@@ -149,14 +149,6 @@ internal object EngineRecords {
             state.questions.keys.map { q -> QUESTION_KEY + q.id to questionFieldsOf(q, state, ledger) }
 
     /**
-     * SPEC §11: rebuilds every tree into [state] from the graph's structure
-     * (claims and the edges linking them, in creation order) and the [meta]
-     * records. A claim whose record never reached the store is rebuilt from
-     * the structure alone; a claim the structure holds without the edge that
-     * would place it in a tree (the process died between the two writes) is
-     * left out. DUR-06: with [startPaused] every restored question is paused.
-     */
-    /**
      * Model A: a root framed in the structure log gets its framing back, items
      * from its positions' structure texts. A root whose record says framed but
      * whose issue the graph dropped (a torn framing) restores unframed and,
@@ -173,6 +165,14 @@ internal object EngineRecords {
         root.status = Status.FRAMED
     }
 
+    /**
+     * SPEC §11: rebuilds every tree into [state] from the graph's structure
+     * (claims and the edges linking them, in creation order) and the [meta]
+     * records. A claim whose record never reached the store is rebuilt from
+     * the structure alone; a claim the structure holds without the edge that
+     * would place it in a tree (the process died between the two writes) is
+     * left out. DUR-06: with [startPaused] every restored question is paused.
+     */
     fun rebuild(
         graph: List<CredenceGraph.Node>,
         meta: Map<String, Map<String, String>>,
