@@ -154,8 +154,8 @@ class QuiescenceTest {
 
             recovery.awaitApplied(30_000)
 
-            recovery.isApplied.shouldBeTrue()
             recovered.c.received.toList().sorted() shouldBe expected
+            recovery.isApplied.shouldBeTrue()
             recoveredScheduler.shutdown()
         }
     }
