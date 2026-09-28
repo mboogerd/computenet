@@ -16,7 +16,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   PRUNED: 'set aside',
   DEPTH_LIMIT: 'depth limit',
   BUDGET: 'budget spent',
-  DIMINISHING: 'returns diminished',
+  DIMINISHING: 'not worth exploring',
   STOPPED: 'stopped by you',
   FAILED: 'failed',
 };
@@ -30,17 +30,17 @@ export const STATUS_HINT: Record<Status, string> = {
   PRUNED: 'Judged unlikely to change the answer to the question, so not explored further',
   DEPTH_LIMIT: 'Too far from the question to explore further',
   BUDGET: 'The question reached its claim budget',
-  DIMINISHING: "Not explored: the question's recent rounds were finding much less new than its earlier ones, so it stopped",
+  DIMINISHING: 'Not explored: settling it could barely move the answer (its value of information fell below the threshold)',
   STOPPED: 'You stopped exploring this claim',
   FAILED: 'Every call for this claim failed',
 };
 
 /**
- * Why a question stopped growing early, in plain words ("stopped: returns
- * diminished"), or undefined while it has not (SPEC EXP-06, EXP-10).
+ * Why a question stopped growing early, in plain words ("stopped: nothing
+ * left could change the answer"), or undefined while it has not (SPEC EXP-06, model C).
  */
 export function stoppedText(q: QuestionDto | undefined): string | undefined {
-  if (q?.stoppedBy === 'diminishing') return 'stopped: returns diminished';
+  if (q?.stoppedBy === 'voi') return 'stopped: nothing left could change the answer';
   if (q?.stoppedBy === 'budget') return 'stopped: claim budget spent';
   return undefined;
 }
@@ -48,11 +48,8 @@ export function stoppedText(q: QuestionDto | undefined): string | undefined {
 /** One-line explanation of a stop, for a tooltip. */
 export function stoppedHint(q: QuestionDto | undefined): string | undefined {
   if (q?.stoppedBy === 'budget') return STATUS_HINT.BUDGET;
-  if (q?.stoppedBy !== 'diminishing') return undefined;
-  const recent = q.yieldRecent === undefined ? undefined : q.yieldRecent.toFixed(2);
-  const earlier = q.yieldEarlier === undefined ? undefined : q.yieldEarlier.toFixed(2);
-  const numbers = recent && earlier ? ` (recent non-root rounds ${recent} vs ${earlier} earlier, per argument asked)` : '';
-  return `New non-root rounds were adding much less than earlier ones${numbers}, so queued work was halted`;
+  if (q?.stoppedBy !== 'voi') return undefined;
+  return 'Every claim left to explore could move the answer too little to be worth a round (value of information below the threshold)';
 }
 
 /** How a status reads at a glance: still moving, finished, halted early, or broken. */

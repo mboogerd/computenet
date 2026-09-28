@@ -195,6 +195,20 @@ export class MockSource implements GraphSource {
       n.reach = arg?.reach;
       if (n.reach !== undefined && n.strength !== undefined) n.contribution = n.reach * 4 * n.strength * (1 - n.strength);
     }
+    // Model C: a stand-in sensitivity shaped like the backend's (root 1, halved and signed per
+    // edge by its strength — or, for the edge itself, by its argument's credence), not its arithmetic.
+    const edgeOf = new Map(nodes.filter((n) => n.kind === 'EDGE').map((e) => [e.source!, e]));
+    const sensitivityOf = (n: NodeDto): number | undefined => {
+      if (n.kind === 'CLAIM' && n.depth === 0) return 1;
+      const e = n.kind === 'EDGE' ? n : edgeOf.get(n.ref);
+      const target = e?.target === undefined ? undefined : byRef.get(e.target);
+      const above = target ? sensitivityOf(target) : undefined;
+      if (above === undefined || e === undefined) return undefined;
+      const sign = e.polarity === 'ATTACK' ? -1 : 1;
+      const factor = n.kind === 'EDGE' ? (byRef.get(e.source!)?.credence ?? 0.5) : (e.strength ?? 0.5);
+      return above * sign * 0.5 * factor;
+    };
+    for (const n of nodes) n.sensitivity = sensitivityOf(n);
     const targeted = new Set(nodes.filter((n) => n.kind === 'EDGE').map((e) => e.target));
     for (const n of nodes) {
       // Without arguments every rule keeps the first impression: no spread, by construction.
@@ -212,10 +226,24 @@ export class MockSource implements GraphSource {
         active: claims.some((c) => c.status !== undefined && ACTIVE_STATUSES.has(c.status)),
         paused: this.paused.has(r.ref),
         ...mockCost(claims),
+        cruxes: mockCruxes(nodes.filter((n) => n.root === r.ref && n.ref !== r.ref)),
       };
     });
     return { questions, nodes, consensusMembers: [...DEFAULT_CONSENSUS] };
   }
+}
+
+/** Model C: the top 3 of [nodes] by |sensitivity| × 4·p·(1 − p) (a link's p is its strength), as the backend ranks them. */
+export function mockCruxes(nodes: readonly NodeDto[]): string[] {
+  const score = (n: NodeDto): number => {
+    const p = (n.kind === 'EDGE' ? n.strength : n.plausibility) ?? 0.5;
+    return n.sensitivity === undefined ? 0 : Math.abs(n.sensitivity) * 4 * p * (1 - p);
+  };
+  return nodes
+    .filter((n) => score(n) > 0)
+    .sort((a, b) => score(b) - score(a))
+    .slice(0, 3)
+    .map((n) => n.ref);
 }
 
 /**

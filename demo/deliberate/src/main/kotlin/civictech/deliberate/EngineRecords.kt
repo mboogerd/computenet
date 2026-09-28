@@ -20,7 +20,7 @@ internal object EngineRecords {
     const val CLAIM_KEY = "c:"
     /** SPEC §3 "Links as claims": a link's record, keyed by its edge ref. */
     const val LINK_KEY = "l:"
-    /** EXP-10: one record per question holding its round yields and whether they diminished. */
+    /** EXP-10: one record per question holding its round yields (and its pause and cost fields). */
     const val QUESTION_KEY = "q:"
     /** SPEC §12: a question record's per-backend cost field is `cost.<backend>`. */
     const val COST_FIELD = "cost."
@@ -64,12 +64,15 @@ internal object EngineRecords {
         val edgeStrength: Double? = null,
     )
 
-    /** EXP-10: a question's record — its non-root round yields and whether they halted queued work. */
+    /**
+     * EXP-10: a question's record — its non-root round yields. A record written
+     * before model C may also hold `diminished` (the removed yield stop): it is
+     * ignored on decode ([RECORDS] ignores unknown keys) and dropped on the next write.
+     */
     @Serializable
     data class QuestionRecord(
         /** Required so a question with no non-root round yet still has its one durable record (DUR-03). */
         val yields: List<Double>,
-        val diminished: Boolean = false,
         /** CTL-05: the question is paused. */
         val paused: Boolean = false,
     )
@@ -127,7 +130,7 @@ internal object EngineRecords {
     fun questionFieldsOf(q: CellRef, state: EngineState, ledger: CostLedger): Map<String, String> =
         RECORDS.encodeToJsonElement(
             QuestionRecord.serializer(),
-            QuestionRecord(state.yields[q].orEmpty().toList(), q in state.diminished, q in state.paused),
+            QuestionRecord(state.yields[q].orEmpty().toList(), q in state.paused),
         ).jsonObject.mapValues { it.value.toString() } +
             // SPEC §12: one field per backend, so a call rewrites only its backend's counters.
             ledger.tallies(q).map { (b, t) -> COST_FIELD + b to RECORDS.encodeToString(BackendTally.serializer(), t) }
@@ -201,7 +204,6 @@ internal object EngineRecords {
         for ((q, r) in questionRecords) {
             if (q !in state.questions) continue
             state.yields[q] = r.yields.toMutableList()
-            if (r.diminished) state.diminished += q
             if (r.paused) state.paused += q
         }
         // DUR-06: --start-paused pauses every restored question before anything is scheduled.

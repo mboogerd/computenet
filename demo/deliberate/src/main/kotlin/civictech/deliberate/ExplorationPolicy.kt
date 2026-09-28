@@ -1,6 +1,7 @@
 package civictech.deliberate
 
 import civictech.agora.cell.Polarity
+import kotlin.math.abs
 import kotlin.math.pow
 
 /**
@@ -19,6 +20,13 @@ internal data class ClaimView(
     val roundLimit: Int = 3,
     val reach: Double? = null,
     val contribution: Double? = null,
+    /**
+     * Model C: d headline(root) / d this node ([CredenceGraph.sensitivityOf]),
+     * null until the sensitivity layer reached it.
+     */
+    val sensitivity: Double? = null,
+    /** Model C: its plausibility; for a link, its argument's edge strength. Null while unjudged. */
+    val plausibility: Double? = null,
     /** How many pro (SUPPORT) and con (ATTACK) arguments it holds. */
     val pros: Int = 0,
     val cons: Int = 0,
@@ -32,8 +40,6 @@ internal data class ClaimView(
 /** What [ExplorationPolicy] needs to know about a claim's question: its per-question counters. */
 internal data class QuestionView(
     val treeSize: Int = 1,
-    /** EXP-10: the question stopped because its returns diminished. */
-    val diminished: Boolean = false,
     /** CTL-05. */
     val paused: Boolean = false,
 )
@@ -48,10 +54,23 @@ internal data class Finish(val status: Status, val error: String? = null)
  * The exploration rules of SPEC §3 (EXP-04..06, EXP-10, CTL-02/03/05) as
  * pure functions over [ClaimView] and [QuestionView]: no locks, no threads,
  * no I/O. The engine takes the views under its lock and applies the answers.
+ *
+ * Model C: the queue order and the stop read the dataflow. A node's value of
+ * information is |d root / d node| × 4·p·(1 − p) ([valueOf]; its sensitivity
+ * from the sensitivity cells, p its plausibility), decayed per round it ran
+ * ([voiOf]). It orders the queue ([priorityOf]), and a node whose value of
+ * information is below `voiEpsilon` gets no (further) round: it ends
+ * DIMINISHING. A question therefore stops once the largest value of
+ * information over its remaining nodes falls below ε — with its hard cost cap
+ * (`maxClaims`, EXP-06 BUDGET) still standing. This replaced reach × relevance
+ * as the order, the relevance floor, `maxDepth` and the yield stop as stop
+ * rules (`maxDepth` survives only as an engine bound the tests use; the app
+ * sets no depth).
  */
 internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
 
     companion object {
+        /** SPEC §3: statuses that end a claim's expansion. DEPTH_LIMIT only arises from an explicit `maxDepth`. */
         val FINISHED = setOf(
             Status.SATURATED, Status.ROUND_LIMIT, Status.PRUNED, Status.DEPTH_LIMIT,
             Status.BUDGET, Status.DIMINISHING, Status.STOPPED, Status.FAILED,
@@ -112,17 +131,16 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     /**
      * The gate that ends a QUEUED claim before its first round without any
      * judgment (EXP-05; CTL-02 skips them), or null when it is queued: links
-     * off, beyond `maxDepth` (DEPTH_LIMIT), below the `minInfluence` floor
-     * (PRUNED), the budget (BUDGET, EXP-06) and diminishing returns (EXP-10).
+     * off, beyond an explicit `maxDepth` (DEPTH_LIMIT), the hard cap (BUDGET,
+     * EXP-06) and, model C, a value of information below ε (DIMINISHING).
      */
     fun scheduleGate(c: ClaimView, q: QuestionView): Status? =
         if (c.isRoot || c.override == Override.EXPAND || c.forceRound) null
         else when {
             c.isLink && !config.exploreLinks -> Status.PRUNED
             c.depth > config.maxDepth -> Status.DEPTH_LIMIT
-            contributionOf(c) < config.minInfluence -> Status.PRUNED
             q.treeSize >= config.maxClaims -> Status.BUDGET
-            q.diminished -> Status.DIMINISHING
+            belowEpsilon(c) -> Status.DIMINISHING
             else -> null
         }
 
@@ -130,21 +148,23 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     fun startBudgetGate(forceRound: Boolean, treeSize: Int): Status? =
         Status.BUDGET.takeIf { !forceRound && treeSize >= config.maxClaims }
 
-    /** EXP-10 after the budget gate, once a dequeued claim was judged. A forced round (CTL-02) passes. */
-    fun startDiminishingGate(forceRound: Boolean, diminished: Boolean): Status? =
-        Status.DIMINISHING.takeIf { !forceRound && diminished }
+    /**
+     * Model C, after the budget gate, once a dequeued claim was judged: its value
+     * of information, re-read now, is below ε. A forced round (CTL-02) passes.
+     */
+    fun startVoiGate(c: ClaimView): Status? = Status.DIMINISHING.takeIf { !c.forceRound && belowEpsilon(c) }
 
     /**
      * The status that ends [c]'s expansion before its next round, or null if
-     * it gets one. A forced round (CTL-02) ignores the round limit, saturation
-     * and the budget.
+     * it gets one. A forced round (CTL-02) ignores the round limit, saturation,
+     * the budget and the value of information.
      */
     fun terminalStatus(c: ClaimView, q: QuestionView): Status? = when {
         c.override == Override.STOP -> Status.STOPPED
         nextSides(c).isEmpty() -> Status.SATURATED
         !c.forceRound && c.rounds >= c.roundLimit -> Status.ROUND_LIMIT
         !c.forceRound && q.treeSize >= config.maxClaims -> Status.BUDGET
-        !c.forceRound && q.diminished -> Status.DIMINISHING
+        !c.forceRound && belowEpsilon(c) -> Status.DIMINISHING
         else -> null
     }
 
@@ -164,22 +184,49 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     /** EXP-06: whether a question holding [treeSize] claims may take one more; a forced round (CTL-02) always may. */
     fun mayReserve(treeSize: Int, forced: Boolean): Boolean = forced || treeSize < config.maxClaims
 
-    /** Why a question stopped growing early, if it did (QuestionDto.stoppedBy). */
-    fun stoppedBy(q: QuestionView): String? = when {
+    /**
+     * Why a question stopped growing early, if it did (QuestionDto.stoppedBy):
+     * its hard cap, or — once no work is left ([active] false) — model C's
+     * value-of-information stop, when it left at least one node DIMINISHING.
+     */
+    fun stoppedBy(q: QuestionView, active: Boolean, anyDiminishing: Boolean): String? = when {
         q.treeSize >= config.maxClaims -> "budget"
-        q.diminished -> "diminishing"
+        !active && anyDiminishing -> "voi"
         else -> null
     }
 
     // ---------------------------------------------------------------- SPEC §3 "Exploration order", EXP-05
 
-    /** A claim whose assessment failed falls back to its reach (EXP-05), then to the fallback strength. */
-    fun contributionOf(c: ClaimView): Double = c.contribution ?: c.reach ?: DeliberationEngine.Config.FALLBACK_STRENGTH
+    /**
+     * Model C: [c]'s value of information before round decay —
+     * |d root / d c| × 4·p·(1 − p) ([uncertainty]). The root is 1: the question
+     * itself is always worth its rounds. An unjudged p counts as ½ (factor 1);
+     * a sensitivity the sensitivity layer has not delivered yet counts as
+     * [DeliberationEngine.Config.FALLBACK_STRENGTH], middling, as a failed
+     * strength judgment does for reach.
+     */
+    fun valueOf(c: ClaimView): Double =
+        if (c.isRoot) 1.0
+        else abs(c.sensitivity ?: DeliberationEngine.Config.FALLBACK_STRENGTH) * uncertainty(c.plausibility)
 
-    /** The queue priority of [c]'s next round: its contribution × roundDecay^(rounds run); forced first (CTL-02). */
+    /** Model C: the value of information of [c]'s next round: [valueOf] × roundDecay^(rounds run). */
+    fun voiOf(c: ClaimView): Double = valueOf(c) * config.roundDecay.pow(c.rounds)
+
+    /** Model C: [c]'s next round is worth less than `voiEpsilon`. */
+    fun belowEpsilon(c: ClaimView): Boolean = voiOf(c) < config.voiEpsilon
+
+    /** The queue priority of [c]'s next round: its value of information ([voiOf]); forced first (CTL-02). */
     fun priorityOf(c: ClaimView): Double =
         if (c.override == Override.EXPAND) DeliberationEngine.Config.FORCED_PRIORITY
-        else contributionOf(c) * config.roundDecay.pow(c.rounds)
+        else voiOf(c)
+
+    /**
+     * Model C: how much settling a node could still move the answer —
+     * |[sensitivity]| × 4·p·(1 − p) (the crux score, [valueOf] without the
+     * fallbacks), or null when its sensitivity is not known yet.
+     */
+    fun cruxScore(sensitivity: Double?, plausibility: Double?): Double? =
+        sensitivity?.let { abs(it) * uncertainty(plausibility) }
 
     /** An edge's strength for reach, [DeliberationEngine.Config.FALLBACK_STRENGTH] when unjudged, clamped to [0,1]. */
     fun strengthOf(strength: Double?): Double =
@@ -194,7 +241,8 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     fun reachOf(parentReach: Double?, edgeStrength: Double?): Double = (parentReach ?: 1.0) * strengthOf(edgeStrength)
 
     /**
-     * SPEC §3 "Exploration order": reach × relevance × quality ×
+     * SPEC §3 "Exploration order" before model C, now shown only (the queue
+     * follows [priorityOf]): reach × relevance × quality ×
      * [uncertainty] (plausibility), an unjudged factor counting 1. Without a
      * [plausibility] this is the argument's worth to its parent alone — what
      * its link's [linkContribution] is built from.
@@ -234,7 +282,7 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
         return (argContribution ?: argReach ?: DeliberationEngine.Config.FALLBACK_STRENGTH) * 4 * s * (1 - s)
     }
 
-    // ---------------------------------------------------------------- EXP-10 yield
+    // ---------------------------------------------------------------- EXP-10 yield (shown; model C replaced its stop)
 
     /** EXP-10: a root round, or a round that asked for nothing, records no yield. */
     fun recordsYield(isRoot: Boolean, requested: Int): Boolean = !isRoot && requested > 0
@@ -254,25 +302,4 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
         else 1.0 - ((counts[TriageAction.DUPLICATE] ?: 0) + (counts[TriageAction.DROP] ?: 0)).toDouble() / triaged
         return value * novelty / requested
     }
-
-    /** EXP-10: [yields] have diminished ([DeliberationEngine.YieldStop]) in a question below its budget. */
-    fun yieldsDiminished(yields: List<Double>, treeSize: Int): Boolean {
-        val stop = config.yieldStop ?: return false
-        return treeSize < config.maxClaims && stop.diminished(yields, treeSize)
-    }
-
-    /** EXP-10: a claim the yield stop halts — queued or waiting work that no human forced and no rewrite holds. */
-    fun haltable(c: ClaimView): Boolean =
-        !c.forceRound && c.override != Override.EXPAND && !c.rewriteInFlight &&
-            (c.status == Status.QUEUED || (c.status == Status.EXPLORING && c.waiting))
-
-    /**
-     * EXP-10: a decline observed only after the last work finished did not
-     * stop the question. It stops only when a first round that was actually
-     * queued is prevented from starting.
-     */
-    fun yieldStopHalts(halted: List<ClaimView>): Boolean = halted.any { it.status == Status.QUEUED }
-
-    /** EXP-10: the status a halted claim ends with; a STOP override keeps STOPPED (CTL-03). */
-    fun haltedStatus(c: ClaimView): Status = if (c.override == Override.STOP) Status.STOPPED else Status.DIMINISHING
 }

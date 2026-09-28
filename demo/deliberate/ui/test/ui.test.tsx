@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { renderToString } from 'solid-js/web';
 import { describe, expect, it, vi } from 'vitest';
 import type { GraphDto } from '../src/api/types';
+import { CruxesPanel, cruxesOf } from '../src/components/CruxesPanel';
 import { EmptyState, EXAMPLES } from '../src/components/EmptyState';
 import { Legend } from '../src/components/Legend';
 import { QuestionInput } from '../src/components/QuestionInput';
@@ -106,17 +107,33 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('2 of 3 claims settled');
   });
 
-  it('says in the question header when returns diminished, and nothing while the tree grows', () => {
+  it('says in the question header when nothing left could change the answer, and nothing while the tree grows', () => {
     expect(renderToString(() => <TreeView graph={graph} root="q" />)).not.toContain('stopped:');
     const stopped: GraphDto = {
       ...graph,
-      questions: [{ ...graph.questions[0], active: false, stoppedBy: 'diminishing', yieldRecent: 0.05, yieldEarlier: 0.2 }],
+      questions: [{ ...graph.questions[0], active: false, stoppedBy: 'voi' }],
       nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'DIMINISHING' } : n)),
     };
     const html = renderToString(() => <TreeView graph={stopped} root="q" />);
-    expect(html).toContain('stopped: returns diminished');
-    expect(html).toContain('returns diminished');
-    expect(html).toContain('0.05 vs 0.20');
+    expect(html).toContain('stopped: nothing left could change the answer');
+    expect(html).toContain('not worth exploring');
+  });
+
+  it('model C lists the question\'s cruxes under "what would change the answer", best first', () => {
+    expect(renderToString(() => <CruxesPanel graph={graph} root="q" />)).not.toContain('What would change the answer');
+    const withCruxes: GraphDto = {
+      ...graph,
+      questions: [{ ...graph.questions[0], cruxes: ['a', 'missing'] }],
+      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, sensitivity: -0.25, plausibility: 0.6 } : n)),
+    };
+    // Solid's SSR marks each dynamic text part with a comment; read the text without them.
+    const html = renderToString(() => <CruxesPanel graph={withCruxes} root="q" />).replace(/<!--[^>]*-->/g, '');
+    expect(html).toContain('What would change the answer');
+    expect(html).toContain('sway 0.25');
+    expect(html).toContain('60% plausible');
+    expect(html).toContain('if it holds, the answer falls');
+    // A ref the graph does not hold is left out, not shown blank.
+    expect(cruxesOf(withCruxes, 'q').map((c) => c.ref)).toEqual(['a']);
   });
 
   it('CTL-05 offers pause beside the cost, and shows "paused" with Resume beside the verdict when paused', () => {

@@ -573,6 +573,55 @@ button {
   color: var(--text-3);
 }
 
+/* Model C: "what would change the answer" — the question's top cruxes, below its tree. */
+.cruxes {
+  margin: 28px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cruxes__title {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 620;
+  color: var(--text-2);
+}
+
+.cruxes__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.crux {
+  display: grid;
+  gap: 2px;
+}
+
+.crux__text {
+  font-size: var(--text-md);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.crux__kind {
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.crux__meta {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  cursor: help;
+}
+
 /* EXP-06/EXP-10: why the tree stopped growing early — informative, not alarming */
 .hero__stopped {
   font-style: italic;

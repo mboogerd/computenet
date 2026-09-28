@@ -494,8 +494,8 @@ export function Facts(props: {
           'Contribution',
           p(c().contribution),
           props.link
-            ? "The argument's contribution × how unsettled the link strength is (highest at 50%): open links are explored first; too low and it is set aside"
-            : 'Reach × relevance × quality: stronger claims are explored first; too low and it is set aside',
+            ? "The argument's contribution × how unsettled the link strength is (highest at 50%). Shown for reference: exploration follows how far settling a link could move the answer"
+            : 'Reach × relevance × quality. Shown for reference: exploration follows how far settling a claim could move the answer',
         )}
       </Show>
       {row('Sides covered', sides(), 'How complete Jev judges each side of the argument')}

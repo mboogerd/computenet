@@ -355,36 +355,14 @@ internal class RoundProtocol(
     /**
      * EXP-10: records the yield ([ExplorationPolicy.roundYield]) of [c]'s round
      * that attached [attached] out of [requested] asked-for arguments, triaged
-     * as [counts]. When the question's yields have diminished and at least one
-     * QUEUED claim can actually be halted, it stops: no new round starts in it;
-     * its queued claims end DIMINISHING (a round in flight finishes and
-     * attaches what it found, but records no further yield).
+     * as [counts]. Shown only: model C's value-of-information gate replaced the
+     * yield stop.
      */
     private fun recordYield(c: Claim, attached: List<Claim>, counts: Map<TriageAction, Int>, requested: Int) {
         if (!policy.recordsYield(isRoot = c.parent == null, requested = requested)) return
-        val stopped = host.update {
-            // The series is frozen at the stop, so it shows why the question stopped;
-            // rounds that were in flight then still attach what they found.
-            if (c.root in state.diminished) return@update null
-            val ys = state.yields.getOrPut(c.root) { mutableListOf() }
-            ys += policy.roundYield(attached.map { AttachedValue(it.edge?.strength, it.relevance, it.quality) }, counts, requested)
-            if (!policy.yieldsDiminished(ys, state.treeSize.getValue(c.root))) return@update null
-            val halted = state.claims.values.filter { n -> n.root == c.root && policy.haltable(n.view()) }
-            if (!policy.yieldStopHalts(halted.map { it.view() })) return@update null
-            state.diminished += c.root
-            halted.onEach { n ->
-                n.waiting = false
-                n.queueGeneration++ // its queued task, if any, falls through
-                n.status = policy.haltedStatus(n.view())
-            }
-            halted to ys.size
-        }
-        if (stopped != null) {
-            val (halted, rounds) = stopped
-            System.err.println(
-                "deliberate: question ${c.root.id} stopped, returns diminished " +
-                    "($rounds rounds, ${halted.size} claims left unexplored)",
-            )
+        host.update {
+            state.yields.getOrPut(c.root) { mutableListOf() } +=
+                policy.roundYield(attached.map { AttachedValue(it.edge?.strength, it.relevance, it.quality) }, counts, requested)
         }
     }
 

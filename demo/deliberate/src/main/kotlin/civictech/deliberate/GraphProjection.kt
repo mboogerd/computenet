@@ -13,6 +13,8 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
     private companion object {
         /** A node's credence before its first emission reached the hub. */
         const val NEUTRAL = 0.5
+        /** Model C: how many cruxes a question lists. */
+        const val CRUXES = 3
     }
 
     /** Caller holds the engine's lock (guarding [state] and the [ledger]). */
@@ -34,7 +36,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                     polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
                     strength = e.strength,
                     text = l?.text, depth = l?.depth, status = l?.status, override = l?.override,
-                    reach = l?.reach, contribution = l?.contribution,
+                    reach = l?.reach, contribution = l?.contribution, sensitivity = n.sensitivity,
                     proSaturation = l?.proSaturation, conSaturation = l?.conSaturation, rounds = l?.rounds,
                     duplicatesDropped = l?.duplicatesDropped, error = l?.error,
                     triage = l?.triage?.mapKeys { it.key.name }?.ifEmpty { null },
@@ -47,7 +49,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
                     text = c.text, depth = c.depth, status = c.status, override = c.override,
                     proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
-                    quality = c.quality, contribution = c.contribution,
+                    quality = c.quality, contribution = c.contribution, sensitivity = n.sensitivity,
                     proSaturation = c.proSaturation, conSaturation = c.conSaturation, rounds = c.rounds,
                     duplicatesDropped = c.duplicatesDropped, error = c.error,
                     alsoProposedBy = c.alsoProposedBy.toList().ifEmpty { null },
@@ -60,19 +62,31 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 )
             }
         }
-        val window = policy.config.yieldStop?.window ?: DeliberationEngine.YieldStop().window
+        val window = DeliberationEngine.Config.YIELD_WINDOW
+        val sensitivity = graph.associate { it.ref to it.sensitivity }
         val qs = state.questions.map { (root, text) ->
             // Links are part of the question's work (activity, rounds, cost), not of its claim count.
             val tree = state.claims.values.filter { it.root == root }
             val ys = state.yields[root].orEmpty()
             val queued = tree.count { it.status in ExplorationPolicy.ACTIVE }
+            // Model C: "what would change the answer" — best crux score first, ties in creation order.
+            val cruxes = tree.filter { it.parent != null }
+                .mapNotNull { n ->
+                    val p = if (n.isLink) n.argument!!.edge?.strength else n.plausibility
+                    policy.cruxScore(sensitivity[n.ref], p)?.takeIf { it > 0.0 }?.let { n to it }
+                }
+                .sortedByDescending { it.second }.take(CRUXES).map { it.first.ref.id.toString() }
             QuestionDto(
                 root.id.toString(), text, tree.count { !it.isLink }, queued > 0,
                 yieldRounds = ys.size,
                 yieldRecent = ys.takeLast(window).takeIf { it.isNotEmpty() }?.average(),
                 yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
-                stoppedBy = policy.stoppedBy(state.projectionQuestionView(root)),
+                stoppedBy = policy.stoppedBy(
+                    state.projectionQuestionView(root), active = queued > 0,
+                    anyDiminishing = tree.any { it.status == Status.DIMINISHING },
+                ),
                 paused = root in state.paused,
+                cruxes = cruxes,
             ).withCost(ledger.costOf(root, rounds = tree.sumOf { it.rounds }, queued = queued))
         }
         return GraphDto(qs, nodes, layers.members)
