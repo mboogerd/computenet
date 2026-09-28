@@ -38,10 +38,23 @@ names that model.)
   limit is hit. Each round is one task in the exploration queue; an attached
   argument joins that queue as soon as its attach-time assessment completes
   (§3 "Exploration order").
-- **Contribution** — how much exploring a claim is worth: reach × relevance ×
-  quality (EXP-05); 1 for the root.
-- **Yield** — what one round returned, per argument asked for (EXP-10); a
-  question stops when its recent yields fall well below its earlier ones.
+- **Contribution** — reach × relevance × quality (EXP-05); 1 for the root.
+  Shown for reference only: since model C it no longer orders exploration or
+  gates a claim (see **Value of information**).
+- **Sensitivity** — d root / d claim (or, for a link, d root / d its edge),
+  computed top-down by cells of their own, separate from the credence graph
+  (model C, §3 "Sensitivity and value of information"): how much settling
+  this node could still move the root's answer.
+- **Value of information (VoI)** — |sensitivity| × 4·p·(1 − p), `p` the
+  claim's plausibility (a link's its own edge strength; model C). It is a
+  claim's priority in the exploration queue and, once it falls below
+  `--voi-eps` for every remaining node in a question, the question's stop
+  condition — replacing contribution-based ordering, `minInfluence`,
+  `maxDepth` as a stop rule and the yield stop (below).
+- **Yield** — what one round returned, per argument asked for (EXP-10);
+  recorded and shown (`yieldRounds`/`yieldRecent`/`yieldEarlier`) for
+  reference only — since model C it no longer stops a question (see
+  **Value of information**).
 - **Override** — the human's per-claim setting: `AUTO` (Jev decides),
   `EXPAND` (force expansion), `STOP` (force no further expansion).
 
@@ -152,8 +165,9 @@ names that model.)
     CLI, same process gate, sandbox and timeout as EXP-09) rewrites the two as
     one sentence, which becomes the target's text (`merged: true`, the
     candidate's proposer in `alsoProposedBy`);
-  - `REFINE` — a specific instance of / evidence for the target: attached as a
-    `SUPPORT` argument under the target instead of under the claim;
+  - `REFINE` — a specific instance of / evidence for the target: recorded as
+    an evidence entry on the target claim itself (model B) — no claim is
+    created and no budget is reserved;
   - `OTHER_SIDE` — argues the opposite side: attached there. In a link round,
     a genuine counter-argument is not attached to the link: it is attached as
     an `ATTACK` on the link's parent claim (or `DROP`ped when it is not a real
@@ -175,6 +189,19 @@ names that model.)
   becomes `ADD` (`DUPLICATE`: dropped). The claim counts each action taken in
   `triage`. Rewording lives in the deliberation layer (the graph's claim text is
   immutable); if the triage request fails, every candidate is `ADD`.
+
+  **Premise vs. bearing (model B).** After triage, every candidate proposed as
+  a con (`ATTACK`) that triage resolved to `ADD`, against a claim whose
+  plausibility is at or above `BEARING_PLAUSIBILITY` (0.8, a named constant —
+  a starting value from a scratch model review, not a calibration run), is
+  additionally asked a Choice: does it dispute the claim, deny that the
+  argument bears on it, or neither? A candidate triage already placed more
+  specifically (`DUPLICATE`, `REPLACE`, `MERGE`, `REFINE`, `UNDERCUT`,
+  `OTHER_SIDE`) or dropped keeps that verdict — the Choice is asked only where
+  triage's answer was the generic `ADD`. "Disputes the claim" leaves the `ADD`
+  unchanged; "denies bearing" reroutes it to `UNDERCUT` of the claim's *own*
+  link (not a con child of the claim); "neither" reroutes it to `DROP`. A
+  failed Choice call keeps triage's verdict (EXP-08).
 - **EXP-04** After each round, Jev judges **saturation** per side (a Noul:
   "is an important consideration on this side still missing from the existing
   arguments?", read as saturated = 1 − p). A side is saturated when that value
@@ -197,25 +224,28 @@ names that model.)
   well-constructed argument — a self-contained, coherent claim that actually
   bears on its parent in the stated direction, not a restatement, off-topic or
   a rhetorical question?"). Its **contribution** is
-  `reach × relevance × quality`. An undercutter's reach is
-  `reach(parent) × strength(its edge) × strength(the undercut edge)`. A
-  non-root claim whose contribution is below `minInfluence` (default 0.10,
-  see §10) is `PRUNED` without being explored — an irrelevant or
-  poorly constructed argument never is. Quality carries no canonical-form
-  factor: canonical form is asked of the proposers only (EXP-02; why, in
-  `CALIBRATION.md`). If the assessment fails, strength 0.5 is used and
-  relevance and quality count as 1. The root is always expanded. Beyond
-  `maxDepth` (default 5) claims are `DEPTH_LIMIT` — a safety net, not the
-  primary stop.
+  `reach × relevance × quality`, shown for reference only — since model C
+  (§3 "Sensitivity and value of information") it does not gate or order
+  exploration; there is no contribution floor and no `PRUNED`-by-contribution
+  outcome (the `minInfluence` flag is removed). An undercutter's reach is
+  `reach(parent) × strength(its edge) × strength(the undercut edge)`. Quality
+  carries no canonical-form factor: canonical form is asked of the proposers
+  only (EXP-02; why, in `CALIBRATION.md`). If the assessment fails, strength
+  0.5 is used and relevance and quality count as 1. The root is always
+  expanded. `maxDepth` survives only as an internal engine bound (unbounded by
+  default) that tests use to keep a fake-driven tree small; it has no CLI flag
+  and a `DEPTH_LIMIT` claim beyond it does not otherwise arise in practice.
 - **EXP-06** A global `maxClaims` budget (default 180 per question) is enforced:
   no argument is attached once the tree holds that many claims. The budget is
-  spent in exploration order (below), so it goes to the most contributing
-  claims first. Gates run in the order depth → contribution → budget →
-  diminishing returns (EXP-10), so `BUDGET` means the claim would otherwise
-  have expanded and never did; a claim that already ran a round and then meets
-  the budget ends `ROUND_LIMIT` with `error = "budget exhausted"`. A question
-  at its budget reports `stoppedBy = "budget"`. The budget is a ceiling; the
-  per-question stop that normally ends a tree is EXP-10.
+  spent in exploration order (below), so it goes to the highest
+  value-of-information claims first. Gates run in the order links-off → depth
+  → budget → value of information (below), so `BUDGET` means the claim would
+  otherwise have expanded and never did; a claim that already ran a round and
+  then meets the budget ends `ROUND_LIMIT` with `error = "budget exhausted"`.
+  A question at its budget reports `stoppedBy = "budget"`. The budget is a
+  hard ceiling that stands beside the value-of-information stop below; it is
+  checked first, so it wins over a claim whose value of information is still
+  high.
 - **EXP-07** Concurrency is bounded: at most `maxProcesses` (default 8) CLI
   processes run at once across the whole app. Jev calls are not rate-limited
   by us but retry 429/529 with exponential backoff (≤ 4 attempts).
@@ -227,48 +257,83 @@ names that model.)
   with a per-call timeout (default 120 s). Output is parsed as a JSON array of
   strings, tolerating surrounding prose/code fences; anything unparseable is a
   failed call.
-- **EXP-10** Every question stops by its own **diminishing returns**. Each
-  round of any **non-root** claim in the question that asked for at least one
-  argument records a **yield**: Σ over the arguments it attached (REFINE and UNDERCUT
-  included) of `strength × relevance × quality` (the EXP-05 fallbacks for a
-  failed assessment), × `1 − (DUPLICATE + DROP) / triaged` (the round's triage
-  counts, exact-text repeats included; 1 when nothing was triaged), ÷ the
-  number of arguments asked for. Root rounds are excluded because their
-  naturally high yields otherwise inflate the earlier mean. The question
-  keeps its non-root yields in completion order. Once it holds ≥
-  `yieldMinClaims` (default 40) claims and ≥ 2 × `yieldWindow` (default 8)
-  non-root yields, and is below its budget, it stops
-  when mean(last `yieldWindow` yields) < `yieldRatio` (default 0.6) ×
-  mean(all earlier yields), **provided at least one claim in `QUEUED` can
-  actually be halted**. If the threshold is first observed after the question
-  ran out of queued work on its own, no stop is recorded and `stoppedBy`
-  remains null. Stopping: no new round starts in the question; every claim
-  waiting for its first or next round, and every argument
-  attached later that passes the depth and contribution gates, ends
-  `DIMINISHING` (terminal); rounds in flight complete and attach, but their
-  yields are not recorded (the series is frozen at the stop, so it shows why
-  the question stopped). `EXPAND` still forces a round on a `DIMINISHING`
-  claim (CTL-02), whose new arguments then meet the stop like any other.
-  `--yield-stop off` disables the stop (yields are still recorded). The
-  question reports `yieldRounds` (non-root rounds), `yieldRecent` (mean of the last window),
-  `yieldEarlier` (mean before it) and `stoppedBy` (`"diminishing"`,
-  `"budget"` or null); the yields and the stop are durable (DUR-02). The
-  relative, per-question comparison is the point: absolute yields differ
-  several-fold between questions (`CALIBRATION.md`), so any absolute threshold
-  would again starve one question and overgrow another.
+- **EXP-10** Each round of any **non-root** claim in the question that asked
+  for at least one argument still records a **yield**: Σ over the arguments it
+  attached (REFINE and UNDERCUT included) of `strength × relevance × quality`
+  (the EXP-05 fallbacks for a failed assessment), × `1 − (DUPLICATE + DROP) /
+  triaged` (the round's triage counts, exact-text repeats included; 1 when
+  nothing was triaged), ÷ the number of arguments asked for. Root rounds are
+  excluded because their naturally high yields otherwise inflate the earlier
+  mean. The question keeps its non-root yields in completion order and
+  reports `yieldRounds` (their count), `yieldRecent` (mean of the last
+  `yieldWindow`, default 8) and `yieldEarlier` (mean of the rest) — for
+  reference only. **Since model C (below) yield no longer gates or stops
+  anything**: there is no yield ratio, no minimum-claims threshold and no
+  `--yield-stop` flag (removed); the yields remain durable (DUR-02) purely as
+  a diagnostic.
+
+### Sensitivity and value of information (model C)
+
+Alongside the credence graph (§2), a second, one-way graph of cells computes
+**sensitivity**: how much the root's answer would move per unit change of
+each node's credence, `d root / d node`, per layer. The root's cell emits 1
+(per layer); every other node's cell folds the same stances and incoming
+influences its credence cell folds, and for each incoming edge sends (its own
+sensitivity × the local partial derivative of its credence with respect to
+that edge's strength or its source's credence) to that edge's cell, which
+sums what arrives from every path back to the source claim (the chain rule;
+a deliberation tree has exactly one path per node). The local partials are
+central finite differences of the layer's own semantics at the node's current
+inputs. No sensitivity cell feeds a credence cell: the credence graph gains no
+new input and no cycle, and sensitivity is a pure function of the replayed
+structure and stances — like credence, it is **derived, never journaled**
+(DUR-01); a restart recomputes it from scratch. A node's scalar sensitivity
+(used below) is `d headline(root) / d node`, via the same per-layer weights
+`headlineOf` (CRED-05) uses.
+
+A claim's (or link's) **value of information** is
+`|sensitivity| × 4·p·(1 − p)`, `p` its plausibility (a link's is its own edge
+strength) — the same uncertainty factor as `uncertainty(p)` above, unjudged
+`p` counting ½ (factor 1). A sensitivity the layer has not yet delivered
+counts `FALLBACK_STRENGTH` (0.5), as a failed strength judgment does for
+reach. This value, decayed by `roundDecay^(rounds already run)`, **is the
+claim's priority in the exploration queue** (below), replacing the earlier
+reach × relevance ordering; and once it falls below `--voi-eps`
+(`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
+review, not a calibration run) the claim gets no (further) round and ends
+`DIMINISHING` (the status name is kept so pre-model-C records still restore;
+its meaning and the UI wording changed to "not worth exploring" /
+"nothing left could change the answer"). A question therefore stops once the
+largest value of information over its remaining nodes falls below `--voi-eps`
+— reported `stoppedBy = "voi"` — with `maxClaims` (EXP-06) still standing as
+a hard cap checked first. `--voi-eps 0` disables the value-of-information
+stop; `maxClaims` alone then bounds a question. **This replaces `minInfluence`
+(removed), `maxDepth` as a stop rule (removed as a flag; the field survives
+only as an unbounded-by-default internal bound, EXP-05) and the yield stop
+above (`--yield-stop`, removed) as a question's stop rule.**
+
+**Cruxes.** `QuestionDto.cruxes` lists up to 3 refs of the question's nodes
+(claims below the root, and links as `EDGE` refs) by `|sensitivity| ×
+4·p·(1 − p)` — the same value-of-information score, without the round-decay
+and `FALLBACK_STRENGTH` fallbacks a node without a sensitivity yet is simply
+left out — best first, ties in creation order. The UI's "what would change
+the answer" panel (§7) lists them.
 
 ### Exploration order
 
 Work is one priority queue across all questions; each task is one round of
-one claim. A claim's first round is queued at its contribution (the root at
-1); after each round a claim that is not finished goes back into the queue at
-`contribution × roundDecay^rounds` (`roundDecay` default 0.5), so a strong
-claim's second round competes fairly with a weaker sibling's first. Ties go
-first-in, first-out. An argument is queued, at its contribution priority, as
-soon as its attach-time assessment completes — at the end of the round that
-attached it, since a later turn may still reword it; it does not wait for its
-parent to finish later rounds. A claim the human forces with `EXPAND` is queued ahead
-of all contributions. Links (below) share this one queue.
+one claim. A claim's first round is queued at its value of information (the
+root at 1); after each round a claim that is not finished goes back into the
+queue at its value of information decayed by `roundDecay^rounds` (`roundDecay`
+default 0.5), so a strong claim's second round competes fairly with a weaker
+sibling's first. Ties go first-in, first-out. An argument is queued, at its
+value-of-information priority, as soon as its attach-time assessment
+completes — at the end of the round that attached it, since a later turn may
+still reword it; it does not wait for its parent to finish later rounds.
+Because the sensitivity cells settle asynchronously, priorities are ranked
+when a worker takes the next task, not fixed when a claim is enqueued. A claim
+the human forces with `EXPAND` is queued ahead of everything else
+(`FORCED_PRIORITY`). Links (below) share this one queue.
 
 ### Links as claims
 
@@ -289,22 +354,25 @@ child rewords its link), and explores the link exactly like a claim:
   below, their path running through the link text, and each is assessed
   (CRED-01/02, EXP-05) with the link text as `parent_claim`. Arguments about
   a link have links of their own.
-- **LINK-03 Contribution.** A link matters in proportion to how much its
-  argument can move the parent, and to how open its strength still is:
-  `contribution(link) = contribution(argument) × 4·s·(1 − s)`, with `s` the
-  argument's CRED-02 strength (0.5 when that judgment failed: factor 1), and
-  `reach(link) = reach(argument)`. The factor is the normalised variance of a
-  Bernoulli(s): 1 at s = ½, 0 for a link judged irrelevant or decisive, so a
-  link never outranks its argument and a clear-cut link is left alone unless
-  the human expands it. An argument about a link then has
+- **LINK-03 Contribution and value of information.** `contribution(link) =
+  contribution(argument) × 4·s·(1 − s)`, with `s` the argument's CRED-02
+  strength (0.5 when that judgment failed: factor 1) — shown for reference
+  only, like a claim's contribution (EXP-05). `reach(link) = reach(argument)`.
+  A link's **value of information** follows the same formula as a claim's
+  (§3 "Sensitivity and value of information"), reading the link's own edge
+  strength as its plausibility and the *edge's* sensitivity cell as its
+  sensitivity: `|sensitivity(edge)| × 4·s·(1 − s)` — 1 at s = ½, 0 for a link
+  judged irrelevant or decisive — so a clear-cut link is left alone unless the
+  human expands it, and an open link under a claim the answer is sensitive to
+  is explored early. An argument about a link then has
   `reach = reach(argument) × strength(its own edge)` — for an undercutter,
   exactly EXP-05's formula.
 - **LINK-04 Scheduling.** A link joins the queue with its argument, once the
   argument's attach-time assessment completed (its strength is then known),
-  at its contribution; the EXP-05/06/10 gates (depth, `minInfluence`, budget,
-  diminishing returns) apply as to a claim. `--explore-links off` (default
-  on) keeps links from being explored automatically — they end `PRUNED` —
-  while `EXPAND` still explores one.
+  at its value of information; the links-off, depth, budget and
+  value-of-information gates (§3) apply as to a claim. `--explore-links off`
+  (default on) keeps links from being explored automatically — they end
+  `PRUNED` — while `EXPAND` still explores one.
 - **LINK-05 Rounds.** A link's round is EXP-02..04 with the link as the claim:
   per-side cap `maxArgsPerSideChild`, triage against the link's own
   arguments (EXP-03, so duplicates are caught against them; the claim-level
@@ -323,8 +391,9 @@ child rewords its link), and explores the link exactly like a claim:
   question (COST-01), an active link keeps the question `active` and counts in
   `cost.queued`, but `QuestionDto.claims` and the `maxClaims` budget count
   claims only (the arguments a link gets are claims and count). This remains
-  bounded even with `--yield-stop off`: every non-root claim has exactly one
-  link, so a question under `maxClaims` has at most `maxClaims − 1` links, and
+  bounded even with `--voi-eps 0` (the value-of-information stop disabled):
+  every non-root claim has exactly one link, so a question under `maxClaims`
+  has at most `maxClaims − 1` links, and
   the budget gate prevents another automatic link round once the claim ceiling
   is reached. Human-forced CTL-02 rounds remain deliberately outside the cap.
 
@@ -336,15 +405,17 @@ child rewords its link), and explores the link exactly like a claim:
 - **CTL-02** `EXPAND` always explores: whatever the claim's status —
   queued, running, or finished for any reason including `BUDGET` and
   `DIMINISHING` — its next
-  round is **forced**, and it runs at least that round. It skips the
-  contribution and depth gates, is queued ahead of all contributions, and
-  raises the claim's round limit by one if needed. The forcing is not
-  durable: an `EXPAND` whose round a restart interrupted is not resumed —
-  the claim restores like any other and the human expands it again. The forced round ignores
-  Jev saturation, the round limit and `maxClaims`: it has its own allowance of
-  up to one per-side cap of new arguments per side (shared by the proposers'
-  turns), and they are attached even when the tree is at its budget. Triage
-  still applies. The new arguments then face the gates like any other.
+  round is **forced**, and it runs at least that round. It skips every
+  scheduling gate (links-off, depth, budget and value of information), is
+  queued ahead of everything else (`FORCED_PRIORITY`), and raises the claim's
+  round limit by one if needed. The forcing is not durable: an `EXPAND` whose
+  round a restart interrupted is not resumed — the claim restores like any
+  other and the human expands it again. The forced round ignores Jev
+  saturation, the round limit, `maxClaims` and the value of information: it
+  has its own allowance of up to one per-side cap of new arguments per side
+  (shared by the proposers' turns), and they are attached even when the tree
+  is at its budget. Triage still applies. The new arguments then face the
+  gates like any other.
 - **CTL-03** `STOP` cancels queued work for that claim and prevents future
   rounds; an in-flight round finishes but its results are still attached
   (arguments are never silently dropped once produced). Status becomes
@@ -368,8 +439,9 @@ child rewords its link), and explores the link exactly like a claim:
 ## 5. Claim status (the state machine the UI renders)
 
 `QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
-alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`, `DIMINISHING` (EXP-10),
-`STOPPED`, `FAILED`.
+alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
+`DIMINISHING` (its value of information fell below `--voi-eps`; model C, §3
+"Sensitivity and value of information"), `STOPPED`, `FAILED`.
 Every status change is broadcast.
 
 ## 6. HTTP surface (the UI contract)
@@ -380,16 +452,20 @@ Every status change is broadcast.
 - `POST /question/pause` form `root=<question ref>&paused=true|false` → `ok`
   (CTL-05); 400 on a malformed ref or flag, 404 on a ref that is not a question
 - `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
-  `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`; an
+  `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`, and its
+  `sensitivity` (model C, §3, null until the sensitivity layer reaches it); an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
   its edge's `target`) and every argument about a link carries `onLink` (that
-  edge); an EDGE carries its link's claim-like fields (`text`, `depth`,
+  edge); a claim carries `evidence` (model B REFINE outcomes) when it has any;
+  an EDGE carries its link's claim-like fields (`text`, `depth`,
   `status`, `override`, `reach`, `contribution`, `proSaturation`,
   `conSaturation`, `rounds`, `duplicatesDropped`, `triage`, `error`); every
   claim and link carries `activity` while it is being explored, judged or
   assessed; the graph carries `consensusMembers`; every question
-  carries `yieldRounds`, `yieldRecent`, `yieldEarlier` and `stoppedBy`
-  (EXP-10), `paused` (CTL-05), and `costUsd`, `projectedUsd` and `cost` (§12).
+  carries `yieldRounds`, `yieldRecent`, `yieldEarlier` (EXP-10, informational)
+  and `stoppedBy` (`"budget"`, `"voi"` or null; model C, §3), `paused`
+  (CTL-05), `cruxes` (model C, up to 3 refs for "what would change the
+  answer"), and `costUsd`, `projectedUsd` and `cost` (§12).
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
 
@@ -417,6 +493,12 @@ Every status change is broadcast.
   under the link, dashed and tagged "link", never under the claim.
 - **UI-06** Under each question a "now" line names what the deliberation is
   doing this moment: which claims and links are being explored or judged.
+- **UI-07** Under each question's tree, a "what would change the answer"
+  panel (model C, §3 "Sensitivity and value of information") lists its
+  `cruxes` — the claims and links whose settling could move the answer most —
+  each with its sway (`|sensitivity|`), how settled it is (its plausibility or,
+  for a link, its strength) and, when its sensitivity is signed, which way it
+  would pull the answer. Nothing is shown until the backend names a crux.
 
 ## 8. Non-goals (v1)
 
@@ -440,13 +522,15 @@ is in scope: §3 "Links as claims".)
 ## 10. Calibration
 
 Jev's gate signals are weaker and differently scaled than their prompts
-suggest, so the thresholds that consume them (`saturation`, `minInfluence`,
-and the EXP-10 yield parameters) are set from evidence, never by intuition. A
-calibration run over real claims at depths 0–3 with 0–6 arguments per side,
-recorded in `demo/deliberate/CALIBRATION.md`, must show that with the
-defaults (a) a side typically saturates by 3–4 arguments and (b) a typical
-question tree stops growing through `PRUNED` before `DEPTH_LIMIT` for most
-depth-2 claims.
+suggest, so `saturation` — the one Jev-consumed threshold that still gates
+anything — is set from evidence, never by intuition. A calibration run over
+real claims at depths 0–3 with 0–6 arguments per side, recorded in
+`demo/deliberate/CALIBRATION.md`, must show that with the defaults a side
+typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
+parameters and `maxDepth` as a stop rule are removed by model C — §3
+"Sensitivity and value of information" — and appear only as history.
+`--voi-eps`'s default is a starting value from a one-off scratch model
+review, not a calibration run; `CALIBRATION.md` records its status.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
@@ -459,12 +543,14 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   append-only log `graph.jsonl` (a torn last line is cut off on boot), and
   the engine's metadata, which includes the `jev` stances, in the host
   journal (`host.journal`, write-ahead, synced per frame). Nothing derived —
-  no credence vector, influence or hub update — is ever written: the
+  no credence vector, influence, hub update, or sensitivity vector or frame
+  (model C, §3 "Sensitivity and value of information") — is ever written: the
   metadata cell is the only journaled cell on the host (a per-cell journal
-  selector), every credence cell is volatile, and on boot the graph
-  recomputes every credence from the structure and the re-applied stances,
-  with catch-up baselines enabled. A restart reproduces every layer's
-  credence and every consensus (within 1e-9), restart after restart.
+  selector), every credence and sensitivity cell is volatile, and on boot the
+  graph recomputes every credence and every sensitivity from the structure and
+  the re-applied stances, with catch-up baselines enabled. A restart
+  reproduces every layer's credence and every consensus (within 1e-9), restart
+  after restart.
 - **DUR-02** The engine's per-claim metadata (question membership, status,
   override, proposer, rewritten text, Jev judgments — plausibility and edge
   strength are the `jev` stances —, saturation, triage counts, rounds,
@@ -488,8 +574,11 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   whose record never reached the journal is rebuilt from the structure alone
   and queued afresh; a claim created without the edge that places it (the
   process died between the two writes) is left out. Each question's EXP-10
-  record (its yields and whether it stopped) is one more record of the same
-  store. Every argument's link is rebuilt with it and its `l:` record
+  record (its non-root round yields, for reference only — its stop is
+  computed live from restored claim status, not journaled) is one more
+  record of the same store; a record written before model C may also carry
+  `diminished` (the removed yield stop), which decodes and is dropped on the
+  next write. Every argument's link is rebuilt with it and its `l:` record
   re-applied; an edge targeting an edge places its source under that edge's
   link. A link whose `l:` record never reached the journal is rebuilt from
   the structure alone and queued afresh, like any other such claim. With
