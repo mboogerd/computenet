@@ -308,7 +308,7 @@ filed: `n99jt` (measure model B's premise-vs-bearing Choice).
 | **S1** `ra3o2` | Claim store: multi-parent claims, question membership, global structure log, aliases, twin REUSE at intake, EXP-02 claim-only subtrees; SPEC §8 non-goal dropped | S0 | strong for twins |
 | **S2** `i9ujc` | Implication relations + coherence view (c′ shown, parents read c) | S1 | medium (n=12 / one snapshot) |
 | **S3a** `6di6y` | Multi-class accuracy experiment (R2 option b): a harder question set (Opus ≈ 50% top-1, Jev knowledgeable), contrastive depth-1 claims each deliberated as its own binary root by today's engine, plus R2's offline checks; go/no-go for S3b | — | — |
-| **S3b** | *Only if S3a says go:* multi-class questions (bearing edges, `instr` judgment, LL read-out, hurdle L, eTV), retiring POSITIONS | S0, S1, S3a | strong mechanism; accuracy not shown |
+| **S3b** | *Not filed — S3a was a no-go.* Was: *only if S3a says go:* multi-class questions (bearing edges, `instr` judgment, LL read-out, hurdle L, eTV), retiring POSITIONS | S0, S1, S3a | strong mechanism; accuracy not shown |
 | **S4** `vyxyl` | Common cores at intake | S2 | 15% coverage on a sample |
 | **S5** `ilknp` | Multi-user (`ilknp`) on the store | S1 | decided |
 
@@ -323,6 +323,10 @@ Decided by the user, 2026-09-28:
 
 1. **Multi-class: accuracy push first** (R2 option b). No multi-class build is
    filed until the S3a experiment reports; S3b is filed only on a go.
+   **Outcome 2026-09-28: no-go.** On a harder set (Opus ≈ 60% top-1) arguments
+   still add no accuracy, and contrastive arguments at depth move claims but
+   not answers (`doc/research/deliberate-multiclass/ACCURACY-PUSH.md`, PR #1161).
+   S3b is not filed; POSITIONS stay.
 5. **Keep POSITIONS for now**; fix `x91yk` in the meantime.
 
 Defaults adopted for planning (recommendations; revisit if evidence changes):
