@@ -86,6 +86,11 @@ internal class Claim(
     var edge: Edge? = null
     /** Its pro and con arguments; for a link, its supporters and undercutters. */
     val children = mutableListOf<Claim>()
+    /**
+     * Model A: on a question root, how it was framed once framing succeeded
+     * (FRAMED); its readings/positions are claims with no parent in the same tree.
+     */
+    var framing: Framing? = null
 
     /** How many arguments it holds on [side]. */
     fun countOf(side: Side) = children.count { it.side == side }
@@ -109,6 +114,10 @@ internal class Claim(
         const val QUESTION = "question"
         /** The proposer field of a link (it has none; its arguments do). */
         const val LINK = "link"
+        /** Model A: the proposer field of a reading of a framed question (explored as a root). */
+        const val READING = "reading"
+        /** Model A: the proposer field of a position of a framed question (explored as a root). */
+        const val POSITION = "position"
     }
 }
 

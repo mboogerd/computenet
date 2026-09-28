@@ -1,6 +1,8 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
-import { buildTree } from '../tree/buildTree';
+import { buildForest } from '../tree/buildTree';
+import type { TreeNode } from '../tree/buildTree';
+import { FramingSummary, Reading } from './Framing';
 import {
   ACTIVITY_VERB,
   activityOf,
@@ -29,7 +31,7 @@ import { PauseControl } from './PauseControl';
 
 /** [research]: model D's research view — per-rule values shown (default: the `?research` URL flag). */
 export function TreeView(props: { graph: GraphDto; root: string; research?: boolean }) {
-  const tree = createMemo(() => buildTree(props.graph, props.root));
+  const tree = createMemo(() => buildForest(props.graph, props.root));
   const index = createMemo<TreeIndex>(() => {
     const t = tree();
     return t ? indexTree(t) : new Map();
@@ -53,18 +55,25 @@ export function TreeView(props: { graph: GraphDto; root: string; research?: bool
   return (
     <Show when={tree()} fallback={<p class="empty">Waiting for the question to appear…</p>}>
       <Show when={props.root} keyed>
-        {(root) => <Question root={root} index={index} graph={() => props.graph} sel={sel} />}
+        {(root) => <Question root={root} index={index} tree={tree} graph={() => props.graph} sel={sel} />}
       </Show>
     </Show>
   );
 }
 
 /** The question is the hero: large text, one credence gauge, a plain verdict, and progress. */
-function Question(props: { root: string; index: () => TreeIndex; graph: () => GraphDto; sel: Selection }) {
+function Question(props: { root: string; index: () => TreeIndex; tree: () => TreeNode | undefined; graph: () => GraphDto; sel: Selection }) {
   const entry = () => props.index().get(props.root);
   const childRefs = useChildRefs(entry);
   const progress = createMemo(() => questionProgress(props.graph().nodes, props.root));
   const question = () => props.graph().questions.find((q) => q.root === props.root);
+  // Model A: set only when the question was framed; the positions built by buildForest, by ref.
+  const framing = () => question()?.framing;
+  const positionTrees = createMemo(() => {
+    const map = new Map<string, TreeNode>();
+    for (const t of props.tree()?.positions ?? []) map.set(t.claim.ref, t);
+    return map;
+  });
 
   return (
     <Show when={entry()}>
@@ -89,36 +98,42 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
             <section class="hero" classList={{ 'is-open': open(), 'is-busy': busy() }} aria-label="Question">
               <h2 class="hero__q">{claim().text}</h2>
 
-              <div
-                class="gauge"
-                classList={{ 'is-empty': unargued() }}
-                title={
-                  unargued()
-                    ? LEAF_AGREEMENT
-                    : props.sel.research?.()
-                      ? `Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())}). The band is the range from the lowest to the highest rule.`
-                      : 'Credence: how likely the answer is yes, after weighing every argument from Jev\'s first impression — the consensus of the credence rules.'
-                }
+              <Show
+                when={!framing()}
+                fallback={<FramingSummary framing={framing()!} />}
               >
-                <span class="gauge__con" aria-hidden="true">no</span>
-                <span class="gauge__track" aria-hidden="true">
-                  <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
-                  <Show when={props.sel.research?.()}>
-                    <SpreadBand node={claim()} class="gauge__band" />
-                  </Show>
-                  <span class="gauge__mark" style={{ left: `${shown(claim()) * 100}%` }} />
-                  <span class="gauge__mid" />
-                </span>
-                <span class="gauge__pro" aria-hidden="true">yes</span>
-                <p class="gauge__caption">
-                  {unargued()
-                    ? `first impression: ${pct(shown(claim()))}`
-                    : [priorText(question()), props.sel.research?.() ? bandCaption(claim()) : undefined]
-                        .filter((x) => x !== undefined)
-                        .join(' · ')}
-                </p>
-              </div>
+                <div
+                  class="gauge"
+                  classList={{ 'is-empty': unargued() }}
+                  title={
+                    unargued()
+                      ? LEAF_AGREEMENT
+                      : props.sel.research?.()
+                        ? `Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())}). The band is the range from the lowest to the highest rule.`
+                        : 'Credence: how likely the answer is yes, after weighing every argument from Jev\'s first impression — the consensus of the credence rules.'
+                  }
+                >
+                  <span class="gauge__con" aria-hidden="true">no</span>
+                  <span class="gauge__track" aria-hidden="true">
+                    <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
+                    <Show when={props.sel.research?.()}>
+                      <SpreadBand node={claim()} class="gauge__band" />
+                    </Show>
+                    <span class="gauge__mark" style={{ left: `${shown(claim()) * 100}%` }} />
+                    <span class="gauge__mid" />
+                  </span>
+                  <span class="gauge__pro" aria-hidden="true">yes</span>
+                  <p class="gauge__caption">
+                    {unargued()
+                      ? `first impression: ${pct(shown(claim()))}`
+                      : [priorText(question()), props.sel.research?.() ? bandCaption(claim()) : undefined]
+                          .filter((x) => x !== undefined)
+                          .join(' · ')}
+                  </p>
+                </div>
+              </Show>
 
+              <Show when={!framing()}>
               <div class="hero__row">
                 <Show
                   when={!unargued()}
@@ -154,6 +169,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                   {open() ? 'Less' : 'Details'}
                 </button>
               </div>
+              </Show>
 
               <div
                 class="activity"
@@ -219,12 +235,27 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
             </section>
 
             <Show
-              when={childRefs().length > 0}
-              fallback={<p class="empty empty--quiet">Proposers are drafting the first arguments…</p>}
+              when={!framing()}
+              fallback={
+                <div class="readings">
+                  <For each={framing()?.positions ?? []}>
+                    {(p) => (
+                      <Show when={positionTrees().get(p.ref)}>
+                        {(t) => <Reading position={p} tree={t()} sel={props.sel} />}
+                      </Show>
+                    )}
+                  </For>
+                </div>
+              }
             >
-              <ul class="tree" aria-label="Deliberation tree">
-                <For each={childRefs()}>{(ref) => <ClaimCard claimRef={ref} index={props.index} sel={props.sel} />}</For>
-              </ul>
+              <Show
+                when={childRefs().length > 0}
+                fallback={<p class="empty empty--quiet">Proposers are drafting the first arguments…</p>}
+              >
+                <ul class="tree" aria-label="Deliberation tree">
+                  <For each={childRefs()}>{(ref) => <ClaimCard claimRef={ref} index={props.index} sel={props.sel} />}</For>
+                </ul>
+              </Show>
             </Show>
           </>
         );

@@ -39,6 +39,8 @@ class DeliberateApp(
     config: DeliberationEngine.Config = DeliberationEngine.Config(),
     private val uiDir: File? = defaultUiDir(),
     merger: Merger? = null,
+    /** Model A: frames each question before its first round; null explores every question as asked. */
+    framer: Framer? = null,
     private val flushIntervalMs: Long = 100,
     /** SPEC §11: with a directory, deliberations survive restarts (and `kill -9`); null is volatile. */
     private val dataDir: File? = null,
@@ -115,7 +117,7 @@ class DeliberateApp(
         }
     }
 
-    val engine = DeliberationEngine(graph, judge, proposers, config, merger, store = metaStore, pricing = pricing) { dirty.set(true) }
+    val engine = DeliberationEngine(graph, judge, proposers, config, merger, store = metaStore, pricing = pricing, framer = framer) { dirty.set(true) }
 
     /** Journal length right after the last checkpoint; the periodic compaction measures growth against it. */
     @Volatile
@@ -498,15 +500,16 @@ fun main(args: Array<String>) {
         }
     }
     val uiDir = opts.ui ?: DeliberateApp.defaultUiDir()
-    // EXP-03 MERGE always asks Claude, whichever CLIs propose.
-    val merger = CliMerger(proposers.filterIsInstance<CliProposer>().firstOrNull { it.id == "claude" } ?: CliProposer.claude(gate, opts.claudeModel))
+    // EXP-03 MERGE and model A's framing always ask Claude, whichever CLIs propose.
+    val claude = proposers.filterIsInstance<CliProposer>().firstOrNull { it.id == "claude" } ?: CliProposer.claude(gate, opts.claudeModel)
+    val merger = CliMerger(claude)
     val app = DeliberateApp(
-        opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger,
+        opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger, CliFramer(claude),
         dataDir = opts.data, semantics = opts.semantics, pricing = opts.pricing,
     ).start()
     Runtime.getRuntime().addShutdownHook(Thread { app.stop() })
     announcePort("http", app.boundPort)
-    println("deliberate: http://localhost:${app.boundPort}  (proposers: ${proposers.joinToString { it.id }}, ${opts.config})")
+    println("deliberate: http://localhost:${app.boundPort}  (proposers: ${proposers.joinToString { it.id }}, framing: claude, ${opts.config})")
     println(if (uiDir != null && File(uiDir, "index.html").isFile) "  serving UI from $uiDir" else "  UI not built — see demo/deliberate/README.md")
     println("  layers: ${opts.semantics.running.joinToString()}  (headline ${opts.semantics.headline}, consensus ${opts.semantics.consensus.joinToString()})")
     println(if (opts.data != null) "  keeping deliberations in ${opts.data} (kill -9 safe)" else "  volatile: add --data <dir> to survive restarts")

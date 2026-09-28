@@ -62,6 +62,12 @@ internal object EngineRecords {
         val error: String? = null,
         val anyCallSucceeded: Boolean = false,
         val edgeStrength: Double? = null,
+        /**
+         * Model A, on a framed question root: its framing mode and term. The
+         * items are not stored: they are the positions' structure texts.
+         */
+        val framingMode: FramingMode? = null,
+        val framingTerm: String? = null,
     )
 
     /**
@@ -89,6 +95,8 @@ internal object EngineRecords {
         duplicatesDropped = c.duplicatesDropped, triage = c.triage.mapKeys { it.key.name },
         alsoProposedBy = c.alsoProposedBy.toList(), evidence = c.evidence.toList(), merged = c.merged, error = c.error,
         anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
+        framingMode = c.framing?.mode?.takeIf { it != FramingMode.NONE },
+        framingTerm = c.framing?.term.takeIf { c.framing?.mode != FramingMode.NONE },
     )
 
     fun apply(c: Claim, r: ClaimRecord) {
@@ -141,6 +149,23 @@ internal object EngineRecords {
             state.questions.keys.map { q -> QUESTION_KEY + q.id to questionFieldsOf(q, state, ledger) }
 
     /**
+     * Model A: a root framed in the structure log gets its framing back, items
+     * from its positions' structure texts. A root whose record says framed but
+     * whose issue the graph dropped (a torn framing) restores unframed and,
+     * if it had finished FRAMED, QUEUED — so it is framed again.
+     */
+    private fun restoreFraming(root: Claim, n: CredenceGraph.Node, rec: ClaimRecord?, graph: List<CredenceGraph.Node>) {
+        val issue = n.info.issue
+        if (issue == null) {
+            if (root.status == Status.FRAMED) root.status = Status.QUEUED
+            return
+        }
+        val texts = issue.positions.mapNotNull { p -> graph.firstOrNull { it.ref == p }?.info?.text }
+        root.framing = Framing(FramingMode.valueOf(issue.mode.name), rec?.framingTerm, texts)
+        root.status = Status.FRAMED
+    }
+
+    /**
      * SPEC §11: rebuilds every tree into [state] from the graph's structure
      * (claims and the edges linking them, in creation order) and the [meta]
      * records. A claim whose record never reached the store is rebuilt from
@@ -179,7 +204,14 @@ internal object EngineRecords {
             if (n.info.kind != CredenceGraph.Kind.CLAIM) continue
             val rec = records[n.ref]
             val structureText = n.info.text.orEmpty()
-            val claim = if (n.info.question || rec?.question == n.ref.id.toString()) {
+            val positionOf = n.info.positionOf
+            val claim = if (positionOf != null) {
+                // Model A: a reading/position, explored as a root of its own in its question's tree.
+                val root = state.claims[positionOf] ?: continue
+                val mode = graph.firstOrNull { it.ref == positionOf }?.info?.issue?.mode
+                val proposer = if (mode == CredenceGraph.IssueMode.READINGS) Claim.READING else Claim.POSITION
+                Claim(n.ref, root.root, null, null, structureText, 0, proposer, roundLimit)
+            } else if (n.info.question || rec?.question == n.ref.id.toString()) {
                 state.questions[n.ref] = structureText
                 Claim(n.ref, n.ref, null, null, structureText, 0, Claim.QUESTION, roundLimit)
             } else run {
@@ -197,6 +229,7 @@ internal object EngineRecords {
                 }
             } ?: continue
             rec?.let { r -> apply(claim, r) }
+            if (claim.parent == null && claim.ref == claim.root) restoreFraming(claim, n, rec, graph)
             state.claims[n.ref] = claim
             state.treeSize.merge(claim.root, 1, Int::plus)
             if (claim.edge != null) state.linkFor(claim, roundLimit).also { l -> linkRecords[l.ref]?.let { apply(l, it) } }

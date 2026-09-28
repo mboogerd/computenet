@@ -327,6 +327,64 @@ class CliProposerTest {
         assertEquals("A and B.", CliMerger(cli).merge("C.", Polarity.SUPPORT, "A.", "B."))
     }
 
+    // ------------------------------------------------------------ model A framing
+
+    @Test
+    fun `framing parses the first object inside prose and a fence and caps readings at 3`() {
+        val text = "Sure, here is the framing:\n```json\n{\"mode\":\"READINGS\",\"term\":\"x\",\"items\":[\"a\",\"b\",\"c\",\"d\"]}\n```\nDone."
+        assertEquals(Framing(FramingMode.READINGS, "x", listOf("a", "b", "c")), CliFramer.parseFraming(text))
+    }
+
+    @Test
+    fun `framing de-duplicates by normalised text and one item left is NONE`() {
+        assertEquals(
+            Framing(FramingMode.READINGS, "t", listOf("A.", "b")),
+            CliFramer.parseFraming("""{"mode":"READINGS","term":"t","items":["A.","a"," ","b"]}"""),
+        )
+        assertEquals(Framing.NONE, CliFramer.parseFraming("""{"mode":"READINGS","term":"t","items":["A.","a"]}"""))
+        assertEquals(Framing.NONE, CliFramer.parseFraming("""{"mode":"POSITIONS","items":["Only one."]}"""))
+        assertEquals(Framing.NONE, CliFramer.parseFraming("""{"mode":"NONE","term":"t","items":["a","b"]}"""))
+    }
+
+    @Test
+    fun `framing caps positions at 5 and drops a term`() {
+        val f = CliFramer.parseFraming("""{"mode":"POSITIONS","term":"t","items":["1","2","3","4","5","6"]}""")
+        assertEquals(Framing(FramingMode.POSITIONS, null, listOf("1", "2", "3", "4", "5")), f)
+    }
+
+    @Test
+    fun `framing throws on an unknown mode and on text without an object`() {
+        assertFailsWith<IllegalArgumentException> { CliFramer.parseFraming("""{"mode":"MAYBE"}""") }
+        assertFailsWith<IllegalArgumentException> { CliFramer.parseFraming("no object here [\"a\", \"b\"]") }
+    }
+
+    @Test
+    fun `framing prompt names the modes, the maxima and the canonical rules, and no demo-run topic`() {
+        val p = CliFramer.prompt("Is the Q true?")
+        assertTrue(p.contains(CliProposer.CANONICAL_RULES))
+        assertTrue(p.contains("Is the Q true?"))
+        for (mode in listOf("NONE", "READINGS", "POSITIONS")) assertTrue(p.contains(mode), mode)
+        assertTrue(p.contains("at most ${Framing.MAX_READINGS} readings") && Framing.MAX_READINGS == 3)
+        assertTrue(p.contains("at most ${Framing.MAX_POSITIONS}") && Framing.MAX_POSITIONS == 5)
+        // The same hygiene rule as the proposer and merger prompts (computenet-dq2fy.12), plus the pilot's topics.
+        val deny = Regex(
+            "\\b(trump|donald|god|gods|divine|religio\\w*|mystical|collagen|cars?|pedestrian\\w*|animals?|language|" +
+                "coffee|diabetes|elections?|president\\w*|politic\\w*|paris|madrid|oslo|northfield|librar\\w*|" +
+                "homework|four-day|sundays?|junior engineers?|sleep|abortion|immigra\\w*|vaccin\\w*|gun)\\b",
+            RegexOption.IGNORE_CASE,
+        )
+        val hits = deny.findAll(p).map { it.value }.toList()
+        assertTrue(hits.isEmpty(), "framing prompt mentions contested or demo-run topics $hits")
+    }
+
+    @Test
+    fun `framer runs the CLI and parses its answer`() {
+        val cli = CliProposer("claude", { prompt, _ ->
+            listOf("sh", "-c", "case \"\$1\" in *POSITIONS*) echo '{\"mode\":\"POSITIONS\",\"items\":[\"X.\",\"Y.\"]}';; *) exit 4;; esac", "sh", prompt)
+        }, ProcessGate(1))
+        assertEquals(Framing(FramingMode.POSITIONS, null, listOf("X.", "Y.")), CliFramer(cli).frame("Which?"))
+    }
+
     // ------------------------------------------------------------ SPEC §12 usage
 
     /** A recorded `claude -p --output-format json` envelope (shape verified live, 2026-09-27). */

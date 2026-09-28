@@ -99,6 +99,102 @@ class CliMerger(private val cli: CliProposer) : Merger {
 }
 
 /**
+ * Model A: frames a question through the same CLI machinery as [CliProposer]
+ * (process gate, empty temp dir, no tools, timeout). The CLI answers one JSON
+ * object `{"mode", "term", "items"}` ([parseFraming]).
+ */
+class CliFramer(private val cli: CliProposer) : Framer {
+    override fun frame(question: String): Framing = parseFraming(cli.run(prompt(question)))
+
+    companion object {
+        fun prompt(question: String): String = """
+            |You are helping map a deliberation. Before it starts, decide how the question below should be explored.
+            |
+            |Question:
+            |  $question
+            |
+            |Choose exactly one mode:
+            |- NONE: the question has one natural reading and is a yes/no question. It is explored as asked.
+            |- READINGS: the question is a yes/no question, but one term in it is ambiguous and the answer depends on which
+            |  sense is meant. Give at most ${Framing.MAX_READINGS} readings. Each reading is a complete yes/no question that
+            |  replaces the ambiguous term by one explicit sense. Name the ambiguous term as "term".
+            |- POSITIONS: the question is open (what, which, how, why) rather than yes/no. Give at most ${Framing.MAX_POSITIONS}
+            |  positions: declarative sentences, each one possible answer. The positions are mutually exclusive and together
+            |  cover the answers people seriously hold.
+            |Prefer NONE unless the ambiguity or openness really changes the answer.
+            |
+            |Write each position in canonical form:
+            |${CliProposer.CANONICAL_RULES}
+            |
+            |Examples (the subjects are invented and only show the form):
+            |- "Is the Riverton pool busy?" → {"mode":"READINGS","term":"busy","items":["Does the Riverton municipal pool admit more than 500 visitors on a typical summer day?","Is the Riverton municipal pool's lane space fully booked at peak hours on weekdays?"]}
+            |- "Which kettle should the Eastmere office buy?" → {"mode":"POSITIONS","items":["The Eastmere office should buy the Model K2 kettle.","The Eastmere office should buy the Model K5 kettle.","The Eastmere office should keep its current kettle."]}
+            |- "Does the Model K2 kettle boil one litre in under three minutes?" → {"mode":"NONE"}
+            |
+            |Output ONLY one JSON object: {"mode":"NONE"|"READINGS"|"POSITIONS","term":"<the ambiguous term, READINGS only>","items":[...]}. No other text.
+        """.trimMargin()
+
+        /**
+         * The first JSON object in [text] with a known `mode` (surrounding prose
+         * and code fences are tolerated). Items are trimmed, blanks dropped,
+         * de-duplicated by normalised text (case, whitespace, trailing
+         * punctuation) and capped to the mode's maximum; fewer than 2 items
+         * is [Framing.NONE], and NONE ignores items and term. Throws
+         * [IllegalArgumentException] when there is no object or its mode is unknown.
+         */
+        fun parseFraming(text: String): Framing {
+            val obj = firstObject(text) ?: throw IllegalArgumentException("no JSON object in output: ${text.take(300)}")
+            val modeName = (obj["mode"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.uppercase()
+            val mode = FramingMode.entries.firstOrNull { it.name == modeName }
+                ?: throw IllegalArgumentException("unknown framing mode: ${obj["mode"]}")
+            if (mode == FramingMode.NONE) return Framing.NONE
+            val max = if (mode == FramingMode.READINGS) Framing.MAX_READINGS else Framing.MAX_POSITIONS
+            val seen = HashSet<String>()
+            val items = (obj["items"] as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim() }
+                .filter { it.isNotEmpty() && seen.add(normalize(it)) }
+                .take(max)
+            if (items.size < 2) return Framing.NONE
+            val term = if (mode == FramingMode.READINGS) {
+                (obj["term"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.ifEmpty { null }
+            } else null
+            return Framing(mode, term, items)
+        }
+
+        private fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?', ';')
+
+        private fun firstObject(text: String): JsonObject? {
+            for (start in text.indices) {
+                if (text[start] != '{') continue
+                val end = matchingBrace(text, start) ?: continue
+                val obj = runCatching { Json.parseToJsonElement(text.substring(start, end + 1)) }.getOrNull()
+                if (obj is JsonObject && "mode" in obj) return obj
+            }
+            return null
+        }
+
+        /** Index of the `}` closing the `{` at [start], skipping braces inside JSON strings. */
+        private fun matchingBrace(text: String, start: Int): Int? {
+            var depth = 0
+            var inString = false
+            var i = start
+            while (i < text.length) {
+                val c = text[i]
+                when {
+                    inString && c == '\\' -> i++
+                    c == '"' -> inString = !inString
+                    inString -> {}
+                    c == '{' -> depth++
+                    c == '}' -> if (--depth == 0) return i
+                }
+                i++
+            }
+            return null
+        }
+    }
+}
+
+/**
  * How a finished CLI call's output becomes its answer text (SPEC EXP-09, §12).
  * A reader also [Usage.report]s what the call used; a failure to read the
  * usage never fails the call.

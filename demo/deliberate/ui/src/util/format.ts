@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, type Activity, type NodeDto, type QuestionDto, type Status } from '../api/types';
+import { ACTIVE_STATUSES, type Activity, type FramingDto, type NodeDto, type QuestionDto, type Status } from '../api/types';
 
 export const pct = (x: number | undefined): string => (x === undefined ? '—' : `${Math.round(x * 100)}%`);
 
@@ -19,6 +19,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   DIMINISHING: 'not worth exploring',
   STOPPED: 'stopped by you',
   FAILED: 'failed',
+  FRAMED: 'depends on the reading',
 };
 
 export const STATUS_HINT: Record<Status, string> = {
@@ -33,6 +34,7 @@ export const STATUS_HINT: Record<Status, string> = {
   DIMINISHING: 'Not explored: settling it could barely move the answer (its value of information fell below the threshold)',
   STOPPED: 'You stopped exploring this claim',
   FAILED: 'Every call for this claim failed',
+  FRAMED: 'The question has several readings (or several possible answers): each is explored on its own below',
 };
 
 /**
@@ -217,12 +219,23 @@ export function isResearch(): boolean {
 }
 
 /**
- * Model D, under the question's gauge: "first impression 90% · arguments alone
- * 30%" — Jev's plausibility of the question before any argument, and the
- * verdict the same arguments give from a neutral start. Undefined until
- * either is known.
+ * Model D's three per-question fields, generalised so the same wording
+ * covers model A: on a framed question they live on each `PositionDto`
+ * instead of the `QuestionDto` ({@link priorText}, {@link priorDecidesText}).
  */
-export function priorText(q: QuestionDto | undefined): string | undefined {
+export interface PriorLike {
+  firstImpression?: number;
+  neutralCredence?: number;
+  verdictsDisagree?: boolean;
+}
+
+/**
+ * Model D, under the question's (or, model A, a reading's) gauge: "first
+ * impression 90% · arguments alone 30%" — Jev's plausibility before any
+ * argument, and the verdict the same arguments give from a neutral start.
+ * Undefined until either is known.
+ */
+export function priorText(q: PriorLike | undefined): string | undefined {
   const parts = [
     q?.firstImpression === undefined ? undefined : `first impression ${pct(q.firstImpression)}`,
     q?.neutralCredence === undefined ? undefined : `arguments alone ${pct(q.neutralCredence)}`,
@@ -230,11 +243,21 @@ export function priorText(q: QuestionDto | undefined): string | undefined {
   return parts.length === 0 ? undefined : parts.join(' · ');
 }
 
-/** Model D: why the question flags its verdict — the first impression, not the arguments, decides the side. */
-export function priorDecidesText(q: QuestionDto | undefined): string | undefined {
+/** Model D: why the question (or reading) flags its verdict — the first impression, not the arguments, decides the side. */
+export function priorDecidesText(q: PriorLike | undefined): string | undefined {
   if (q?.verdictsDisagree !== true || q.neutralCredence === undefined) return undefined;
   const side = (x: number) => (x > 0.5 ? 'yes' : 'no');
   return `The first impression decides the side: weighed from a neutral start, the arguments lean ${side(q.neutralCredence)} (${pct(q.neutralCredence)}).`;
+}
+
+/**
+ * Model A: the framing line under the question's text in place of its gauge
+ * — "depends on what you mean by <term>" (READINGS, term known), "depends on
+ * the reading" (READINGS, no term) or "several possible answers" (POSITIONS).
+ */
+export function framingText(f: FramingDto): string {
+  if (f.mode === 'POSITIONS') return 'several possible answers';
+  return f.term === undefined ? 'depends on the reading' : `depends on what you mean by ${f.term}`;
 }
 
 /** `?debug`: show internals (claim refs) that mean nothing to a reader. */

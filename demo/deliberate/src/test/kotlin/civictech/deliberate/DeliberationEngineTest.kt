@@ -143,7 +143,8 @@ class DeliberationEngineTest {
             maxArgsPerSide = 5,
         ),
         merger: Merger? = null,
-    ) = DeliberationEngine(service, judge, proposers, config, merger).also { engines += it }
+        framer: Framer? = null,
+    ) = DeliberationEngine(service, judge, proposers, config, merger, framer = framer).also { engines += it }
 
     private fun DeliberationEngine.idle() = assertTrue(awaitIdle(20.seconds), "engine did not go idle")
     private fun GraphDto.node(ref: CellRef) = nodes.single { it.ref == ref.id.toString() }
@@ -2546,6 +2547,270 @@ class DeliberationEngineTest {
             assertTrue(g3.questions.none { it.active || it.paused })
         } finally {
             gate.countDown()
+            dir.deleteRecursively()
+        }
+    }
+    // ---------------------------------------------------------------- model A: framing (computenet-dq2fy.29.2)
+
+    /** Answers [result] and counts its calls in [counter]; [before] runs first (a latch, a usage report). */
+    private class FakeFramer(
+        val result: (String) -> Framing,
+        val counter: AtomicInteger = AtomicInteger(),
+        val before: () -> Unit = {},
+    ) : Framer {
+        val questions = CopyOnWriteArrayList<String>()
+        override fun frame(question: String): Framing {
+            counter.incrementAndGet()
+            questions += question
+            before()
+            return result(question)
+        }
+    }
+
+    private fun readings(vararg items: String) = Framing(FramingMode.READINGS, "sleep", items.toList())
+    private fun positions(vararg items: String) = Framing(FramingMode.POSITIONS, null, items.toList())
+
+    /** Child (text, polarity) pairs of [ref]. */
+    private fun GraphDto.argumentsOf(ref: CellRef) =
+        childrenOf(ref).map { claim(it.source!!).text!!.substringBeforeLast('-') to it.polarity }.sortedBy { it.toString() }
+
+    @Test
+    fun `model A - a NONE framing is asked once, before the root's plausibility, and changes nothing`() {
+        val judge = FakeJudge()
+        val judgedBeforeFraming = AtomicInteger(-1)
+        val framer = FakeFramer({ Framing.NONE }, before = { judgedBeforeFraming.set(judge.plausibilityCalls.size) })
+        val e = engine(judge = judge, framer = framer)
+        val root = e.ask("Should cities ban cars?")
+        e.idle()
+        val plain = engine()
+        val plainRoot = plain.ask("Should cities ban cars?")
+        plain.idle()
+        assertEquals(listOf("Should cities ban cars?"), framer.questions)
+        assertEquals(0, judgedBeforeFraming.get(), "the framer runs before Judge.plausibility of the root")
+        val g = e.snapshot()
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertEquals(plain.snapshot().argumentsOf(plainRoot), g.argumentsOf(root))
+        val q = g.questions.single { it.root == root.id.toString() }
+        assertNull(q.framing)
+        assertNull(g.node(root).error)
+    }
+
+    @Test
+    fun `model A - a failed framing is recorded and the question is explored as asked`() {
+        val framer = FakeFramer({ error("cli down") })
+        val e = engine(framer = framer)
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(1, framer.counter.get())
+        assertTrue(g.node(root).error!!.startsWith("framing: "), g.node(root).error)
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertEquals(8, g.childrenOf(root).size)
+        assertNull(g.questions.single().framing)
+    }
+
+    @Test
+    fun `model A - READINGS frame the root and each reading is explored as a root`() {
+        val judge = FakeJudge(plausibility = { when (it) { "R1" -> 0.9; "R2" -> 0.1; else -> 0.5 } })
+        val framer = FakeFramer({ readings("R1", "R2") }, before = {
+            Usage.report(CallUsage(Pricing.CLAUDE, listOf("claude-test"), inputTokens = 100, outputTokens = 10, reportedUsd = 0.02))
+        })
+        val claude = FakeProposer("claude")
+        // A root's cap (3) differs from a child's (1): 2 per side can only come from the root cap.
+        val config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 0, maxArgsPerSide = 3, maxArgsPerSideChild = 1)
+        val e = engine(judge = judge, proposers = listOf(claude), config = config, framer = framer)
+        val root = e.ask("Is sleep good?")
+        e.idle()
+        val g = e.snapshot()
+        val r = g.node(root)
+        assertEquals(Status.FRAMED, r.status)
+        assertEquals(0, r.rounds)
+        assertEquals(1, framer.counter.get(), "only the question root is framed, never its readings")
+        assertTrue(g.edges().none { it.target == root.id.toString() }, "nothing argues about a framed root")
+        assertTrue(claude.contexts.none { it.claim == "Is sleep good?" }, "the framed root runs no round")
+        val q = g.questions.single()
+        val framing = assertNotNull(q.framing)
+        assertEquals("READINGS", framing.mode)
+        assertEquals("sleep", framing.term)
+        assertEquals(listOf("R1", "R2"), framing.positions.map { it.text })
+        for ((pos, p) in framing.positions.zip(listOf(0.9, 0.1))) {
+            val n = g.claim(pos.ref)
+            assertEquals("CLAIM", n.kind)
+            assertEquals(0, n.depth)
+            assertEquals(Claim.READING, n.proposer)
+            assertEquals(root.id.toString(), n.positionOf)
+            assertEquals(root.id.toString(), n.root)
+            assertEquals(p, n.plausibility)
+            assertEquals(p, pos.firstImpression)
+            assertNull(pos.share, "readings have no shares")
+            val kids = g.edges().filter { it.target == pos.ref }
+            assertEquals(2, kids.count { it.polarity == "SUPPORT" }, "a reading is capped as a root")
+            assertEquals(2, kids.count { it.polarity == "ATTACK" })
+        }
+        // A reading is judged against the question as asked.
+        assertTrue(judge.plausibilityCalls.any { it.first == "Is sleep good?" && it.third == "R1" })
+        assertEquals(1 + 2 + 2 * 4, q.claims)
+        val billed = q.cost.backends.single { it.backend == Pricing.CLAUDE }
+        assertEquals(1, billed.calls, "the framing call is billed to the question")
+        assertEquals(0.02, billed.usd!!, 1e-12)
+    }
+
+    @Test
+    fun `model A - POSITIONS carry shares that sum to one and follow credence`() {
+        val judge = FakeJudge(plausibility = { when (it) { "P1" -> 0.8; "P2" -> 0.5; "P3" -> 0.2; else -> 0.5 } })
+        val e = engine(judge = judge, proposers = listOf(FakeProposer("claude") { _, _, _ -> emptyList() }), framer = FakeFramer({ positions("P1", "P2", "P3") }))
+        e.ask("Which P?")
+        e.idle()
+        awaitUntil("every position has its share") {
+            e.snapshot().questions.single().framing?.positions?.all { it.share != null } == true
+        }
+        awaitUntil("the shares sum to one and the most credible position holds the largest") {
+            val ps = e.snapshot().questions.single().framing!!.positions
+            abs(ps.sumOf { it.share!! } - 1.0) < 1e-6 && ps.maxBy { it.credence } == ps.maxBy { it.share!! } &&
+                ps.maxBy { it.credence }.text == "P1"
+        }
+        assertEquals("POSITIONS", e.snapshot().questions.single().framing!!.mode)
+    }
+
+    @Test
+    fun `model A - EXPAND on a framed root runs no round and it stays FRAMED`() {
+        val claude = FakeProposer("claude")
+        val framer = FakeFramer({ readings("R1", "R2") })
+        val e = engine(proposers = listOf(claude), framer = framer)
+        val root = e.ask("Q?")
+        e.idle()
+        e.setOverride(root, Override.EXPAND)
+        e.idle()
+        assertEquals(Status.FRAMED, e.snapshot().node(root).status)
+        assertTrue(claude.contexts.none { it.claim == "Q?" }, "no proposer call for the framed root")
+        assertEquals(1, framer.counter.get(), "a framed root is never framed again")
+    }
+
+    @Test
+    fun `model A - positions of a question paused during framing wait unstarted for the resume`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val claude = FakeProposer("claude")
+        val framer = FakeFramer({ readings("R1", "R2") }, before = { entered.countDown(); release.await(20, TimeUnit.SECONDS) })
+        val e = engine(proposers = listOf(claude), framer = framer)
+        val root = e.ask("Q?")
+        assertTrue(entered.await(20, TimeUnit.SECONDS))
+        e.setPaused(root, true)
+        release.countDown()
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(Status.FRAMED, g.node(root).status)
+        val ps = g.questions.single().framing!!.positions
+        assertTrue(ps.all { g.claim(it.ref).status == Status.QUEUED }, "positions stay QUEUED while paused")
+        assertTrue(claude.contexts.isEmpty(), "nothing started in the paused question")
+        e.setPaused(root, false)
+        e.idle()
+        val after = e.snapshot()
+        assertTrue(ps.all { after.claim(it.ref).status == Status.ROUND_LIMIT }, "resumed positions are explored")
+    }
+
+    @Test
+    fun `model A - each reading carries its own first impression and neutral-prior verdict`() {
+        // DF-QuAD, one attack of energy 0.5 x 0.8 = 0.4 on R1: from 0.9 it keeps 0.54, from ½ it drops to 0.3.
+        val judge = FakeJudge(plausibility = { when (it) { "R1" -> 0.9; else -> 0.5 } }, strength = { 0.8 })
+        val proposer = FakeProposer("claude") { ctx, side, _ -> if (ctx.claim == "R1" && side == Polarity.ATTACK) listOf("Con") else emptyList() }
+        val e = engine(
+            judge = judge, proposers = listOf(proposer), framer = FakeFramer({ readings("R1", "R2") }),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+        )
+        val root = e.ask("Q?")
+        e.idle()
+        awaitUntil("R1's neutral-prior verdict settles on 0.3 and disagrees") {
+            val r1 = e.snapshot().questions.single().framing!!.positions.first()
+            r1.neutralCredence?.let { abs(it - 0.3) < 1e-9 } == true && abs(r1.credence - 0.54) < 1e-9 && r1.verdictsDisagree
+        }
+        val g = e.snapshot()
+        val q = g.questions.single()
+        assertNull(q.firstImpression)
+        assertNull(q.neutralCredence)
+        assertTrue(!q.verdictsDisagree)
+        val (r1, r2) = q.framing!!.positions
+        assertEquals(0.9, r1.firstImpression)
+        assertTrue(!r2.verdictsDisagree)
+        for (p in q.framing!!.positions) assertEquals(g.claim(p.ref).credence, p.credence)
+        assertEquals(Status.FRAMED, g.node(root).status)
+    }
+
+    @Test
+    fun `model A - a framing survives a restart without asking the framer again`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-restore").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val store = InMemoryMetaStore()
+        val counter = AtomicInteger()
+        val judge = FakeJudge(plausibility = { when (it) { "R1" -> 0.9; "R2" -> 0.1; else -> 0.5 } })
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false)
+        val e1 = DeliberationEngine(
+            CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(FakeProposer("claude")), config,
+            store = store, framer = FakeFramer({ readings("R1", "R2") }, counter),
+        ).also { engines += it }
+        val root = e1.ask("Q?")
+        e1.idle()
+        val before = e1.snapshot().questions.single().framing!!
+        e1.close()
+        val scheduler2 = VirtualThreadScheduler("deliberate-framing-restore-2")
+        try {
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val e2 = DeliberationEngine(
+                CredenceGraph(host2, registry2, dfquad, structureLog = log), judge, listOf(FakeProposer("claude")), config,
+                store = store, framer = FakeFramer({ readings("R1", "R2") }, counter),
+            ).also { engines += it }
+            e2.idle()
+            val g = e2.snapshot()
+            val after = g.questions.single().framing!!
+            assertEquals(before.mode, after.mode)
+            assertEquals(before.term, after.term)
+            assertEquals(before.positions.map { it.ref to it.text }, after.positions.map { it.ref to it.text })
+            assertEquals(before.positions.map { it.firstImpression }, after.positions.map { it.firstImpression })
+            assertEquals(Status.FRAMED, g.node(root).status)
+            assertEquals(1, counter.get())
+            assertTrue(after.positions.all { g.claim(it.ref).proposer == Claim.READING && g.claim(it.ref).positionOf == root.id.toString() })
+        } finally {
+            scheduler2.shutdown()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `model A - a torn framing restores the root unframed and frames it again`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-torn").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val store = InMemoryMetaStore()
+        val counter = AtomicInteger()
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false)
+        val e1 = DeliberationEngine(
+            CredenceGraph(host, registry, dfquad, structureLog = log), FakeJudge(), listOf(FakeProposer("claude")), config,
+            store = store, framer = FakeFramer({ positions("P1", "P2", "P3") }, counter),
+        ).also { engines += it }
+        val root = e1.ask("Q?")
+        e1.idle()
+        e1.close()
+        assertTrue(store.load().getValue("c:${root.id}")["status"]!!.contains("FRAMED"))
+        // Kill -9 between the issue op and its last position: keep the log up to the issue op and one position.
+        val lines = log.readLines().filter { it.isNotBlank() }
+        val issue = lines.indexOfFirst { it.contains("\"op\":\"issue\"") }
+        assertTrue(issue >= 0)
+        log.writeText(lines.take(issue + 2).joinToString("\n", postfix = "\n"))
+        val scheduler2 = VirtualThreadScheduler("deliberate-framing-torn-2")
+        try {
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val e2 = DeliberationEngine(
+                CredenceGraph(host2, registry2, dfquad, structureLog = log), FakeJudge(), listOf(FakeProposer("claude")), config,
+                store = store, framer = FakeFramer({ positions("P1", "P2", "P3") }, counter),
+            ).also { engines += it }
+            e2.idle()
+            assertEquals(2, counter.get(), "the torn root is framed again")
+            val g = e2.snapshot()
+            assertEquals(Status.FRAMED, g.node(root).status)
+            assertEquals(listOf("P1", "P2", "P3"), g.questions.single().framing!!.positions.map { it.text })
+        } finally {
+            scheduler2.shutdown()
             dir.deleteRecursively()
         }
     }

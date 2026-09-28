@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphDto } from '../src/api/types';
-import { buildTree, countClaims, type TreeNode } from '../src/tree/buildTree';
+import { buildForest, buildTree, countClaims, type TreeNode } from '../src/tree/buildTree';
 import flat from './fixtures/flat.json';
 import deep from './fixtures/deep.json';
 
@@ -124,5 +124,64 @@ describe('buildTree', () => {
     expect(arg.linkArgs[0].linkArgs.map((c) => c.node.claim.ref)).toEqual(['w']);
     expect(arg.node.children[0].linkArgs).toEqual([]);
     expect(countClaims(tree)).toBe(7);
+  });
+});
+
+describe('buildForest', () => {
+  const framed: GraphDto = {
+    questions: [
+      {
+        root: 'q',
+        text: 'Do fish sleep?',
+        claims: 5,
+        active: false,
+        framing: {
+          mode: 'READINGS',
+          term: 'sleep',
+          positions: [
+            { ref: 'p1', text: 'Do fish enter a rest state?', credence: 0.6 },
+            { ref: 'p2', text: 'Do fish show REM-like brain activity?', credence: 0.2 },
+          ],
+        },
+      },
+    ],
+    nodes: [
+      { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Do fish sleep?', depth: 0, status: 'FRAMED' },
+      { ref: 'p1', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Do fish enter a rest state?', depth: 0, positionOf: 'q', status: 'SATURATED' },
+      { ref: 'p2', kind: 'CLAIM', credence: 0.2, root: 'q', text: 'Do fish show REM-like brain activity?', depth: 0, positionOf: 'q', status: 'QUEUED' },
+      { ref: 'a1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'Fish become unresponsive at night.', depth: 1, status: 'SATURATED' },
+      { ref: 'a1-p1', kind: 'EDGE', credence: 0.7, root: 'q', polarity: 'SUPPORT', source: 'a1', target: 'p1', strength: 0.7 },
+    ],
+  };
+
+  it('returns one subtree per position, in framing order, each equal to buildTree at its ref', () => {
+    const forest = buildForest(framed, 'q')!;
+    expect(forest.claim.ref).toBe('q');
+    expect(forest.children).toEqual([]);
+    expect(forest.positions?.map((t) => t.claim.ref)).toEqual(['p1', 'p2']);
+    expect(forest.positions?.[0]).toEqual(buildTree(framed, 'p1'));
+    expect(forest.positions?.[1]).toEqual(buildTree(framed, 'p2'));
+    // p1 has an argument; p2 (no arguments yet) is a leaf.
+    expect(forest.positions?.[0].children.map((a) => a.node.claim.ref)).toEqual(['a1']);
+    expect(forest.positions?.[1].children).toEqual([]);
+  });
+
+  it('leaves out a position whose framing order lists it but whose claim has not arrived', () => {
+    const torn: GraphDto = {
+      ...framed,
+      nodes: framed.nodes.filter((n) => n.ref !== 'p2'),
+    };
+    const forest = buildForest(torn, 'q')!;
+    expect(forest.positions?.map((t) => t.claim.ref)).toEqual(['p1']);
+  });
+
+  it('returns the plain buildTree result, with no positions field, for an unframed question', () => {
+    const forest = buildForest(flatGraph, 'c0');
+    expect(forest).toEqual(buildTree(flatGraph, 'c0'));
+    expect(forest?.positions).toBeUndefined();
+  });
+
+  it('returns undefined when the root is absent, same as buildTree', () => {
+    expect(buildForest(framed, 'nope')).toBeUndefined();
   });
 });

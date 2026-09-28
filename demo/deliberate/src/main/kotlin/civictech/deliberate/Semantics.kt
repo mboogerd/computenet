@@ -190,6 +190,28 @@ object Consensus {
 }
 
 /**
+ * Model A: the shares competing positions of one issue hold — a softmax over
+ * each position's score `logit(clamped credence) / T`. At [TEMPERATURE] 1
+ * this is odds normalisation: (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
+ * (0.696, 0.261, 0.043). Monotone in every credence, sums to 1; the clamp to
+ * [Consensus.LOW]..[Consensus.HIGH] keeps a credence of 0 or 1 finite.
+ * T = 1 is a starting value, not calibrated (feature computenet-dq2fy.29, D7).
+ */
+object Softmax {
+    const val TEMPERATURE = 1.0
+
+    fun shares(credences: List<Double>, temperature: Double = TEMPERATURE): List<Double> {
+        if (credences.isEmpty()) return emptyList()
+        require(temperature > 0) { "softmax temperature must be positive: $temperature" }
+        val scores = credences.map { logit(it.coerceIn(Consensus.LOW, Consensus.HIGH)) / temperature }
+        val top = scores.max()
+        val weights = scores.map { exp(it - top) }
+        val total = weights.sum()
+        return weights.map { it / total }
+    }
+}
+
+/**
  * The credence layers one deliberation graph evaluates (SPEC CRED-04): every
  * claim and edge cell computes one credence per layer, so a credence is a
  * vector indexed like [ids]. [consensusMembers] are the layers [Consensus]

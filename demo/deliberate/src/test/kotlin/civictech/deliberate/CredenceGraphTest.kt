@@ -7,15 +7,23 @@ import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.host.inlet
 import civictech.testkit.SimWorld
 import civictech.testkit.awaitUntil
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The one-graph credence propagation (SPEC CRED-04..06): vector messages, derived consensus. */
@@ -197,5 +205,224 @@ class CredenceGraphTest {
         assertEquals(0, world.runToIdle(), "a quiescent cycle must not leave another lap queued")
         assertTrue(g.credenceOf(a)!!.values.all { it in 0.0..1.0 })
         assertTrue(g.credenceOf(b)!!.values.all { it in 0.0..1.0 })
+    }
+
+    // --- Model A: framing a question root as an issue (computenet-dq2fy.29.1) ---
+
+    private val stances3 = listOf(0.8, 0.6, 0.2)
+
+    private fun near(a: List<Double>, b: List<Double>, eps: Double = 1e-9) = a.size == b.size && a.indices.all { abs(a[it] - b[it]) < eps }
+
+    /** The shares the fold should hold for [positions]' current credences: a softmax per layer and over the consensus. */
+    private fun CredenceGraph.expectedShares(positions: List<CellRef>): Pair<List<List<Double>>, List<Double>>? {
+        val cs = positions.map { credenceOf(it) ?: return null }
+        val perLayer = layers.ids.indices.map { l -> Softmax.shares(cs.map { it.values[l] }) }
+        return positions.indices.map { p -> perLayer.map { it[p] } } to Softmax.shares(cs.map { it.consensus })
+    }
+
+    private fun CredenceGraph.sharesMatch(root: CellRef, positions: List<CellRef>): Boolean {
+        val (values, consensus) = expectedShares(positions) ?: return false
+        val s = sharesOf(root) ?: return false
+        return s.positions == positions && s.values.indices.all { near(s.values[it], values[it]) } && near(s.consensus, consensus)
+    }
+
+    @Test
+    fun `model A - framing logs one issue op before the positions, and replay rebuilds the same issue and shares`() {
+        val dir = Files.createTempDirectory("credence-graph-issue").toFile()
+        try {
+            val log = java.io.File(dir, "graph.jsonl")
+            val first = graph(log = log)
+            val root = first.createClaim("Which is best?", question = true)
+            val positions = first.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2", "P3"))
+
+            val ops = log.readLines().map { Json.parseToJsonElement(it).jsonObject }
+            assertEquals(listOf("claim", "issue", "claim", "claim", "claim"), ops.map { it["op"]!!.jsonPrimitive.content })
+            assertEquals(root.id.toString(), ops[0]["ref"]!!.jsonPrimitive.content)
+            assertEquals(root.id.toString(), ops[1]["ref"]!!.jsonPrimitive.content)
+            assertEquals("POSITIONS", ops[1]["mode"]!!.jsonPrimitive.content)
+            assertEquals(positions.map { it.id.toString() }, ops[1]["positions"]!!.jsonArray.map { it.jsonPrimitive.content })
+            ops.drop(2).zip(positions).forEach { (op, p) ->
+                assertEquals(p.id.toString(), op["ref"]!!.jsonPrimitive.content)
+                assertEquals("true", op["question"]!!.jsonPrimitive.content)
+            }
+
+            assertEquals(CredenceGraph.IssueInfo(CredenceGraph.IssueMode.POSITIONS, positions), first.nodeInfo(root)!!.issue)
+            positions.forEach { assertEquals(root, first.nodeInfo(it)!!.positionOf) }
+            assertTrue(positions.all { first.nodeInfo(it)!!.question })
+
+            positions.zip(stances3).forEach { (p, v) -> first.setStance(p, "jev", v) }
+            awaitUntil("the positions' shares settle on the softmax of their stances") {
+                first.sharesMatch(root, positions) && positions.zip(stances3).all { (p, v) -> first.near(p, List(first.layers.ids.size) { v }) }
+            }
+            val want = listOf(4.0, 1.5, 0.25).map { it / 5.75 }
+            val shares = first.sharesOf(root)!!
+            first.layers.ids.indices.forEach { l -> assertTrue(near(shares.values.map { it[l] }, want), "layer $l: $shares") }
+            assertTrue(near(shares.consensus, want), "consensus: ${shares.consensus}")
+            assertEquals(shares, first.graph().single { it.ref == root }.shares?.copy(size = shares.size))
+
+            val second = graph(log = log)
+            assertEquals(first.graph().map { it.ref to it.info }, second.graph().map { it.ref to it.info })
+            positions.zip(stances3).forEach { (p, v) -> second.setStance(p, "jev", v) }
+            awaitUntil("the rebuilt graph reaches the same shares and credences") {
+                val s = second.sharesOf(root)
+                s != null && s.positions == shares.positions &&
+                    s.values.indices.all { near(s.values[it], shares.values[it]) } && near(s.consensus, shares.consensus) &&
+                    positions.all { p -> second.credenceOf(p)?.values?.let { near(it, first.credenceOf(p)!!.values) } == true }
+            }
+            assertEquals(ops.size, log.readLines().size, "replay appends nothing")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `model A - an argument under a position moves its share through the fold`() {
+        val g = graph(LayerSet.of(listOf("dfquad", "wlo", "jnb", "woe")))
+        val root = g.createClaim("Which is best?", question = true)
+        val positions = g.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2", "P3"))
+        positions.zip(stances3).forEach { (p, v) -> g.setStance(p, "jev", v) }
+        // Read the settled Shares from inside the predicate itself, not with a second, separate
+        // call afterwards: sharesOf() and sharesMatch() each re-read the live hub, so a read taken
+        // after awaitUntil returns can race a further, unrelated update and no longer be the value
+        // the predicate actually observed (computenet-y6cj6).
+        lateinit var before: Shares
+        awaitUntil("shares settle") {
+            (g.sharesMatch(root, positions) && g.near(positions[0], List(4) { 0.8 })).also { settled ->
+                if (settled) before = g.sharesOf(root)!!
+            }
+        }
+
+        val a = g.createClaim("for P1")
+        val e = g.createEdge(a, positions[0], Polarity.SUPPORT)
+        g.setStance(a, "jev", 0.9)
+        g.setStance(e, "jev", 0.8)
+        lateinit var after: Shares
+        awaitUntil("the first position's credence rises in every layer and the shares follow it") {
+            val settled = g.credenceOf(positions[0])!!.values.all { it > 0.8 + 1e-6 } && g.sharesMatch(root, positions)
+            if (settled) after = g.sharesOf(root)!!
+            settled
+        }
+        for (l in g.layers.ids.indices) {
+            assertTrue(after.values[0][l] > before.values[0][l], "layer $l: the supported position's share rises")
+            assertTrue(after.values[1][l] < before.values[1][l] && after.values[2][l] < before.values[2][l], "layer $l: the others fall")
+        }
+        assertTrue(after.consensus[0] > before.consensus[0])
+    }
+
+    @Test
+    fun `model A - a position not heard from counts one half`() {
+        val layers = LayerSet.of(listOf("dfquad", "wlo"))
+        val p = listOf(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()))
+        val cell = IssueNode(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()), p, layers)
+        assertEquals(listOf(listOf(0.5, 0.5), listOf(0.5, 0.5)), cell.shares.values)
+        assertEquals(listOf(0.5, 0.5), cell.shares.consensus)
+
+        val g = graph(layers)
+        val root = g.createClaim("Q", question = true)
+        val positions = g.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2"))
+        awaitUntil("two unjudged positions share evenly") {
+            g.sharesOf(root)?.let { s -> s.values == listOf(listOf(0.5, 0.5), listOf(0.5, 0.5)) && s.consensus == listOf(0.5, 0.5) } == true
+        }
+        g.setStance(positions[0], "jev", 0.8)
+        awaitUntil("one judged position, the other still one half") {
+            g.sharesOf(root)?.let { s -> near(s.consensus, Softmax.shares(listOf(0.8, 0.5))) } == true
+        }
+
+        // In the graph every position is heard at once (its catch-up baseline), so the
+        // "unheard counts 1/2" default is observable only on a cell that has heard some
+        // positions but not others: one position at 0.8, two never heard -> odds 4 : 1 : 1.
+        val scheduler = VirtualThreadScheduler("issue-node-test").also { schedulers += it }
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = scheduler, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+        val three = List(3) { CellRef(UUID.randomUUID()) }
+        val partial = IssueNode(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()), three, layers)
+        host.managementInlet.call.spawn(partial)
+        registry.inlet<Credence>(partial.ref, "positionInlet")
+            .propagate(Credence(three[0], listOf(0.8, 0.8), 0.8, 0.8, 0.8, 0.8))
+        val want = listOf(4.0 / 6, 1.0 / 6, 1.0 / 6)
+        awaitUntil("the heard position holds odds 4 against two unheard halves") {
+            near(partial.shares.consensus, want) && layers.ids.indices.all { l -> near(partial.shares.values.map { it[l] }, want) }
+        }
+    }
+
+    @Test
+    fun `model A - readings spawn no issue cell and are question roots of their own`() {
+        val layers = LayerSet.of(listOf("dfquad", "wlo"))
+        val g = graph(layers)
+        val root = g.createClaim("Do fish sleep?", question = true)
+        val readings = g.frame(root, CredenceGraph.IssueMode.READINGS, listOf("rest state?", "REM-like activity?"))
+        assertEquals(CredenceGraph.IssueInfo(CredenceGraph.IssueMode.READINGS, readings), g.nodeInfo(root)!!.issue)
+        assertNull(g.issueCellOf(root))
+        readings.forEach { r ->
+            assertEquals(root, g.nodeInfo(r)!!.positionOf)
+            awaitUntil("reading ${r.id} is a sensitivity root with a neutral verdict") {
+                g.sensitivityVectorOf(r) == listOf(1.0, 1.0) && g.sensitivityHub.current()[r]?.root == r &&
+                    g.credenceOf(r)?.neutral != null
+            }
+        }
+        assertNull(g.sharesOf(root))
+        assertTrue(g.wiring.none { it.to == g.sharesHub.ref || it.from == g.sharesHub.ref })
+    }
+
+    @Test
+    fun `model A - the issue cell feeds only the shares fold`() {
+        val g = graph(LayerSet.of(listOf("dfquad")))
+        val root = g.createClaim("Q", question = true)
+        val positions = g.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2", "P3"))
+        val a = g.createClaim("for P1")
+        g.createEdge(a, positions[0], Polarity.SUPPORT)
+        val issue = assertNotNull(g.issueCellOf(root))
+        val issueSide = setOf(issue, g.sharesHub.ref)
+        assertEquals(
+            listOf(CredenceGraph.Wire(issue, "sharesOutlet", g.sharesHub.ref, "inlet")),
+            g.wiring.filter { it.from in issueSide },
+        )
+        assertEquals(
+            positions.map { CredenceGraph.Wire(it, "credenceOutlet", issue, "positionInlet") },
+            g.wiring.filter { it.to == issue },
+        )
+    }
+
+    @Test
+    fun `model A - replay drops a torn framing with its positions and their edges`() {
+        val dir = Files.createTempDirectory("credence-graph-torn").toFile()
+        try {
+            val log = java.io.File(dir, "graph.jsonl")
+            val (root, p1, p2, x, e) = List(5) { CellRef(UUID.randomUUID()) }
+            log.writeText(
+                listOf(
+                    """{"op":"claim","ref":"${root.id}","text":"Q","question":true}""",
+                    """{"op":"issue","ref":"${root.id}","mode":"POSITIONS","positions":["${p1.id}","${p2.id}"]}""",
+                    """{"op":"claim","ref":"${p1.id}","text":"P1","question":true}""",
+                    """{"op":"claim","ref":"${x.id}","text":"X"}""",
+                    """{"op":"edge","ref":"${e.id}","polarity":"SUPPORT","source":"${p1.id}","target":"${x.id}"}""",
+                ).joinToString("\n", postfix = "\n"),
+            )
+            val g = graph(LayerSet.of(listOf("dfquad")), log)
+            assertNull(g.nodeInfo(root)!!.issue)
+            assertNull(g.nodeInfo(p1))
+            assertNull(g.nodeInfo(p2))
+            assertNull(g.nodeInfo(e))
+            assertEquals(listOf(root, x), g.graph().map { it.ref })
+            assertNull(g.issueCellOf(root))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `model A - frame refuses a non-question, a framed root, a root with arguments and fewer than two positions`() {
+        val g = graph(LayerSet.of(listOf("dfquad")))
+        val plain = g.createClaim("not a question")
+        assertFailsWith<IllegalArgumentException> { g.frame(plain, CredenceGraph.IssueMode.READINGS, listOf("a", "b")) }
+        val framed = g.createClaim("Q1", question = true)
+        g.frame(framed, CredenceGraph.IssueMode.READINGS, listOf("a", "b"))
+        assertFailsWith<IllegalArgumentException> { g.frame(framed, CredenceGraph.IssueMode.POSITIONS, listOf("c", "d")) }
+        val argued = g.createClaim("Q2", question = true)
+        g.createEdge(g.createClaim("pro"), argued, Polarity.SUPPORT)
+        assertFailsWith<IllegalArgumentException> { g.frame(argued, CredenceGraph.IssueMode.POSITIONS, listOf("c", "d")) }
+        val lone = g.createClaim("Q3", question = true)
+        assertFailsWith<IllegalArgumentException> { g.frame(lone, CredenceGraph.IssueMode.POSITIONS, listOf("only")) }
+        assertNull(g.nodeInfo(lone)!!.issue)
     }
 }

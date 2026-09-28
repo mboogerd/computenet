@@ -73,7 +73,7 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
         /** SPEC §3: statuses that end a claim's expansion. DEPTH_LIMIT only arises from an explicit `maxDepth`. */
         val FINISHED = setOf(
             Status.SATURATED, Status.ROUND_LIMIT, Status.PRUNED, Status.DEPTH_LIMIT,
-            Status.BUDGET, Status.DIMINISHING, Status.STOPPED, Status.FAILED,
+            Status.BUDGET, Status.DIMINISHING, Status.STOPPED, Status.FAILED, Status.FRAMED,
         )
         val ACTIVE = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
         val SIDES = listOf(Polarity.SUPPORT, Polarity.ATTACK)

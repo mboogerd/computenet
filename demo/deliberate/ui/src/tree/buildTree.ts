@@ -5,6 +5,13 @@ export interface TreeNode {
   claim: NodeDto;
   /** Pro (SUPPORT) arguments first, then con (ATTACK); each group in first-appearance order. */
   children: ArgumentNode[];
+  /**
+   * Model A: set only on the tree returned for a framed question's root — one
+   * subtree per reading/position, in `QuestionDto.framing.positions` order,
+   * each equal to what {@link buildTree} returns rooted at that position's
+   * ref (see {@link buildForest}).
+   */
+  positions?: TreeNode[];
 }
 
 /**
@@ -84,4 +91,22 @@ export function buildTree(graph: GraphDto, root: string): TreeNode | undefined {
 export function countClaims(tree: TreeNode): number {
   const args = (list: ArgumentNode[]): number => list.reduce((sum, a) => sum + countClaims(a.node) + args(a.linkArgs), 0);
   return 1 + args(tree.children);
+}
+
+/**
+ * {@link buildTree}, extended for a framed question (SPEC §3 "Framing
+ * (model A)"): when `root`'s question carries `framing`, the returned root
+ * node also carries `positions` — one subtree per reading/position, built
+ * exactly as {@link buildTree} builds a root, in `framing.positions` order.
+ * A position whose claim is absent from the snapshot is left out (a frame can
+ * carry a position before its claim). An unframed question is returned
+ * unchanged from {@link buildTree}.
+ */
+export function buildForest(graph: GraphDto, root: string): TreeNode | undefined {
+  const tree = buildTree(graph, root);
+  if (!tree) return undefined;
+  const framing = graph.questions.find((q) => q.root === root)?.framing;
+  if (!framing) return tree;
+  const positions = framing.positions.map((p) => buildTree(graph, p.ref)).filter((t): t is TreeNode => t !== undefined);
+  return { ...tree, positions };
 }

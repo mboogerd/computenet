@@ -198,6 +198,95 @@ class EdgeNode(
 }
 
 /**
+ * Model A: the shares of the competing positions of one issue ([source] = the
+ * issue's root): [values] per position (in [positions] order) per layer, each
+ * layer a [Softmax] over the positions' credences in that layer, and
+ * [consensus] per position, a softmax over each position's consensus. Derived
+ * and volatile like a credence (SPEC DUR-01). [size] is the largest
+ * per-position-per-layer change against the previous emission.
+ */
+@Serializable
+@SerialName("deliberate.Shares")
+data class Shares(
+    val source: CellRef,
+    val positions: List<CellRef>,
+    val values: List<List<Double>>,
+    val consensus: List<Double>,
+    val size: Double,
+) : java.io.Serializable, Magnitude {
+    override fun size(): Double = size
+}
+
+/**
+ * Model A: the "softmax cell" of a POSITIONS issue. Hears every position's
+ * [Credence] (keyed by [Credence.source]) and emits their [Shares]; a
+ * position not heard from yet counts ½ in every layer and in the consensus.
+ * Nothing it emits is wired into a credence or sensitivity cell (CRED-03):
+ * shares are a read of the positions' credences, never an input to them.
+ */
+class IssueNode(
+    override val ref: CellRef,
+    val root: CellRef,
+    val positions: List<CellRef>,
+    private val layers: LayerSet,
+) : Cell {
+    val positionInlet = registerPort("positionInlet", FanInlet.create<Propagate<Credence>>())
+    val sharesOutlet = registerPort("sharesOutlet", FanOutlet.create<Propagate<Shares>>())
+
+    private val heard = HashMap<CellRef, Credence>()
+
+    var shares: Shares = compute(size = 0.0)
+        private set
+
+    init {
+        positionInlet.onEach { c ->
+            if (c.source !in positions) return@onEach
+            heard[c.source] = c
+            val next = compute(size = 0.0)
+            if (next.values != shares.values || next.consensus != shares.consensus) {
+                val size = next.values.indices.maxOfOrNull { p -> maxDelta(next.values[p], shares.values[p]) } ?: 0.0
+                shares = next.copy(size = size)
+                sharesOutlet.call.propagate(shares)
+            }
+        }
+        sharesOutlet.catchUpOnLinked { shares.copy(size = 0.0) }
+    }
+
+    private fun compute(size: Double): Shares {
+        val neutral = List(layers.ids.size) { 0.5 }
+        val vectors = positions.map { heard[it]?.values ?: neutral }
+        val perLayer = layers.ids.indices.map { l -> Softmax.shares(vectors.map { it[l] }) }
+        val values = positions.indices.map { p -> perLayer.map { it[p] } }
+        val consensus = Softmax.shares(positions.map { heard[it]?.consensus ?: 0.5 })
+        return Shares(root, positions, values, consensus, size)
+    }
+}
+
+/** Model A: folds every POSITIONS issue's [Shares] into `{ root -> latest shares }`, as [CredenceHubView] does credences. */
+class SharesHubView(private val onUpdate: () -> Unit = {}) : View<Shares, Map<CellRef, Shares>> {
+    @Volatile
+    private var shares: Map<CellRef, Shares> = emptyMap()
+
+    override fun apply(delta: Shares): Boolean {
+        val changed = shares[delta.source].let { it?.values != delta.values || it.consensus != delta.consensus }
+        if (changed) {
+            shares = shares + (delta.source to delta)
+            onUpdate()
+        }
+        return changed
+    }
+
+    override fun current(): Map<CellRef, Shares> = shares
+
+    override fun snapshot(): java.io.Serializable = HashMap(shares)
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: java.io.Serializable) {
+        shares = HashMap(state as Map<CellRef, Shares>)
+    }
+}
+
+/**
  * The read model: folds every node's [Credence] into one immutable
  * `{ node -> latest credence }` map, run by a kernel `ObserveCell`. It is the
  * only place `snapshot()` reads credences from. [onUpdate] fires on every
