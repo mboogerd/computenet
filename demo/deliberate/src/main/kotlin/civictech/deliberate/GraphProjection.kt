@@ -20,6 +20,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
     /** Caller holds the engine's lock (guarding [state] and the [ledger]). */
     fun project(graph: List<CredenceGraph.Node>, layers: LayerSet, state: EngineState): GraphDto {
         val neutral = List(layers.ids.size) { NEUTRAL }
+        val neutralValues = neutral
         val nodes = graph.mapNotNull { n ->
             val values = n.credence?.values ?: neutral
             val named = layers.named(values)
@@ -59,6 +60,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                     activity = activityOf(c),
                     undercuts = onLink?.takeIf { c.side == Polarity.ATTACK }?.ref?.id?.toString(),
                     onLink = onLink?.ref?.id?.toString(),
+                    positionOf = c.root.id.toString().takeIf { c.parent == null && c.ref != c.root },
                 )
             }
         }
@@ -78,9 +80,32 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 }
                 .sortedByDescending { it.second }.take(CRUXES).map { it.first.ref.id.toString() }
             // Model D: the verdict from Jev's first impression against what the arguments say from a neutral prior.
-            val rootCredence = credences[root]
-            val verdict = rootCredence?.let { layers.headlineOf(it.values, it.consensus) }
-            val neutral = rootCredence?.neutral?.let { layers.headlineOf(it, layers.consensus(it)) }
+            fun verdicts(ref: civictech.cell.CellRef): Pair<Double?, Double?> {
+                val cr = credences[ref]
+                return cr?.let { layers.headlineOf(it.values, it.consensus) } to
+                    cr?.neutral?.let { layers.headlineOf(it, layers.consensus(it)) }
+            }
+            val framing = state.claims[root]?.framing?.takeIf { it.mode != FramingMode.NONE }?.let { f ->
+                val shares = graph.firstOrNull { it.ref == root }?.shares
+                val positions = tree.filter { it.parent == null && it.ref != root }
+                FramingDto(
+                    mode = f.mode.name, term = f.term,
+                    positions = positions.mapIndexed { i, p ->
+                        val (v, n) = verdicts(p.ref)
+                        val cr = credences[p.ref]
+                        PositionDto(
+                            ref = p.ref.id.toString(), text = p.text,
+                            credence = layers.headlineOf(cr?.values ?: neutralValues, cr?.consensus ?: NEUTRAL),
+                            firstImpression = p.plausibility, neutralCredence = n,
+                            verdictsDisagree = v != null && n != null && LayerSet.oppositeSides(v, n),
+                            share = if (f.mode == FramingMode.POSITIONS) {
+                                shares?.let { s -> s.positions.indexOf(p.ref).takeIf { it >= 0 }?.let { s.consensus[it] } }
+                            } else null,
+                        )
+                    },
+                )
+            }
+            val (verdict, neutral) = if (framing != null) null to null else verdicts(root)
             QuestionDto(
                 root.id.toString(), text, tree.count { !it.isLink }, queued > 0,
                 yieldRounds = ys.size,
@@ -92,9 +117,10 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 ),
                 paused = root in state.paused,
                 cruxes = cruxes,
-                firstImpression = state.claims[root]?.plausibility,
+                firstImpression = state.claims[root]?.plausibility.takeIf { framing == null },
                 neutralCredence = neutral,
                 verdictsDisagree = verdict != null && neutral != null && LayerSet.oppositeSides(verdict, neutral),
+                framing = framing,
             ).withCost(ledger.costOf(root, rounds = tree.sumOf { it.rounds }, queued = queued))
         }
         return GraphDto(qs, nodes, layers.members)
