@@ -24,11 +24,19 @@ Each round asks the proposers for new arguments, then Jev sorts every proposal
 in one request (SPEC EXP-03): **add** it, drop it as a **duplicate** (its
 proposer is noted on the existing argument), **replace** a weaker wording,
 **merge** it with an overlapping argument (Claude rewrites the two as one
-sentence), **refine** an existing argument (it is nested under that argument
-as evidence), move it to the **other side**, **undercut** an existing
-argument (it denies that the argument bears on the claim, so it attacks that
-argument's link rather than the claim), or **drop** it as not a real
-argument. Rewording and merging only touch arguments nobody explored yet.
+sentence), **refine** an existing argument (recorded as an evidence entry on
+it — no child claim, no budget spent), move it to the **other side**,
+**undercut** an existing argument (it denies that the argument bears on the
+claim, so it attacks that argument's link rather than the claim), or **drop**
+it as not a real argument. Rewording and merging only touch arguments nobody
+explored yet.
+
+A con Jev would **add** against a claim it judges at least 80% plausible is
+asked one more thing: does it dispute the claim itself, deny only that it
+*bears* on the claim, or neither? "Denies bearing" attacks the claim's own
+link (an undercutter of the link, not a con of the claim) instead; "neither"
+drops it. A con triage already placed more specifically (duplicate, replace,
+merge, refine, undercut, other side) or dropped is not asked.
 
 Within a round the proposers take turns — Claude, then Codex (the order of
 `--proposers`) — and the second sees what the first just contributed, after
@@ -41,26 +49,36 @@ Jev alone (below its cap), so the sides stay balanced.
 
 Every attached argument gets a **contribution**: reach × relevance × quality
 (quality is Jev's judgment of whether the argument is well constructed;
-canonical form is asked of the proposers, never scored).
-Exploration is best-first by contribution across one queue, one round per
-task. A claim with rounds left goes back into the queue at
-contribution × 0.5 per round it already ran, so a strong claim's
-second round still beats a weak sibling's first. Arguments below
-`--min-influence` are never explored (`PRUNED`), so irrelevant or badly built
-ones cost nothing, and the claim budget is spent on the strongest ones first.
+canonical form is asked of the proposers, never scored). It is shown for
+reference; it no longer decides what gets explored.
 
-Each question also watches its own **returns**. Every non-root round records a
-yield — the value of the arguments it attached (strength × relevance × quality),
-discounted by the share of proposals triage threw away as repeats or drops,
-per argument asked for. Once a question holds 40 claims and 16 non-root rounds,
-it stops when its last 8 rounds yielded less than 0.6 × its earlier average
-and there is a queued claim to halt: no new round starts, and its waiting
-claims end `DIMINISHING` ("returns diminished"). Root rounds are excluded
-because their yields are naturally higher. Rounds in flight still attach what
-they found. A tree that ran out of work on its own does not report a stop. The question
-header then says "stopped: returns diminished" (or "stopped: claim budget
-spent" when `--max-claims` ended it). An `EXPAND` still explores a
-`DIMINISHING` claim.
+Alongside credence, a second graph of cells computes each claim's
+**sensitivity** top-down — how much settling it would move the root's answer,
+`d root / d claim` — the root at 1, propagated by chain rule down every path.
+A claim's (or link's) **value of information** is
+`|sensitivity| × 4·p·(1 − p)`, `p` its plausibility (a link's is its own
+strength): 1 for an unsettled claim under a sensitive part of the tree, 0 once
+either its sensitivity or its plausibility is pinned down. Exploration is
+best-first by value of information across one queue, one round per task
+(priorities are re-read when a worker is ready, since the sensitivity cells
+settle asynchronously). A claim with rounds left goes back into the queue at
+its value of information × 0.5 per round it already ran, so a strong claim's
+second round still beats a weak sibling's first. Once a claim's value of
+information falls below `--voi-eps` it gets no further round and ends
+`DIMINISHING` ("not worth exploring"); a question stops once every remaining
+claim is below that threshold, reporting "stopped: nothing left could change
+the answer" (or "stopped: claim budget spent" when `--max-claims` ended it
+first — the hard cap is checked before the value-of-information gate). An
+`EXPAND` still explores a `DIMINISHING` claim, and skips every gate to do it.
+The tree's top-3 claims and links by value of information are its **cruxes**
+— "what would change the answer" (below).
+
+Each question also still tracks its own **returns**, for reference only:
+every non-root round records a yield — the value of the arguments it attached
+(strength × relevance × quality), discounted by the share of proposals triage
+threw away as repeats or drops, per argument asked for. Root rounds are
+excluded because their yields are naturally higher. These numbers no longer
+stop anything; the value-of-information rule above does.
 
 ### Links as claims
 
@@ -71,20 +89,25 @@ really bears on B) and why it **fails** (why A, even if true, does not show
 it — the undercutters), with a prompt that forbids disputing A or arguing B on
 other grounds. Their arguments attach to the edge node, so they move the
 edge's credence and with it A's pull on B; Jev sorts them against the link's
-own arguments and judges them with the link as their parent. A link's
-contribution is its argument's contribution × 4·s·(1 − s), with s the link
-strength: an open link (s near ½) under a strong argument is explored early, a
-clear-cut one (s near 0 or 1) is left alone unless you expand it. Links count
+own arguments and judges them with the link as their parent. A link's value of
+information follows the same rule as a claim's, reading its own strength as
+its plausibility and its edge's sensitivity as its sensitivity:
+`|sensitivity| × 4·s·(1 − s)`, with s the link strength — an open link (s near
+½) whose answer is sensitive to it is explored early, a clear-cut one (s near
+0 or 1) is left alone unless you expand it. (Its contribution — argument's
+contribution × 4·s·(1 − s) — is still shown, for reference only.) Links count
 in the question's rounds and cost, not in its claim count. `--explore-links
 off` stops automatic link exploration (`EXPAND` still works).
 
-Measured once (2026-09-27, defaults but `--max-claims 80`, a question about
-motion-activated streetlights): 8 of 82 links were explored automatically (5
-of the 7 root arguments' links, contributions 0.38–0.44, and 3 at depth 2,
-0.30–0.31), gathering 10 reasons a link holds and 13 that it fails, before
-the budget stopped the question at 26 rounds and $1.12; expanding one more
-link by hand (strength 0.5, left at `BUDGET`) added two undercutters, took its
-credence from 0.50 to 0.35 and moved the root from 0.594 to 0.604, for $0.07.
+**Pre-model-C** (measured once, 2026-09-27, defaults but `--max-claims 80`, a
+question about motion-activated streetlights, back when links were ordered by
+contribution rather than value of information): 8 of 82 links were explored
+automatically (5 of the 7 root arguments' links, contributions 0.38–0.44, and
+3 at depth 2, 0.30–0.31), gathering 10 reasons a link holds and 13 that it
+fails, before the budget stopped the question at 26 rounds and $1.12;
+expanding one more link by hand (strength 0.5, left at `BUDGET`) added two
+undercutters, took its credence from 0.50 to 0.35 and moved the root from
+0.594 to 0.604, for $0.07.
 
 In the UI the connector — "Pro · strong link 72%" under an argument — is a
 button: hover or focus it for a preview of the link, press it to open the
@@ -94,6 +117,12 @@ question names the claims and links being explored or judged at the moment.
 A claim or link without arguments shows no spread band, because every rule
 starts from the same first impression; the UI says so instead of drawing an
 invisible band.
+
+Under each question's tree, a **"What would change the answer"** panel lists
+its top-3 cruxes — the claims and links with the highest value of information
+— each with its sway (how far the answer moves per unit change in it), how
+settled it is (plausible/strong, as a percentage) and, when known, which way
+it would pull the answer. Nothing is shown until the backend names a crux.
 
 ## Prerequisites
 
@@ -108,7 +137,7 @@ invisible band.
 cd demo/deliberate/ui && npm install && npm run build && cd -
 
 # 2. start the backend (default port 8091)
-./gradlew :demo:deliberate:run --args="--max-depth 2 --max-claims 30"
+./gradlew :demo:deliberate:run --args="--max-claims 30"
 open http://localhost:8091
 ```
 
@@ -125,22 +154,27 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
 | `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
-| `--max-depth <n>` | 5 | claims deeper than this are `DEPTH_LIMIT` |
-| `--max-claims <n>` | 180 | claims per question; unexplored claims past it become `BUDGET`, explored ones end `ROUND_LIMIT` ("budget exhausted"). An `EXPAND` still explores past it |
+| `--max-claims <n>` | 180 | hard cap: claims per question; unexplored claims past it become `BUDGET`, explored ones end `ROUND_LIMIT` ("budget exhausted"). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
-| `--min-influence <p>` | 0.10 | a non-root claim is expanded only if its contribution (reach × Jev relevance × Jev quality) ≥ p, else `PRUNED` |
-| `--yield-stop on\|off` | on | stop a question once its returns diminish (EXP-10); `off` leaves only `--max-claims` |
+| `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its value of information, `\|d answer/d node\| × 4·p·(1 − p)`, is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |
 | `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `PRUNED` unless expanded |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
 | `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Restarting paused*) |
 | `--semantics <id>` | `consensus` | what a node's `credence` reports: the consensus, or one layer id |
 | `--codex-input-rate` / `--codex-cached-rate` / `--codex-output-rate` | 4.00 / 0.40 / 20.00 | Codex price in USD per 1M tokens (SPEC §12); required for a `--codex-model` other than `gpt-5.6-sol`, else its cost is "rate unknown" and left out of the total |
 
+`--max-depth`, `--min-influence` and `--yield-stop` are **removed**: passing
+one errors, naming `--voi-eps` as its replacement (model C — see
+*Exploration*).
+
 Fixed in code (`DeliberationEngine.Config`, `DeliberateApp.SemanticsConfig`,
 `Pricing`), no longer flags: one argument per proposer call per side, a
-per-side cap of 3 below the root, a round decay of 0.5, the EXP-10 window /
-ratio / minimum claims (8 / 0.6 / 40), all seven credence layers with the
+per-side cap of 3 below the root, a round decay of 0.5, an internal `maxDepth`
+bound (unbounded by default; only the test suite sets it — it no longer
+gates or stops anything the app does), the EXP-10 yield-reporting window (8;
+the old diminishing-returns ratio and minimum-claims thresholds are gone with
+the yield stop), all seven credence layers with the
 consensus over `wlo,jnb,woe`, the weighted log-odds parameters (k 2.4, p 2,
 γ 1.3, α 1), and the assumed Jev price (USD 0.042 per 1M input tokens, output
 free — a third-party listing; TypeSafe publishes none).
@@ -149,16 +183,19 @@ free — a third-party listing; TypeSafe publishes none).
 reach 1, and an argument's reach is its parent's reach times the Jev strength
 of the edge that attaches it (0.5 is assumed if that judgment failed). Reach
 therefore decays down the tree even where Jev keeps calling every claim fairly
-relevant. The `--saturation` and `--min-influence` defaults were calibrated on
+relevant; it still feeds a link's own reach (*Links as claims*) and the shown
+contribution figure. The `--saturation` default was calibrated on
 live Jev judgments of real proposer output; the data and reasoning are in
 [`CALIBRATION.md`](CALIBRATION.md). In short, Jev's saturation reading rises
 only weakly with the number of arguments, so `--max-args-per-side` is the
-dependable stop. Most depth-2 claims fall below `--min-influence`, so
-`DEPTH_LIMIT` is a safety net that rarely fires.
+dependable stop for a side. `--voi-eps`'s default is a starting value from a
+one-off scratch review, not a calibration run (`minInfluence` and
+`DEPTH_LIMIT`-as-a-stop-rule are gone with model C, so most claims now stop on
+value of information, saturation or the claim budget, not depth).
 
-The budget is spent in contribution order (see *Exploration*). With the
-defaults, the per-side caps bound the root to 12 arguments and any other claim
-to 6. Each default round offers two new arguments per side, giving Jev a
+The budget is spent in value-of-information order (see *Exploration*). With
+the defaults, the per-side caps bound the root to 12 arguments and any other
+claim to 6. Each default round offers two new arguments per side, giving Jev a
 chance to stop a side before the cap supplies the dependable stop.
 
 ## HTTP
@@ -166,7 +203,7 @@ chance to stop a side before the cap supplies the dependable stop.
 - `POST /question` with form field `text=…` returns `{"root":"<ref>"}`.
 - `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. The ref is a claim's, or an edge's to steer its link. Bad input returns 400, and an unknown ref returns 404.
 - `POST /question/pause` with form fields `root=<question ref>&paused=true|false` returns `ok` (SPEC CTL-05). A paused question finishes its rounds in flight and starts no new one; `EXPAND` on one of its claims or links still runs that one. The UI's **Pause/Resume** button sits next to the question's cost figure.
-- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow` and `spreadHigh`; an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`.
+- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh` and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer").
 - `GET /events` is an SSE stream. Every message is a full `GraphDto`, and messages are coalesced to at most about 10 per second.
 
 ## Cost and time
@@ -176,6 +213,10 @@ side, and each claim also costs about 4–6 Jev requests. A single CLI call take
 roughly 4–10 s, but at most `--max-processes` run at once, so when a whole tree
 level expands together, most of the wall time is spent queueing for a process
 slot.
+
+**Pre-model-C** (these three paragraphs predate the value-of-information stop
+and were measured with the removed `--max-depth`, `--min-influence` and
+`--yield-stop` flags; kept as history, not as current behaviour):
 
 Measured on 2026-09-27 with `--max-depth 2 --max-claims 30 --max-rounds 2`
 (one argument per call): a 30-claim tree took about 1–2 minutes. It ran 14–17 rounds,
@@ -208,9 +249,10 @@ holds now.
 Iteration 5 (quality without the canonical factor, `--min-influence 0.10`,
 the per-question yield stop) was measured on 2026-09-27. That historical run
 included root rounds and could label an already exhausted tree as stopped;
-the final rule excludes root rounds and records a diminishing stop only when
-queued work is actually halted. See `CALIBRATION.md`, iteration 5, for the raw
-measurements and the correction.
+the (then-)final rule excluded root rounds and recorded a diminishing stop
+only when queued work was actually halted — since superseded by model C's
+value-of-information stop above. See `CALIBRATION.md`, iteration 5, for the
+raw measurements and the correction.
 
 ### The cost figure (SPEC §12)
 
@@ -262,7 +304,8 @@ the engine's per-claim metadata — status, override, proposer, rewritten text,
 the Jev judgments (which are the `jev` stances), triage counts, rounds,
 errors — as field-level changes written into one hosted cell, the only
 journaled cell on the host. Nothing derived is written: every credence,
-influence and consensus is recomputed from those inputs on boot. The journal
+influence, consensus and sensitivity (model C) is recomputed from those
+inputs on boot. The journal
 compacts itself to one checkpoint at boot, at shutdown, and whenever it has
 grown by more than 64 KB and its own last checkpoint size. On restart the
 trees are rebuilt, and every claim that was waiting or being explored is
