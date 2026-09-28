@@ -168,3 +168,30 @@ interface Judge {
         const val OUTSIDE_KNOWLEDGE = 0.5
     }
 }
+
+/** Model A: how a question root is framed before its first round ([Framer]). */
+enum class FramingMode { NONE, READINGS, POSITIONS }
+
+/**
+ * Model A: a [Framer]'s answer. READINGS: [items] are restated yes/no
+ * questions, each fixing one sense of the ambiguous [term]. POSITIONS:
+ * [items] are mutually exclusive declarative answers to an open question.
+ * NONE: the question has one natural reading and is explored as asked.
+ */
+data class Framing(val mode: FramingMode, val term: String? = null, val items: List<String> = emptyList()) {
+    companion object {
+        val NONE = Framing(FramingMode.NONE)
+        const val MAX_READINGS = 3
+        const val MAX_POSITIONS = 5
+    }
+}
+
+/**
+ * Model A: asked once per question root, before its first round, whether
+ * the question should be explored as asked (NONE), as several readings of
+ * an ambiguous term (READINGS) or as several competing answers (POSITIONS).
+ * Throws on failure; the engine then explores the question unframed.
+ */
+fun interface Framer {
+    fun frame(question: String): Framing
+}

@@ -63,6 +63,37 @@ export interface QuestionDto {
    * Has a Kotlin default and is always sent; optional so older fixtures stay valid.
    */
   verdictsDisagree?: boolean;
+  /**
+   * Model A: how the question was framed before its first round; absent when it
+   * was explored as asked. When set, the question-level model D fields are absent
+   * and each position carries its own.
+   */
+  framing?: FramingDto;
+}
+
+/** Model A: a framed question's readings (or positions), in the framer's order. */
+export interface FramingDto {
+  mode: 'READINGS' | 'POSITIONS';
+  /** READINGS: the ambiguous term the readings resolve. */
+  term?: string;
+  positions: PositionDto[];
+}
+
+/** Model A: one reading or position — a claim explored as a root of its own. */
+export interface PositionDto {
+  /** Its CLAIM node's ref. */
+  ref: string;
+  text: string;
+  /** Its headline credence (equal to its NodeDto's). */
+  credence: number;
+  /** Model D: Jev's plausibility of it, judged against the original question. */
+  firstImpression?: number;
+  /** Model D: its headline credence from a neutral prior. */
+  neutralCredence?: number;
+  /** Model D: its credence and neutralCredence fall on different sides of ½. */
+  verdictsDisagree?: boolean;
+  /** POSITIONS: its share of the consensus shares (they sum to 1); absent for READINGS. */
+  share?: number;
 }
 
 /** SPEC §12: the details behind a question's cost figure. */
@@ -117,7 +148,8 @@ export type Status =
   | 'BUDGET'
   | 'DIMINISHING'
   | 'STOPPED'
-  | 'FAILED';
+  | 'FAILED'
+  | 'FRAMED';
 
 export type Override = 'AUTO' | 'EXPAND' | 'STOP';
 
@@ -180,6 +212,8 @@ export interface NodeDto {
    * also `undercuts`). Absent for an argument about a claim.
    */
   onLink?: string;
+  /** Model A: on a reading/position, the ref of the framed question root it belongs to. */
+  positionOf?: string;
   /** Jev plausibility stance (CRED-01), once judged. */
   plausibility?: number;
   /** Jev relevance probability (EXP-05), judged when the argument was attached. */

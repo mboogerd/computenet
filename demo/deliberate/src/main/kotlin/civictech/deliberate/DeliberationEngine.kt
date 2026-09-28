@@ -64,6 +64,12 @@ class DeliberationEngine(
     /** SPEC §12: how each backend's usage is priced. */
     private val pricing: Pricing = Pricing(),
     private val persistEveryMs: Long = 100,
+    /**
+     * Model A: asked once per question root before its first round; READINGS or
+     * POSITIONS turn the root FRAMED and each item into a root-like claim of its
+     * own. Without one, every question is explored as asked.
+     */
+    private val framer: Framer? = null,
     private val onChange: () -> Unit = {},
 ) : AutoCloseable {
 
@@ -582,6 +588,12 @@ class DeliberationEngine(
             onChange()
             return false
         }
+        // Model A: a framed root is never explored itself (an EXPAND on it runs no round).
+        if (synchronized(lock) { c.framing.let { it != null && it.mode != FramingMode.NONE } }) {
+            update { c.forceRound = false }
+            return finish(c, Status.FRAMED)
+        }
+        if (frame(c)) return true
         // CRED-01 (a link's stance is its argument's CRED-02 strength, judged at attach time)
         if (synchronized(lock) { !c.isLink && c.plausibility == null }) {
             val text = synchronized(lock) { c.text }
@@ -652,6 +664,45 @@ class DeliberationEngine(
         return if (next != null) finish(c, next) else false
     }
 
+    /**
+     * Model A: asks the [framer] how question root [c] should be explored, once,
+     * before its first round. READINGS/POSITIONS with at least 2 items frame the
+     * root in the graph, create one root-like claim per item, finish the root
+     * FRAMED and schedule the items; returns true then. NONE, or a failed call
+     * (the root carries a "framing: …" error), returns false: explored as asked.
+     */
+    private fun frame(c: Claim): Boolean {
+        val f = framer ?: return false
+        val text = synchronized(lock) {
+            // Only a question root: its readings/positions are roots of the same tree and are never framed.
+            if (c.ref != c.root || c.parent != null || c.isLink || c.rounds != 0 || c.children.isNotEmpty() || c.framing != null) return false
+            c.text
+        }
+        val framing = tryCall(c, "framing") { f.frame(text) } ?: return false
+        if (framing.mode == FramingMode.NONE || framing.items.size < 2) {
+            update { c.framing = Framing.NONE }
+            return false
+        }
+        val refs = try {
+            synchronized(serviceLock) {
+                service.frame(c.ref, CredenceGraph.IssueMode.valueOf(framing.mode.name), framing.items)
+            }
+        } catch (e: Exception) {
+            update { c.error = "framing: $e" }
+            return false
+        }
+        val proposer = if (framing.mode == FramingMode.READINGS) Claim.READING else Claim.POSITION
+        val positions = synchronized(lock) {
+            c.framing = framing
+            refs.zip(framing.items).map { (ref, item) ->
+                Claim(ref, c.root, null, null, item, 0, proposer, config.maxRounds).also { claims[ref] = it }
+            }.also { treeSize.merge(c.root, it.size, Int::plus) }
+        }
+        finish(c, Status.FRAMED)
+        positions.forEach(::schedule)
+        return true
+    }
+
     // ---------------------------------------------------------------- cost (SPEC §12)
 
     /** SPEC §12: the sink bound around every call made for question [root]. */
@@ -710,11 +761,14 @@ class DeliberationEngine(
     // ---------------------------------------------------------------- helpers
 
     /** EXP-08: run a judge call; on failure record the error and return null. */
-    private fun <T> attempt(c: Claim, what: String, call: () -> T): T? =
+    private fun <T> attempt(c: Claim, what: String, call: () -> T): T? = tryCall(c, "jev $what", call)
+
+    /** EXP-08: run a call billed to [c]'s question; on failure record "[label]: error" and return null. */
+    private fun <T> tryCall(c: Claim, label: String, call: () -> T): T? =
         try {
             Usage.within(sinkFor(c.root), call)
         } catch (e: Exception) {
-            update { c.error = "jev $what: $e" }
+            update { c.error = "$label: $e" }
             null
         }
 

@@ -70,6 +70,40 @@ data class QuestionDto(
      * which way the answer leans.
      */
     val verdictsDisagree: Boolean = false,
+    /**
+     * Model A: how the question was framed before its first round; null when it
+     * was explored as asked. When set, [firstImpression] and [neutralCredence]
+     * are null and [verdictsDisagree] false — each position carries its own.
+     */
+    val framing: FramingDto? = null,
+)
+
+/** Model A: a framed question's readings (or positions), in the framer's order. */
+@Serializable
+data class FramingDto(
+    /** "READINGS" | "POSITIONS". */
+    val mode: String,
+    /** READINGS: the ambiguous term the readings resolve. */
+    val term: String? = null,
+    val positions: List<PositionDto>,
+)
+
+/** Model A: one reading or position — a claim explored as a root of its own. */
+@Serializable
+data class PositionDto(
+    /** Its CLAIM node's ref. */
+    val ref: String,
+    val text: String,
+    /** Its headline credence (equal to its NodeDto's). */
+    val credence: Double,
+    /** Model D: Jev's plausibility of it, judged against the original question. */
+    val firstImpression: Double? = null,
+    /** Model D: its headline credence from a neutral prior. */
+    val neutralCredence: Double? = null,
+    /** Model D: its credence and [neutralCredence] fall strictly on different sides of ½. */
+    val verdictsDisagree: Boolean = false,
+    /** POSITIONS: its share of the consensus shares (the shares sum to 1); null for READINGS. */
+    val share: Double? = null,
 )
 
 /** SPEC §12: the details behind a question's cost figure. */
@@ -118,7 +152,11 @@ data class BackendCostDto(
  * its next round (records written before model C: the removed yield stop).
  * DEPTH_LIMIT arises only from an explicit engine `maxDepth` (no longer a stop rule).
  */
-enum class Status { QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING, STOPPED, FAILED }
+enum class Status {
+    QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING, STOPPED, FAILED,
+    /** Model A: a question root that was framed — its readings/positions are explored instead of it. */
+    FRAMED,
+}
 
 enum class Override { AUTO, EXPAND, STOP }
 
@@ -175,6 +213,8 @@ data class NodeDto(
      * (ATTACK, then also [undercuts]). Null for an argument about a claim.
      */
     val onLink: String? = null,
+    /** Model A: on a reading/position, the ref of the framed question root it belongs to. */
+    val positionOf: String? = null,
     /** Jev plausibility stance (CRED-01), once judged. */
     val plausibility: Double? = null,
     /** Jev relevance probability (EXP-05), judged when the argument was attached. */
