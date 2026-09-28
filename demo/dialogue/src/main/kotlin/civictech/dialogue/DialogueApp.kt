@@ -224,10 +224,9 @@ class DialogueApp(
     )
 
     init {
-        // Boot on the driver thread, like every other runtime call. No startup
-        // checkpoint (AgoraApp's / DialogueRuntime's hazard note: a checkpoint
-        // on the management band jumps ahead of the still-staged replay frames
-        // and compacts the journal to PRE-replay state).
+        // Boot on the driver thread, like every other runtime call. A
+        // checkpoint is safe after `afterQuiescence`; none is taken (no
+        // compaction in dialogue v1).
         onDriver(BOOT_TIMEOUT_MS) {
             runtime.recover()
             runtime.afterQuiescence { runtime.completeRecovery() }

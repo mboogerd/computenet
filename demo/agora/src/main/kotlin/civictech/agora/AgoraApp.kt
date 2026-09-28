@@ -56,15 +56,13 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
     val boundPort: Int get() = shell.boundPort
 
     init {
-        // No startup checkpoint: checkpoint runs on the management band and
-        // would jump ahead of the still-staged replay frames, compacting the
-        // journal down to PRE-replay state (data loss on the next restart).
-        // Rebuild appends nothing (catch-ups are suppressed while the
-        // structure log replays); replay dispatch does re-journal the derived
-        // re-emissions it triggers — idempotent duplicates, bounded per
-        // restart. ponytail: compaction needs a quiescence-safe checkpoint;
-        // do it when journals actually get big.
-        if (journal != null) host.recoverFrom(journal)
+        // Replay is fenced by the recovery handle: routes are registered only
+        // after every replayed frame and its same-host cascade has been
+        // applied (civictech.cell.host.Recovery.awaitApplied, computenet-q5jzk
+        // Q4/Q5). A checkpoint taken after the fence is safe; no startup
+        // checkpoint is added here — deferred until journals get big
+        // (computenet-vcrc7 owns adding one).
+        if (journal != null) host.recoverFrom(journal).awaitApplied(60_000)
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         shell.route("/graph") { it.respond(200, graphJson(), "application/json") }
         shell.route("/op") { handleOp(it) }

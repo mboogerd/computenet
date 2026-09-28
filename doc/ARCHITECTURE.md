@@ -258,7 +258,9 @@ payload.
 **Durability.** `HostDurability` writes wire-encoded invocation frames,
 checkpoints (state + processed-frontier atomically), and `Effectful` frontier
 advances to an opaque `Journal`. Recovery: rebuild the graph, then
-`host.recoverFrom(journal)`, then `host.checkpoint(journal)` to compact.
+`host.recoverFrom(journal).awaitApplied()` (replay only stages frames; the
+`Recovery` handle fences on their delivery, `ManagedHost.quiescence()` being the
+general form), then `host.checkpoint(journal)` to compact.
 `KeyedCells` packages the correct ordering for per-key cell families
 (pre-spawn known keys before replay so re-minted tags cannot resurrect removed
 elements).

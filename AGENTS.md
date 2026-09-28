@@ -9,6 +9,13 @@ parallel model from nearby implementation accidents.
 Detailed architecture (module graph, kernel package map, KSP generation flow,
 runtime lifecycle, concord, demos): `doc/ARCHITECTURE.md`.
 
+## Talking to the human
+
+Bead ids mean nothing to the user. In text meant for a person, say what the
+item *is*; add the id in parentheses only when they may act on it or two items
+would otherwise read alike. Agent-to-agent text (prompts, bead notes, commits)
+may use bare ids.
+
 ## Start every task here
 
 1. Read the complete assigned work item — tickets live in the file your

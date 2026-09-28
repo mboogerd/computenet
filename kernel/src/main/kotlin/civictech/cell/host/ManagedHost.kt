@@ -912,8 +912,23 @@ open class ManagedHost(
     /**
      * Replay this host's [journal] (M10.1). See [HostDurability.recoverFrom]
      * for the full behavior; delegates there (RS-8.2).
+     *
+     * Replay only STAGES frames, so this returns a [Recovery] handle whose
+     * [Recovery.awaitApplied] fences on their delivery and on every same-host
+     * frame those deliveries cascade into (computenet-q5jzk). The fence is
+     * taken AFTER the replay's last submit — the order is what makes it sound.
+     * A failed replay throws [RecoveryIncomplete] and returns no handle.
      */
-    fun recoverFrom(journal: Journal) = hostDurability.recoverFrom(journal)
+    fun recoverFrom(journal: Journal): Recovery {
+        val frames = hostDurability.recoverFrom(journal)
+        return Recovery(frames, scheduler.quiescence())
+    }
+
+    /**
+     * A [Quiescence] fence on this host's scheduler: completes once its queue
+     * holds no task at any band. See [Quiescence] for the argument and its limits.
+     */
+    fun quiescence(): Quiescence = scheduler.quiescence()
 
     /**
      * Checkpoint (M10.2, extended G-59). See [HostDurability.checkpoint] for
