@@ -52,6 +52,16 @@ class CredenceGraph(
 ) {
     enum class Kind { CLAIM, EDGE }
 
+    /**
+     * Model A: how a question root is framed. READINGS are alternative
+     * meanings of the question, each judged on its own; POSITIONS are
+     * competing answers whose credences an [IssueNode] folds into [Shares].
+     */
+    enum class IssueMode { READINGS, POSITIONS }
+
+    /** Model A: a framed root's issue — its [mode] and its [positions] (readings or positions), in order. */
+    data class IssueInfo(val mode: IssueMode, val positions: List<CellRef>)
+
     data class NodeInfo(
         val kind: Kind,
         val text: String? = null,
@@ -61,13 +71,24 @@ class CredenceGraph(
         val source: CellRef? = null,
         val target: CellRef? = null,
         val head: Boolean = false,
+        /** Model A: set on a framed question root. */
+        val issue: IssueInfo? = null,
+        /** Model A: set on each reading/position, the root it frames. */
+        val positionOf: CellRef? = null,
     )
 
     /**
      * A node, its latest credence (null until its first emission reached the hub)
      * and its sensitivity d headline(root) / d node ([sensitivityOf]; null until known).
      */
-    data class Node(val ref: CellRef, val info: NodeInfo, val credence: Credence?, val sensitivity: Double? = null)
+    data class Node(
+        val ref: CellRef,
+        val info: NodeInfo,
+        val credence: Credence?,
+        val sensitivity: Double? = null,
+        /** Model A: a POSITIONS root's shares, once the shares fold has them. */
+        val shares: Shares? = null,
+    )
 
     /** One link the graph installed: [outlet] of cell [from] streams to [inlet] of cell [to]. */
     data class Wire(val from: CellRef, val outlet: String, val to: CellRef, val inlet: String)
@@ -80,7 +101,13 @@ class CredenceGraph(
     /** Model C: the sensitivity fold. Volatile, like [hub]. */
     val sensitivityHub = ObserveCell(SensitivityHubView(onCredence))
 
+    /** Model A: the shares fold of every POSITIONS issue. Volatile, like [hub]. */
+    val sharesHub = ObserveCell(SharesHubView(onCredence))
+
     private val cells = HashMap<CellRef, ClaimNode>()
+
+    /** Model A: each POSITIONS root's [IssueNode], by the root's ref. */
+    private val issueCells = HashMap<CellRef, IssueNode>()
 
     /** Model C: each node's sensitivity cell, by the node's ref. */
     private val sensCells = HashMap<CellRef, SensitivityNode>()
@@ -112,6 +139,9 @@ class CredenceGraph(
         val polarity: Polarity? = null,
         val source: String? = null,
         val target: String? = null,
+        /** Model A, an "issue" op: the framing mode and the position refs, in order. */
+        val mode: IssueMode? = null,
+        val positions: List<String>? = null,
     )
 
     private var replaying = false
@@ -119,24 +149,57 @@ class CredenceGraph(
     init {
         manage.spawn(hub)
         if (sensitivity) manage.spawn(sensitivityHub)
+        manage.spawn(sharesHub)
         structureLog?.takeIf { it.exists() }?.let { log ->
             replaying = true
             try {
-                readStructure(log).forEach { op ->
-                    val ref = CellRef(UUID.fromString(op.ref))
-                    when (op.op) {
-                        "claim" -> createClaim(op.text ?: "", ref, op.question)
-                        "edge" -> createEdge(
-                            CellRef(UUID.fromString(op.source!!)),
-                            CellRef(UUID.fromString(op.target!!)),
-                            op.polarity!!,
-                            ref,
-                        )
-                        else -> error("unknown structure op ${op.op}")
-                    }
-                }
+                replay(readStructure(log))
             } finally {
                 replaying = false
+            }
+        }
+    }
+
+    /**
+     * Replays the structure log. Model A (feature D3): an "issue" op is valid
+     * only when every position it names has a "claim" op after it; a valid one
+     * replays as [frame], which recreates those position claims itself (so
+     * their own claim ops are skipped). A torn framing — an issue op whose
+     * positions are not all present — is dropped with its listed positions,
+     * and any edge touching a dropped position is skipped too.
+     */
+    private fun replay(ops: List<StructureOp>) {
+        val claimAt = HashMap<String, Int>()
+        ops.forEachIndexed { i, op -> if (op.op == "claim") claimAt.putIfAbsent(op.ref, i) }
+        val skipped = HashSet<String>()
+        val framed = HashSet<String>()
+        val validIssues = HashSet<Int>()
+        ops.forEachIndexed { i, op ->
+            if (op.op != "issue") return@forEachIndexed
+            val positions = op.positions.orEmpty()
+            if (positions.all { (claimAt[it] ?: -1) > i }) {
+                validIssues += i
+                framed += positions
+            } else {
+                skipped += positions
+                System.err.println("deliberate: dropping torn framing of root ${op.ref} (positions not all logged: $positions)")
+            }
+        }
+        fun ref(id: String) = CellRef(UUID.fromString(id))
+        ops.forEachIndexed { i, op ->
+            when (op.op) {
+                "claim" -> if (op.ref !in skipped && op.ref !in framed) createClaim(op.text ?: "", ref(op.ref), op.question)
+                "issue" -> if (i in validIssues) {
+                    val positions = op.positions!!
+                    frame(ref(op.ref), op.mode!!, positions.map { ops[claimAt.getValue(it)].text ?: "" }, positions.map(::ref))
+                }
+                "edge" -> if (op.source !in skipped && op.target !in skipped && op.ref !in skipped) createEdge(
+                    ref(op.source!!),
+                    ref(op.target!!),
+                    op.polarity!!,
+                    ref(op.ref),
+                )
+                else -> error("unknown structure op ${op.op}")
             }
         }
     }
@@ -221,6 +284,58 @@ class CredenceGraph(
         ref
     }
 
+    /**
+     * Model A: frames question root [root] as an issue over [texts] — each a
+     * new question-flagged claim (so each has model D's neutral verdict and is
+     * a model C sensitivity root). Logs ONE "issue" op naming every position
+     * ref *before* the position claims (feature D3: replay drops a torn
+     * framing). POSITIONS also spawn an [IssueNode] fed by the positions'
+     * credences, emitting [Shares] to [sharesHub]; nothing flows back from it
+     * (CRED-03). Returns the position refs, in order.
+     */
+    fun frame(
+        root: CellRef,
+        mode: IssueMode,
+        texts: List<String>,
+        refs: List<CellRef> = texts.map { CellRef(UUID.randomUUID()) },
+    ): List<CellRef> = synchronized(mutationLock) {
+        synchronized(nodesLock) {
+            val info = requireNotNull(nodes[root]) { "unknown root ${root.id}" }
+            require(info.kind == Kind.CLAIM && info.question) { "only a question root can be framed: ${root.id}" }
+            require(info.issue == null) { "root ${root.id} is already framed" }
+            require(nodes.values.none { it.target == root }) { "root ${root.id} already has arguments" }
+            require(texts.size >= 2) { "an issue needs at least 2 positions (was ${texts.size})" }
+            require(refs.size == texts.size) { "one ref per position" }
+            require(refs.distinct().size == refs.size && refs.none { it in nodes }) { "position refs must be new and distinct" }
+        }
+        log(StructureOp("issue", root.id.toString(), mode = mode, positions = refs.map { it.id.toString() }))
+        texts.zip(refs).forEach { (text, ref) -> createClaim(text, ref, question = true) }
+        synchronized(nodesLock) {
+            refs.forEach { nodes[it] = nodes.getValue(it).copy(positionOf = root) }
+            nodes[root] = nodes.getValue(root).copy(issue = IssueInfo(mode, refs))
+        }
+        if (mode == IssueMode.POSITIONS) {
+            val issue = IssueNode(CellRef(UUID.randomUUID()), root, refs, layers)
+            manage.spawn(issue)
+            issueCells[root] = issue
+            refs.forEach { p ->
+                wire(p, "credenceOutlet", issue.ref, "positionInlet") {
+                    cells.getValue(p).credenceOutlet.streamTo(registry.inlet<Credence>(issue.ref, "positionInlet"))
+                }
+            }
+            wire(issue.ref, "sharesOutlet", sharesHub.ref, "inlet") {
+                issue.sharesOutlet.streamTo(registry.inlet<Shares>(sharesHub.ref, "inlet"))
+            }
+        }
+        refs
+    }
+
+    /** Model A: the [IssueNode] of POSITIONS root [root]; null for any other node. */
+    fun issueCellOf(root: CellRef): CellRef? = synchronized(mutationLock) { issueCells[root]?.ref }
+
+    /** Model A: POSITIONS root [root]'s latest shares; null until the fold has them, and for any other node. */
+    fun sharesOf(root: CellRef): Shares? = sharesHub.current()[root]
+
     /** Routes [user]'s stance to node [id]; a stance the node already holds is not sent again. */
     fun setStance(id: CellRef, user: String, value: Double?) = synchronized(mutationLock) mutation@{
         synchronized(nodesLock) {
@@ -238,7 +353,8 @@ class CredenceGraph(
         val snapshot = synchronized(nodesLock) { nodes.entries.map { it.key to it.value } }
         val credences = hub.current()
         val sensitivities = sensitivityHub.current()
-        return snapshot.map { (ref, info) -> Node(ref, info, credences[ref], scalar(sensitivities[ref], credences)) }
+        val shares = sharesHub.current()
+        return snapshot.map { (ref, info) -> Node(ref, info, credences[ref], scalar(sensitivities[ref], credences), shares[ref]) }
     }
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }

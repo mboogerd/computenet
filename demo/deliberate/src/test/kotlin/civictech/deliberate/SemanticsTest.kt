@@ -174,4 +174,29 @@ class SemanticsTest {
     fun `unknown semantics are refused`() {
         assertFailsWith<IllegalArgumentException> { SemanticsCatalog.of("nope") }
     }
+
+    @Test
+    fun `model A - softmax shares at temperature 1 are the normalised odds`() {
+        val shares = Softmax.shares(listOf(0.8, 0.6, 0.2))
+        listOf(4.0, 1.5, 0.25).map { it / 5.75 }.zip(shares).forEach { (want, got) -> assertEquals(want, got, 1e-9) }
+        assertEquals(1.0, shares.sum(), 1e-12)
+        assertEquals(listOf(0.695652173913, 0.260869565217, 0.043478260870), shares.map { Math.round(it * 1e12) / 1e12 })
+    }
+
+    @Test
+    fun `model A - a rising credence raises its share and lowers every other`() {
+        val before = Softmax.shares(listOf(0.8, 0.6, 0.2))
+        val after = Softmax.shares(listOf(0.8, 0.7, 0.2))
+        assertTrue(after[1] > before[1])
+        assertTrue(after[0] < before[0] && after[2] < before[2])
+    }
+
+    @Test
+    fun `model A - softmax clamps certain credences and maps empty to empty`() {
+        val shares = Softmax.shares(listOf(0.0, 1.0, 1.0, 0.5))
+        assertTrue(shares.all { it.isFinite() && it > 0 }, "$shares")
+        assertEquals(1.0, shares.sum(), 1e-12)
+        assertEquals(emptyList(), Softmax.shares(emptyList()))
+        assertEquals(listOf(0.5, 0.5), Softmax.shares(listOf(0.5, 0.5)))
+    }
 }
