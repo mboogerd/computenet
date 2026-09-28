@@ -39,7 +39,14 @@ class DeliberationEngineTest {
         val quality: (child: String) -> Double = { 1.0 },
         val saturation: (ClaimContext, Side) -> Double = { _, _ -> 0.0 },
         val relevance: (ClaimContext) -> Double = { 1.0 },
+        /** Model B; the default is the interface's: every candidate disputes the claim. */
+        val bearing: (String) -> Bearing = { Bearing.DISPUTES_CLAIM },
     ) : Judge {
+        val bearingCalls = CopyOnWriteArrayList<Triple<ClaimContext, LinkContext, List<String>>>()
+        override fun bearing(ctx: ClaimContext, link: LinkContext, candidates: List<String>): List<Bearing> {
+            bearingCalls += Triple(ctx, link, candidates)
+            return candidates.map(bearing)
+        }
         val relevanceCalls = CopyOnWriteArrayList<String>()
         val plausibilityCalls = CopyOnWriteArrayList<Triple<String, List<String>, String>>()
         val relationCalls = CopyOnWriteArrayList<RelationCall>()
@@ -907,11 +914,10 @@ class DeliberationEngineTest {
         assertEquals("claude", p1.proposer)
         assertEquals(listOf("codex"), p1.alsoProposedBy)
         assertTrue(judge.relationCalls.any { it.child == "P1 better" }, "a replaced argument is re-assessed")
-        // REFINE attached the example under P1, as support.
-        val refinement = g.edges().single { g.claim(it.source!!).text == "P1 example" }
-        assertEquals(p1.ref, refinement.target)
-        assertEquals("SUPPORT", refinement.polarity)
-        assertEquals(2, g.claim(refinement.source!!).depth)
+        // Model B: REFINE recorded the example as evidence on P1 — no child claim.
+        assertEquals(listOf("P1 example"), p1.evidence)
+        assertTrue(g.claims().none { it.text == "P1 example" }, "a REFINE creates no claim")
+        assertTrue(g.childrenOf(g.ref(p1)).isEmpty(), "a REFINE attaches nothing under its target")
         assertEquals(
             mapOf("ADD" to 2, "DUPLICATE" to 1, "REPLACE" to 1, "REFINE" to 1, "OTHER_SIDE" to 1, "DROP" to 1),
             g.node(root).triage,
@@ -1224,6 +1230,142 @@ class DeliberationEngineTest {
         assertEquals(listOf("Q?", "“P” is a reason for “Q?”"), claude.contexts.first { it.claim == "U" }.path)
         // The undercut lowers the link's credence below its own strength stance.
         awaitUntil("the undercut edge loses credence") { e.snapshot().nodes.single { it.ref == pEdge.ref }.credence < 0.8 - 1e-6 }
+    }
+
+    // ------------------------------------------------------------ model B: premise vs bearing, evidence
+
+    /**
+     * Root "Q?" gets one pro "P" (plausibility [pPlausibility]); P's round gets the cons [cons].
+     * Links are off, so only the triage routing is exercised.
+     */
+    private fun bearingRun(pPlausibility: Double, cons: List<String>, bearing: (String) -> Bearing): Pair<FakeJudge, GraphDto> {
+        val claude = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.claim == "Q?" && side == Polarity.SUPPORT -> listOf("P")
+                ctx.claim == "P" && side == Polarity.ATTACK -> cons
+                else -> emptyList()
+            }
+        }
+        val judge = FakeJudge(plausibility = { if (it == "P") pPlausibility else 0.5 }, bearing = bearing)
+        val e = engine(
+            judge = judge,
+            proposers = listOf(claude),
+            config = DeliberationEngine.Config(argsPerCall = 3, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false),
+        )
+        e.ask("Q?")
+        e.idle()
+        return judge to e.snapshot()
+    }
+
+    @Test
+    fun `a con against a well-believed claim is routed by what it denies - claim, bearing, or neither`() {
+        val (judge, g) = bearingRun(0.9, listOf("C dispute", "C bearing", "C neither")) {
+            when (it) {
+                "C bearing" -> Bearing.DENIES_BEARING
+                "C neither" -> Bearing.NEITHER
+                else -> Bearing.DISPUTES_CLAIM
+            }
+        }
+        val p = g.text("P")
+        val pEdge = g.linkOf(p)
+        // One request for the turn's ADD-bound cons, told P's connection to its parent. The root has no link: never asked.
+        val (ctx, link, asked) = judge.bearingCalls.single()
+        assertEquals("P", ctx.claim)
+        assertEquals(LinkContext("P", "Q?", Polarity.SUPPORT), link)
+        assertEquals(listOf("C dispute", "C bearing", "C neither"), asked)
+        // "disputes claim": the existing con-child path.
+        assertEquals(listOf("C dispute"), g.childrenOf(g.ref(p)).map { g.claim(it.source!!).text })
+        assertEquals("ATTACK", g.childrenOf(g.ref(p)).single().polarity)
+        // "denies bearing": an UNDERCUT of P's own link, not a con child of P.
+        val u = g.text("C bearing")
+        assertEquals(pEdge.ref, u.undercuts)
+        assertEquals(pEdge.ref, g.linkOf(u).target)
+        assertEquals("ATTACK", g.linkOf(u).polarity)
+        // "neither": the reject path (DROP) — no claim.
+        assertTrue(g.claims().none { it.text == "C neither" })
+        assertEquals(mapOf("ADD" to 1, "UNDERCUT" to 1, "DROP" to 1), p.triage)
+        // 4p(1-p): P's contribution is its strength (0.8) damped by 4 × 0.9 × 0.1; its link is
+        // built from the undamped 0.8 (its bearing is still open): 0.8 × 4 × 0.8 × 0.2.
+        assertEquals(0.8 * 4 * 0.9 * 0.1, p.contribution!!, 1e-9)
+        assertEquals(0.8 * 4 * 0.8 * 0.2, pEdge.contribution!!, 1e-9)
+    }
+
+    @Test
+    fun `below the bearing threshold a con against a claim is not asked and stays a con child`() {
+        val (judge, g) = bearingRun(ExplorationPolicy.BEARING_PLAUSIBILITY - 0.01, listOf("C")) { Bearing.DENIES_BEARING }
+        assertTrue(judge.bearingCalls.isEmpty(), "asked below the threshold: ${judge.bearingCalls}")
+        val p = g.text("P")
+        assertEquals(listOf("C"), g.childrenOf(g.ref(p)).map { g.claim(it.source!!).text })
+        assertNull(g.text("C").undercuts)
+        assertEquals(mapOf("ADD" to 1), p.triage)
+    }
+
+    @Test
+    fun `at the bearing threshold a con against a claim is asked and a denied bearing undercuts its link`() {
+        val (judge, g) = bearingRun(ExplorationPolicy.BEARING_PLAUSIBILITY, listOf("C")) { Bearing.DENIES_BEARING }
+        assertEquals(listOf("C"), judge.bearingCalls.single().third)
+        val p = g.text("P")
+        assertTrue(g.childrenOf(g.ref(p)).isEmpty())
+        assertEquals(g.linkOf(p).ref, g.text("C").undercuts)
+        assertEquals(mapOf("UNDERCUT" to 1), p.triage)
+    }
+
+    @Test
+    fun `a failed bearing call keeps the triage verdict and records the error`() {
+        val claude = FakeProposer("claude") { ctx, side, _ ->
+            when {
+                ctx.claim == "Q?" && side == Polarity.SUPPORT -> listOf("P")
+                ctx.claim == "P" && side == Polarity.ATTACK -> listOf("C")
+                else -> emptyList()
+            }
+        }
+        val judge = object : Judge by FakeJudge(plausibility = { if (it == "P") 0.95 else 0.5 }) {
+            override fun bearing(ctx: ClaimContext, link: LinkContext, candidates: List<String>): List<Bearing> =
+                throw IllegalStateException("jev down")
+        }
+        val e = engine(
+            judge = judge, proposers = listOf(claude),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false),
+        )
+        e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val p = g.text("P")
+        assertEquals(listOf("C"), g.childrenOf(g.ref(p)).map { g.claim(it.source!!).text })
+        assertTrue(p.error!!.startsWith("jev bearing:"), p.error)
+    }
+
+    @Test
+    fun `REFINE evidence survives a restart, and a record written before evidence existed still restores`() {
+        // Durability: `evidence` is an optional ClaimRecord field with an empty default, not
+        // encoded when empty — a pre-change record is exactly a record without it.
+        val old = mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1", "alsoProposedBy" to "[\"codex\"]")
+        val decoded = EngineRecords.recordFrom(old)
+        assertEquals(emptyList(), decoded.evidence)
+        assertEquals(old, EngineRecords.fieldsOf(decoded), "an empty evidence list is not stored")
+        val withEvidence = decoded.copy(evidence = listOf("E1", "E2"))
+        assertEquals(withEvidence, EngineRecords.recordFrom(EngineRecords.fieldsOf(withEvidence)))
+
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-evidence").toFile()
+        try {
+            val log = java.io.File(dir, "graph.jsonl")
+            val store = InMemoryMetaStore()
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0)
+            val claude = FakeProposer("claude") { _, side, _ -> if (side == Polarity.SUPPORT) listOf("P") else emptyList() }
+            val codex = FakeProposer("codex") { _, side, _ -> if (side == Polarity.SUPPORT) listOf("P example") else emptyList() }
+            val judge = FakeJudge(triage = { _, cands -> cands.map { if (it.text == "P example") Triage(TriageAction.REFINE, 0) else Triage(TriageAction.ADD) } })
+            val e1 = DeliberationEngine(CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(claude, codex), config, store = store)
+                .also { engines += it }
+            e1.ask("Q?")
+            e1.idle()
+            e1.close()
+            assertEquals(listOf("P example"), e1.snapshot().text("P").evidence)
+            val after = restart(log, store, config).also { it.idle() }.snapshot()
+            assertEquals(listOf("P example"), after.text("P").evidence)
+            assertTrue(after.claims().none { it.text == "P example" })
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     // ------------------------------------------------------------ SPEC §3 "Links as claims"

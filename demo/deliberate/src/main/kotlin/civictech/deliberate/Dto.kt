@@ -125,6 +125,11 @@ data class NodeDto(
     /** EXP-03 MERGE: true when this argument's text was rewritten together with an overlapping one. */
     val merged: Boolean? = null,
     /**
+     * EXP-03 REFINE (model B): texts proposed as specific instances of or
+     * evidence for this argument, recorded on it instead of as child claims.
+     */
+    val evidence: List<String>? = null,
+    /**
      * EXP-03 UNDERCUT: the ref of the EDGE this claim attacks — it denies that
      * that edge's source bears on its target. Its own edge's `target` is that ref.
      */
@@ -142,8 +147,8 @@ data class NodeDto(
     /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
     val quality: Double? = null,
     /**
-     * SPEC §3 "Exploration order" priority: reach × relevance × quality (root = 1);
-     * for a link, its argument's contribution × 4·s·(1 − s), s its strength.
+     * SPEC §3 "Exploration order" priority: reach × relevance × quality × 4·p·(1 − p),
+     * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
      */
     val contribution: Double? = null,
     /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */

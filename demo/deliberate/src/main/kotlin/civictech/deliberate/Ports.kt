@@ -51,7 +51,10 @@ enum class TriageAction {
     REPLACE,
     /** Overlaps its target, each adding something: the two are rewritten as one ([Merger]) if unexplored. */
     MERGE,
-    /** A specific instance of / evidence for its target: attached as SUPPORT under the target. */
+    /**
+     * A specific instance of / evidence for its target: recorded in the target's
+     * evidence list ([Claim.evidence]), not attached as a child claim (model B).
+     */
     REFINE,
     /**
      * Argues the opposite side from the one it was proposed for: attached there.
@@ -74,6 +77,19 @@ enum class TriageAction {
  */
 fun interface Merger {
     fun merge(claim: String, side: Side, a: String, b: String): String
+}
+
+/**
+ * Model B: what a con candidate against a well-believed claim actually denies
+ * ([Judge.bearing]) — the claim itself, or only that it bears on its parent.
+ */
+enum class Bearing {
+    /** It disputes the claim itself: attached as a con argument of the claim (the ordinary path). */
+    DISPUTES_CLAIM,
+    /** It grants the claim but denies it bears on its parent: attached as an UNDERCUT of the claim's link. */
+    DENIES_BEARING,
+    /** Neither: not a real argument about the claim or its bearing — rejected as a DROP. */
+    NEITHER,
 }
 
 /** A proposed argument awaiting triage. */
@@ -128,4 +144,16 @@ interface Judge {
      * 1 − p(an important consideration on that side is still missing).
      */
     fun saturation(ctx: ClaimContext, side: Side): Double
+
+    /**
+     * Model B, asked after [triage] for the con candidates it would ADD to a
+     * claim Jev already believes ([ExplorationPolicy.asksBearing]): one answer
+     * per text in [candidates], aligned. `ctx` is the claim's context; [link]
+     * is its connection to its parent (`link.argument` is `ctx.claim`). The
+     * default answers [Bearing.DISPUTES_CLAIM] for every candidate — the
+     * behaviour before this question existed — so a judge that does not
+     * implement it changes nothing. A wrapper around a judge must forward it.
+     */
+    fun bearing(ctx: ClaimContext, link: LinkContext, candidates: List<String>): List<Bearing> =
+        candidates.map { Bearing.DISPUTES_CLAIM }
 }

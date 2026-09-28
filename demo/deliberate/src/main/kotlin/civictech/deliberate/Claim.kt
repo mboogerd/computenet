@@ -50,6 +50,12 @@ internal class Claim(
     var duplicatesDropped = 0
     val triage = sortedMapOf<TriageAction, Int>()
     val alsoProposedBy = mutableListOf<String>()
+    /**
+     * EXP-03 REFINE (model B): the texts of candidates triaged as a specific
+     * instance of or evidence for this argument, in arrival order — recorded
+     * here instead of as child claims. Distinct by normalized text.
+     */
+    val evidence = mutableListOf<String>()
     /** EXP-03 MERGE rewrote this argument together with an overlapping one. */
     var merged = false
     var error: String? = null

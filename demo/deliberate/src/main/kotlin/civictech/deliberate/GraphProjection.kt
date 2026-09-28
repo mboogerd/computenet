@@ -52,6 +52,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                     duplicatesDropped = c.duplicatesDropped, error = c.error,
                     alsoProposedBy = c.alsoProposedBy.toList().ifEmpty { null },
                     merged = c.merged.takeIf { it },
+                    evidence = c.evidence.toList().ifEmpty { null },
                     triage = c.triage.mapKeys { it.key.name }.ifEmpty { null },
                     activity = activityOf(c),
                     undercuts = onLink?.takeIf { c.side == Polarity.ATTACK }?.ref?.id?.toString(),

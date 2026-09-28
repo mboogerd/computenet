@@ -268,6 +268,58 @@ class JevJudge(
         }
     }
 
+    /**
+     * Model B in one request: per candidate a `b<i>` Choice — does this con
+     * against a claim Jev already believes dispute the claim, deny that it
+     * bears on its parent, or neither?
+     */
+    override fun bearing(ctx: ClaimContext, link: LinkContext, candidates: List<String>): List<Bearing> {
+        if (candidates.isEmpty()) return emptyList()
+        val state = buildJsonObject {
+            put("root_question", ctx.question)
+            putStrings("path_from_root", ctx.path)
+            put("parent_claim", link.parent)
+            put("claim", ctx.claim)
+            put("claim_direction", link.side.verb)
+        }
+        val questions = LinkedHashMap<String, JsonObject>()
+        candidates.forEachIndexed { i, text ->
+            questions["b$i"] = buildJsonObject {
+                put("type", "choice")
+                putJsonObject("instructions") {
+                    put("candidate_argument", text)
+                    put(
+                        "question",
+                        "`candidate_argument` was proposed as an argument against `claim`, which is offered as a reason " +
+                            "${link.side.preposition} `parent_claim` (`claim_direction`). Does it dispute whether `claim` " +
+                            "is true, or does it grant `claim` and deny only that it bears on `parent_claim`?",
+                    )
+                }
+                putJsonObject("criteria") {
+                    put(
+                        Bearing.DISPUTES_CLAIM.name,
+                        "Disputes the claim: it gives a reason to think `claim` itself is false or overstated.",
+                    )
+                    put(
+                        Bearing.DENIES_BEARING.name,
+                        "Denies the bearing: even granting that `claim` is true, it argues that `claim` does not show " +
+                            "what it is offered to show about `parent_claim` — the connection fails, not the claim.",
+                    )
+                    put(
+                        Bearing.NEITHER.name,
+                        "Neither: it is not a real argument about `claim` or about its bearing on `parent_claim` " +
+                            "(off-topic, incoherent, a question, or a restatement).",
+                    )
+                }
+            }
+        }
+        val answers = evaluate(state, questions)
+        return candidates.indices.map { i ->
+            val b = choiceOf(answers.getValue("b$i"))
+            Bearing.entries.firstOrNull { it.name == b } ?: throw JevException(null, "unknown bearing answer '$b'")
+        }
+    }
+
     override fun saturation(ctx: ClaimContext, side: Side): Double {
         val state = buildJsonObject {
             put("root_question", ctx.question)
