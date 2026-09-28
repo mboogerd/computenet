@@ -93,10 +93,14 @@ internal class Claim(
     /** Texts from the root down to (excluding) this claim. */
     fun path(): List<String> = generateSequence(parent) { it.parent }.map { it.text }.toList().asReversed()
 
-    /** What [ExplorationPolicy] sees of it. */
-    fun view() = ClaimView(
+    /**
+     * What [ExplorationPolicy] sees of it; [sensitivity] (model C) is the
+     * sensitivity layer's d root / d this node, which only the graph knows.
+     */
+    fun view(sensitivity: Double? = null) = ClaimView(
         isRoot = parent == null, isLink = isLink, depth = depth, status = status, override = override,
         forceRound = forceRound, rounds = rounds, roundLimit = roundLimit, reach = reach, contribution = contribution,
+        sensitivity = sensitivity, plausibility = if (isLink) argument!!.edge?.strength else plausibility,
         pros = countOf(Polarity.SUPPORT), cons = countOf(Polarity.ATTACK), jevSaturated = saturated.toSet(),
         waiting = waiting, rewriteInFlight = rewriteInFlight,
     )
@@ -128,21 +132,19 @@ internal class EngineState {
     val edges = LinkedHashMap<CellRef, Edge>()
     val questions = LinkedHashMap<CellRef, String>()
     val treeSize = HashMap<CellRef, Int>()
-    /** EXP-10: per question, the yield of every recorded non-root round in completion order. */
+    /** EXP-10: per question, the yield of every recorded non-root round in completion order (shown, no longer a stop). */
     val yields = HashMap<CellRef, MutableList<Double>>()
-    /** EXP-10: questions stopped because their returns diminished. */
-    val diminished = HashSet<CellRef>()
     /** CTL-05: paused questions — no new round starts in them except a forced one (CTL-02). */
     val paused = HashSet<CellRef>()
 
     /** What [ExplorationPolicy] sees of question [root]. */
     fun questionView(root: CellRef) = QuestionView(
-        treeSize = treeSize.getValue(root), diminished = root in diminished, paused = root in paused,
+        treeSize = treeSize.getValue(root), paused = root in paused,
     )
 
     /** The snapshot's tolerant view: the old projection reported an absent tree as empty. */
     fun projectionQuestionView(root: CellRef) = QuestionView(
-        treeSize = treeSize[root] ?: 0, diminished = root in diminished, paused = root in paused,
+        treeSize = treeSize[root] ?: 0, paused = root in paused,
     )
 
     /** What proposers and Jev are told about [c] (a claim or a link). */

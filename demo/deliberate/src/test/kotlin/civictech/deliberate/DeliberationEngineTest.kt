@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -158,8 +159,9 @@ class DeliberationEngineTest {
         assertEquals(6, config.maxArgsPerSide)
         assertEquals(3, config.maxArgsPerSideChild)
         assertEquals(0.22, config.saturation)
-        assertEquals(0.10, config.minInfluence)
-        assertEquals(DeliberationEngine.YieldStop(window = 8, ratio = 0.6, minClaims = 40), config.yieldStop)
+        // Model C: the value-of-information stop replaced the relevance floor, maxDepth and the yield stop.
+        assertEquals(0.01, config.voiEpsilon)
+        assertEquals(Int.MAX_VALUE, config.maxDepth)
         assertEquals(180, config.maxClaims)
     }
 
@@ -317,28 +319,97 @@ class DeliberationEngineTest {
         assertEquals(mapOf("ADD" to 4, "DUPLICATE" to 2), g.node(root).triage)
     }
 
+    /** Model C: waits until every node's sensitivity is known and has stopped moving (the cells settled). */
+    private fun settle(graph: CredenceGraph = service) {
+        var last: List<Double?>? = null
+        awaitUntil("the sensitivity cells settle") {
+            Thread.sleep(25)
+            val now = graph.graph().map { it.sensitivity }
+            (now.none { it == null } && now == last).also { last = now }
+        }
+    }
+
     @Test
-    fun `irrelevant claims are pruned and the root is never relevance-judged`() {
-        // influence = relevance × reach(0.8): codex 0.16 < 0.3 ≤ 0.72 others
-        val judge = FakeJudge(relevance = { if (it.claim.startsWith("codex")) 0.2 else 0.9 })
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, minInfluence = 0.3))
+    fun `a question stops when its value of information falls below eps, with budget remaining`() {
+        // Every argument's premise is all but settled (p = 0.999): 4·p·(1 − p) ≈ 0.004, so whatever its
+        // sensitivity (at most 1 here), no argument is worth a round at ε = 0.01. The root always is.
+        val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
+        val config = DeliberationEngine.Config(maxRounds = 1, argsPerCall = 1, exploreLinks = false)
+        val e = engine(judge = judge, config = config)
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
+        val q = g.questions.single()
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         assertEquals(4, kids.size)
-        kids.forEach { k ->
-            if (k.proposer == "codex") {
-                assertEquals(Status.PRUNED, k.status)
-                assertEquals(0.2, k.relevance)
-                assertTrue(g.childrenOf(CellRef(java.util.UUID.fromString(k.ref))).isEmpty())
-            } else {
-                assertEquals(Status.ROUND_LIMIT, k.status)
-            }
-        }
-        assertTrue("Q?" !in judge.relevanceCalls)
+        assertTrue(kids.all { it.status == Status.DIMINISHING && it.rounds == 0 && it.plausibility == 0.999 }, kids.toString())
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        // Budget remaining: 5 of 180 claims, no depth limit — the value of information stopped it.
+        assertEquals(5, q.claims)
+        assertTrue(q.claims < config.maxClaims)
+        assertEquals("voi", q.stoppedBy)
+        assertTrue(!q.active)
+        // The same question with the stop off keeps growing below the root.
+        val open = engine(judge = judge, config = config.copy(voiEpsilon = 0.0, maxDepth = 1))
+        val root2 = open.ask("Q?")
+        open.idle()
+        val g2 = open.snapshot()
+        assertTrue(g2.childrenOf(root2).map { g2.claim(it.source!!) }.all { it.status == Status.ROUND_LIMIT && it.rounds == 1 })
     }
 
+    @Test
+    fun `the hard cost cap still stops a question whose value of information stays high`() {
+        // p = ½ everywhere: every argument keeps its whole sensitivity (≈ 0.2 at depth 1), far above ε.
+        val config = DeliberationEngine.Config(maxRounds = 2, argsPerCall = 1, maxClaims = 7, exploreLinks = false)
+        val e = engine(config = config)
+        val root = e.ask("Q?")
+        e.idle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        assertEquals(7, q.claims)
+        assertEquals("budget", q.stoppedBy)
+        assertTrue(g.claims().none { it.status == Status.DIMINISHING }, g.claims().toString())
+        val capped = g.claims().filter { it.status == Status.BUDGET }
+        assertTrue(capped.isNotEmpty())
+        assertEquals(DeliberationEngine.Config.BUDGET_EXHAUSTED, g.node(root).error)
+        awaitUntil("the capped arguments' sensitivities are known") {
+            e.snapshot().claims().filter { it.status == Status.BUDGET }.all { it.sensitivity != null }
+        }
+        val policy = ExplorationPolicy(config)
+        for (n in e.snapshot().claims().filter { it.status == Status.BUDGET }) {
+            val voi = policy.voiOf(ClaimView(sensitivity = n.sensitivity, plausibility = n.plausibility))
+            assertTrue(voi >= 10 * config.voiEpsilon, "a capped argument was still well worth a round: $voi")
+        }
+    }
+
+    @Test
+    fun `each node carries its sensitivity and the question its top-3 cruxes`() {
+        val plausibility = mapOf("P1" to 0.5, "P2" to 0.9, "C1" to 0.6, "C2" to 0.99)
+        val p = FakeProposer("claude") { ctx, side, _ ->
+            if (ctx.path.isNotEmpty()) emptyList()
+            else if (side == Polarity.SUPPORT) listOf("P1", "P2") else listOf("C1", "C2")
+        }
+        val judge = FakeJudge(plausibility = { plausibility[it] ?: 0.5 }, strength = { if (it == "P2") 0.6 else 0.8 })
+        val e = engine(judge = judge, proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1))
+        val root = e.ask("Q?")
+        e.idle()
+        settle()
+        val g = e.snapshot()
+        val q = g.questions.single()
+        assertEquals(1.0, g.node(root).sensitivity!!, 1e-9)
+        val kids = g.childrenOf(root).map { g.claim(it.source!!) }
+        assertTrue(kids.filter { it.text!!.startsWith("P") }.all { it.sensitivity!! > 0 }, kids.toString())
+        assertTrue(kids.filter { it.text!!.startsWith("C") }.all { it.sensitivity!! < 0 }, kids.toString())
+        // Every link carries its edge's sensitivity too; a stronger pro edge moves the root more.
+        assertTrue(g.edges().all { it.sensitivity != null })
+        // Cruxes: the 3 highest |sensitivity| × 4·p·(1 − p) below the root (a link's p is its strength), best first.
+        fun score(n: NodeDto) = abs(n.sensitivity!!) * 4 * (n.plausibility ?: n.strength!!) * (1 - (n.plausibility ?: n.strength!!))
+        val expected = (kids + g.edges()).sortedByDescending(::score).take(3).map { it.ref }
+        assertEquals(expected, q.cruxes)
+        assertTrue(g.node(root).ref !in q.cruxes)
+        // The near-certain con is no crux, whatever it could move.
+        assertTrue(g.text("C2").ref !in q.cruxes)
+    }
     @Test
     fun `claims beyond maxDepth are DEPTH_LIMIT and never explored`() {
         val judge = FakeJudge()
@@ -618,7 +689,7 @@ class DeliberationEngineTest {
         val e = engine(
             judge = judge,
             proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, minInfluence = 0.0),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, voiEpsilon = 0.0),
         )
         val root = e.ask("Q?")
         e.idle()
@@ -643,7 +714,7 @@ class DeliberationEngineTest {
             override fun assess(question: String, path: List<String>, child: String, side: Side): Assessment = error("jev down")
         }
         val e = engine(judge = judge, proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, minInfluence = 0.5))
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
@@ -651,7 +722,7 @@ class DeliberationEngineTest {
         assertEquals(2, kids.size)
         kids.forEach {
             assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.reach)
-            // relevance and quality fall back to 1: contribution = reach alone (0.5 ≥ 0.5, expanded)
+            // relevance and quality fall back to 1: contribution = reach alone (shown; model C orders by sensitivity)
             assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.contribution)
             assertNull(it.relevance)
             assertNull(it.quality)
@@ -663,58 +734,35 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `contribution below the floor prunes an argument without asking anything at dequeue`() {
-        val judge = FakeJudge(strength = { child -> if (child.contains("support")) 0.8 else 0.4 })
+    fun `EXPAND bypasses the value-of-information gate for that claim only`() {
+        // Every argument's premise is all but settled: none is worth a round on its own.
+        val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
         val e = engine(
             judge = judge,
             proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, minInfluence = 0.5),
-        )
-        val root = e.ask("Q?")
-        e.idle()
-        val graph = e.snapshot()
-        val kids = graph.childrenOf(root).map { graph.claim(it.source!!) }
-        val reachable = kids.single { it.text!!.contains("support") }
-        val decayed = kids.single { it.text!!.contains("attack") }
-        assertEquals(Status.ROUND_LIMIT, reachable.status)
-        assertEquals(Status.PRUNED, decayed.status)
-        assertEquals(0.4, decayed.contribution)
-        assertEquals(0, decayed.rounds)
-    }
-
-    @Test
-    fun `influence gate expands relevant-and-reachable claims and prunes decayed ones`() {
-        // relevance 0.5 everywhere, strength 0.8: influence 0.4 at depth 1, 0.32 at depth 2.
-        val judge = FakeJudge(relevance = { 0.5 })
-        val e = engine(
-            judge = judge,
-            proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1, minInfluence = 0.35),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1),
         )
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
-        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.ROUND_LIMIT && it.relevance == 0.5 })
-        val d2 = g.claims().filter { it.depth == 2 }
-        assertEquals(4, d2.size)
-        assertTrue(d2.all { it.status == Status.PRUNED && it.relevance == 0.5 }, d2.toString())
-        assertTrue(g.claims().none { it.depth == 3 })
+        val d1 = g.claims().filter { it.depth == 1 }
+        assertEquals(2, d1.size)
+        assertTrue(d1.all { it.status == Status.DIMINISHING && it.rounds == 0 }, d1.toString())
         assertEquals(Status.ROUND_LIMIT, g.node(root).status)
 
-        // CTL-02: EXPAND bypasses the influence gate for that claim only.
-        val pruned = g.ref(d2.first())
+        // CTL-02: EXPAND bypasses the gate for that claim only.
+        val stopped = g.ref(d1.first())
         val relevanceBefore = judge.relevanceCalls.size
-        e.setOverride(pruned, Override.EXPAND)
+        e.setOverride(stopped, Override.EXPAND)
         e.idle()
         val g2 = e.snapshot()
-        assertEquals(Status.ROUND_LIMIT, g2.node(pruned).status)
-        val grandkids = g2.childrenOf(pruned).map { g2.claim(it.source!!) }
+        assertEquals(1, g2.node(stopped).rounds)
+        val grandkids = g2.childrenOf(stopped).map { g2.claim(it.source!!) }
         assertEquals(2, grandkids.size)
-        // its depth-3 children face the gate again: 0.5 × 0.8³ = 0.256 < 0.35
-        assertTrue(grandkids.all { it.status == Status.PRUNED })
+        // its children face the gate again
+        assertTrue(grandkids.all { it.status == Status.DIMINISHING && it.rounds == 0 })
         assertEquals(relevanceBefore + 2, judge.relevanceCalls.size)
     }
-
     @Test
     fun `a side at maxArgsPerSide is saturated without asking Jev and never overfilled in a round`() {
         val judge = FakeJudge(saturation = { _, _ -> 0.0 })
@@ -769,74 +817,66 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `the influence gate runs before the budget so rejected claims read PRUNED, not BUDGET`() {
-        val judge = FakeJudge(relevance = { if (it.claim.startsWith("codex")) 0.1 else 1.0 })
+    fun `the hard cap runs before the value-of-information gate so capped claims read BUDGET`() {
+        // Changed by model C: this was "the influence gate runs before the budget" (PRUNED first);
+        // the relevance floor is gone, and the hard cap now wins over a low value of information.
+        val judge = FakeJudge(plausibility = { if (it.startsWith("codex")) 0.999 else 0.5 })
         val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1, maxClaims = 5))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         assertEquals(4, kids.size)
-        assertTrue(kids.filter { it.proposer == "codex" }.all { it.status == Status.PRUNED })
-        assertTrue(kids.filter { it.proposer == "claude" }.all { it.status == Status.BUDGET })
+        assertTrue(kids.all { it.status == Status.BUDGET }, kids.toString())
     }
-
+    /**
+     * Model C rewrote this test (it was "exploration follows contribution and a strong
+     * claim's next round competes via roundDecay", ordered by reach × relevance × quality
+     * with a relevance floor): the queue now follows |d root / d c| × 4·p·(1 − p).
+     */
     @Test
-    fun `exploration follows contribution and a strong claim's next round competes via roundDecay`() {
-        // Root: 4 arguments per side in one round (its cap) → 8 depth-1 claims with
-        // contribution = strength (relevance 1) × quality.
-        val strength = mapOf("a1" to 0.95, "s1" to 0.9, "s4" to 0.8, "s3" to 0.7, "a2" to 0.6, "s2" to 0.5, "a3" to 0.42, "a4" to 0.85)
+    fun `exploration follows sensitivity times the plausibility uncertainty`() {
+        // Four pros of the root, all of strength 0.8. Under DF-QuAD (root base b = ½, no cons)
+        // d root / d c_i = (1 − b)·s·∏_{j≠i}(1 − s·p_j): the likelier a sibling, the less room
+        // it leaves the others. Their plausibilities make the three orders all differ.
+        val p = mapOf("s1" to 0.5, "s2" to 0.7, "s3" to 0.85, "s4" to 0.95)
         val firstCalls = CopyOnWriteArrayList<String>()
-        val n = AtomicInteger()
-        val p = FakeProposer("claude") { ctx, side, _ ->
+        val proposer = FakeProposer("claude") { ctx, side, _ ->
             when {
-                ctx.path.isEmpty() -> if (side == Polarity.SUPPORT) listOf("s1", "s2", "s3", "s4") else listOf("a1", "a2", "a3", "a4")
+                ctx.path.isEmpty() -> if (side == Polarity.SUPPORT) p.keys.toList() else emptyList()
                 else -> {
                     if (side == Polarity.SUPPORT) firstCalls += ctx.claim
-                    listOf("x${n.incrementAndGet()}")
+                    emptyList()
                 }
             }
         }
         val judge = FakeJudge(
-            strength = { strength[it] ?: 0.8 },
-            quality = { if (it == "a4") 0.2 else 1.0 }, // a4: strong link, badly constructed
+            plausibility = { p[it] ?: 0.5 },
+            strength = { 0.8 },
+            // The root's round ends here: let the sensitivity cells settle before the worker picks.
+            saturation = { ctx, _ -> if (ctx.path.isEmpty()) settle(); 0.0 },
         )
-        // Budget: 1 + 8 + 6 first rounds × 2 + 2 second rounds × 2 = 25.
         val e = engine(
             judge = judge,
-            proposers = listOf(p),
+            proposers = listOf(proposer),
             config = DeliberationEngine.Config(
-                argsPerCall = 4, maxRounds = 2, maxDepth = 1, maxClaims = 25, minInfluence = 0.35,
-                maxArgsPerSide = 4, maxArgsPerSideChild = 3, roundDecay = 0.5, workers = 1, exploreLinks = false,
+                argsPerCall = 4, maxRounds = 1, maxDepth = 1, voiEpsilon = 0.0,
+                maxArgsPerSide = 4, workers = 1, exploreLinks = false,
             ),
         )
-        val root = e.ask("Q?")
+        e.ask("Q?")
         e.idle()
+        fun sensitivity(i: String) = 0.5 * 0.8 * p.filterKeys { it != i }.values.fold(1.0) { acc, pj -> acc * (1 - 0.8 * pj) }
+        fun voi(i: String) = sensitivity(i) * 4 * p.getValue(i) * (1 - p.getValue(i))
+        val expected = p.keys.sortedByDescending(::voi)
+        assertEquals(listOf("s2", "s1", "s3", "s4"), expected, "the fixture's own arithmetic")
+        assertTrue(p.keys.sortedByDescending { 4 * p.getValue(it) * (1 - p.getValue(it)) } != expected, "not uncertainty alone")
+        assertTrue(p.keys.sortedByDescending(::sensitivity) != expected, "not sensitivity alone")
+        assertEquals(expected, firstCalls.toList())
+        // The DTO's sensitivities are those derivatives.
         val g = e.snapshot()
-        assertEquals(25, g.claims().size)
-        assertEquals(1.0, g.node(root).contribution)
-        // Firsts in contribution order; then a1 (0.95 × 0.5) and s1 (0.9 × 0.5) go before a3's first
-        // round (0.42) — which then finds the budget spent.
-        assertEquals(listOf("a1", "s1", "s4", "s3", "a2", "s2", "a1", "s1"), firstCalls.toList())
-        val level1 = g.claims().filter { it.depth == 1 }.associateBy { it.text }
-        assertEquals(0.2 * 0.85, level1.getValue("a4").contribution!!, 1e-9)
-        assertEquals(0.2, level1.getValue("a4").quality)
-        // Low quality: never expanded, whatever the budget.
-        assertEquals(Status.PRUNED, level1.getValue("a4").status)
-        assertEquals(0, level1.getValue("a4").rounds)
-        // The weakest one that passed the floor never got the budget.
-        assertEquals(Status.BUDGET, level1.getValue("a3").status)
-        assertEquals(0, level1.getValue("a3").rounds)
-        // The explored ones end ROUND_LIMIT: by their round limit, or on the budget.
-        for (t in listOf("a1", "s1")) assertEquals(2, level1.getValue(t).rounds)
-        for (t in listOf("s4", "s3", "a2", "s2")) {
-            val k = level1.getValue(t)
-            assertEquals(1, k.rounds)
-            assertEquals(Status.ROUND_LIMIT, k.status)
-            assertEquals(DeliberationEngine.Config.BUDGET_EXHAUSTED, k.error)
-        }
+        for ((t, _) in p) assertEquals(sensitivity(t), g.text(t).sensitivity!!, 1e-4, t)
     }
-
     @Test
     fun `a strong child runs before its still-exploring parent's decayed next round`() {
         val calls = CopyOnWriteArrayList<String>()
@@ -848,17 +888,23 @@ class DeliberationEngineTest {
             }
         }
         val e = engine(
-            judge = FakeJudge(strength = { if (it == "strong child") 0.9 else 0.8 }),
+            // Model C: root base 0.2, so d root / d child = (1 − 0.2)·0.9 = 0.72 at p = ½ — above the
+            // root's decayed second round (1 × 0.5). Settle the sensitivity cells before the worker picks.
+            judge = FakeJudge(
+                plausibility = { if (it == "Q?") 0.2 else 0.5 },
+                strength = { if (it == "strong child") 0.9 else 0.8 },
+                saturation = { ctx, _ -> if (ctx.path.isEmpty()) settle(); 0.0 },
+            ),
             proposers = listOf(p),
             config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0,
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, voiEpsilon = 0.0,
                 maxArgsPerSide = 10, maxArgsPerSideChild = 10, roundDecay = 0.5, workers = 1,
             ),
         )
         e.ask("Q?")
         e.idle()
 
-        // The child (0.9) joins the queue after assessment and beats the
+        // The child (0.72) joins the queue after assessment and beats the
         // still-exploring root's second round (1.0 × 0.5).
         assertEquals(listOf("Q?", "strong child", "Q?"), calls.take(3))
     }
@@ -901,7 +947,7 @@ class DeliberationEngineTest {
             // Root round two (priority 0.5) reaches P1 before the queued 0.4
             // child, keeping it eligible for REPLACE/REFINE.
             config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0, workers = 1,
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, voiEpsilon = 0.0, workers = 1,
             ),
         )
         val root = e.ask("Q?")
@@ -995,7 +1041,7 @@ class DeliberationEngineTest {
             judge = judge,
             proposers = listOf(p),
             config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0, workers = 1,
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, voiEpsilon = 0.0, workers = 1,
             ),
         )
         val root = e.ask("Q?")
@@ -1100,7 +1146,7 @@ class DeliberationEngineTest {
             judge = FakeJudge(strength = { 0.9 }),
             proposers = listOf(p),
             config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0,
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, voiEpsilon = 0.0,
                 maxArgsPerSide = 10, maxArgsPerSideChild = 10, workers = 1,
             ),
         )
@@ -1200,7 +1246,7 @@ class DeliberationEngineTest {
             judge = judge,
             proposers = listOf(claude, codex),
             // U sits one level below P's link, which is at P's depth (1).
-            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 2, minInfluence = 0.0),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 2, voiEpsilon = 0.0),
         )
         val root = e.ask("Q?")
         e.idle()
@@ -1250,7 +1296,7 @@ class DeliberationEngineTest {
         val e = engine(
             judge = judge,
             proposers = listOf(claude),
-            config = DeliberationEngine.Config(argsPerCall = 3, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false),
+            config = DeliberationEngine.Config(argsPerCall = 3, maxRounds = 1, maxDepth = 1, voiEpsilon = 0.0, exploreLinks = false),
         )
         e.ask("Q?")
         e.idle()
@@ -1325,7 +1371,7 @@ class DeliberationEngineTest {
         }
         val e = engine(
             judge = judge, proposers = listOf(claude),
-            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false),
+            config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, voiEpsilon = 0.0, exploreLinks = false),
         )
         e.ask("Q?")
         e.idle()
@@ -1387,7 +1433,7 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `a link is queued by its argument's contribution times the uncertainty of its strength and explored like a claim`() {
+    fun `a link is queued by its edge's sensitivity times the uncertainty of its strength and explored like a claim`() {
         val p = linkProposer(rootPros = listOf("Strong"), rootCons = listOf("Even")) { link, side, _ ->
             if (link.argument == "Even") listOf(if (side == Polarity.SUPPORT) "Even holds" else "Even fails") else emptyList()
         }
@@ -1399,8 +1445,11 @@ class DeliberationEngineTest {
         val strong = g.linkOf(g.text("Strong"))
         val even = g.linkOf(g.text("Even"))
         // contribution(argument) x 4 s (1 - s): a decisive link is settled, an even one is wide open.
+        // Model C: its value of information is |sensitivity of the edge| × 4·s·(1 − s), so the decisive
+        // link is not worth a round (DIMINISHING; it was PRUNED by the relevance floor before).
         assertEquals(0.0, strong.contribution!!, 1e-9)
-        assertEquals(Status.PRUNED, strong.status)
+        assertEquals(Status.DIMINISHING, strong.status)
+        assertTrue(even.sensitivity != null && even.sensitivity!! < 0, "the con's link pulls the root down: $even")
         assertEquals(0, strong.rounds)
         assertEquals(0.5, even.contribution!!, 1e-9)
         assertEquals(0.5, even.reach!!, 1e-9)
@@ -1491,7 +1540,7 @@ class DeliberationEngineTest {
             judge = FakeJudge(strength = { 0.5 }), proposers = listOf(p),
             config = DeliberationEngine.Config(
                 argsPerCall = 1, maxRounds = 3, maxDepth = 8, maxClaims = 3,
-                minInfluence = 0.0, workers = 1, yieldStop = null,
+                voiEpsilon = 0.0, workers = 1,
             ),
         )
         e.ask("Q?")
@@ -1501,8 +1550,8 @@ class DeliberationEngineTest {
         val links = g.edges()
 
         // Every non-root claim creates exactly one link, so the claim ceiling
-        // is also a structural ceiling on links. Disabling EXP-10 still cannot
-        // produce an unbounded chain.
+        // is also a structural ceiling on links. Disabling the value-of-information
+        // stop still cannot produce an unbounded chain.
         assertEquals(3, q.claims)
         assertEquals(q.claims - 1, links.size)
         assertEquals(1, links.sumOf { it.rounds ?: 0 })
@@ -1778,7 +1827,7 @@ class DeliberationEngineTest {
         }
         // Links off: a running link round between persistNow() and the `before` snapshot would race
         // the comparison (CI 36341232982); link restore has its own durability test.
-        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false)
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, voiEpsilon = 0.0, exploreLinks = false)
         val judge = FakeJudge(
             strength = { if (it == "claude-SUPPORT") 0.9 else 0.8 },
             triage = { _, cands -> cands.map { if (it.text == "codex-ATTACK") Triage(TriageAction.UNDERCUT, 0) else Triage(TriageAction.ADD) } },
@@ -1952,7 +2001,7 @@ class DeliberationEngineTest {
     // ------------------------------------------------------------ EXP-05 iteration 5, EXP-10
 
     @Test
-    fun `contribution is reach x relevance x quality and the default floor is 0_10`() {
+    fun `contribution is reach x relevance x quality, shown but no longer a floor`() {
         // quality is Jev's construction Noul alone: no canonical-form factor scales or gates it.
         val judge = FakeJudge(
             strength = { 0.8 },
@@ -1969,15 +2018,14 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         val kept = kids.single { it.text!!.contains("support") }
-        val pruned = kids.single { it.text!!.contains("attack") }
-        // 0.8 × 0.5 × 0.3 = 0.12 ≥ 0.10: explored; 0.8 × 0.5 × 0.2 = 0.08 < 0.10: PRUNED.
+        val low = kids.single { it.text!!.contains("attack") }
         assertEquals(0.12, kept.contribution!!, 1e-9)
         assertEquals(0.3, kept.quality)
         assertEquals(Status.ROUND_LIMIT, kept.status)
-        assertEquals(0.08, pruned.contribution!!, 1e-9)
-        assertEquals(Status.PRUNED, pruned.status)
+        // Changed by model C: 0.08 was below the 0.10 floor (PRUNED); the floor is gone.
+        assertEquals(0.08, low.contribution!!, 1e-9)
+        assertEquals(Status.ROUND_LIMIT, low.status)
     }
-
     @Test
     fun `round yield is value x novelty per argument asked`() {
         // The root attaches one child but records no yield. The child's round asks
@@ -2003,7 +2051,7 @@ class DeliberationEngineTest {
         val e = engine(
             judge = judge,
             proposers = listOf(proposer),
-            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, exploreLinks = false),
+            config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1, voiEpsilon = 0.0, exploreLinks = false),
         )
         e.ask("Q?")
         e.idle()
@@ -2015,207 +2063,45 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `a high-yield root followed by flat child yields does not stop`() {
-        val proposer = FakeProposer("claude") { ctx, side, max ->
-            when {
-                ctx.path.isEmpty() -> List(max) { "root-${side.name.lowercase()}-$it" }
-                ctx.path.size == 1 -> listOf("flat-${ctx.claim}-${side.name.lowercase()}")
-                else -> emptyList()
-            }
-        }
-        val judge = FakeJudge(strength = { if (it.startsWith("root-")) 1.0 else 0.1 })
-        val e = engine(
-            judge = judge,
-            proposers = listOf(proposer),
-            config = DeliberationEngine.Config(
-                argsPerCall = 3, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, workers = 1,
-                yieldStop = DeliberationEngine.YieldStop(window = 2, ratio = 0.6, minClaims = 0), exploreLinks = false,
-            ),
-        )
-        e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        val q = g.questions.single()
-        assertEquals(6, q.yieldRounds, "the root's high-yield round must not be in the history")
-        assertEquals(q.yieldEarlier!!, q.yieldRecent!!, 1e-12)
-        assertNull(q.stoppedBy)
-        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
-    }
-
-    @Test
-    fun `a decline after the question exhausts itself records no diminishing stop`() {
-        val proposer = FakeProposer("claude") { ctx, side, _ ->
-            when {
-                ctx.path.isEmpty() -> listOf(if (side == Polarity.SUPPORT) "first" else "second")
-                ctx.claim == "first" -> listOf("high-${side.name.lowercase()}")
-                ctx.claim == "second" -> listOf("low-${side.name.lowercase()}")
-                else -> emptyList()
-            }
-        }
-        val judge = FakeJudge(
-            strength = { 1.0 },
-            triage = { ctx, c -> c.map { Triage(if (ctx.claim == "second") TriageAction.DROP else TriageAction.ADD) } },
-        )
-        val e = engine(
-            judge = judge,
-            proposers = listOf(proposer),
-            config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 1, maxDepth = 1, minInfluence = 0.0, workers = 1,
-                yieldStop = DeliberationEngine.YieldStop(window = 1, ratio = 0.6, minClaims = 0), exploreLinks = false,
-            ),
-        )
-        e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        val q = g.questions.single()
-        assertEquals(2, q.yieldRounds)
-        assertTrue(q.yieldRecent!! < 0.6 * q.yieldEarlier!!, q.toString())
-        assertNull(q.stoppedBy, "the decline halted no QUEUED claim")
-        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
-    }
-
-    /** Triage keeps the first [keep] candidates and drops every later one as an untargeted DUPLICATE (yield 0). */
-    private fun decayingJudge(keep: Int, allowAll: AtomicBoolean = AtomicBoolean(false)): FakeJudge {
-        val seen = AtomicInteger()
-        return FakeJudge(triage = { _, c ->
-            c.map { if (allowAll.get() || seen.incrementAndGet() <= keep) Triage(TriageAction.ADD) else Triage(TriageAction.DUPLICATE) }
-        })
-    }
-
-    private val deepConfig = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 3, minInfluence = 0.0)
-
-    @Test
-    fun `a question whose yields decay stops and its queued claims end DIMINISHING`() {
-        val e = engine(judge = decayingJudge(keep = 50), config = deepConfig)
-        val root = e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        val q = g.questions.single()
-        assertEquals("diminishing", q.stoppedBy)
-        assertEquals(51, q.claims)
-        assertTrue(q.yieldRounds >= 16, q.toString())
-        val diminishing = g.claims().filter { it.status == Status.DIMINISHING }
-        assertTrue(diminishing.isNotEmpty())
-        assertTrue(g.claims().none { it.status in setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING) })
-        assertTrue(g.claims().none { it.status == Status.BUDGET }, "the budget was never reached")
-        // The series froze at the stop, so it still shows the decline that caused it.
-        assertTrue(q.yieldRecent!! < 0.6 * q.yieldEarlier!!, q.toString())
-        assertTrue(g.node(root).rounds!! >= 1)
-    }
-
-    @Test
-    fun `yields that collapse below the claim floor never stop the question`() {
-        // 20 candidates kept: the tree never reaches 40 claims, so however low its yields, it just runs out.
-        val e = engine(judge = decayingJudge(keep = 20), config = deepConfig)
-        e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        val q = g.questions.single()
-        assertEquals(21, q.claims)
-        assertTrue(q.yieldRounds >= 16, q.toString())
-        assertNull(q.stoppedBy)
-        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
-    }
-
-    @Test
-    fun `flat yields run into the budget, not the yield stop`() {
-        val e = engine(config = deepConfig.copy(maxClaims = 120))
-        e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        assertEquals("budget", g.questions.single().stoppedBy)
-        assertEquals(120, g.questions.single().claims)
-        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
-    }
-
-    @Test
-    fun `yield stop off keeps exploring a decaying question`() {
-        val e = engine(judge = decayingJudge(keep = 50), config = deepConfig.copy(yieldStop = null))
-        e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        assertNull(g.questions.single().stoppedBy)
-        assertTrue(g.claims().none { it.status == Status.DIMINISHING })
-        // yields are still recorded for display
-        assertTrue(g.questions.single().yieldEarlier != null)
-    }
-
-    @Test
-    fun `EXPAND overrides DIMINISHING for one forced round whose arguments meet the stop`() {
-        val allowAll = AtomicBoolean(false)
-        val e = engine(judge = decayingJudge(keep = 50, allowAll = allowAll), config = deepConfig)
-        e.ask("Q?")
-        e.idle()
-        val g = e.snapshot()
-        val target = g.claims().first { it.status == Status.DIMINISHING && it.rounds == 0 && it.depth!! < 3 }
-        val ref = g.ref(target)
-        allowAll.set(true)
-        e.setOverride(ref, Override.EXPAND)
-        e.idle()
-        val g2 = e.snapshot()
-        assertEquals(1, g2.node(ref).rounds)
-        // Rounds were left, but the question is stopped: back to DIMINISHING, not ROUND_LIMIT.
-        assertEquals(Status.DIMINISHING, g2.node(ref).status)
-        val kids = g2.childrenOf(ref).map { g2.claim(it.source!!) }
-        assertEquals(4, kids.size) // 2 proposers × 1 per side
-        assertTrue(kids.all { it.status == Status.DIMINISHING && it.rounds == 0 }, kids.toString())
-        assertEquals("diminishing", g2.questions.single().stoppedBy)
-    }
-
-    @Test
-    fun `budget gate wins over a prior diminishing stop for later forced arguments`() {
-        val allowAll = AtomicBoolean(false)
-        val e = engine(
-            judge = decayingJudge(keep = 50, allowAll = allowAll),
-            config = deepConfig.copy(maxClaims = 55, workers = 1),
-        )
-        e.ask("Q?")
-        e.idle()
-        val stopped = e.snapshot()
-        assertEquals(51, stopped.questions.single().claims)
-        assertEquals("diminishing", stopped.questions.single().stoppedBy)
-        val target = stopped.claims().first { it.status == Status.DIMINISHING && it.rounds == 0 && it.depth!! < 3 }
-
-        allowAll.set(true)
-        e.setOverride(stopped.ref(target), Override.EXPAND)
-        e.idle()
-
-        val resumed = e.snapshot()
-        val kids = resumed.childrenOf(stopped.ref(target)).map { resumed.claim(it.source!!) }
-        assertEquals(4, kids.size)
-        assertTrue(kids.all { it.status == Status.BUDGET }, kids.toString())
-        assertEquals(55, resumed.questions.single().claims)
-        assertEquals("budget", resumed.questions.single().stoppedBy)
-    }
-
-    @Test
-    fun `a restart keeps the yield stop, its yields and the DIMINISHING statuses`() {
-        val dir = java.nio.file.Files.createTempDirectory("deliberate-yield").toFile()
+    fun `sensitivity is derived - a restart recomputes it and a record from before model C still restores`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-voi").toFile()
         val log = java.io.File(dir, "graph.jsonl")
         val store = InMemoryMetaStore()
-        val scheduler2 = VirtualThreadScheduler("deliberate-test-yield")
+        val scheduler2 = VirtualThreadScheduler("deliberate-test-voi")
         try {
+            val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, exploreLinks = false)
             val first = CredenceGraph(host, registry, dfquad, structureLog = log)
-            val e1 = DeliberationEngine(first, decayingJudge(keep = 50),
-                listOf(FakeProposer("claude"), FakeProposer("codex")), deepConfig, store = store)
+            val e1 = DeliberationEngine(first, judge, listOf(FakeProposer("claude"), FakeProposer("codex")), config, store = store)
                 .also { engines += it }
-            e1.ask("Q?")
+            val root = e1.ask("Q?")
             e1.idle()
+            settle(first)
             e1.close()
             val before = e1.snapshot()
-            assertEquals("diminishing", before.questions.single().stoppedBy)
+            assertEquals("voi", before.questions.single().stoppedBy)
+            // Nothing of the sensitivity layer is journaled.
+            assertTrue(store.load().values.none { fields -> fields.keys.any { it.contains("sensitiv") } })
+            // A question record written before model C held the yield stop's flag.
+            val q = EngineRecords.QUESTION_KEY + root.id
+            store.put(q, mapOf("diminished" to "true"))
 
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
             val second = CredenceGraph(host2, registry2, dfquad, structureLog = log)
-            // A judge that would keep everything: nothing may run, since the question is stopped.
-            val e2 = DeliberationEngine(second, FakeJudge(),
-                listOf(FakeProposer("claude"), FakeProposer("codex")), deepConfig, store = store)
+            val e2 = DeliberationEngine(second, FakeJudge(), listOf(FakeProposer("claude"), FakeProposer("codex")), config, store = store)
                 .also { engines += it }
             e2.idle()
+            awaitUntil("the restarted graph recomputes every sensitivity") {
+                val after = e2.snapshot()
+                after.nodes.map { it.ref to it.sensitivity?.let { s -> Math.round(s * 1e9) } } ==
+                    before.nodes.map { it.ref to it.sensitivity?.let { s -> Math.round(s * 1e9) } }
+            }
             val after = e2.snapshot()
-            assertEquals(before.questions, after.questions)
             assertEquals(before.claims().map { it.ref to it.status }, after.claims().map { it.ref to it.status })
+            assertEquals(before.questions.map { it.stoppedBy to it.cruxes }, after.questions.map { it.stoppedBy to it.cruxes })
+            e2.persistNow()
+            assertNull(store.load().getValue(q)["diminished"], "the removed flag is dropped on the next write")
         } finally {
             scheduler2.shutdown()
             dir.deleteRecursively()
@@ -2451,7 +2337,7 @@ class DeliberationEngineTest {
             judge = judge,
             proposers = listOf(claude, codex),
             config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 3, maxDepth = 2, minInfluence = 0.0,
+                argsPerCall = 1, maxRounds = 3, maxDepth = 2, voiEpsilon = 0.0,
                 maxArgsPerSide = 10, exploreLinks = false, workers = 1,
             ),
         )
@@ -2509,7 +2395,7 @@ class DeliberationEngineTest {
         val log = java.io.File(dir, "graph.jsonl")
         val gate = CountDownLatch(1)
         try {
-            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true, minInfluence = 0.0)
+            val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true, voiEpsilon = 0.0)
             val blocked = CountDownLatch(2)
             val gated = FakeProposer("claude") { ctx, _, _ ->
                 if (ctx.path.size == 1 && ctx.link == null) {

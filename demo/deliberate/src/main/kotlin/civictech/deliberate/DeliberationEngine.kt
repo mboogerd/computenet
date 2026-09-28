@@ -4,7 +4,6 @@ import civictech.cell.CellRef
 import civictech.deliberate.ExplorationPolicy.Companion.FINISHED
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -19,8 +18,10 @@ import kotlin.time.Duration
  *
  * Threading: claims are expanded by `config.workers` threads pulling from one
  * priority queue (SPEC §3 "Exploration order"). One queue task runs one round:
- * a task's priority is the claim's contribution (reach × relevance × quality,
- * judged by Jev when the argument was attached; the root is 1) times
+ * a task's priority is the claim's value of information (model C:
+ * |d root / d claim| × 4·p·(1 − p), the sensitivity read from the graph's
+ * sensitivity cells when a worker takes its next task, so the order follows
+ * the dataflow as it stands then; the root is 1) times
  * `roundDecay` per round the claim already ran, so a claim with rounds left
  * re-enters the queue behind stronger fresh work. Within a round the
  * proposers take turns (EXP-02); a turn fans its per-side calls out on a
@@ -76,15 +77,24 @@ class DeliberationEngine(
         val maxArgsPerSide: Int = 6,
         /** EXP-04: the same cap for every claim below the root. */
         val maxArgsPerSideChild: Int = 3,
-        /** EXP-05: a non-root claim is expanded only when its contribution reaches this. */
-        val minInfluence: Double = DEFAULT_MIN_INFLUENCE,
-        /** SPEC §3 "Exploration order": a claim's next round is queued at contribution × roundDecay^(rounds run). */
+        /** SPEC §3 "Exploration order": a claim's next round is queued at its value of information × roundDecay^(rounds run). */
         val roundDecay: Double = 0.5,
-        val maxDepth: Int = 5,
+        /**
+         * Not a stop rule since model C, and not settable from the command line:
+         * an explicit bound on the expanded depth that tests use to keep a fake-driven
+         * tree small. Unbounded by default.
+         */
+        val maxDepth: Int = Int.MAX_VALUE,
+        /** EXP-06: the hard per-question cost cap, in claims. It stands beside the value-of-information stop. */
         val maxClaims: Int = 180,
         val workers: Int = 8,
-        /** EXP-10: the per-question diminishing-returns stop; null disables it (yields are still recorded). */
-        val yieldStop: YieldStop? = YieldStop(),
+        /**
+         * Model C: a node whose value of information ([ExplorationPolicy.voiOf]) is
+         * below this gets no further round (DIMINISHING), so a question stops once
+         * the largest value of information over its remaining nodes is below it
+         * (`--voi-eps`). 0 disables the stop.
+         */
+        val voiEpsilon: Double = DEFAULT_VOI_EPSILON,
         /**
          * SPEC §3 "Links as claims": links compete in the queue like claims. Off, a
          * link is never explored automatically (it ends PRUNED); EXPAND still explores it.
@@ -102,12 +112,19 @@ class DeliberationEngine(
             require(maxArgsPerSide > 0) { "maxArgsPerSide must be positive" }
             require(maxArgsPerSideChild > 0) { "maxArgsPerSideChild must be positive" }
             require(roundDecay in 0.0..1.0) { "roundDecay must be in [0,1]" }
+            require(voiEpsilon >= 0.0) { "voiEpsilon must not be negative" }
         }
 
         companion object {
             const val DEFAULT_SATURATION = 0.22
-            /** Iteration 5: quality is the construction Noul alone; 0.10 balances tree sizes across questions (CALIBRATION.md). */
-            const val DEFAULT_MIN_INFLUENCE = 0.10
+            /**
+             * Model C's ε. A starting value, not a calibrated one: a scratch model review
+             * (2026-09-27, not in the repo) found about half of the explored claims could
+             * not move the root by 0.01.
+             */
+            const val DEFAULT_VOI_EPSILON = 0.01
+            /** EXP-10: the recent-yield window QuestionDto reports (the yield stop itself is gone). */
+            const val YIELD_WINDOW = 8
             /**
              * EXP-05: reach assumes this edge strength when the CRED-02 judgment
              * failed — middling, so one failure neither prunes nor frees a subtree.
@@ -120,28 +137,7 @@ class DeliberationEngine(
         }
     }
 
-    /**
-     * EXP-10: a question stops when, once it holds at least [minClaims] claims
-     * and 2 × [window] recorded non-root round yields, the mean yield of its
-     * last [window] rounds falls below [ratio] × the mean of all its earlier ones.
-     */
-    data class YieldStop(val window: Int = 8, val ratio: Double = 0.6, val minClaims: Int = 40) {
-        init {
-            require(window > 0) { "yield window must be positive" }
-            require(ratio > 0.0) { "yield ratio must be positive" }
-            require(minClaims >= 0) { "yield min claims must not be negative" }
-        }
-
-        /** Whether [yields] (in completion order) have diminished, for a tree of [claims] claims. */
-        fun diminished(yields: List<Double>, claims: Int): Boolean {
-            if (claims < minClaims || yields.size < 2 * window) return false
-            val recent = yields.takeLast(window).average()
-            val earlier = yields.dropLast(window).average()
-            return recent < ratio * earlier
-        }
-    }
-
-    private class Task(val claim: Claim, val priority: Double, val seq: Long, val generation: Long)
+    private class Task(val claim: Claim, val seq: Long, val generation: Long)
 
     private val lock = Any()
     private val serviceLock = Any()
@@ -158,7 +154,11 @@ class DeliberationEngine(
 
     private val pending = AtomicInteger()
     private val idle = Object()
-    private val queue = PriorityBlockingQueue<Task>(64, compareByDescending<Task> { it.priority }.thenBy { it.seq })
+    /**
+     * The ready tasks. Not a priority heap: model C's priorities move with the
+     * sensitivity cells, so [take] ranks the tasks when a worker asks ([currentPriority]).
+     */
+    private val queue = ArrayList<Task>()
     private val seq = AtomicLong()
     @Volatile private var closed = false
     private val calls: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
@@ -422,7 +422,7 @@ class DeliberationEngine(
     private fun work() {
         while (!closed) {
             val task = try {
-                queue.take()
+                take()
             } catch (e: InterruptedException) {
                 return
             }
@@ -434,8 +434,35 @@ class DeliberationEngine(
         }
     }
 
+    /**
+     * SPEC §3 "Exploration order": waits for a ready task and takes the one of
+     * highest [currentPriority] (ties: the earliest queued).
+     */
+    private fun take(): Task {
+        while (true) {
+            val ready = synchronized(queue) {
+                while (queue.isEmpty()) (queue as Object).wait()
+                queue.toList()
+            }
+            val best = synchronized(lock) {
+                ready.maxWith(compareBy<Task> { currentPriority(it) }.thenByDescending { it.seq })
+            }
+            synchronized(queue) { if (queue.remove(best)) return best }
+        }
+    }
+
+    /**
+     * Caller holds [lock]. A task's priority now ([ExplorationPolicy.priorityOf] at
+     * the claim's current sensitivity); a stale task ranks first, so it is discarded at once.
+     */
+    private fun currentPriority(t: Task): Double =
+        if (t.generation != t.claim.queueGeneration) Double.MAX_VALUE else policy.priorityOf(viewOf(t.claim))
+
     /** Caller holds [lock]. What [ExplorationPolicy] sees of [c]'s question. */
     private fun questionView(c: Claim) = state.questionView(c.root)
+
+    /** Caller holds [lock]. What [ExplorationPolicy] sees of [c], with its current sensitivity (model C). */
+    private fun viewOf(c: Claim) = c.view(service.sensitivityOf(c.ref))
 
     /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one (CTL-02). */
     private fun held(c: Claim) = policy.held(c.view(), questionView(c))
@@ -458,17 +485,20 @@ class DeliberationEngine(
 
     private fun enqueue(c: Claim) {
         if (closed) return
-        val (priority, generation) = synchronized(lock) {
+        val generation = synchronized(lock) {
             c.queueGeneration++
             if (held(c)) {
                 // CTL-05: withheld until the question resumes; a task already queued goes stale.
                 c.parked = true
                 return
             }
-            policy.priorityOf(c.view()) to c.queueGeneration
+            c.queueGeneration
         }
         pending.incrementAndGet()
-        queue.add(Task(c, priority, seq.getAndIncrement(), generation))
+        synchronized(queue) {
+            queue += Task(c, seq.getAndIncrement(), generation)
+            (queue as Object).notifyAll()
+        }
     }
 
     /**
@@ -483,7 +513,7 @@ class DeliberationEngine(
                 c.parked = true
                 return
             }
-            policy.scheduleGate(c.view(), questionView(c))
+            policy.scheduleGate(viewOf(c), questionView(c))
         }
         if (gate == null) enqueue(c) else finish(c, gate)
     }
@@ -543,7 +573,7 @@ class DeliberationEngine(
 
     /**
      * Judges plausibility if it is still missing (the root, or a failed
-     * assessment), applies the budget and diminishing gates (not to a forced
+     * assessment), applies the budget and value-of-information gates (not to a forced
      * round, CTL-02) and runs the first round. Returns true once the claim
      * finished, false when it has rounds left.
      */
@@ -578,10 +608,9 @@ class DeliberationEngine(
             }
             if (budgetGate != null) return finish(c, budgetGate)
         }
-        val diminishingGate = synchronized(lock) {
-            policy.startDiminishingGate(c.forceRound, c.root in state.diminished)
-        }
-        if (diminishingGate != null) return finish(c, diminishingGate)
+        // Model C: the value of information is re-read now; it may have fallen since the claim was queued.
+        val voiGate = synchronized(lock) { policy.startVoiGate(viewOf(c)) }
+        if (voiGate != null) return finish(c, voiGate)
         update { c.status = Status.EXPLORING }
         return step(c)
     }
@@ -598,7 +627,7 @@ class DeliberationEngine(
                 c.waiting = true
                 return false
             }
-            val view = c.view()
+            val view = viewOf(c)
             val forcedRound = c.forceRound
             val nextStatus = policy.terminalStatus(view, questionView(c))
             val nextSides = policy.nextSides(view)
@@ -618,7 +647,7 @@ class DeliberationEngine(
         if (outcome != null) return finish(c, outcome)
         // Finish now if nothing is left, so a done claim needs no queue trip.
         val next = synchronized(lock) {
-            policy.terminalStatus(c.view(), questionView(c)).also { if (it == null) c.waiting = true }
+            policy.terminalStatus(viewOf(c), questionView(c)).also { if (it == null) c.waiting = true }
         }
         return if (next != null) finish(c, next) else false
     }

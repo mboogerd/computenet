@@ -29,7 +29,12 @@ data class QuestionDto(
     val yieldRecent: Double? = null,
     /** EXP-10: mean yield of every recorded round before those; null until there are more than `yieldWindow`. */
     val yieldEarlier: Double? = null,
-    /** Why the tree stopped growing early: "budget", "diminishing" (only when queued work was halted), or null. */
+    /**
+     * Why the tree stopped growing early: "budget" (the hard cap, EXP-06), "voi"
+     * (model C: no work left, and at least one node ended DIMINISHING because its
+     * value of information fell below ε), or null. ("diminishing", the removed
+     * yield stop, is no longer sent.)
+     */
     val stoppedBy: String? = null,
     /** CTL-05: the question is paused — no new round starts in it until it is resumed (`POST /question/pause`). */
     val paused: Boolean = false,
@@ -39,6 +44,13 @@ data class QuestionDto(
     val projectedUsd: Double? = null,
     /** SPEC §12: what the figure is made of, per backend. */
     val cost: CostDto = CostDto(),
+    /**
+     * Model C, "what would change the answer": up to 3 refs of the question's
+     * nodes (claims below the root, and links as EDGE refs) with the highest
+     * |sensitivity| × 4·p·(1 − p) — p the plausibility, a link's its strength,
+     * unjudged ½ — best first. Nodes whose sensitivity is not known yet are left out.
+     */
+    val cruxes: List<String> = emptyList(),
 )
 
 /** SPEC §12: the details behind a question's cost figure. */
@@ -82,7 +94,11 @@ data class BackendCostDto(
     val note: String? = null,
 )
 
-/** SPEC §5. DIMINISHING (EXP-10): the question's returns diminished before this claim's next round. */
+/**
+ * SPEC §5. DIMINISHING (model C): its value of information fell below ε before
+ * its next round (records written before model C: the removed yield stop).
+ * DEPTH_LIMIT arises only from an explicit engine `maxDepth` (no longer a stop rule).
+ */
 enum class Status { QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING, STOPPED, FAILED }
 
 enum class Override { AUTO, EXPAND, STOP }
@@ -147,10 +163,16 @@ data class NodeDto(
     /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
     val quality: Double? = null,
     /**
-     * SPEC §3 "Exploration order" priority: reach × relevance × quality × 4·p·(1 − p),
+     * Shown only since model C (the queue follows sensitivity × 4·p·(1 − p)): reach × relevance × quality × 4·p·(1 − p),
      * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
      */
     val contribution: Double? = null,
+    /**
+     * Model C: d headline(root) / d this node's credence — how far the question's
+     * headline credence moves per unit move of this node's (every layer at once),
+     * from the sensitivity cells. Root ≈ 1; a link's is its edge's. Null until known.
+     */
+    val sensitivity: Double? = null,
     /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */
     val reach: Double? = null,
     /** Last Jev saturation probabilities per side (EXP-04). */

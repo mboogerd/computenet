@@ -31,6 +31,13 @@ import java.util.UUID
  * themselves are volatile: a restart recomputes every credence from those
  * inputs, with late-join catch-up baselines enabled throughout, so nothing
  * derived ever needs to be journaled.
+ *
+ * Model C: beside the credence cells runs the sensitivity layer
+ * ([SensitivityNode], one per claim and per edge, and a [SensitivityHubView]
+ * fold): d root / d node, computed top-down. It reads what the credence cells
+ * emit and the stances routed to them; nothing it emits is wired into a
+ * credence cell ([wiring] records every link, so a test can check that). Off
+ * ([sensitivity] = false), the credence cells are wired exactly the same.
  */
 class CredenceGraph(
     host: ManagedHost,
@@ -40,6 +47,8 @@ class CredenceGraph(
     /** Cycle-head absorb threshold (per feedback edge; heads only), agora's default. */
     private val quiescence: Double = 1e-3,
     onCredence: () -> Unit = {},
+    /** Model C: run the sensitivity layer. */
+    private val sensitivity: Boolean = true,
 ) {
     enum class Kind { CLAIM, EDGE }
 
@@ -54,15 +63,35 @@ class CredenceGraph(
         val head: Boolean = false,
     )
 
-    /** A node and its latest credence (null until its first emission reached the hub). */
-    data class Node(val ref: CellRef, val info: NodeInfo, val credence: Credence?)
+    /**
+     * A node, its latest credence (null until its first emission reached the hub)
+     * and its sensitivity d headline(root) / d node ([sensitivityOf]; null until known).
+     */
+    data class Node(val ref: CellRef, val info: NodeInfo, val credence: Credence?, val sensitivity: Double? = null)
+
+    /** One link the graph installed: [outlet] of cell [from] streams to [inlet] of cell [to]. */
+    data class Wire(val from: CellRef, val outlet: String, val to: CellRef, val inlet: String)
 
     private val manage = host.managementInlet.call
 
     /** Volatile: its content is recomputed after every restart. */
     val hub = ObserveCell(CredenceHubView(onCredence))
 
+    /** Model C: the sensitivity fold. Volatile, like [hub]. */
+    val sensitivityHub = ObserveCell(SensitivityHubView(onCredence))
+
     private val cells = HashMap<CellRef, ClaimNode>()
+
+    /** Model C: each node's sensitivity cell, by the node's ref. */
+    private val sensCells = HashMap<CellRef, SensitivityNode>()
+
+    private val wires = java.util.concurrent.CopyOnWriteArrayList<Wire>()
+
+    /** Every link the graph installed, in order. */
+    val wiring: List<Wire> get() = wires.toList()
+
+    /** The cells of the sensitivity layer (the hub included). */
+    val sensitivityCells: Set<CellRef> get() = synchronized(mutationLock) { sensCells.values.map { it.ref }.toSet() + sensitivityHub.ref }
 
     /** Serializes structure-log appends and graph mutations, including direct callers outside the engine. */
     private val mutationLock = Any()
@@ -89,6 +118,7 @@ class CredenceGraph(
 
     init {
         manage.spawn(hub)
+        if (sensitivity) manage.spawn(sensitivityHub)
         structureLog?.takeIf { it.exists() }?.let { log ->
             replaying = true
             try {
@@ -140,7 +170,8 @@ class CredenceGraph(
         log(StructureOp("claim", ref.id.toString(), text = text, question = question))
         manage.spawn(cell)
         cells[ref] = cell
-        cell.credenceOutlet.streamTo(routedHub())
+        wire(ref, "credenceOutlet", hub.ref, "inlet") { cell.credenceOutlet.streamTo(routedHub()) }
+        if (sensitivity) spawnSensitivity(SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, question = question))
         synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text, question = question) }
         ref
     }
@@ -161,9 +192,29 @@ class CredenceGraph(
         val edge = EdgeNode(polarity, ref, layers, quiescence = if (head) quiescence else 0.0)
         manage.spawn(edge)
         cells[ref] = edge
-        edge.credenceOutlet.streamTo(routedHub())
-        edge.influenceOutlet.streamTo(registry.inlet<Influence>(target, "influenceInlet"))
-        cells.getValue(source).credenceOutlet.streamTo(registry.inlet<Credence>(ref, "sourceInlet"))
+        wire(ref, "credenceOutlet", hub.ref, "inlet") { edge.credenceOutlet.streamTo(routedHub()) }
+        wire(ref, "influenceOutlet", target, "influenceInlet") {
+            edge.influenceOutlet.streamTo(registry.inlet<Influence>(target, "influenceInlet"))
+        }
+        wire(source, "credenceOutlet", ref, "sourceInlet") {
+            cells.getValue(source).credenceOutlet.streamTo(registry.inlet<Credence>(ref, "sourceInlet"))
+        }
+        if (sensitivity) {
+            // Model C: the edge's sensitivity cell hears its target's frame and hands its source its share;
+            // the target's sensitivity cell folds the same influence the target's credence cell does.
+            val s = spawnSensitivity(SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, isEdge = true))
+            val onTarget = sensCells.getValue(target)
+            val ofSource = sensCells.getValue(source)
+            wire(ref, "influenceOutlet", onTarget.ref, "influenceInlet") {
+                edge.influenceOutlet.streamTo(registry.inlet<Influence>(onTarget.ref, "influenceInlet"))
+            }
+            wire(onTarget.ref, "frameOutlet", s.ref, "frameInlet") {
+                onTarget.frameOutlet.streamTo(registry.inlet<SensitivityFrame>(s.ref, "frameInlet"))
+            }
+            wire(s.ref, "sourceOutlet", ofSource.ref, "shareInlet") {
+                s.sourceOutlet.streamTo(registry.inlet<Sensitivity>(ofSource.ref, "shareInlet"))
+            }
+        }
         synchronized(nodesLock) {
             nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = head)
         }
@@ -180,17 +231,37 @@ class CredenceGraph(
             if (value == null) mine.remove(user) else mine[user] = value
         }
         registry.inlet<Stance>(id, "stanceInlet").propagate(Stance(user, value))
+        sensCells[id]?.let { registry.inlet<Stance>(it.ref, "stanceInlet").propagate(Stance(user, value)) }
     }
 
     fun graph(): List<Node> {
         val snapshot = synchronized(nodesLock) { nodes.entries.map { it.key to it.value } }
         val credences = hub.current()
-        return snapshot.map { (ref, info) -> Node(ref, info, credences[ref]) }
+        val sensitivities = sensitivityHub.current()
+        return snapshot.map { (ref, info) -> Node(ref, info, credences[ref], scalar(sensitivities[ref], credences)) }
     }
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 
     fun credenceOf(id: CellRef): Credence? = hub.current()[id]
+
+    /** Model C: node [id]'s sensitivity vector, d root\[l] / d node\[l] per layer; null until the layer reached it. */
+    fun sensitivityVectorOf(id: CellRef): List<Double>? = sensitivityHub.current()[id]?.values
+
+    /**
+     * Model C: d headline(root) / d node [id] — how far the root's headline
+     * credence moves per unit move of every layer of the node's credence
+     * ([LayerSet.headlineGradient] at the root's current credences, dotted with
+     * the node's vector). Null until the sensitivity layer reached the node.
+     */
+    fun sensitivityOf(id: CellRef): Double? = scalar(sensitivityHub.current()[id], hub.current())
+
+    private fun scalar(s: Sensitivity?, credences: Map<CellRef, Credence>): Double? {
+        val values = s?.values ?: return null
+        val root = s.root?.let { credences[it]?.values } ?: List(layers.ids.size) { 0.5 }
+        val g = layers.headlineGradient(root)
+        return values.indices.sumOf { g[it] * values[it] }
+    }
 
     /** Caller holds [nodesLock]. DFS along the influence flow: node → edges sourced at it → their targets. */
     private fun reaches(from: CellRef, to: CellRef): Boolean {
@@ -207,6 +278,21 @@ class CredenceGraph(
     }
 
     private fun routedHub(): Propagate<Credence> = registry.inlet(hub.ref, "inlet")
+
+    private inline fun wire(from: CellRef, outlet: String, to: CellRef, inlet: String, link: () -> Unit) {
+        link()
+        wires += Wire(from, outlet, to, inlet)
+    }
+
+    /** Caller holds [mutationLock]. Spawns a sensitivity cell and wires it to the sensitivity hub. */
+    private fun spawnSensitivity(s: SensitivityNode): SensitivityNode {
+        manage.spawn(s)
+        sensCells[s.subject] = s
+        wire(s.ref, "hubOutlet", sensitivityHub.ref, "inlet") {
+            s.hubOutlet.streamTo(registry.inlet<Sensitivity>(sensitivityHub.ref, "inlet"))
+        }
+        return s
+    }
 
     private companion object {
         val JSON = Json { explicitNulls = false }

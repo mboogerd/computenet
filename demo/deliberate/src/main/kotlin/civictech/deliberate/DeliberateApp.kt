@@ -358,6 +358,7 @@ internal class Options(args: Array<String>) {
             when {
                 a == "--help" || a == "-h" -> values["--help"] = "true"
                 a in SWITCHES -> values[a] = "true"
+                a in REMOVED -> throw IllegalArgumentException(REMOVED.getValue(a))
                 a.startsWith("--") -> {
                     require(a in FLAGS) { "unknown option $a" }
                     require(i + 1 < args.size) { "$a needs a value" }
@@ -392,11 +393,11 @@ internal class Options(args: Array<String>) {
     val config: DeliberationEngine.Config = DeliberationEngine.Config().let { d ->
         d.copy(
             maxRounds = int("--max-rounds") ?: d.maxRounds,
-            maxDepth = int("--max-depth") ?: d.maxDepth,
             maxClaims = int("--max-claims") ?: d.maxClaims,
             maxArgsPerSide = int("--max-args-per-side") ?: d.maxArgsPerSide,
             saturation = double("--saturation") ?: d.saturation,
-            minInfluence = double("--min-influence") ?: d.minInfluence,
+            voiEpsilon = (double("--voi-eps") ?: d.voiEpsilon)
+                .also { require(it >= 0.0) { "--voi-eps must not be negative: $it" } },
             exploreLinks = when (val mode = values["--explore-links"]?.trim()?.lowercase()) {
                 null -> d.exploreLinks
                 "on" -> true
@@ -404,11 +405,6 @@ internal class Options(args: Array<String>) {
                 else -> throw IllegalArgumentException("--explore-links must be on or off: $mode")
             },
             startPaused = "--start-paused" in values,
-            yieldStop = when (val mode = values["--yield-stop"]?.trim()?.lowercase()) {
-                null, "on" -> d.yieldStop ?: DeliberationEngine.YieldStop()
-                "off" -> null
-                else -> throw IllegalArgumentException("--yield-stop must be on or off: $mode")
-            },
         )
     }
 
@@ -436,13 +432,21 @@ internal class Options(args: Array<String>) {
         const val DEFAULT_MAX_PROCESSES = 8
         val FLAGS = setOf(
             "--proposers", "--claude-model", "--codex-model", "--ui", "--max-processes",
-            "--max-rounds", "--max-depth", "--max-claims", "--max-args-per-side",
-            "--saturation", "--min-influence", "--yield-stop", "--explore-links",
+            "--max-rounds", "--max-claims", "--max-args-per-side",
+            "--saturation", "--voi-eps", "--explore-links",
             "--data", "--semantics",
             "--codex-input-rate", "--codex-cached-rate", "--codex-output-rate",
         )
         /** Flags that take no value. */
         val SWITCHES = setOf("--start-paused")
+        private const val VOI_STOP = "a question now stops when the value of information left in it falls below --voi-eps"
+        /** Model C: stop rules that were removed, and what replaced them. Passing one is an error, not a no-op. */
+        val REMOVED = mapOf(
+            "--max-depth" to "--max-depth was removed: $VOI_STOP (--max-claims still caps a question)",
+            "--yield-stop" to "--yield-stop was removed: $VOI_STOP",
+            "--min-influence" to "--min-influence was removed: exploration follows the value of information " +
+                "(sensitivity x 4p(1-p)); a node below --voi-eps is not explored",
+        )
         private val D = DeliberationEngine.Config()
         val USAGE = """
             usage: deliberate [port] [options]            (port default 8091, or ${'$'}PORT)
@@ -451,12 +455,11 @@ internal class Options(args: Array<String>) {
               --codex-model <m>           model for the Codex CLI (its default otherwise)
               --max-processes <n>         concurrent CLI processes, app-wide ($DEFAULT_MAX_PROCESSES)
               --max-rounds <n>            rounds per claim (${D.maxRounds})
-              --max-depth <n>             deepest expanded level (${D.maxDepth})
-              --max-claims <n>            claims per question (${D.maxClaims})
+              --max-claims <n>            hard cap: claims per question (${D.maxClaims})
               --max-args-per-side <n>     arguments per side of the root before it is saturated (${D.maxArgsPerSide})
               --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
-              --min-influence <p>         expand a claim only if contribution (reach x relevance x quality) >= p (${D.minInfluence})
-              --yield-stop on|off         stop a question once its returns diminish (on)
+              --voi-eps <e>               explore a node only while its value of information, |d answer/d node| x 4p(1-p),
+                                          is at least e; a question stops when none is left (${D.voiEpsilon})
               --explore-links on|off      explore links ("A is a reason for B") like claims (on)
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)
               --start-paused              every restored question starts paused: nothing runs until you resume

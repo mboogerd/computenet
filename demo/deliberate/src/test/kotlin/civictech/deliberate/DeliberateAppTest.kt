@@ -121,6 +121,10 @@ class DeliberateAppTest {
         assertEquals(setOf("SUPPORT", "ATTACK"), edges.map { it.polarity }.toSet())
         assertTrue(edges.all { it.strength == 0.7 })
         assertTrue(claims.all { it.credence in 0.0..1.0 })
+        // Model C: over HTTP every node carries its sensitivity, and the question its top-3 cruxes.
+        val settled = probe.awaitGraph { gr -> gr.nodes.all { it.sensitivity != null } && gr.questions.single().cruxes.size == 3 }
+        assertTrue(settled.questions.single().cruxes.all { c -> c != root && settled.nodes.any { it.ref == c } })
+        assertTrue(settled.nodes.single { it.ref == root }.sensitivity!! > 0)
     }
 
     @Test
@@ -142,7 +146,7 @@ class DeliberateAppTest {
         }
         val (_, replaceProbe) = app(
             config = DeliberationEngine.Config(
-                argsPerCall = 1, maxRounds = 2, maxDepth = 1, minInfluence = 0.0, workers = 1,
+                argsPerCall = 1, maxRounds = 2, maxDepth = 1, voiEpsilon = 0.0, workers = 1,
             ),
             judge = replaceJudge,
             proposers = listOf(replaceProposer),
@@ -351,31 +355,31 @@ class DeliberateAppTest {
 
     @Test
     fun `command line parses port, proposers and config knobs`() {
-        assertEquals(19, (Options.FLAGS + Options.SWITCHES).size, "the public CLI is deliberately limited to 19 flags")
+        assertEquals(17, (Options.FLAGS + Options.SWITCHES).size, "the public CLI is deliberately limited to 17 flags")
         assertTrue(Options.FLAGS.intersect(Options.SWITCHES).isEmpty())
         val o = Options(
             arrayOf(
-                "--max-depth", "2", "9000", "--max-claims", "20", "--proposers", "codex",
+                "--voi-eps", "0.02", "9000", "--max-claims", "20", "--proposers", "codex",
                 "--max-processes", "2",
-                "--max-args-per-side", "5", "--saturation", "0.4", "--min-influence", "0.25",
+                "--max-args-per-side", "5", "--saturation", "0.4",
             ),
         )
         assertEquals(9000, o.port)
         assertEquals(listOf("codex"), o.proposers)
         assertEquals(2, o.maxProcesses)
-        assertEquals(2, o.config.maxDepth)
+        assertEquals(0.02, o.config.voiEpsilon)
         assertEquals(20, o.config.maxClaims)
         assertEquals(5, o.config.maxArgsPerSide)
         assertEquals(0.4, o.config.saturation)
-        assertEquals(0.25, o.config.minInfluence)
         assertEquals(DeliberationEngine.Config().maxRounds, o.config.maxRounds)
-        assertEquals(DeliberateApp.DEFAULT_PORT, Options(arrayOf("--max-depth", "2")).port.takeIf { System.getenv("PORT") == null } ?: DeliberateApp.DEFAULT_PORT)
+        assertEquals(DeliberateApp.DEFAULT_PORT, Options(arrayOf("--voi-eps", "0.02")).port.takeIf { System.getenv("PORT") == null } ?: DeliberateApp.DEFAULT_PORT)
         assertEquals(8, Options(emptyArray()).maxProcesses)
         assertEquals(6, Options(emptyArray()).config.maxArgsPerSide)
         assertEquals(3, Options(emptyArray()).config.maxArgsPerSideChild)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--relevance", "0.5")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--bogus", "1")) }
-        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-depth", "x")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--voi-eps", "x")) }
+        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--voi-eps", "-0.1")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--max-processes", "0")) }
         // LINK-04: link exploration is on by default and has an explicit,
         // fail-closed on|off command-line switch.
@@ -383,9 +387,11 @@ class DeliberateAppTest {
         assertEquals(true, Options(arrayOf("--explore-links", "on")).config.exploreLinks)
         assertEquals(false, Options(arrayOf("--explore-links", "off")).config.exploreLinks)
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--explore-links", "maybe")) }
-        // EXP-10 knobs
-        assertEquals(DeliberationEngine.YieldStop(), Options(emptyArray()).config.yieldStop)
-        assertEquals(null, Options(arrayOf("--yield-stop", "off")).config.yieldStop)
+        // Model C: the value-of-information stop, and the hard cap beside it.
+        assertEquals(DeliberationEngine.Config.DEFAULT_VOI_EPSILON, Options(emptyArray()).config.voiEpsilon)
+        assertEquals(0.0, Options(arrayOf("--voi-eps", "0")).config.voiEpsilon)
+        assertEquals(Int.MAX_VALUE, Options(emptyArray()).config.maxDepth, "the app sets no depth limit")
+        assertTrue("--voi-eps" in Options.USAGE && "--max-claims" in Options.USAGE)
         // Knobs kept in code only (SPEC §3 defaults), no longer command-line flags.
         for (gone in listOf(
             "--args-per-call", "--max-args-per-side-child", "--round-decay", "--yield-window", "--yield-ratio",
@@ -395,7 +401,13 @@ class DeliberateAppTest {
             assertFailsWith<IllegalArgumentException>(gone) { Options(arrayOf(gone, "1")) }
             assertTrue(gone !in Options.USAGE, gone)
         }
-        assertFailsWith<IllegalArgumentException> { Options(arrayOf("--yield-stop", "maybe")) }
+        // Model C: the removed stop rules are rejected with a message naming what replaced them.
+        for (removed in listOf("--max-depth", "--yield-stop", "--min-influence")) {
+            val e = assertFailsWith<IllegalArgumentException>(removed) { Options(arrayOf(removed, "2")) }
+            assertTrue(e.message!!.startsWith("$removed was removed") && "--voi-eps" in e.message!!, e.message)
+            assertTrue(removed !in Options.USAGE, removed)
+            assertTrue(removed !in Options.FLAGS, removed)
+        }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("--proposers", "other")) }
         assertFailsWith<IllegalArgumentException> { Options(arrayOf("9000", "9001")) }
     }
@@ -618,7 +630,7 @@ class DeliberateAppTest {
         try {
             val config = DeliberationEngine.Config(
                 argsPerCall = 1, maxRounds = 2, maxDepth = 3, maxClaims = 60,
-                maxArgsPerSide = 3, maxArgsPerSideChild = 2, minInfluence = 0.0,
+                maxArgsPerSide = 3, maxArgsPerSideChild = 2, voiEpsilon = 0.0,
             )
             val (first, probe1) = app(config = config, judge = VariedJudge(), dataDir = dir)
             val root = probe1.ask("How big is a deliberation on disk?")

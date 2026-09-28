@@ -195,7 +195,7 @@ class CostTest {
         // maxDepth 1: the depth-1 arguments and their links (at the same depth) explore; their arguments do not.
         val e = DeliberationEngine(
             graph(), judge, listOf(proposer),
-            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxArgsPerSide = 10, minInfluence = 0.0),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxArgsPerSide = 10, voiEpsilon = 0.0),
         ).also { engines += it }
         e.ask("One?")
         e.ask("Two?")
@@ -231,7 +231,7 @@ class CostTest {
         // One worker; roundDecay 1 keeps the root's three rounds (priority 1) ahead of its children (0.8).
         val e = DeliberationEngine(
             graph(), PricedJudge(), listOf(proposer),
-            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 1, maxArgsPerSide = 10, roundDecay = 1.0, workers = 1, minInfluence = 0.0, exploreLinks = false),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 1, maxArgsPerSide = 10, roundDecay = 1.0, workers = 1, voiEpsilon = 0.0, exploreLinks = false),
         ).also { engines += it }
         try {
             e.ask("Grow?")
