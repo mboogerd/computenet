@@ -35,6 +35,7 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -399,7 +400,11 @@ class WriteVisibilityTest {
         val ingress = ActorIngress(UUID.randomUUID())
         val ops = graph.ops
         val itemsLink = sink.inlets.getValue("items").linking.links.single()
-        val composites = Collections.synchronizedList(mutableListOf<AlignedComposite>())
+        // Copy-on-write, not `Collections.synchronizedList`: the dispatcher thread
+        // appends while this thread polls `any { }` below, and a synchronized
+        // list's iterator is unguarded — it threw ConcurrentModificationException
+        // in 14 of 1000 local loop iterations once the read became a poll.
+        val composites = CopyOnWriteArrayList<AlignedComposite>()
         sink.onComposite { composites += it }
 
         // Stamped, but nothing has propagated yet: `items` is still queued
@@ -422,7 +427,20 @@ class WriteVisibilityTest {
         // wave already retired without it) catches the edge's watermark up
         // and clears the disclosure on `sink.composite()` by the time
         // `runToIdle` returns.
-        composites.any { it.droppedEdges == dropped } shouldBe true
+        //
+        // Waited for, not read once: `onComposite` listeners run on the sink's
+        // own dispatcher thread, while the handle is completed on the common
+        // async pool, and the two carry no ordering guarantee (AlignedCompositeCell
+        // class doc, "Threading"). So `h.get` returning says nothing about
+        // whether the release composite has reached the listener yet — on a
+        // loaded CI runner it had not, and a single read saw `false`
+        // (computenet-rlafe; reproduced by holding the dispatcher with a
+        // blocking listener, which leaves the handle completing as before).
+        // The claim is unchanged: the composite published at release — the only
+        // one carrying this dropped set — must be delivered, disclosing the edge.
+        awaitUntil("the composite published at release reaches onComposite, disclosing the dropped edge", 5_000) {
+            composites.any { it.droppedEdges == dropped }
+        }
         sink.close()
     }
 
