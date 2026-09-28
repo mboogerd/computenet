@@ -32,7 +32,6 @@ import java.io.File
 import java.net.URLDecoder
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -422,22 +421,18 @@ class SocialApp(
     }
 
     /**
-     * Blocks until the host queue has drained: `DialogueRuntime.afterQuiescence`'s
-     * six lines (re-implemented because `:testkit`'s `awaitDrained` is test-only).
-     * One task at [Int.MAX_VALUE] priority sorts below every band the host uses,
-     * so it runs only once nothing else is queued, however deep the cascade
-     * the replay enqueues. [QUIESCENCE_TIMEOUT_MS] is a hang backstop, not a
-     * convergence budget. Must not be reached on a `SimulationController`,
-     * which nothing steps while this thread waits.
+     * Blocks until the host queue has drained: delegates to
+     * [civictech.cell.host.Quiescence] via [ManagedHost.quiescence]
+     * (computenet-q5jzk). One task at [Int.MAX_VALUE] priority sorts below
+     * every band the host uses, so it runs only once nothing else is queued,
+     * however deep the cascade the replay enqueues. [QUIESCENCE_TIMEOUT_MS] is
+     * a hang backstop, not a convergence budget. Must not be reached on a
+     * `SimulationController`, which nothing steps while this thread waits.
      *
      * @throws IllegalStateException if the host never drained in time.
      */
     private fun awaitQuiescence() {
-        val drained = CountDownLatch(1)
-        hostScheduler.submit(Int.MAX_VALUE) { drained.countDown() }
-        check(drained.await(QUIESCENCE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            "SocialApp.start: host queue never drained within ${QUIESCENCE_TIMEOUT_MS}ms of staging recovery or loading the source"
-        }
+        host.quiescence().await(QUIESCENCE_TIMEOUT_MS, "SocialApp.start: staging recovery or loading the source")
     }
 
     // --- /op ------------------------------------------------------------------

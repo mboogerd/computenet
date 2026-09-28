@@ -72,8 +72,9 @@ Durability = two files in the journal dir (`graph.jsonl` structure log +
 recorded refs (with catch-up baselines suppressed — the journal holds the
 originals, and re-emitting them would clobber recovered state), then replays
 the journal. Replay re-journals the derived re-emissions it triggers —
-idempotent duplicates, bounded per restart; compaction needs a
-quiescence-safe checkpoint and is deferred. `remove` cascades over dangling
+idempotent duplicates, bounded per restart; a post-replay checkpoint is safe
+behind `Recovery.awaitApplied()`, but compaction is still deferred until
+journals get big. `remove` cascades over dangling
 edges; a crash mid-cascade can leave a dangling influence until the next
 remove — accepted for v1 (single host).
 
