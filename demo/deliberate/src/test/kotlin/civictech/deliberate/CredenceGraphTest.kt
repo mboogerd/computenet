@@ -7,6 +7,7 @@ import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.host.inlet
 import civictech.testkit.SimWorld
 import civictech.testkit.awaitUntil
 import kotlinx.serialization.json.Json
@@ -315,6 +316,22 @@ class CredenceGraphTest {
         g.setStance(positions[0], "jev", 0.8)
         awaitUntil("one judged position, the other still one half") {
             g.sharesOf(root)?.let { s -> near(s.consensus, Softmax.shares(listOf(0.8, 0.5))) } == true
+        }
+
+        // In the graph every position is heard at once (its catch-up baseline), so the
+        // "unheard counts 1/2" default is observable only on a cell that has heard some
+        // positions but not others: one position at 0.8, two never heard -> odds 4 : 1 : 1.
+        val scheduler = VirtualThreadScheduler("issue-node-test").also { schedulers += it }
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = scheduler, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+        val three = List(3) { CellRef(UUID.randomUUID()) }
+        val partial = IssueNode(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()), three, layers)
+        host.managementInlet.call.spawn(partial)
+        registry.inlet<Credence>(partial.ref, "positionInlet")
+            .propagate(Credence(three[0], listOf(0.8, 0.8), 0.8, 0.8, 0.8, 0.8))
+        val want = listOf(4.0 / 6, 1.0 / 6, 1.0 / 6)
+        awaitUntil("the heard position holds odds 4 against two unheard halves") {
+            near(partial.shares.consensus, want) && layers.ids.indices.all { l -> near(partial.shares.values.map { it[l] }, want) }
         }
     }
 
