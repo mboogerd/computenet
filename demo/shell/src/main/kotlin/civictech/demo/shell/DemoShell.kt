@@ -164,7 +164,11 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
      */
     fun sse(path: String, closeOnFailure: Boolean = false, coalesce: Duration? = null, initialFrame: () -> String) {
         closeOnSendFailure = closeOnFailure
-        if (coalesce != null) {
+        // Published under [coalesceLock]: [invalidate] may already be running
+        // on another thread (agora's `onCredence` runs on its host's
+        // VirtualThreadScheduler, which may still be dispatching replayed
+        // changes while AgoraApp's `init` calls this), and these are plain fields.
+        if (coalesce != null) synchronized(coalesceLock) {
             coalesceFrame = initialFrame
             coalesceWindowMs = coalesce.toMillis().coerceAtLeast(1)
             coalesceExecutor = Executors.newSingleThreadScheduledExecutor(
@@ -219,8 +223,8 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
      * check-and-mark, so no interleaving of those three can drop a call.
      */
     fun invalidate() {
-        val frame = coalesceFrame ?: return
         synchronized(coalesceLock) {
+            val frame = coalesceFrame ?: return
             if (stopped || coalesceScheduled) return
             coalesceScheduled = true
             coalesceExecutor!!.schedule({ fireCoalesced(frame) }, coalesceWindowMs, TimeUnit.MILLISECONDS)
