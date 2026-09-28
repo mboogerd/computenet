@@ -365,9 +365,16 @@ internal class HostDurability(
      * selector tees to it (the write path is per-cell), so replaying it
      * restores exactly those cells and re-delivers nothing to volatile cells
      * that were never written. Recover each distinct journal once.
+     *
+     * Returns the number of `Frame` records submitted (checkpoint, frontier,
+     * discharge and outlet-wave records are applied in place and not counted).
+     * Submission only STAGES a frame; delivery is a later scheduler task —
+     * [ManagedHost.recoverFrom] wraps this count in a [Recovery] whose
+     * `awaitApplied` fences on that delivery.
      */
-    fun recoverFrom(journal: Journal) {
+    fun recoverFrom(journal: Journal): Int {
         recovering = true
+        var frames = 0
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -400,12 +407,15 @@ internal class HostDurability(
                     // complete one.
                     try {
                         when (val decoded = JournalRecords.decode(record)) {
-                            is DecodedJournalRecord.Frame -> submit(
-                                WireCodec.decode(decoded.payload).let { frame ->
-                                    (if (scope == null) frame else frame.baselined(scope))
-                                        .copy(replayFrontier = scope)
-                                }
-                            )
+                            is DecodedJournalRecord.Frame -> {
+                                submit(
+                                    WireCodec.decode(decoded.payload).let { frame ->
+                                        (if (scope == null) frame else frame.baselined(scope))
+                                            .copy(replayFrontier = scope)
+                                    }
+                                )
+                                frames++
+                            }
 
                             is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
                             is DecodedJournalRecord.Frontier ->
@@ -424,6 +434,7 @@ internal class HostDurability(
         } finally {
             recovering = false
         }
+        return frames
     }
 
     /**
