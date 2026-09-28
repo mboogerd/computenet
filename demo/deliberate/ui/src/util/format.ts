@@ -206,6 +206,37 @@ export function bandCaption(n: NodeDto): string {
   return lo === hi ? `rules agree: ${lo}%` : `rules: ${lo}–${hi}%`;
 }
 
+/**
+ * Model D: whether the research view starts on — `?research` in the URL. The
+ * research view adds the per-rule values (the rules' band and each rule's
+ * credence); by default only the consensus is shown. Every layer is computed
+ * either way.
+ */
+export function isResearch(): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('research');
+}
+
+/**
+ * Model D, under the question's gauge: "first impression 90% · arguments alone
+ * 30%" — Jev's plausibility of the question before any argument, and the
+ * verdict the same arguments give from a neutral start. Undefined until
+ * either is known.
+ */
+export function priorText(q: QuestionDto | undefined): string | undefined {
+  const parts = [
+    q?.firstImpression === undefined ? undefined : `first impression ${pct(q.firstImpression)}`,
+    q?.neutralCredence === undefined ? undefined : `arguments alone ${pct(q.neutralCredence)}`,
+  ].filter((x) => x !== undefined);
+  return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/** Model D: why the question flags its verdict — the first impression, not the arguments, decides the side. */
+export function priorDecidesText(q: QuestionDto | undefined): string | undefined {
+  if (q?.verdictsDisagree !== true || q.neutralCredence === undefined) return undefined;
+  const side = (x: number) => (x > 0.5 ? 'yes' : 'no');
+  return `The first impression decides the side: weighed from a neutral start, the arguments lean ${side(q.neutralCredence)} (${pct(q.neutralCredence)}).`;
+}
+
 /** `?debug`: show internals (claim refs) that mean nothing to a reader. */
 export function isDebug(): boolean {
   return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');

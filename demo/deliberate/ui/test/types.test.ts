@@ -22,6 +22,9 @@ type ExpectedQuestionDto = {
   projectedUsd?: number;
   cost?: CostDto;
   cruxes?: string[];
+  firstImpression?: number;
+  neutralCredence?: number;
+  verdictsDisagree?: boolean;
 };
 type ExpectedCostDto = { backends: BackendCostDto[]; rounds: number; queued: number; perRoundUsd?: number };
 type ExpectedBackendCostDto = {

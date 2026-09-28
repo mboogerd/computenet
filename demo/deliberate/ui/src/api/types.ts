@@ -48,6 +48,21 @@ export interface QuestionDto {
    * first. Has a Kotlin default and is always sent; optional so older fixtures stay valid.
    */
   cruxes?: string[];
+  /**
+   * Model D: Jev's plausibility of the question itself, before any argument —
+   * its "first impression", which stays the root's prior. Absent until judged.
+   */
+  firstImpression?: number;
+  /**
+   * Model D, "what the arguments say": the root's headline credence with the same
+   * arguments weighed from a neutral prior instead. Absent until the root emitted.
+   */
+  neutralCredence?: number;
+  /**
+   * Model D: the root's credence and `neutralCredence` fall on different sides of ½.
+   * Has a Kotlin default and is always sent; optional so older fixtures stay valid.
+   */
+  verdictsDisagree?: boolean;
 }
 
 /** SPEC §12: the details behind a question's cost figure. */

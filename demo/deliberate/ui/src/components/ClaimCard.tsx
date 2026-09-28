@@ -46,6 +46,11 @@ export interface Selection {
   toggle: (ref: string) => void;
   /** The layers averaged into the consensus, for the facts panel. */
   members?: Accessor<readonly string[]>;
+  /**
+   * Model D: the research view is on — show the per-rule values (the rules'
+   * band and each rule's credence). Off, only the consensus is shown.
+   */
+  research?: Accessor<boolean>;
 }
 
 const sameRefs = (a: string[], b: string[]) => a.length === b.length && a.every((r, i) => r === b[i]);
@@ -75,10 +80,10 @@ export function SpreadBand(props: { node: NodeDto; class: string }) {
 
 /**
  * A small credence bar: a soft fill to the consensus, the rules' band drawn
- * above it (so all of the band shows), and a marker at the consensus — taller
- * on a leaf, whose rules coincide and so have no band.
+ * above it (so all of the band shows) in the research view only, and a marker
+ * at the consensus — taller on a leaf, whose rules coincide and so have no band.
  */
-function CredenceBar(props: { node: NodeDto; leaf: boolean }) {
+function CredenceBar(props: { node: NodeDto; leaf: boolean; research?: boolean }) {
   const flat = () => {
     const s = spreadOf(props.node);
     return props.leaf && Math.round(s.high * 100) === Math.round(s.low * 100);
@@ -86,7 +91,9 @@ function CredenceBar(props: { node: NodeDto; leaf: boolean }) {
   return (
     <span class="bar" classList={{ 'bar--leaf': flat() }} aria-hidden="true">
       <span class="bar__fill" style={{ transform: `scaleX(${shown(props.node)})` }} />
-      <SpreadBand node={props.node} class="bar__band" />
+      <Show when={props.research}>
+        <SpreadBand node={props.node} class="bar__band" />
+      </Show>
       <span class="bar__tick" style={{ left: `${shown(props.node) * 100}%` }} />
     </span>
   );
@@ -132,12 +139,12 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                 <span class="card__text">{claim().text}</span>
                 <span
                   class="card__cred"
-                  title={`Credence: ${verdict(shown(claim()), 'claim').text} (${agreementText(claim(), leaf())})`}
+                  title={`Credence: ${verdict(shown(claim()), 'claim').text}${props.sel.research?.() ? ` (${agreementText(claim(), leaf())})` : ''}`}
                 >
                   <span class="card__num">
                     <TweenPct value={shown(claim())} />
                   </span>
-                  <CredenceBar node={claim()} leaf={leaf()} />
+                  <CredenceBar node={claim()} leaf={leaf()} research={props.sel.research?.()} />
                 </span>
               </button>
 
@@ -178,7 +185,14 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
               </div>
 
               <Show when={open()}>
-                <Facts id={panelId()} claim={claim()} edge={edge()} leaf={leaf()} members={props.sel.members?.()} />
+                <Facts
+                  id={panelId()}
+                  claim={claim()}
+                  edge={edge()}
+                  leaf={leaf()}
+                  members={props.sel.members?.()}
+                  research={props.sel.research?.()}
+                />
               </Show>
             </article>
 
@@ -394,8 +408,10 @@ export function LinkPanel(props: {
             <span class="linkpanel__num" title="The link's credence: how far the argument really bears on the claim, after weighing the link's own arguments">
               holds <TweenPct value={shown(props.edge)} />
             </span>
-            <CredenceBar node={props.edge} leaf={leaf()} />
-            <span class="linkpanel__agree">{agreementText(props.edge, leaf())}</span>
+            <CredenceBar node={props.edge} leaf={leaf()} research={props.sel.research?.()} />
+            <Show when={props.sel.research?.()}>
+              <span class="linkpanel__agree">{agreementText(props.edge, leaf())}</span>
+            </Show>
           </div>
           <div class="card__meta linkpanel__meta">
             <Show when={props.edge.status}>
@@ -416,7 +432,14 @@ export function LinkPanel(props: {
             <OverrideControl id={props.edge.ref} value={override()} what="link" />
           </div>
           <Show when={facts()}>
-            <Facts id={`facts-${props.edge.ref}`} claim={props.edge} link leaf={leaf()} members={props.sel.members?.()} />
+            <Facts
+              id={`facts-${props.edge.ref}`}
+              claim={props.edge}
+              link
+              leaf={leaf()}
+              members={props.sel.members?.()}
+              research={props.sel.research?.()}
+            />
           </Show>
         </Show>
         <div class="linkpanel__cols">
@@ -438,6 +461,8 @@ export function Facts(props: {
   leaf?: boolean;
   /** `claim` is an EDGE node explored as a link. */
   link?: boolean;
+  /** Model D: the research view — add how far the rules agree and each rule's credence. */
+  research?: boolean;
 }) {
   const c = () => props.claim;
   // Rows Jev has not judged yet are left out rather than shown as dashes.
@@ -464,10 +489,10 @@ export function Facts(props: {
       )}
       {row(
         'Rules',
-        c().credences ? agreementText(c(), props.leaf) : undefined,
+        props.research && c().credences ? agreementText(c(), props.leaf) : undefined,
         props.leaf ? `How far the credence rules agree — ${LEAF_AGREEMENT}` : 'How far the credence rules (ways of weighing arguments) agree on this claim',
       )}
-      <Show when={c().credences}>
+      <Show when={props.research && c().credences}>
         <dt title="Each rule's credence; the consensus averages the marked ones">By rule</dt>
         <dd>
           <ul class="facts__layers">
@@ -479,7 +504,9 @@ export function Facts(props: {
         {row('First impression', p(c().strength), "Jev's link strength before any argument about the link: if the argument were true, how strongly it bears on the claim")}
       </Show>
       <Show when={!props.link}>
-        {row('Plausible on its own', p(c().plausibility), "Jev's judgment of the claim alone, before arguments")}
+        {c().depth === 0
+          ? row('First impression', p(c().plausibility), "Jev's judgment of the question alone, before any argument: the prior the arguments start from")
+          : row('Plausible on its own', p(c().plausibility), "Jev's judgment of the claim alone, before arguments")}
       </Show>
       <Show when={props.edge}>
         {row('Link strength', p(props.edge!.strength), 'If this were true, how strongly it bears on the claim above')}

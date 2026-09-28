@@ -227,10 +227,24 @@ export class MockSource implements GraphSource {
         paused: this.paused.has(r.ref),
         ...mockCost(claims),
         cruxes: mockCruxes(nodes.filter((n) => n.root === r.ref && n.ref !== r.ref)),
+        ...mockPrior(r),
       };
     });
     return { questions, nodes, consensusMembers: [...DEFAULT_CONSENSUS] };
   }
+}
+
+/**
+ * Model D: the first impression is the root's plausibility; "arguments alone"
+ * moves ½ by as much as the arguments moved the root from it (a stand-in for
+ * the backend's neutral-prior verdict), flagged when the two lean differently.
+ */
+export function mockPrior(root: NodeDto): { firstImpression?: number; neutralCredence?: number; verdictsDisagree?: boolean } {
+  const first = root.plausibility;
+  if (first === undefined) return {};
+  const verdict = root.consensus ?? root.credence;
+  const neutral = Math.min(0.999, Math.max(0.001, 0.5 + verdict - first));
+  return { firstImpression: first, neutralCredence: neutral, verdictsDisagree: (verdict - 0.5) * (neutral - 0.5) < 0 };
 }
 
 /** Model C: the top 3 of [nodes] by |sensitivity| × 4·p·(1 − p) (a link's p is its strength), as the backend ranks them. */
