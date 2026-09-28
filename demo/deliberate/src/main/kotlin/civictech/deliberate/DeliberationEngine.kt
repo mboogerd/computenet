@@ -674,7 +674,8 @@ class DeliberationEngine(
     private fun frame(c: Claim): Boolean {
         val f = framer ?: return false
         val text = synchronized(lock) {
-            if (c.parent != null || c.isLink || c.rounds != 0 || c.children.isNotEmpty() || c.framing != null) return false
+            // Only a question root: its readings/positions are roots of the same tree and are never framed.
+            if (c.ref != c.root || c.parent != null || c.isLink || c.rounds != 0 || c.children.isNotEmpty() || c.framing != null) return false
             c.text
         }
         val framing = tryCall(c, "framing") { f.frame(text) } ?: return false
