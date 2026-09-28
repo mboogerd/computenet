@@ -1,1 +1,0 @@
-Read sol_prompt.md in the cwd: it lists 6 conclusions of a VoI experiment and the files (q1_main.out, q1b.out, q1_layers.out, q2.out, tree.py, cat.py) behind them. Do NOT run long scripts; read the .out files and code only. For each conclusion 1-6 say agree / disagree / agree-with-changes with one or two sentences, then an overall verdict. At most 400 words.

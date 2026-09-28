@@ -50,7 +50,7 @@ value of information.
 
 The negative accuracy result applies **only to the algorithms tested**
 (§8.3). The combination read-out, the judgment mapping and the use of the prior
-can be re-tested offline from the committed data (`data/DATA.md`). The most
+can be re-tested offline from the saved experiment data (`data/DATA.md`; the data itself is not in git). The most
 promising untested changes need new generation: contrastive arguments at depth,
 a budget spent on decisive claims, and a harder question set (§8.3–8.4).
 
@@ -687,13 +687,15 @@ option.
 
 ## 11. Artefacts and reproduction
 
-The experiment data is committed next to this report in
-[`data/`](data/), about 25 MB on disk and 1.9 MB compressed. It includes every
+The experiment data is **not in git** (about 25 MB; gitignored). It is kept
+locally on the machine that ran the research (`MacBoo`), both in this
+report's `data/` folder and in the repo-root `data/deliberate-multiclass/`
+(ignored via `.git/info/exclude`). Only the replay guide is tracked. It includes every
 model output and judgment, so algorithm changes can be re-evaluated **without
 regenerating anything**. [`data/DATA.md`](data/DATA.md) is the replay guide: it
 says which changes are offline, which need Jev calls only, and which need new
 generation, and what was left out and how to regenerate it. Re-running the
-three accuracy analyses offline reproduces the committed results exactly.
+three accuracy analyses offline reproduces the saved results exactly.
 Layout:
 
 | Path | Content |

@@ -1,0 +1,4 @@
+# Experiment data stays local: too big for git (about 25 MB). See DATA.md.
+*
+!.gitignore
+!DATA.md

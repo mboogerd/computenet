@@ -1,8 +1,0 @@
-    15s claims=17 active=True cost=$0.174 stopped=None
-    30s claims=36 active=True cost=$0.446 stopped=None
-    45s claims=51 active=True cost=$0.692 stopped=None
-    60s claims=65 active=True cost=$1.000 stopped=None
-    75s claims=78 active=True cost=$1.283 stopped=None
-    90s claims=84 active=True cost=$1.521 stopped=None
-   105s claims=90 active=False cost=$1.749 stopped=budget
-OUTCOME done cost 1.7493608300000003 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "33f1657d-7b19-409c-aa0e-821709a783a5", "text": "Reform UK wins the 2026 Clacton by-election.", "credence": 0.4880212692002202, "firstImpression": 0.5, "neutralCredence": 0.4880212692002202, "verdictsDisagree": false, "share": 0.20433252072622815}, {"ref": "5baafe4f-bdae-4d73-b36d-fdcd40b0c13d", "text": "The Conservative Party wins the 2026 Clacton by-election.", "credence": 0.4965619347476661, "firstImpression": 0.5, "neutralCredence": 0.4965619347476661, "verdictsDisagree": false, "share": 0.2114355631425619}, {"ref": "39a97c6e-ae05-4920-ba05-0354f

@@ -4,14 +4,18 @@ This is every model output and judgment the report's experiments produced. It
 lets an algorithm change be re-evaluated **without regenerating anything**.
 Only the parts the change actually touches need new model calls.
 
-Size: about 25 MB on disk, 1.9 MB compressed. All paths below are relative to
+**Not in git.** Only this guide is tracked (`.gitignore` here ignores the rest),
+because the data is about 25 MB (1.9 MB compressed). The data lives on the
+machine that ran the research (`MacBoo`): in this folder of the research
+worktree and in the repo-root `data/deliberate-multiclass/`, which is
+ignored locally. Copy it into this folder to replay. All paths below are relative to
 this `data/` folder. The scripts use relative paths, so run each one from its
 own directory.
 
 ## Offline replay (verified)
 
 Re-running the three accuracy analyses offline, with no `claude`, no `codex`
-and no `TYPESAFE_API_KEY`, reproduces the committed outputs exactly:
+and no `TYPESAFE_API_KEY`, reproduces the saved outputs exactly:
 
 | Command | Reproduces |
 |---|---|

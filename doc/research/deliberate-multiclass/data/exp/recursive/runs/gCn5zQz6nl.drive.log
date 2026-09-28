@@ -1,8 +1,0 @@
-    15s claims=15 active=True cost=$0.165 stopped=None
-    30s claims=30 active=True cost=$0.423 stopped=None
-    45s claims=44 active=True cost=$0.686 stopped=None
-    60s claims=64 active=True cost=$1.010 stopped=None
-    75s claims=81 active=True cost=$1.301 stopped=None
-    90s claims=90 active=True cost=$1.552 stopped=budget
-   105s claims=90 active=False cost=$1.616 stopped=budget
-OUTCOME done cost 1.6160443279999999 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "f2adfd1f-f90d-43ed-8f6e-bf8fae8e2336", "text": "Sofia hosts the Eurovision Song Contest 2027.", "credence": 0.32032609947183643, "firstImpression": 0.5, "neutralCredence": 0.32032609947183643, "verdictsDisagree": false, "share": 0.09741658993384483}, {"ref": "f8e37ecf-5d1f-4ec7-9abd-0f30bf8b8a1a", "text": "Plovdiv hosts the Eurovision Song Contest 2027.", "credence": 0.49222634475509003, "firstImpression": 0.5, "neutralCredence": 0.49222634475509003, "verdictsDisagree": false, "share": 0.20037146816012685}, {"ref": "4fd7d1a2-8467-4b4f-85b8-286e8e048

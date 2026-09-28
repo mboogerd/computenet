@@ -1,7 +1,0 @@
-    15s claims=23 active=True cost=$0.215 stopped=None
-    30s claims=40 active=True cost=$0.472 stopped=None
-    45s claims=55 active=True cost=$0.732 stopped=None
-    60s claims=72 active=True cost=$1.044 stopped=None
-    75s claims=87 active=True cost=$1.347 stopped=None
-    90s claims=90 active=False cost=$1.543 stopped=budget
-OUTCOME done cost 1.5426112159999998 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "7f51c089-5288-44a6-a000-b90b31f9dc47", "text": "Spain wins the 2026 FIFA World Cup.", "credence": 0.544550817225162, "firstImpression": 0.5, "neutralCredence": 0.544550817225162, "verdictsDisagree": false, "share": 0.19598331180320394}, {"ref": "4df83751-939a-42e7-8426-f0608a384615", "text": "France wins the 2026 FIFA World Cup.", "credence": 0.46279110680004304, "firstImpression": 0.5, "neutralCredence": 0.46279110680004304, "verdictsDisagree": false, "share": 0.1412090126759928}, {"ref": "d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da", "text": "England win
