@@ -156,6 +156,57 @@ class CliProposerTest {
     }
 
     @Test
+    fun `timeout still kills a grandchild missed by the first descendant snapshot`() {
+        // Deterministic reproduction of computenet-lmpn3's mechanism: destroyTree
+        // takes a snapshot of descendants BEFORE giving the timed-out process up to a
+        // second of grace to exit naturally (so a killed child does not linger as an
+        // observable zombie). Under host load, a shell that has not yet forked (or
+        // recorded) its background job is invisible to that first snapshot; the
+        // grace-period wait then gives it time to spawn while nothing is watching,
+        // and — pre-fix — it is never looked at again, so it outlives its parent as
+        // an orphan. This test forces exactly that shape via a call-counting
+        // descendantsOf, so the race is exercised on every run regardless of host
+        // load or scheduling luck, rather than only sometimes under contention.
+        val pidFile = Files.createTempFile("deliberate-pid", ".txt").toFile()
+        try {
+            val calls = java.util.concurrent.atomic.AtomicInteger(0)
+            val proposer = CliProposer(
+                "slow",
+                { _, _ -> listOf("sh", "-c", "pwd > '${pidFile.absolutePath}'; sleep 60 & echo \$! >> '${pidFile.absolutePath}'; wait") },
+                ProcessGate(1),
+                timeout = Duration.ofMillis(200),
+                descendantsOf = {
+                    // First call (destroyTree's pre-grace-period snapshot): behave as
+                    // though the grandchild had not been recorded yet. Every later call
+                    // (only the fix makes one) sees the real, by-then-recorded pid.
+                    if (calls.getAndIncrement() == 0) {
+                        emptyList()
+                    } else {
+                        val lines = pidFile.readLines()
+                        if (lines.size < 2) emptyList() else listOf(ProcessHandle.of(lines[1].toLong()).orElseThrow())
+                    }
+                },
+            )
+            val error = assertFailsWith<IllegalStateException> { proposer.run("p") }
+            assertTrue("timed out" in error.message!!)
+
+            val lines = pidFile.readLines()
+            assertTrue(lines.size >= 2, "grandchild pid was never recorded: $lines")
+            val childPid = lines[1].toLong()
+
+            // A pid ProcessHandle.of no longer finds has already exited (and been
+            // reaped): that counts as killed, not as a lookup failure.
+            fun alive() = ProcessHandle.of(childPid).map { it.isAlive }.orElse(false)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (alive() && System.nanoTime() < deadline) Thread.sleep(20)
+            assertFalse(alive(), "grandchild missed by the first descendant snapshot must still be killed")
+            assertTrue(calls.get() >= 2, "fix must re-snapshot descendants after the kill grace period")
+        } finally {
+            pidFile.delete()
+        }
+    }
+
+    @Test
     fun `gate never exceeds its bound`() {
         val gate = ProcessGate(3)
         val inside = AtomicInteger()

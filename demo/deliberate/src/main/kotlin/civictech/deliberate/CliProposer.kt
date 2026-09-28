@@ -178,15 +178,30 @@ class CliProposer internal constructor(
     internal fun commandLine(prompt: String, outFile: File): List<String> = command(prompt, outFile)
 
     private fun destroyTree(process: Process) {
-        val descendants = try {
+        fun snapshot(): List<ProcessHandle> = try {
             descendantsOf(process)
         } catch (_: RuntimeException) {
             emptyList()
         }
+
+        // A descendant that has not spawned yet (or has spawned but not yet made
+        // itself discoverable to `descendantsOf`, e.g. a shell that has not finished
+        // recording a background job's pid) is invisible to this first snapshot. The
+        // grace-period wait below gives the tree up to a second to keep running while
+        // nothing is watching for new descendants; without a second look, a child
+        // that appears during that window is missed and survives the parent's kill as
+        // an orphan (computenet-lmpn3).
+        var descendants = snapshot()
         descendants.asReversed().forEach { it.destroyForcibly() }
         // Let the direct process reap terminated children before forcing it down;
         // otherwise a killed child can remain observable as a zombie.
         if (!process.waitFor(1, TimeUnit.SECONDS)) {
+            // Re-snapshot: anything that spawned during the wait above is still
+            // alive and still a target. Union with the first snapshot rather than
+            // replacing it, in case a fast-exiting descendant is no longer enumerable
+            // by the time this second look runs.
+            descendants = (descendants + snapshot()).distinctBy { it.pid() }
+            descendants.asReversed().forEach { it.destroyForcibly() }
             process.destroyForcibly()
             process.waitFor(5, TimeUnit.SECONDS)
         }
