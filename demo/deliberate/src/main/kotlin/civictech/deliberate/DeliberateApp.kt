@@ -108,12 +108,12 @@ class DeliberateApp(
 
     init {
         // Rebuild (the graph replayed its structure log) → replay the metadata journal →
-        // wait until it is folded → compact it: the fold now holds every replayed frame,
-        // so the checkpoint is quiescent (JournaledMetaStore.checkpoint).
+        // fence on the kernel's Recovery handle, which holds every replayed frame once it
+        // returns → compact it: the fold now holds every replayed frame, so the checkpoint
+        // is quiescent (JournaledMetaStore.checkpoint fences again for its own hold-off).
         if (journal != null) {
-            host.recoverFrom(journal)
-            metaStore!!.awaitReplayed(kotlin.time.Duration.parse("60s"))
-            metaStore.checkpoint(journal)
+            host.recoverFrom(journal).awaitApplied(60_000)
+            metaStore!!.checkpoint(journal)
         }
     }
 

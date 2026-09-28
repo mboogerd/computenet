@@ -104,9 +104,10 @@ class DeliberateWireSerializers : WireSerializers {
  * nothing to re-journal: this cell emits nothing.
  *
  * Replay only *stages* frames, so a reader must wait for them to be folded:
- * [awaitReplayed] routes a fresh fence record after `recoverFrom` returned
- * and waits until the fold holds it. The cell is FIFO per inlet, so by then
- * every replayed record before the fence has been applied.
+ * the kernel's `Recovery.awaitApplied()` (fenced by `civictech.cell.host.Quiescence`)
+ * blocks until every replayed frame and its same-host cascade has been
+ * delivered — `DeliberateApp`'s init calls it right after `host.recoverFrom`,
+ * before the startup checkpoint.
  */
 class JournaledMetaStore(private val host: ManagedHost, registry: LocationRegistry) : MetaStore {
     /** Deterministic: journaled frames must find the same cell after a restart. */
@@ -126,37 +127,29 @@ class JournaledMetaStore(private val host: ManagedHost, registry: LocationRegist
         synchronized(writeLock) { inlet.propagate(MetaDelta(key, fields)) }
     }
 
-    override fun load(): Map<String, Map<String, String>> = cell.current() - FENCE
-
-    /** Blocks until every record written or replayed before this call has been folded. */
-    fun awaitReplayed(timeout: Duration) = synchronized(writeLock) { fence(timeout) }
-
-    /** Caller holds [writeLock]. */
-    private fun fence(timeout: Duration) {
-        val nonce = UUID.randomUUID().toString()
-        inlet.propagate(MetaDelta(FENCE, mapOf("n" to nonce)))
-        val deadline = System.nanoTime() + timeout.inWholeNanoseconds
-        while (cell.current()[FENCE]?.get("n") != nonce) {
-            check(System.nanoTime() < deadline) { "deliberate: metadata fold did not catch up within $timeout" }
-            Thread.sleep(2)
-        }
-    }
+    // Legacy: journals written before the kernel fence landed hold a
+    // `"fence"` record from the old poll-and-nonce protocol (removed below).
+    // Cross-build replay is a supported path (spec 31 "Cross-build replay"),
+    // so a fold that still carries one must keep filtering it out.
+    override fun load(): Map<String, Map<String, String>> = cell.current() - LEGACY_FENCE
 
     /**
      * Compacts [journal] (which must be the journal this cell tees to) down to
      * one checkpoint of the fold. Safe only when *quiescent*: the kernel's
      * checkpoint runs on the management band and would jump ahead of frames
      * still staged (AgoraApp's reason for never checkpointing), so writes are
-     * held off and a fence is folded first — every frame the journal holds has
-     * then been applied, and the snapshot covers all of them.
+     * held off and [host]'s own fence is awaited first — every frame the
+     * journal holds has then been applied, and the snapshot covers all of
+     * them. `checkpoint` itself does not fence (kernel design), so callers on
+     * a live host must take this hold-off themselves.
      */
     fun checkpoint(journal: Journal, timeout: Duration = Duration.parse("30s")) = synchronized(writeLock) {
-        fence(timeout)
+        host.quiescence().await(timeout.inWholeMilliseconds, "deliberate metadata checkpoint")
         host.checkpoint(journal)
     }
 
     companion object {
         val REF = CellRef(UUID.nameUUIDFromBytes("deliberate:meta".toByteArray()))
-        private const val FENCE = "fence"
+        private const val LEGACY_FENCE = "fence"
     }
 }
