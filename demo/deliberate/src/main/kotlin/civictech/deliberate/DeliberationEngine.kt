@@ -678,7 +678,14 @@ class DeliberationEngine(
             if (c.ref != c.root || c.parent != null || c.isLink || c.rounds != 0 || c.children.isNotEmpty() || c.framing != null) return false
             c.text
         }
-        val framing = tryCall(c, "framing") { f.frame(text) } ?: return false
+        val framing = tryCall(c, "framing") { f.frame(text) }
+        if (framing == null) {
+            // computenet-3iu1k: tryCall already recorded the error; remember the
+            // outcome too (as NONE) so a re-entry — pause/resume, restart, or a
+            // budget-gate-then-EXPAND — does not ask the framer again.
+            update { c.framing = Framing.NONE }
+            return false
+        }
         if (framing.mode == FramingMode.NONE || framing.items.size < 2) {
             update { c.framing = Framing.NONE }
             return false

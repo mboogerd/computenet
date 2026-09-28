@@ -2610,6 +2610,73 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `model A - a failed framing is not re-asked after a pause during the root's plausibility call`() {
+        // computenet-3iu1k: a failed framing was not remembered, so a pause landing during the
+        // plausibility call that follows it (parkIfHeld turns JUDGING back to QUEUED) led start()
+        // to call the framer a second time on resume.
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val framer = FakeFramer({ error("cli down") })
+        val judge = FakeJudge(plausibility = { entered.countDown(); release.await(20, TimeUnit.SECONDS); 0.5 })
+        val e = engine(judge = judge, framer = framer)
+        val root = e.ask("Q?")
+        assertTrue(entered.await(20, TimeUnit.SECONDS), "plausibility reached, so the failed framing already happened")
+        e.setPaused(root, true)
+        release.countDown()
+        e.idle()
+        assertTrue(e.snapshot().questions.single().paused, "the pause landed before the round started")
+        e.setPaused(root, false)
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(1, framer.counter.get(), "the framer is asked once, even across the pause")
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertNull(g.questions.single().framing)
+        assertTrue(g.node(root).error!!.startsWith("framing: "), g.node(root).error)
+    }
+
+    @Test
+    fun `model A - a NONE framing survives a restart without asking the framer again`() {
+        // computenet-3iu1k: EngineRecords.recordOf wrote framingMode only when the mode was not
+        // NONE, so a NONE outcome never reached the store; restoreFraming only restored framing
+        // from the graph's structure (which a NONE framing never creates), so a restart re-asked.
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-none-restore").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val store = InMemoryMetaStore()
+        val counter = AtomicInteger()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val judge = FakeJudge(plausibility = { entered.countDown(); release.await(20, TimeUnit.SECONDS); 0.5 })
+        val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false)
+        val e1 = DeliberationEngine(
+            CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(FakeProposer("claude")), config,
+            store = store, framer = FakeFramer({ Framing.NONE }, counter),
+        ).also { engines += it }
+        val root = e1.ask("Q?")
+        // The framing is decided (NONE) before the root's plausibility is judged (model A order);
+        // blocking here and closing captures the persisted state before round 1 runs.
+        assertTrue(entered.await(20, TimeUnit.SECONDS), "plausibility reached, so framing is already decided")
+        e1.close()
+        val scheduler2 = VirtualThreadScheduler("deliberate-framing-none-restore-2")
+        try {
+            val registry2 = LocationRegistry()
+            val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val e2 = DeliberationEngine(
+                CredenceGraph(host2, registry2, dfquad, structureLog = log), FakeJudge(), listOf(FakeProposer("claude")), config,
+                store = store, framer = FakeFramer({ Framing.NONE }, counter),
+            ).also { engines += it }
+            e2.idle()
+            assertEquals(1, counter.get(), "a NONE framing is remembered across restart, not asked again")
+            val g = e2.snapshot()
+            assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+            assertNull(g.questions.single().framing)
+        } finally {
+            release.countDown()
+            scheduler2.shutdown()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `model A - READINGS frame the root and each reading is explored as a root`() {
         val judge = FakeJudge(plausibility = { when (it) { "R1" -> 0.9; "R2" -> 0.1; else -> 0.5 } })
         val framer = FakeFramer({ readings("R1", "R2") }, before = {

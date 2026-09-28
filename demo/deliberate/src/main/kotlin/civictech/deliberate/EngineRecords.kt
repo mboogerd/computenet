@@ -95,7 +95,10 @@ internal object EngineRecords {
         duplicatesDropped = c.duplicatesDropped, triage = c.triage.mapKeys { it.key.name },
         alsoProposedBy = c.alsoProposedBy.toList(), evidence = c.evidence.toList(), merged = c.merged, error = c.error,
         anyCallSucceeded = c.anyCallSucceeded, edgeStrength = c.edge?.strength,
-        framingMode = c.framing?.mode?.takeIf { it != FramingMode.NONE },
+        // computenet-3iu1k: a NONE or failed outcome is persisted too (not just READINGS/
+        // POSITIONS), so a restore does not ask the framer again. null still means "never
+        // asked" so a record written before this fix decodes unchanged.
+        framingMode = c.framing?.mode,
         framingTerm = c.framing?.term.takeIf { c.framing?.mode != FramingMode.NONE },
     )
 
@@ -158,6 +161,10 @@ internal object EngineRecords {
         val issue = n.info.issue
         if (issue == null) {
             if (root.status == Status.FRAMED) root.status = Status.QUEUED
+            // computenet-3iu1k: a NONE or failed framing left no structure behind, but the
+            // record remembers it was asked, so restore must too — otherwise the framer is
+            // asked again on the next start().
+            if (rec?.framingMode == FramingMode.NONE) root.framing = Framing.NONE
             return
         }
         val texts = issue.positions.mapNotNull { p -> graph.firstOrNull { it.ref == p }?.info?.text }
