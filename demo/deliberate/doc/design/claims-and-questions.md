@@ -296,19 +296,21 @@ Cost: < $0.0001 per claim for recall + relation [R1 §5.2].
 
 ## 9. Build order
 
-Each step is shippable and useful alone.
+Each step is shippable and useful alone. Bead ids are `computenet-<id>` under
+`computenet-dq2fy`; the epic's 2026-09-28 plan comment is the live order. Also
+filed: `n99jt` (measure model B's premise-vs-bearing Choice).
 
 | Step | Content | Depends on | Evidence strength |
 |---|---|---|---|
-| **S0** | Exact q-weighted VoI on demand (`dw2wh`), replacing sensitivity cells | — | medium-strong |
-| **S0'** | CRED-01 without `root_question`; recalibrate with `knowledge` | — | decided; 9% shift measured |
-| **S0''** | Arguments-alone view at every node; `nxege` measurement | — | measured concern |
-| **S1** | Claim store: multi-parent claims, question membership, global structure log, aliases, twin REUSE at intake, EXP-02 claim-only subtrees; SPEC §8 non-goal dropped | S0 | strong for twins |
-| **S2** | Implication relations + coherence view (c′ shown, parents read c) | S1 | medium (n=12 / one snapshot) |
-| **S3a** | Multi-class accuracy experiment (R2 option b): a harder question set (Opus ≈ 50% top-1, Jev knowledgeable), contrastive depth-1 claims each deliberated as its own binary root by today's engine, plus R2's offline checks; go/no-go for S3b | — | — |
+| **S0** `dw2wh` | Exact q-weighted VoI on demand (`dw2wh`), replacing sensitivity cells | — | medium-strong |
+| **S0'** `pyyi0` | CRED-01 without `root_question`; recalibrate with `knowledge` | — | decided; 9% shift measured |
+| **S0''** `nxege` | Arguments-alone view at every node; `nxege` measurement | — | measured concern |
+| **S1** `ra3o2` | Claim store: multi-parent claims, question membership, global structure log, aliases, twin REUSE at intake, EXP-02 claim-only subtrees; SPEC §8 non-goal dropped | S0 | strong for twins |
+| **S2** `i9ujc` | Implication relations + coherence view (c′ shown, parents read c) | S1 | medium (n=12 / one snapshot) |
+| **S3a** `6di6y` | Multi-class accuracy experiment (R2 option b): a harder question set (Opus ≈ 50% top-1, Jev knowledgeable), contrastive depth-1 claims each deliberated as its own binary root by today's engine, plus R2's offline checks; go/no-go for S3b | — | — |
 | **S3b** | *Only if S3a says go:* multi-class questions (bearing edges, `instr` judgment, LL read-out, hurdle L, eTV), retiring POSITIONS | S0, S1, S3a | strong mechanism; accuracy not shown |
-| **S4** | Common cores at intake | S2 | 15% coverage on a sample |
-| **S5** | Multi-user (`ilknp`) on the store | S1 | decided |
+| **S4** `vyxyl` | Common cores at intake | S2 | 15% coverage on a sample |
+| **S5** `ilknp` | Multi-user (`ilknp`) on the store | S1 | decided |
 
 Cheap offline checks from R2's committed data (`data/DATA.md`) — prior
 tempering, OUTSIDE_MY_KNOWLEDGE handling — belong to S3a. [R2 §8.3]
