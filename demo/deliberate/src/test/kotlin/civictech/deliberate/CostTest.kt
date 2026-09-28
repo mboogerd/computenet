@@ -289,11 +289,15 @@ class CostTest {
             // can be caught mid-flight the same way), which is why both reads below wait on the same
             // known target instead of on each other.
             val expectedNeutral = 0.5
+            // Return the snapshot the predicate matched, never a second read: 0.5 is also the pristine
+            // value, so a later read can land mid-cascade (CI run 36381914733 read 0.527 right after a match).
             fun DeliberationEngine.settledDurable(): QuestionDto {
+                var matched: QuestionDto? = null
                 awaitUntil("the root's neutral-prior verdict settles on $expectedNeutral", timeoutMs = 30_000) {
-                    durable(snapshot().questions.single()).neutralCredence == expectedNeutral
+                    val q = durable(snapshot().questions.single())
+                    (q.neutralCredence == expectedNeutral).also { if (it) matched = q }
                 }
-                return durable(snapshot().questions.single())
+                return matched!!
             }
             val before = e1.settledDurable()
             e1.close()
