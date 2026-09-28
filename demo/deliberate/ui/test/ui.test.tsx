@@ -527,6 +527,32 @@ describe('UI-09 model A: framing', () => {
     expect(widths).toEqual([0.7, 0.26, 0.04]);
   });
 
+  it('computenet-qkngi: framed hero sums pro/con over every position\'s subtree, not the rootless root', () => {
+    const html = renderToString(() => <TreeView graph={readingsGraph} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const readingsAt = text.indexOf('class="readings"');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
+
+    // p1's subtree carries one SUPPORT argument (a-p1); p2's subtree carries none;
+    // the root itself has no direct children at all (FRA-02) — the old
+    // sideCounts(root) read "0 pro · 0 con" here regardless.
+    const pro = hero.match(/class="pro-text"[^>]*>([^<]+)</)?.[1];
+    const con = hero.match(/class="con-text"[^>]*>([^<]+)</)?.[1];
+    expect(pro).toBe('1 pro');
+    expect(con).toBe('0 con');
+  });
+
+  it('computenet-qkngi: framed hero has no question-level override control (EXPAND on a framed root runs no round)', () => {
+    const html = renderToString(() => <TreeView graph={readingsGraph} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const readingsAt = text.indexOf('class="readings"');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
+
+    expect(hero).not.toContain('aria-label="Exploration override"');
+    // each reading still keeps its own control (unaffected by this change).
+    expect((text.slice(readingsAt).match(/aria-label="Exploration override"/g) ?? []).length).toBeGreaterThan(0);
+  });
+
   it('an unframed question renders exactly as before (no framing line, no readings block)', () => {
     const unframed: GraphDto = { ...readingsGraph, questions: [{ ...readingsGraph.questions[0], framing: undefined }] };
     const html = renderToString(() => <TreeView graph={unframed} root="q" />);

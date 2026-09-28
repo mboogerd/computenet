@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildForest } from '../tree/buildTree';
-import type { TreeNode } from '../tree/buildTree';
+import type { ArgumentNode, TreeNode } from '../tree/buildTree';
 import { FramingSummary, Reading } from './Framing';
 import {
   ACTIVITY_VERB,
@@ -61,6 +61,30 @@ export function TreeView(props: { graph: GraphDto; root: string; research?: bool
   );
 }
 
+function tallyArg(a: ArgumentNode, acc: { pro: number; con: number }): void {
+  if (a.edge.polarity === 'SUPPORT') acc.pro++;
+  else acc.con++;
+  tallyNode(a.node, acc);
+  for (const la of a.linkArgs) tallyArg(la, acc);
+}
+
+function tallyNode(node: TreeNode, acc: { pro: number; con: number }): void {
+  for (const a of node.children) tallyArg(a, acc);
+}
+
+/**
+ * UI-09: pro/con arguments across every position's whole subtree (every
+ * level, not just each position's own direct arguments) — the same span
+ * `questionProgress` already counts via `root`. Used for a framed question's
+ * hero meta line, which has no arguments of its own to count with
+ * {@link sideCounts} (its children live under its readings/positions).
+ */
+function framedSideCounts(positions: TreeNode[]): { pro: number; con: number } {
+  const acc = { pro: 0, con: 0 };
+  for (const p of positions) tallyNode(p, acc);
+  return acc;
+}
+
 /** The question is the hero: large text, one credence gauge, a plain verdict, and progress. */
 function Question(props: { root: string; index: () => TreeIndex; tree: () => TreeNode | undefined; graph: () => GraphDto; sel: Selection }) {
   const entry = () => props.index().get(props.root);
@@ -74,6 +98,10 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
     for (const t of props.tree()?.positions ?? []) map.set(t.claim.ref, t);
     return map;
   });
+  // UI-09: a framed root has no arguments of its own (they live under its
+  // readings/positions), so its hero meta line sums pro/con over every
+  // position's whole subtree instead of sideCounts(root).
+  const frameCounts = createMemo(() => (framing() ? framedSideCounts(props.tree()?.positions ?? []) : undefined));
 
   return (
     <Show when={entry()}>
@@ -83,7 +111,7 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
         // The headline is the consensus of the credence rules; the band behind it is their spread.
         const tweened = createTween(() => shown(claim()));
         const v = () => verdict(tweened(), 'question');
-        const counts = () => sideCounts(e().node);
+        const counts = () => frameCounts() ?? sideCounts(e().node);
         const open = () => props.sel.selected() === claim().ref;
         const paused = () => question()?.paused === true;
         // A paused question with queued claims is waiting, not working (CTL-05).
@@ -208,9 +236,12 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                 <span class="card__spacer" />
                 <Show when={question()}>{(q) => <CostBadge question={q()} />}</Show>
                 <Show when={question()?.active && !paused() && question()}>{(q) => <PauseControl root={q().root} paused={false} />}</Show>
-                <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
-                  <OverrideControl id={claim().ref} value={override()} />
-                </span>
+                {/* UI-09: a framed root's EXPAND/STOP would run no round (FRA-02) — no question-level override for it. */}
+                <Show when={!framing()}>
+                  <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
+                    <OverrideControl id={claim().ref} value={override()} />
+                  </span>
+                </Show>
               </p>
 
               <Show when={!unargued() && priorDecidesText(question())}>
