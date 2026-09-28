@@ -136,8 +136,6 @@ class DeliberationEngine(
              * failed — middling, so one failure neither prunes nor frees a subtree.
              */
             const val FALLBACK_STRENGTH = 0.5
-            /** EXP-06: the error of a claim that explored and then ran out of budget (ROUND_LIMIT). */
-            const val BUDGET_EXHAUSTED = "budget exhausted"
             /** CTL-02: a claim the human forced to expand is queued ahead of every contribution (≤ 1). */
             const val FORCED_PRIORITY = 2.0
         }

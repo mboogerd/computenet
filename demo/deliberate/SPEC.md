@@ -257,10 +257,9 @@ names that model.)
   no argument is attached once the tree holds that many claims. The budget is
   spent in exploration order (below), so it goes to the highest
   value-of-information claims first. Gates run in the order links-off → depth
-  → budget → value of information (below), so `BUDGET` means the claim would
-  otherwise have expanded and never did; a claim that already ran a round and
-  then meets the budget ends `ROUND_LIMIT` with `error = "budget exhausted"`.
-  A question at its budget reports `stoppedBy = "budget"`. The budget is a
+  → budget → value of information (below); a claim that meets the cap ends
+  `BUDGET` whether or not it already ran a round — `rounds` still tells the
+  two cases apart. A question at its budget reports `stoppedBy = "budget"`. The budget is a
   hard ceiling that stands beside the value-of-information stop below; it is
   checked first, so it wins over a claim whose value of information is still
   high.
