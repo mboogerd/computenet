@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest';
-import type { BackendCostDto, CostDto, GraphDto, NodeDto, Override, QuestionDto, Status } from '../src/api/types';
+import type {
+  BackendCostDto, CostDto, FramingDto, GraphDto, NodeDto, Override, PositionDto, QuestionDto, Status,
+} from '../src/api/types';
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
   ? (<T>() => T extends B ? 1 : 2) extends <T>() => T extends A ? 1 : 2
@@ -25,6 +27,17 @@ type ExpectedQuestionDto = {
   firstImpression?: number;
   neutralCredence?: number;
   verdictsDisagree?: boolean;
+  framing?: FramingDto;
+};
+type ExpectedFramingDto = { mode: 'READINGS' | 'POSITIONS'; term?: string; positions: PositionDto[] };
+type ExpectedPositionDto = {
+  ref: string;
+  text: string;
+  credence: number;
+  firstImpression?: number;
+  neutralCredence?: number;
+  verdictsDisagree?: boolean;
+  share?: number;
 };
 type ExpectedCostDto = { backends: BackendCostDto[]; rounds: number; queued: number; perRoundUsd?: number };
 type ExpectedBackendCostDto = {
@@ -46,7 +59,7 @@ type ExpectedBackendCostDto = {
 };
 type ExpectedStatus =
   | 'QUEUED' | 'JUDGING' | 'EXPLORING' | 'SATURATED' | 'ROUND_LIMIT'
-  | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING' | 'STOPPED' | 'FAILED';
+  | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING' | 'STOPPED' | 'FAILED' | 'FRAMED';
 type ExpectedOverride = 'AUTO' | 'EXPAND' | 'STOP';
 type ExpectedNodeDto = {
   ref: string;
@@ -68,6 +81,7 @@ type ExpectedNodeDto = {
   evidence?: string[];
   undercuts?: string;
   onLink?: string;
+  positionOf?: string;
   plausibility?: number;
   relevance?: number;
   quality?: number;
@@ -93,9 +107,12 @@ const overrideMatches: Equal<Override, ExpectedOverride> = true;
 const nodeMatches: Equal<NodeDto, ExpectedNodeDto> = true;
 const costMatches: Equal<CostDto, ExpectedCostDto> = true;
 const backendCostMatches: Equal<BackendCostDto, ExpectedBackendCostDto> = true;
+const framingMatches: Equal<FramingDto, ExpectedFramingDto> = true;
+const positionMatches: Equal<PositionDto, ExpectedPositionDto> = true;
 
 it('mirrors the Dto.kt wire contract field for field', () => {
-  expect([graphMatches, questionMatches, statusMatches, overrideMatches, nodeMatches, costMatches, backendCostMatches]).toEqual([
-    true, true, true, true, true, true, true,
-  ]);
+  expect([
+    graphMatches, questionMatches, statusMatches, overrideMatches, nodeMatches, costMatches, backendCostMatches,
+    framingMatches, positionMatches,
+  ]).toEqual([true, true, true, true, true, true, true, true, true]);
 });

@@ -19,6 +19,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   DIMINISHING: 'not worth exploring',
   STOPPED: 'stopped by you',
   FAILED: 'failed',
+  FRAMED: 'depends on the reading',
 };
 
 export const STATUS_HINT: Record<Status, string> = {
@@ -33,6 +34,7 @@ export const STATUS_HINT: Record<Status, string> = {
   DIMINISHING: 'Not explored: settling it could barely move the answer (its value of information fell below the threshold)',
   STOPPED: 'You stopped exploring this claim',
   FAILED: 'Every call for this claim failed',
+  FRAMED: 'The question has several readings (or several possible answers): each is explored on its own below',
 };
 
 /**
