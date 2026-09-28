@@ -45,7 +45,7 @@ describe('disagreementsOf (where the rules disagree)', () => {
       questions: [],
       nodes: [
         node({ ref: 'wide', text: 'wide', spreadLow: 0.1, spreadHigh: 0.9 }),
-        node({ ref: 'tie', text: 'tie', spreadLow: 0.47, spreadHigh: 0.47 }), // width 0
+        node({ ref: 'tie', text: 'tie', credence: 0.47, spreadLow: 0.47, spreadHigh: 0.47 }), // width 0: credence sits inside the band, so spreadOf does not widen it
       ],
     };
     const rows = disagreementsOf(graph, 'q');
