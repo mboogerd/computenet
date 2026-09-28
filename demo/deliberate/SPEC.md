@@ -72,7 +72,13 @@ names that model.)
   in its own request, in parallel with one request asking its CRED-02
   strength and EXP-05 quality and relevance (independent questions over the
   argument's full state); the root, or an argument whose assessment failed, is
-  judged when its expansion starts.
+  judged when its expansion starts. **Model D:** the same request also asks a
+  `knowledge` Choice — `WITHIN_MY_KNOWLEDGE` / `OUTSIDE_MY_KNOWLEDGE`, does
+  judging `claim` need knowledge Jev does not have — and `OUTSIDE_MY_KNOWLEDGE`
+  maps the plausibility to `Judge.OUTSIDE_KNOWLEDGE` (0.5) whatever the score
+  says; an unrecognised answer fails the call. No Jev request carries a
+  current date, on any judgment kind: the judgment rests on Jev's own
+  knowledge (a date moved the judgment of claims about recent events).
 - **CRED-02** Every edge receives a Jev *relation strength* judgment — a Score:
   "if the child claim were true, how strongly would it bear on the parent in
   the stated direction" (irrelevant … decisive), mapped to [0,1]. Applied as the
@@ -126,6 +132,18 @@ names that model.)
   consensus is a pure function of the vector, so computing it where the
   vector is computed is the simplest derived form — no second cell per node,
   no second hop, no second fold. The snapshot only reads the hub.
+- **Model D — the neutral-prior vector.** A question root's `ClaimNode` also
+  evaluates every layer with its base shrunk towards a neutral prior before
+  the arguments are weighed: `base' = LayerSet.NEUTRAL_PRIOR +
+  LayerSet.WEAK_PRIOR_WEIGHT * (base - LayerSet.NEUTRAL_PRIOR)`, with
+  `NEUTRAL_PRIOR = 0.5` and `WEAK_PRIOR_WEIGHT = 0.0` — a fully neutral base,
+  the smallest choice (a weak, non-zero prior would be `0 < w < 1`). This
+  rides the root's own `Credence` emission as an optional `neutral` vector,
+  computed the moment the root's ordinary vector is (same stances, same
+  attacks and supports); every other node's `Credence.neutral` is null. The
+  root's ordinary credence is unaffected — `priorWeight == 1.0` leaves the
+  base untouched — so Jev's plausibility stays the root's stance and prior as
+  before.
 
 ## 3. Exploration (requirements EXP-*)
 
@@ -465,7 +483,14 @@ Every status change is broadcast.
   carries `yieldRounds`, `yieldRecent`, `yieldEarlier` (EXP-10, informational)
   and `stoppedBy` (`"budget"`, `"voi"` or null; model C, §3), `paused`
   (CTL-05), `cruxes` (model C, up to 3 refs for "what would change the
-  answer"), and `costUsd`, `projectedUsd` and `cost` (§12).
+  answer"), `costUsd`, `projectedUsd` and `cost` (§12), and — model D —
+  `firstImpression` (Jev's plausibility of the question itself, judged before
+  any argument; null until judged), `neutralCredence` (the root's headline
+  credence with the same arguments weighed from the neutral prior instead;
+  null until the root cell emits) and `verdictsDisagree` (true when the root's
+  ordinary credence and `neutralCredence` fall strictly on different sides of
+  0.5 — `LayerSet.oppositeSides`; a value of exactly 0.5 on either side is on
+  neither, so it never sets the flag).
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
 
@@ -499,6 +524,22 @@ Every status change is broadcast.
   each with its sway (`|sensitivity|`), how settled it is (its plausibility or,
   for a link, its strength) and, when its sensitivity is signed, which way it
   would pull the answer. Nothing is shown until the backend names a crux.
+- **UI-08 (model D).** All seven layers are still computed for every node, but
+  only the consensus is shown by default: no spread band on a claim's or the
+  question's gauge, no per-layer caption, no per-rule values or tooltip text.
+  A "rules" pill button in the header (`aria-pressed`, off by default) toggles
+  the *research view* on for the session; `?research` in the URL starts it on
+  (like `?debug`), and it is not otherwise persisted. In the research view the
+  spread band, the "rules: a–b%" caption and each rule's own credence (facts
+  panel "By rule") reappear exactly as before model D. The question's hero
+  caption reads "first impression F% · arguments alone N%" (`firstImpression`,
+  `neutralCredence`; either half is left out until known), with " · rules
+  a–b%" appended in the research view; when `verdictsDisagree` is true a note
+  (`role="note"`) says the first impression decides the side, naming which way
+  the arguments alone lean. The root claim's Facts row that shows its
+  pre-argument judgment is labelled "First impression" (a non-root claim keeps
+  "Plausible on its own"); the Legend explains both the rules button and
+  "First impression"/"Arguments alone".
 
 ## 8. Non-goals (v1)
 
