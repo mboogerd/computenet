@@ -221,9 +221,7 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
   );
 }
 
-/** The engine's EXP-06 note on a claim that explored and then met the budget: not a failed call. */
-const BUDGET_EXHAUSTED = 'budget exhausted';
-const callFailed = (n: NodeDto) => n.error !== undefined && n.error !== BUDGET_EXHAUSTED;
+const callFailed = (n: NodeDto) => n.error !== undefined;
 
 const SIDE_WORD = { pro: 'Pro', con: 'Con', holds: 'Link holds', undercut: 'Undercuts the link' } as const;
 

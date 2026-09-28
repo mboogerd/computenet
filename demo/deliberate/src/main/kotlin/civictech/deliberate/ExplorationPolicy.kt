@@ -171,13 +171,11 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     /**
      * How a claim ends when its expansion stops with [status]. A STOP that
      * raced the last round boundary still wins (CTL-03). EXP-06: a claim that
-     * already ran a round and then meets the budget ends ROUND_LIMIT with
-     * error [DeliberationEngine.Config.BUDGET_EXHAUSTED]; BUDGET is kept for
-     * a claim that would have expanded but never did.
+     * meets the hard cap ends BUDGET whether or not it ran a round; `rounds`
+     * still distinguishes the two cases.
      */
     fun finish(c: ClaimView, status: Status): Finish = when {
         c.override == Override.STOP -> Finish(Status.STOPPED)
-        status == Status.BUDGET && c.rounds > 0 -> Finish(Status.ROUND_LIMIT, DeliberationEngine.Config.BUDGET_EXHAUSTED)
         else -> Finish(status)
     }
 

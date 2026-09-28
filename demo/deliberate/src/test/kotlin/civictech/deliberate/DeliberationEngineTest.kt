@@ -377,7 +377,8 @@ class DeliberationEngineTest {
         assertTrue(g.claims().none { it.status == Status.DIMINISHING }, g.claims().toString())
         val capped = g.claims().filter { it.status == Status.BUDGET }
         assertTrue(capped.isNotEmpty())
-        assertEquals(DeliberationEngine.Config.BUDGET_EXHAUSTED, g.node(root).error)
+        assertEquals(Status.BUDGET, g.node(root).status)
+        assertNull(g.node(root).error)
         awaitUntil("the capped arguments' sensitivities are known") {
             e.snapshot().claims().filter { it.status == Status.BUDGET }.all { it.sensitivity != null }
         }
@@ -439,11 +440,49 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         assertEquals(5, g.claims().size)
-        // The root explored before the budget ran out, so it is not BUDGET (EXP-06).
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
-        assertEquals(DeliberationEngine.Config.BUDGET_EXHAUSTED, g.node(root).error)
+        // The root explored before the budget ran out; `rounds` still shows that (EXP-06).
+        assertEquals(Status.BUDGET, g.node(root).status)
+        assertNull(g.node(root).error)
+        assertTrue(g.node(root).rounds!! > 0)
         assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.BUDGET && it.rounds == 0 })
         assertEquals(5, g.questions.single().claims)
+    }
+
+    @Test
+    fun `a legacy ROUND_LIMIT-with-budget-exhausted record restores as BUDGET with no error`() {
+        val claim = Claim(
+            ref = CellRef(java.util.UUID.randomUUID()), root = CellRef(java.util.UUID.randomUUID()),
+            parent = null, side = null, text = "x", depth = 0, proposer = "claude", roundLimit = 3,
+        )
+        val legacy = EngineRecords.recordFrom(
+            mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1", "error" to "\"budget exhausted\""),
+        )
+        EngineRecords.apply(claim, legacy)
+        assertEquals(Status.BUDGET, claim.status)
+        assertNull(claim.error)
+        assertEquals(1, claim.rounds)
+
+        // A ROUND_LIMIT record with any other error (or none) is left as written: the mapping
+        // is keyed on the (status, error) pair, not on the status alone.
+        val claim2 = Claim(
+            ref = CellRef(java.util.UUID.randomUUID()), root = CellRef(java.util.UUID.randomUUID()),
+            parent = null, side = null, text = "x", depth = 0, proposer = "claude", roundLimit = 3,
+        )
+        val other = EngineRecords.recordFrom(
+            mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1", "error" to "\"claude: exit 1\""),
+        )
+        EngineRecords.apply(claim2, other)
+        assertEquals(Status.ROUND_LIMIT, claim2.status)
+        assertEquals("claude: exit 1", claim2.error)
+
+        val claim3 = Claim(
+            ref = CellRef(java.util.UUID.randomUUID()), root = CellRef(java.util.UUID.randomUUID()),
+            parent = null, side = null, text = "x", depth = 0, proposer = "claude", roundLimit = 3,
+        )
+        val noError = EngineRecords.recordFrom(mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1"))
+        EngineRecords.apply(claim3, noError)
+        assertEquals(Status.ROUND_LIMIT, claim3.status)
+        assertNull(claim3.error)
     }
 
     @Test
@@ -1225,7 +1264,7 @@ class DeliberationEngineTest {
         // The new arguments meet the exhausted budget like any other claim.
         assertTrue(g2.childrenOf(ref).all { g2.claim(it.source!!).status == Status.BUDGET })
 
-        // The root (ROUND_LIMIT, budget exhausted) also gets its forced round.
+        // The root (BUDGET) also gets its forced round.
         e.setOverride(root, Override.EXPAND)
         e.idle()
         val g3 = e.snapshot()

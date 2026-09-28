@@ -24,6 +24,14 @@ internal object EngineRecords {
     const val QUESTION_KEY = "q:"
     /** SPEC §12: a question record's per-backend cost field is `cost.<backend>`. */
     const val COST_FIELD = "cost."
+    /**
+     * DUR-03: before computenet-dq2fy.24.1, a claim that had already run a round
+     * and then met the hard cap (EXP-06) was recorded `ROUND_LIMIT` with this
+     * error text instead of `BUDGET`. [apply] maps that pair back to `BUDGET`
+     * with a null error on restore; a record with this pair from any other
+     * status is left as written.
+     */
+    private const val LEGACY_BUDGET_EXHAUSTED = "budget exhausted"
 
     /**
      * One claim's engine metadata as the store keeps it, one field per
@@ -128,6 +136,10 @@ internal object EngineRecords {
         c.evidence += r.evidence
         c.merged = r.merged
         c.error = r.error
+        if (r.status == Status.ROUND_LIMIT && r.error == LEGACY_BUDGET_EXHAUSTED) {
+            c.status = Status.BUDGET
+            c.error = null
+        }
         c.anyCallSucceeded = r.anyCallSucceeded
         c.edge?.strength = r.edgeStrength
     }

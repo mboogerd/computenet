@@ -174,7 +174,7 @@ class ExplorationPolicyTest {
     }
 
     @Test
-    fun `finish — STOP wins, and budget after a round reads ROUND_LIMIT with an error`() {
+    fun `finish — STOP wins, BUDGET stands whether or not a round ran`() {
         table(
             Case("a plain status", fresh to Status.SATURATED, Finish(Status.SATURATED)),
             Case("STOP wins (CTL-03)", fresh.copy(override = Override.STOP) to Status.ROUND_LIMIT, Finish(Status.STOPPED)),
@@ -182,7 +182,7 @@ class ExplorationPolicyTest {
             Case(
                 "BUDGET after a round (EXP-06)",
                 fresh.copy(rounds = 1) to Status.BUDGET,
-                Finish(Status.ROUND_LIMIT, Config.BUDGET_EXHAUSTED),
+                Finish(Status.BUDGET),
             ),
             Case("FAILED keeps its status", fresh.copy(rounds = 1) to Status.FAILED, Finish(Status.FAILED)),
         ) { (c, s) -> defaults.finish(c, s) }
