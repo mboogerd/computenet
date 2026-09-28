@@ -1,0 +1,28 @@
+| scenario | Ω0 | Hmin-abs | Hmin-pen | Hlse-pen |
+|---|---|---|---|---|
+| S1 routine two-sided, K=2 (A vs B, none possible) | 0.05 | 0.050/0.121/0.050 | 0.050/0.091/0.050 | 0.089/0.150/0.083 |
+| S1c contrastive debate, K=3 (X>Y, Y>Z, Z>X) | 0.05 | 0.050/0.085/0.050 | 0.050/0.072/0.050 | 0.050/0.072/0.050 |
+| S3 all eliminated (absolute objection to each, e=.72) | 0.10 | 0.280/0.280/0.205 | 0.284/0.284/0.199 | 0.284/0.284/0.199 |
+| S3b all objected but objections rebutted (c=.2) | 0.10 | 0.130/0.130/0.120 | 0.131/0.131/0.118 | 0.131/0.131/0.118 |
+| S3c all eliminated AND a proposer's explicit none-claim (s.8 c.8) | 0.10 | 0.402/0.402/0.333 | 0.555/0.555/0.439 | 0.555/0.555/0.439 |
+| S4 one strong answer (2 strong pros X, weak con X) | 0.10 | 0.100/0.154/0.100 | 0.100/0.146/0.100 | 0.115/0.152/0.110 |
+| S5 Late Bronze Age collapse, listed debate only | 0.40 | 0.572/0.620/0.519 | 0.569/0.589/0.506 | 0.594/0.618/0.522 |
+| S5b + explicit claim 'systems collapse, no single cause' (s.8 c.75) | 0.40 | 0.719/0.744/0.694 | 0.793/0.806/0.748 | 0.809/0.824/0.759 |
+| Sol-R3 extreme: bL=.99, s=c=1 objection to each of 3 | 0.01 | 0.047/0.047/0.033 | 0.047/0.047/0.033 | 0.047/0.047/0.033 |
+| S3d X,Y,Z objected, junk V p=.02 unobjected | 0.10 | 0.100/0.100/0.100 | 0.100/0.100/0.100 | 0.273/0.273/0.195 |
+| Sol-cx: 10 strong contrasts each way + weightless abs objections | 0.05 | 0.050/0.198/0.050 | 0.050/0.213/0.050 | 0.050/0.213/0.050 |
+| Opus-cx: S1 + weak abs objection to B (e=.04) | 0.05 | 0.053/0.124/0.052 | 0.052/0.092/0.052 | 0.093/0.151/0.085 |
+| S1' S1 with CONTRASTIVE pros (A fits better than B) | 0.05 | 0.050/0.121/0.050 | 0.050/0.091/0.050 | 0.089/0.150/0.083 |
+| 10 decisive objections per class (K=3, bL=.9) | 0.10 | 0.354/0.354/0.354 | 0.983/0.983/0.903 | 0.983/0.983/0.903 |
+
+| candidate | judge | routine mean/max ΔΩ | +weak objections to every class | all-elim mean ΔΩ / P(Ω) |
+|---|---|---|---|---|
+| Hmin-abs | up0/down0 | +0.004/+0.044 | +0.010/+0.075 | +0.117 / 0.234 |
+| Hmin-abs | up0.3/down0 | +0.042/+0.243 | +0.046/+0.251 | +0.124 / 0.240 |
+| Hmin-abs | up0/down0.3 | +0.004/+0.044 | +0.008/+0.073 | +0.075 / 0.191 |
+| Hmin-pen | up0/down0 | +0.003/+0.023 | +0.006/+0.031 | +0.114 / 0.230 |
+| Hmin-pen | up0.3/down0 | +0.027/+0.152 | +0.029/+0.150 | +0.116 / 0.232 |
+| Hmin-pen | up0/down0.3 | +0.003/+0.023 | +0.005/+0.030 | +0.066 / 0.182 |
+| Hlse-pen | up0/down0 | +0.029/+0.249 | +0.030/+0.261 | +0.147 / 0.263 |
+| Hlse-pen | up0.3/down0 | +0.062/+0.316 | +0.061/+0.310 | +0.150 / 0.266 |
+| Hlse-pen | up0/down0.3 | +0.022/+0.179 | +0.022/+0.189 | +0.089 / 0.206 |

@@ -1,0 +1,32 @@
+## reduction / decomposition checks (max abs error, 200 questions each)
+- eTV_joint vs binary E_q on L (K=1 listed): 1.1e-16
+- eMw_joint vs binary (K=1): 1.6e-16
+- eTV_joint vs closed eTV (P(L)=1, no L-args): 0.0e+00
+- eMw_joint vs closed eM_w (P(L)=1): 0.0e+00
+- eTV_joint listed-node = P(L)*closed eTV: 1.1e-16
+- eTV_joint L-node = binary E_q on L: 2.2e-16
+
+## worked: listed = 3-way near tie (A,B,C) with one 'for A' leaf; L has one supporting and one attacking leaf; P(L) varied
+| P(L) base | P(L) | node | eM_w joint | eTV joint | EVSI_log joint | closed eM_w (no Ω) |
+|---|---|---|---|---|---|---|
+| 0.95 | 0.950 | L root | 0.0711 | 0.1900 | 0.1985 | nan |
+| 0.95 | 0.950 | pro-L leaf | 0.0157 | 0.0812 | 0.0167 | nan |
+| 0.95 | 0.950 | con-L leaf | 0.0158 | 0.0815 | 0.0168 | nan |
+| 0.95 | 0.950 | for A (listed) | 0.2779 | 0.3768 | 0.0777 | 0.2975 |
+| 0.7 | 0.700 | L root | 0.4805 | 0.8400 | 0.6109 | nan |
+| 0.7 | 0.700 | pro-L leaf | 0.1973 | 0.3250 | 0.0637 | nan |
+| 0.7 | 0.700 | con-L leaf | 0.1980 | 0.3256 | 0.0640 | nan |
+| 0.7 | 0.700 | for A (listed) | 0.1509 | 0.2776 | 0.0572 | 0.2975 |
+| 0.4 | 0.400 | L root | 0.6571 | 0.9600 | 0.6730 | nan |
+| 0.4 | 0.400 | pro-L leaf | 0.2728 | 0.3655 | 0.0712 | nan |
+| 0.4 | 0.400 | con-L leaf | 0.2726 | 0.3652 | 0.0710 | nan |
+| 0.4 | 0.400 | for A (listed) | 0.0722 | 0.1587 | 0.0327 | 0.2975 |
+
+## population: 300 hurdle questions (listed K 2-6, P(L) base U(.4,.98)), 7679 nodes; MC to completion 3000 worlds (T=Ω when L resolves false)
+| objective | per-q Spearman vs MC_log | pooled vs MC_log | per-q vs EVSI_log(joint) | top-pick MC_log capture | share of top picks on L side |
+|---|---|---|---|---|---|
+| eMw_joint | 0.627 | 0.602 | 0.952 | 0.875 | 0.63 |
+| eTV_joint | 0.644 | 0.620 | 0.972 | 0.930 | 0.63 |
+| sep | 0.621 | 0.596 | 0.951 | 0.910 | 0.72 |
+| EVSI_log | 0.668 | 0.646 | 1.000 | 0.975 | 0.60 |
+(MC_log's own top pick is on the L side in 0.62 of questions; 'sep' = binary E_q for L-nodes, P(L)*closed eM_w for listed nodes)

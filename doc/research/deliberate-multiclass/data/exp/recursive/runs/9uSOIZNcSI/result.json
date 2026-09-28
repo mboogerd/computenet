@@ -1,0 +1,128 @@
+{
+ "root": "69d162b8-8137-4a7c-bdb5-8e0d612f810f",
+ "outcome": "done",
+ "elapsed": 90.0640640258789,
+ "question": {
+  "root": "69d162b8-8137-4a7c-bdb5-8e0d612f810f",
+  "text": "Which ticket will win the 2026 FIDE presidential election?",
+  "claims": 90,
+  "active": false,
+  "yieldRounds": 23,
+  "yieldRecent": 0.0570413671875,
+  "yieldEarlier": 0.16530289895833336,
+  "stoppedBy": "budget",
+  "paused": false,
+  "costUsd": 1.3974035200000001,
+  "projectedUsd": 1.3974035200000001,
+  "cost": {
+   "backends": [
+    {
+     "backend": "claude",
+     "models": [
+      "claude-sonnet-5"
+     ],
+     "calls": 67,
+     "inputTokens": 437051,
+     "cachedInputTokens": 300102,
+     "cacheWriteTokens": 136817,
+     "outputTokens": 4001,
+     "reasoningTokens": 686,
+     "usd": 0.6475624000000002,
+     "unpricedCalls": 0,
+     "rate": "as reported by Claude Code (total_cost_usd per call)",
+     "rateSource": "Claude Code CLI",
+     "assumed": false,
+     "note": "API-equivalent as reported by Claude Code; not your bill if you use a subscription."
+    },
+    {
+     "backend": "codex",
+     "models": [
+      "gpt-5.6-sol"
+     ],
+     "calls": 57,
+     "inputTokens": 708276,
+     "cachedInputTokens": 592896,
+     "cacheWriteTokens": 0,
+     "outputTokens": 1932,
+     "reasoningTokens": 0,
+     "usd": 0.7373183999999999,
+     "unpricedCalls": 0,
+     "rate": "$4.00/1M input \u00b7 $0.40/1M cached input \u00b7 $20.00/1M output \u00b7 cache writes 1.25\u00d7 input \u00b7 prompts over 272K tokens 2\u00d7 input, 1.5\u00d7 output",
+     "rateSource": "developers.openai.com/api/docs/models/gpt-5.6-sol",
+     "rateDate": "2026-09-27",
+     "assumed": false,
+     "note": "Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21."
+    },
+    {
+     "backend": "jev",
+     "models": [
+      "jev-1.13.0"
+     ],
+     "calls": 303,
+     "inputTokens": 298160,
+     "cachedInputTokens": 0,
+     "cacheWriteTokens": 0,
+     "outputTokens": 24095,
+     "reasoningTokens": 0,
+     "usd": 0.012522719999999989,
+     "unpricedCalls": 0,
+     "rate": "$0.042/1M input \u00b7 output free",
+     "rateSource": "third-party: OpenRouter typesafe/jev-1.13, MindStudio",
+     "rateDate": "2026-09-27",
+     "assumed": true,
+     "note": "TypeSafe publishes no pricing; this is a third-party listing."
+    }
+   ],
+   "rounds": 35,
+   "queued": 0,
+   "perRoundUsd": 0.03992581485714286
+  },
+  "cruxes": [
+   "803d38d7-1228-4388-ae36-69dbb8d8cb64",
+   "30373fa4-9377-43cc-958f-db409699917c",
+   "312fc49e-6f3a-48cd-adb8-16d2bcc97821"
+  ],
+  "verdictsDisagree": false,
+  "framing": {
+   "mode": "POSITIONS",
+   "positions": [
+    {
+     "ref": "bb0b00d0-cff7-4dcb-9891-2604b12626eb",
+     "text": "The Jan Henric Buettner and Malcolm Pein ticket wins the 2026 FIDE presidential election.",
+     "credence": 0.3418013386135157,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.3418013386135157,
+     "verdictsDisagree": false,
+     "share": 0.14244355218412819
+    },
+    {
+     "ref": "c041e83b-439b-44ac-91a5-83dae5d899e9",
+     "text": "The Wadim Rosenstein and Gordon Tang ticket wins the 2026 FIDE presidential election.",
+     "credence": 0.5508425830561038,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5508425830561038,
+     "verdictsDisagree": false,
+     "share": 0.3363992054749796
+    },
+    {
+     "ref": "f0bf65ea-e80a-40cd-a965-6520529876fd",
+     "text": "The Timur Turlov and Viswanathan Anand ticket wins the 2026 FIDE presidential election.",
+     "credence": 0.48384847347222576,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.48384847347222576,
+     "verdictsDisagree": false,
+     "share": 0.25713322090101687
+    },
+    {
+     "ref": "002133f4-f9df-4ca5-8b11-a1fccd3f8b5f",
+     "text": "A ticket other than Buettner/Pein, Rosenstein/Tang and Turlov/Anand wins the 2026 FIDE presidential election.",
+     "credence": 0.49045545392263995,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.49045545392263995,
+     "verdictsDisagree": false,
+     "share": 0.26402402143987547
+    }
+   ]
+  }
+ }
+}

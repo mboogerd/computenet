@@ -1,0 +1,175 @@
+{"op":"claim","ref":"60b9ac07-c65f-47a5-b98b-ff84c7ebd92c","text":"Which party will win the 2026 Clacton by-election?","question":true}
+{"op":"issue","ref":"60b9ac07-c65f-47a5-b98b-ff84c7ebd92c","mode":"POSITIONS","positions":["33f1657d-7b19-409c-aa0e-821709a783a5","5baafe4f-bdae-4d73-b36d-fdcd40b0c13d","39a97c6e-ae05-4920-ba05-0354f21686e0","0e3fc7c1-7b83-456c-b39a-684d4de65548","ef115881-0c6b-4661-a390-4fd1f7db7583"]}
+{"op":"claim","ref":"33f1657d-7b19-409c-aa0e-821709a783a5","text":"Reform UK wins the 2026 Clacton by-election.","question":true}
+{"op":"claim","ref":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d","text":"The Conservative Party wins the 2026 Clacton by-election.","question":true}
+{"op":"claim","ref":"39a97c6e-ae05-4920-ba05-0354f21686e0","text":"The Labour Party wins the 2026 Clacton by-election.","question":true}
+{"op":"claim","ref":"0e3fc7c1-7b83-456c-b39a-684d4de65548","text":"Restore Britain wins the 2026 Clacton by-election.","question":true}
+{"op":"claim","ref":"ef115881-0c6b-4661-a390-4fd1f7db7583","text":"A party other than Reform UK, the Conservatives, Labour and Restore Britain wins the 2026 Clacton by-election.","question":true}
+{"op":"claim","ref":"2c901d30-1e48-44bb-8976-b72897a84a0f","text":"Labour won the Clacton parliamentary seat in every general election from 1997 to 2005 before boundary and demographic shifts favored Reform-aligned candidates."}
+{"op":"edge","ref":"29b313f9-3533-41d2-921d-fbf716cedec4","polarity":"ATTACK","source":"2c901d30-1e48-44bb-8976-b72897a84a0f","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"d517db80-6101-4915-88aa-365029f55b91","text":"Nigel Farage's Reform UK party held the Clacton parliamentary seat with a majority exceeding 20,000 votes at the 2024 general election."}
+{"op":"edge","ref":"b4f9e276-33f8-47a3-aac6-4f05aeb8a3e5","polarity":"ATTACK","source":"d517db80-6101-4915-88aa-365029f55b91","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"018e8dbc-830e-417e-8390-dbcbe39b082f","text":"Giles Watling held the Clacton constituency for the Conservative Party from 2017 until Nigel Farage's 2024 win, indicating a substantial non-Reform voter base remains."}
+{"op":"edge","ref":"4081ad6d-8aa5-481f-b721-c8cb4b481836","polarity":"ATTACK","source":"018e8dbc-830e-417e-8390-dbcbe39b082f","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"01856fbe-8f13-4c9d-88e0-db44b3ff45fa","text":"The Green Party candidate finished within 5 percentage points of the winner in the Clacton constituency at the 2024 general election."}
+{"op":"edge","ref":"7fbe9951-bad5-4330-914a-3d52dcdfd112","polarity":"SUPPORT","source":"01856fbe-8f13-4c9d-88e0-db44b3ff45fa","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"9d0b695e-eeaa-43c7-a708-ac1159b55fcd","text":"No candidate outside Reform UK, the Conservatives, Labour, Restore Britain, and the Green Party finished within 10 percentage points of the winner in the Clacton constituency in the 2024 general election."}
+{"op":"edge","ref":"39cc0697-fd9d-4419-9fe9-aa31a5270f33","polarity":"ATTACK","source":"9d0b695e-eeaa-43c7-a708-ac1159b55fcd","target":"7fbe9951-bad5-4330-914a-3d52dcdfd112"}
+{"op":"claim","ref":"482b8a13-f099-4403-99a5-bdec09a69ca0","text":"The Conservative Party held the Clacton constituency continuously from 2015 until Douglas Carswell's UKIP defection ended in 2017, then represented it again from 2017 to 2024."}
+{"op":"edge","ref":"1f31af93-ca91-4a8a-9d26-3cb33ffed3b2","polarity":"SUPPORT","source":"482b8a13-f099-4403-99a5-bdec09a69ca0","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"5a8b8ae1-665e-4b25-ac70-549d37215b5e","text":"Nigel Farage's Reform UK party won the Clacton parliamentary seat with over half of the vote in the 2024 general election."}
+{"op":"edge","ref":"b520a87a-68cc-486b-8e8e-17848566035e","polarity":"ATTACK","source":"5a8b8ae1-665e-4b25-ac70-549d37215b5e","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"03fc0573-a374-41a2-95c2-1dbbc9963d2b","text":"Nigel Farage won Clacton for Reform UK in the 2024 general election with 46.2% of the vote."}
+{"op":"edge","ref":"d98c2f1b-3264-4911-a961-e737a6eb1204","polarity":"SUPPORT","source":"03fc0573-a374-41a2-95c2-1dbbc9963d2b","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"62590dd2-cd03-4860-9a6c-ed0fb7c03a20","text":"Nigel Farage's personal prominence accounted for a substantial share of Reform UK's appeal in Clacton at the 2024 general election."}
+{"op":"edge","ref":"5dd0ddc7-5d7f-4d86-b728-807c21846d08","polarity":"ATTACK","source":"62590dd2-cd03-4860-9a6c-ed0fb7c03a20","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"a158eab8-72f4-4442-955e-dfd499d99af5","text":"The Liberal Democrats won the 2025 North Shropshire council by-election after placing fourth there at the 2024 general election."}
+{"op":"edge","ref":"a517b3d7-d583-4c14-896a-1fb1fc4b5339","polarity":"SUPPORT","source":"a158eab8-72f4-4442-955e-dfd499d99af5","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"d283904f-3ed7-4de0-b3a7-25e002c49b69","text":"Reform UK won Clacton at the 2024 general election with 46.2% of the vote."}
+{"op":"edge","ref":"8903e994-f6b2-4bae-95c0-132f6ed5ea14","polarity":"ATTACK","source":"d283904f-3ed7-4de0-b3a7-25e002c49b69","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"d6ef2702-508a-4502-b061-73b965bd2129","text":"The Conservatives finished second in Clacton at the 2024 general election, ahead of Labour and every other party except Reform UK."}
+{"op":"edge","ref":"37fd036c-c016-41c3-bde7-e06a5b6c8373","polarity":"ATTACK","source":"d6ef2702-508a-4502-b061-73b965bd2129","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"0a2ba8ad-c3ce-470e-99b2-1987789d7575","text":"Incumbent parties in UK by-elections frequently retain the seat when their vote share in the prior general election exceeded 40%."}
+{"op":"edge","ref":"60cd6fa3-8324-44cb-b040-06179b86dca4","polarity":"SUPPORT","source":"0a2ba8ad-c3ce-470e-99b2-1987789d7575","target":"d98c2f1b-3264-4911-a961-e737a6eb1204"}
+{"op":"claim","ref":"6e125677-1abb-4489-bc6c-4e5b24c220f3","text":"Nigel Farage announced he will not defend the Clacton seat in the 2026 by-election."}
+{"op":"edge","ref":"ffa775e8-cee3-4c36-82da-daefc1578d7f","polarity":"ATTACK","source":"6e125677-1abb-4489-bc6c-4e5b24c220f3","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"5ea48de7-6665-44c0-9edf-9f141fba647b","text":"Voters who supported the Conservative Party under Giles Watling from 2017 to 2024 are less likely to vote for Reform UK in a 2026 by-election."}
+{"op":"edge","ref":"5ca20dc3-8c42-48b2-b0c6-11a0fcaf45b3","polarity":"ATTACK","source":"5ea48de7-6665-44c0-9edf-9f141fba647b","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"e3333518-165d-42e2-960b-01c9c0206f90","text":"Nigel Farage won the Clacton constituency for Reform UK in the 2024 general election, defeating the Conservative incumbent Giles Watling."}
+{"op":"edge","ref":"05f7fde6-601b-4ac7-9d52-2d7e9a7415e6","polarity":"ATTACK","source":"e3333518-165d-42e2-960b-01c9c0206f90","target":"4081ad6d-8aa5-481f-b721-c8cb4b481836"}
+{"op":"claim","ref":"7b5cfd67-8a33-4ac2-b93b-daec8d7f6d1c","text":"Reform UK led national opinion polls in the United Kingdom throughout most of 2025 and into 2026."}
+{"op":"edge","ref":"8b1e61c6-8d58-46b7-a7d1-4031d0a3a946","polarity":"SUPPORT","source":"7b5cfd67-8a33-4ac2-b93b-daec8d7f6d1c","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"e6d81cc2-dd1a-45e2-be1d-eaea284ab236","text":"National Reform UK opinion poll ratings fell relative to their 2024 general election vote share by mid-2026."}
+{"op":"edge","ref":"c686fd5a-167a-4b60-aa68-80c23f538cba","polarity":"ATTACK","source":"e6d81cc2-dd1a-45e2-be1d-eaea284ab236","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"1cea7e12-51a8-48a5-8f49-cefae2674e03","text":"Reform UK's national opinion poll ratings declined by several percentage points between mid-2025 and late 2026 amid internal party defections and controversies."}
+{"op":"edge","ref":"00238e02-a8a2-4832-ba39-43cf94dbd63b","polarity":"SUPPORT","source":"1cea7e12-51a8-48a5-8f49-cefae2674e03","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"814ba744-f91e-4393-aa1b-3f25c839341a","text":"Opinion polling in the Clacton constituency throughout 2025 and 2026 has consistently placed Reform UK ahead of the Labour Party."}
+{"op":"edge","ref":"8e6a64e9-3363-4e20-ba9a-a5b28a2e489f","polarity":"ATTACK","source":"814ba744-f91e-4393-aa1b-3f25c839341a","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"a6d638b1-6880-47d1-bcd7-c1d4af883ab3","text":"Reform UK candidate Nigel Farage won the Clacton constituency with over 46% of the vote in the 2024 UK general election."}
+{"op":"edge","ref":"f1721979-2264-45ee-8cdb-157bf3929f9b","polarity":"ATTACK","source":"a6d638b1-6880-47d1-bcd7-c1d4af883ab3","target":"0e3fc7c1-7b83-456c-b39a-684d4de65548"}
+{"op":"claim","ref":"21a77ad5-aa44-486e-ab27-c79a4b387a25","text":"Independent candidates and minor parties collectively received more than 10% of the vote in the Clacton constituency at the 2024 general election."}
+{"op":"edge","ref":"4f7e0d97-f24c-409b-aeb2-488860575994","polarity":"SUPPORT","source":"21a77ad5-aa44-486e-ab27-c79a4b387a25","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"4edabcba-25dd-4e79-8f73-326023d4cff1","text":"Restore Britain has never contested a UK parliamentary election as of September 2026."}
+{"op":"edge","ref":"8c9b8471-8b4b-45d7-b3fd-bff2ac106f39","polarity":"ATTACK","source":"4edabcba-25dd-4e79-8f73-326023d4cff1","target":"0e3fc7c1-7b83-456c-b39a-684d4de65548"}
+{"op":"claim","ref":"e9248b16-2522-4d0f-9ecb-983bfdd87f4c","text":"No candidate outside Reform UK, the Conservatives, Labour or the Green Party has won a Westminster parliamentary seat in Clacton since the constituency's creation in 2010."}
+{"op":"edge","ref":"938bccef-7b57-4efb-bcd2-c2baa4d1333f","polarity":"ATTACK","source":"e9248b16-2522-4d0f-9ecb-983bfdd87f4c","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"4caca6df-54c3-4855-9862-48b53274810b","text":"Reform UK's national opinion poll ratings declined relative to the Conservative Party's ratings between mid-2025 and September 2026."}
+{"op":"edge","ref":"32406704-b9b9-44ea-9a14-303c1c4c950e","polarity":"SUPPORT","source":"4caca6df-54c3-4855-9862-48b53274810b","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"82fb08b1-d646-429f-9ce6-a7e3e2ab502c","text":"Nigel Farage's personal appeal accounted for an unmeasured portion of Reform UK's 2024 vote share in Clacton."}
+{"op":"edge","ref":"5febb1c5-0794-482e-a157-ae7bef7dc195","polarity":"ATTACK","source":"82fb08b1-d646-429f-9ce6-a7e3e2ab502c","target":"60cd6fa3-8324-44cb-b040-06179b86dca4"}
+{"op":"claim","ref":"7d240586-cdad-4227-8b2f-7a852ac6197a","text":"Long-term party incumbency generally preserves local voter loyalty and campaign networks beyond a single electoral defeat."}
+{"op":"edge","ref":"45478b1e-fe4c-422f-9a9d-55e2cf102d8c","polarity":"SUPPORT","source":"7d240586-cdad-4227-8b2f-7a852ac6197a","target":"4081ad6d-8aa5-481f-b721-c8cb4b481836"}
+{"op":"claim","ref":"ec6d2f46-d44f-43bc-a1f2-001ad49ddf9c","text":"A constituency's voting patterns in general elections do not determine its voting patterns in by-elections with different candidates and turnout."}
+{"op":"edge","ref":"dc550df0-3d4b-4502-991e-950fffe8e214","polarity":"ATTACK","source":"ec6d2f46-d44f-43bc-a1f2-001ad49ddf9c","target":"05f7fde6-601b-4ac7-9d52-2d7e9a7415e6"}
+{"op":"claim","ref":"90053e61-d9a1-4d3b-b12f-d6ceedbd90bd","text":"Labour finished second in Clacton at the 2024 general election, ahead of the Conservative Party."}
+{"op":"edge","ref":"a1ffe26b-382d-40bd-b92c-3d902fc77051","polarity":"ATTACK","source":"90053e61-d9a1-4d3b-b12f-d6ceedbd90bd","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"210799cf-19ec-485e-83ec-9568642bc0db","text":"A 2026 by-election without Nigel Farage as Reform UK's candidate would remove Reform UK's principal personal-vote advantage in Clacton."}
+{"op":"edge","ref":"ce9c2d83-001c-425f-b9fb-3b77cf4517e4","polarity":"SUPPORT","source":"210799cf-19ec-485e-83ec-9568642bc0db","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"500b9f9c-432b-4c1a-8f66-a8a1728452b3","text":"Restore Britain selected former Reform UK deputy leader Ben Habib as its first parliamentary candidate in September 2026."}
+{"op":"edge","ref":"6652504e-966b-4e24-934f-734268c187e8","polarity":"ATTACK","source":"500b9f9c-432b-4c1a-8f66-a8a1728452b3","target":"8c9b8471-8b4b-45d7-b3fd-bff2ac106f39"}
+{"op":"claim","ref":"dc6d9c58-7787-4a41-998a-17156e53ffd6","text":"Reform UK lost the Runcorn and Helsby by-election in 2025 despite having finished second there at the 2024 general election."}
+{"op":"edge","ref":"86c6c836-8e37-44b2-9227-8fc6eee3e1de","polarity":"SUPPORT","source":"dc6d9c58-7787-4a41-998a-17156e53ffd6","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"fb758e78-a168-40cd-99a6-1ed31287511a","text":"The Green Party won the 2024 general election in four constituencies after entering the campaign with one Westminster seat."}
+{"op":"edge","ref":"0f0afd79-a699-4dfe-912c-ed961206cb41","polarity":"SUPPORT","source":"fb758e78-a168-40cd-99a6-1ed31287511a","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"6fa7c62e-45d9-4588-8e68-8ccdac7f986c","text":"Incumbent parties that won a constituency by a large vote margin in the preceding general election are more likely to retain that seat in a subsequent by-election."}
+{"op":"edge","ref":"b747f7e5-15ba-464e-be51-40befd2bbbaf","polarity":"ATTACK","source":"6fa7c62e-45d9-4588-8e68-8ccdac7f986c","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"220322bb-11ec-4b24-9c9d-51acd3ef207b","text":"By-elections often trigger substantial swings away from the incumbent party, so a strong 2024 result does not determine the 2026 by-election outcome."}
+{"op":"edge","ref":"76502219-7ed6-4fb0-8e7a-d09c03111886","polarity":"ATTACK","source":"220322bb-11ec-4b24-9c9d-51acd3ef207b","target":"b520a87a-68cc-486b-8e8e-17848566035e"}
+{"op":"claim","ref":"d7fb99a7-0368-4333-a659-80536dda42e9","text":"The House of Commons Library’s 2024 general-election results record Nigel Farage receiving 21,225 votes in Clacton."}
+{"op":"edge","ref":"a4b1de33-6d05-464c-bf9b-13390fa3ec39","polarity":"SUPPORT","source":"d7fb99a7-0368-4333-a659-80536dda42e9","target":"03fc0573-a374-41a2-95c2-1dbbc9963d2b"}
+{"op":"claim","ref":"0e1942c3-9edd-4210-a48d-12427fa02fda","text":"Nigel Farage received 46.2% of Clacton's votes in the 2024 general election, short of an absolute majority."}
+{"op":"edge","ref":"c2a041e4-c251-498e-8449-873dd46fa9a2","polarity":"SUPPORT","source":"0e1942c3-9edd-4210-a48d-12427fa02fda","target":"03fc0573-a374-41a2-95c2-1dbbc9963d2b"}
+{"op":"claim","ref":"1db63daa-fd57-4a56-9518-a8796493b7a5","text":"Reform UK's 2024 general election win in Clacton relied heavily on Nigel Farage's personal candidacy and public recognition rather than local party organization."}
+{"op":"edge","ref":"186f21ae-60ea-48a6-8956-c12b6a8c9b79","polarity":"SUPPORT","source":"1db63daa-fd57-4a56-9518-a8796493b7a5","target":"ce9c2d83-001c-425f-b9fb-3b77cf4517e4"}
+{"op":"claim","ref":"5b390024-32d9-4bf8-ab08-53698b222a2f","text":"Reform UK could select a replacement candidate in Clacton with substantial local recognition or incumbency advantage independent of Nigel Farage."}
+{"op":"edge","ref":"83f0dc30-ab43-48a1-a2b2-cd563043fb89","polarity":"ATTACK","source":"5b390024-32d9-4bf8-ab08-53698b222a2f","target":"ce9c2d83-001c-425f-b9fb-3b77cf4517e4"}
+{"op":"claim","ref":"8af7e20e-983d-4ccc-be31-e72ffb84b840","text":"Opinion polls at the constituency level for UK by-elections have historically shown larger errors than national polls due to small sample sizes."}
+{"op":"edge","ref":"c56d0fd7-b9c1-40a2-9ca3-c65a8c136799","polarity":"ATTACK","source":"8af7e20e-983d-4ccc-be31-e72ffb84b840","target":"814ba744-f91e-4393-aa1b-3f25c839341a"}
+{"op":"claim","ref":"9075d297-72b6-4f4e-b441-7ecbbcfa5a09","text":"Restore Britain was founded in 2025, after the most recent general election in 2024."}
+{"op":"edge","ref":"af762002-77e7-4e3a-9832-866007e846a9","polarity":"SUPPORT","source":"9075d297-72b6-4f4e-b441-7ecbbcfa5a09","target":"4edabcba-25dd-4e79-8f73-326023d4cff1"}
+{"op":"claim","ref":"0f20922b-8988-4269-a7c3-c2a248c94c8d","text":"Restore Britain announced candidates for multiple UK parliamentary constituencies ahead of the 2026 Clacton by-election."}
+{"op":"edge","ref":"d7c1e1a9-e754-4268-9f92-37f50de982b7","polarity":"ATTACK","source":"0f20922b-8988-4269-a7c3-c2a248c94c8d","target":"4edabcba-25dd-4e79-8f73-326023d4cff1"}
+{"op":"claim","ref":"864b7f90-aac2-4968-9d16-06c57aea27cd","text":"Past electoral outcomes in a constituency are a reliable guide to which parties can win future elections there absent major shifts in voter behavior."}
+{"op":"edge","ref":"eec586cf-970c-4f45-aae3-cde311a43f49","polarity":"SUPPORT","source":"864b7f90-aac2-4968-9d16-06c57aea27cd","target":"938bccef-7b57-4efb-bcd2-c2baa4d1333f"}
+{"op":"claim","ref":"f1cd007e-1b09-4d1b-8521-9060e63bee5a","text":"Restore Britain is a newly formed party that did not exist as a contesting option in prior Clacton elections since 2010."}
+{"op":"edge","ref":"72e2326d-0b10-4355-a008-94c03230d420","polarity":"ATTACK","source":"f1cd007e-1b09-4d1b-8521-9060e63bee5a","target":"938bccef-7b57-4efb-bcd2-c2baa4d1333f"}
+{"op":"claim","ref":"16521fac-2f2b-4aaa-a3dd-4313def12932","text":"Nigel Farage's personal popularity accounted for part of Reform UK's 2024 vote in Clacton."}
+{"op":"edge","ref":"6acf649f-dc99-4ec0-8e42-938db83eafae","polarity":"ATTACK","source":"16521fac-2f2b-4aaa-a3dd-4313def12932","target":"d98c2f1b-3264-4911-a961-e737a6eb1204"}
+{"op":"claim","ref":"ccbcc7e8-29f1-4c50-b157-070736310440","text":"Reform UK held more county council and local council seats than any other party in the Essex area as of 2026."}
+{"op":"edge","ref":"5d0c7fc0-8b52-4a98-80f1-2e05cd0a9f44","polarity":"SUPPORT","source":"ccbcc7e8-29f1-4c50-b157-070736310440","target":"33f1657d-7b19-409c-aa0e-821709a783a5"}
+{"op":"claim","ref":"27b29257-0a1f-44d7-919d-10deadd5b5b0","text":"Large constituency vote shares usually indicate a durable local electoral base for the winning party beyond a single election."}
+{"op":"edge","ref":"43a59d9f-e15d-4be4-9820-078a2e8c454d","polarity":"SUPPORT","source":"27b29257-0a1f-44d7-919d-10deadd5b5b0","target":"b520a87a-68cc-486b-8e8e-17848566035e"}
+{"op":"claim","ref":"49cd80f7-2599-4023-bd47-079eb94c8c34","text":"The removal of Reform UK's personal-vote advantage would not transfer those voters specifically to the Labour Party."}
+{"op":"edge","ref":"ece0fba3-5348-45c1-9ab9-7375f864f316","polarity":"ATTACK","source":"49cd80f7-2599-4023-bd47-079eb94c8c34","target":"ce9c2d83-001c-425f-b9fb-3b77cf4517e4"}
+{"op":"claim","ref":"773de531-601b-40cb-8035-86cdf9cdbcb5","text":"Restore Britain leads Reform UK in opinion polling for the Clacton constituency conducted in September 2026."}
+{"op":"edge","ref":"27fc57fa-2818-4c76-998a-687cb00cc1c7","polarity":"SUPPORT","source":"773de531-601b-40cb-8035-86cdf9cdbcb5","target":"0e3fc7c1-7b83-456c-b39a-684d4de65548"}
+{"op":"claim","ref":"aedaa856-590c-40b8-bfd6-f65a4f9f3cd8","text":"Labour-run local councils in Tendring district increased targeted campaign spending and canvassing resources in Clacton ahead of the 2026 by-election."}
+{"op":"edge","ref":"3bba456b-51a1-49d6-8723-f13dddbc844e","polarity":"SUPPORT","source":"aedaa856-590c-40b8-bfd6-f65a4f9f3cd8","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"f9f22333-b4fd-42dc-b622-3facdf2ef7d2","text":"Minor parties without an established local electoral base face greater barriers to recruiting candidates, attracting donors and persuading tactical voters."}
+{"op":"edge","ref":"f4926a96-4e40-4826-b98e-bf07f31199ea","polarity":"SUPPORT","source":"f9f22333-b4fd-42dc-b622-3facdf2ef7d2","target":"938bccef-7b57-4efb-bcd2-c2baa4d1333f"}
+{"op":"claim","ref":"a825aa69-bb17-4228-94f8-8cbbc6a90477","text":"Restore Britain’s announced parliamentary candidates had not appeared on any UK parliamentary ballot before the 2026 Clacton by-election."}
+{"op":"edge","ref":"a719886f-378e-41e8-930d-df564bf6c8b6","polarity":"SUPPORT","source":"a825aa69-bb17-4228-94f8-8cbbc6a90477","target":"4edabcba-25dd-4e79-8f73-326023d4cff1"}
+{"op":"claim","ref":"d2417c37-aef1-4e8b-8f53-1be17183f670","text":"UK by-elections in seats held by Reform UK, the Conservatives or Labour since 2024 have been won only by Reform UK, the Conservatives or Labour."}
+{"op":"edge","ref":"4a192480-914e-44c1-b8e7-83eea01b6b3f","polarity":"ATTACK","source":"d2417c37-aef1-4e8b-8f53-1be17183f670","target":"ef115881-0c6b-4661-a390-4fd1f7db7583"}
+{"op":"claim","ref":"367c54eb-0e75-4ca3-add1-f97473115aab","text":"No publicly reported Clacton constituency polls existed during 2025."}
+{"op":"edge","ref":"fc378df0-ec86-4e3b-bb5e-c3104f9c6857","polarity":"ATTACK","source":"367c54eb-0e75-4ca3-add1-f97473115aab","target":"814ba744-f91e-4393-aa1b-3f25c839341a"}
+{"op":"claim","ref":"8f0ea38e-4ec8-499d-a3b7-4f1fe8756f92","text":"The Conservatives won Clacton in every general election from 2010 to 2019, leaving Labour a potential tactical-voting beneficiary in a fragmented opposition field."}
+{"op":"edge","ref":"559f82cc-43e8-4876-b5d6-341358996342","polarity":"SUPPORT","source":"8f0ea38e-4ec8-499d-a3b7-4f1fe8756f92","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"be7006e0-e759-4bce-8421-d8e3c0bf2961","text":"Nigel Farage won the Clacton constituency with 46.2% of the vote in the July 2024 general election, more than double the vote share of the second-placed Conservative candidate."}
+{"op":"edge","ref":"79415f1a-69be-4c81-8767-d951fa69231c","polarity":"SUPPORT","source":"be7006e0-e759-4bce-8421-d8e3c0bf2961","target":"210799cf-19ec-485e-83ec-9568642bc0db"}
+{"op":"claim","ref":"075ff2b0-d0da-4f50-a8eb-5054ad2521c4","text":"Reform UK won the Clacton constituency by a majority exceeding 20,000 votes at the 2024 general election, indicating support beyond Nigel Farage's personal following."}
+{"op":"edge","ref":"8ea36cc8-db2e-41ec-8dc5-670c0101b6b8","polarity":"ATTACK","source":"075ff2b0-d0da-4f50-a8eb-5054ad2521c4","target":"210799cf-19ec-485e-83ec-9568642bc0db"}
+{"op":"claim","ref":"86246073-3233-46eb-bea2-5be08d15a523","text":"In the 2015, 2017, 2019 and 2024 general elections in Clacton, the winning candidate represented either the Conservative Party, the Labour Party or Reform UK (or its predecessor UKIP)."}
+{"op":"edge","ref":"65c7d99a-dceb-4a87-83b7-259b3e279331","polarity":"SUPPORT","source":"86246073-3233-46eb-bea2-5be08d15a523","target":"e9248b16-2522-4d0f-9ecb-983bfdd87f4c"}
+{"op":"claim","ref":"140e6da0-8602-4a45-b631-c959f6ae3feb","text":"Independent candidate Giles Watling's predecessor lost the Clacton seat to UKIP's Douglas Carswell in a 2014 by-election, and UKIP was neither Reform UK, the Conservatives, Labour nor the Green Party at that time."}
+{"op":"edge","ref":"2100c01d-d465-4216-9d8c-b10ac2a29ce8","polarity":"ATTACK","source":"140e6da0-8602-4a45-b631-c959f6ae3feb","target":"e9248b16-2522-4d0f-9ecb-983bfdd87f4c"}
+{"op":"claim","ref":"38acc109-8f0f-46b4-b9bb-2646592bc81b","text":"The historical Westminster winners cited exclude Restore Britain and the Green Party is not named as a party in the claim's list of excluded winners."}
+{"op":"edge","ref":"6a353306-1d6c-4ae8-8f42-3cf7bfdb6adb","polarity":"ATTACK","source":"38acc109-8f0f-46b4-b9bb-2646592bc81b","target":"72e2326d-0b10-4355-a008-94c03230d420"}
+{"op":"claim","ref":"29c96dc1-b66a-43b7-ae35-b6c2269c3cc0","text":"Incumbent parties defending large vote-share majorities in a constituency typically retain the seat in the subsequent by-election."}
+{"op":"edge","ref":"0cd56cf1-0559-4d77-80ae-1ec421f3fb0f","polarity":"SUPPORT","source":"29c96dc1-b66a-43b7-ae35-b6c2269c3cc0","target":"b4f9e276-33f8-47a3-aac6-4f05aeb8a3e5"}
+{"op":"claim","ref":"9f64601b-beee-4175-be83-bbea1d679b38","text":"Voter support for Reform UK in Clacton has declined substantially in national and local polling since the 2024 general election."}
+{"op":"edge","ref":"e9aacc01-2079-43ac-815a-297e44fc1f32","polarity":"ATTACK","source":"9f64601b-beee-4175-be83-bbea1d679b38","target":"39a97c6e-ae05-4920-ba05-0354f21686e0"}
+{"op":"claim","ref":"cdc642c4-fbe2-444d-b29c-b2d553f58f57","text":"Opinion polls conducted shortly before a UK by-election have historically been reasonably predictive of the eventual constituency winner."}
+{"op":"edge","ref":"fd1f239c-cff8-4330-a567-84ca321e4889","polarity":"SUPPORT","source":"cdc642c4-fbe2-444d-b29c-b2d553f58f57","target":"27fc57fa-2818-4c76-998a-687cb00cc1c7"}
+{"op":"claim","ref":"ad149594-9f2f-433a-ae37-bee59e28dd0e","text":"Opinion polls in UK by-elections have understated or overstated the eventual winning party's vote share by wide margins in numerous past contests."}
+{"op":"edge","ref":"9f64f7d1-61da-4451-a0ab-59ed7991de8e","polarity":"ATTACK","source":"ad149594-9f2f-433a-ae37-bee59e28dd0e","target":"27fc57fa-2818-4c76-998a-687cb00cc1c7"}
+{"op":"claim","ref":"efb51c8f-d701-452c-9676-01389a6c4c81","text":"Nigel Farage has led Reform UK since June 2024, giving Nigel Farage a national profile unmatched by other Reform UK politicians."}
+{"op":"edge","ref":"bbc4cc3f-3ee5-43d1-975d-0bc4473b6c4e","polarity":"SUPPORT","source":"efb51c8f-d701-452c-9676-01389a6c4c81","target":"210799cf-19ec-485e-83ec-9568642bc0db"}
+{"op":"claim","ref":"405fcbb7-efbd-488d-8129-f5539aa4f958","text":"A poll of Clacton constituency voters conducted by a national polling firm in September 2026 recorded a higher vote share for Restore Britain than for Reform UK."}
+{"op":"edge","ref":"ee58b8f0-9d57-4b23-88d4-1ea73f1206c0","polarity":"SUPPORT","source":"405fcbb7-efbd-488d-8129-f5539aa4f958","target":"773de531-601b-40cb-8035-86cdf9cdbcb5"}
+{"op":"claim","ref":"ba97703b-36ba-497a-a878-2672e304f84e","text":"No polling organization has published a constituency-level poll for the Clacton by-election as of September 2026."}
+{"op":"edge","ref":"fb9b5cfc-87c8-4cd5-b51c-eacf89ef76df","polarity":"ATTACK","source":"ba97703b-36ba-497a-a878-2672e304f84e","target":"773de531-601b-40cb-8035-86cdf9cdbcb5"}
+{"op":"claim","ref":"f3e17e09-29d8-49c9-8f77-6ab7b822b3c6","text":"The Green Party is included in the historical comparison but excluded from the claim’s named-party group."}
+{"op":"edge","ref":"2567bc9c-8674-4409-98a7-53c9e16d91ab","polarity":"ATTACK","source":"f3e17e09-29d8-49c9-8f77-6ab7b822b3c6","target":"938bccef-7b57-4efb-bcd2-c2baa4d1333f"}
+{"op":"claim","ref":"183b8fe7-ccdd-4000-ad15-69b3af63c0c4","text":"Restore Britain's Clacton constituency membership grew to over 5,000 registered supporters by September 2026."}
+{"op":"edge","ref":"0ae3bd18-39b1-4907-8d8f-ebadafd354ee","polarity":"SUPPORT","source":"183b8fe7-ccdd-4000-ad15-69b3af63c0c4","target":"0e3fc7c1-7b83-456c-b39a-684d4de65548"}
+{"op":"claim","ref":"90913862-3a58-448f-bd9a-e8fc916388c3","text":"By-election electorates and candidate fields can differ substantially from those of the preceding general election."}
+{"op":"edge","ref":"c3a3e9ee-256b-44e5-83c3-defcfe0dedaf","polarity":"ATTACK","source":"90913862-3a58-448f-bd9a-e8fc916388c3","target":"0cd56cf1-0559-4d77-80ae-1ec421f3fb0f"}
+{"op":"claim","ref":"a9a40acd-4951-4373-b7fe-a1603e605d1b","text":"Nigel Farage received a vote share more than 18 percentage points higher than the second-placed Conservative candidate in the 2024 Clacton constituency declaration."}
+{"op":"edge","ref":"07f33a17-3487-4dfb-929d-120471d38084","polarity":"SUPPORT","source":"a9a40acd-4951-4373-b7fe-a1603e605d1b","target":"5a8b8ae1-665e-4b25-ac70-549d37215b5e"}
+{"op":"claim","ref":"80273bfc-ced0-4e2d-93cb-8391b6887ab0","text":"A constituency poll's party lead does not identify the leading candidate when multiple candidates represent that party or party labels are ambiguous."}
+{"op":"edge","ref":"9886be96-0b1d-4f23-94c2-55e76b57f526","polarity":"ATTACK","source":"80273bfc-ced0-4e2d-93cb-8391b6887ab0","target":"27fc57fa-2818-4c76-998a-687cb00cc1c7"}
+{"op":"claim","ref":"ed59040d-cb6c-451b-90ad-1ceced03ba70","text":"National opinion poll standing relative to competitors is a strong predictor of a party's vote share in individual UK by-elections."}
+{"op":"edge","ref":"316320eb-ef15-4427-9d63-120e58bd7fe5","polarity":"SUPPORT","source":"ed59040d-cb6c-451b-90ad-1ceced03ba70","target":"32406704-b9b9-44ea-9a14-303c1c4c950e"}
+{"op":"claim","ref":"75ee896a-f6a0-4bff-bd06-93b8fea46e57","text":"Local constituency-level factors specific to Clacton can diverge substantially from national opinion poll trends between parties."}
+{"op":"edge","ref":"658b930b-006b-428c-afa2-8930b680150a","polarity":"ATTACK","source":"75ee896a-f6a0-4bff-bd06-93b8fea46e57","target":"32406704-b9b9-44ea-9a14-303c1c4c950e"}
+{"op":"claim","ref":"399f3f14-e3cd-4f1a-859f-75f9160ef3b9","text":"Incumbency in a seat won by a landslide typically gives the incumbent party's candidate a strong organizational and name-recognition advantage in the subsequent by-election."}
+{"op":"edge","ref":"d9207b69-6c5c-44ff-9f1f-182344d3e56e","polarity":"ATTACK","source":"399f3f14-e3cd-4f1a-859f-75f9160ef3b9","target":"5baafe4f-bdae-4d73-b36d-fdcd40b0c13d"}
+{"op":"claim","ref":"838ed931-3c2f-4d06-aed6-fa1de448f205","text":"A 2026 Clacton by-election would occur only if the sitting Reform UK MP for Clacton vacated the seat, which is a precondition unrelated to Conservative electoral strength."}
+{"op":"edge","ref":"f2bb76d6-5ae1-4801-94e6-8cd3123a2ef8","polarity":"ATTACK","source":"838ed931-3c2f-4d06-aed6-fa1de448f205","target":"b520a87a-68cc-486b-8e8e-17848566035e"}
+{"op":"claim","ref":"65370367-69e2-4ad9-a178-fcf9e2ede764","text":"Nigel Farage received 46.2% of votes cast in the Clacton constituency at the 2024 general election."}
+{"op":"edge","ref":"1e2692da-80d9-4232-8597-772e6e687037","polarity":"ATTACK","source":"65370367-69e2-4ad9-a178-fcf9e2ede764","target":"5a8b8ae1-665e-4b25-ac70-549d37215b5e"}
+{"op":"claim","ref":"25f72f71-7798-4722-8b1b-8b4ee86f32c7","text":"Nigel Farage will not be a candidate in the 2026 Clacton by-election."}
+{"op":"edge","ref":"88d0cd42-f667-4ab1-8120-162f39085c0e","polarity":"ATTACK","source":"25f72f71-7798-4722-8b1b-8b4ee86f32c7","target":"d98c2f1b-3264-4911-a961-e737a6eb1204"}
+{"op":"claim","ref":"2989e485-edbd-4d15-8894-d33f569eda70","text":"UK by-election swings away from the incumbent party are frequently large enough to change which party holds the seat."}
+{"op":"edge","ref":"005cb6bd-c8a0-46c2-8fce-7aa80799b0ad","polarity":"SUPPORT","source":"2989e485-edbd-4d15-8894-d33f569eda70","target":"76502219-7ed6-4fb0-8e7a-d09c03111886"}
+{"op":"claim","ref":"17bca33b-c44c-43ce-b7b7-a45ce63a6e76","text":"General by-election swing patterns in the United Kingdom apply most strongly when the incumbent party holds the seat, but Reform UK, not the Conservative Party, held the Clacton seat before the 2026 by-election."}
+{"op":"edge","ref":"73c59990-74d6-498b-84c6-0c58a46f5b52","polarity":"ATTACK","source":"17bca33b-c44c-43ce-b7b7-a45ce63a6e76","target":"005cb6bd-c8a0-46c2-8fce-7aa80799b0ad"}
+{"op":"claim","ref":"e152dd02-8be1-4143-b3f5-d0f30d3359ed","text":"The UK Electoral Commission's official results for the 2024 general election list Nigel Farage as the winning candidate in the Clacton constituency."}
+{"op":"edge","ref":"d4454cf7-182c-4206-a9bd-95656054ba1f","polarity":"SUPPORT","source":"e152dd02-8be1-4143-b3f5-d0f30d3359ed","target":"d517db80-6101-4915-88aa-365029f55b91"}
+{"op":"claim","ref":"e6d8f8a0-7fe7-46cf-9964-de4da322d5bf","text":"Incumbency advantage and established local party infrastructure from a prior large election win typically persist into subsequent by-elections in the same constituency."}
+{"op":"edge","ref":"521486b9-06d2-4704-a1e0-64cbbd0a52ac","polarity":"ATTACK","source":"e6d8f8a0-7fe7-46cf-9964-de4da322d5bf","target":"0e3fc7c1-7b83-456c-b39a-684d4de65548"}
+{"op":"claim","ref":"d5526bb3-dde2-4e7a-8519-b06bbf90d564","text":"Restore Britain did not exist as a registered political party in the Clacton constituency during the 2024 UK general election."}
+{"op":"edge","ref":"194210b8-2730-4d06-95b4-6cbe4105fc54","polarity":"ATTACK","source":"d5526bb3-dde2-4e7a-8519-b06bbf90d564","target":"f1721979-2264-45ee-8cdb-157bf3929f9b"}
+{"op":"claim","ref":"16f7ad74-434e-40ed-932a-eb2150f90a1a","text":"A constituency result driven partly by a candidate's personal popularity is less predictive of the same party's performance without that candidate."}
+{"op":"edge","ref":"2e17222c-23ea-441a-9e7b-c0ba50e3d2d9","polarity":"SUPPORT","source":"16f7ad74-434e-40ed-932a-eb2150f90a1a","target":"6acf649f-dc99-4ec0-8e42-938db83eafae"}

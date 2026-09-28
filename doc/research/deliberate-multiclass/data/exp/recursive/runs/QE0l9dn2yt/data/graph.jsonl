@@ -1,0 +1,175 @@
+{"op":"claim","ref":"6092cccc-a604-44c1-a446-06b1fcaaa427","text":"Who will win the 2026 Wimbledon women's singles title?","question":true}
+{"op":"issue","ref":"6092cccc-a604-44c1-a446-06b1fcaaa427","mode":"POSITIONS","positions":["8f0f9fc6-ab21-4538-a2c5-f6330e393041","bb05461a-ad0f-4b41-8161-6c571e1a0992","70a21c7b-cf25-46fe-844c-d2a67fbdd524","4c7e8588-00ae-447f-abde-404038b57143","eac4ed82-97f0-4733-9d3d-1b31bb51c609"]}
+{"op":"claim","ref":"8f0f9fc6-ab21-4538-a2c5-f6330e393041","text":"Iga Swiatek wins the 2026 Wimbledon women's singles title.","question":true}
+{"op":"claim","ref":"bb05461a-ad0f-4b41-8161-6c571e1a0992","text":"Aryna Sabalenka wins the 2026 Wimbledon women's singles title.","question":true}
+{"op":"claim","ref":"70a21c7b-cf25-46fe-844c-d2a67fbdd524","text":"Jessica Pegula wins the 2026 Wimbledon women's singles title.","question":true}
+{"op":"claim","ref":"4c7e8588-00ae-447f-abde-404038b57143","text":"Coco Gauff wins the 2026 Wimbledon women's singles title.","question":true}
+{"op":"claim","ref":"eac4ed82-97f0-4733-9d3d-1b31bb51c609","text":"A player other than Iga Swiatek, Aryna Sabalenka, Jessica Pegula and Coco Gauff wins the 2026 Wimbledon women's singles title.","question":true}
+{"op":"claim","ref":"43e41e0e-e760-4a49-a1a6-bf523f2176c1","text":"Coco Gauff reached at least one Grand Slam singles final in each of the 2023, 2024, and 2025 seasons."}
+{"op":"edge","ref":"d925e49c-22ae-44ad-919b-21e5987444e8","polarity":"SUPPORT","source":"43e41e0e-e760-4a49-a1a6-bf523f2176c1","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"9fd77bc2-6e71-4230-b8e2-09a7a9bb30e3","text":"Coco Gauff has never reached a Wimbledon singles final as of the 2025 tournament."}
+{"op":"edge","ref":"8c1306fa-8e19-4938-9228-b8b1cab3e792","polarity":"ATTACK","source":"9fd77bc2-6e71-4230-b8e2-09a7a9bb30e3","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"08c5a7d9-b98d-414b-abe5-aef65868a10a","text":"Iga Swiatek won the 2025 Wimbledon women's singles title."}
+{"op":"edge","ref":"656bb919-4377-4004-a03a-9bc5b7e13642","polarity":"SUPPORT","source":"08c5a7d9-b98d-414b-abe5-aef65868a10a","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"6fb37da2-ef5e-4d4a-ab74-e52da492d491","text":"Iga Swiatek has reached the Wimbledon women's singles final only once, in 2025, in her career as of 2025."}
+{"op":"edge","ref":"303d7654-348f-410e-bcb7-e3610453ddf0","polarity":"ATTACK","source":"6fb37da2-ef5e-4d4a-ab74-e52da492d491","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"656af7e3-3162-49f4-b24a-7b43c1ae8266","text":"Six different women won the last six women's singles Grand Slam titles before the 2026 Wimbledon tournament."}
+{"op":"edge","ref":"0c1de586-9346-41a5-8986-8b8973f90fc0","polarity":"SUPPORT","source":"656af7e3-3162-49f4-b24a-7b43c1ae8266","target":"eac4ed82-97f0-4733-9d3d-1b31bb51c609"}
+{"op":"claim","ref":"bce5e893-f570-4dac-b6bf-d215f6765195","text":"Swiatek, Sabalenka, Pegula and Gauff combined have won or reached the final in the majority of Grand Slam tournaments held since 2022."}
+{"op":"edge","ref":"b5b92f1d-6370-4178-88a0-7219dd70a57b","polarity":"ATTACK","source":"bce5e893-f570-4dac-b6bf-d215f6765195","target":"eac4ed82-97f0-4733-9d3d-1b31bb51c609"}
+{"op":"claim","ref":"813ba168-6de1-418e-9655-e883591fb658","text":"Jessica Pegula reached the quarterfinals or better at Wimbledon in multiple years between 2022 and 2025."}
+{"op":"edge","ref":"c9b30c8c-243b-4c1f-8b18-4c266a2e6e80","polarity":"SUPPORT","source":"813ba168-6de1-418e-9655-e883591fb658","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"fa4a6f37-9e7d-4b43-8d87-e73cb01a8170","text":"Jessica Pegula has never reached a Wimbledon singles final in her career as of 2025."}
+{"op":"edge","ref":"55f382b7-d4a8-4dfc-b5f7-ba05f48f7b98","polarity":"ATTACK","source":"fa4a6f37-9e7d-4b43-8d87-e73cb01a8170","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"ee270be4-5839-4c07-bcf6-0560779814f8","text":"Aryna Sabalenka held the world No. 1 WTA ranking for most of the 2025 season."}
+{"op":"edge","ref":"d4623482-4064-4451-9746-229d1e489384","polarity":"SUPPORT","source":"ee270be4-5839-4c07-bcf6-0560779814f8","target":"bb05461a-ad0f-4b41-8161-6c571e1a0992"}
+{"op":"claim","ref":"c6af6358-cbb1-4c4f-8b4a-16003ab53558","text":"Aryna Sabalenka has never reached the Wimbledon women's singles final in any of her career appearances through 2025."}
+{"op":"edge","ref":"574ae907-dbfd-4ce1-b08f-a9c977c99768","polarity":"ATTACK","source":"c6af6358-cbb1-4c4f-8b4a-16003ab53558","target":"bb05461a-ad0f-4b41-8161-6c571e1a0992"}
+{"op":"claim","ref":"2a802967-896b-49ea-b973-a36bc16f0613","text":"Coco Gauff won the 2024 Auckland singles title on an outdoor grass court."}
+{"op":"edge","ref":"cce9e029-ab5d-4fbc-9981-3a042201d1bc","polarity":"SUPPORT","source":"2a802967-896b-49ea-b973-a36bc16f0613","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"6636cd80-0a2b-443a-bde2-8c62950ccf1b","text":"Iga Swiatek won the Wimbledon junior girls’ singles title in 2018."}
+{"op":"edge","ref":"a5325dbf-dc90-4634-9a80-32565690c84e","polarity":"SUPPORT","source":"6636cd80-0a2b-443a-bde2-8c62950ccf1b","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"8ae2f441-1b26-4ea8-a759-9d49c03f7f19","text":"No woman successfully defended the Wimbledon singles title from 2017 through 2025."}
+{"op":"edge","ref":"8f0f07ff-54b1-4e2a-b790-d8c67ee151f3","polarity":"ATTACK","source":"8ae2f441-1b26-4ea8-a759-9d49c03f7f19","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"4d08692e-e0b6-4b81-8ffc-60792c673457","text":"Elena Rybakina is a former Wimbledon champion who reached the Wimbledon semifinals in both 2024 and 2025."}
+{"op":"edge","ref":"f4314424-85e1-4c9c-a154-eac9c30d4b45","polarity":"SUPPORT","source":"4d08692e-e0b6-4b81-8ffc-60792c673457","target":"eac4ed82-97f0-4733-9d3d-1b31bb51c609"}
+{"op":"claim","ref":"cd35c76c-ecca-4bc4-b3f2-73fd2ec67b0e","text":"Aryna Sabalenka reached the Wimbledon women's singles semifinals in both 2021 and 2023."}
+{"op":"edge","ref":"da369f65-47ac-4cc8-9491-bc9478182487","polarity":"SUPPORT","source":"cd35c76c-ecca-4bc4-b3f2-73fd2ec67b0e","target":"bb05461a-ad0f-4b41-8161-6c571e1a0992"}
+{"op":"claim","ref":"5387d002-7c5c-4f3e-8342-fe787df0acee","text":"Jessica Pegula defeated four-time Wimbledon champion Iga Świątek to win the 2025 Bad Homburg grass-court title."}
+{"op":"edge","ref":"1644a5c5-06b2-4be2-9369-e99684efa894","polarity":"SUPPORT","source":"5387d002-7c5c-4f3e-8342-fe787df0acee","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"44b6161c-e8fa-4254-809c-99ca0d234011","text":"Jessica Pegula had not won a Grand Slam singles title as of the end of 2025."}
+{"op":"edge","ref":"5affb6bc-2d91-4278-b8a1-704137747663","polarity":"ATTACK","source":"44b6161c-e8fa-4254-809c-99ca0d234011","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"608cc837-7d18-484f-97a4-fa574e198678","text":"Coco Gauff won the 2023 US Open singles title and the 2025 French Open singles title."}
+{"op":"edge","ref":"6ca58246-e0f1-4bc3-9d83-c79e64d79002","polarity":"SUPPORT","source":"608cc837-7d18-484f-97a4-fa574e198678","target":"43e41e0e-e760-4a49-a1a6-bf523f2176c1"}
+{"op":"claim","ref":"65d64fab-aaf8-4d7d-9839-f5506a5fe997","text":"Coco Gauff lost in the 2023 US Open final, the 2024 French Open final, and the 2025 French Open final before winning the 2025 French Open title."}
+{"op":"edge","ref":"924bf867-b536-4bfa-8ecc-b0dd3bc5760c","polarity":"SUPPORT","source":"65d64fab-aaf8-4d7d-9839-f5506a5fe997","target":"43e41e0e-e760-4a49-a1a6-bf523f2176c1"}
+{"op":"claim","ref":"d3b89675-8473-4897-9710-2c08a521c021","text":"Players who have never previously reached a Wimbledon singles final win the title less often than players with prior final experience there."}
+{"op":"edge","ref":"37a0920d-14e6-4437-a082-3d9666161e12","polarity":"SUPPORT","source":"d3b89675-8473-4897-9710-2c08a521c021","target":"8c1306fa-8e19-4938-9228-b8b1cab3e792"}
+{"op":"claim","ref":"3db60d33-8254-4b36-a3b8-9e0e00b4508d","text":"Player performance and career trajectories can change substantially between 2025 and the 2026 Wimbledon tournament."}
+{"op":"edge","ref":"0a28066e-233e-42b3-8c52-8f014eb9fb04","polarity":"ATTACK","source":"3db60d33-8254-4b36-a3b8-9e0e00b4508d","target":"37a0920d-14e6-4437-a082-3d9666161e12"}
+{"op":"claim","ref":"18674679-a2e4-4105-9c26-849730e0e213","text":"Consistent reaching of Grand Slam finals across multiple recent seasons indicates a sustained high level of performance likely to persist into the 2026 Wimbledon tournament."}
+{"op":"edge","ref":"d83807fb-460b-4e5b-b194-6ef2d45a1a42","polarity":"SUPPORT","source":"18674679-a2e4-4105-9c26-849730e0e213","target":"d925e49c-22ae-44ad-919b-21e5987444e8"}
+{"op":"claim","ref":"f1ed4f14-8ccc-4865-a45a-73b419974269","text":"Coco Gauff reached the finals of the 2023 US Open, 2024 Olympics, and 2025 French Open but lost most other Grand Slam finals and quarterfinals, including at Wimbledon, indicating no particular grass-court advantage relevant to the 2026 Wimbledon final."}
+{"op":"edge","ref":"2037d872-6956-44b8-af8c-e8e71cc4ae97","polarity":"ATTACK","source":"f1ed4f14-8ccc-4865-a45a-73b419974269","target":"d925e49c-22ae-44ad-919b-21e5987444e8"}
+{"op":"claim","ref":"36d7dc3a-c61c-463a-ace1-02063587aec8","text":"Coco Gauff reached the semifinals of the 2025 Wimbledon singles tournament."}
+{"op":"edge","ref":"84fe765d-a3d7-4d5f-993a-f0ae74ec21e9","polarity":"SUPPORT","source":"36d7dc3a-c61c-463a-ace1-02063587aec8","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"460fa005-e536-4454-b4c6-f6d48ff95e93","text":"Coco Gauff has a career losing record against Aryna Sabalenka and Iga Swiatek on grass-court and hard-court matches combined as of 2025."}
+{"op":"edge","ref":"f63a29a5-7405-4e08-9d52-04abe2d46a27","polarity":"ATTACK","source":"460fa005-e536-4454-b4c6-f6d48ff95e93","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"ac99ad58-e963-4315-9498-81ff025cd641","text":"Iga Swiatek held the world number 1 ranking for a combined total of over 100 weeks between 2022 and 2025."}
+{"op":"edge","ref":"bedbf904-7f1f-474c-bb32-224ee3dadf21","polarity":"SUPPORT","source":"ac99ad58-e963-4315-9498-81ff025cd641","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"4e70f254-0777-488c-ae5b-63b8b60a4474","text":"Iga Swiatek's career win-loss record on grass courts is worse than her win-loss record on clay and hard courts combined."}
+{"op":"edge","ref":"4568471b-486c-4575-95f2-6c1de951ada2","polarity":"ATTACK","source":"4e70f254-0777-488c-ae5b-63b8b60a4474","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"2d863b6e-e2fb-42f9-ab2c-29e54c486dd6","text":"Grass-court tournaments in 2025 and 2026 outside Wimbledon were won by players other than Swiatek, Sabalenka, Pegula and Gauff in multiple instances."}
+{"op":"edge","ref":"03efd93b-2c4f-412b-bd73-b0c057aca3a9","polarity":"SUPPORT","source":"2d863b6e-e2fb-42f9-ab2c-29e54c486dd6","target":"eac4ed82-97f0-4733-9d3d-1b31bb51c609"}
+{"op":"claim","ref":"7148462d-c716-4e4c-abe0-5ef0f62da90f","text":"Aryna Sabalenka won the 2025 US Open women's singles title."}
+{"op":"edge","ref":"43fab9f4-eadd-45ae-9887-2d6106537330","polarity":"SUPPORT","source":"7148462d-c716-4e4c-abe0-5ef0f62da90f","target":"bb05461a-ad0f-4b41-8161-6c571e1a0992"}
+{"op":"claim","ref":"6e8e61ae-64d6-4cef-b9a6-7cc83463945d","text":"Jessica Pegula finished the 2025 season ranked among the top 10 players in the WTA singles rankings."}
+{"op":"edge","ref":"b65c6a6d-2a07-43c8-b3a1-9cc7a2507a54","polarity":"SUPPORT","source":"6e8e61ae-64d6-4cef-b9a6-7cc83463945d","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"158d8c01-bb8b-42da-955c-59607f2ea848","text":"Jessica Pegula was ranked outside the WTA top 10 as of September 2026."}
+{"op":"edge","ref":"960490e1-bc63-4461-82a9-93e0da462444","polarity":"ATTACK","source":"158d8c01-bb8b-42da-955c-59607f2ea848","target":"b65c6a6d-2a07-43c8-b3a1-9cc7a2507a54"}
+{"op":"claim","ref":"a21828af-2df0-4fce-935e-4421500d128d","text":"Several Wimbledon women’s singles champions won the title without having reached a previous Wimbledon singles final."}
+{"op":"edge","ref":"4be1bb1b-dd63-47f0-96d4-ed6b988c1a41","polarity":"ATTACK","source":"a21828af-2df0-4fce-935e-4421500d128d","target":"37a0920d-14e6-4437-a082-3d9666161e12"}
+{"op":"claim","ref":"11db9721-26ce-48c1-8552-d5c4b125580f","text":"Coco Gauff reached the 2024 French Open singles semifinal but did not reach a Grand Slam singles final during the 2024 season."}
+{"op":"edge","ref":"0689bdfa-4c03-4cad-b4ff-7070392d338a","polarity":"ATTACK","source":"11db9721-26ce-48c1-8552-d5c4b125580f","target":"43e41e0e-e760-4a49-a1a6-bf523f2176c1"}
+{"op":"claim","ref":"4b6bcd87-bd90-4c22-a321-5a1be10fec7e","text":"Grand Slam finals are played on three different surfaces, while Wimbledon is the only Grand Slam played on grass."}
+{"op":"edge","ref":"b4fd355c-a4f8-4c60-92dc-c1f1ae98b6bc","polarity":"ATTACK","source":"4b6bcd87-bd90-4c22-a321-5a1be10fec7e","target":"2037d872-6956-44b8-af8c-e8e71cc4ae97"}
+{"op":"claim","ref":"f4003506-c61b-49fa-ac69-6d03af75a567","text":"Coco Gauff won the 2023 US Open and 2025 French Open singles titles."}
+{"op":"edge","ref":"3fbfc89c-fa60-489d-bc52-3d6468c5b4df","polarity":"SUPPORT","source":"f4003506-c61b-49fa-ac69-6d03af75a567","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"6c85a228-660c-43bf-bc7b-5fe9463ce0ae","text":"Mirra Andreeva reached the Wimbledon quarterfinals in 2023 and 2025 before turning 19."}
+{"op":"edge","ref":"a4587213-2a15-48aa-8b53-d5bfc1f5919a","polarity":"SUPPORT","source":"6c85a228-660c-43bf-bc7b-5fe9463ce0ae","target":"eac4ed82-97f0-4733-9d3d-1b31bb51c609"}
+{"op":"claim","ref":"2fd4f701-6cf3-43a0-b9d3-94b71b70bb1a","text":"Consistent quarterfinal-or-better performance on grass at Wimbledon indicates a player's skill level is well suited to grass-court conditions."}
+{"op":"edge","ref":"89ac9e16-c6b3-492f-a1c9-082230612bf1","polarity":"SUPPORT","source":"2fd4f701-6cf3-43a0-b9d3-94b71b70bb1a","target":"c9b30c8c-243b-4c1f-8b18-4c266a2e6e80"}
+{"op":"claim","ref":"ce05aa22-fa71-4263-b410-411fde7df80f","text":"Players who have never previously reached a Wimbledon singles final rarely win the Wimbledon women's singles title."}
+{"op":"edge","ref":"e17d2d99-9c31-4f98-9d54-dcf9f13bd9d8","polarity":"SUPPORT","source":"ce05aa22-fa71-4263-b410-411fde7df80f","target":"55f382b7-d4a8-4dfc-b5f7-ba05f48f7b98"}
+{"op":"claim","ref":"854fee68-6492-41cc-9248-827316e774d0","text":"Jessica Pegula has never reached a Wimbledon final or won a Wimbledon singles title as of 2025."}
+{"op":"edge","ref":"b56a83ab-5d70-48ce-829c-23427c7be2f3","polarity":"ATTACK","source":"854fee68-6492-41cc-9248-827316e774d0","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"00671088-e009-44f1-945b-cc55e3e9d493","text":"Jessica Pegula reached the 2024 US Open singles final."}
+{"op":"edge","ref":"c0335d80-f0db-49ae-8687-9476cf53757a","polarity":"SUPPORT","source":"00671088-e009-44f1-945b-cc55e3e9d493","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"fb77ba15-bea3-4ce7-a9de-eae9b4c8bdee","text":"Past performance of a group of players in a competitive tournament is predictive of that same group's likelihood of winning a future edition of the tournament."}
+{"op":"edge","ref":"0782c3ff-6cb1-4160-a067-fc5f93195e85","polarity":"SUPPORT","source":"fb77ba15-bea3-4ce7-a9de-eae9b4c8bdee","target":"b5b92f1d-6370-4178-88a0-7219dd70a57b"}
+{"op":"claim","ref":"ed4f9fdc-3add-437e-8922-9ca61c71c357","text":"Player age, injury status and form change substantially between 2022–2025 and the 2026 Wimbledon tournament."}
+{"op":"edge","ref":"b77f043e-8e5b-4750-ac00-7eabbe22ef64","polarity":"ATTACK","source":"ed4f9fdc-3add-437e-8922-9ca61c71c357","target":"b5b92f1d-6370-4178-88a0-7219dd70a57b"}
+{"op":"claim","ref":"91cff4de-e12b-46b9-a3af-8c3e7d5faff8","text":"A player's past win-loss record on a surface is predictive of that player's future performance on the same surface."}
+{"op":"edge","ref":"54631242-7413-43fa-ae60-fd5593a48d09","polarity":"SUPPORT","source":"91cff4de-e12b-46b9-a3af-8c3e7d5faff8","target":"4568471b-486c-4575-95f2-6c1de951ada2"}
+{"op":"claim","ref":"cdfb310f-9015-4f2b-af79-bfec257a9aef","text":"Players with losing head-to-head records against top rivals win fewer matches against those specific opponents in subsequent tournaments."}
+{"op":"edge","ref":"4a61fefe-a099-441b-a8c2-8759011cc360","polarity":"SUPPORT","source":"cdfb310f-9015-4f2b-af79-bfec257a9aef","target":"f63a29a5-7405-4e08-9d52-04abe2d46a27"}
+{"op":"claim","ref":"4cad8976-0e0d-469c-85ee-f1c1aa144306","text":"Coco Gauff needs to win only seven matches at the 2026 Wimbledon tournament, not necessarily any match against Aryna Sabalenka or Iga Swiatek, to claim the title."}
+{"op":"edge","ref":"d2a0fbb2-ba8c-4e67-8bee-76106bcd9e7f","polarity":"ATTACK","source":"4cad8976-0e0d-469c-85ee-f1c1aa144306","target":"f63a29a5-7405-4e08-9d52-04abe2d46a27"}
+{"op":"claim","ref":"f4940298-daa5-4936-81e7-bdc86f25eae7","text":"Sustained world number 1 rankings indicate a player's consistently high overall tennis skill level relative to competitors."}
+{"op":"edge","ref":"73a7ab29-2d34-4a45-b304-c05357874d66","polarity":"SUPPORT","source":"f4940298-daa5-4936-81e7-bdc86f25eae7","target":"bedbf904-7f1f-474c-bb32-224ee3dadf21"}
+{"op":"claim","ref":"73365e86-77e3-4ef7-8f45-37b7dc33f828","text":"Iga Swiatek has never won a Wimbledon singles title and reached only one Wimbledon final, in 2025, as of September 2026."}
+{"op":"edge","ref":"d2768638-9908-4840-a5bb-7bd48a4e4c4e","polarity":"ATTACK","source":"73365e86-77e3-4ef7-8f45-37b7dc33f828","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"be0c2dc9-311f-4fc0-a2b8-21edcc172d85","text":"Coco Gauff ranked in the top 5 of the WTA singles rankings as of September 2025."}
+{"op":"edge","ref":"91b4c61e-fb86-4757-a2e5-bf64f7abb9c0","polarity":"SUPPORT","source":"be0c2dc9-311f-4fc0-a2b8-21edcc172d85","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"e1d96d45-d25b-4949-b4ee-afd9cbdcec9a","text":"Coco Gauff hired a new coach in 2025, disrupting her competitive continuity heading into the grass-court season."}
+{"op":"edge","ref":"58b002fe-7b57-4964-9c82-565dd949bc75","polarity":"ATTACK","source":"e1d96d45-d25b-4949-b4ee-afd9cbdcec9a","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"31f5287e-e4f4-4054-abd0-de6fe55fee0b","text":"Several Wimbledon women’s singles champions won the title in their first appearance in a Wimbledon singles final."}
+{"op":"edge","ref":"748d5e0e-fcfc-4cec-b599-5188e2c5ae74","polarity":"ATTACK","source":"31f5287e-e4f4-4054-abd0-de6fe55fee0b","target":"e17d2d99-9c31-4f98-9d54-dcf9f13bd9d8"}
+{"op":"claim","ref":"4074cfd4-01f3-4ba6-b1f5-cdd39ec4e77a","text":"Grand Slam results across hard, clay and grass courts do not isolate performance on Wimbledon's grass courts."}
+{"op":"edge","ref":"b30473ea-b091-4ede-a060-dd767db101a8","polarity":"ATTACK","source":"4074cfd4-01f3-4ba6-b1f5-cdd39ec4e77a","target":"b5b92f1d-6370-4178-88a0-7219dd70a57b"}
+{"op":"claim","ref":"6db7f5c5-a9e9-410c-b888-8272911ef2dd","text":"At least one of Swiatek, Sabalenka, Pegula and Gauff withdrew from or lost early at Wimbledon in multiple recent years due to injury or grass-court struggles."}
+{"op":"edge","ref":"c7d7e267-797e-4cd6-a023-02353af5ec75","polarity":"SUPPORT","source":"6db7f5c5-a9e9-410c-b888-8272911ef2dd","target":"eac4ed82-97f0-4733-9d3d-1b31bb51c609"}
+{"op":"claim","ref":"373d6d35-cf3b-4cf1-897d-a8121ae36838","text":"The comparison combines results from two surfaces instead of comparing Iga Swiatek’s grass record with other 2026 Wimbledon contenders’ grass records."}
+{"op":"edge","ref":"1442062f-9bf4-4474-8216-4dda62e0b1b5","polarity":"ATTACK","source":"373d6d35-cf3b-4cf1-897d-a8121ae36838","target":"4568471b-486c-4575-95f2-6c1de951ada2"}
+{"op":"claim","ref":"450487b2-fc41-474d-86bb-dcf652d46e29","text":"Women's singles major champions are disproportionately drawn from players who previously sustained the world number 1 ranking."}
+{"op":"edge","ref":"1bba1976-74a5-4b00-bf03-7677dd46c797","polarity":"SUPPORT","source":"450487b2-fc41-474d-86bb-dcf652d46e29","target":"bedbf904-7f1f-474c-bb32-224ee3dadf21"}
+{"op":"claim","ref":"61cd5620-7ba8-4100-af14-d4937b718c8c","text":"Swiatek's number-one ranking reflected results across all surfaces rather than performance specifically on Wimbledon's grass courts."}
+{"op":"edge","ref":"ceb879df-d99b-4d6e-99ba-72266c230beb","polarity":"ATTACK","source":"61cd5620-7ba8-4100-af14-d4937b718c8c","target":"73a7ab29-2d34-4a45-b304-c05357874d66"}
+{"op":"claim","ref":"5781f6ae-285c-4deb-aee2-2493e2f28264","text":"Wimbledon is played on grass, while the combined record includes hard-court matches that do not measure grass-specific performance."}
+{"op":"edge","ref":"d3f6442b-bdce-4e7c-a30e-623baeb31cc3","polarity":"ATTACK","source":"5781f6ae-285c-4deb-aee2-2493e2f28264","target":"f63a29a5-7405-4e08-9d52-04abe2d46a27"}
+{"op":"claim","ref":"46822faa-6588-4265-982c-efcd7a5ce541","text":"Coco Gauff reached the fourth round or better at Wimbledon in five of her six main-draw appearances through 2025."}
+{"op":"edge","ref":"3949a49d-3606-451a-9daf-f0d2851cb5b3","polarity":"SUPPORT","source":"46822faa-6588-4265-982c-efcd7a5ce541","target":"4c7e8588-00ae-447f-abde-404038b57143"}
+{"op":"claim","ref":"68788f9a-07e5-4857-959b-bc9306c70ea9","text":"Coco Gauff lost in the first round at Wimbledon in both 2023 and 2025."}
+{"op":"edge","ref":"d45dcc39-3ea1-4ed5-97e6-7fd69c5636b3","polarity":"ATTACK","source":"68788f9a-07e5-4857-959b-bc9306c70ea9","target":"8c1306fa-8e19-4938-9228-b8b1cab3e792"}
+{"op":"claim","ref":"c20cdb90-b72e-4e30-905d-0cf1d6301d92","text":"Iga Swiatek won the 2025 WTA Finals title in November 2025."}
+{"op":"edge","ref":"e6157b5f-8e66-4d64-a772-0cff6155c313","polarity":"SUPPORT","source":"c20cdb90-b72e-4e30-905d-0cf1d6301d92","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"61c96e0e-435c-4f7d-bc8d-5b3da25f880e","text":"Quarterfinal-or-better finishes establish competitiveness at Wimbledon but do not distinguish a likely champion from other consistently deep-running players."}
+{"op":"edge","ref":"ae005129-5380-4937-9ceb-f0c6ce07634d","polarity":"ATTACK","source":"61c96e0e-435c-4f7d-bc8d-5b3da25f880e","target":"89ac9e16-c6b3-492f-a1c9-082230612bf1"}
+{"op":"claim","ref":"fb57cfe2-d12b-4af0-8993-abd56be3e027","text":"Aryna Sabalenka won the 2026 WTA grass-court warm-up tournament ahead of Wimbledon."}
+{"op":"edge","ref":"af621282-317a-40b1-96db-52d7a28bd975","polarity":"SUPPORT","source":"fb57cfe2-d12b-4af0-8993-abd56be3e027","target":"bb05461a-ad0f-4b41-8161-6c571e1a0992"}
+{"op":"claim","ref":"9a6f5b2f-97db-48e8-bb31-1e96ff49974d","text":"Aryna Sabalenka lost in the third round of the 2025 Wimbledon women's singles tournament."}
+{"op":"edge","ref":"8bac5103-0c36-4dc1-89ed-8266086318b9","polarity":"ATTACK","source":"9a6f5b2f-97db-48e8-bb31-1e96ff49974d","target":"bb05461a-ad0f-4b41-8161-6c571e1a0992"}
+{"op":"claim","ref":"0bf5872d-2791-4d0b-b8f4-b76a8485805f","text":"Jessica Pegula's best result at Wimbledon as of 2025 is a quarterfinal appearance, reached in 2023 and 2024."}
+{"op":"edge","ref":"3a272e5c-5ae4-4078-b85d-0292f8b2d07c","polarity":"SUPPORT","source":"0bf5872d-2791-4d0b-b8f4-b76a8485805f","target":"fa4a6f37-9e7d-4b43-8d87-e73cb01a8170"}
+{"op":"claim","ref":"07330ea0-6438-4e6d-9492-b6573c5a770e","text":"Jessica Pegula reached the Wimbledon singles quarterfinals in 2023 and the semifinals in 2024, her best results at the tournament as of 2025."}
+{"op":"edge","ref":"5167c4d2-3225-4098-a2c2-824af796de37","polarity":"SUPPORT","source":"07330ea0-6438-4e6d-9492-b6573c5a770e","target":"fa4a6f37-9e7d-4b43-8d87-e73cb01a8170"}
+{"op":"claim","ref":"89d71a95-8384-4424-8021-5003bd53ae39","text":"Jessica Pegula's serve and return statistics on grass ranked among the WTA tour's top tier during the 2025 season."}
+{"op":"edge","ref":"d9b0a2a5-e69e-4a58-88a0-9cac9c18ff0f","polarity":"SUPPORT","source":"89d71a95-8384-4424-8021-5003bd53ae39","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"95398990-da4e-4651-80aa-7d89d54aa6c8","text":"Jessica Pegula turned 32 years old in 2026, an age at which few WTA players have won a first Grand Slam singles title."}
+{"op":"edge","ref":"0649a2bd-1080-43b0-acc1-026143658822","polarity":"ATTACK","source":"95398990-da4e-4651-80aa-7d89d54aa6c8","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"786fd096-7946-4032-9bb6-e31f0448cceb","text":"Jessica Pegula reached the Wimbledon singles semifinal in 2025, a round in which players occasionally go on to win the title the following year."}
+{"op":"edge","ref":"3921386b-2d3d-42bf-82e0-119c86084d80","polarity":"ATTACK","source":"786fd096-7946-4032-9bb6-e31f0448cceb","target":"70a21c7b-cf25-46fe-844c-d2a67fbdd524"}
+{"op":"claim","ref":"4940ca09-1ab5-444c-879a-c8a78a3623ea","text":"Iga Swiatek's world number 1 ranking weeks occurred entirely before the 2026 Wimbledon tournament and do not reflect her form or fitness during that event."}
+{"op":"edge","ref":"39119e26-a282-43f6-b3cd-53aab3d280ec","polarity":"ATTACK","source":"4940ca09-1ab5-444c-879a-c8a78a3623ea","target":"73a7ab29-2d34-4a45-b304-c05357874d66"}
+{"op":"claim","ref":"3622a1e2-52d0-4382-b646-9a68d981625e","text":"Iga Swiatek won six Grand Slam women’s singles titles through 2025."}
+{"op":"edge","ref":"34a63665-c829-438d-98b8-dc311e854373","polarity":"SUPPORT","source":"3622a1e2-52d0-4382-b646-9a68d981625e","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"ccc55b9c-18a9-4593-8756-2166063ccd2e","text":"Elena Rybakina defeated Iga Swiatek in all four completed WTA matches between 2023 and 2025."}
+{"op":"edge","ref":"9c202534-c5bc-4ab2-9892-2df6ed98923c","polarity":"ATTACK","source":"ccc55b9c-18a9-4593-8756-2166063ccd2e","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"9bc7e364-61eb-44b5-ab1a-b15c14e86b08","text":"Iga Swiatek's grass court win-loss record includes matches from early in her career before she adapted her game to the surface."}
+{"op":"edge","ref":"7ba8ebb5-8ce8-459f-b3cb-5da41ac822cf","polarity":"ATTACK","source":"9bc7e364-61eb-44b5-ab1a-b15c14e86b08","target":"4568471b-486c-4575-95f2-6c1de951ada2"}
+{"op":"claim","ref":"1a965d5e-150f-47fa-9fcd-26e946e6e35c","text":"Jessica Pegula reached the Wimbledon women's singles final in 2024."}
+{"op":"edge","ref":"f95ef980-65b7-4751-944d-dd374fd4776f","polarity":"ATTACK","source":"1a965d5e-150f-47fa-9fcd-26e946e6e35c","target":"fa4a6f37-9e7d-4b43-8d87-e73cb01a8170"}
+{"op":"claim","ref":"1f7bb603-30a7-4f8f-a327-65cce33942c7","text":"A higher combined injury rate or grass-court underperformance among Swiatek, Sabalenka, Pegula and Gauff at Wimbledon lowers their collective probability of winning the 2026 title compared to a healthy field."}
+{"op":"edge","ref":"4fb5d46c-000a-407c-a4b5-9046a96b91c0","polarity":"SUPPORT","source":"1f7bb603-30a7-4f8f-a327-65cce33942c7","target":"c7d7e267-797e-4cd6-a023-02353af5ec75"}
+{"op":"claim","ref":"76a2a924-6c41-47b0-8155-5a4213806e9a","text":"The argument's premise concerns Wimbledon results in prior years, not the identity of the 2026 women's singles champion, so it does not indicate whether any of the four named players entered or performed in the 2026 tournament."}
+{"op":"edge","ref":"9e5f1b6d-3128-4277-8ecf-cb505d687bd3","polarity":"ATTACK","source":"76a2a924-6c41-47b0-8155-5a4213806e9a","target":"c7d7e267-797e-4cd6-a023-02353af5ec75"}
+{"op":"claim","ref":"bf23e152-07ed-483f-89cf-d49caefbdaa0","text":"Swiatek’s sustained number-one ranking reflects results across all surfaces rather than grass-court performance specifically."}
+{"op":"edge","ref":"a2a35c99-ddd0-4f30-8906-9ec891e26a2d","polarity":"ATTACK","source":"bf23e152-07ed-483f-89cf-d49caefbdaa0","target":"73a7ab29-2d34-4a45-b304-c05357874d66"}
+{"op":"claim","ref":"19e7de6c-c306-4964-96bd-0158bc1dad1c","text":"Several Wimbledon women’s singles champions won the title without previously reaching a Wimbledon singles final."}
+{"op":"edge","ref":"406d3d68-25e5-4421-959b-95f4fb1f1f47","polarity":"ATTACK","source":"19e7de6c-c306-4964-96bd-0158bc1dad1c","target":"e17d2d99-9c31-4f98-9d54-dcf9f13bd9d8"}
+{"op":"claim","ref":"70a5344b-3525-428a-9b03-3ae025f8c14b","text":"Players who have never won a tournament's singles title historically win that title less often than proven champions do."}
+{"op":"edge","ref":"7e899007-9626-4121-a150-1cc58b3b8e0a","polarity":"ATTACK","source":"70a5344b-3525-428a-9b03-3ae025f8c14b","target":"8f0f9fc6-ab21-4538-a2c5-f6330e393041"}
+{"op":"claim","ref":"29f64c2f-c82d-4b9f-b5e7-ce0026c7b6b2","text":"Player performance and title outcomes at a single past major tournament are not statistically dependent on performance in a future, separate tournament held the following year."}
+{"op":"edge","ref":"772a21d6-2aba-4557-b30f-55c30c4ea756","polarity":"ATTACK","source":"29f64c2f-c82d-4b9f-b5e7-ce0026c7b6b2","target":"d2768638-9908-4840-a5bb-7bd48a4e4c4e"}
+{"op":"claim","ref":"675acd39-d37c-4b14-a1aa-5e85ec968768","text":"Iga Swiatek lost the 2025 Wimbledon final to Amanda Anisimova in straight sets."}
+{"op":"edge","ref":"98678eea-caa7-443a-8e18-3b2b1f52bac1","polarity":"SUPPORT","source":"675acd39-d37c-4b14-a1aa-5e85ec968768","target":"73365e86-77e3-4ef7-8f45-37b7dc33f828"}
+{"op":"claim","ref":"2454688d-f278-439f-bb48-55ba409024ad","text":"Iga Swiatek won her 2025 Wimbledon semifinal against Belinda Bencic and her run to the final demonstrated strong grass-court form at the All England Club."}
+{"op":"edge","ref":"123de06b-9c3d-4385-8901-9f984355a9fa","polarity":"ATTACK","source":"2454688d-f278-439f-bb48-55ba409024ad","target":"98678eea-caa7-443a-8e18-3b2b1f52bac1"}
+{"op":"claim","ref":"153f505b-3a55-4bd8-a255-70cc7e41599f","text":"Surface-specific skills like sliding technique and low-bounce return timing remain relatively stable aspects of a player's game across consecutive seasons."}
+{"op":"edge","ref":"c52ecdff-e1d2-45b1-b944-7d1f89fa1ac0","polarity":"SUPPORT","source":"153f505b-3a55-4bd8-a255-70cc7e41599f","target":"54631242-7413-43fa-ae60-fd5593a48d09"}
+{"op":"claim","ref":"9e97e167-cc81-46f8-8889-0cef930bf281","text":"Iga Swiatek's grass-court win-loss record has substantially improved from 2023 through 2025 relative to her earlier career grass-court results."}
+{"op":"edge","ref":"305bce17-39d9-41e2-92e8-b7b900c664d1","polarity":"ATTACK","source":"9e97e167-cc81-46f8-8889-0cef930bf281","target":"4568471b-486c-4575-95f2-6c1de951ada2"}
+{"op":"claim","ref":"0bd079f2-0363-44fd-9c2b-9f673405c120","text":"Wimbledon’s grass conditions differ materially from the grass conditions at several other tournaments included in Iga Swiatek’s career grass record."}
+{"op":"edge","ref":"3932dffd-7d60-4891-bd87-ff92a0e5c84c","polarity":"ATTACK","source":"0bd079f2-0363-44fd-9c2b-9f673405c120","target":"4568471b-486c-4575-95f2-6c1de951ada2"}
+{"op":"claim","ref":"e75ad5de-1411-484e-942e-3b144243a465","text":"Players who change coaches shortly before a major tournament often experience adjustment periods that temporarily reduce match performance."}
+{"op":"edge","ref":"3d216b50-3f2a-4e37-a7c3-6d44ec896eb5","polarity":"SUPPORT","source":"e75ad5de-1411-484e-942e-3b144243a465","target":"58b002fe-7b57-4964-9c82-565dd949bc75"}

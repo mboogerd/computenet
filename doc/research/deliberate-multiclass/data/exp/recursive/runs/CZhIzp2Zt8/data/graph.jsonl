@@ -1,0 +1,177 @@
+{"op":"claim","ref":"15065b57-9bfa-49f7-aec9-93efc8414b22","text":"Who will win the 2026 Democratic primary for US Senator in Michigan?","question":true}
+{"op":"issue","ref":"15065b57-9bfa-49f7-aec9-93efc8414b22","mode":"POSITIONS","positions":["47539f98-fc8c-4230-86bb-95b064191ef4","563f4c54-3edb-4de1-9d3f-16b7af4e5c08","854919a8-7457-4c91-a1b2-459e973fa30c"]}
+{"op":"claim","ref":"47539f98-fc8c-4230-86bb-95b064191ef4","text":"Abdul El-Sayed wins the 2026 Democratic primary for US Senator in Michigan.","question":true}
+{"op":"claim","ref":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08","text":"Haley Stevens wins the 2026 Democratic primary for US Senator in Michigan.","question":true}
+{"op":"claim","ref":"854919a8-7457-4c91-a1b2-459e973fa30c","text":"Mallory McMorrow wins the 2026 Democratic primary for US Senator in Michigan.","question":true}
+{"op":"claim","ref":"8d43ba86-ebdc-43ac-844d-37d25b9e4957","text":"Abdul El-Sayed's 2018 gubernatorial primary campaign built a statewide grassroots donor and volunteer network that remains active in Michigan Democratic politics as of 2026."}
+{"op":"edge","ref":"d38f3805-679a-4765-9760-35bd29962937","polarity":"SUPPORT","source":"8d43ba86-ebdc-43ac-844d-37d25b9e4957","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"9874c3cd-ed29-409d-9600-36cfb490d52f","text":"Abdul El-Sayed lost the 2018 Michigan Democratic gubernatorial primary to Gretchen Whitmer."}
+{"op":"edge","ref":"1f69193a-232e-4bfb-a49b-58bf095445d3","polarity":"ATTACK","source":"9874c3cd-ed29-409d-9600-36cfb490d52f","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"6afe0164-6266-4548-b31c-9cccae958c13","text":"Mallory McMorrow raised more individual campaign contributions than other declared Democratic candidates in the Michigan Senate race during at least one 2025 fundraising quarter."}
+{"op":"edge","ref":"1f2d45be-ae1d-42f0-9042-13fba31b2056","polarity":"SUPPORT","source":"6afe0164-6266-4548-b31c-9cccae958c13","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"4573a83b-42ea-46fe-a415-4c7c19999b0c","text":"Haley Stevens has raised more campaign funds than Mallory McMorrow according to FEC filings for the 2026 Michigan Senate primary."}
+{"op":"edge","ref":"32958616-a4b5-425d-bbb8-07af37981b8e","polarity":"ATTACK","source":"4573a83b-42ea-46fe-a415-4c7c19999b0c","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"96225c9d-75fc-4756-9d3e-169d89b25aac","text":"Haley Stevens represents a Michigan congressional district that includes suburban Oakland County voters who have historically decided competitive Michigan Democratic primaries."}
+{"op":"edge","ref":"9e210d67-68b9-452c-8f8b-ed8cdacfab67","polarity":"SUPPORT","source":"96225c9d-75fc-4756-9d3e-169d89b25aac","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"6d4266bb-570e-4626-ac4c-43728eca180a","text":"Representative Debbie Dingell has considered running for the Michigan Senate seat in 2026 and would compete with Haley Stevens for the same establishment-aligned Democratic primary voters."}
+{"op":"edge","ref":"f0b9e98c-1caa-42c3-89d8-dec7d68bce46","polarity":"ATTACK","source":"6d4266bb-570e-4626-ac4c-43728eca180a","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"5c93c1f4-3604-4ccf-9095-d2ab201a5aba","text":"Mallory McMorrow led Abdul El-Sayed in several public polls of Michigan's 2026 Democratic Senate primary during 2025."}
+{"op":"edge","ref":"3d5da160-e57c-4f60-a2d5-71027c808c9a","polarity":"ATTACK","source":"5c93c1f4-3604-4ccf-9095-d2ab201a5aba","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"b416aa13-3775-4c41-bc0e-c05860ebfbc5","text":"Mallory McMorrow gained national prominence in 2022 after a Michigan Senate floor speech defending LGBTQ rights went viral."}
+{"op":"edge","ref":"806a4e46-6930-4eaf-befb-0ec73fe39b24","polarity":"SUPPORT","source":"b416aa13-3775-4c41-bc0e-c05860ebfbc5","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"b29994dc-dd25-4db4-ba34-5af1d035b939","text":"Haley Stevens led Mallory McMorrow in multiple publicly reported polls of likely 2026 Michigan Democratic Senate primary voters during 2025."}
+{"op":"edge","ref":"251ac178-c892-4047-8cd9-ab3ae4442591","polarity":"ATTACK","source":"b29994dc-dd25-4db4-ba34-5af1d035b939","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"6861e94e-a751-486f-8643-a633f0a0ede3","text":"Haley Stevens raised more campaign funds than any other candidate during the opening phase of Michigan’s 2026 Democratic Senate primary."}
+{"op":"edge","ref":"80faf939-aef8-4ffd-bcad-ce5c38f212dd","polarity":"SUPPORT","source":"6861e94e-a751-486f-8643-a633f0a0ede3","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"0d1327d8-a040-45b2-99f4-513b5f35746c","text":"A September 2025 Target Insyght poll of the Michigan Democratic Senate primary showed Mallory McMorrow ahead of Abdul El-Sayed among likely primary voters."}
+{"op":"edge","ref":"693777ac-f2dd-4db3-aff0-78008042b9b0","polarity":"SUPPORT","source":"0d1327d8-a040-45b2-99f4-513b5f35746c","target":"5c93c1f4-3604-4ccf-9095-d2ab201a5aba"}
+{"op":"claim","ref":"da65fdef-5159-4632-8982-39e26b93ce8c","text":"A poll conducted by EPIC-MRA in October 2025 showed Abdul El-Sayed leading Mallory McMorrow among likely Michigan Democratic primary voters."}
+{"op":"edge","ref":"94a3af4f-c717-40d0-bc81-39eef01ca3f3","polarity":"ATTACK","source":"da65fdef-5159-4632-8982-39e26b93ce8c","target":"5c93c1f4-3604-4ccf-9095-d2ab201a5aba"}
+{"op":"claim","ref":"8b77b31e-a7ef-443d-b348-5c2db23c6a9c","text":"Abdul El-Sayed's 2018 gubernatorial campaign raised small-dollar donations from more than 100,000 individual donors across Michigan."}
+{"op":"edge","ref":"6acb74fd-efa4-49ec-80e6-090dfac2ea98","polarity":"SUPPORT","source":"8b77b31e-a7ef-443d-b348-5c2db23c6a9c","target":"8d43ba86-ebdc-43ac-844d-37d25b9e4957"}
+{"op":"claim","ref":"14dea8c6-934d-43c4-98a5-1000de3c9ee2","text":"Most donors and volunteers from Abdul El-Sayed's 2018 campaign have since given to or worked for other Michigan Democratic candidates in subsequent election cycles."}
+{"op":"edge","ref":"ff5ef13f-937e-4e03-bded-c90008235c39","polarity":"ATTACK","source":"14dea8c6-934d-43c4-98a5-1000de3c9ee2","target":"8d43ba86-ebdc-43ac-844d-37d25b9e4957"}
+{"op":"claim","ref":"5ccc9578-2187-493b-8167-f0fbf28d72ca","text":"Abdul El-Sayed received endorsements from national progressive organizations including Justice Democrats during the 2026 Michigan Senate primary campaign."}
+{"op":"edge","ref":"c119531d-3ccd-402c-a73c-a34905853ff0","polarity":"SUPPORT","source":"5ccc9578-2187-493b-8167-f0fbf28d72ca","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"3cc6118e-c168-400b-b5af-1234336d1507","text":"Haley Stevens raised more campaign funds than Abdul El-Sayed in multiple quarterly filings during the 2026 Michigan Senate primary race."}
+{"op":"edge","ref":"faebdef3-a0bc-406c-922f-4898b28d4a41","polarity":"ATTACK","source":"3cc6118e-c168-400b-b5af-1234336d1507","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"f39ace83-947f-4279-b363-b79e0ffa8944","text":"Candidates with active statewide grassroots donor and volunteer networks from prior campaigns perform better in subsequent Michigan Democratic primaries."}
+{"op":"edge","ref":"9e8a8d4b-eb58-4280-9733-97c68091202b","polarity":"SUPPORT","source":"f39ace83-947f-4279-b363-b79e0ffa8944","target":"d38f3805-679a-4765-9760-35bd29962937"}
+{"op":"claim","ref":"9d983fd7-950c-4ac4-9ad1-2bb05cafed24","text":"Multiple other 2026 Democratic Senate primary candidates in Michigan, including Haley Stevens and Mallory McMorrow, also have established statewide donor and volunteer networks as of 2026."}
+{"op":"edge","ref":"f5682bcc-946f-412c-8d91-62cf2b09302b","polarity":"ATTACK","source":"9d983fd7-950c-4ac4-9ad1-2bb05cafed24","target":"d38f3805-679a-4765-9760-35bd29962937"}
+{"op":"claim","ref":"82c18db5-6ea9-4c8a-9aa0-4c17b9827cd8","text":"Mallory McMorrow secured endorsements from more than one statewide progressive advocacy organization in the 2026 Michigan Senate primary."}
+{"op":"edge","ref":"c437d630-06a4-40b7-88a5-0b679c56fc87","polarity":"SUPPORT","source":"82c18db5-6ea9-4c8a-9aa0-4c17b9827cd8","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"6b6f4446-c820-42ac-b0d8-931e228c0ff7","text":"Michigan Democratic Party officials and elected officeholders have endorsed Haley Stevens at a higher rate than Mallory McMorrow as of September 2026."}
+{"op":"edge","ref":"10c9e912-b22a-49e9-9dbb-065582fd79e1","polarity":"ATTACK","source":"6b6f4446-c820-42ac-b0d8-931e228c0ff7","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"fffb18c5-9680-47f5-8d51-bbf06a4f851d","text":"Candidates who lost a prior statewide Democratic primary in Michigan have a lower rate of winning subsequent statewide Democratic primaries there."}
+{"op":"edge","ref":"4e5211e9-9cb2-45b4-bc84-972f6c75f85b","polarity":"SUPPORT","source":"fffb18c5-9680-47f5-8d51-bbf06a4f851d","target":"1f69193a-232e-4bfb-a49b-58bf095445d3"}
+{"op":"claim","ref":"d7fdcee5-24ee-495d-ae45-9b51334296a6","text":"Haley Stevens won statewide endorsements from Michigan Democratic officeholders in Wayne, Oakland, and Macomb counties by mid-2026."}
+{"op":"edge","ref":"782744a2-cec6-4154-b812-a2a26a927228","polarity":"SUPPORT","source":"d7fdcee5-24ee-495d-ae45-9b51334296a6","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"6e3e25b6-8eb8-4bf7-90bb-e07068d4773c","text":"Michigan State Senator Mallory McMorrow announced a campaign for the 2026 Democratic US Senate primary in Michigan and drew significant grassroots fundraising and national media attention."}
+{"op":"edge","ref":"e9e493f2-0078-45a0-993a-807c7c89270f","polarity":"ATTACK","source":"6e3e25b6-8eb8-4bf7-90bb-e07068d4773c","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"5bf5b3da-95e7-418b-8f4d-230050958b33","text":"El-Sayed's Southpaw Michigan political-action committee organized volunteers and supported Michigan progressive candidates after the 2018 primary."}
+{"op":"edge","ref":"6c1990d0-362f-42eb-90e2-5d73ebe91bb6","polarity":"SUPPORT","source":"5bf5b3da-95e7-418b-8f4d-230050958b33","target":"8d43ba86-ebdc-43ac-844d-37d25b9e4957"}
+{"op":"claim","ref":"43ea888f-cf12-4d07-b37d-658065091ca5","text":"Abdul El-Sayed’s 2018 campaign organization formally ended after the gubernatorial primary."}
+{"op":"edge","ref":"3950fc41-b9fe-408b-a896-1707294d9f28","polarity":"ATTACK","source":"43ea888f-cf12-4d07-b37d-658065091ca5","target":"ff5ef13f-937e-4e03-bded-c90008235c39"}
+{"op":"claim","ref":"d46745c9-f59f-4730-9604-cc3cc8d3a2c1","text":"Gretchen Whitmer received more votes than Abdul El-Sayed in Michigan’s certified 2018 Democratic gubernatorial primary results."}
+{"op":"edge","ref":"b8bc97ee-58ac-4a38-902f-4a1f31c92d6e","polarity":"SUPPORT","source":"d46745c9-f59f-4730-9604-cc3cc8d3a2c1","target":"9874c3cd-ed29-409d-9600-36cfb490d52f"}
+{"op":"claim","ref":"b5723ea4-c873-4a60-9822-d04e83617d1a","text":"Grassroots networks from an eight-year-old campaign lose predictive value when their members are not committed exclusively to the former candidate."}
+{"op":"edge","ref":"dc0a704c-853f-4600-b85d-ea3831936c03","polarity":"ATTACK","source":"b5723ea4-c873-4a60-9822-d04e83617d1a","target":"f5682bcc-946f-412c-8d91-62cf2b09302b"}
+{"op":"claim","ref":"98ede627-8470-4f8b-ad74-6d09d05609cb","text":"Abdul El-Sayed received fewer votes than Gretchen Whitmer in Michigan’s 2018 Democratic gubernatorial primary."}
+{"op":"edge","ref":"c20f5f3b-1168-4254-85ae-81651740549e","polarity":"SUPPORT","source":"98ede627-8470-4f8b-ad74-6d09d05609cb","target":"9874c3cd-ed29-409d-9600-36cfb490d52f"}
+{"op":"claim","ref":"3fde3b8b-784d-43ab-8684-c89a26adb64d","text":"Michigan's 2018 gubernatorial primary and 2026 Senate primary involve different offices, electorates, opponents, and political environments."}
+{"op":"edge","ref":"6441d9bc-c1b5-49e7-aa81-ba72afa575f6","polarity":"ATTACK","source":"3fde3b8b-784d-43ab-8684-c89a26adb64d","target":"1f69193a-232e-4bfb-a49b-58bf095445d3"}
+{"op":"claim","ref":"5cab259b-a3d6-43fd-a38c-b44c8927f370","text":"An August 2025 Emerson College poll placed Mallory McMorrow ahead of Abdul El-Sayed among Michigan Democratic primary voters."}
+{"op":"edge","ref":"9d8adf16-9d14-4365-be55-1026e10a6401","polarity":"SUPPORT","source":"5cab259b-a3d6-43fd-a38c-b44c8927f370","target":"5c93c1f4-3604-4ccf-9095-d2ab201a5aba"}
+{"op":"claim","ref":"0040f9c6-32b9-4112-b89a-233d8b0bc061","text":"Abdul El-Sayed entered Michigan’s 2026 Democratic Senate primary with statewide name recognition from his 2018 gubernatorial campaign."}
+{"op":"edge","ref":"15a2b1e8-049f-4931-905f-0c9c90bcfabb","polarity":"ATTACK","source":"0040f9c6-32b9-4112-b89a-233d8b0bc061","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"ee615cfc-8d59-4aee-a0a8-eeef728dd987","text":"Candidates with high name recognition and national fundraising networks typically outperform lesser-known rivals in contested Democratic primaries."}
+{"op":"edge","ref":"713a1450-d1cc-4593-976c-53c397e3bd28","polarity":"SUPPORT","source":"ee615cfc-8d59-4aee-a0a8-eeef728dd987","target":"806a4e46-6930-4eaf-befb-0ec73fe39b24"}
+{"op":"claim","ref":"94732428-888f-4290-b015-de2780acead4","text":"National name recognition from a viral 2022 speech does not by itself translate into primary votes in Michigan's 2026 Democratic electorate."}
+{"op":"edge","ref":"806a25e5-3658-45a5-9cc3-73c6ff60a0cf","polarity":"ATTACK","source":"94732428-888f-4290-b015-de2780acead4","target":"806a4e46-6930-4eaf-befb-0ec73fe39b24"}
+{"op":"claim","ref":"8f70b53d-3bbd-42f3-b950-acaac12e98e6","text":"Pre-election polling leaders in Democratic primary races win the nomination in most historical cases."}
+{"op":"edge","ref":"dc384cbe-c502-4d6a-b48c-0fa96a902bf5","polarity":"ATTACK","source":"8f70b53d-3bbd-42f3-b950-acaac12e98e6","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"05fb75cb-a251-4587-ad3d-b2188aae5dec","text":"Primary polling leads more than several months before an election frequently fail to predict the eventual primary winner."}
+{"op":"edge","ref":"1633b6a8-b26d-4cf5-8c8c-20b0996823b0","polarity":"ATTACK","source":"05fb75cb-a251-4587-ad3d-b2188aae5dec","target":"251ac178-c892-4047-8cd9-ab3ae4442591"}
+{"op":"claim","ref":"0a6adc63-2f80-4531-86c8-a685cd3fb308","text":"Abdul El-Sayed served as Wayne County's health director from 2023 to 2026, giving him statewide executive branch experience before the primary."}
+{"op":"edge","ref":"07ffbd65-1054-4ce9-a280-59c89e3e15e9","polarity":"SUPPORT","source":"0a6adc63-2f80-4531-86c8-a685cd3fb308","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"631ac853-8879-46a6-baf6-51d4f7a59785","text":"Michigan's 2026 Democratic Senate primary field includes multiple candidates who could split the progressive vote against Abdul El-Sayed."}
+{"op":"edge","ref":"17efd56f-d584-4d3c-a147-1e8b67064da7","polarity":"ATTACK","source":"631ac853-8879-46a6-baf6-51d4f7a59785","target":"47539f98-fc8c-4230-86bb-95b064191ef4"}
+{"op":"claim","ref":"90d55837-7416-4166-9314-ed0792d5f5ef","text":"A EPIC-MRA poll conducted in October 2025 showed Haley Stevens leading Mallory McMorrow among likely Michigan Democratic Senate primary voters."}
+{"op":"edge","ref":"78d5db56-d445-4a59-99b1-26dbe561e441","polarity":"SUPPORT","source":"90d55837-7416-4166-9314-ed0792d5f5ef","target":"b29994dc-dd25-4db4-ba34-5af1d035b939"}
+{"op":"claim","ref":"82fdbaa5-b365-4d04-8070-9f376f85c682","text":"Most publicly reported 2025 polls of the Michigan Democratic Senate primary showed a majority of likely voters undecided rather than committed to Haley Stevens or Mallory McMorrow."}
+{"op":"edge","ref":"4bbf2a46-a2b3-459d-8c91-c0186e805840","polarity":"ATTACK","source":"82fdbaa5-b365-4d04-8070-9f376f85c682","target":"b29994dc-dd25-4db4-ba34-5af1d035b939"}
+{"op":"claim","ref":"17493bef-59b6-4c1c-ba85-e99d5062609d","text":"Public primary polling conducted during the run-up to an election is predictive of the eventual primary outcome."}
+{"op":"edge","ref":"27b40dd3-46bd-46d8-b6b9-31cdc22fb988","polarity":"SUPPORT","source":"17493bef-59b6-4c1c-ba85-e99d5062609d","target":"3d5da160-e57c-4f60-a2d5-71027c808c9a"}
+{"op":"claim","ref":"196865e2-ad06-4d1e-867d-699499bdfaf1","text":"Primary election outcomes frequently diverge from pre-election polling conducted months before the primary date."}
+{"op":"edge","ref":"30fcea27-260e-4839-a509-d19124b78046","polarity":"ATTACK","source":"196865e2-ad06-4d1e-867d-699499bdfaf1","target":"27b40dd3-46bd-46d8-b6b9-31cdc22fb988"}
+{"op":"claim","ref":"53722cad-2029-4a6f-8f59-886dfd99d807","text":"Viral political attention typically decays substantially during the four years following the event that generated it."}
+{"op":"edge","ref":"aa9432b8-83ad-40b9-bdbc-d11563de7544","polarity":"ATTACK","source":"53722cad-2029-4a6f-8f59-886dfd99d807","target":"806a25e5-3658-45a5-9cc3-73c6ff60a0cf"}
+{"op":"claim","ref":"72b5cc23-0094-4f70-9834-40c2bfb929a8","text":"Haley Stevens received the endorsement of EMILY's List in the 2026 Michigan Democratic Senate primary."}
+{"op":"edge","ref":"92c07f14-5ca3-42b6-8ba4-12485c10ae8c","polarity":"SUPPORT","source":"72b5cc23-0094-4f70-9834-40c2bfb929a8","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"e7fc3ceb-3d79-4314-9bca-3f08c0784fe2","text":"Haley Stevens has not previously won a statewide Michigan election, having only represented a single congressional district since 2019."}
+{"op":"edge","ref":"b9805e6e-2ff3-49b4-98e0-c525f78db85f","polarity":"ATTACK","source":"e7fc3ceb-3d79-4314-9bca-3f08c0784fe2","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"e0bc15fb-9a1f-41c2-a268-07797f2d5031","text":"An Emerson College poll conducted in November 2025 showed Haley Stevens leading Mallory McMorrow among likely Michigan Democratic primary voters."}
+{"op":"edge","ref":"1ae9355b-db94-417d-a7d7-47a91f01db22","polarity":"SUPPORT","source":"e0bc15fb-9a1f-41c2-a268-07797f2d5031","target":"b29994dc-dd25-4db4-ba34-5af1d035b939"}
+{"op":"claim","ref":"3d441fc2-89d3-40fc-af9b-23edfaa768f9","text":"Only one publicly reported 2025 poll is identified as showing Haley Stevens ahead of Mallory McMorrow."}
+{"op":"edge","ref":"0d5276e6-40e1-4217-9094-0f4c81f5833a","polarity":"ATTACK","source":"3d441fc2-89d3-40fc-af9b-23edfaa768f9","target":"78d5db56-d445-4a59-99b1-26dbe561e441"}
+{"op":"claim","ref":"5dcebdb2-f9d1-4640-8e32-424bf67c630c","text":"Several 2025 polls surveyed Michigan Democratic primary voters before the candidate field and campaign conditions were settled."}
+{"op":"edge","ref":"d5830369-dc49-4da3-b50f-880046929af4","polarity":"ATTACK","source":"5dcebdb2-f9d1-4640-8e32-424bf67c630c","target":"3d5da160-e57c-4f60-a2d5-71027c808c9a"}
+{"op":"claim","ref":"93b063a8-c880-41d1-8856-79bb9adda273","text":"Endorsements from local officeholders in vote-rich, densely populated counties increase a primary candidate's name recognition and turnout organizing capacity among likely Democratic primary voters."}
+{"op":"edge","ref":"acc15796-0f5c-4455-aad6-f8ee77d26efb","polarity":"SUPPORT","source":"93b063a8-c880-41d1-8856-79bb9adda273","target":"782744a2-cec6-4154-b812-a2a26a927228"}
+{"op":"claim","ref":"349e7b50-4b29-48b3-81bb-c6ae764407d3","text":"Primary election outcomes in Michigan Democratic primaries have differed from the candidate favored by officeholder endorsements in multiple past statewide races."}
+{"op":"edge","ref":"e6cd1b8c-fa8a-4d31-a62d-1cfa4781e033","polarity":"ATTACK","source":"349e7b50-4b29-48b3-81bb-c6ae764407d3","target":"782744a2-cec6-4154-b812-a2a26a927228"}
+{"op":"claim","ref":"ad43b044-b33d-4723-943f-1027eb96402d","text":"Haley Stevens received endorsements from a larger number of sitting Michigan state legislators than Mallory McMorrow did as of September 2026."}
+{"op":"edge","ref":"f43ff3fc-b974-4487-89c1-bdbc6874c7ac","polarity":"SUPPORT","source":"ad43b044-b33d-4723-943f-1027eb96402d","target":"6b6f4446-c820-42ac-b0d8-931e228c0ff7"}
+{"op":"claim","ref":"4d99a238-9dc4-4200-b762-259380a99fcd","text":"Endorsements from party officials and officeholders have historically had little correlation with primary election outcomes in contested Michigan Democratic Senate primaries."}
+{"op":"edge","ref":"704ba58c-1fcc-4cf0-bfb3-22f4a6388fe0","polarity":"ATTACK","source":"4d99a238-9dc4-4200-b762-259380a99fcd","target":"6b6f4446-c820-42ac-b0d8-931e228c0ff7"}
+{"op":"claim","ref":"26a0bcc1-c019-41a6-aa32-7e23abf9cac1","text":"Party official and officeholder endorsements in Democratic primaries correlate with higher primary vote shares for the endorsed candidate."}
+{"op":"edge","ref":"376961a8-de74-4c24-8552-1ca0801886f1","polarity":"SUPPORT","source":"26a0bcc1-c019-41a6-aa32-7e23abf9cac1","target":"10c9e912-b22a-49e9-9dbb-065582fd79e1"}
+{"op":"claim","ref":"52078339-159c-481c-9a89-ca2d07dd5012","text":"Party officials and officeholders comprise a small share of the Democratic primary electorate that will vote in the 2026 Michigan Senate primary."}
+{"op":"edge","ref":"5f316a90-8e75-4bdb-8244-f0ea96a73735","polarity":"ATTACK","source":"52078339-159c-481c-9a89-ca2d07dd5012","target":"10c9e912-b22a-49e9-9dbb-065582fd79e1"}
+{"op":"claim","ref":"d2a34070-7e88-4cd5-b0db-62d2ce2ab19c","text":"Haley Stevens entered the 2026 Michigan Senate primary with endorsements from several labor unions representing workers statewide."}
+{"op":"edge","ref":"565f4ffa-29b3-498c-847d-516fb3dcf936","polarity":"SUPPORT","source":"d2a34070-7e88-4cd5-b0db-62d2ce2ab19c","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"67e86f7d-cbac-4c2d-9a43-469d22fe7c3b","text":"Haley Stevens voted in 2023 to condemn President Joe Biden’s pause on weapons shipments to Israel."}
+{"op":"edge","ref":"ba5ba758-ad69-4819-9f77-8d67e1415f7b","polarity":"ATTACK","source":"67e86f7d-cbac-4c2d-9a43-469d22fe7c3b","target":"563f4c54-3edb-4de1-9d3f-16b7af4e5c08"}
+{"op":"claim","ref":"21ac0989-bbb7-4884-9604-840dc5d1ee1b","text":"Haley Stevens received endorsements from a majority of Wayne County's Democratic state legislators before the August 2026 primary."}
+{"op":"edge","ref":"805d94a9-0d34-4cb8-bb6c-b1cd45d1673d","polarity":"SUPPORT","source":"21ac0989-bbb7-4884-9604-840dc5d1ee1b","target":"d7fdcee5-24ee-495d-ae45-9b51334296a6"}
+{"op":"claim","ref":"57bed2ec-36eb-4400-ab04-eea8703452fe","text":"Several Wayne County Democratic officeholders, including Detroit-area legislators, publicly endorsed a rival candidate before the 2026 primary."}
+{"op":"edge","ref":"261dbf2e-d977-49dc-9103-7b8974163dbc","polarity":"ATTACK","source":"57bed2ec-36eb-4400-ab04-eea8703452fe","target":"d7fdcee5-24ee-495d-ae45-9b51334296a6"}
+{"op":"claim","ref":"b2046e0e-c21f-4448-8528-9317cd3dd909","text":"An active grassroots donor and volunteer network from a prior campaign did not prevent Abdul El-Sayed from losing the 2018 Michigan gubernatorial primary."}
+{"op":"edge","ref":"eec439b4-1147-4c5e-a7ed-7acaeef56c7e","polarity":"ATTACK","source":"b2046e0e-c21f-4448-8528-9317cd3dd909","target":"9e8a8d4b-eb58-4280-9733-97c68091202b"}
+{"op":"claim","ref":"abd435d0-72b1-4445-ac54-a2e646f37c8b","text":"County officeholders’ endorsements do not measure the preferences of Democratic primary voters outside Wayne, Oakland, and Macomb counties."}
+{"op":"edge","ref":"ed261a01-d309-463d-9623-0c7dab3fe471","polarity":"ATTACK","source":"abd435d0-72b1-4445-ac54-a2e646f37c8b","target":"e6cd1b8c-fa8a-4d31-a62d-1cfa4781e033"}
+{"op":"claim","ref":"e2be751d-1136-44ba-958f-fe3f03866442","text":"Endorsements from statewide progressive advocacy organizations mobilize volunteer canvassing and voter turnout operations that increase a primary candidate's vote share."}
+{"op":"edge","ref":"77c35105-8551-4ef1-a45b-d166b3ab6c04","polarity":"SUPPORT","source":"e2be751d-1136-44ba-958f-fe3f03866442","target":"c437d630-06a4-40b7-88a5-0b679c56fc87"}
+{"op":"claim","ref":"a185c2b7-625b-4d2f-8e20-27275c8ad03a","text":"In statewide Michigan Democratic primaries since 2018, candidates endorsed by more than one progressive advocacy organization have lost to more moderate rivals in most contested races."}
+{"op":"edge","ref":"04ab009b-7245-4583-ba04-c1510d316c66","polarity":"ATTACK","source":"a185c2b7-625b-4d2f-8e20-27275c8ad03a","target":"854919a8-7457-4c91-a1b2-459e973fa30c"}
+{"op":"claim","ref":"9cb1f6b0-c10d-45fc-aba1-d4bf6c764920","text":"Haley Stevens received endorsements from more Michigan Democratic members of Congress than Mallory McMorrow as of September 2026."}
+{"op":"edge","ref":"3ab46f49-e594-4f56-8537-f7ba938497ce","polarity":"SUPPORT","source":"9cb1f6b0-c10d-45fc-aba1-d4bf6c764920","target":"6b6f4446-c820-42ac-b0d8-931e228c0ff7"}
+{"op":"claim","ref":"51407050-221d-4034-b46a-6c7cf4009f53","text":"Mallory McMorrow received endorsements from prominent Michigan Democratic officeholders outside the state legislature as of September 2026."}
+{"op":"edge","ref":"38cee87f-1f75-496e-8117-1363fda57474","polarity":"ATTACK","source":"51407050-221d-4034-b46a-6c7cf4009f53","target":"6b6f4446-c820-42ac-b0d8-931e228c0ff7"}
+{"op":"claim","ref":"9a9d2eb6-f99f-4be9-aa2b-5ff2ca7223e7","text":"Endorsement rates measure endorsers’ preferences rather than endorsements’ influence on Michigan Democratic primary voters."}
+{"op":"edge","ref":"8fd40eb0-90d4-4f77-aa1c-af2dbc3c05ec","polarity":"ATTACK","source":"9a9d2eb6-f99f-4be9-aa2b-5ff2ca7223e7","target":"5f316a90-8e75-4bdb-8244-f0ea96a73735"}
+{"op":"claim","ref":"d3dc9495-ca2c-4f51-813d-6fa279f93ee6","text":"Candidates without prior statewide electoral victories in Michigan win their party's statewide primary less often than candidates who have previously won statewide."}
+{"op":"edge","ref":"abc64451-87b4-4646-827b-7e8e95fa9d2e","polarity":"SUPPORT","source":"d3dc9495-ca2c-4f51-813d-6fa279f93ee6","target":"b9805e6e-2ff3-49b4-98e0-c525f78db85f"}
+{"op":"claim","ref":"e5552e6b-883b-41c8-b283-ca6d9016d8cf","text":"Primary electoral success depends on current campaign factors rather than prior electoral track record in similar races."}
+{"op":"edge","ref":"5b6b52f9-8452-4911-acfb-71d0e228b6e9","polarity":"ATTACK","source":"e5552e6b-883b-41c8-b283-ca6d9016d8cf","target":"b9805e6e-2ff3-49b4-98e0-c525f78db85f"}
+{"op":"claim","ref":"c9c3c739-f67b-40b6-85b8-eee128e665d9","text":"Haley Stevens received endorsements from Democratic officeholders representing Oakland and Macomb counties before the August 2026 primary."}
+{"op":"edge","ref":"b79dbeac-8b64-4690-9d90-6ab1baf608c0","polarity":"SUPPORT","source":"c9c3c739-f67b-40b6-85b8-eee128e665d9","target":"d7fdcee5-24ee-495d-ae45-9b51334296a6"}
+{"op":"claim","ref":"b70f17c2-caa7-42fc-a45f-4aaef38480fb","text":"Haley Stevens had not secured endorsements from Democratic officeholders in all three of Wayne, Oakland, and Macomb counties by mid-2026."}
+{"op":"edge","ref":"7fc2e093-2959-40fe-ad1c-c7787c78b77b","polarity":"ATTACK","source":"b70f17c2-caa7-42fc-a45f-4aaef38480fb","target":"d7fdcee5-24ee-495d-ae45-9b51334296a6"}
+{"op":"claim","ref":"3a42dea9-3ae1-432e-a614-8679a6dd995c","text":"Viral political speeches give candidates reusable campaign material that distinguishes candidates from rivals among ideologically aligned primary voters."}
+{"op":"edge","ref":"1f306244-f4c4-4bef-97e6-cd3fd3093dd4","polarity":"SUPPORT","source":"3a42dea9-3ae1-432e-a614-8679a6dd995c","target":"806a4e46-6930-4eaf-befb-0ec73fe39b24"}
+{"op":"claim","ref":"9d8fcb40-4abc-4d23-a268-43f45e30b04c","text":"Viral political attention frequently fades before elections held several years later."}
+{"op":"edge","ref":"b057ef18-171b-4700-979f-26e03f2c0408","polarity":"ATTACK","source":"9d8fcb40-4abc-4d23-a268-43f45e30b04c","target":"806a4e46-6930-4eaf-befb-0ec73fe39b24"}
+{"op":"claim","ref":"11d944ac-cbc6-445e-8ef6-f0f02620657a","text":"A prior campaign network's continued activity does not establish that its donors and volunteers support the same candidate in a later primary."}
+{"op":"edge","ref":"3901469f-ec4a-42d8-82ca-94fef13463ff","polarity":"ATTACK","source":"11d944ac-cbc6-445e-8ef6-f0f02620657a","target":"d38f3805-679a-4765-9760-35bd29962937"}
+{"op":"claim","ref":"30cdbe7c-9d94-4084-8c5e-deeb39e2ecb9","text":"Greater campaign fundraising is strongly associated with higher primary vote share and win rates in contested US Senate primaries."}
+{"op":"edge","ref":"63a8abef-3b3c-4289-8c55-85aa0f258bb2","polarity":"SUPPORT","source":"30cdbe7c-9d94-4084-8c5e-deeb39e2ecb9","target":"faebdef3-a0bc-406c-922f-4898b28d4a41"}
+{"op":"claim","ref":"94f466a1-5e08-49ec-a57f-0801b939eb64","text":"Primary election outcomes in past Michigan Democratic races have not consistently correlated with which candidate led in fundraising."}
+{"op":"edge","ref":"5b734c64-33cb-45e5-9791-914945c8814f","polarity":"ATTACK","source":"94f466a1-5e08-49ec-a57f-0801b939eb64","target":"faebdef3-a0bc-406c-922f-4898b28d4a41"}
+{"op":"claim","ref":"38d6d568-350d-46ab-ada5-a774002b8972","text":"Progressive advocacy endorsements represent only one segment of the broader Democratic primary electorate in Michigan."}
+{"op":"edge","ref":"363dc504-7de9-4ec6-9677-98e51d2bdaa6","polarity":"ATTACK","source":"38d6d568-350d-46ab-ada5-a774002b8972","target":"77c35105-8551-4ef1-a45b-d166b3ab6c04"}
+{"op":"claim","ref":"a135f2a5-7a68-4f5c-90a9-64da34a48273","text":"NARAL Pro-Choice Michigan endorsed Mallory McMorrow in the 2026 Democratic primary for US Senate in Michigan."}
+{"op":"edge","ref":"7abed2ae-723b-44f3-b5ed-248d801329ab","polarity":"SUPPORT","source":"a135f2a5-7a68-4f5c-90a9-64da34a48273","target":"82c18db5-6ea9-4c8a-9aa0-4c17b9827cd8"}
+{"op":"claim","ref":"2c9edb2c-3499-4474-a3d1-7a87b8465866","text":"As of September 2026, Mallory McMorrow has received a formal statewide endorsement from only one progressive advocacy organization in the Michigan Senate primary."}
+{"op":"edge","ref":"0decb4ae-7849-435f-aa1f-4c86c70b5f55","polarity":"ATTACK","source":"2c9edb2c-3499-4474-a3d1-7a87b8465866","target":"82c18db5-6ea9-4c8a-9aa0-4c17b9827cd8"}
+{"op":"claim","ref":"8b8dcf7c-b306-431c-a7a2-b21791f40426","text":"Endorsements from national progressive organizations historically increase primary vote share for endorsed Democratic candidates through volunteer mobilization and fundraising support."}
+{"op":"edge","ref":"c1282baf-266b-4ebc-a9e5-740300cef5e2","polarity":"SUPPORT","source":"8b8dcf7c-b306-431c-a7a2-b21791f40426","target":"c119531d-3ccd-402c-a73c-a34905853ff0"}
+{"op":"claim","ref":"66153f87-720c-4eb0-8b10-e4b015223973","text":"National progressive endorsements from groups such as Justice Democrats have failed to secure primary wins for multiple endorsed Democratic Senate candidates in past election cycles."}
+{"op":"edge","ref":"122fead8-0e82-42c0-b4ae-aad78cc48a43","polarity":"ATTACK","source":"66153f87-720c-4eb0-8b10-e4b015223973","target":"c119531d-3ccd-402c-a73c-a34905853ff0"}
+{"op":"claim","ref":"7fe502bf-e7b3-42d3-aad3-d3dbb6121ee5","text":"Democratic primary voters in Michigan give substantial weight to party official and officeholder endorsements when deciding which candidate to support."}
+{"op":"edge","ref":"01cd53db-04fd-41c3-81c0-5eb26ad15d9b","polarity":"SUPPORT","source":"7fe502bf-e7b3-42d3-aad3-d3dbb6121ee5","target":"376961a8-de74-4c24-8552-1ca0801886f1"}
+{"op":"claim","ref":"e1e22704-82e9-4788-90f0-ef6afd426acc","text":"Endorsement-vote share correlations in past Democratic primaries were measured mainly in low-name-recognition races, unlike the McMorrow-Stevens primary where both candidates are sitting members of Congress with substantial independent name recognition."}
+{"op":"edge","ref":"d94ee65d-ac32-486e-ad82-1afe0fd3859e","polarity":"ATTACK","source":"e1e22704-82e9-4788-90f0-ef6afd426acc","target":"376961a8-de74-4c24-8552-1ca0801886f1"}
+{"op":"claim","ref":"7907fa54-dcb6-40ae-b43d-5400aeeaf6d3","text":"The Michigan Democratic Party's county chairs endorsed Haley Stevens at its 2026 pre-primary convention by a wider margin than Mallory McMorrow received."}
+{"op":"edge","ref":"9d3df8d4-c7b5-46a0-877c-8cada5b7f15d","polarity":"SUPPORT","source":"7907fa54-dcb6-40ae-b43d-5400aeeaf6d3","target":"6b6f4446-c820-42ac-b0d8-931e228c0ff7"}
+{"op":"claim","ref":"0d765fcd-c149-463f-a3ec-83d7e3ec6edc","text":"Quarterly fundraising totals include money spent before election day, so higher cumulative receipts do not necessarily mean greater remaining campaign resources."}
+{"op":"edge","ref":"ee47cfc8-0582-4350-8da8-d44fb0fd6e31","polarity":"ATTACK","source":"0d765fcd-c149-463f-a3ec-83d7e3ec6edc","target":"faebdef3-a0bc-406c-922f-4898b28d4a41"}
+{"op":"claim","ref":"bb9d8473-7096-482a-8e80-f9309aef3e6b","text":"Justice Democrats endorsed Abdul El-Sayed in his run for the 2026 Michigan Senate seat before the August 2026 primary."}
+{"op":"edge","ref":"b4c9c5ba-c602-4771-b897-0a570c5a50c3","polarity":"SUPPORT","source":"bb9d8473-7096-482a-8e80-f9309aef3e6b","target":"5ccc9578-2187-493b-8167-f0fbf28d72ca"}
+{"op":"claim","ref":"39ce2218-8081-4615-a4e8-b4cb1d899294","text":"Justice Democrats did not issue a formal endorsement in the 2026 Michigan Democratic Senate primary as of September 2026."}
+{"op":"edge","ref":"aec09bba-1793-4a54-92c7-fc617b15bb6c","polarity":"ATTACK","source":"39ce2218-8081-4615-a4e8-b4cb1d899294","target":"5ccc9578-2187-493b-8167-f0fbf28d72ca"}
+{"op":"claim","ref":"9e5df015-506b-4155-95f2-c60fb7f7ff9b","text":"Democratic primary voters in Michigan tend to favor candidates with executive branch governing experience over legislative-only backgrounds."}
+{"op":"edge","ref":"b6c8d315-b90b-46b9-9a38-d5ca9992d728","polarity":"SUPPORT","source":"9e5df015-506b-4155-95f2-c60fb7f7ff9b","target":"07ffbd65-1054-4ce9-a280-59c89e3e15e9"}
+{"op":"claim","ref":"e2924785-61e6-4d69-8ce6-3bb4ffb86876","text":"Michigan Democratic primary voters have historically prioritized name recognition and fundraising over prior executive branch administrative experience when choosing US Senate nominees."}
+{"op":"edge","ref":"9bda06c4-2059-48b0-b3b1-e6592c9649f6","polarity":"ATTACK","source":"e2924785-61e6-4d69-8ce6-3bb4ffb86876","target":"07ffbd65-1054-4ce9-a280-59c89e3e15e9"}

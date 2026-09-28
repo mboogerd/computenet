@@ -1,0 +1,5 @@
+- **A — MISATTRIBUTED.** DIAL only cites this result; it originates in [Shi et al., arXiv:2406.07791](https://arxiv.org/html/2406.07791): “those of similar quality are difficult to judge, increasing the likelihood of position bias.”
+
+- **B — VERIFIED.** [Qian, arXiv:2609.08016](https://arxiv.org/html/2609.08016): “debate does not reliably outperform a well-prompted single model or repeated independent sampling.”
+
+- **C — MISATTRIBUTED.** [2205.10932](https://arxiv.org/abs/2205.10932) instead uses LR itself: “we understand logistic regression as a gradual semantics for these QBAFs.” The match is [Yin et al., arXiv:2609.02399](https://arxiv.org/html/2609.02399): “Support and attack relations indicate whether a feature supports or attacks a class.” It applies DF-QuAD to raw class strengths; no normalization is described. DAX is not the match.

@@ -1,0 +1,54 @@
+{
+ "Q2-00": {
+  "label": "ABSOLUTE",
+  "abs": 97
+ },
+ "Q2-01": {
+  "label": "ABSOLUTE",
+  "abs": 96
+ },
+ "Q2-02": {
+  "label": "ABSOLUTE",
+  "abs": 95
+ },
+ "Q2-03": {
+  "label": "ABSOLUTE",
+  "abs": 96
+ },
+ "Q2-04": {
+  "label": "ABSOLUTE",
+  "abs": 82
+ },
+ "Q2-05": {
+  "label": "COMPARATIVE",
+  "abs": 5
+ },
+ "Q2-06": {
+  "label": "COMPARATIVE",
+  "abs": 5
+ },
+ "Q2-07": {
+  "label": "COMPARATIVE",
+  "abs": 5
+ },
+ "Q2-08": {
+  "label": "COMPARATIVE",
+  "abs": 5
+ },
+ "Q2-09": {
+  "label": "COMPARATIVE",
+  "abs": 8
+ },
+ "Q2-10": {
+  "label": "COMPARATIVE",
+  "abs": 6
+ },
+ "Q2-11": {
+  "label": "ABSOLUTE",
+  "abs": 90
+ },
+ "Q2-12": {
+  "label": "ABSOLUTE",
+  "abs": 72
+ }
+}

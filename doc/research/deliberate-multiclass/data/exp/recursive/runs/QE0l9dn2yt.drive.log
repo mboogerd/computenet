@@ -1,0 +1,8 @@
+    15s claims=20 active=True cost=$0.182 stopped=None
+    30s claims=39 active=True cost=$0.523 stopped=None
+    45s claims=55 active=True cost=$0.822 stopped=None
+    60s claims=68 active=True cost=$1.059 stopped=None
+    75s claims=81 active=True cost=$1.319 stopped=None
+    90s claims=90 active=True cost=$1.595 stopped=budget
+   105s claims=90 active=False cost=$1.628 stopped=budget
+OUTCOME done cost 1.6281019359999997 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "8f0f9fc6-ab21-4538-a2c5-f6330e393041", "text": "Iga Swiatek wins the 2026 Wimbledon women's singles title.", "credence": 0.49651957221842413, "firstImpression": 0.5, "neutralCredence": 0.49651957221842413, "verdictsDisagree": false, "share": 0.15887832416441305}, {"ref": "bb05461a-ad0f-4b41-8161-6c571e1a0992", "text": "Aryna Sabalenka wins the 2026 Wimbledon women's singles title.", "credence": 0.6158818476705283, "firstImpression": 0.5, "neutralCredence": 0.6158818476705283, "verdictsDisagree": false, "share": 0.25831132259736184}, {"ref": "70a21c7

@@ -1,0 +1,93 @@
+{
+ "order": [
+  "BR",
+  "BC",
+  "HD"
+ ],
+ "ratings": {
+  "c1": {
+   "BR": "+",
+   "BC": "-",
+   "HD": "+"
+  },
+  "c2": {
+   "BR": "--",
+   "BC": "--",
+   "HD": "++"
+  },
+  "c3": {
+   "BR": "++",
+   "BC": "--",
+   "HD": "--"
+  },
+  "c4": {
+   "BR": "-",
+   "BC": "+",
+   "HD": "0"
+  },
+  "c5": {
+   "BR": "0",
+   "BC": "-",
+   "HD": "+"
+  },
+  "c6": {
+   "BR": "0",
+   "BC": "-",
+   "HD": "0"
+  },
+  "c7": {
+   "BR": "0",
+   "BC": "0",
+   "HD": "0"
+  },
+  "c8": {
+   "BR": "--",
+   "BC": "++",
+   "HD": "--"
+  },
+  "c9": {
+   "BR": "--",
+   "BC": "-",
+   "HD": "+"
+  },
+  "c10": {
+   "BR": "0",
+   "BC": "0",
+   "HD": "0"
+  },
+  "c11": {
+   "BR": "-",
+   "BC": "0",
+   "HD": "0"
+  }
+ },
+ "contested": {
+  "c1": {
+   "BC": "Could be 0: current acceleration does not fix the future if dark energy later decays or turns negative.",
+   "HD": "Could be 0: acceleration is also consistent with a Big Rip, so it does not specifically favour heat death."
+  },
+  "c4": {
+   "HD": "Could be -: evolving dark energy weakens the standard cosmological-constant route to heat death, even though decaying dark energy can still expand forever.",
+   "BR": "Could be --: decreasing density means w > -1 now, which is incompatible with a phantom rip unless w later drops below -1."
+  },
+  "c5": {
+   "HD": "Could be 0: the matter density alone says little once dark energy dominates the dynamics.",
+   "BC": "Could be 0 for the same reason: dark energy, not matter, decides whether recollapse happens."
+  },
+  "c6": {
+   "BC": "Could be 0: with dark energy present, flatness does not decide recollapse.",
+   "HD": "Could be +: a flat universe with positive dark energy is the standard setting for eternal expansion."
+  },
+  "c9": {
+   "BC": "Could be --: realistic recollapse models crunch within tens of billions of years, and a crunch after about 10^100 years would be exceptional."
+  },
+  "c10": {
+   "HD": "Could be -: the claim undermines the certainty of the standard cosmological-constant heat-death picture.",
+   "BR": "Could be +: it leaves room for w slightly below -1, which keeps a rip possible.",
+   "BC": "Could be +: it leaves room for slowly decaying dark energy, which keeps recollapse possible."
+  },
+  "c11": {
+   "HD": "Could be +: disfavouring phantom energy shifts probability toward eternal non-phantom expansion."
+  }
+ }
+}

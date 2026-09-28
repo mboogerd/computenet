@@ -1,0 +1,8 @@
+Model C's value of information (SPEC §3 "Sensitivity and value of information"; Sensitivity.kt, ExplorationPolicy.valueOf, CredenceGraph.scalar) is |d headline(root)/d node| × 4p(1−p): a first-order (local, finite-difference) sensitivity times an uncertainty factor. It is a linearisation of "how much would the root move if this node resolved to true/false". Found during computenet-1ow0x verification (2026-09-28, Python port of the Kotlin layers checked to ≤5e-16 at K=2; script verify/math/c7.py in that session's scratchpad), comparing it to the exact expected root change 2·(p·|root(node=1)−root| + (1−p)·|root(node=0)−root|):
+
+- Random trees (n=1278, leaves at depth 1-4, consensus headline): linear/exact ratio median 1.03, 5-95% 0.62-1.31, extremes 0.19-2.05.
+- 15/1278 nodes had linear VoI < --voi-eps (0.01) while the exact value was ≥ 0.01: they would end DIMINISHING ("nothing left could change the answer") although resolving them could move the root by more than epsilon.
+- Saturation/clamps zero the local gradient: with the woe layer as headline and a top-level claim whose energy sits at woe's emax (.7) clamp, linear VoI is 0.0000 while the exact value is .059. With the default consensus headline the same case gives .065 vs .082 (under-rated, not zeroed).
+- Top-level claim with strength .9, p=.5: linear .433 (woe) vs exact .309 — over-rated.
+
+Impact: modest (≈1% premature stops in random trees), but systematic near clamps, i.e. exactly for strong, decisive arguments. Options: exact two-point recomputation for the top-N queue candidates (cost: two re-evaluations of the path to the root per candidate), or a secant instead of a tangent (evaluate at node=0 and node=1 once). Decide against cost; add a regression test with the clamp case.

@@ -1,0 +1,175 @@
+{"op":"claim","ref":"9f53fb75-cd62-4865-b7e6-6dc8ec07fb27","text":"Which team will win the 2026 FIFA World Cup?","question":true}
+{"op":"issue","ref":"9f53fb75-cd62-4865-b7e6-6dc8ec07fb27","mode":"POSITIONS","positions":["7f51c089-5288-44a6-a000-b90b31f9dc47","4df83751-939a-42e7-8426-f0608a384615","d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da","1c7936f2-012b-4ce3-bc61-bcfbd030d2b7","49717d7c-3ea1-40ef-a292-255ae371c8c0"]}
+{"op":"claim","ref":"7f51c089-5288-44a6-a000-b90b31f9dc47","text":"Spain wins the 2026 FIFA World Cup.","question":true}
+{"op":"claim","ref":"4df83751-939a-42e7-8426-f0608a384615","text":"France wins the 2026 FIFA World Cup.","question":true}
+{"op":"claim","ref":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da","text":"England wins the 2026 FIFA World Cup.","question":true}
+{"op":"claim","ref":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7","text":"Argentina wins the 2026 FIFA World Cup.","question":true}
+{"op":"claim","ref":"49717d7c-3ea1-40ef-a292-255ae371c8c0","text":"A team other than Spain, France, England and Argentina wins the 2026 FIFA World Cup.","question":true}
+{"op":"claim","ref":"7988f046-96d8-44fe-9550-0d6c2cb25c58","text":"Brazil has won the FIFA World Cup a record five times, more than Spain, France, England and Argentina combined outside their own totals."}
+{"op":"edge","ref":"d59f89f8-9142-40ef-b168-72a6524d352e","polarity":"SUPPORT","source":"7988f046-96d8-44fe-9550-0d6c2cb25c58","target":"49717d7c-3ea1-40ef-a292-255ae371c8c0"}
+{"op":"claim","ref":"c074559e-6277-41b0-8eee-33fd5f46c3e7","text":"Spain, France, England and Argentina occupied 4 of the top 6 positions in the FIFA World Ranking as of September 2025."}
+{"op":"edge","ref":"4d6cb911-e3fe-4f04-a17e-540214d9edcc","polarity":"ATTACK","source":"c074559e-6277-41b0-8eee-33fd5f46c3e7","target":"49717d7c-3ea1-40ef-a292-255ae371c8c0"}
+{"op":"claim","ref":"03e3c537-31e2-4b67-a6f0-9d1f42f87e14","text":"England reached the semifinal or better in three of the last four major international tournaments (2018 World Cup, Euro 2020, Euro 2024) as of 2024."}
+{"op":"edge","ref":"cefc876c-17ed-4750-86c7-cf6c22ff3539","polarity":"SUPPORT","source":"03e3c537-31e2-4b67-a6f0-9d1f42f87e14","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"b370117a-0bf5-4d82-8305-3e88798528f2","text":"England has never won a FIFA World Cup held outside England, with their only title coming in 1966 as hosts."}
+{"op":"edge","ref":"26794147-6b5c-4cd3-aac7-ab89b042713d","polarity":"ATTACK","source":"b370117a-0bf5-4d82-8305-3e88798528f2","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"04c9a52d-8c3c-4230-ab0a-7c5bdc43468c","text":"France reached the final or semi-final of the FIFA World Cup in three of the last four tournaments (2018, 2022)."}
+{"op":"edge","ref":"e530d170-3fcf-4296-8970-5d60da0ca038","polarity":"SUPPORT","source":"04c9a52d-8c3c-4230-ab0a-7c5bdc43468c","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"8a26d45f-0cb5-48d4-af26-17a7d7693f32","text":"France has never won the FIFA World Cup immediately after winning the tournament two editions earlier, as France did in 2018."}
+{"op":"edge","ref":"2644fb2b-d721-4821-a840-a5e6296968f5","polarity":"ATTACK","source":"8a26d45f-0cb5-48d4-af26-17a7d7693f32","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"ad50981b-d679-4d55-a22e-ab50668e0363","text":"Argentina won the 2022 FIFA World Cup with a core group of players who remained eligible for the 2026 tournament."}
+{"op":"edge","ref":"ead13643-2193-40e0-9d34-476f7dbc95e2","polarity":"SUPPORT","source":"ad50981b-d679-4d55-a22e-ab50668e0363","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"0510309e-e30a-4ee5-84d4-a5a55cd1bb46","text":"Argentina's squad averages older than most FIFA World Cup 2026 contenders, with key players including Lionel Messi aged over 38 in 2026."}
+{"op":"edge","ref":"1b60de2a-42c2-404f-babf-8459ec14af39","polarity":"ATTACK","source":"0510309e-e30a-4ee5-84d4-a5a55cd1bb46","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"3e3f4ad7-3b19-4127-93ca-656948f8111b","text":"Spain won the 2024 UEFA European Championship."}
+{"op":"edge","ref":"3c0aa90c-b182-44ec-a640-815762fed2e7","polarity":"SUPPORT","source":"3e3f4ad7-3b19-4127-93ca-656948f8111b","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"f9f88f0d-5ff1-4703-9321-c4d3cbbce4d2","text":"Spain has never won a FIFA World Cup held outside Europe, and the 2026 tournament is hosted in the United States, Mexico, and Canada."}
+{"op":"edge","ref":"e8fbba6e-cbbd-427e-8927-e8fff9313b2f","polarity":"ATTACK","source":"f9f88f0d-5ff1-4703-9321-c4d3cbbce4d2","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"7c8b3a55-78d8-4673-a6d5-28d2be04b5b8","text":"England's projected 2026 squad includes several players who won the 2023 UEFA European Under-21 Championship without conceding a goal."}
+{"op":"edge","ref":"f535890a-9ccf-4588-9f20-3ae74f4402e8","polarity":"SUPPORT","source":"7c8b3a55-78d8-4673-a6d5-28d2be04b5b8","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"f411aac0-b28b-42e4-bec6-4f12ac20427c","text":"England lost the final of both UEFA European Championships held in 2021 and 2024."}
+{"op":"edge","ref":"7df4d20b-62e6-4015-81eb-9a6a9fdd7509","polarity":"ATTACK","source":"f411aac0-b28b-42e4-bec6-4f12ac20427c","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"b908748a-f11b-436a-aec2-a855552f469e","text":"France entered the 2026 World Cup cycle with Kylian Mbappé, the Golden Boot winner at the 2022 World Cup."}
+{"op":"edge","ref":"2d1e029e-b5f8-4dd5-9ea0-05a9b4b2b9ca","polarity":"SUPPORT","source":"b908748a-f11b-436a-aec2-a855552f469e","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"6929dc38-3301-4564-8d57-3b7e1d24167d","text":"France have won only two of the 22 FIFA World Cups played through 2022."}
+{"op":"edge","ref":"ab481631-0d05-42c9-9bb6-080d3ba34cbc","polarity":"ATTACK","source":"6929dc38-3301-4564-8d57-3b7e1d24167d","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"29bb4382-bf86-42c2-8e20-1225c45070f4","text":"Argentina won the 2024 Copa América without conceding a goal in five of six matches."}
+{"op":"edge","ref":"3f1af3cc-0bdd-450a-8ecc-b5191fb66d66","polarity":"SUPPORT","source":"29bb4382-bf86-42c2-8e20-1225c45070f4","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"a353b6b4-4a15-405d-a9c9-dc4e2324f104","text":"No nation has won consecutive men's FIFA World Cups since Brazil retained the title in 1962."}
+{"op":"edge","ref":"fe77b54f-95ea-4956-9d74-d0046cbe454f","polarity":"ATTACK","source":"a353b6b4-4a15-405d-a9c9-dc4e2324f104","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"21580d65-ad54-4e6e-8afa-2f5f49b9a186","text":"Germany, Brazil and Italy have collectively won 13 of the 22 FIFA World Cups held through 2022."}
+{"op":"edge","ref":"5429b7fd-542c-47b7-9493-d1b06387f789","polarity":"SUPPORT","source":"21580d65-ad54-4e6e-8afa-2f5f49b9a186","target":"49717d7c-3ea1-40ef-a292-255ae371c8c0"}
+{"op":"claim","ref":"30307eb8-08f3-4632-8436-74b7b63ef716","text":"Spain held first place in the FIFA men's world ranking in September 2026."}
+{"op":"edge","ref":"d0da8eae-73ef-4cc0-8fb2-76e2f3090828","polarity":"SUPPORT","source":"30307eb8-08f3-4632-8436-74b7b63ef716","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"de100831-ff12-4e1e-90d7-a149ad27db32","text":"No reigning UEFA European champion has won the subsequent FIFA World Cup since West Germany in 1974."}
+{"op":"edge","ref":"08c1a351-33b0-44e5-9556-55c544163341","polarity":"ATTACK","source":"de100831-ff12-4e1e-90d7-a149ad27db32","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"d698d73c-d149-4a83-a375-fe8a91ef5a37","text":"England has reached the semi-finals or better at only one World Cup held outside England since 1966, the 2018 tournament in Russia."}
+{"op":"edge","ref":"b4d3be1a-bd78-4ebd-8d61-8f8dc6d63718","polarity":"SUPPORT","source":"d698d73c-d149-4a83-a375-fe8a91ef5a37","target":"b370117a-0bf5-4d82-8305-3e88798528f2"}
+{"op":"claim","ref":"e067f6c5-6f07-4c92-b9c7-52a5565dada8","text":"England reached the semi-finals of the away World Cups in 1990 and 2018."}
+{"op":"edge","ref":"c9b314b9-c964-411e-967c-71672a3d5131","polarity":"SUPPORT","source":"e067f6c5-6f07-4c92-b9c7-52a5565dada8","target":"b370117a-0bf5-4d82-8305-3e88798528f2"}
+{"op":"claim","ref":"60ca2290-994e-4e89-9745-2a6d9226e826","text":"Consistent semifinal-or-better performance across multiple recent major tournaments indicates a team's sustained squad strength and competitiveness relative to other national teams."}
+{"op":"edge","ref":"272c8672-0519-4e13-afaa-364246bdad31","polarity":"SUPPORT","source":"60ca2290-994e-4e89-9745-2a6d9226e826","target":"cefc876c-17ed-4750-86c7-cf6c22ff3539"}
+{"op":"claim","ref":"bfc32ee7-6dba-4f92-9a44-ed911e6a4a70","text":"The 2026 World Cup field includes several other teams with comparable or stronger semifinal appearance records over the last four major tournaments as of 2024."}
+{"op":"edge","ref":"8bcf2df1-34ac-4c64-bc89-733ead507c30","polarity":"ATTACK","source":"bfc32ee7-6dba-4f92-9a44-ed911e6a4a70","target":"272c8672-0519-4e13-afaa-364246bdad31"}
+{"op":"claim","ref":"0079d312-252c-4dbf-852d-cfcfc7759ee6","text":"FIFA ranked England among the top five national teams in the world in the September 2025 FIFA rankings."}
+{"op":"edge","ref":"99e021b6-0946-4ec5-aafa-5c07292b814c","polarity":"SUPPORT","source":"0079d312-252c-4dbf-852d-cfcfc7759ee6","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"b135a1ad-2028-4095-959f-b42add5ec0c7","text":"England's FIFA world ranking was outside the top 4 as of September 2026."}
+{"op":"edge","ref":"1ec0131b-14dc-4ad8-b0e2-fd730262f44a","polarity":"ATTACK","source":"b135a1ad-2028-4095-959f-b42add5ec0c7","target":"99e021b6-0946-4ec5-aafa-5c07292b814c"}
+{"op":"claim","ref":"3f6473af-a109-4593-af44-706c6e487c45","text":"France's FIFA world ranking was among the top 3 nations as of September 2026."}
+{"op":"edge","ref":"7294ca6b-eadd-4625-8dc2-189d43ca3ac4","polarity":"SUPPORT","source":"3f6473af-a109-4593-af44-706c6e487c45","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"246e4071-0a85-4fc5-93ee-22d3624ca676","text":"Kylian Mbappé missed significant playing time in the 2025-26 club season due to injury."}
+{"op":"edge","ref":"d6471067-5674-4530-83b5-6dce85433ee0","polarity":"ATTACK","source":"246e4071-0a85-4fc5-93ee-22d3624ca676","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"a259cfda-ae76-43bb-8900-23edfe93cff7","text":"The 2026 FIFA World Cup expands to 48 teams, increasing the number of national teams with a realistic path to the title."}
+{"op":"edge","ref":"1c6ea858-f5b3-40ce-aa9c-f7061b4ff71e","polarity":"SUPPORT","source":"a259cfda-ae76-43bb-8900-23edfe93cff7","target":"49717d7c-3ea1-40ef-a292-255ae371c8c0"}
+{"op":"claim","ref":"558ec3f9-ac7e-46a3-982d-184fa43f44f2","text":"Spain's squad in 2026 includes multiple players under age 24 who won the 2024 UEFA European Championship together, including Lamine Yamal and Nico Williams."}
+{"op":"edge","ref":"ebe4fb17-7dd6-43f4-9cf7-97f7f5477e91","polarity":"SUPPORT","source":"558ec3f9-ac7e-46a3-982d-184fa43f44f2","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"25effdc2-0ab1-4b6d-abdc-a92a7fd742d8","text":"Spain's squad in 2026 lacks a recognized world-class striker comparable to those on other top-ranked national teams."}
+{"op":"edge","ref":"cab42718-8587-4e4c-8b4d-5302f9205259","polarity":"ATTACK","source":"25effdc2-0ab1-4b6d-abdc-a92a7fd742d8","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"3d82188d-e123-4e6e-b7f1-f1b1c468db68","text":"England finished fourth at the 2018 World Cup and runner-up at both Euro 2020 and Euro 2024."}
+{"op":"edge","ref":"531d8225-37c7-4677-b28c-02f49ac572ee","polarity":"SUPPORT","source":"3d82188d-e123-4e6e-b7f1-f1b1c468db68","target":"03e3c537-31e2-4b67-a6f0-9d1f42f87e14"}
+{"op":"claim","ref":"6b175404-4d68-467d-83e8-891d249c3078","text":"France won five of its six UEFA World Cup qualifying matches played from September 2025 through September 2026."}
+{"op":"edge","ref":"0d03f515-8c41-44f8-8325-2a12f70d9f7b","polarity":"SUPPORT","source":"6b175404-4d68-467d-83e8-891d249c3078","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"edff9082-96a2-4bf4-bd80-20e33cd12901","text":"France lost the 2026 World Cup final to Brazil."}
+{"op":"edge","ref":"215d71dd-9a8e-4dee-b382-42cf70b43c9a","polarity":"ATTACK","source":"edff9082-96a2-4bf4-bd80-20e33cd12901","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"812f909e-ac19-4fbb-8ca2-f04dafd98d18","text":"England failed to win each of the three cited tournaments despite reaching at least the semifinals."}
+{"op":"edge","ref":"273052a7-736c-4398-bf9f-0157a3709eb2","polarity":"ATTACK","source":"812f909e-ac19-4fbb-8ca2-f04dafd98d18","target":"cefc876c-17ed-4750-86c7-cf6c22ff3539"}
+{"op":"claim","ref":"84531907-3ed4-4f30-8adb-bd65327f3645","text":"Spain completed 2026 World Cup qualifying with eight wins from eight matches."}
+{"op":"edge","ref":"51a08621-a665-466e-850c-dee909a379e8","polarity":"SUPPORT","source":"84531907-3ed4-4f30-8adb-bd65327f3645","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"aca66c24-00fe-47c3-a9bf-b1b6adde0a23","text":"Spain has advanced beyond the FIFA World Cup round of 16 only once in the six tournaments since 2002."}
+{"op":"edge","ref":"08bc6b20-7482-4891-abc2-aeeef7ab8acc","polarity":"ATTACK","source":"aca66c24-00fe-47c3-a9bf-b1b6adde0a23","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"1751a372-260c-4e1b-b6a7-7958ebaa67b7","text":"Argentina finished first in the 2026 CONMEBOL World Cup qualifying standings."}
+{"op":"edge","ref":"a49c1436-adf8-4fec-bcac-06f78ddcc30f","polarity":"SUPPORT","source":"1751a372-260c-4e1b-b6a7-7958ebaa67b7","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"fb5fd8de-9a39-4971-8350-9d751b1280c9","text":"Teams' past performance in away versus home World Cup tournaments is a reliable predictor of their performance in future away World Cup tournaments, including the 2026 tournament in North America."}
+{"op":"edge","ref":"f2579b7e-f5fe-4bda-9527-7f0733905cff","polarity":"SUPPORT","source":"fb5fd8de-9a39-4971-8350-9d751b1280c9","target":"26794147-6b5c-4cd3-aac7-ab89b042713d"}
+{"op":"claim","ref":"5a92bcf5-936b-46db-a7a5-b8fad98aa326","text":"Teams retaining a majority of their prior World Cup-winning core have historically shown above-average performance in the subsequent World Cup."}
+{"op":"edge","ref":"52c747af-4ee8-4bc7-9f54-7a8b4e3c88b2","polarity":"SUPPORT","source":"5a92bcf5-936b-46db-a7a5-b8fad98aa326","target":"ead13643-2193-40e0-9d34-476f7dbc95e2"}
+{"op":"claim","ref":"b55505b0-aaf3-4223-9d99-9f0284f4302e","text":"Squad continuity between winning World Cup tournaments has not reliably produced back-to-back titles for national teams in the tournament's history."}
+{"op":"edge","ref":"6be9b830-b507-4934-9ff3-ddba02e5d122","polarity":"ATTACK","source":"b55505b0-aaf3-4223-9d99-9f0284f4302e","target":"ead13643-2193-40e0-9d34-476f7dbc95e2"}
+{"op":"claim","ref":"de611202-4c88-4ac9-a7c5-7034e9fc053c","text":"Teams with a reigning Golden Boot winner from the previous World Cup have historically had above-average odds of winning the next tournament."}
+{"op":"edge","ref":"2fd1553e-f02b-4aa5-a14f-e8d96240c4ee","polarity":"SUPPORT","source":"de611202-4c88-4ac9-a7c5-7034e9fc053c","target":"2d1e029e-b5f8-4dd5-9ea0-05a9b4b2b9ca"}
+{"op":"claim","ref":"46b4124e-e5e9-450f-8bd9-555c213aa074","text":"Individual player awards from a prior World Cup do not determine which national team wins the subsequent tournament."}
+{"op":"edge","ref":"b35e8de2-1db8-458d-989a-9586661e1ada","polarity":"ATTACK","source":"46b4124e-e5e9-450f-8bd9-555c213aa074","target":"2d1e029e-b5f8-4dd5-9ea0-05a9b4b2b9ca"}
+{"op":"claim","ref":"d14e9bed-76dd-4e9f-a51a-6060dfdab199","text":"Player performance in elite international football typically declines with age, especially for players over 35."}
+{"op":"edge","ref":"30c7b05d-7f01-4d4c-974a-7998a5dff608","polarity":"SUPPORT","source":"d14e9bed-76dd-4e9f-a51a-6060dfdab199","target":"1b60de2a-42c2-404f-babf-8459ec14af39"}
+{"op":"claim","ref":"a234f153-e846-44fa-b824-fda38c7f1956","text":"Squad age averages correlate only weakly with FIFA World Cup outcomes historically, since tournament success depends heavily on tactics, form, and squad depth rather than average age alone."}
+{"op":"edge","ref":"927e4058-9be9-4aec-9abc-8c88ae7f3972","polarity":"ATTACK","source":"a234f153-e846-44fa-b824-fda38c7f1956","target":"1b60de2a-42c2-404f-babf-8459ec14af39"}
+{"op":"claim","ref":"595e945c-e375-46b4-8198-079cfc30ae73","text":"Historical patterns of which national teams win World Cups held on a given continent tend to persist across tournaments due to shared factors like travel fatigue, climate adaptation, and fan support that favor teams from the host continent."}
+{"op":"edge","ref":"dd2fa832-c7c3-4fcc-b685-f865a4eb81d1","polarity":"SUPPORT","source":"595e945c-e375-46b4-8198-079cfc30ae73","target":"e8fbba6e-cbbd-427e-8927-e8fff9313b2f"}
+{"op":"claim","ref":"bb91767e-2999-4322-95a1-72905ab80204","text":"The number of prior FIFA World Cup tournaments held outside Europe is too small to establish a reliable historical base rate for any single team's performance in host-region conditions."}
+{"op":"edge","ref":"b4c8bfe6-90f1-4036-8afd-0a17f6736f37","polarity":"ATTACK","source":"bb91767e-2999-4322-95a1-72905ab80204","target":"e8fbba6e-cbbd-427e-8927-e8fff9313b2f"}
+{"op":"claim","ref":"6086a47e-be6b-4c95-b8ee-9ccc828c32f6","text":"A larger tournament field statistically dilutes the probability that any single favored team, such as Spain, France, England or Argentina, wins."}
+{"op":"edge","ref":"4af91abd-4516-4680-9394-28a0add99bbf","polarity":"SUPPORT","source":"6086a47e-be6b-4c95-b8ee-9ccc828c32f6","target":"1c6ea858-f5b3-40ce-aa9c-f7061b4ff71e"}
+{"op":"claim","ref":"8118abf2-97fb-4388-a805-97eaf552120e","text":"Spain, France, England and Argentina remain among the squads with the deepest talent pools regardless of the expanded 48-team format."}
+{"op":"edge","ref":"7defed15-58b8-43b0-b8a5-01c2ec937cf2","polarity":"ATTACK","source":"8118abf2-97fb-4388-a805-97eaf552120e","target":"49717d7c-3ea1-40ef-a292-255ae371c8c0"}
+{"op":"claim","ref":"ff0b58e1-c5a6-49d6-b472-f34d97b8eb4c","text":"England’s non-host World Cup record spans different squads, managers, opponents, and tournament formats from those of the 2026 tournament."}
+{"op":"edge","ref":"196fc373-9add-49d7-8ee0-2a77ead5abb7","polarity":"ATTACK","source":"ff0b58e1-c5a6-49d6-b472-f34d97b8eb4c","target":"f2579b7e-f5fe-4bda-9527-7f0733905cff"}
+{"op":"claim","ref":"18af7b1a-7180-4268-bfb9-d5d2f3b08478","text":"France was drawn into a 2026 World Cup group or knockout path containing at least one other top-10 FIFA ranked nation."}
+{"op":"edge","ref":"3eb00f9f-bba9-4f98-b974-0f3684f0d306","polarity":"ATTACK","source":"18af7b1a-7180-4268-bfb9-d5d2f3b08478","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"d4f85e0b-6563-4037-97fd-5770cb80c870","text":"Brazil has won the FIFA World Cup a record five times, more than any other national team including France."}
+{"op":"edge","ref":"4d9cbbd9-f7f6-413e-8c72-3279add6eee1","polarity":"SUPPORT","source":"d4f85e0b-6563-4037-97fd-5770cb80c870","target":"edff9082-96a2-4bf4-bd80-20e33cd12901"}
+{"op":"claim","ref":"5a2f9004-699c-4f01-9507-6e14cb5bf93e","text":"The 2026 FIFA World Cup final has not been played as of September 28, 2026."}
+{"op":"edge","ref":"009610e5-4ea1-41d4-8cef-2d9993a8cee0","polarity":"ATTACK","source":"5a2f9004-699c-4f01-9507-6e14cb5bf93e","target":"edff9082-96a2-4bf4-bd80-20e33cd12901"}
+{"op":"claim","ref":"9ed89f2c-876c-46c6-885e-a2767c984431","text":"Tournament eligibility does not establish that Argentina’s 2022 core will be selected, healthy, or performing at the same level in 2026."}
+{"op":"edge","ref":"def04afc-904c-494d-9d13-e95a5e4cd0e0","polarity":"ATTACK","source":"9ed89f2c-876c-46c6-885e-a2767c984431","target":"6be9b830-b507-4934-9ff3-ddba02e5d122"}
+{"op":"claim","ref":"bf4f9a3e-6b4e-496a-a986-36a61e9f289d","text":"Spain’s only FIFA World Cup title came in South Africa, outside Europe."}
+{"op":"edge","ref":"0e9d17d4-b158-45bd-a476-024387e9225a","polarity":"ATTACK","source":"bf4f9a3e-6b4e-496a-a986-36a61e9f289d","target":"b4c8bfe6-90f1-4036-8afd-0a17f6736f37"}
+{"op":"claim","ref":"e98821d1-4f1a-4daf-bf46-f27bf2a80199","text":"Spain’s 2010 title remains Spain’s only prior FIFA World Cup victory, so the cited pattern derives from a single winning tournament."}
+{"op":"edge","ref":"66162641-109c-4f2d-9090-e1cd591537fa","polarity":"ATTACK","source":"e98821d1-4f1a-4daf-bf46-f27bf2a80199","target":"b4c8bfe6-90f1-4036-8afd-0a17f6736f37"}
+{"op":"claim","ref":"0c328a90-6dfc-42bb-a832-99565348e86d","text":"The 16 additional tournament places primarily add lower-ranked teams whose title probabilities are substantially below those of established contenders."}
+{"op":"edge","ref":"4fa67055-6eb9-4ffb-be77-ba923910599a","polarity":"ATTACK","source":"0c328a90-6dfc-42bb-a832-99565348e86d","target":"4af91abd-4516-4680-9394-28a0add99bbf"}
+{"op":"claim","ref":"948061d2-4145-479f-a30b-3b15fb61ad4c","text":"A squad-wide age average does not identify the playing time or competitive importance of Argentina's oldest players."}
+{"op":"edge","ref":"7aa8321f-c0da-4934-9e1a-530fd1705443","polarity":"ATTACK","source":"948061d2-4145-479f-a30b-3b15fb61ad4c","target":"1b60de2a-42c2-404f-babf-8459ec14af39"}
+{"op":"claim","ref":"8d33427f-5600-4355-ae64-3187b5db5db8","text":"The current England national team squad differs substantially in personnel and quality from prior England squads that failed to win World Cups abroad."}
+{"op":"edge","ref":"197a142c-49b0-4cbc-b822-d54b4534a210","polarity":"ATTACK","source":"8d33427f-5600-4355-ae64-3187b5db5db8","target":"26794147-6b5c-4cd3-aac7-ab89b042713d"}
+{"op":"claim","ref":"8542cee7-00eb-4f32-901a-9bf9c73c6452","text":"France had reached four FIFA World Cup finals since 1998, more than any other nation during that span."}
+{"op":"edge","ref":"ecd1d417-7f28-4923-a663-7c83a62814d9","polarity":"SUPPORT","source":"8542cee7-00eb-4f32-901a-9bf9c73c6452","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"58015715-6884-4216-ad89-298f8d77f7c4","text":"The expanded 48-team format requires the 2026 champion to win eight matches, one more than champions needed through 2022."}
+{"op":"edge","ref":"348915b5-b17c-4e02-a6bc-eeffced551e4","polarity":"ATTACK","source":"58015715-6884-4216-ad89-298f8d77f7c4","target":"4df83751-939a-42e7-8426-f0608a384615"}
+{"op":"claim","ref":"fcb14b8a-8717-4b62-b032-d1292ff3579e","text":"England qualified for the 2026 FIFA World Cup with a perfect record of wins in every group-stage qualifying match."}
+{"op":"edge","ref":"bbe18129-2e5c-4183-8855-2517a3f16ccc","polarity":"SUPPORT","source":"fcb14b8a-8717-4b62-b032-d1292ff3579e","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"6009859e-da1d-4b7c-a7a4-cb75671268e6","text":"Bookmakers listed England below at least two other national teams in their 2026 FIFA World Cup outright winner odds as of September 2026."}
+{"op":"edge","ref":"28146335-c13d-4d6d-9cc3-3496ae3da0aa","polarity":"ATTACK","source":"6009859e-da1d-4b7c-a7a4-cb75671268e6","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"a6b6276f-37b7-4e9d-a588-123d4435943a","text":"The 2026 FIFA World Cup features 12 additional automatic qualification slots for Africa, Asia, and Oceania compared to the 2022 tournament."}
+{"op":"edge","ref":"a65ee42e-6900-4a32-a6ed-237f864beda0","polarity":"SUPPORT","source":"a6b6276f-37b7-4e9d-a588-123d4435943a","target":"a259cfda-ae76-43bb-8900-23edfe93cff7"}
+{"op":"claim","ref":"1c9f513e-11cf-4c94-8468-b7e1378223b1","text":"In every FIFA World Cup from 1998 to 2022 under the 32-team format, the champion came from a group of fewer than ten traditionally elite footballing nations."}
+{"op":"edge","ref":"71d8f6ec-aadc-428f-9ec8-80ca348cb4c9","polarity":"ATTACK","source":"1c9f513e-11cf-4c94-8468-b7e1378223b1","target":"a259cfda-ae76-43bb-8900-23edfe93cff7"}
+{"op":"claim","ref":"a1adaa90-543c-4b4d-bac3-9ec4225ba283","text":"Spain's head coach Luis de la Fuente has led the senior national team since 2022 without a major tournament elimination before the semifinal stage."}
+{"op":"edge","ref":"67b2f4cb-e699-4750-b46a-e0deab1df5dc","polarity":"SUPPORT","source":"a1adaa90-543c-4b4d-bac3-9ec4225ba283","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"a184c8e7-0e8a-4a49-a6ef-df162d9a2179","text":"Spain is drawn in the same 2026 FIFA World Cup group or knockout path as at least one other top-ten ranked national team as of September 2026."}
+{"op":"edge","ref":"881e4e77-76b9-4a28-948c-1b016ef9d843","polarity":"ATTACK","source":"a184c8e7-0e8a-4a49-a6ef-df162d9a2179","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"b12e7515-e205-4093-a0a0-515e24642c8d","text":"Argentina is scheduled to play at least three 2026 FIFA World Cup group-stage matches at high altitude or in conditions similar to those it prepared for during 2025 friendlies."}
+{"op":"edge","ref":"7b8520aa-5c83-43e0-b9ed-e5c2d6282c7d","polarity":"SUPPORT","source":"b12e7515-e205-4093-a0a0-515e24642c8d","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"e18a63f9-ab18-4943-b3e1-a354587d5729","text":"The United States, Mexico, and Canada will host the 2026 FIFA World Cup, giving several rival contenders home-continent conditions."}
+{"op":"edge","ref":"01a8ebe5-5dc0-4e0e-acfb-02863fbbb27b","polarity":"ATTACK","source":"e18a63f9-ab18-4943-b3e1-a354587d5729","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"2e570b62-0ed3-4503-a1f5-09bb4212c8c2","text":"National teams had won World Cups outside their home countries in 17 of the 22 tournaments held through 2022."}
+{"op":"edge","ref":"142c74ac-af81-44b2-af43-f1f94c2133ec","polarity":"ATTACK","source":"2e570b62-0ed3-4503-a1f5-09bb4212c8c2","target":"f2579b7e-f5fe-4bda-9527-7f0733905cff"}
+{"op":"claim","ref":"92c21164-2e16-4444-8512-2ae1e03e3152","text":"Squads with a core of players who have already won a major international tournament together perform better in subsequent tournaments than squads without such shared success."}
+{"op":"edge","ref":"19299609-106d-4784-944b-7a3a2d6c26d4","polarity":"SUPPORT","source":"92c21164-2e16-4444-8512-2ae1e03e3152","target":"ebe4fb17-7dd6-43f4-9cf7-97f7f5477e91"}
+{"op":"claim","ref":"38d8e2d0-205e-4518-bc2a-98915d26ebea","text":"Squad continuity and youth from a prior tournament-winning team have not reliably predicted subsequent World Cup victories for national teams."}
+{"op":"edge","ref":"d99b304c-7166-4195-9e6a-81dbebe5b7bc","polarity":"ATTACK","source":"38d8e2d0-205e-4518-bc2a-98915d26ebea","target":"ebe4fb17-7dd6-43f4-9cf7-97f7f5477e91"}
+{"op":"claim","ref":"eda41c26-fea1-4720-8a91-6208fb7d420d","text":"England's 2026 squad contains multiple players who have won the UEFA Champions League."}
+{"op":"edge","ref":"caa8eab4-3183-4853-a1be-36621de35c9e","polarity":"SUPPORT","source":"eda41c26-fea1-4720-8a91-6208fb7d420d","target":"d84bb1f3-8fbe-4a55-afb7-ce760ab7f7da"}
+{"op":"claim","ref":"3bb58949-9fe4-4681-b6bd-98edcf5ca599","text":"Argentina's 2026 World Cup roster is expected to include defender Nicolas Otamendi, who will be 38 years old in 2026."}
+{"op":"edge","ref":"a6ad6fb8-899d-40d9-ba4f-58fa35ac0108","polarity":"SUPPORT","source":"3bb58949-9fe4-4681-b6bd-98edcf5ca599","target":"0510309e-e30a-4ee5-84d4-a5a55cd1bb46"}
+{"op":"claim","ref":"2c018ad0-4c50-47d2-9a9e-2dfb4d3fec64","text":"Argentina won the 2022 FIFA World Cup with a squad that averaged older than most contenders at that tournament."}
+{"op":"edge","ref":"cd1cd39d-8b36-4141-8933-3a4798d94ff3","polarity":"SUPPORT","source":"2c018ad0-4c50-47d2-9a9e-2dfb4d3fec64","target":"0510309e-e30a-4ee5-84d4-a5a55cd1bb46"}
+{"op":"claim","ref":"5c965f80-400e-4c4f-9a5e-cb07b7d49637","text":"Spain won the 2023 UEFA Nations League."}
+{"op":"edge","ref":"c22485f3-cd83-481e-90ab-26e975a42bea","polarity":"SUPPORT","source":"5c965f80-400e-4c4f-9a5e-cb07b7d49637","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"834db39d-fd9d-4ce2-a999-f577a7504142","text":"The expanded 48-team format requires the champion to win up to eight matches, one more than in every World Cup through 2022."}
+{"op":"edge","ref":"49e51eb5-6159-4c8a-9821-e38097e42dc0","polarity":"ATTACK","source":"834db39d-fd9d-4ce2-a999-f577a7504142","target":"7f51c089-5288-44a6-a000-b90b31f9dc47"}
+{"op":"claim","ref":"306ad4e9-5fb9-416d-acee-b5baf09ceb8b","text":"The 48-team format adds a knockout round, requiring the eventual champion to win one more elimination match than under the 32-team format."}
+{"op":"edge","ref":"0f0a13b8-7e71-4535-aa7f-0375b4123979","polarity":"ATTACK","source":"306ad4e9-5fb9-416d-acee-b5baf09ceb8b","target":"a259cfda-ae76-43bb-8900-23edfe93cff7"}
+{"op":"claim","ref":"34c36b2d-893c-4c81-b429-1a62e674194d","text":"Argentina occupied first place in FIFA's men's world ranking throughout 2025."}
+{"op":"edge","ref":"f9dd169d-596a-4830-b59c-1d32be71c353","polarity":"SUPPORT","source":"34c36b2d-893c-4c81-b429-1a62e674194d","target":"1c7936f2-012b-4ce3-bc61-bcfbd030d2b7"}
+{"op":"claim","ref":"6996279b-da3c-495b-b525-2b330946f3c7","text":"Younger elite footballers generally recover faster between matches during the World Cup's compressed schedule than older elite footballers."}
+{"op":"edge","ref":"216915dc-bf32-475a-8fa2-bf453879e4d1","polarity":"SUPPORT","source":"6996279b-da3c-495b-b525-2b330946f3c7","target":"ebe4fb17-7dd6-43f4-9cf7-97f7f5477e91"}
+{"op":"claim","ref":"00976ecc-b017-48b8-b9cc-5f4a46a1a09b","text":"UEFA European Championship success tests performance against European opponents, while the FIFA World Cup includes elite teams from five other confederations."}
+{"op":"edge","ref":"4cc12182-58c4-4ed0-a898-fbcf8fd4ae86","polarity":"ATTACK","source":"00976ecc-b017-48b8-b9cc-5f4a46a1a09b","target":"ebe4fb17-7dd6-43f4-9cf7-97f7f5477e91"}
+{"op":"claim","ref":"5dbbe673-1eda-45e4-95dd-2945acc2d6c5","text":"The 48-team expansion adds lower-ranked nations primarily via extra group-stage slots that are eliminated before the knockout rounds where Spain, France, England and Argentina compete."}
+{"op":"edge","ref":"6e669bfa-db39-4eeb-866b-fcb0e6cbb3ab","polarity":"ATTACK","source":"5dbbe673-1eda-45e4-95dd-2945acc2d6c5","target":"1c6ea858-f5b3-40ce-aa9c-f7061b4ff71e"}
+{"op":"claim","ref":"a05685b6-5c04-451c-aec9-ab9816fa3605","text":"Many of Argentina's core 2022 World Cup-winning players, including Lionel Messi, will be aged 34 or older by the 2026 tournament."}
+{"op":"edge","ref":"1920f606-92aa-45f4-9fc3-12326dd27bca","polarity":"ATTACK","source":"a05685b6-5c04-451c-aec9-ab9816fa3605","target":"6be9b830-b507-4934-9ff3-ddba02e5d122"}
+{"op":"claim","ref":"74d88c7f-8d4f-41f5-a5ef-ad05a63f661c","text":"Older players over 35 on average contribute less effective on-field performance across a squad than younger squads, reducing team-level match outcomes."}
+{"op":"edge","ref":"646c5926-c7fc-4889-b899-5be7ce81ed01","polarity":"SUPPORT","source":"74d88c7f-8d4f-41f5-a5ef-ad05a63f661c","target":"30c7b05d-7f01-4d4c-974a-7998a5dff608"}
+{"op":"claim","ref":"d381ea7c-e1df-49fe-9bb9-27a1aae64cf0","text":"Team success in international football tournaments depends primarily on collective tactics and squad depth rather than average squad age."}
+{"op":"edge","ref":"780850b4-61e1-46cf-852d-4e1a4c877e1a","polarity":"ATTACK","source":"d381ea7c-e1df-49fe-9bb9-27a1aae64cf0","target":"30c7b05d-7f01-4d4c-974a-7998a5dff608"}

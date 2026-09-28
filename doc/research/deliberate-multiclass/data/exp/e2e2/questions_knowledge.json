@@ -1,0 +1,786 @@
+{
+ "note": "Build the knowledge-domain question set (fixed before any model call). Deterministic (seed 20260928).\n\nSources\n  S  SuperGPQA (m-a-p/SuperGPQA, ODC-BY; arXiv 2502.14739), difficulty=hard, is_calculation=false, knowledge\n     disciplines only. Fetched via the HF datasets-server API into supergpqa_hard.json. Options reduced to\n     the correct answer + seeded-random distractors (never \"all/none of the above\"-style options).\n     Three variants:  plain (K=6)   none-true (correct removed, 5 distractors + OTHER)   none-false (correct + 4 + OTHER)\n  WB Wikidata (CC0) \"Which of these was born first?\": 5 notable composers/painters (sitelinks>=40/50) with day-precision\n     birth dates inside a 4-year window; earliest leads the second by >= 120 days. Source = entity URIs + dates.\n  WN Wikidata (CC0) \"Which of these cities lies furthest north?\": 5 cities (pop > 700k, distinct countries) whose\n     coordinates lie within a 3-degree latitude band; the northernmost leads the second by >= 0.5 degrees.\n",
+ "seed": 20260928,
+ "questions": [
+  {
+   "id": "S9e1ccbb4",
+   "root_question": "It is known that the fruit shape of pumpkin is controlled by two pairs of independently inherited genes. Crossing two round spherical varieties, $\\mathbf{F_{1}}$ is flattened disk-shaped, $\\mathbf{F}_{2}$ three fruit shapes appear: 9/16 flattened disk-shaped, 6/16 round spherical, 1/16 oblong. It can be inferred that the interactions between these two pairs of genes are of the ____ type.",
+   "classes": {
+    "C1": "Epistatic effect",
+    "C2": "Additional suppression",
+    "C3": "Partial dominance",
+    "C4": "Multifactorial influence",
+    "C5": "Incomplete dominance",
+    "C6": "Cumulative effect"
+   },
+   "answer": "C6",
+   "source": "SuperGPQA uuid=9e1ccbb4662b4f5d9bb571315e57eea3 (Agronomy/Crop Science/Crop Science)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sad8a1dde",
+   "root_question": "Which of the following statements are true concerning the autocorrelation function (acf) and partial autocorrelation function (pacf)?\ni) The acf and pacf will always be identical at lag one whatever the model\nii) The pacf for an MA(q) model will in general be non-zero beyond lag q\niii) The pacf for an AR(p) model will be zero beyond lag p\niv) The acf and pacf will be the same at lag two for an MA(1) model",
+   "classes": {
+    "C1": "(i) and (iii) only",
+    "C2": "(i), (ii), (iii), and (iv)",
+    "C3": "(i), (iii), and (iv) only",
+    "C4": "(i), (ii), and (iii) only",
+    "C5": "(i) and (ii) only",
+    "C6": "(ii) and (iii) only"
+   },
+   "answer": "C4",
+   "source": "SuperGPQA uuid=ad8a1dde79bf494e95a80c5d2495692f (Economics/Applied Economics/Quantitative Economics)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S43d7130d",
+   "root_question": "What is the training theory proposed based on the non-equilibrium state of the development of each constituent element of an athlete's individual competitive ability, as well as the compensatory effects between these elements?",
+   "classes": {
+    "C1": "Equilibrium conditions of athletic compensatory roles",
+    "C2": "Asymmetric growth dynamics of athlete skills",
+    "C3": "Competitive skill disparity balance factors",
+    "C4": "The compensatory effect of competitive ability on non-equilibrium structures",
+    "C5": "Non-equilibrium condition of competitive proficiency",
+    "C6": "High altitude phenomena"
+   },
+   "answer": "C4",
+   "source": "SuperGPQA uuid=43d7130d47b84180af596998d4814df2 (Education/Physical Education/Physical Education and Training)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sca003776",
+   "root_question": "\"\u800c\u6050\u592a\u540e\u7389\u4f53\u4e4b\u6709\u6240\u90c4\u4e5f.\" The characters \"\u90c4\" and \"\u9699\" are:",
+   "classes": {
+    "C1": "Sequential narrative text markers",
+    "C2": "Characters sharing radical components",
+    "C3": "Phonetically borrowed characters",
+    "C4": "Characters in their ancient and modern forms",
+    "C5": "Variant characters",
+    "C6": "Interchangeable descriptive characters"
+   },
+   "answer": "C3",
+   "source": "SuperGPQA uuid=ca0037760192483ebe49cfd9d39ead56 (Literature and Arts/Language and Literature/Classical Chinese Literature)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S41a86048",
+   "root_question": "A primiparous woman with no history of surgery. Due to prolonged second stage of labor and decreased fetal heart rate, a posterior-lateral episiotomy and low forceps delivery were performed, delivering a live infant weighing 4000g. Two hours postpartum, she complained of perineal pain, a feeling of rectal fullness, and minimal vaginal bleeding. On examination: anemic appearance, blood pressure 89/55mmHg. The possible diagnosis is",
+   "classes": {
+    "C1": "Uterine atony",
+    "C2": "Second-degree perineal laceration",
+    "C3": "Retained placenta",
+    "C4": "Perineal varicosities",
+    "C5": "Cervical laceration",
+    "C6": "Vaginal wall hematoma"
+   },
+   "answer": "C6",
+   "source": "SuperGPQA uuid=41a860487f204eb4b456b4542807b6bf (Medicine/Clinical Medicine/Obstetrics and Gynecology)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S10aa0c9e",
+   "root_question": "According to Nagel, the problem of moral luck arises because:",
+   "classes": {
+    "C1": "there is too much emphasis on individual responsibility in our moral theories.",
+    "C2": "the self is threatened with dissolution by the absorption of its acts into the class of events.",
+    "C3": "the concept of luck is incompatible with the concept of morality.",
+    "C4": "moral theories don't take into account the element of luck.",
+    "C5": "philosophers focus too much on the role of chance in human actions.",
+    "C6": "our moral theories are hopelessly off track."
+   },
+   "answer": "C2",
+   "source": "SuperGPQA uuid=10aa0c9ef7874e27b4324f8ac86fccc7 (Philosophy/Philosophy/Ethics)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sbe091c39",
+   "root_question": "We now define an algorithm: The definition of a(n) is the McKay-Thompson series of class 4B for the Monster group, an important object in the theory of modular functions and monstrous moonshine theory. Given the input x_list (a series of values): [12, 13, 14, 15, 16, 17, 18, 19, 20, 21], determine the corresponding output sequence y_list.",
+   "classes": {
+    "C1": "[141244796, 327974700, 742169724, 1627202744, 3490345477, 7301071680, 14987511560, 30138820888, 59623576440, 115928963656]",
+    "C2": "[141143593, 327871497, 742064521, 1626113706, 3490246442, 7290970685, 14986421336, 30137730664, 59622486114, 115927063830]",
+    "C3": "[141246897, 327976801, 742171825, 1627206745, 3490347478, 7301074681, 14987531661, 30138840989, 59623596541, 115929164657]",
+    "C4": "[141145592, 327873498, 742066522, 1626114707, 3490248443, 7290977686, 14986431337, 30137750665, 59622496115, 115927163931]",
+    "C5": "[142256789, 328975601, 743270625, 1638213755, 3501356488, 7312082791, 14997621671, 30148931099, 59633686551, 116030074757]",
+    "C6": "[141246996, 327976901, 742171926, 1627207746, 3490348479, 7301075682, 14987541662, 30138850990, 59623606542, 115929264658]"
+   },
+   "answer": "C1",
+   "source": "SuperGPQA uuid=be091c3945a54db99326f44605f5aadf (Science/Mathematics/Group Theory)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Se780f37a",
+   "root_question": "In 1814, 15 British individuals settled on T Island in the middle of the Atlantic Ocean, one of whom was a carrier of the recessive gene for retinitis pigmentosa. By 1960, among the 240 descendants living on this island, there were 4 patients and at least 9 carriers of the recessive gene, a proportion far higher than that in the ancestral British population. What factors caused the change in gene frequency in this population?",
+   "classes": {
+    "C1": "Artificial Mutation",
+    "C2": "Gene Mutations",
+    "C3": "Migration",
+    "C4": "Genetic Drift",
+    "C5": "Recessive Selection",
+    "C6": "Founder Effect"
+   },
+   "answer": "C4",
+   "source": "SuperGPQA uuid=e780f37a5baa4fe094cd9c157486664d (Sociology/Sociology/Demography and Anthropology)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S0f384591",
+   "root_question": "A piglet herd is suffering from lack of energy, weakness, skin eczema, itching, loss of appetite, light cough, weight loss, abdominal enlargement, and diarrhea. Fecal examination revealed a large number of oval worm eggs with thin transparent shells, containing jackknife larvae. What may be the cause of the disease?",
+   "classes": {
+    "C1": "Trichuris",
+    "C2": "Capillaria",
+    "C3": "Nematodirus",
+    "C4": "Ascaris",
+    "C5": "Strongyloides",
+    "C6": "Coccidia"
+   },
+   "answer": "C5",
+   "source": "SuperGPQA uuid=0f384591a8c34fcbadee53fe5bcd1e29 (Agronomy/Veterinary Medicine/Veterinary Medicine)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sdd1a6dc3",
+   "root_question": "A supermarket near your home placed a coupon on your door today. Originally, milk priced at 3 yuan per bag (200ML) will be 2 yuan per bag next week if you use the coupon. Assuming the store has calculated that the price elasticity of demand for coupon users is -2, what is the price elasticity of demand for customers who do not use the coupon?",
+   "classes": {
+    "C1": "-0.75",
+    "C2": "-0.67",
+    "C3": "-1.0",
+    "C4": "-0.25",
+    "C5": "-1.25",
+    "C6": "-1.5"
+   },
+   "answer": "C6",
+   "source": "SuperGPQA uuid=dd1a6dc347f24ba38549043c7f1847ed (Economics/Applied Economics/Quantitative Economics)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sfc03b5a5",
+   "root_question": "Ten minutes after delivery of the fetus, there is heavy vaginal bleeding and prolongation of the exposed umbilical cord, a sign that ____.",
+   "classes": {
+    "C1": "abruption of the placenta",
+    "C2": "relaxation of the uterine muscles",
+    "C3": "inflammation of the amniotic sac",
+    "C4": "extension of the pelvic floor",
+    "C5": "effacement of the cervical os",
+    "C6": "rupture of the uterine wall"
+   },
+   "answer": "C1",
+   "source": "SuperGPQA uuid=fc03b5a563824c868e5b96db6412a42c (Medicine/Clinical Medicine/Obstetrics and Gynecology)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S52c4dea0",
+   "root_question": "By what means is the objective reality of the mode of existence of the movement of matter to be expressed?",
+   "classes": {
+    "C1": "Force and velocity.",
+    "C2": "Mass and acceleration.",
+    "C3": "Particles and interactions.",
+    "C4": "Dimensions and fields.",
+    "C5": "Time and space.",
+    "C6": "Gravity and waves."
+   },
+   "answer": "C5",
+   "source": "SuperGPQA uuid=52c4dea0f186451a886483d06b115a11 (Philosophy/Philosophy/Philosophy of Science and Technology)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S9ac81b5e",
+   "root_question": "Let ${,{{f}_{n}}{(x)=}{{x}^{n}}}$, then ${,{{f}_{n}}{(x)}}$ on [0,1] ( )",
+   "classes": {
+    "C1": "converges uniformly on [0,1) but not at x=0 and x=1",
+    "C2": "not necessarily",
+    "C3": "converges uniformly on [0,1) but not at x=1",
+    "C4": "converges uniformly on [0,1) but not at x=0",
+    "C5": "converges but not uniformly",
+    "C6": "does not converge"
+   },
+   "answer": "C5",
+   "source": "SuperGPQA uuid=9ac81b5ee701464597d7a3cc43c6278e (Science/Mathematics/Mathematical Analysis)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sdfd6b5d8",
+   "root_question": "The genes $a, b, c, d$ are located on the same chromosome in maize. A series of crosses resulted in the following recombination values $\\mathrm{R F} \\ ( \\mathrm{a} -\\mathrm{c} )=40 \\% \\mathrm{, R F}$ (a $- \\mathbf{d} )=2 5 \\%$ , RF $( \\mathbf{b}-\\mathbf{d} )=5 \\%$ , RF $( \\mathrm{b-c} )=1 0 \\%$. Therefore, the order of these four genes is ____ .",
+   "classes": {
+    "C1": "c-b-a-d",
+    "C2": "a-c-d-b",
+    "C3": "b-c-a-d",
+    "C4": "a-d-b-c",
+    "C5": "c-d-a-b",
+    "C6": "d-c-b-a"
+   },
+   "answer": "C4",
+   "source": "SuperGPQA uuid=dfd6b5d82dee40dfb15af30445cc3806 (Agronomy/Crop Science/Crop Science)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Scbb1630e",
+   "root_question": "Which of the following statements are true concerning a triangular or recursive system?\ni) The parameters can be validly estimated using separate applications of OLS to\neach equation\nii) The independent variables may be correlated with the error terms in other\nequations\niii) An application of 2SLS would lead to unbiased but inefficient parameter estimates\niv) The independent variables may be correlated with the error terms in the equations\nin which they appear as independent variables",
+   "classes": {
+    "C1": "(ii) and (iii) only",
+    "C2": "(i) and (iii) only",
+    "C3": "(i), (ii), (iii), and (iv)",
+    "C4": "(i), (ii), and (iii) only",
+    "C5": "(ii) only",
+    "C6": "(i) and (ii) only"
+   },
+   "answer": "C4",
+   "source": "SuperGPQA uuid=cbb1630eeeb84570a16a38f2f7d482a4 (Economics/Applied Economics/Quantitative Economics)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sc49b0094",
+   "root_question": "A patient is to undergo angiography for unstable angina. His routine evaluation revealed his serum creatinine to be elevated. All of the following can be used to prevent contrast nephropathy, EXCEPT:",
+   "classes": {
+    "C1": "Fenoldopam",
+    "C2": "Ascorbic acid",
+    "C3": "N-acetylcysteine",
+    "C4": "1/2 N saline",
+    "C5": "Hydralazine",
+    "C6": "Mannitol"
+   },
+   "answer": "C1",
+   "source": "SuperGPQA uuid=c49b009470fc4827af8a4fc8cf5cfb5d (Medicine/Clinical Medicine/Imaging and Nuclear Medicine)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "S48fc17fa",
+   "root_question": "Construct a complete truth table for the following pairs of propositions. Then, using the truth tables, determine whether the statements are logically equivalent or contradictory. If neither, determine whether they are consistent or inconsistent. Justify your answers.\n~O \u2283 P and O \u2228 P",
+   "classes": {
+    "C1": "Neither logically equivalent nor contradictory, but inconsistent",
+    "C2": "Neither logically equivalent nor contradictory, but consistent",
+    "C3": "Inconsistent",
+    "C4": "Logically equivalent",
+    "C5": "Both contradictory and inconsistent",
+    "C6": "Contradictory"
+   },
+   "answer": "C4",
+   "source": "SuperGPQA uuid=48fc17fa381f4cc58bd4c8bf58cb6e4f (Philosophy/Philosophy/Logic)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sf3d4dd73",
+   "root_question": "The correct statement(s) about the compound $H_{3}C(HO)HCCH=CHCH(OH)CH_{3} (X)$ are:",
+   "classes": {
+    "C1": "The total number of diastereomers possible for X is $3$.",
+    "C2": "If the stereochemistry about the double bond in X is cis, the number of enantiomers possible for X is $2.$",
+    "C3": "If the stereochemistry about the double bond in X is cis, the number of enantiomers possible for X is $3.$",
+    "C4": "If the stereochemistry about the double bond in X is cis, the number of enantiomers possible for X is $4.$",
+    "C5": "If the stereochemistry about the double bond in X is cis, the number of enantiomers possible for X is $1.$",
+    "C6": "If the stereochemistry about the double bond in X is cis, the number of enantiomers possible for X is $5.$"
+   },
+   "answer": "C2",
+   "source": "SuperGPQA uuid=f3d4dd73e58849ae9b9968c398c8e8ae (Science/Chemistry/Organic Chemistry)",
+   "domain": "knowledge",
+   "kind": "S-plain"
+  },
+  {
+   "id": "Sa0897d54",
+   "root_question": "If OLS is used in the presence of autocorrelation, which of the following will be likely consequences?\ni) Coefficient estimates may be misleading\nii) Hypothesis tests could reach the wrong conclusions\niii) Forecasts made from the model could be biased\niv) Standard errors may inappropriate",
+   "classes": {
+    "C1": "(i) and (iii) only",
+    "C2": "(i) and (ii) only",
+    "C3": "(i), (ii), (iii), and (iv)",
+    "C4": "(i), (ii), and (iii) only",
+    "C5": "(i), (iii), and (iv) only",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "OTHER",
+   "source": "SuperGPQA uuid=a0897d54087e4a729079f055fe1f5356 (Economics/Applied Economics/Quantitative Economics)",
+   "domain": "knowledge",
+   "kind": "S-none-true"
+  },
+  {
+   "id": "S8cb6f2d0",
+   "root_question": "What is the nerve that passes superficially over the internal and external carotid arteries from posterior to anterior, below the angle of the jaw?",
+   "classes": {
+    "C1": "Transverse cervical nerve",
+    "C2": "Glossopharyngeal nerve",
+    "C3": "Lateral branch of the superior laryngeal nerve",
+    "C4": "Facial branch of the mandibular nerve",
+    "C5": "Dorsal scapular nerve",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "OTHER",
+   "source": "SuperGPQA uuid=8cb6f2d0bf4e42f48e5d60c9495bd94f (Medicine/Stomatology/Clinical Stomatology)",
+   "domain": "knowledge",
+   "kind": "S-none-true"
+  },
+  {
+   "id": "S65e18d5e",
+   "root_question": "Say whether each of the following sentences is valid, contingent, or unsatisfiable.\na.\t(p \u21d2 q) \u2228 (q \u21d2 p)\t\nb.\tp \u2227 (p \u21d2 \u00acq) \u2227 q\t\nc.\t(p \u21d2 (q \u2227 r)) \u21d4 (p \u21d2 q) \u2227 (p \u21d2 r)\t\n\nd.\t(p \u21d2 (q \u21d2 r)) \u21d2 ((p \u2227 q) \u21d2 r)\t\n\ne.\t(p \u21d2 q) \u2227 (p \u21d2 \u00acq)\t\n\nf.\t(\u00acp \u2228 \u00acq) \u21d2 \u00ac(p \u2227 q)\t\n\ng.\t((\u00acp \u21d2 q) \u21d2 (\u00acq \u21d2 p)) \u2227 (p \u2228 q)\t\n\nh.\t(\u00acp \u2228 q) \u21d2 (q \u2227 (p \u21d4 q))\t\n\ni.\t((\u00acr \u21d2 \u00acp \u2227 \u00acq) \u2228 s) \u21d4 (p \u2228 q \u21d2 r \u2228 s)\t\n\nj.\t(p \u2227 (q \u21d2 r)) \u21d4 ((\u00acp \u2228 q) \u21d2 (p \u2227 r))",
+   "classes": {
+    "C1": "contingent, unsatisfiable, valid, valid, contingent, valid, contingent, valid, contingent, valid",
+    "C2": "valid, contingent, valid, valid, unsatisfiable, valid, contingent, contingent, valid, valid",
+    "C3": "contingent, unsatisfiable, valid, valid, valid, valid, contingent, contingent, valid, valid",
+    "C4": "valid, unsatisfiable, contingent, valid, contingent, valid, contingent, valid, valid, valid",
+    "C5": "valid, unsatisfiable, valid, valid, contingent, contingent, contingent, contingent, valid, valid",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "OTHER",
+   "source": "SuperGPQA uuid=65e18d5ebc6d481f92372a02f7346d7e (Philosophy/Philosophy/Logic)",
+   "domain": "knowledge",
+   "kind": "S-none-true"
+  },
+  {
+   "id": "S51a5a58f",
+   "root_question": "The correct set of four quantum number for the valence electron of Kr$\\left( Z=36 \\right) $ having highest value of $\\left( n+1 \\right) $",
+   "classes": {
+    "C1": "5,0,1,\\dfrac { 1 }{ 2 }",
+    "C2": "5,1,0,-\\dfrac{1}{2}",
+    "C3": "$$4,1,-1,0$$",
+    "C4": "$$4,2,-2,-\\dfrac { 1 }{ 2 } $$",
+    "C5": "$$4,1,-1,\\dfrac { 1 }{ 2 } $$",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "OTHER",
+   "source": "SuperGPQA uuid=51a5a58ffb394eeab2acc69dfabc1775 (Science/Physics/Quantum Mechanics)",
+   "domain": "knowledge",
+   "kind": "S-none-true"
+  },
+  {
+   "id": "S74e6ac21",
+   "root_question": "A 26 year old male presents to OPD with a circular, itchy, inflamed, slightly raised skin lesion He gives a history of his pet dog sleeps next to him. His dog has had some localized areas of hair loss. The patient has no other symptom. What would be expected on a KOH of skin scrapings?",
+   "classes": {
+    "C1": "Clusters of yeastlike cells and sho curved septate hyphae",
+    "C2": "Budding yeasts with some pseudohyphae and true hyphae",
+    "C3": "Hyphae with frequent branching and no arthroconidia",
+    "C4": "Hyphae with little branching and some arthroconidia that are not breaking up",
+    "C5": "Filariform larvae",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "OTHER",
+   "source": "SuperGPQA uuid=74e6ac2189dc4375adea280e2ef6a889 (Medicine/Clinical Medicine/Dermatology and Venereology)",
+   "domain": "knowledge",
+   "kind": "S-none-true"
+  },
+  {
+   "id": "Sfacd6dd1",
+   "root_question": "For each of the following pairs of sentences, determine whether or not the sentences are logically equivalent.\na.\t(p \u21d2 q \u2228 r) and (p \u2227 q \u21d2 r)\t\n\nb.\t(p \u21d2 (q \u21d2 r)) and (p \u2227 q \u21d2 r)\t\n\nc.\t(p \u2227 q \u21d2 r) and (p \u2227 r \u21d2 q)\t\n\nd.\t((p \u21d2 q \u2228 r) \u2227 (p \u21d2 r)) and (q \u21d2 r)\t\n\ne.\t((p \u21d2 q) \u2228 (q \u21d2 r)) and (p \u2228 \u00acp)",
+   "classes": {
+    "C1": "equivalent, nonequivalent, equivalent, nonequivalent, nonequivalent",
+    "C2": "nonequivalent, nonequivalent, nonequivalent, equivalent, equivalent",
+    "C3": "nonequivalent, nonequivalent, equivalent, nonequivalent, equivalent",
+    "C4": "equivalent, equivalent, nonequivalent, equivalent, equivalent",
+    "C5": "nonequivalent, equivalent, nonequivalent, equivalent, nonequivalent",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "OTHER",
+   "source": "SuperGPQA uuid=facd6dd1e2074073adcfcac48eab3afb (Philosophy/Philosophy/Logic)",
+   "domain": "knowledge",
+   "kind": "S-none-true"
+  },
+  {
+   "id": "Sbf021c65",
+   "root_question": "If $w={\\frac{a z+b} {c z+d}}$ transforms the unit circle into a straight line, what conditions should its coefficients satisfy?",
+   "classes": {
+    "C1": "$$\na b-d c \\neq0, \\mid a \\mid=\\mid c \\mid\n$$",
+    "C2": "$$\nc d-a b \\neq0, \\mid c \\mid=\\mid a \\mid\n$$",
+    "C3": "$$\nb c+a d \\neq0, \\mid a \\mid=\\mid d \\mid\n$$",
+    "C4": "$$\na c-b d \\neq0, \\mid b \\mid=\\mid d \\mid\n$$",
+    "C5": "$$\na d-b c \\neq0, \\mid c \\mid=\\mid d \\mid\n$$",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "C5",
+   "source": "SuperGPQA uuid=bf021c65688d462e9439880d2d85272a (Science/Mathematics/Functions of Complex Variables)",
+   "domain": "knowledge",
+   "kind": "S-none-false"
+  },
+  {
+   "id": "S2024487a",
+   "root_question": "A 63-year-old woman with a history of adult polycystic kidney disease and COPD presents to her optometrist after having difficulty watching a movie. She has no other complaints. She is accompanied by her daughter, who notes that her mother hasn't been able to look at her since the previous day. On exam, her right eye has full range of motion, but her left eye is fixed in a down and outward position. What is the most likely cause of her symptoms?",
+   "classes": {
+    "C1": "Impaired dopaminergic neurons",
+    "C2": "Intracranial hemorrhage",
+    "C3": "Migraine with ophthalmoplegia",
+    "C4": "Intracranial aneurysm",
+    "C5": "Vascular abnormality",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "C5",
+   "source": "SuperGPQA uuid=2024487a36ef48ea8425cd84d4997644 (Medicine/Clinical Medicine/Neurology)",
+   "domain": "knowledge",
+   "kind": "S-none-false"
+  },
+  {
+   "id": "S6c84be05",
+   "root_question": "Say whether each of the following sentences is valid, contingent, or unsatisfiable.\na.\t\u2200x.p(x) \u21d2 \u2203x.p(x)\t\n\nb.\t\u2203x.p(x) \u21d2 \u2200x.p(x)\t\n\nc.\t\u2200x.p(x) \u21d2 p(x)\t\n\nd.\t\u2203x.p(x) \u21d2 p(x)\t\n\ne.\tp(x) \u21d2 \u2200x.p(x)\t\n\nf.\tp(x) \u21d2 \u2203x.p(x)\t\n\ng.\t\u2200x.\u2203y.p(x,y) \u21d2 \u2203y.\u2200x.p(x,y)\t\n\nh.\t\u2200x.(p(x) \u21d2 q(x)) \u21d2 \u2203x.(p(x) \u2227 q(x))\t\n\ni.\t\u2200x.(p(x) \u21d2 q(x)) \u2227 \u2203x.(p(x) \u2227 \u00acq(x))\t\n\nj.\t(\u2203x.p(x) \u21d2 \u2200x.q(x)) \u2228 (\u2200x.q(x) \u21d2 \u2203x.r(x))",
+   "classes": {
+    "C1": "contingent, valid, valid, contingent, valid, valid, unsatisfiable, contingent, unsatisfiable, valid",
+    "C2": "contingent, valid, contingent, valid, contingent, valid, contingent, valid, unsatisfiable, contingent",
+    "C3": "valid, contingent, valid, contingent, contingent, valid, contingent, contingent, unsatisfiable, valid",
+    "C4": "valid, contingent, valid, valid, contingent, contingent, valid, unsatisfiable, contingent, valid",
+    "C5": "contingent, valid, valid, contingent, valid, contingent, contingent, valid, unsatisfiable, valid",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "C3",
+   "source": "SuperGPQA uuid=6c84be05be0546ef80bb4de347407008 (Philosophy/Philosophy/Logic)",
+   "domain": "knowledge",
+   "kind": "S-none-false"
+  },
+  {
+   "id": "Sd9ced088",
+   "root_question": "In industry, an alcoholic solution of sodium ethoxide is prepared by heating ethanol and sodium hydroxide in benzene. In the reaction system of ethanol, benzene, and water, water is the least component, and if it can be continuously removed, it will favor the forward reaction. Ethanol, benzene, and water form a ternary azeotropic mixture with a composition ratio of: ethanol 18.5%, benzene 74.1%, water 7.4%, and an azeotropic point of ____, which is distilled first.",
+   "classes": {
+    "C1": "Favorable, $64.9^{\\circ} \\ \\mathrm{C}$",
+    "C2": "Irreversible, $85.0^{\\circ} \\ \\mathrm{C}$",
+    "C3": "Equilibrial, $78.3^{\\circ} \\ \\mathrm{C}$",
+    "C4": "Dynamic, $72.5^{\\circ} \\ \\mathrm{C}$",
+    "C5": "Stationary, $80.5^{\\circ} \\ \\mathrm{C}$",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "C1",
+   "source": "SuperGPQA uuid=d9ced088670c444abf0755f9de7f3d5a (Science/Chemistry/Organic Chemistry)",
+   "domain": "knowledge",
+   "kind": "S-none-false"
+  },
+  {
+   "id": "S9af20ac6",
+   "root_question": "A 32-year-old pregnant woman, 2 months into pregnancy, experiences chest tightness, shortness of breath, and palpitations after doing housework. Over the past week, she often wakes up at night due to chest tightness. Physical examination: heart rate 116/min, respiratory rate 22/min, heart border expanded to the left, a grade III systolic murmur heard at the apex, moist rales at the lung bases, and edema in the lower limbs (+). The management should be ().",
+   "classes": {
+    "C1": "Abortion Procedure Following Heart Failure Control",
+    "C2": "Oxygen Therapy with Diuretic Administration",
+    "C3": "Antihypertensive Therapy and Bed Rest Only",
+    "C4": "Echocardiogram Monitoring and Iron Supplementation",
+    "C5": "Surgical Valve Replacement within First Trimester",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "C1",
+   "source": "SuperGPQA uuid=9af20ac611394be69ea789dbe30876a1 (Medicine/Clinical Medicine/Obstetrics and Gynecology)",
+   "domain": "knowledge",
+   "kind": "S-none-false"
+  },
+  {
+   "id": "Se7ed39bd",
+   "root_question": "Let \u0393 and \u0394 be sets of sentences in Relational Logic. Let \u03c6 and \u03c8 be closed sentences in Relational Logic. State whether each of the following statements is true or false.\na.\tIf \u0394 \u22a8 \u2200x.(p(x) \u2228 q(x)) and \u0394 \u22a8 \u2203x.\u00acp(x), then \u0394 \u22a8 \u2203x.q(x)\t\n\nb.\tIf \u0394 \u22a8 \u2200x.(p(x) \u21d2 q(x)) and \u0394 \u22a8 \u2203x.p(x), then \u0394 \u22a8 \u2203x.(p(x) \u2227 q(x)).\t\n\nc.\tIf \u0394 \u22a8 \u2200x.(p(x) \u21d2 q(x)) and \u0394 \u22a8 \u2200x.(q(x) \u21d2 r(x)), then \u0394 \u22a8 \u2200x.(p(x) \u21d2 r(x)).\t\n\nd.\tIf \u0394 \u22ad \u2203x.p(x), then \u0394 \u22a8 \u2200x.\u00acp(x).\t\n\ne.\tIf \u0394 \u22a8 \u2200x.(p(x) \u21d2 q(x)) and \u0394 \u22a8 \u2203x.\u00acq(x), then \u0394 \u22a8 \u2203x.\u00acp(x).",
+   "classes": {
+    "C1": "true, true, true, true, false",
+    "C2": "true, false, true, true, true",
+    "C3": "true, true, true, false, true",
+    "C4": "true, false, false, false, true",
+    "C5": "false, true, true, true, true",
+    "OTHER": "None of the other listed answers is correct"
+   },
+   "answer": "C3",
+   "source": "SuperGPQA uuid=e7ed39bd4ead4d3d97325f7e371073e1 (Philosophy/Philosophy/Logic)",
+   "domain": "knowledge",
+   "kind": "S-none-false"
+  },
+  {
+   "id": "WB00",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Le Corbusier",
+    "C2": "Jean Cocteau",
+    "C3": "Man Ray",
+    "C4": "Max Ernst",
+    "C5": "Nestor Makhno"
+   },
+   "answer": "C1",
+   "source": "Wikidata P569: Le Corbusier 1887-10-06 http://www.wikidata.org/entity/Q4724; Nestor Makhno 1888-11-07 http://www.wikidata.org/entity/Q47900; Jean Cocteau 1889-07-05 http://www.wikidata.org/entity/Q83158; Man Ray 1890-08-27 http://www.wikidata.org/entity/Q46139; Max Ernst 1891-04-02 http://www.wikidata.org/entity/Q154842",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB01",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Claude Monet",
+    "C2": "Pierre-Auguste Renoir",
+    "C3": "Jan Matejko",
+    "C4": "Auguste Rodin",
+    "C5": "Alfred Sisley"
+   },
+   "answer": "C3",
+   "source": "Wikidata P569: Jan Matejko 1838-06-24 http://www.wikidata.org/entity/Q189117; Alfred Sisley 1839-10-30 http://www.wikidata.org/entity/Q175130; Auguste Rodin 1840-11-12 http://www.wikidata.org/entity/Q30755; Claude Monet 1840-11-14 http://www.wikidata.org/entity/Q296; Pierre-Auguste Renoir 1841-02-25 http://www.wikidata.org/entity/Q39931",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB02",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Giacomo Puccini",
+    "C2": "Isaac Alb\u00e9niz",
+    "C3": "Hugo Wolf",
+    "C4": "Ignacy Jan Paderewski",
+    "C5": "Claude Debussy"
+   },
+   "answer": "C1",
+   "source": "Wikidata P569: Giacomo Puccini 1858-12-22 http://www.wikidata.org/entity/Q7311; Hugo Wolf 1860-03-13 http://www.wikidata.org/entity/Q215747; Isaac Alb\u00e9niz 1860-05-29 http://www.wikidata.org/entity/Q185812; Ignacy Jan Paderewski 1860-11-18 http://www.wikidata.org/entity/Q191957; Claude Debussy 1862-08-22 http://www.wikidata.org/entity/Q4700",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB03",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Mack Sennett",
+    "C2": "Alma Mahler",
+    "C3": "Georges Enescou",
+    "C4": "B\u00e9la Bart\u00f3k",
+    "C5": "Igor Stravinsky"
+   },
+   "answer": "C2",
+   "source": "Wikidata P569: Alma Mahler 1879-08-31 http://www.wikidata.org/entity/Q156898; Mack Sennett 1880-01-17 http://www.wikidata.org/entity/Q317574; B\u00e9la Bart\u00f3k 1881-03-25 http://www.wikidata.org/entity/Q83326; Georges Enescou 1881-08-19 http://www.wikidata.org/entity/Q77177; Igor Stravinsky 1882-06-17 http://www.wikidata.org/entity/Q7314",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB04",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Andr\u00e9s Segovia",
+    "C2": "Lili Boulanger",
+    "C3": "Paul Hindemith",
+    "C4": "Thomas Mitchell",
+    "C5": "Eddie Cantor"
+   },
+   "answer": "C5",
+   "source": "Wikidata P569: Eddie Cantor 1892-01-31 http://www.wikidata.org/entity/Q350472; Thomas Mitchell 1892-07-11 http://www.wikidata.org/entity/Q317026; Andr\u00e9s Segovia 1893-02-21 http://www.wikidata.org/entity/Q192529; Lili Boulanger 1893-08-21 http://www.wikidata.org/entity/Q230412; Paul Hindemith 1895-11-16 http://www.wikidata.org/entity/Q57244",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB05",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Josef Albers",
+    "C2": "Jean Arp",
+    "C3": "Robert Delaunay",
+    "C4": "Alexander Archipenko",
+    "C5": "Marcel Duchamp"
+   },
+   "answer": "C3",
+   "source": "Wikidata P569: Robert Delaunay 1885-04-12 http://www.wikidata.org/entity/Q33978; Jean Arp 1886-09-16 http://www.wikidata.org/entity/Q153739; Alexander Archipenko 1887-05-30 http://www.wikidata.org/entity/Q157578; Marcel Duchamp 1887-07-28 http://www.wikidata.org/entity/Q5912; Josef Albers 1888-03-19 http://www.wikidata.org/entity/Q170071",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB06",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Arkhip Kuindzhi",
+    "C2": "Fr\u00e9d\u00e9ric Bazille",
+    "C3": "Victoria, Princess Royal",
+    "C4": "Paul C\u00e9zanne",
+    "C5": "Odilon Redon"
+   },
+   "answer": "C4",
+   "source": "Wikidata P569: Paul C\u00e9zanne 1839-01-19 http://www.wikidata.org/entity/Q35548; Odilon Redon 1840-04-20 http://www.wikidata.org/entity/Q154349; Victoria, Princess Royal 1840-11-21 http://www.wikidata.org/entity/Q116728; Arkhip Kuindzhi 1841-01-27 http://www.wikidata.org/entity/Q353628; Fr\u00e9d\u00e9ric Bazille 1841-12-06 http://www.wikidata.org/entity/Q207298",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB07",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Charles Maurras",
+    "C2": "Charles G. Dawes",
+    "C3": "Ethel Lilian Voynich",
+    "C4": "Ferruccio Busoni",
+    "C5": "Enrique Granados"
+   },
+   "answer": "C3",
+   "source": "Wikidata P569: Ethel Lilian Voynich 1864-05-11 http://www.wikidata.org/entity/Q466068; Charles G. Dawes 1865-08-27 http://www.wikidata.org/entity/Q184565; Ferruccio Busoni 1866-04-01 http://www.wikidata.org/entity/Q219551; Enrique Granados 1867-07-27 http://www.wikidata.org/entity/Q294225; Charles Maurras 1868-04-20 http://www.wikidata.org/entity/Q3048",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB08",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Anders Zorn",
+    "C2": "Verner von Heidenstam",
+    "C3": "Rabindranath Tagore",
+    "C4": "Rudolf Steiner",
+    "C5": "James Ensor"
+   },
+   "answer": "C2",
+   "source": "Wikidata P569: Verner von Heidenstam 1859-07-06 http://www.wikidata.org/entity/Q129173; Anders Zorn 1860-02-18 http://www.wikidata.org/entity/Q206820; James Ensor 1860-04-13 http://www.wikidata.org/entity/Q158840; Rudolf Steiner 1861-02-27 http://www.wikidata.org/entity/Q78484; Rabindranath Tagore 1861-05-07 http://www.wikidata.org/entity/Q7241",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WB09",
+   "root_question": "Which of these people was born first (earliest date of birth)?",
+   "classes": {
+    "C1": "Francisco T\u00e1rrega",
+    "C2": "Leo\u0161 Jan\u00e1\u010dek",
+    "C3": "Alphonse Allais",
+    "C4": "John Philip Sousa",
+    "C5": "Engelbert Humperdinck"
+   },
+   "answer": "C1",
+   "source": "Wikidata P569: Francisco T\u00e1rrega 1852-11-21 http://www.wikidata.org/entity/Q313372; Leo\u0161 Jan\u00e1\u010dek 1854-07-03 http://www.wikidata.org/entity/Q184933; Engelbert Humperdinck 1854-09-01 http://www.wikidata.org/entity/Q55010; Alphonse Allais 1854-10-20 http://www.wikidata.org/entity/Q371905; John Philip Sousa 1854-11-06 http://www.wikidata.org/entity/Q295935",
+   "domain": "knowledge",
+   "kind": "WD-born-first"
+  },
+  {
+   "id": "WN00",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Khulna (Bangladesh)",
+    "C2": "Taichung (Taiwan)",
+    "C3": "Culiac\u00e1n (Mexico)",
+    "C4": "Hyderabad (Pakistan)",
+    "C5": "Jamnagar (India)"
+   },
+   "answer": "C4",
+   "source": "Wikidata P625: Hyderabad 25.38 http://www.wikidata.org/entity/Q1640079; Taichung 24.14 http://www.wikidata.org/entity/Q245023; Jamnagar 22.47 http://www.wikidata.org/entity/Q1154; Khulna 22.82 http://www.wikidata.org/entity/Q243325; Culiac\u00e1n 24.79 http://www.wikidata.org/entity/Q211760",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN01",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Osogbo (Nigeria)",
+    "C2": "Conakry (Guinea)",
+    "C3": "Valencia (Venezuela)",
+    "C4": "Freetown (Sierra Leone)",
+    "C5": "Panama City (Panama)"
+   },
+   "answer": "C3",
+   "source": "Wikidata P625: Valencia 10.17 http://www.wikidata.org/entity/Q54880; Conakry 9.51 http://www.wikidata.org/entity/Q3733; Panama City 8.97 http://www.wikidata.org/entity/Q3306; Osogbo 7.76 http://www.wikidata.org/entity/Q868203; Freetown 8.49 http://www.wikidata.org/entity/Q3780",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN02",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Taipei (Taiwan)",
+    "C2": "Narayanganj (Bangladesh)",
+    "C3": "Jodhpur (India)",
+    "C4": "Sharjah (United Arab Emirates)",
+    "C5": "Monterrey (Mexico)"
+   },
+   "answer": "C3",
+   "source": "Wikidata P625: Jodhpur 26.29 http://www.wikidata.org/entity/Q200019; Narayanganj 23.62 http://www.wikidata.org/entity/Q1990163; Monterrey 25.68 http://www.wikidata.org/entity/Q81033; Sharjah 25.34 http://www.wikidata.org/entity/Q289693; Taipei 25.04 http://www.wikidata.org/entity/Q1867",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN03",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Port Said (Egypt)",
+    "C2": "Kuwait City (Kuwait)",
+    "C3": "Chandigarh (India)",
+    "C4": "Gujranwala (Pakistan)",
+    "C5": "Lhasa (People's Republic of China)"
+   },
+   "answer": "C4",
+   "source": "Wikidata P625: Gujranwala 32.15 http://www.wikidata.org/entity/Q243322; Port Said 31.26 http://www.wikidata.org/entity/Q134509; Chandigarh 30.73 http://www.wikidata.org/entity/Q43433; Lhasa 29.65 http://www.wikidata.org/entity/Q5869; Kuwait City 29.38 http://www.wikidata.org/entity/Q35178",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN04",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Konya (Turkey)",
+    "C2": "Xining (People's Republic of China)",
+    "C3": "Erbil (Iraq)",
+    "C4": "Algiers (Algeria)",
+    "C5": "Busan (South Korea)"
+   },
+   "answer": "C1",
+   "source": "Wikidata P625: Konya 37.85 http://www.wikidata.org/entity/Q79857; Algiers 36.78 http://www.wikidata.org/entity/Q3561; Busan 35.18 http://www.wikidata.org/entity/Q16520; Erbil 36.19 http://www.wikidata.org/entity/Q132754; Xining 36.62 http://www.wikidata.org/entity/Q69060",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN05",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Havana (Cuba)",
+    "C2": "Shenzhen (People's Republic of China)",
+    "C3": "Abu Dhabi (United Arab Emirates)",
+    "C4": "Varanasi (India)",
+    "C5": "Tainan (Taiwan)"
+   },
+   "answer": "C4",
+   "source": "Wikidata P625: Varanasi 25.32 http://www.wikidata.org/entity/Q79980; Abu Dhabi 24.45 http://www.wikidata.org/entity/Q1519; Shenzhen 22.55 http://www.wikidata.org/entity/Q15174; Tainan 22.99 http://www.wikidata.org/entity/Q140631; Havana 23.14 http://www.wikidata.org/entity/Q1563",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN06",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "El Alto (Bolivia)",
+    "C2": "Goi\u00e2nia (Brazil)",
+    "C3": "Lilongwe (Malawi)",
+    "C4": "Nampula (Mozambique)",
+    "C5": "Lubango (Angola)"
+   },
+   "answer": "C3",
+   "source": "Wikidata P625: Lilongwe -13.99 http://www.wikidata.org/entity/Q3876; Lubango -14.92 http://www.wikidata.org/entity/Q122044; El Alto -16.50 http://www.wikidata.org/entity/Q30996; Goi\u00e2nia -16.68 http://www.wikidata.org/entity/Q83189; Nampula -15.12 http://www.wikidata.org/entity/Q323801",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN07",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Ibadan (Nigeria)",
+    "C2": "Tamale (Ghana)",
+    "C3": "Ciudad Guayana (Venezuela)",
+    "C4": "Garoua (Cameroon)",
+    "C5": "Madurai (India)"
+   },
+   "answer": "C5",
+   "source": "Wikidata P625: Madurai 9.92 http://www.wikidata.org/entity/Q228405; Ibadan 7.38 http://www.wikidata.org/entity/Q183298; Garoua 9.30 http://www.wikidata.org/entity/Q157915; Ciudad Guayana 8.32 http://www.wikidata.org/entity/Q507080; Tamale 9.41 http://www.wikidata.org/entity/Q217040",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN08",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Alexandria (Egypt)",
+    "C2": "Jalandhar (India)",
+    "C3": "Nanjing (People's Republic of China)",
+    "C4": "Peshawar (Pakistan)",
+    "C5": "Ramadi (Iraq)"
+   },
+   "answer": "C4",
+   "source": "Wikidata P625: Peshawar 34.01 http://www.wikidata.org/entity/Q1113311; Jalandhar 31.33 http://www.wikidata.org/entity/Q33377; Nanjing 32.06 http://www.wikidata.org/entity/Q16666; Alexandria 31.20 http://www.wikidata.org/entity/Q87; Ramadi 33.43 http://www.wikidata.org/entity/Q192961",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  },
+  {
+   "id": "WN09",
+   "root_question": "Which of these cities lies furthest north (highest latitude of its city centre)?",
+   "classes": {
+    "C1": "Bhopal (India)",
+    "C2": "Hong Kong (People's Republic of China)",
+    "C3": "Chittagong (Bangladesh)",
+    "C4": "Cancun (Mexico)",
+    "C5": "Mandalay (Myanmar)"
+   },
+   "answer": "C1",
+   "source": "Wikidata P625: Bhopal 23.26 http://www.wikidata.org/entity/Q80989; Cancun 21.16 http://www.wikidata.org/entity/Q8969; Chittagong 22.34 http://www.wikidata.org/entity/Q376749; Hong Kong 22.28 http://www.wikidata.org/entity/Q8646; Mandalay 21.97 http://www.wikidata.org/entity/Q185518",
+   "domain": "knowledge",
+   "kind": "WD-furthest-north"
+  }
+ ]
+}

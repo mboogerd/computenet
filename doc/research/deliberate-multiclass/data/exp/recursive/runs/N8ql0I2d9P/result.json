@@ -1,0 +1,137 @@
+{
+ "root": "eb43f5f8-a4b5-4716-8815-29fde889050a",
+ "outcome": "done",
+ "elapsed": 105.07196593284607,
+ "question": {
+  "root": "eb43f5f8-a4b5-4716-8815-29fde889050a",
+  "text": "Which team will win the 2026 MLB National League West division?",
+  "claims": 90,
+  "active": false,
+  "yieldRounds": 18,
+  "yieldRecent": 0.06413655078125001,
+  "yieldEarlier": 0.17820040625,
+  "stoppedBy": "budget",
+  "paused": false,
+  "costUsd": 1.5447867220000002,
+  "projectedUsd": 1.5447867220000002,
+  "cost": {
+   "backends": [
+    {
+     "backend": "claude",
+     "models": [
+      "claude-sonnet-5"
+     ],
+     "calls": 67,
+     "inputTokens": 436426,
+     "cachedInputTokens": 300102,
+     "cacheWriteTokens": 136192,
+     "outputTokens": 3668,
+     "reasoningTokens": 440,
+     "usd": 0.6417324000000001,
+     "unpricedCalls": 0,
+     "rate": "as reported by Claude Code (total_cost_usd per call)",
+     "rateSource": "Claude Code CLI",
+     "assumed": false,
+     "note": "API-equivalent as reported by Claude Code; not your bill if you use a subscription."
+    },
+    {
+     "backend": "codex",
+     "models": [
+      "gpt-5.6-sol"
+     ],
+     "calls": 60,
+     "inputTokens": 859164,
+     "cachedInputTokens": 720000,
+     "cacheWriteTokens": 0,
+     "outputTokens": 2285,
+     "reasoningTokens": 0,
+     "usd": 0.8903559999999999,
+     "unpricedCalls": 0,
+     "rate": "$4.00/1M input \u00b7 $0.40/1M cached input \u00b7 $20.00/1M output \u00b7 cache writes 1.25\u00d7 input \u00b7 prompts over 272K tokens 2\u00d7 input, 1.5\u00d7 output",
+     "rateSource": "developers.openai.com/api/docs/models/gpt-5.6-sol",
+     "rateDate": "2026-09-27",
+     "assumed": false,
+     "note": "Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21."
+    },
+    {
+     "backend": "jev",
+     "models": [
+      "jev-1.13.0"
+     ],
+     "calls": 298,
+     "inputTokens": 302341,
+     "cachedInputTokens": 0,
+     "cacheWriteTokens": 0,
+     "outputTokens": 25912,
+     "reasoningTokens": 0,
+     "usd": 0.012698322000000003,
+     "unpricedCalls": 0,
+     "rate": "$0.042/1M input \u00b7 output free",
+     "rateSource": "third-party: OpenRouter typesafe/jev-1.13, MindStudio",
+     "rateDate": "2026-09-27",
+     "assumed": true,
+     "note": "TypeSafe publishes no pricing; this is a third-party listing."
+    }
+   ],
+   "rounds": 33,
+   "queued": 0,
+   "perRoundUsd": 0.04681171884848485
+  },
+  "cruxes": [
+   "8ac2ef82-c47d-4eba-96c7-59e1cc08e473",
+   "8fd22531-2531-414d-b95e-7eb9c0feb7f9",
+   "54f248af-0189-4e64-bb12-5ed848fb2f58"
+  ],
+  "verdictsDisagree": false,
+  "framing": {
+   "mode": "POSITIONS",
+   "positions": [
+    {
+     "ref": "4c05db3b-e652-4708-95db-eee86f364327",
+     "text": "The Arizona Diamondbacks win the 2026 MLB National League West division.",
+     "credence": 0.5199882461736448,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5199882461736448,
+     "verdictsDisagree": false,
+     "share": 0.15890378201240493
+    },
+    {
+     "ref": "b3da249c-9ca7-4aad-8f8d-07e3f30dd559",
+     "text": "The Colorado Rockies win the 2026 MLB National League West division.",
+     "credence": 0.2881483205751421,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.2881483205751421,
+     "verdictsDisagree": false,
+     "share": 0.059377123900512266
+    },
+    {
+     "ref": "19a41ba3-754c-40fb-9dc3-2559f88e0e99",
+     "text": "The Los Angeles Dodgers win the 2026 MLB National League West division.",
+     "credence": 0.6988733236003722,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.6988733236003722,
+     "verdictsDisagree": false,
+     "share": 0.3404409639179932
+    },
+    {
+     "ref": "36f430f2-13be-47d0-be43-8ab7bc92d27a",
+     "text": "The San Diego Padres win the 2026 MLB National League West division.",
+     "credence": 0.6897178139191261,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.6897178139191261,
+     "verdictsDisagree": false,
+     "share": 0.32606724884791877
+    },
+    {
+     "ref": "5a29a9a4-c86c-4fad-986f-861e51d83fda",
+     "text": "The San Francisco Giants win the 2026 MLB National League West division.",
+     "credence": 0.4399071090874555,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.4399071090874555,
+     "verdictsDisagree": false,
+     "share": 0.1152108813211708
+    }
+   ]
+  }
+ }
+}

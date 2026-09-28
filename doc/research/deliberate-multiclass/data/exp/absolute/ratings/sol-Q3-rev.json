@@ -1,0 +1,50 @@
+{
+ "Q3-11": {
+  "label": "COMPARATIVE",
+  "abs": 15
+ },
+ "Q3-10": {
+  "label": "COMPARATIVE",
+  "abs": 25
+ },
+ "Q3-09": {
+  "label": "MIXED",
+  "abs": 55
+ },
+ "Q3-08": {
+  "label": "COMPARATIVE",
+  "abs": 8
+ },
+ "Q3-07": {
+  "label": "COMPARATIVE",
+  "abs": 12
+ },
+ "Q3-06": {
+  "label": "COMPARATIVE",
+  "abs": 5
+ },
+ "Q3-05": {
+  "label": "COMPARATIVE",
+  "abs": 1
+ },
+ "Q3-04": {
+  "label": "COMPARATIVE",
+  "abs": 8
+ },
+ "Q3-03": {
+  "label": "ABSOLUTE",
+  "abs": 96
+ },
+ "Q3-02": {
+  "label": "ABSOLUTE",
+  "abs": 99
+ },
+ "Q3-01": {
+  "label": "ABSOLUTE",
+  "abs": 99
+ },
+ "Q3-00": {
+  "label": "ABSOLUTE",
+  "abs": 100
+ }
+}

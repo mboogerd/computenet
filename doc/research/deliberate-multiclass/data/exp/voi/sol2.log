@@ -1,0 +1,833 @@
+2026-09-28T16:07:39.693218Z ERROR codex_skills_extension::loader::host: failed to scan skill path file:///Users/merlijn/.codex/skills/transcript-claim-capture: Operation not permitted (os error 1)
+OpenAI Codex v0.155.0
+--------
+workdir: /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 01a0e8c5-9aec-7b81-9ba6-c394e86eac0c
+--------
+user
+Read sol_prompt.md in the cwd: it lists 6 conclusions of a VoI experiment and the files (q1_main.out, q1b.out, q1_layers.out, q2.out, tree.py, cat.py) behind them. Do NOT run long scripts; read the .out files and code only. For each conclusion 1-6 say agree / disagree / agree-with-changes with one or two sentences, then an overall verdict. At most 400 words.
+
+codex
+I’ll inspect the prompt, the six referenced outputs/code files, and the workspace instructions, then give a compact evidence-based verdict.
+exec
+/bin/zsh -lc "pwd && sed -n '1,240p' /Users/merlijn/.codex/RTK.md && printf '\\n--- sol_prompt.md ---\\n' && sed -n '1,260p' sol_prompt.md && printf '\\n--- files ---\\n' && ls -l q1_main.out q1b.out q1_layers.out q2.out tree.py cat.py" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+2026-09-28T16:07:59.190333Z ERROR codex_core::shell_snapshot: Shell snapshot validation failed: Snapshot command timed out for zsh
+ succeeded in 14672ms:
+pyenv: cannot rehash: /Users/merlijn/.pyenv/shims isn't writable
+/private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+# RTK - Rust Token Killer (Codex CLI)
+
+**Usage**: Token-optimized CLI proxy for shell commands.
+
+## Rule
+
+Always prefix shell commands with `rtk`.
+
+Examples:
+
+```bash
+rtk git status
+rtk cargo test
+rtk npm run build
+rtk pytest -q
+```
+
+## Meta Commands
+
+```bash
+rtk gain            # Token savings analytics
+rtk gain --history  # Recent command savings history
+rtk proxy <cmd>     # Run raw command without filtering
+```
+
+## Verification
+
+```bash
+rtk --version
+rtk gain
+which rtk
+```
+
+--- sol_prompt.md ---
+You are reviewing an experiment (read-only). cwd holds Python scripts and outputs; the Kotlin originals are in
+/Users/merlijn/Documents/local-projects/computenet/demo/deliberate/src/main/kotlin/civictech/deliberate/
+(Sensitivity.kt, ExplorationPolicy.kt, CredenceGraph.kt, Semantics.kt, DeliberationEngine.kt take()/currentPriority) and SPEC.md in
+demo/deliberate. Layer ports: ../../verify/math/verify.py (previously checked vs Kotlin to 5e-16); tree.py adds euler/qe.
+Files: tree.py (tree model, tangent sensitivity = Kotlin localPartials chain x headlineGradient, exact path
+re-evaluation, secant variants, response-curve cells), q1.py (+q1_main.out, q1_layers.out), q1b.py (+q1b.out),
+cat.py + q2.py (+q2.out). You may run them (python3, stdlib only, a few seconds each).
+
+Context: deliberate model C orders its exploration queue and stops nodes (DIMINISHING at --voi-eps .01) by
+VoI = |d headline(root)/d node| * 4p(1-p), p = Jev plausibility (not the propagated credence q). Bug computenet-dw2wh:
+the tangent mis-prices nodes near energy clamps (woe emax .7) and can stop them prematurely.
+
+My conclusions -- please check each, try to break them, and give a verdict (agree / disagree / agree-with-changes):
+
+Q1 (binary)
+1. The right reference is E_q = 2(q|R(1)-R| + (1-q)|R(0)-R|), q = the node's propagated headline credence, not p:
+   under p the expected root after resolution drifts (q1b.out: -0.12, -0.15) while under q it is ~0 (martingale /
+   conservation of expected evidence); a Jev-certain claim (p=1) under a decisive attack gets VoI 0 today and is
+   stopped at once although E_q=.05.
+2. A "secant" evaluated at node=0 and node=1 and propagated exactly along the path needs exactly the evaluations the
+   exact E needs (R is already known), so it is dominated by exact. Cell-compatible secants (secant partials per hop
+   in the sensitivity cells) are no better than today's tangent (q1_main.out SecChain_p/Sec1stHop_p).
+3. T_q (today's tangent with q instead of p) is a free improvement for ranking (Spearman .88 -> .98 vs E_q,
+   consensus) but still fails near clamps (woe headline: 43 premature), so it does not fix dw2wh.
+4. Recommendation: VoI := exact E_q computed on demand by a pure function over the credence hub snapshot + structure
+   + stances (walk node->root, re-evaluate only the headline layers), memoised per hub version; cost ~15 evaluate()
+   calls per candidate vs ~361 per full sensitivity-layer recompute for a 14-node tree; take() rescoring all ready
+   tasks per dequeue is then <= ~180*2*4*3 evaluate calls. Hybrid "tangent + exact confirm near eps" does not pay:
+   80% of candidates fall in the confirm band. Links: same with their credence.
+   Regression tests: woe clamp case (today 0, exact .059), over-rate case (.433 vs .309), p=1 claim under decisive
+   attack (today 0, E_q .050 consensus), plus a seeded random-tree property test vs an independent full-tree evaluator.
+Q2 (categorical, closed-world log-linear elimination per layer, log-pooled)
+5. Recommend eM_w(tau=1) = sum_k s_k * E|dM_k|, M_k(s) = s_k - max_{j!=k} s_j, weights at the CURRENT s, expectation
+   over resolution to 1/0 with prob q, exact through the tree and the combination. It is continuous at ties (S1/S6:
+   eM_hard jumps .1446<->.1006 across a 3-way tie, eM_w constant .1106), keeps tail-only discriminators ~0
+   (S3 .0019, eTV .040, e|dH| .034), values broad claims more than eM_hard (S3 'rules out C' .063 vs .041, while
+   'for A' drops .153->.127), removes the leader privilege of a 1% lead (S2), and reduces EXACTLY to the binary
+   E_q at K=2 (S0: 6.7e-16), as do eM_hard and eTV; eSM (smooth margin with recomputed weights), entropy, info gain
+   and flip probability do not.
+6. Linearisation through the tree is again materially worse (random categorical: tangent 71 premature /10258,
+   tree-linear-combination-exact 13), so exact it is.
+Look especially for: bugs in my ports or variant definitions (e.g. the factor 2 conventions, curve_R, calibrated()),
+whether q vs p is really the right call, whether the martingale argument is sound given q is a consensus of layers,
+unfair comparisons, and anything that would make eM_w(tau=1) a bad default. Reply in <= 600 words.
+
+--- files ---
+-rw-r--r--@ 1 merlijn  wheel  4388 Sep 28 15:57 cat.py
+-rw-r--r--@ 1 merlijn  wheel  7630 Sep 28 15:52 q1_layers.out
+-rw-r--r--@ 1 merlijn  wheel  2758 Sep 28 15:51 q1_main.out
+-rw-r--r--@ 1 merlijn  wheel  4204 Sep 28 15:53 q1b.out
+-rw-r--r--@ 1 merlijn  wheel  5587 Sep 28 15:57 q2.out
+-rw-r--r--@ 1 merlijn  wheel  6446 Sep 28 15:51 tree.py
+
+exec
+/bin/zsh -lc "sed -n '1,260p' sol_prompt.md" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+ succeeded in 10634ms:
+pyenv: cannot rehash: /Users/merlijn/.pyenv/shims isn't writable
+You are reviewing an experiment (read-only). cwd holds Python scripts and outputs; the Kotlin originals are in
+/Users/merlijn/Documents/local-projects/computenet/demo/deliberate/src/main/kotlin/civictech/deliberate/
+(Sensitivity.kt, ExplorationPolicy.kt, CredenceGraph.kt, Semantics.kt, DeliberationEngine.kt take()/currentPriority) and SPEC.md in
+demo/deliberate. Layer ports: ../../verify/math/verify.py (previously checked vs Kotlin to 5e-16); tree.py adds euler/qe.
+Files: tree.py (tree model, tangent sensitivity = Kotlin localPartials chain x headlineGradient, exact path
+re-evaluation, secant variants, response-curve cells), q1.py (+q1_main.out, q1_layers.out), q1b.py (+q1b.out),
+cat.py + q2.py (+q2.out). You may run them (python3, stdlib only, a few seconds each).
+
+Context: deliberate model C orders its exploration queue and stops nodes (DIMINISHING at --voi-eps .01) by
+VoI = |d headline(root)/d node| * 4p(1-p), p = Jev plausibility (not the propagated credence q). Bug computenet-dw2wh:
+the tangent mis-prices nodes near energy clamps (woe emax .7) and can stop them prematurely.
+
+My conclusions -- please check each, try to break them, and give a verdict (agree / disagree / agree-with-changes):
+
+Q1 (binary)
+1. The right reference is E_q = 2(q|R(1)-R| + (1-q)|R(0)-R|), q = the node's propagated headline credence, not p:
+   under p the expected root after resolution drifts (q1b.out: -0.12, -0.15) while under q it is ~0 (martingale /
+   conservation of expected evidence); a Jev-certain claim (p=1) under a decisive attack gets VoI 0 today and is
+   stopped at once although E_q=.05.
+2. A "secant" evaluated at node=0 and node=1 and propagated exactly along the path needs exactly the evaluations the
+   exact E needs (R is already known), so it is dominated by exact. Cell-compatible secants (secant partials per hop
+   in the sensitivity cells) are no better than today's tangent (q1_main.out SecChain_p/Sec1stHop_p).
+3. T_q (today's tangent with q instead of p) is a free improvement for ranking (Spearman .88 -> .98 vs E_q,
+   consensus) but still fails near clamps (woe headline: 43 premature), so it does not fix dw2wh.
+4. Recommendation: VoI := exact E_q computed on demand by a pure function over the credence hub snapshot + structure
+   + stances (walk node->root, re-evaluate only the headline layers), memoised per hub version; cost ~15 evaluate()
+   calls per candidate vs ~361 per full sensitivity-layer recompute for a 14-node tree; take() rescoring all ready
+   tasks per dequeue is then <= ~180*2*4*3 evaluate calls. Hybrid "tangent + exact confirm near eps" does not pay:
+   80% of candidates fall in the confirm band. Links: same with their credence.
+   Regression tests: woe clamp case (today 0, exact .059), over-rate case (.433 vs .309), p=1 claim under decisive
+   attack (today 0, E_q .050 consensus), plus a seeded random-tree property test vs an independent full-tree evaluator.
+Q2 (categorical, closed-world log-linear elimination per layer, log-pooled)
+5. Recommend eM_w(tau=1) = sum_k s_k * E|dM_k|, M_k(s) = s_k - max_{j!=k} s_j, weights at the CURRENT s, expectation
+   over resolution to 1/0 with prob q, exact through the tree and the combination. It is continuous at ties (S1/S6:
+   eM_hard jumps .1446<->.1006 across a 3-way tie, eM_w constant .1106), keeps tail-only discriminators ~0
+   (S3 .0019, eTV .040, e|dH| .034), values broad claims more than eM_hard (S3 'rules out C' .063 vs .041, while
+   'for A' drops .153->.127), removes the leader privilege of a 1% lead (S2), and reduces EXACTLY to the binary
+   E_q at K=2 (S0: 6.7e-16), as do eM_hard and eTV; eSM (smooth margin with recomputed weights), entropy, info gain
+   and flip probability do not.
+6. Linearisation through the tree is again materially worse (random categorical: tangent 71 premature /10258,
+   tree-linear-combination-exact 13), so exact it is.
+Look especially for: bugs in my ports or variant definitions (e.g. the factor 2 conventions, curve_R, calibrated()),
+whether q vs p is really the right call, whether the martingale argument is sound given q is a consensus of layers,
+unfair comparisons, and anything that would make eM_w(tau=1) a bad default. Reply in <= 600 words.
+
+exec
+/bin/sh -c "sed -n '1,260p' sol_prompt.md" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+ succeeded in 0ms:
+You are reviewing an experiment (read-only). cwd holds Python scripts and outputs; the Kotlin originals are in
+/Users/merlijn/Documents/local-projects/computenet/demo/deliberate/src/main/kotlin/civictech/deliberate/
+(Sensitivity.kt, ExplorationPolicy.kt, CredenceGraph.kt, Semantics.kt, DeliberationEngine.kt take()/currentPriority) and SPEC.md in
+demo/deliberate. Layer ports: ../../verify/math/verify.py (previously checked vs Kotlin to 5e-16); tree.py adds euler/qe.
+Files: tree.py (tree model, tangent sensitivity = Kotlin localPartials chain x headlineGradient, exact path
+re-evaluation, secant variants, response-curve cells), q1.py (+q1_main.out, q1_layers.out), q1b.py (+q1b.out),
+cat.py + q2.py (+q2.out). You may run them (python3, stdlib only, a few seconds each).
+
+Context: deliberate model C orders its exploration queue and stops nodes (DIMINISHING at --voi-eps .01) by
+VoI = |d headline(root)/d node| * 4p(1-p), p = Jev plausibility (not the propagated credence q). Bug computenet-dw2wh:
+the tangent mis-prices nodes near energy clamps (woe emax .7) and can stop them prematurely.
+
+My conclusions -- please check each, try to break them, and give a verdict (agree / disagree / agree-with-changes):
+
+Q1 (binary)
+1. The right reference is E_q = 2(q|R(1)-R| + (1-q)|R(0)-R|), q = the node's propagated headline credence, not p:
+   under p the expected root after resolution drifts (q1b.out: -0.12, -0.15) while under q it is ~0 (martingale /
+   conservation of expected evidence); a Jev-certain claim (p=1) under a decisive attack gets VoI 0 today and is
+   stopped at once although E_q=.05.
+2. A "secant" evaluated at node=0 and node=1 and propagated exactly along the path needs exactly the evaluations the
+   exact E needs (R is already known), so it is dominated by exact. Cell-compatible secants (secant partials per hop
+   in the sensitivity cells) are no better than today's tangent (q1_main.out SecChain_p/Sec1stHop_p).
+3. T_q (today's tangent with q instead of p) is a free improvement for ranking (Spearman .88 -> .98 vs E_q,
+   consensus) but still fails near clamps (woe headline: 43 premature), so it does not fix dw2wh.
+4. Recommendation: VoI := exact E_q computed on demand by a pure function over the credence hub snapshot + structure
+   + stances (walk node->root, re-evaluate only the headline layers), memoised per hub version; cost ~15 evaluate()
+   calls per candidate vs ~361 per full sensitivity-layer recompute for a 14-node tree; take() rescoring all ready
+   tasks per dequeue is then <= ~180*2*4*3 evaluate calls. Hybrid "tangent + exact confirm near eps" does not pay:
+   80% of candidates fall in the confirm band. Links: same with their credence.
+   Regression tests: woe clamp case (today 0, exact .059), over-rate case (.433 vs .309), p=1 claim under decisive
+   attack (today 0, E_q .050 consensus), plus a seeded random-tree property test vs an independent full-tree evaluator.
+Q2 (categorical, closed-world log-linear elimination per layer, log-pooled)
+5. Recommend eM_w(tau=1) = sum_k s_k * E|dM_k|, M_k(s) = s_k - max_{j!=k} s_j, weights at the CURRENT s, expectation
+   over resolution to 1/0 with prob q, exact through the tree and the combination. It is continuous at ties (S1/S6:
+   eM_hard jumps .1446<->.1006 across a 3-way tie, eM_w constant .1106), keeps tail-only discriminators ~0
+   (S3 .0019, eTV .040, e|dH| .034), values broad claims more than eM_hard (S3 'rules out C' .063 vs .041, while
+   'for A' drops .153->.127), removes the leader privilege of a 1% lead (S2), and reduces EXACTLY to the binary
+   E_q at K=2 (S0: 6.7e-16), as do eM_hard and eTV; eSM (smooth margin with recomputed weights), entropy, info gain
+   and flip probability do not.
+6. Linearisation through the tree is again materially worse (random categorical: tangent 71 premature /10258,
+   tree-linear-combination-exact 13), so exact it is.
+Look especially for: bugs in my ports or variant definitions (e.g. the factor 2 conventions, curve_R, calibrated()),
+whether q vs p is really the right call, whether the martingale argument is sound given q is a consensus of layers,
+unfair comparisons, and anything that would make eM_w(tau=1) a bad default. Reply in <= 600 words.
+
+exec
+/bin/sh -c "sed -n '1,260p' /Users/merlijn/.codex/RTK.md" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+ succeeded in 0ms:
+# RTK - Rust Token Killer (Codex CLI)
+
+**Usage**: Token-optimized CLI proxy for shell commands.
+
+## Rule
+
+Always prefix shell commands with `rtk`.
+
+Examples:
+
+```bash
+rtk git status
+rtk cargo test
+rtk npm run build
+rtk pytest -q
+```
+
+## Meta Commands
+
+```bash
+rtk gain            # Token savings analytics
+rtk gain --history  # Recent command savings history
+rtk proxy <cmd>     # Run raw command without filtering
+```
+
+## Verification
+
+```bash
+rtk --version
+rtk gain
+which rtk
+```
+
+exec
+/bin/sh -c 'rtk wc -l q1_main.out q1b.out q1_layers.out q2.out tree.py cat.py' in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+exec
+/bin/sh -c "rtk sed -n '1,260p' q1_main.out" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+exec
+/bin/sh -c "rtk sed -n '1,300p' q1_layers.out" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+exec
+/bin/sh -c "rtk sed -n '1,260p' q1b.out" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+exec
+/bin/sh -c "rtk sed -n '1,360p' q2.out" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+ succeeded in 465ms:
+[rtk] /!\ No hook installed — run `rtk init -g` for automatic token savings
+38 q1_main.out
+52 q1b.out
+105 q1_layers.out
+91 q2.out
+149 tree.py
+90 cat.py
+Σ 525
+
+ succeeded in 559ms:
+
+### headline=consensus ref=E_q claims: n=3873 nodes, 793 with ref>=eps, 172 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.02 | 1.83 | 0.00 | 7.19 | 54 | 46 | 0.883 | 0.91 | 0.87 |
+| T_q | 0.42 | 1.03 | 1.39 | 0.02 | 2.63 | 33 | 25 | 0.980 | 0.97 | 0.97 |
+| T_pq | 0.38 | 1.03 | 1.68 | 0.01 | 5.29 | 43 | 40 | 0.977 | 0.95 | 0.94 |
+| SecChain_p | 0.00 | 0.98 | 3.09 | 0.00 | 15.08 | 54 | 63 | 0.871 | 0.89 | 0.81 |
+| Sec1stHop_p | 0.00 | 1.00 | 1.99 | 0.00 | 15.03 | 36 | 46 | 0.886 | 0.90 | 0.81 |
+| SecPath_p | 0.00 | 1.00 | 1.96 | 0.00 | 15.06 | 38 | 46 | 0.887 | 0.91 | 0.81 |
+| SecPath_q | 0.73 | 1.01 | 1.60 | 0.48 | 1.98 | 20 | 37 | 0.986 | 0.95 | 0.94 |
+| Curve9_q | 0.85 | 1.00 | 4.01 | 0.35 | 67.93 | 4 | 6 | 0.876 | 0.97 | 1.00 |
+| Curve5_q | 0.82 | 1.00 | 12.54 | 0.37 | 191.11 | 8 | 149 | 0.810 | 0.93 | 1.00 |
+| E_p | 0.53 | 1.00 | 1.58 | 0.00 | 7.78 | 20 | 27 | 0.985 | 0.97 | 0.88 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=consensus ref=E_p claims: n=3873 nodes, 800 with ref>=eps, 172 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.01 | 1.53 | 0.00 | 3.25 | 46 | 31 | 0.910 | 0.92 | 0.84 |
+| T_q | 0.37 | 1.03 | 1.93 | 0.00 | 4.17 | 51 | 36 | 0.976 | 0.94 | 0.87 |
+| T_pq | 0.46 | 1.03 | 1.50 | 0.02 | 2.76 | 41 | 31 | 0.981 | 0.95 | 0.87 |
+| SecChain_p | 0.00 | 0.99 | 2.48 | 0.00 | 11.42 | 39 | 41 | 0.902 | 0.91 | 0.91 |
+| Sec1stHop_p | 0.00 | 1.00 | 1.54 | 0.00 | 2.68 | 23 | 26 | 0.916 | 0.93 | 0.91 |
+| SecPath_p | 0.00 | 1.00 | 1.53 | 0.00 | 1.97 | 24 | 25 | 0.917 | 0.93 | 0.91 |
+| SecPath_q | 0.63 | 1.00 | 1.77 | 0.22 | 41.16 | 34 | 44 | 0.972 | 0.95 | 0.90 |
+| Curve9_q | 0.61 | 1.00 | 4.38 | 0.13 | 67.93 | 31 | 26 | 0.865 | 0.95 | 0.88 |
+| Curve5_q | 0.63 | 1.04 | 14.03 | 0.13 | 191.11 | 33 | 167 | 0.802 | 0.92 | 0.88 |
+| E_p | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+| E_q | 0.61 | 1.00 | 1.60 | 0.13 | 21.77 | 27 | 20 | 0.985 | 0.97 | 0.88 |
+
+### headline=consensus ref=E_s LINKS: n=3873 nodes, 772 with ref>=eps, 172 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_s (today) | 0.44 | 1.09 | 2.20 | 0.00 | 5.62 | 43 | 57 | 0.979 | 0.93 | 0.89 |
+| SecPath_s | 0.84 | 1.02 | 1.43 | 0.56 | 1.82 | 9 | 26 | 0.994 | 0.99 | 0.94 |
+| Curve9_s | 0.89 | 1.00 | 3.45 | 0.45 | 46.93 | 5 | 8 | 0.852 | 0.97 | 0.99 |
+| E_s | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+ succeeded in 648ms:
+
+## headline=consensus: premature T_p (today) vs E_q, by cause
+  {'leaf, p interior': 14, 'interior, p in {0,1}': 12, 'interior, p interior': 22, 'leaf, p in {0,1}': 6}
+  T_q premature by kind: {'leaf': 15, 'interior': 18}
+  hybrid confirm band T_q<1eps: exact evaluations needed for 3088/3873 candidates (80%); residual premature 0 (was 33)
+  hybrid confirm band T_q<2eps: exact evaluations needed for 3272/3873 candidates (84%); residual premature 0 (was 33)
+  hybrid confirm band T_q<3eps: exact evaluations needed for 3379/3873 candidates (87%); residual premature 0 (was 33)
+  T_q ranks, exact E_q re-ranks top-1: top-1 = exact top-1 in 97% of trees
+  T_q ranks, exact E_q re-ranks top-3: top-1 = exact top-1 in 100% of trees
+  T_q ranks, exact E_q re-ranks top-5: top-1 = exact top-1 in 100% of trees
+  T_q ranks, exact E_q re-ranks top-10: top-1 = exact top-1 in 100% of trees
+
+## headline=woe: premature T_p (today) vs E_q, by cause
+  {'leaf, p interior': 27, 'interior, p interior': 15, 'leaf, p in {0,1}': 1, 'interior, p in {0,1}': 2}
+  T_q premature by kind: {'leaf': 27, 'interior': 16}
+  hybrid confirm band T_q<1eps: exact evaluations needed for 1481/1815 candidates (82%); residual premature 0 (was 43)
+  hybrid confirm band T_q<2eps: exact evaluations needed for 1557/1815 candidates (86%); residual premature 0 (was 43)
+  hybrid confirm band T_q<3eps: exact evaluations needed for 1610/1815 candidates (89%); residual premature 0 (was 43)
+  T_q ranks, exact E_q re-ranks top-1: top-1 = exact top-1 in 85% of trees
+  T_q ranks, exact E_q re-ranks top-3: top-1 = exact top-1 in 94% of trees
+  T_q ranks, exact E_q re-ranks top-5: top-1 = exact top-1 in 96% of trees
+  T_q ranks, exact E_q re-ranks top-10: top-1 = exact top-1 in 99% of trees
+
+## headline=dfquad: premature T_p (today) vs E_q, by cause
+  {'interior, p in {0,1}': 20, 'interior, p interior': 16, 'leaf, p interior': 19, 'leaf, p in {0,1}': 5}
+  T_q premature by kind: {'interior': 8, 'leaf': 18}
+  hybrid confirm band T_q<1eps: exact evaluations needed for 1219/1815 candidates (67%); residual premature 0 (was 26)
+  hybrid confirm band T_q<2eps: exact evaluations needed for 1360/1815 candidates (75%); residual premature 0 (was 26)
+  hybrid confirm band T_q<3eps: exact evaluations needed for 1443/1815 candidates (80%); residual premature 0 (was 26)
+  T_q ranks, exact E_q re-ranks top-1: top-1 = exact top-1 in 95% of trees
+  T_q ranks, exact E_q re-ranks top-3: top-1 = exact top-1 in 99% of trees
+  T_q ranks, exact E_q re-ranks top-5: top-1 = exact top-1 in 100% of trees
+  T_q ranks, exact E_q re-ranks top-10: top-1 = exact top-1 in 100% of trees
+
+## cost per full refresh, consensus headline (evaluate() calls)
+  mean nodes/tree 13.9; today's sensitivity layer full recompute 361 evals/tree; exact E_q for EVERY candidate 201 evals/tree (15.5 per candidate)
+
+## p vs q: interior nodes whose credence q differs from Jev's plausibility p (consensus headline)
+  Jev-certain claim (p=1) under a decisive attack: p=1.0 q=0.949  T_p(today)=0.0000 T_q=0.0288 E_p=0.0196 E_q=0.0496
+     E[root after] - root now: under p +0.0098, under q -0.0062
+  open claim (p=.5) with a decisive support below: p=0.5 q=0.849  T_p(today)=0.3000 T_q=0.1536 E_p=0.3155 E_q=0.1456
+     E[root after] - root now: under p -0.1216, under q -0.0114
+  bug's interior case (p=.2, strong support below): p=0.2 q=0.573  T_p(today)=0.2146 T_q=0.3281 E_p=0.3922 E_q=0.3161
+     E[root after] - root now: under p -0.1503, under q -0.0268
+
+## regression cases (Kotlin tests)
+  [clamp] root .5 <-sup s=1- top(p=.6) <-sup s=.95- leaf(p=.5), headline woe: top per-layer woe=0.765; today 0.0000 T_q 0.0000 E_q 0.0590
+  [over-rate] root .5 <-sup s=.9- leaf(p=.5), headline woe: today 0.4328 E_q 0.3092
+  [p-vs-q] root .5 <-sup s=.75- a(p=1) <-att s=1- b(p=.9), headline woe: q_a=0.959 today 0.0000 E_q 0.0254
+  [clamp] root .5 <-sup s=1- top(p=.6) <-sup s=.95- leaf(p=.5), headline consensus: top per-layer woe=0.765; today 0.0651 T_q 0.0651 E_q 0.0822
+  [over-rate] root .5 <-sup s=.9- leaf(p=.5), headline consensus: today 0.3793 E_q 0.3445
+  [p-vs-q] root .5 <-sup s=.75- a(p=1) <-att s=1- b(p=.9), headline consensus: q_a=0.949 today 0.0000 E_q 0.0496
+
+ succeeded in 724ms:
+### S0 K=2: max |objective - binary exact E_q| over 2932 nodes (consensus headline vs log-pool)
+ eM_hard: 6.7e-16, eM_w(t=1): 6.7e-16, eM_w(t=.5): 6.7e-16, eSM(t=.1): 1.8e-01, eTV: 6.7e-16, e|dH|: 3.3e-01, InfoGain: 3.3e-01, P(flip): 7.8e-01
+
+### S1 exact 5-way tie (bead c5b), claims for A, B, E; s(E) x(1-1e-06)
+ s = {A:0.200, B:0.200, C:0.200, D:0.200, E:0.200} leader=C
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| for A | 0.0811 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 1.0000 |
+| for B | 0.0811 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 1.0000 |
+| for E | 0.0811 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 1.0000 |
+
+### S1 exact 5-way tie (bead c5b), claims for A, B, E; s(E) x(1+0)
+ s = {A:0.200, B:0.200, C:0.200, D:0.200, E:0.200} leader=C
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| for A | 0.0811 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 1.0000 |
+| for B | 0.0811 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 1.0000 |
+| for E | 0.0811 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 1.0000 |
+
+### S1 exact 5-way tie (bead c5b), claims for A, B, E; s(E) x(1+1e-06)
+ s = {A:0.200, B:0.200, C:0.200, D:0.200, E:0.200} leader=E
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| for A | 0.0793 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 0.5000 |
+| for B | 0.0793 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 0.5000 |
+| for E | 0.1055 | 0.0852 | 0.0852 | 0.0741 | 0.1674 | 0.0245 | 0.0245 | 0.5000 |
+
+### S2 K=10 near-uniform s (A +1%)
+ s = {A:0.101, B:0.100, C:0.100, D:0.100, E:0.100, F:0.100, G:0.100, H:0.100, I:0.100, J:0.100} leader=A
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| for leader A | 0.0604 | 0.0468 | 0.0468 | 0.0452 | 0.1088 | 0.0175 | 0.0175 | 0.5000 |
+| for J | 0.0444 | 0.0456 | 0.0456 | 0.0435 | 0.1079 | 0.0171 | 0.0171 | 0.5000 |
+| against leader A | 0.0471 | 0.0240 | 0.0240 | 0.0144 | 0.0848 | 0.0107 | 0.0107 | 0.5000 |
+| rules out J | 0.0208 | 0.0230 | 0.0230 | 0.0125 | 0.0840 | 0.0107 | 0.0107 | 0.5000 |
+
+### S3 3-way near tie A>B>C + tail D,E: broad claims
+ s = {A:0.300, B:0.295, C:0.290, D:0.060, E:0.055} leader=A
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| for A | 0.1534 | 0.1270 | 0.1305 | 0.1129 | 0.2106 | 0.0499 | 0.0422 | 0.5000 |
+| broad: rules out C (A,B both up) | 0.0405 | 0.0629 | 0.0642 | 0.0296 | 0.1664 | 0.0137 | 0.0137 | 0.5000 |
+| broad: A or B only | 0.0393 | 0.0645 | 0.0649 | 0.0285 | 0.2059 | 0.0697 | 0.0390 | 0.5000 |
+| rules out B (A-vs-B) | 0.0603 | 0.0831 | 0.0853 | 0.0520 | 0.2001 | 0.0212 | 0.0212 | 0.5000 |
+| tail-only: rules out E | 0.0001 | 0.0019 | 0.0005 | 0.0001 | 0.0402 | 0.0338 | 0.0105 | 0.0000 |
+
+### S4 clear leader A=.7; tail-only discriminators
+ s = {A:0.700, B:0.100, C:0.100, D:0.050, E:0.050} leader=A
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| rules out E | 0.0371 | 0.0369 | 0.0369 | 0.0371 | 0.0889 | 0.0829 | -0.0157 | 0.0000 |
+| rules out D | 0.0371 | 0.0369 | 0.0369 | 0.0371 | 0.0889 | 0.0829 | -0.0157 | 0.0000 |
+| rules out leader A | 0.2277 | 0.2249 | 0.2274 | 0.2277 | 0.3416 | 0.3602 | 0.0202 | 0.0000 |
+
+### S5 K=3 near tie, graded multi-class claim
+ s = {A:0.340, B:0.330, C:0.330} leader=A
+| candidate | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) | eTV | e|dH| | InfoGain | P(flip) |
+|---|---|---|---|---|---|---|---|---|
+| graded A:1 B:.5 C:0 | 0.1477 | 0.1229 | 0.1232 | 0.0875 | 0.2114 | 0.0289 | 0.0289 | 0.5000 |
+| for B | 0.1624 | 0.1721 | 0.1720 | 0.1470 | 0.2610 | 0.0418 | 0.0418 | 0.5000 |
+| rules out A (s=.6) | 0.0869 | 0.0485 | 0.0489 | 0.0144 | 0.1158 | 0.0086 | 0.0086 | 0.5000 |
+
+### S6 continuity through a 3-way tie (A,B,E tied, C,D lower); s(E) scaled by (1+d)
+| d | leader | cand | eM_hard | eM_w(t=1) | eM_w(t=.5) | eSM(t=.1) |
+|---|---|---|---|---|---|---|
+| -0.001 | A | for A | 0.1447 | 0.1107 | 0.1132 | 0.1008 |
+| -0.001 | A | for E | 0.1005 | 0.1105 | 0.1130 | 0.1006 |
+| -1e-06 | A | for A | 0.1446 | 0.1106 | 0.1132 | 0.1008 |
+| -1e-06 | A | for E | 0.1006 | 0.1106 | 0.1132 | 0.1008 |
+| +1e-06 | E | for A | 0.1006 | 0.1106 | 0.1132 | 0.1008 |
+| +1e-06 | E | for E | 0.1446 | 0.1106 | 0.1132 | 0.1008 |
+| +0.001 | E | for A | 0.1006 | 0.1106 | 0.1131 | 0.1006 |
+| +0.001 | E | for E | 0.1447 | 0.1107 | 0.1133 | 0.1009 |
+
+### random categorical trees (n=10258 nodes, 250 questions, K in 3/5/8): approximations of exact eM_w(t=1)
+| variant | ratio 5% | 50% | 95% | min | premature@.01 | wasted | Spearman | top5 |
+|---|---|---|---|---|---|---|---|---|
+| tan_eMw | 0.35 | 1.03 | 1.41 | 0.01 | 71 | 61 | 0.986 | 0.93 |
+| lin_eMw | 0.56 | 1.00 | 1.34 | 0.02 | 13 | 32 | 0.990 | 0.97 |
+
+### agreement of each exact objective with eM_w(t=1) (per-question Spearman / top-5 overlap)
+| objective | Spearman | top5 | top1 |
+|---|---|---|---|
+| eM_hard | 0.993 | 0.96 | 0.93 |
+| eM_w(t=1) | 1.000 | 1.00 | 1.00 |
+| eM_w(t=.5) | 0.998 | 0.98 | 0.96 |
+| eSM(t=.1) | 0.993 | 0.95 | 0.92 |
+| eTV | 0.989 | 0.93 | 0.90 |
+| e|dH| | 0.962 | 0.85 | 0.68 |
+| InfoGain | 0.126 | 0.57 | 0.56 |
+| P(flip) | 0.749 | 0.42 | 0.37 |
+
+ succeeded in 784ms:
+
+### headline=dfquad ref=E_q claims: n=1815 nodes, 614 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.00 | 2.21 | 0.00 | 698.61 | 60 | 33 | 0.869 | 0.88 | 0.80 |
+| T_q | 0.43 | 1.00 | 1.33 | 0.02 | 2.25 | 26 | 8 | 0.989 | 0.98 | 0.95 |
+| T_pq | 0.40 | 1.00 | 2.14 | 0.01 | 380.63 | 36 | 30 | 0.974 | 0.95 | 0.85 |
+| SecChain_p | 0.00 | 1.00 | 3.63 | 0.00 | 476.07 | 50 | 49 | 0.858 | 0.88 | 0.77 |
+| Sec1stHop_p | 0.00 | 1.00 | 2.18 | 0.00 | 476.07 | 43 | 32 | 0.873 | 0.89 | 0.81 |
+| SecPath_p | 0.00 | 1.00 | 2.15 | 0.00 | 476.07 | 41 | 33 | 0.873 | 0.89 | 0.81 |
+| SecPath_q | 0.82 | 1.00 | 1.22 | 0.14 | 1.96 | 9 | 7 | 0.995 | 0.98 | 0.94 |
+| Curve9_q | 1.00 | 1.00 | 1.00 | 0.56 | 64.80 | 0 | 15 | 0.991 | 1.00 | 1.00 |
+| Curve5_q | 1.00 | 1.00 | 1.02 | 0.53 | 127.26 | 1 | 30 | 0.977 | 1.00 | 1.00 |
+| E_p | 0.51 | 1.00 | 2.06 | 0.01 | 259.54 | 12 | 25 | 0.982 | 0.96 | 0.89 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=wlo ref=E_q claims: n=1815 nodes, 396 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.08 | 2.03 | 0.00 | 12.98 | 35 | 30 | 0.879 | 0.90 | 0.87 |
+| T_q | 0.23 | 1.09 | 1.36 | 0.00 | 1.97 | 28 | 18 | 0.975 | 0.96 | 0.95 |
+| T_pq | 0.23 | 1.09 | 1.85 | 0.00 | 7.87 | 31 | 29 | 0.972 | 0.94 | 0.89 |
+| SecChain_p | 0.00 | 0.95 | 3.56 | 0.00 | 34.95 | 21 | 37 | 0.859 | 0.88 | 0.87 |
+| Sec1stHop_p | 0.00 | 1.00 | 2.37 | 0.00 | 20.68 | 15 | 33 | 0.880 | 0.90 | 0.87 |
+| SecPath_p | 0.00 | 1.00 | 2.34 | 0.00 | 13.31 | 14 | 35 | 0.881 | 0.90 | 0.87 |
+| SecPath_q | 0.68 | 1.00 | 1.72 | 0.45 | 1.99 | 8 | 16 | 0.985 | 0.95 | 0.90 |
+| Curve9_q | 0.88 | 1.00 | 3.18 | 0.30 | 22.98 | 4 | 2 | 0.882 | 0.98 | 1.00 |
+| Curve5_q | 0.81 | 1.00 | 9.81 | 0.37 | 66.83 | 7 | 43 | 0.799 | 0.93 | 1.00 |
+| E_p | 0.56 | 1.00 | 1.99 | 0.00 | 7.43 | 5 | 21 | 0.980 | 0.95 | 0.92 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=jnb ref=E_q claims: n=1815 nodes, 329 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.02 | 1.79 | 0.00 | 4.90 | 15 | 19 | 0.889 | 0.91 | 0.87 |
+| T_q | 0.56 | 1.02 | 1.31 | 0.10 | 1.82 | 10 | 9 | 0.988 | 0.97 | 0.95 |
+| T_pq | 0.48 | 1.04 | 1.56 | 0.05 | 3.43 | 13 | 18 | 0.982 | 0.96 | 0.94 |
+| SecChain_p | 0.00 | 1.00 | 2.81 | 0.00 | 11.59 | 19 | 30 | 0.880 | 0.90 | 0.82 |
+| Sec1stHop_p | 0.00 | 1.00 | 2.02 | 0.00 | 7.65 | 13 | 28 | 0.887 | 0.90 | 0.82 |
+| SecPath_p | 0.00 | 1.00 | 2.07 | 0.00 | 7.52 | 13 | 32 | 0.888 | 0.90 | 0.82 |
+| SecPath_q | 0.77 | 1.01 | 1.42 | 0.44 | 1.93 | 7 | 12 | 0.990 | 0.97 | 0.95 |
+| Curve9_q | 0.90 | 1.00 | 2.02 | 0.55 | 39.19 | 0 | 0 | 0.888 | 0.98 | 1.00 |
+| Curve5_q | 0.82 | 1.00 | 6.82 | 0.47 | 192.49 | 3 | 28 | 0.814 | 0.95 | 1.00 |
+| E_p | 0.54 | 1.00 | 1.73 | 0.02 | 4.22 | 5 | 16 | 0.984 | 0.96 | 0.93 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=woe ref=E_q claims: n=1815 nodes, 355 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.01 | 2.26 | 0.00 | 6.96 | 45 | 29 | 0.807 | 0.87 | 0.81 |
+| T_q | 0.00 | 1.02 | 1.90 | 0.00 | 5.48 | 43 | 22 | 0.860 | 0.91 | 0.85 |
+| T_pq | 0.00 | 1.02 | 2.20 | 0.00 | 5.95 | 43 | 28 | 0.858 | 0.90 | 0.83 |
+| SecChain_p | 0.00 | 0.96 | 2.89 | 0.00 | 10.14 | 24 | 32 | 0.807 | 0.87 | 0.81 |
+| Sec1stHop_p | 0.00 | 1.00 | 2.47 | 0.00 | 26.08 | 12 | 35 | 0.888 | 0.90 | 0.81 |
+| SecPath_p | 0.00 | 1.01 | 2.23 | 0.00 | 7.91 | 7 | 30 | 0.902 | 0.90 | 0.81 |
+| SecPath_q | 0.69 | 1.01 | 1.87 | 0.32 | 2.00 | 6 | 23 | 0.990 | 0.95 | 0.90 |
+| Curve9_q | 0.91 | 1.00 | 4.63 | 0.40 | 196.87 | 3 | 41 | 0.850 | 0.95 | 1.00 |
+| Curve5_q | 0.84 | 1.00 | 13.00 | 0.33 | 247.59 | 7 | 95 | 0.736 | 0.90 | 0.99 |
+| E_p | 0.48 | 1.00 | 1.75 | 0.00 | 4.54 | 4 | 14 | 0.968 | 0.95 | 0.92 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=euler ref=E_q claims: n=1815 nodes, 273 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.00 | 1.31 | 0.00 | 2.59 | 1 | 7 | 0.904 | 0.93 | 0.95 |
+| T_q | 0.91 | 1.00 | 1.07 | 0.76 | 1.20 | 0 | 2 | 0.998 | 0.99 | 0.99 |
+| T_pq | 0.52 | 1.00 | 1.18 | 0.39 | 1.98 | 1 | 5 | 0.993 | 0.97 | 0.99 |
+| SecChain_p | 0.00 | 1.00 | 1.36 | 0.00 | 2.68 | 2 | 9 | 0.902 | 0.93 | 0.95 |
+| Sec1stHop_p | 0.00 | 1.00 | 1.26 | 0.00 | 2.55 | 2 | 8 | 0.903 | 0.93 | 0.95 |
+| SecPath_p | 0.00 | 1.00 | 1.26 | 0.00 | 2.63 | 2 | 8 | 0.903 | 0.93 | 0.95 |
+| SecPath_q | 0.93 | 1.00 | 1.08 | 0.80 | 1.24 | 1 | 2 | 0.998 | 0.99 | 0.99 |
+| Curve9_q | 0.92 | 1.00 | 1.07 | 0.45 | 2.89 | 0 | 0 | 0.923 | 0.98 | 1.00 |
+| Curve5_q | 0.85 | 1.00 | 1.46 | 0.50 | 8.74 | 0 | 0 | 0.889 | 0.97 | 1.00 |
+| E_p | 0.52 | 1.00 | 1.18 | 0.38 | 1.99 | 1 | 4 | 0.994 | 0.98 | 0.99 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=qe ref=E_q claims: n=1815 nodes, 448 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.01 | 1.45 | 0.00 | 4.24 | 52 | 12 | 0.875 | 0.89 | 0.81 |
+| T_q | 0.23 | 1.02 | 1.30 | 0.00 | 1.95 | 35 | 9 | 0.973 | 0.97 | 0.89 |
+| T_pq | 0.23 | 1.02 | 1.40 | 0.00 | 3.07 | 40 | 12 | 0.970 | 0.94 | 0.85 |
+| SecChain_p | 0.00 | 0.95 | 2.47 | 0.00 | 16.56 | 37 | 23 | 0.878 | 0.90 | 0.90 |
+| Sec1stHop_p | 0.00 | 1.00 | 1.60 | 0.00 | 5.64 | 25 | 14 | 0.890 | 0.90 | 0.90 |
+| SecPath_p | 0.00 | 1.00 | 1.58 | 0.00 | 3.55 | 24 | 15 | 0.891 | 0.91 | 0.90 |
+| SecPath_q | 0.76 | 1.00 | 1.45 | 0.22 | 1.96 | 9 | 12 | 0.990 | 0.98 | 0.95 |
+| Curve9_q | 0.88 | 1.00 | 2.71 | 0.43 | 48.55 | 0 | 0 | 0.915 | 0.98 | 1.00 |
+| Curve5_q | 0.85 | 1.00 | 9.62 | 0.33 | 134.89 | 4 | 35 | 0.849 | 0.96 | 1.00 |
+| E_p | 0.58 | 1.00 | 1.27 | 0.01 | 3.08 | 8 | 7 | 0.992 | 0.97 | 0.92 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+### headline=mlp ref=E_q claims: n=1815 nodes, 336 with ref>=eps, 84 trees>=6 cands
+| variant | ratio 5% | 50% | 95% | min | max | premature | wasted | Spearman | top5 | top1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T_p (today) | 0.00 | 1.00 | 1.47 | 0.00 | 4.39 | 7 | 13 | 0.907 | 0.92 | 0.92 |
+| T_q | 0.89 | 1.00 | 1.08 | 0.76 | 1.20 | 2 | 1 | 0.997 | 0.99 | 1.00 |
+| T_pq | 0.53 | 1.00 | 1.31 | 0.39 | 2.88 | 3 | 11 | 0.992 | 0.97 | 0.95 |
+| SecChain_p | 0.00 | 1.00 | 1.52 | 0.00 | 3.96 | 6 | 16 | 0.904 | 0.91 | 0.89 |
+| Sec1stHop_p | 0.00 | 1.00 | 1.42 | 0.00 | 3.90 | 6 | 10 | 0.907 | 0.92 | 0.89 |
+| SecPath_p | 0.00 | 1.00 | 1.41 | 0.00 | 3.97 | 6 | 11 | 0.907 | 0.92 | 0.89 |
+| SecPath_q | 0.92 | 1.00 | 1.10 | 0.80 | 1.24 | 4 | 4 | 0.997 | 1.00 | 0.95 |
+| Curve9_q | 0.91 | 1.00 | 1.12 | 0.54 | 2.79 | 0 | 0 | 0.947 | 1.00 | 1.00 |
+| Curve5_q | 0.85 | 1.00 | 1.80 | 0.49 | 14.05 | 2 | 1 | 0.906 | 0.99 | 1.00 |
+| E_p | 0.53 | 1.00 | 1.28 | 0.38 | 2.84 | 2 | 10 | 0.993 | 0.97 | 0.94 |
+| E_q | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 0 | 1.000 | 1.00 | 1.00 |
+
+exec
+/bin/sh -c "rtk sed -n '1,240p' tree.py" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+exec
+/bin/sh -c "rtk sed -n '1,220p' cat.py" in /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/203e4fbc-0355-41f9-a52e-dd5404776b66/scratchpad/exp/voi
+ succeeded in 56ms:
+"""Q2: categorical-root VoI objectives over the closed-world log-linear elimination combination (LL per
+log-odds layer wlo/jnb/woe, log-pooled). Top-level claims carry graded compatibility kappa over classes and a
+binary subtree (tree.py) that sets their credence."""
+import math, random, sys
+from tree import *
+sys.path.insert(0, "../../verify/math")
+import verify as V
+
+class Top:
+    def __init__(self, node, s, kappa): self.node, self.s, self.kappa = node, s, kappa
+
+class Cat:
+    def __init__(self, prior, tops):
+        self.prior = prior; self.tops = tops; self.K = list(prior)
+        for t in tops: evaluate(t.node)
+    def dist(self, cvals=None):
+        """cvals: per top index -> {layer: credence}; default the tops' current credences."""
+        logs = {k: 0.0 for k in self.K}
+        for l in MEMBERS:
+            f, en, w, pp, kk = V.LAYERS[l]
+            claims = []
+            for i, t in enumerate(self.tops):
+                c = (cvals or {}).get(i, t.node.c)[l]
+                claims.append((w(en(t.s, c)), t.kappa))
+            d = V.LL(claims, self.prior, pp, kk)
+            for k in self.K: logs[k] += math.log(max(d[k], 1e-300)) / len(MEMBERS)
+        m = max(logs.values()); z = {k: math.exp(v - m) for k, v in logs.items()}; t = sum(z.values())
+        return {k: v / t for k, v in z.items()}
+    def top_index(self, n):
+        r = root_of(n)
+        return next(i for i, t in enumerate(self.tops) if t.node is r)
+    def resolved(self, n, r):
+        i = self.top_index(n)
+        return self.dist({i: {l: resolved_root(n, r, l) for l in MEMBERS}})
+    def linear_resolved(self, n, r):
+        """tangent through the binary subtree, combination exact (the 'design hybrid')."""
+        i = self.top_index(n); t = self.tops[i]
+        vals = {}
+        for l in MEMBERS:
+            g = sens_layer(n, l); vals[l] = min(max(t.node.c[l] + g * (r - n.c[l]), 0.0), 1.0)
+        return self.dist({i: vals})
+    def moved(self, n, x):
+        i = self.top_index(n)
+        return self.dist({i: {l: resolved_root(n, min(max(x, 0), 1), l) for l in MEMBERS}})
+
+def q_of(n): return Headline("consensus").of(n.c)
+
+# ---- margins and objectives ----
+def M(s, k): return s[k] - max(v for j, v in s.items() if j != k)
+def leader(s): return max(s, key=s.get)
+def weights(s, tau):
+    if tau == 0: k1 = leader(s); return {k: (1.0 if k == k1 else 0.0) for k in s}
+    z = {k: s[k] ** (1 / tau) for k in s}; t = sum(z.values()); return {k: v / t for k, v in z.items()}
+def H(s): return -sum(v * math.log(v) for v in s.values() if v > 0)
+def SM(s, tau):
+    w = weights(s, tau); return sum(w[k] * M(s, k) for k in s)
+
+def objectives(cat, n, lin=False):
+    s0 = cat.dist(); q = q_of(n)
+    res = cat.linear_resolved if lin else cat.resolved
+    s1, s0r = res(n, 1.0), res(n, 0.0)
+    E = lambda f: q * f(s1) + (1 - q) * f(s0r)
+    out = {
+        "eM_hard": E(lambda s: abs(M(s, leader(s0)) - M(s0, leader(s0)))),
+        "eM_w(t=1)": sum(weights(s0, 1)[k] * E(lambda s: abs(M(s, k) - M(s0, k))) for k in s0),
+        "eM_w(t=.5)": sum(weights(s0, .5)[k] * E(lambda s: abs(M(s, k) - M(s0, k))) for k in s0),
+        "eSM(t=.1)": E(lambda s: abs(SM(s, .1) - SM(s0, .1))),
+        "eTV": E(lambda s: sum(abs(s[k] - s0[k]) for k in s0)),
+        "e|dH|": E(lambda s: abs(H(s) - H(s0))),
+        "InfoGain": H(s0) - E(H),
+        "P(flip)": E(lambda s: 1.0 if leader(s) != leader(s0) else 0.0),
+    }
+    return out
+
+def tangent_eMw(cat, n, tau=1.0, h=1e-6):
+    """fully linear: sum_k w_k |dM_k/dx| * 4q(1-q) (today's rule generalised)."""
+    s0 = cat.dist(); x = q_of(n); w = weights(s0, tau)
+    # perturb the node's credence in every layer by +-h (as CredenceGraph.scalar does)
+    i = cat.top_index(n)
+    def at(dx): return cat.dist({i: {l: resolved_root(n, min(max(n.c[l] + dx, 0), 1), l) for l in MEMBERS}})
+    sp, sm = at(h), at(-h)
+    return sum(w[k] * abs(M(sp, k) - M(sm, k)) / (2 * h) for k in s0) * unc(x) / 2  # 2q(1-q): M already carries the binary factor 2
+
+def fmt(d, keys=None): return " ".join(f"{k}={d[k]:.4f}" for k in (keys or d))
+
+def calibrated(K, tops, target):
+    """prior such that the CURRENT pooled distribution equals target (exact ties by construction)."""
+    c = Cat({k: 1 / len(K) for k in K}, tops); su = c.dist()
+    raw = {k: target[k] / su[k] for k in K}; t = sum(raw.values())
+    c.prior = {k: v / t for k, v in raw.items()}; return c
+
+ succeeded in 92ms:
+"""Tree model + all binary VoI variants for computenet-dw2wh / 1ow0x.
+Layer ports from ../../verify/math/verify.py (checked vs Kotlin to <=5e-16), plus euler/qe ported from
+demo/deliberate Semantics.kt. Base = DfQuad.base = clamp(p, .01, .99) for every layer."""
+import math, random, sys
+sys.path.insert(0, "../../verify/math")
+import verify as V
+
+def euler(b, att, sup):
+    b = V.clampBase(b); E = sum(sup) - sum(att)
+    return 1 - (1 - b * b) / (1 + b * math.exp(E))
+def qe(b, att, sup):
+    b = V.clampBase(b); E = sum(sup) - sum(att)
+    h = lambda x: max(0.0, x) ** 2 / (1 + max(0.0, x) ** 2)
+    return b - b * h(-E) + (1 - b) * h(E)
+def dfq(b, att, sup): return V.dfquad(b, att, sup)
+
+# layer id -> (combine(base, attE, supE), energy(s, c))
+LAY = {
+    "dfquad": (dfq, V.energy_prod), "wlo": (V.wlo, V.energy_prod), "jnb": (V.jnb, V.jnb_energy),
+    "woe": (V.woe, V.energy_prod), "euler": (euler, V.energy_prod), "qe": (qe, V.energy_prod),
+    "mlp": (V.mlp, V.energy_prod),
+}
+IDS = list(LAY)
+MEMBERS = ["wlo", "jnb", "woe"]
+LO, HI = 0.001, 0.999
+H = 1e-6
+
+class Node:
+    __slots__ = ("id", "p", "kids", "parent", "pol", "s", "depth", "c")
+    def __init__(self, p, parent=None, pol=0, s=None, depth=0):
+        self.p = p; self.kids = []; self.parent = parent; self.pol = pol; self.s = s; self.depth = depth; self.c = {}
+
+def local(node, l, over_child=None, over_val=None, over_strength=None):
+    """node's layer-l credence; optionally child over_child's credence := over_val, or its edge strength := over_strength."""
+    f, en = LAY[l]; sup, att = [], []
+    for k in node.kids:
+        c = over_val if (k is over_child and over_val is not None) else k.c[l]
+        s = over_strength if (k is over_child and over_strength is not None) else k.s
+        (sup if k.pol > 0 else att).append(en(s, c))
+    return f(node.p, att, sup)
+
+def evaluate(root):
+    def go(n):
+        for k in n.kids: go(k)
+        for l in IDS: n.c[l] = local(n, l)
+    go(root)
+
+class Headline:
+    def __init__(self, kind): self.kind = kind  # 'consensus' or a layer id
+    def layers(self): return MEMBERS if self.kind == "consensus" else [self.kind]
+    def of(self, vals):  # vals: layer -> credence
+        if self.kind != "consensus": return vals[self.kind]
+        return V.sig(sum(V.logit(min(max(vals[l], LO), HI)) for l in MEMBERS) / len(MEMBERS))
+    def grad(self, vals):
+        if self.kind != "consensus": return {self.kind: 1.0}
+        cons = self.of(vals); g = {}
+        for l in MEMBERS:
+            c = vals[l]; g[l] = 0.0 if (c <= LO or c >= HI) else cons * (1 - cons) / (len(MEMBERS) * c * (1 - c))
+        return g
+
+def node_headline(hl, n): return hl.of(n.c)
+
+# ---------- exact path re-evaluation (cost: len(path) evaluate() per layer per resolution) ----------
+def resolved_root(n, r, l, edge=False):
+    """root layer-l credence when node n's credence (or, edge=True, its edge strength) is set to r."""
+    if edge:
+        val = local(n.parent, l, over_child=n, over_strength=r); cur = n.parent
+    else:
+        if n.parent is None: return r
+        val = local(n.parent, l, over_child=n, over_val=r); cur = n.parent
+    while cur.parent is not None:
+        val = local(cur.parent, l, over_child=cur, over_val=val); cur = cur.parent
+    return val
+
+def root_of(n):
+    while n.parent is not None: n = n.parent
+    return n
+
+def R(hl, n, r, edge=False): return hl.of({l: resolved_root(n, r, l, edge) for l in hl.layers()})
+
+# ---------- tangent (today's Kotlin: central differences, one-sided at [0,1] ends) ----------
+def diff(x, at):
+    lo, hi = max(x - H, 0.0), min(x + H, 1.0)
+    return 0.0 if hi <= lo else (at(hi) - at(lo)) / (hi - lo)
+
+def secant(at): return at(1.0) - at(0.0)
+
+def sens_layer(n, l, hop="tan", first_secant=False, edge=False):
+    """d root_l / d node_l (or d root_l / d strength): product of local partials along the path."""
+    g = 1.0; child = n; first = True
+    if edge:
+        par = n.parent
+        g *= diff(n.s, lambda v: local(par, l, over_child=n, over_strength=v)); child = par; first = False
+    while child.parent is not None:
+        par = child.parent; x = child.c[l]
+        use_sec = hop == "sec" or (first_secant and first)
+        if use_sec: g *= secant(lambda v: local(par, l, over_child=child, over_val=v))
+        else: g *= diff(x, lambda v: local(par, l, over_child=child, over_val=v))
+        child = par; first = False
+    return g
+
+def scalar_sens(hl, n, **kw):
+    root = root_of(n); g = hl.grad(root.c)
+    return sum(g[l] * sens_layer(n, l, **kw) for l in g)
+
+def unc(x): x = min(max(x, 0.0), 1.0); return 4 * x * (1 - x)
+
+# ---------- response-curve cells: each node gets root_l(x_node) on a G-point grid (cell-compatible, one-way) ----------
+def curve_R(hl, n, r, G, edge=False):
+    """approximate R(node:=r) by composing G-point grid response curves top-down, linear interpolation."""
+    xs = [i / (G - 1) for i in range(G)]
+    def interp(tab, x):
+        x = min(max(x, 0.0), 1.0); j = min(int(x * (G - 1)), G - 2); t = x * (G - 1) - j
+        return tab[j] * (1 - t) + tab[j + 1] * t
+    tgt = n.parent if edge else n
+    path = []; cur = tgt
+    while cur.parent is not None: path.append(cur); cur = cur.parent
+    vals = {}
+    for l in hl.layers():
+        tab = xs[:]
+        for child in reversed(path):
+            par = child.parent
+            tab = [interp(tab, local(par, l, over_child=child, over_val=x)) for x in xs]
+        vals[l] = interp(tab, local(n.parent, l, over_child=n, over_strength=r) if edge else r)
+    return hl.of(vals)
+
+# ---------- tree generator ----------
+def plaus(rnd):
+    u = rnd.random()
+    if u < 0.35: return rnd.choice([0.0, 0.25, 0.5, 0.75, 1.0, 0.9, 0.1])
+    return rnd.betavariate(1.3, 1.3)
+def strength(rnd):
+    u = rnd.random()
+    if u < 0.4: return rnd.choice([0.25, 0.5, 0.75, 1.0])
+    return rnd.uniform(0.1, 1.0)
+
+def gen_tree(rnd, maxdepth=None, maxb=4, cap=180, psup=0.55):
+    D = maxdepth or rnd.randint(1, 4)
+    root = Node(plaus(rnd)); nodes = [root]; frontier = [root]
+    while frontier:
+        n = frontier.pop(0)
+        if n.depth >= D: continue
+        if n.depth > 0 and rnd.random() < 0.3: continue
+        for _ in range(rnd.randint(1, maxb)):
+            if len(nodes) >= cap: break
+            k = Node(plaus(rnd), n, 1 if rnd.random() < psup else -1, strength(rnd), n.depth + 1)
+            n.kids.append(k); nodes.append(k); frontier.append(k)
+    evaluate(root)
+    return root, nodes
+
+codex
+1. **Agree with changes.** Use \(q\) only if it is the calibrated probability of resolution; consensus credence is a reasonable proxy, but not guaranteed correct. The martingale claim is overstated: even under \(q\), reported drift reaches −0.0268 because nonlinear recomputation does not ensure \(R=qR(1)+(1-q)R(0)\).
+
+2. **Agree with changes.** An endpoint secant propagated exactly requires the same \(R(0),R(1)\) evaluations as exact \(E\), so exact dominates it. However, cell secants are not simply “no better”: `Sec1stHop_p` substantially reduces premature stops in several tables, albeit without consistently improving ranking or waste.
+
+3. **Agree.** Replacing \(p\) with \(q\) materially improves ranking—especially for consensus—at negligible computation cost, while the 43 premature woe cases confirm that clamps remain unresolved.
+
+4. **Agree with changes.** Exact path evaluation is the strongest implementation recommendation, and the reported aggregate cost—201 evaluations per tree versus 361—is encouraging. Benchmark real wall time and invalidation behavior first; the 80% result rejects only the near-threshold hybrid, while exact reranking of the tangent top 3–5 remains promising.
+
+5. **Agree with changes.** \(eM_w(\tau=1)\) has attractive properties: continuity, no discontinuous leader privilege, and exact binary compatibility under the chosen factor-two convention. It is not yet established as the default: examples are hand-selected, random-objective “agreement” is measured against \(eM_w\) itself, and S4 shows a tail-only score of .0369—not generally near zero; sensitivity to class duplication/cardinality also needs testing.
+
+6. **Agree with changes.** The experiment establishes that both linearizations can cross the stopping threshold incorrectly, so exact evaluation is preferable when false stopping matters. Calling the residual 13/10,258 failures “material” needs a relevant-denominator rate and runtime comparison.
+
+**Overall verdict:** The case for exact endpoint evaluation is strong, and \(q\) plus \(eM_w\) are good provisional choices, but the martingale justification, categorical default, and performance claims should be softened pending calibration, invariance, and production benchmarks.
+tokens used
+34,827
+1. **Agree with changes.** Use \(q\) only if it is the calibrated probability of resolution; consensus credence is a reasonable proxy, but not guaranteed correct. The martingale claim is overstated: even under \(q\), reported drift reaches −0.0268 because nonlinear recomputation does not ensure \(R=qR(1)+(1-q)R(0)\).
+
+2. **Agree with changes.** An endpoint secant propagated exactly requires the same \(R(0),R(1)\) evaluations as exact \(E\), so exact dominates it. However, cell secants are not simply “no better”: `Sec1stHop_p` substantially reduces premature stops in several tables, albeit without consistently improving ranking or waste.
+
+3. **Agree.** Replacing \(p\) with \(q\) materially improves ranking—especially for consensus—at negligible computation cost, while the 43 premature woe cases confirm that clamps remain unresolved.
+
+4. **Agree with changes.** Exact path evaluation is the strongest implementation recommendation, and the reported aggregate cost—201 evaluations per tree versus 361—is encouraging. Benchmark real wall time and invalidation behavior first; the 80% result rejects only the near-threshold hybrid, while exact reranking of the tangent top 3–5 remains promising.
+
+5. **Agree with changes.** \(eM_w(\tau=1)\) has attractive properties: continuity, no discontinuous leader privilege, and exact binary compatibility under the chosen factor-two convention. It is not yet established as the default: examples are hand-selected, random-objective “agreement” is measured against \(eM_w\) itself, and S4 shows a tail-only score of .0369—not generally near zero; sensitivity to class duplication/cardinality also needs testing.
+
+6. **Agree with changes.** The experiment establishes that both linearizations can cross the stopping threshold incorrectly, so exact evaluation is preferable when false stopping matters. Calling the residual 13/10,258 failures “material” needs a relevant-denominator rate and runtime comparison.
+
+**Overall verdict:** The case for exact endpoint evaluation is strong, and \(q\) plus \(eM_w\) are good provisional choices, but the martingale justification, categorical default, and performance claims should be softened pending calibration, invariance, and production benchmarks.

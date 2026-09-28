@@ -1,0 +1,104 @@
+{
+ "order": [
+  "PK",
+  "CY",
+  "PT",
+  "CC"
+ ],
+ "ratings": {
+  "p1": {
+   "PK": "0",
+   "CY": "0",
+   "PT": "0",
+   "CC": "+"
+  },
+  "p2": {
+   "PK": "0",
+   "CY": "0",
+   "PT": "0",
+   "CC": "-"
+  },
+  "p3": {
+   "PK": "+",
+   "CY": "0",
+   "PT": "-",
+   "CC": "+"
+  },
+  "p4": {
+   "PK": "0",
+   "CY": "0",
+   "PT": "0",
+   "CC": "--"
+  },
+  "p5": {
+   "PK": "0",
+   "CY": "0",
+   "PT": "-",
+   "CC": "0"
+  },
+  "p6": {
+   "PK": "0",
+   "CY": "+",
+   "PT": "0",
+   "CC": "0"
+  },
+  "p7": {
+   "PK": "0",
+   "CY": "-",
+   "PT": "0",
+   "CC": "0"
+  },
+  "p8": {
+   "PK": "+",
+   "CY": "0",
+   "PT": "0",
+   "CC": "0"
+  },
+  "p9": {
+   "PK": "-",
+   "CY": "+",
+   "PT": "+",
+   "CC": "-"
+  },
+  "p10": {
+   "PK": "-",
+   "CY": "-",
+   "PT": "0",
+   "CC": "+"
+  }
+ },
+ "contested": {
+  "p1": {
+   "PK": "Strong evidence for CC could be read as '-' for rival single-choice answers.",
+   "PT": "Strong evidence for CC could be read as '-' for rival single-choice answers."
+  },
+  "p2": {
+   "PK": "Parking pricing is also a regressive charge, so some would rate it '-'.",
+   "PT": "PT is a progressive alternative, so some would rate it '+'."
+  },
+  "p3": {
+   "PK": "Spare bus capacity means alternatives exist, which favours push measures; others would say it has no bearing ('0').",
+   "CC": "Spare bus capacity means alternatives exist, which favours push measures; others would say it has no bearing ('0').",
+   "PT": "Some would read empty off-peak buses as a demand problem only, giving '0'."
+  },
+  "p5": {
+   "PT": "Buses can expand quickly, so some would rate this '0'."
+  },
+  "p6": {
+   "PT": "Short trips also suit frequent buses, so some would rate this '+'.",
+   "PK": "Short trips are easy to shift once parking is priced, so some would rate this '+'."
+  },
+  "p7": {
+   "PT": "Harsh climate makes PT the main alternative, so some would rate this '+'.",
+   "CY": "Hills and cold could be read as '--', though e-bikes and winter-cycling cities make it doubtful."
+  },
+  "p8": {
+   "PK": "A third of traffic is removable directly by parking reform, so some would rate this '++'."
+  },
+  "p10": {
+   "PK": "Through-traffic does not park, so some would rate this '--'.",
+   "PT": "Cross-district lines could serve through trips, so some would rate this '+' or '-'.",
+   "CY": "Some would rate this '0'."
+  }
+ }
+}

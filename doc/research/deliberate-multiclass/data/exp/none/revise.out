@@ -1,0 +1,36 @@
+## Revised: P(Ω) per scenario [first-impression Ω]; judges 0 / up.3 / down.3
+| scenario | Ω0 | A0p | Hmin-abs | Hw-abs | HB |
+|---|---|---|---|---|---|
+| S1 routine two-sided, K=2 (A vs B, none possible) | 0.05 | 0.050 | 0.050/0.121/0.050 | 0.108/0.166/0.102 | 0.050/0.384/0.022 |
+| S1c contrastive debate, K=3 (X>Y, Y>Z, Z>X) | 0.05 | 0.050 | 0.050/0.085/0.050 | 0.050/0.085/0.050 | 0.088/0.133/0.088 |
+| S3 all eliminated (absolute objection to each, e=.72) | 0.10 | 0.100 | 0.280/0.280/0.205 | 0.280/0.280/0.205 | 0.284/0.284/0.161 |
+| S3b all objected but objections rebutted (c=.2) | 0.10 | 0.100 | 0.130/0.130/0.120 | 0.130/0.130/0.120 | 0.119/0.119/0.103 |
+| S3c all eliminated AND a proposer's explicit none-claim (s.8 c.8) | 0.10 | 0.259 | 0.402/0.402/0.333 | 0.402/0.402/0.333 | 0.555/0.555/0.375 |
+| S4 one strong answer (2 strong pros X, weak con X) | 0.10 | 0.100 | 0.100/0.154/0.100 | 0.119/0.171/0.113 | 0.013/0.065/0.012 |
+| S5 Late Bronze Age collapse, listed debate only | 0.40 | 0.400 | 0.572/0.620/0.519 | 0.596/0.649/0.536 | 0.814/0.814/0.695 |
+| S5b + explicit claim 'systems collapse, no single cause' (s.8 c.75) | 0.40 | 0.659 | 0.719/0.744/0.694 | 0.731/0.761/0.702 | 0.927/0.927/0.868 |
+| Sol-R3 extreme: bL=.99, s=c=1 objection to each of 3 | 0.01 | 0.010 | 0.047/0.047/0.033 | 0.047/0.047/0.033 | 0.503/0.503/0.260 |
+| S3d X,Y,Z objected, junk V p=.02 unobjected | 0.10 | 0.100 | 0.100/0.100/0.100 | 0.277/0.277/0.202 | 0.273/0.273/0.153 |
+| Sol-cx: 10 strong contrasts each way + weightless abs objections | 0.05 | 0.050 | 0.050/0.198/0.050 | 0.050/0.198/0.050 | 1.000/1.000/1.000 |
+| Opus-cx: S1 + weak abs objection to B (e=.04) | 0.05 | 0.050 | 0.053/0.124/0.052 | 0.111/0.167/0.104 | 0.051/0.389/0.022 |
+| S1' S1 with CONTRASTIVE pros (A fits better than B) | 0.05 | 0.050 | 0.050/0.121/0.050 | 0.108/0.166/0.102 | 0.618/0.738/0.412 |
+
+## Populations (1500 each; separate pooling; judge sd .1). ΔΩ = P(Ω) − (1−bL)
+| candidate | judge | routine mean/max ΔΩ | routine+weak objections to every class mean/max ΔΩ | all-elim mean ΔΩ / mean P(Ω) |
+|---|---|---|---|---|
+| A0p | up0/down0 | +0.000/+0.000 | -0.000/+0.000 | -0.000 / 0.116 |
+| Hmin-abs | up0/down0 | +0.004/+0.044 | +0.010/+0.075 | +0.117 / 0.234 |
+| Hmin-abs | up0.3/down0 | +0.042/+0.243 | +0.046/+0.251 | +0.124 / 0.240 |
+| Hmin-abs | up0/down0.3 | +0.004/+0.044 | +0.008/+0.073 | +0.075 / 0.191 |
+| Hw-abs | up0/down0 | +0.041/+0.270 | +0.043/+0.260 | +0.152 / 0.268 |
+| Hw-abs | up0.3/down0 | +0.091/+0.293 | +0.093/+0.290 | +0.159 / 0.275 |
+| Hw-abs | up0/down0.3 | +0.032/+0.245 | +0.033/+0.231 | +0.099 / 0.215 |
+| HB | up0/down0 | -0.025/+0.417 | -0.025/+0.335 | +0.140 / 0.256 |
+| HB | up0.3/down0 | +0.050/+0.624 | +0.050/+0.474 | +0.153 / 0.269 |
+| HB | up0/down0.3 | -0.039/+0.349 | -0.040/+0.246 | +0.051 / 0.167 |
+
+## R4 carve-from-Ω then sequential re-judgment of existing claims against W (q=.5)
+- S3 all eliminated (absol / Hw-abs: carve W=0.140 Ω=0.140; 0 judged: W=0.141 Ω=0.148; 1 judged: W=0.141 Ω=0.148; 2 judged: W=0.141 Ω=0.148; 3 judged: W=0.141 Ω=0.148
+- S3 all eliminated (absol / HB: carve W=0.142 Ω=0.142; 0 judged: W=0.142 Ω=0.142; 1 judged: W=0.142 Ω=0.142; 2 judged: W=0.142 Ω=0.142; 3 judged: W=0.142 Ω=0.142
+- S4 one strong answer (2  / Hw-abs: carve W=0.060 Ω=0.060; 0 judged: W=0.019 Ω=0.060; 1 judged: W=0.019 Ω=0.060; 2 judged: W=0.019 Ω=0.060; 3 judged: W=0.019 Ω=0.060
+- S4 one strong answer (2  / HB: carve W=0.007 Ω=0.007; 0 judged: W=0.020 Ω=0.007; 1 judged: W=0.020 Ω=0.007; 2 judged: W=0.020 Ω=0.007; 3 judged: W=0.020 Ω=0.007

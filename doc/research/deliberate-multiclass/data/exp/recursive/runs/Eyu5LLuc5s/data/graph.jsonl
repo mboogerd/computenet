@@ -1,0 +1,176 @@
+{"op":"claim","ref":"0314da93-7fe3-4f5c-a1f9-ef5f7913c924","text":"Who will be the 2026 Republican nominee for Governor of Florida?","question":true}
+{"op":"issue","ref":"0314da93-7fe3-4f5c-a1f9-ef5f7913c924","mode":"POSITIONS","positions":["2cf9c5c3-a28d-4198-a2ab-19deddd34499","0790b144-5b65-47f9-ab9b-3d095bb8465a","76dcfeff-f95e-434d-b0f5-81a0bbd28302","8cf0628f-86d4-48b7-ae0f-4ee2046feba6"]}
+{"op":"claim","ref":"2cf9c5c3-a28d-4198-a2ab-19deddd34499","text":"Byron Donalds is the 2026 Republican nominee for Governor of Florida.","question":true}
+{"op":"claim","ref":"0790b144-5b65-47f9-ab9b-3d095bb8465a","text":"James Fishback is the 2026 Republican nominee for Governor of Florida.","question":true}
+{"op":"claim","ref":"76dcfeff-f95e-434d-b0f5-81a0bbd28302","text":"Jay Collins is the 2026 Republican nominee for Governor of Florida.","question":true}
+{"op":"claim","ref":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6","text":"Someone other than Byron Donalds, James Fishback and Jay Collins is the 2026 Republican nominee for Governor of Florida.","question":true}
+{"op":"claim","ref":"46eb2866-a0de-41f7-9658-10d54172d5ba","text":"Jay Collins was endorsed by President Donald Trump as lieutenant governor running mate on Byron Donalds' 2026 Florida gubernatorial ticket."}
+{"op":"edge","ref":"ae24b1c6-64c6-4d95-8de3-57831cbb6bac","polarity":"SUPPORT","source":"46eb2866-a0de-41f7-9658-10d54172d5ba","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"e339e811-49ba-4fec-9bed-3881c895e2e5","text":"Byron Donalds received Donald Trump's endorsement in the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"ea2124c4-debf-4900-a94b-a5bbd3d152ad","polarity":"ATTACK","source":"e339e811-49ba-4fec-9bed-3881c895e2e5","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"be4297a2-8600-472d-8d71-4f576b395b79","text":"James Fishback has never held elected public office as of September 2026."}
+{"op":"edge","ref":"db09263a-d953-4b18-ad54-d552f1b70d74","polarity":"ATTACK","source":"be4297a2-8600-472d-8d71-4f576b395b79","target":"0790b144-5b65-47f9-ab9b-3d095bb8465a"}
+{"op":"claim","ref":"7ffcce3b-bcdc-451f-b430-b7aa22145c47","text":"Byron Donalds received a formal endorsement from Donald Trump in the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"aaeb692e-8a32-434c-8ea8-827c40ebb22e","polarity":"SUPPORT","source":"7ffcce3b-bcdc-451f-b430-b7aa22145c47","target":"2cf9c5c3-a28d-4198-a2ab-19deddd34499"}
+{"op":"claim","ref":"d2ec2076-765b-4414-8bb3-f93aed531121","text":"President Trump endorsed Byron Donalds for the 2026 Florida gubernatorial race before any Republican primary vote had been cast."}
+{"op":"edge","ref":"63358620-33ac-48db-bd2c-7b1a641c3866","polarity":"SUPPORT","source":"d2ec2076-765b-4414-8bb3-f93aed531121","target":"2cf9c5c3-a28d-4198-a2ab-19deddd34499"}
+{"op":"claim","ref":"83e56024-6080-40bf-950a-214c355de021","text":"Casey DeSantis had been publicly floated as a potential 2026 Florida gubernatorial candidate as of 2025."}
+{"op":"edge","ref":"88628055-c013-4fcc-a51c-b19f700000a3","polarity":"SUPPORT","source":"83e56024-6080-40bf-950a-214c355de021","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"7a751ee3-ee08-47ac-a6d4-3be4009bfa3a","text":"Byron Donalds received a formal endorsement from Donald Trump for the 2026 Florida gubernatorial race."}
+{"op":"edge","ref":"864976f4-a38f-43fd-b7d0-0625915f2880","polarity":"ATTACK","source":"7a751ee3-ee08-47ac-a6d4-3be4009bfa3a","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"9aeb1266-2ad9-4446-a40a-b48a438d6275","text":"James Fishback led a statewide grassroots campaign for Florida governor during the 2026 Republican primary."}
+{"op":"edge","ref":"be2a3016-ee45-457d-9f8f-06be2fc27eea","polarity":"SUPPORT","source":"9aeb1266-2ad9-4446-a40a-b48a438d6275","target":"0790b144-5b65-47f9-ab9b-3d095bb8465a"}
+{"op":"claim","ref":"cf3bc1c4-6918-4a08-ba40-9063c92b744e","text":"James Fishback trailed Byron Donalds in Republican primary polling released during the 2026 Florida gubernatorial campaign."}
+{"op":"edge","ref":"233252a6-b312-4140-ae09-4d3c65509fef","polarity":"ATTACK","source":"cf3bc1c4-6918-4a08-ba40-9063c92b744e","target":"0790b144-5b65-47f9-ab9b-3d095bb8465a"}
+{"op":"claim","ref":"9d27f773-eae0-4761-84d0-c7e398c6275b","text":"Byron Donalds led Florida’s Republican gubernatorial primary field in multiple statewide polls published in 2025 and 2026."}
+{"op":"edge","ref":"666c8604-fe9d-45e7-8f4a-f5ae43cc1a49","polarity":"SUPPORT","source":"9d27f773-eae0-4761-84d0-c7e398c6275b","target":"2cf9c5c3-a28d-4198-a2ab-19deddd34499"}
+{"op":"claim","ref":"93809cdc-7df3-446b-be87-6290ca29ca1e","text":"Florida's 2026 Republican gubernatorial primary has not yet occurred as of September 2026."}
+{"op":"edge","ref":"51a91df3-ed77-4cf7-b1e5-c91cbd0a6c99","polarity":"ATTACK","source":"93809cdc-7df3-446b-be87-6290ca29ca1e","target":"2cf9c5c3-a28d-4198-a2ab-19deddd34499"}
+{"op":"claim","ref":"1a2c34f6-09cd-4fcf-92ee-44e45ba17489","text":"Donald Trump publicly endorsed Byron Donalds for Florida Governor in February 2025."}
+{"op":"edge","ref":"ff2e8938-a3fb-4e42-99c6-a845f22114c4","polarity":"SUPPORT","source":"1a2c34f6-09cd-4fcf-92ee-44e45ba17489","target":"e339e811-49ba-4fec-9bed-3881c895e2e5"}
+{"op":"claim","ref":"61165cef-02ae-40d0-b030-67202ceacd76","text":"Donald Trump publicly endorsed Byron Donalds for Florida Governor before Jay Collins entered the 2026 Republican primary race."}
+{"op":"edge","ref":"46ac112c-0112-4119-9a8c-84b469a99abb","polarity":"SUPPORT","source":"61165cef-02ae-40d0-b030-67202ceacd76","target":"e339e811-49ba-4fec-9bed-3881c895e2e5"}
+{"op":"claim","ref":"fdf20ccd-df07-45f4-aaac-626cd2464d40","text":"A Trump endorsement in Florida Republican gubernatorial primaries substantially increases the endorsed candidate's likelihood of winning the primary."}
+{"op":"edge","ref":"05307342-d143-4eb4-899f-b405c2cbe48a","polarity":"ATTACK","source":"fdf20ccd-df07-45f4-aaac-626cd2464d40","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"9695a647-bc82-430b-a47d-fa7d7767ceef","text":"Republican primary voters in Florida have historically not always nominated the candidate endorsed by Donald Trump in contested primaries."}
+{"op":"edge","ref":"c0f7ca1b-402c-4076-877a-88c061c4d3cf","polarity":"ATTACK","source":"9695a647-bc82-430b-a47d-fa7d7767ceef","target":"ea2124c4-debf-4900-a94b-a5bbd3d152ad"}
+{"op":"claim","ref":"9b29006b-c94d-4b5b-8e92-416bcfde1eb9","text":"Byron Donalds selected Jay Collins as his 2026 Florida lieutenant governor running mate before Donald Trump made any public endorsement statement about the pairing."}
+{"op":"edge","ref":"bb0433a2-3c05-4627-8826-6d40e8a8b8ce","polarity":"ATTACK","source":"9b29006b-c94d-4b5b-8e92-416bcfde1eb9","target":"46eb2866-a0de-41f7-9658-10d54172d5ba"}
+{"op":"claim","ref":"4c90abc1-8a3b-4063-a601-547710d2cdfa","text":"Trump's endorsement of a Florida gubernatorial ticket historically increases that ticket's likelihood of winning the Republican primary."}
+{"op":"edge","ref":"4dc7552d-4a96-4223-a4fc-161212682638","polarity":"SUPPORT","source":"4c90abc1-8a3b-4063-a601-547710d2cdfa","target":"ae24b1c6-64c6-4d95-8de3-57831cbb6bac"}
+{"op":"claim","ref":"16382f96-c0b8-4b8f-8df0-e273b89b2a20","text":"Byron Donalds' gubernatorial ticket must first win the 2026 Republican primary for governor of Florida before Jay Collins could become nominee."}
+{"op":"edge","ref":"87525bd9-b1fe-4340-9b6d-8a93ba7884c5","polarity":"ATTACK","source":"16382f96-c0b8-4b8f-8df0-e273b89b2a20","target":"ae24b1c6-64c6-4d95-8de3-57831cbb6bac"}
+{"op":"claim","ref":"874a74c9-d7fd-4968-bcf5-6c1d21a0e110","text":"Paul Renner entered the 2026 Republican primary for governor of Florida in September 2025."}
+{"op":"edge","ref":"07ccba44-a9e1-48b6-abbe-fb340177e719","polarity":"SUPPORT","source":"874a74c9-d7fd-4968-bcf5-6c1d21a0e110","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"08b2d40f-dc74-4a16-b3b8-5824ff228a47","text":"Byron Donalds led the Republican field in statewide primary polling released during 2025."}
+{"op":"edge","ref":"c386057e-4d93-4944-a2d9-92fb56796930","polarity":"ATTACK","source":"08b2d40f-dc74-4a16-b3b8-5824ff228a47","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"ea253e99-7393-4121-8787-d9d6d5865362","text":"Jay Collins served as Florida's Lieutenant Governor since February 2025, giving him statewide name recognition heading into the 2026 primary."}
+{"op":"edge","ref":"40652a1e-ca5c-4c74-938c-8f8ef54a93ad","polarity":"SUPPORT","source":"ea253e99-7393-4121-8787-d9d6d5865362","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"c5e87304-8407-4087-a369-80a9e0c3f627","text":"No sitting Florida lieutenant governor has ever been elected Governor of Florida directly from that office."}
+{"op":"edge","ref":"2c39d1b7-b482-4df8-a902-8220ecc77afd","polarity":"ATTACK","source":"c5e87304-8407-4087-a369-80a9e0c3f627","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"6f424a25-12fd-4aed-b9e1-5e7cbd29afae","text":"James Fishback received Donald Trump's endorsement in the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"f2220e07-5d02-46ba-ba3b-9921e6c4a382","polarity":"SUPPORT","source":"6f424a25-12fd-4aed-b9e1-5e7cbd29afae","target":"0790b144-5b65-47f9-ab9b-3d095bb8465a"}
+{"op":"claim","ref":"d4d3e828-fded-42e5-9d8e-5f2562a460c2","text":"Casey DeSantis declined to run for the 2026 Republican gubernatorial nomination, allowing Byron Donalds to consolidate the Trump-aligned Republican primary vote in Florida."}
+{"op":"edge","ref":"fdb071ea-57c3-47fa-8e9a-e82a7b567d84","polarity":"ATTACK","source":"d4d3e828-fded-42e5-9d8e-5f2562a460c2","target":"0790b144-5b65-47f9-ab9b-3d095bb8465a"}
+{"op":"claim","ref":"fee78f61-93a3-4000-8727-f242aab247b8","text":"Byron Donalds raised more campaign funds than any other declared candidate in Florida's 2026 Republican gubernatorial primary, according to state campaign finance filings."}
+{"op":"edge","ref":"5c3071a8-7e1e-486f-88c9-20042c013112","polarity":"SUPPORT","source":"fee78f61-93a3-4000-8727-f242aab247b8","target":"2cf9c5c3-a28d-4198-a2ab-19deddd34499"}
+{"op":"claim","ref":"fe3efcf3-c97a-406c-8cb4-49f3ab728581","text":"Florida Agriculture Commissioner Wilton Simpson announced a campaign for the 2026 Republican gubernatorial nomination, creating a contested primary."}
+{"op":"edge","ref":"09d662cd-d6e6-4c79-9b37-63a4d24d04e0","polarity":"ATTACK","source":"fe3efcf3-c97a-406c-8cb4-49f3ab728581","target":"2cf9c5c3-a28d-4198-a2ab-19deddd34499"}
+{"op":"claim","ref":"3f6f201f-e206-4c71-b6b3-2e2afd69728d","text":"Donald Trump's endorsement gives Byron Donalds a prominent signal of partisan loyalty to Florida Republican primary voters."}
+{"op":"edge","ref":"22de2c61-e9a4-49f3-870c-9a91f849ad75","polarity":"ATTACK","source":"3f6f201f-e206-4c71-b6b3-2e2afd69728d","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"d29d6055-e5f7-476c-80ae-dcc0bb9878c0","text":"Florida gubernatorial candidates select their lieutenant governor running mates for the same general-election ticket after winning their party's gubernatorial nomination."}
+{"op":"edge","ref":"43c6788f-1049-4937-a247-7f079e96bde4","polarity":"ATTACK","source":"d29d6055-e5f7-476c-80ae-dcc0bb9878c0","target":"87525bd9-b1fe-4340-9b6d-8a93ba7884c5"}
+{"op":"claim","ref":"96c7cc24-abd7-4799-824f-f5f63fb72162","text":"Florida gubernatorial candidates and lieutenant-governor running mates seek different nominations in the 2026 Republican primary."}
+{"op":"edge","ref":"0ef94cf0-4d69-4cf1-a325-94c172487174","polarity":"ATTACK","source":"96c7cc24-abd7-4799-824f-f5f63fb72162","target":"87525bd9-b1fe-4340-9b6d-8a93ba7884c5"}
+{"op":"claim","ref":"a409af79-cfb8-491f-8aec-7b761a05fc61","text":"Florida Agriculture Commissioner Wilton Simpson filed to run in the 2026 Republican primary for governor of Florida."}
+{"op":"edge","ref":"a5623827-8722-48c1-9723-d3d8acd444db","polarity":"SUPPORT","source":"a409af79-cfb8-491f-8aec-7b761a05fc61","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"c3d97404-73f7-459d-86ce-9f50f6a00ef4","text":"Jay Collins is running for lieutenant governor on Byron Donalds’ 2026 ticket rather than seeking the Republican gubernatorial nomination."}
+{"op":"edge","ref":"b3c35c51-6517-4249-926d-a2d6b8df8475","polarity":"ATTACK","source":"c3d97404-73f7-459d-86ce-9f50f6a00ef4","target":"76dcfeff-f95e-434d-b0f5-81a0bbd28302"}
+{"op":"claim","ref":"9538c80f-7170-4ac1-823b-f482982303e9","text":"Florida's statewide primary elections are scheduled to be held in August 2026, per the Florida Division of Elections calendar."}
+{"op":"edge","ref":"50ab6137-fcda-4d33-8c6f-31ab274a355e","polarity":"SUPPORT","source":"9538c80f-7170-4ac1-823b-f482982303e9","target":"93809cdc-7df3-446b-be87-6290ca29ca1e"}
+{"op":"claim","ref":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91","text":"James Fishback won the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"64f9f00c-c13a-410a-8412-b956cb6045d9","polarity":"SUPPORT","source":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91","target":"0790b144-5b65-47f9-ab9b-3d095bb8465a"}
+{"op":"claim","ref":"e8330ebd-2678-4cad-8956-a6a7fdb39a25","text":"A candidate cannot officially become a party's nominee for governor before that party's primary election has been held."}
+{"op":"edge","ref":"1676a81c-af6a-4868-ae1b-31e2c781889e","polarity":"SUPPORT","source":"e8330ebd-2678-4cad-8956-a6a7fdb39a25","target":"51a91df3-ed77-4cf7-b1e5-c91cbd0a6c99"}
+{"op":"claim","ref":"fd2a72b2-1665-4303-bbd0-edcdd14ec70d","text":"Party nominees for governor in some U.S. states are chosen by pre-primary party conventions rather than solely by a primary election."}
+{"op":"edge","ref":"3702235a-f154-4d3b-8fb7-5906d2fe31b3","polarity":"ATTACK","source":"fd2a72b2-1665-4303-bbd0-edcdd14ec70d","target":"1676a81c-af6a-4868-ae1b-31e2c781889e"}
+{"op":"claim","ref":"a9b27f06-b3f0-4d44-8219-48fc3a273e1a","text":"In Republican primaries, candidates endorsed by Donald Trump have won the nomination in most contested 2022 and 2024 races."}
+{"op":"edge","ref":"3fc646a4-9aea-4c08-b526-13a850d9a050","polarity":"SUPPORT","source":"a9b27f06-b3f0-4d44-8219-48fc3a273e1a","target":"22de2c61-e9a4-49f3-870c-9a91f849ad75"}
+{"op":"claim","ref":"c252a667-1e0d-4818-9758-5f0cda126c69","text":"Republican primary voters in Florida have historically nominated candidates without Donald Trump's endorsement in some past gubernatorial primaries."}
+{"op":"edge","ref":"a3c63cf5-ca30-4703-b06e-2f1b78b26009","polarity":"ATTACK","source":"c252a667-1e0d-4818-9758-5f0cda126c69","target":"22de2c61-e9a4-49f3-870c-9a91f849ad75"}
+{"op":"claim","ref":"4be3bc38-aa1f-418b-9299-334e778b9526","text":"Byron Donalds announced Jay Collins as his running mate for lieutenant governor in the 2026 Florida gubernatorial race."}
+{"op":"edge","ref":"2df06aba-aadf-4685-b599-aff636f08ae9","polarity":"SUPPORT","source":"4be3bc38-aa1f-418b-9299-334e778b9526","target":"c3d97404-73f7-459d-86ce-9f50f6a00ef4"}
+{"op":"claim","ref":"dd9feab7-3ee0-46d6-90bc-d74ff9cdebcc","text":"Jay Collins filed paperwork with the Florida Division of Elections as a candidate for governor rather than lieutenant governor in 2025."}
+{"op":"edge","ref":"6dcbe724-bec4-443b-8aa2-215cae6c6ded","polarity":"ATTACK","source":"dd9feab7-3ee0-46d6-90bc-d74ff9cdebcc","target":"c3d97404-73f7-459d-86ce-9f50f6a00ef4"}
+{"op":"claim","ref":"d6bb7e44-ce15-483f-9a7a-2ccda245c594","text":"Florida law requires the 2026 gubernatorial primary election results to determine the Republican nominee before the November 2026 general election."}
+{"op":"edge","ref":"b1131e0d-63d7-4fa8-bc51-af446b14d69e","polarity":"SUPPORT","source":"d6bb7e44-ce15-483f-9a7a-2ccda245c594","target":"93809cdc-7df3-446b-be87-6290ca29ca1e"}
+{"op":"claim","ref":"4f2f5c9c-b123-462d-8aaa-416da133e38a","text":"Byron Donalds received a formal endorsement from Donald Trump in the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"3f914178-c0f7-4821-9225-3d1b1d261389","polarity":"SUPPORT","source":"4f2f5c9c-b123-462d-8aaa-416da133e38a","target":"cf3bc1c4-6918-4a08-ba40-9063c92b744e"}
+{"op":"claim","ref":"730f9c28-9629-4b48-926d-5324b168a5c0","text":"James Fishback led Byron Donalds in at least one publicly released Florida Republican gubernatorial primary poll conducted in September 2026."}
+{"op":"edge","ref":"6307db7d-9b88-4e3d-a076-5a212b9dd4bc","polarity":"ATTACK","source":"730f9c28-9629-4b48-926d-5324b168a5c0","target":"cf3bc1c4-6918-4a08-ba40-9063c92b744e"}
+{"op":"claim","ref":"c8f459b4-4179-488b-b95d-639f8cefe7b8","text":"Predictions about a future primary winner remain meaningful before the primary election occurs."}
+{"op":"edge","ref":"93889c0a-c892-40d8-919c-65b66ef88802","polarity":"ATTACK","source":"c8f459b4-4179-488b-b95d-639f8cefe7b8","target":"1676a81c-af6a-4868-ae1b-31e2c781889e"}
+{"op":"claim","ref":"be60900f-cd19-4214-b471-1deed25338d5","text":"James Fishback has never held or run for elected public office in Florida before the 2026 gubernatorial race."}
+{"op":"edge","ref":"9f7d5c1a-6a00-42d0-801c-90d8d8014bf3","polarity":"ATTACK","source":"be60900f-cd19-4214-b471-1deed25338d5","target":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91"}
+{"op":"claim","ref":"a636a248-e8de-4ffb-bcf7-f953e11b4b52","text":"Public discussion of Casey DeSantis’s potential candidacy identified an additional plausible contender for the 2026 Republican nomination."}
+{"op":"edge","ref":"f5888b4a-e60d-4319-b9f4-f99b77773314","polarity":"SUPPORT","source":"a636a248-e8de-4ffb-bcf7-f953e11b4b52","target":"88628055-c013-4fcc-a51c-b19f700000a3"}
+{"op":"claim","ref":"f5b0aec4-2d80-4260-9176-f0fbc83a40af","text":"Public discussion of a potential candidacy does not establish that Casey DeSantis entered or won the 2026 Republican primary."}
+{"op":"edge","ref":"0c8f1ee2-6a21-4a5d-8f9b-f0ac04f9a347","polarity":"ATTACK","source":"f5b0aec4-2d80-4260-9176-f0fbc83a40af","target":"88628055-c013-4fcc-a51c-b19f700000a3"}
+{"op":"claim","ref":"17d5bd27-7ebe-48e1-ad46-8c67c5f8a54a","text":"A prominent partisan-loyalty signal does not establish Byron Donalds as Florida Republican primary voters' preferred candidate on qualifications, ideology, or state issues."}
+{"op":"edge","ref":"de5ccb5a-13ae-4251-a604-9efbdbd83543","polarity":"ATTACK","source":"17d5bd27-7ebe-48e1-ad46-8c67c5f8a54a","target":"a3c63cf5-ca30-4703-b06e-2f1b78b26009"}
+{"op":"claim","ref":"1034192d-cb3a-457c-a487-99918787bb43","text":"Byron Donalds held a wide polling lead over other declared candidates in multiple publicly released Florida Republican gubernatorial primary polls before September 2026."}
+{"op":"edge","ref":"6733950a-6084-4119-a186-c76f11234988","polarity":"SUPPORT","source":"1034192d-cb3a-457c-a487-99918787bb43","target":"cf3bc1c4-6918-4a08-ba40-9063c92b744e"}
+{"op":"claim","ref":"d84a4d0c-26bc-4492-b19d-36459b9bdb8b","text":"Florida's 2026 Republican gubernatorial primary had not occurred by September 28, 2026."}
+{"op":"edge","ref":"e739335d-927d-4506-a95c-b5b19da1ec96","polarity":"ATTACK","source":"d84a4d0c-26bc-4492-b19d-36459b9bdb8b","target":"cf3bc1c4-6918-4a08-ba40-9063c92b744e"}
+{"op":"claim","ref":"ba22c126-5cda-418a-8065-ecda10fbb4db","text":"Florida's Division of Elections website reported official primary election results for the Republican gubernatorial race in August 2026."}
+{"op":"edge","ref":"a9aff43d-595b-4f14-a411-7176d7f4575e","polarity":"ATTACK","source":"ba22c126-5cda-418a-8065-ecda10fbb4db","target":"93809cdc-7df3-446b-be87-6290ca29ca1e"}
+{"op":"claim","ref":"b1bd4593-5617-4b9e-ab35-b0be553a5324","text":"Florida Chief Financial Officer Jimmy Patronis was publicly floated as a potential 2026 Republican gubernatorial candidate as of 2025."}
+{"op":"edge","ref":"8f264999-90e9-4a44-8550-91448341b67d","polarity":"SUPPORT","source":"b1bd4593-5617-4b9e-ab35-b0be553a5324","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"31601901-1f1b-4267-b566-848d958496ee","text":"Byron Donalds won the endorsement of the Florida Republican Party's executive committee in 2025."}
+{"op":"edge","ref":"2b735f49-08ac-45bf-8579-3b880293d730","polarity":"ATTACK","source":"31601901-1f1b-4267-b566-848d958496ee","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"f8210dbf-edcc-4e0f-a0f5-1db2a864325f","text":"James Fishback secured President Donald Trump’s endorsement in Florida’s 2026 Republican gubernatorial primary."}
+{"op":"edge","ref":"b2261a9c-8be8-436c-9289-7f090c6e5af5","polarity":"SUPPORT","source":"f8210dbf-edcc-4e0f-a0f5-1db2a864325f","target":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91"}
+{"op":"claim","ref":"e2778a9a-d0ff-43dd-b7c3-30ffc7b699b7","text":"James Fishback trailed Byron Donalds by double digits in multiple polls of the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"58baba51-d091-46a9-a2bd-f8ad7f71af69","polarity":"ATTACK","source":"e2778a9a-d0ff-43dd-b7c3-30ffc7b699b7","target":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91"}
+{"op":"claim","ref":"1a6d47eb-74b8-494d-bcfc-7236f6ca075d","text":"Statewide name recognition among Republican primary voters is strongly correlated with winning gubernatorial primary elections in Florida."}
+{"op":"edge","ref":"3aeaa519-8fe7-4be6-af6c-389fce9293b5","polarity":"SUPPORT","source":"1a6d47eb-74b8-494d-bcfc-7236f6ca075d","target":"40652a1e-ca5c-4c74-938c-8f8ef54a93ad"}
+{"op":"claim","ref":"217bb49f-41a7-4a30-aec8-1382ca01bc90","text":"Statewide name recognition among Republican primary voters in Florida does not reliably translate into winning a multi-candidate 2026 gubernatorial primary."}
+{"op":"edge","ref":"0ac43d06-1d49-4461-9f01-407466000b1d","polarity":"ATTACK","source":"217bb49f-41a7-4a30-aec8-1382ca01bc90","target":"40652a1e-ca5c-4c74-938c-8f8ef54a93ad"}
+{"op":"claim","ref":"449b8b35-70ad-4c3c-97a0-68784970e1d3","text":"Under Florida election law, the winner of a party's gubernatorial primary becomes that party's nominee for the general election."}
+{"op":"edge","ref":"283d7ca6-c5d9-4e0b-ba4b-b3fbfdcefe31","polarity":"SUPPORT","source":"449b8b35-70ad-4c3c-97a0-68784970e1d3","target":"64f9f00c-c13a-410a-8412-b956cb6045d9"}
+{"op":"claim","ref":"b7430cc7-370f-4e0e-ab4e-d4daf3c47403","text":"A winning primary candidate can withdraw or be disqualified before the general election ballot is finalized, preventing them from becoming the nominee."}
+{"op":"edge","ref":"b0d06778-669d-425d-91de-a3d874e4b54b","polarity":"ATTACK","source":"b7430cc7-370f-4e0e-ab4e-d4daf3c47403","target":"64f9f00c-c13a-410a-8412-b956cb6045d9"}
+{"op":"claim","ref":"32743bae-914a-406e-b6a8-8572e147d7d9","text":"Byron Donalds raised more campaign funds than any other candidate in Florida's 2026 Republican gubernatorial primary as of September 2026."}
+{"op":"edge","ref":"ee58da19-1d4c-4666-8fa9-3270a0106ed4","polarity":"SUPPORT","source":"32743bae-914a-406e-b6a8-8572e147d7d9","target":"cf3bc1c4-6918-4a08-ba40-9063c92b744e"}
+{"op":"claim","ref":"5e60ddbc-2441-498e-b106-9844f93cc171","text":"Jay Collins appeared alongside Byron Donalds at a campaign event in 2025 billed as introducing Donalds' running mate for lieutenant governor."}
+{"op":"edge","ref":"9a265146-429e-41ae-9506-a2939ba5c7ed","polarity":"SUPPORT","source":"5e60ddbc-2441-498e-b106-9844f93cc171","target":"4be3bc38-aa1f-418b-9299-334e778b9526"}
+{"op":"claim","ref":"24ed80de-c1f9-4323-8b8d-f33859f9701a","text":"As of September 28, 2026, Byron Donalds has not publicly named a running mate for the 2026 Florida gubernatorial race."}
+{"op":"edge","ref":"9f17bd2e-ff57-40a2-ab49-993dd09db01e","polarity":"ATTACK","source":"24ed80de-c1f9-4323-8b8d-f33859f9701a","target":"4be3bc38-aa1f-418b-9299-334e778b9526"}
+{"op":"claim","ref":"8291631f-996f-42e9-8797-4f80cdae196f","text":"Lieutenant governors of Florida have historically had lower statewide voter recognition than elected constitutional officers such as the Attorney General or CFO."}
+{"op":"edge","ref":"ed573f0b-fe2f-4264-8024-9d953efcf9a7","polarity":"ATTACK","source":"8291631f-996f-42e9-8797-4f80cdae196f","target":"ea253e99-7393-4121-8787-d9d6d5865362"}
+{"op":"claim","ref":"5bb7ac98-ab36-4a3a-8c68-14e47eb48c7a","text":"Lieutenant-governor service does not establish that Jay Collins will enter the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"cd891016-2095-469b-8e47-06fc85520a51","polarity":"ATTACK","source":"5bb7ac98-ab36-4a3a-8c68-14e47eb48c7a","target":"0ac43d06-1d49-4461-9f01-407466000b1d"}
+{"op":"claim","ref":"1a85d1b3-27eb-44e6-937a-56c083dd0566","text":"Florida sets its statewide primary elections for governor in August of the election year under Florida Statutes."}
+{"op":"edge","ref":"abda7fc8-b929-4cae-bbce-e37389cb78df","polarity":"ATTACK","source":"1a85d1b3-27eb-44e6-937a-56c083dd0566","target":"d84a4d0c-26bc-4492-b19d-36459b9bdb8b"}
+{"op":"claim","ref":"40ee2552-4e18-4ade-b1d5-454b90530d2d","text":"Primary polling front-runners are nominated by their party in most contested primaries."}
+{"op":"edge","ref":"5edb06b5-c5b5-41bb-9f21-d91e4ecfa5bc","polarity":"SUPPORT","source":"40ee2552-4e18-4ade-b1d5-454b90530d2d","target":"666c8604-fe9d-45e7-8f4a-f5ae43cc1a49"}
+{"op":"claim","ref":"8e4b5383-b053-4f57-8cbf-31a718fbe683","text":"Florida's Republican gubernatorial primary has not yet been held as of the argument's cited polling in 2025 and 2026."}
+{"op":"edge","ref":"d6c9c32d-47ac-41de-a261-117c10f93c49","polarity":"ATTACK","source":"8e4b5383-b053-4f57-8cbf-31a718fbe683","target":"666c8604-fe9d-45e7-8f4a-f5ae43cc1a49"}
+{"op":"claim","ref":"31391619-5517-4951-a7b5-38b13d6da062","text":"Several statewide polls in 2025 showed Florida Agriculture Commissioner Wilton Simpson or other Republican candidates leading Byron Donalds in the gubernatorial primary field."}
+{"op":"edge","ref":"6910b410-d5c7-4176-9a2d-0bf07097094e","polarity":"ATTACK","source":"31391619-5517-4951-a7b5-38b13d6da062","target":"9d27f773-eae0-4761-84d0-c7e398c6275b"}
+{"op":"claim","ref":"a5e1f01a-b43e-4a73-9faa-6edf2fb0da10","text":"Florida state law schedules primary elections for the fourth Tuesday in August during even-numbered years."}
+{"op":"edge","ref":"ced5db82-a3aa-4a7f-bee5-5e547dd9eeaf","polarity":"SUPPORT","source":"a5e1f01a-b43e-4a73-9faa-6edf2fb0da10","target":"ba22c126-5cda-418a-8065-ecda10fbb4db"}
+{"op":"claim","ref":"1aadf1ea-21e6-4e48-a251-fdc5b7e368ee","text":"Florida's statewide primary elections are held on the fourth Tuesday of August in gubernatorial election years, placing the 2026 primary after the date referenced in the claim."}
+{"op":"edge","ref":"cf74fad4-eb2b-4d60-9a34-7c172b1443ed","polarity":"ATTACK","source":"1aadf1ea-21e6-4e48-a251-fdc5b7e368ee","target":"ced5db82-a3aa-4a7f-bee5-5e547dd9eeaf"}
+{"op":"claim","ref":"57993849-d512-44bd-8e2a-5e93eba3be33","text":"Florida's lieutenant governor participates in statewide public events and receives statewide media coverage while serving in office."}
+{"op":"edge","ref":"bb39cd55-665b-448d-afa2-54f77de8033e","polarity":"SUPPORT","source":"57993849-d512-44bd-8e2a-5e93eba3be33","target":"ea253e99-7393-4121-8787-d9d6d5865362"}
+{"op":"claim","ref":"18ca5c43-36cb-4f23-9eae-15d78e445c0f","text":"Jay Collins did not become Florida’s lieutenant governor until August 2025."}
+{"op":"edge","ref":"037e1328-99a1-4327-8824-dbb7a6813dfc","polarity":"ATTACK","source":"18ca5c43-36cb-4f23-9eae-15d78e445c0f","target":"ea253e99-7393-4121-8787-d9d6d5865362"}
+{"op":"claim","ref":"b6331b7f-c146-4fa1-ad3a-2a2c65b60dbb","text":"Statewide primary polls do not determine the Republican nominee when no candidate receives enough primary votes to win the nomination."}
+{"op":"edge","ref":"9c4a6af4-fcfb-4159-9fc8-625ae631daf3","polarity":"ATTACK","source":"b6331b7f-c146-4fa1-ad3a-2a2c65b60dbb","target":"5edb06b5-c5b5-41bb-9f21-d91e4ecfa5bc"}
+{"op":"claim","ref":"10ff303b-00ce-4386-b2f8-c42b936d98ac","text":"Florida's statewide primary elections are held in August, so the 2026 gubernatorial primary would occur in August 2026, before September 2026."}
+{"op":"edge","ref":"b98fe2dc-93e9-4819-be3b-2b5ccc246f22","polarity":"ATTACK","source":"10ff303b-00ce-4386-b2f8-c42b936d98ac","target":"93809cdc-7df3-446b-be87-6290ca29ca1e"}
+{"op":"claim","ref":"206281ad-35a6-400e-bbd2-1afb50b186c6","text":"Florida's statutory primary election date for statewide offices in 2026 falls in August, before September 2026."}
+{"op":"edge","ref":"c788f3b2-e2aa-4a48-b76f-a6e13da09b3e","polarity":"ATTACK","source":"206281ad-35a6-400e-bbd2-1afb50b186c6","target":"93809cdc-7df3-446b-be87-6290ca29ca1e"}
+{"op":"claim","ref":"d2b61904-5612-447a-823d-b5523d65667e","text":"A presidential primary endorsement from Donald Trump has historically increased the endorsed candidate's vote share and win rate in contested Florida Republican primaries."}
+{"op":"edge","ref":"a8ce3763-0818-46d3-9d21-f7d252b3d27c","polarity":"SUPPORT","source":"d2b61904-5612-447a-823d-b5523d65667e","target":"aaeb692e-8a32-434c-8ea8-827c40ebb22e"}
+{"op":"claim","ref":"26ce976c-55d1-4f3a-9653-97172a2ffe8e","text":"In multiple past Florida Republican primaries, Trump-endorsed candidates have lost to opponents in the primary election."}
+{"op":"edge","ref":"c8561a39-3f1b-42d9-b822-82b0d1e222f7","polarity":"ATTACK","source":"26ce976c-55d1-4f3a-9653-97172a2ffe8e","target":"aaeb692e-8a32-434c-8ea8-827c40ebb22e"}
+{"op":"claim","ref":"ca98dbc0-adf8-4c6b-b11e-aedc5493c377","text":"James Fishback raised more campaign contributions than Byron Donalds in at least one fundraising quarter of the 2026 Florida gubernatorial primary cycle."}
+{"op":"edge","ref":"604f8431-77cf-4dd0-8236-063be21cc3ef","polarity":"SUPPORT","source":"ca98dbc0-adf8-4c6b-b11e-aedc5493c377","target":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91"}
+{"op":"claim","ref":"6adce065-b096-4dd4-b783-6a9dbb378a03","text":"Byron Donalds raised more campaign funds than James Fishback in the 2026 Florida Republican gubernatorial primary as of mid-2026 FEC filings."}
+{"op":"edge","ref":"48a416c1-45e4-4632-994e-843ebb544244","polarity":"ATTACK","source":"6adce065-b096-4dd4-b783-6a9dbb378a03","target":"1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91"}
+{"op":"claim","ref":"e0fadf86-b96b-444c-ad5f-232ca1756621","text":"Donald Trump publicly endorsed Byron Donalds for Florida governor in an announcement on Truth Social in February 2025."}
+{"op":"edge","ref":"cecf3fb1-afeb-4936-b5b8-a8c08d9e243e","polarity":"SUPPORT","source":"e0fadf86-b96b-444c-ad5f-232ca1756621","target":"7ffcce3b-bcdc-451f-b430-b7aa22145c47"}
+{"op":"claim","ref":"963c668a-c199-47ff-a0ac-e9ca6b7eda9a","text":"Donald Trump has publicly stated he will remain neutral until closer to the 2026 Florida Republican gubernatorial primary."}
+{"op":"edge","ref":"3fad554e-31a5-410e-b031-40b5656aaad7","polarity":"ATTACK","source":"963c668a-c199-47ff-a0ac-e9ca6b7eda9a","target":"7ffcce3b-bcdc-451f-b430-b7aa22145c47"}
+{"op":"claim","ref":"0cea7141-cdae-4fe3-8ce8-3dd9ab203a56","text":"Jimmy Patronis endorsed Byron Donalds for the 2026 Republican gubernatorial nomination and did not enter the race himself, as of early 2026."}
+{"op":"edge","ref":"1c80d21e-c38d-429e-a194-e57e7885ecf9","polarity":"ATTACK","source":"0cea7141-cdae-4fe3-8ce8-3dd9ab203a56","target":"8cf0628f-86d4-48b7-ae0f-4ee2046feba6"}
+{"op":"claim","ref":"38ab6ccb-5b79-46dc-9be3-d2d20ccfba09","text":"A February 2025 Victory Insights statewide poll placed Byron Donalds first among likely Republican primary voters in a hypothetical gubernatorial field."}
+{"op":"edge","ref":"8440d4b4-6841-4102-af6a-56b38999b5a1","polarity":"SUPPORT","source":"38ab6ccb-5b79-46dc-9be3-d2d20ccfba09","target":"9d27f773-eae0-4761-84d0-c7e398c6275b"}
+{"op":"claim","ref":"7d244e91-8bca-4345-97a8-cb83d469b953","text":"No publicly documented statewide Florida Republican gubernatorial primary poll had been published in 2026 as of September 2026."}
+{"op":"edge","ref":"d706354c-b7db-409a-89ed-b13484351d83","polarity":"ATTACK","source":"7d244e91-8bca-4345-97a8-cb83d469b953","target":"9d27f773-eae0-4761-84d0-c7e398c6275b"}
+{"op":"claim","ref":"2eba7522-1709-488c-a049-35ca7ba108ad","text":"The Florida Division of Elections publishes certified election results through its official online Election Watch system after each statewide primary."}
+{"op":"edge","ref":"73453c94-d100-4a35-b9a5-037bba5d17fe","polarity":"SUPPORT","source":"2eba7522-1709-488c-a049-35ca7ba108ad","target":"ba22c126-5cda-418a-8065-ecda10fbb4db"}
+{"op":"claim","ref":"7c2aeb93-7fe6-4c2d-82f5-f59ec6c5c2ed","text":"Florida law scheduled the 2026 primary for August 18, 2026, rather than the fourth Tuesday of August."}
+{"op":"edge","ref":"8bd3e4a6-8c13-44c3-a826-5350f6a891a2","polarity":"SUPPORT","source":"7c2aeb93-7fe6-4c2d-82f5-f59ec6c5c2ed","target":"ba22c126-5cda-418a-8065-ecda10fbb4db"}

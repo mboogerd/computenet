@@ -1,0 +1,45 @@
+## Rater agreement
+opus: order-stable 67/71; order kappa 0.90
+sol: order-stable 67/71; order kappa 0.90
+opus vs sol (both stable, n=63): agree 61, kappa 0.94
+gold: 61 Counter({'ABSOLUTE': 31, 'COMPARATIVE': 28, 'MIXED': 2})
+author intent vs gold: Counter({('C', 'COM'): 28, ('A', 'ABS'): 23, ('M', 'ABS'): 8, ('C', 'MIX'): 1, ('M', 'MIX'): 1})
+dropped: [('Q3-10', 'M', 'MIX', 'UNS'), ('Q3-11', 'M', 'UNS', 'COM'), ('Q5-08', 'C', 'UNS', 'COM'), ('Q6-04', 'C', 'MIX', 'COM'), ('Q6-10', 'M', 'UNS', 'ABS'), ('Q7-00', 'A', 'ABS', 'UNS'), ('Q7-01', 'A', 'ABS', 'UNS'), ('Q7-03', 'A', 'ABS', 'UNS'), ('Q7-08', 'C', 'UNS', 'MIX'), ('Q7-09', 'M', 'ABS', 'COM')]
+
+## Jev vs gold (n abs=31, comp=28, mixed=2)
+| shape | AUC [95%] | kappa@.5 | mean judged on COMP (bias up) [95%] | 1-mean on ABS (bias down) | sd comp/abs | Brier | mean on MIXED | r vs rater abs (all 71) |
+|---|---|---|---|---|---|---|---|---|
+| noul|A | 0.99 [0.96,1.00] | 0.76 | 0.19 [0.17,0.23] | 0.32 | 0.08/0.19 | 0.093 | 0.35 | 0.86 |
+| noul|B | 0.96 [0.91,1.00] | 0.80 | 0.42 [0.39,0.45] | 0.20 | 0.09/0.15 | 0.121 | 0.71 | 0.84 |
+| score|A | 0.99 [0.96,1.00] | 0.83 | 0.14 [0.11,0.17] | 0.22 | 0.08/0.22 | 0.063 | 0.47 | 0.87 |
+| score|B | 0.99 [0.98,1.00] | 0.83 | 0.21 [0.18,0.24] | 0.20 | 0.09/0.18 | 0.062 | 0.51 | 0.88 |
+| noul | 0.98 [0.93,1.00] | 0.86 | 0.31 [0.28,0.34] | 0.26 | 0.08/0.17 | 0.098 | 0.53 | 0.86 |
+| score | 0.99 [0.98,1.00] | 0.83 | 0.17 [0.14,0.21] | 0.21 | 0.08/0.20 | 0.061 | 0.49 | 0.88 |
+| all | 0.99 [0.97,1.00] | 0.83 | 0.24 [0.21,0.27] | 0.23 | 0.08/0.18 | 0.075 | 0.51 | 0.88 |
+
+## paraphrase agreement (Pearson over 71 items)
+noul|A noul|B 0.94
+score|A score|B 0.99
+noul score 0.95
+
+## Calibration (shape 'all' and 'noul'): judged-absoluteness bin -> fraction ABSOLUTE among abs+comp gold
+noul [0.0,0.2) n=1 mean=0.14 frac_abs=0.00; [0.2,0.4) n=25 mean=0.29 frac_abs=0.04; [0.4,0.6) n=7 mean=0.47 frac_abs=0.57; [0.6,0.8) n=12 mean=0.70 frac_abs=1.00; [0.8,1.0) n=14 mean=0.89 frac_abs=1.00
+score [0.0,0.2) n=21 mean=0.14 frac_abs=0.00; [0.2,0.4) n=8 mean=0.28 frac_abs=0.25; [0.4,0.6) n=4 mean=0.43 frac_abs=0.75; [0.6,0.8) n=6 mean=0.75 frac_abs=1.00; [0.8,1.0) n=20 mean=0.91 frac_abs=1.00
+all [0.0,0.2) n=7 mean=0.16 frac_abs=0.00; [0.2,0.4) n=21 mean=0.26 frac_abs=0.05; [0.4,0.6) n=6 mean=0.48 frac_abs=0.83; [0.6,0.8) n=8 mean=0.74 frac_abs=1.00; [0.8,1.0) n=17 mean=0.89 frac_abs=1.00
+
+## Comparative-gold items Jev scored most absolute (shape all)
+  Q6-06 0.52 (noul 0.58 score 0.45) vs CL: The Chicxulub crater is dated to within 30,000 years of the extinction.
+  Q1-08 0.38 (noul 0.43 score 0.32) vs BR: The observed acceleration is fitted slightly better by a constant dark energy than by a growing one.
+  Q1-05 0.33 (noul 0.36 score 0.30) vs BR: Heat death is the outcome predicted by the simplest model that fits all current cosmological data (Lambda-CDM).
+  Q5-09 0.31 (noul 0.35 score 0.28) vs PY: Go produces a single static binary, which makes deployment simpler than with Python.
+  Q3-07 0.29 (noul 0.35 score 0.22) vs EQ: The last letters from Ugarit describe enemy ships attacking the coast.
+  Q5-07 0.29 (noul 0.41 score 0.16) vs JV: Python lets small teams ship a first version faster than Java does.
+  Q1-06 0.27 (noul 0.27 score 0.26) vs BR: Big Rip models need more free parameters than a cosmological constant, so Occam's razor favours heat death.
+  Q3-06 0.26 (noul 0.33 score 0.19) vs EQ: Evidence for the drought is stronger and more widespread than evidence for an earthquake storm.
+## Absolute-gold items Jev scored least absolute
+  Q7-10 0.32 (noul 0.30 score 0.34) vs LE: Leif Erikson was born in Iceland, a Norse settlement some count as part of North America.
+  Q1-02 0.40 (noul 0.51 score 0.30) vs HD: Dark energy has an equation-of-state parameter w that is less than -1 and stays below -1.
+  Q6-09 0.42 (noul 0.43 score 0.42) vs DV: The largest pulse of Deccan eruptions came after the impact, not before it.
+  Q6-03 0.43 (noul 0.43 score 0.43) vs CL: Dinosaur diversity was stable, not declining, in the ten million years before the extinction.
+  Q1-00 0.51 (noul 0.62 score 0.41) vs BR: Dark energy is a cosmological constant: its density stays exactly the same forever.
+  Q3-03 0.58 (noul 0.53 score 0.64) vs EQ: Bronze Age cities routinely rebuilt within a generation after earthquakes.

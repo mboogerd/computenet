@@ -1,0 +1,7 @@
+Citation check. For each of three attributions below, look up the primary source (arXiv abstract/HTML) and say whether the attributed claim is supported, with a short quote (<=15 words) as evidence. Verdict per item: VERIFIED / MISATTRIBUTED / NOT FOUND. Be terse.
+
+A. arXiv 2609.31215 "DIAL: Position-Debiased LLM Judges with Adaptive Human Preference Calibration" (Cai et al., 2026). Attributed claim: position bias in LLM judges is strongest when the quality gap between the two responses is small (close pairs).
+
+B. arXiv 2609.08016 "What Does Multi-Agent LLM Debate Actually Change?" (Chen Qian, 2026). Attributed claim: multi-agent debate is not reliably better than a single model or than repeated sampling.
+
+C. arXiv 2205.10932 Lertvittayakumjorn & Toni, "Argumentative Explanations for Pattern-Based Text Classifiers". Attributed claim: multi-rooted QBAFs for classifiers with one class node per label; pattern arguments attack/support class nodes; DF-QuAD applied once over the whole graph, no normalisation. If misattributed, name the paper that does match (candidate: arXiv 2609.02399 Yin, Potyka, Rago, Toni, contrastive explanations in QBAFs, or DAX arXiv 2012.05766).

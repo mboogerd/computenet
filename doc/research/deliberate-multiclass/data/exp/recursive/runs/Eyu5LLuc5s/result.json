@@ -1,0 +1,128 @@
+{
+ "root": "0314da93-7fe3-4f5c-a1f9-ef5f7913c924",
+ "outcome": "done",
+ "elapsed": 105.07744717597961,
+ "question": {
+  "root": "0314da93-7fe3-4f5c-a1f9-ef5f7913c924",
+  "text": "Who will be the 2026 Republican nominee for Governor of Florida?",
+  "claims": 90,
+  "active": false,
+  "yieldRounds": 27,
+  "yieldRecent": 0.11482813997395834,
+  "yieldEarlier": 0.14476402796052634,
+  "stoppedBy": "budget",
+  "paused": false,
+  "costUsd": 1.7089560979999996,
+  "projectedUsd": 1.7089560979999996,
+  "cost": {
+   "backends": [
+    {
+     "backend": "claude",
+     "models": [
+      "claude-sonnet-5"
+     ],
+     "calls": 73,
+     "inputTokens": 474575,
+     "cachedInputTokens": 327384,
+     "cacheWriteTokens": 147047,
+     "outputTokens": 3732,
+     "reasoningTokens": 334,
+     "usd": 0.6912727999999998,
+     "unpricedCalls": 0,
+     "rate": "as reported by Claude Code (total_cost_usd per call)",
+     "rateSource": "Claude Code CLI",
+     "assumed": false,
+     "note": "API-equivalent as reported by Claude Code; not your bill if you use a subscription."
+    },
+    {
+     "backend": "codex",
+     "models": [
+      "gpt-5.6-sol"
+     ],
+     "calls": 68,
+     "inputTokens": 898725,
+     "cachedInputTokens": 731008,
+     "cacheWriteTokens": 0,
+     "outputTokens": 2085,
+     "reasoningTokens": 0,
+     "usd": 1.0049712,
+     "unpricedCalls": 0,
+     "rate": "$4.00/1M input \u00b7 $0.40/1M cached input \u00b7 $20.00/1M output \u00b7 cache writes 1.25\u00d7 input \u00b7 prompts over 272K tokens 2\u00d7 input, 1.5\u00d7 output",
+     "rateSource": "developers.openai.com/api/docs/models/gpt-5.6-sol",
+     "rateDate": "2026-09-27",
+     "assumed": false,
+     "note": "Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21."
+    },
+    {
+     "backend": "jev",
+     "models": [
+      "jev-1.13.0"
+     ],
+     "calls": 316,
+     "inputTokens": 302669,
+     "cachedInputTokens": 0,
+     "cacheWriteTokens": 0,
+     "outputTokens": 25010,
+     "reasoningTokens": 0,
+     "usd": 0.012712098000000002,
+     "unpricedCalls": 0,
+     "rate": "$0.042/1M input \u00b7 output free",
+     "rateSource": "third-party: OpenRouter typesafe/jev-1.13, MindStudio",
+     "rateDate": "2026-09-27",
+     "assumed": true,
+     "note": "TypeSafe publishes no pricing; this is a third-party listing."
+    }
+   ],
+   "rounds": 38,
+   "queued": 0,
+   "perRoundUsd": 0.04497252889473684
+  },
+  "cruxes": [
+   "93809cdc-7df3-446b-be87-6290ca29ca1e",
+   "cf3bc1c4-6918-4a08-ba40-9063c92b744e",
+   "1b4fe2e7-dfb0-40e7-af4a-fa95895b2f91"
+  ],
+  "verdictsDisagree": false,
+  "framing": {
+   "mode": "POSITIONS",
+   "positions": [
+    {
+     "ref": "2cf9c5c3-a28d-4198-a2ab-19deddd34499",
+     "text": "Byron Donalds is the 2026 Republican nominee for Governor of Florida.",
+     "credence": 0.5825230607641727,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5825230607641727,
+     "verdictsDisagree": false,
+     "share": 0.34860026824351786
+    },
+    {
+     "ref": "0790b144-5b65-47f9-ab9b-3d095bb8465a",
+     "text": "James Fishback is the 2026 Republican nominee for Governor of Florida.",
+     "credence": 0.49498966977943215,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.49498966977943215,
+     "verdictsDisagree": false,
+     "share": 0.24487415959781084
+    },
+    {
+     "ref": "76dcfeff-f95e-434d-b0f5-81a0bbd28302",
+     "text": "Jay Collins is the 2026 Republican nominee for Governor of Florida.",
+     "credence": 0.32747438623716124,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.32747438623716124,
+     "verdictsDisagree": false,
+     "share": 0.12165097450784033
+    },
+    {
+     "ref": "8cf0628f-86d4-48b7-ae0f-4ee2046feba6",
+     "text": "Someone other than Byron Donalds, James Fishback and Jay Collins is the 2026 Republican nominee for Governor of Florida.",
+     "credence": 0.5327686233426262,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5327686233426262,
+     "verdictsDisagree": false,
+     "share": 0.284874597650831
+    }
+   ]
+  }
+ }
+}

@@ -48,8 +48,11 @@ value of information.
   around an LLM first impression, in the spirit of model D;
 - **not** building it as an accuracy engine that replaces asking the model.
 
-Whether an accuracy claim is achievable is still open. It would need a harder
-question set and contrastive arguments at depth (§8.3).
+The negative accuracy result applies **only to the algorithms tested**
+(§8.3). The combination read-out, the judgment mapping and the use of the prior
+can be re-tested offline from the committed data (`data/DATA.md`). The most
+promising untested changes need new generation: contrastive arguments at depth,
+a budget spent on decisive claims, and a harder question set (§8.3–8.4).
 
 ---
 
@@ -549,7 +552,37 @@ add knowledge beyond the proposer's. The only positive signals are:
 
 Both are too rare to move averages at these n.
 
-### 8.3 What would change the conclusion
+### 8.3 Scope of the negative result: it is about *these* algorithms
+
+The accuracy findings in §7 hold only for the algorithms tested. They are **not**
+evidence that argue/judge/propagate cannot beat a direct LLM answer. The table
+lists what was held fixed, and what it would cost to test a change using the
+stored data in `data/` (see `data/DATA.md`).
+
+| Held fixed in the tested pipeline | Plausible change | Cost to test |
+|---|---|---|
+| Combination: closed-world LL, woe+mlp log-pool, energy = strength × credence, one CV scale per arm | Likelihood/bayesVE member, DS, pairwise-from-bear, per-domain scale, redundancy damping between correlated claims | **Offline**, from caches |
+| Bearing→κ mapping (fixed; see `exp/e2e/analyze.py` docstring); OUTSIDE_MY_KNOWLEDGE claims withheld at 0.5 | Other mappings; drop or down-weight unknown claims; use plausibility confidence | **Offline** |
+| Prior arm: log π from the Opus distribution + CV-scaled adjustment | Temper the prior by argument agreement; switch prior and arguments by disagreement; model-D-style "arguments alone" as a separate view | **Offline** |
+| Recursive trees: aggregation of per-position credences | Other read-outs of the same trees | **Offline** (`graph.json`) |
+| Recursive trees: today's layer semantics inside the trees | Different semantics, clamps, K-class propagation | Offline in principle, via engine replay of the journaled structure + Jev stances (DUR-01); not exercised |
+| Jev shape `instr` bear (graded, one call per claim for all classes) | `lik`, `compat` + placebo, pairwise, new wording | New **Jev calls only** (cents) on the same claims |
+| One-level proposer: Opus, about 10 atomic claims, sees all classes | Instruct for discriminating / eliminating / none-of-these claims; more claims; several proposers | New generation |
+| Recursive run: per-position trees, default proposers (Sonnet 5 + Sol), today's exploration policy (linearised p-weighted VoI, i.e. bug `computenet-dw2wh`), link exploration on, 90-claim budget | **Contrastive recursion** (sub-arguments that bear on several classes); exact q-weighted eTV VoI; budget steered away from link arguments and undercutters toward decisive claims | New generation (exploration order decides which claims exist) |
+| Knowledge only from the models themselves | Evidence retrieval, which gives knowledge the proposer lacks | New generation |
+| Question sets: future events (Jev can't judge) and knowledge questions (Opus 90% correct) | A set where Opus gets about 50% and Jev has the knowledge | New generation |
+
+The two most promising changes by the evidence both need new generation:
+
+- **Contrastive arguments at depth.** Per-position trees had no discriminating
+  arguments and lost to one level of contrastive arguments (§7.3).
+- **A budget that goes to decisive claims.** In the recursive runs, 70–79 of 90
+  claims ended BUDGET, mostly spent on link arguments and undercutters.
+
+Of the offline changes, prior tempering and handling OUTSIDE_MY_KNOWLEDGE are
+the cheapest first checks.
+
+### 8.4 What would change the conclusion
 
 - A harder question set, where Opus direct gets about 50% top-1. Both sets
   here were either too easy (knowledge, 90%) or out of Jev's knowledge
@@ -654,9 +687,14 @@ option.
 
 ## 11. Artefacts and reproduction
 
-The experiment data is **not in git**. It is in `data/deliberate-multiclass/`
-at the repository root on the machine that ran it (MacBoo), excluded through
-`.git/info/exclude`. About 20 MB. Layout:
+The experiment data is committed next to this report in
+[`data/`](data/), about 25 MB on disk and 1.9 MB compressed. It includes every
+model output and judgment, so algorithm changes can be re-evaluated **without
+regenerating anything**. [`data/DATA.md`](data/DATA.md) is the replay guide: it
+says which changes are offline, which need Jev calls only, and which need new
+generation, and what was left out and how to regenerate it. Re-running the
+three accuracy analyses offline reproduces the committed results exactly.
+Layout:
 
 | Path | Content |
 |---|---|

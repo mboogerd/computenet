@@ -1,0 +1,7 @@
+    15s claims=18 active=True cost=$0.170 stopped=None
+    30s claims=36 active=True cost=$0.421 stopped=None
+    45s claims=54 active=True cost=$0.685 stopped=None
+    60s claims=72 active=True cost=$0.971 stopped=None
+    75s claims=87 active=True cost=$1.211 stopped=None
+    90s claims=90 active=False cost=$1.397 stopped=budget
+OUTCOME done cost 1.3974035200000001 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "bb0b00d0-cff7-4dcb-9891-2604b12626eb", "text": "The Jan Henric Buettner and Malcolm Pein ticket wins the 2026 FIDE presidential election.", "credence": 0.3418013386135157, "firstImpression": 0.5, "neutralCredence": 0.3418013386135157, "verdictsDisagree": false, "share": 0.14244355218412819}, {"ref": "c041e83b-439b-44ac-91a5-83dae5d899e9", "text": "The Wadim Rosenstein and Gordon Tang ticket wins the 2026 FIDE presidential election.", "credence": 0.5508425830561038, "firstImpression": 0.5, "neutralCredence": 0.5508425830561038, "verdictsDisagree": fa

@@ -1,0 +1,8 @@
+    15s claims=15 active=True cost=$0.124 stopped=None
+    30s claims=32 active=True cost=$0.402 stopped=None
+    45s claims=46 active=True cost=$0.691 stopped=None
+    60s claims=65 active=True cost=$0.961 stopped=None
+    75s claims=82 active=True cost=$1.196 stopped=None
+    90s claims=90 active=True cost=$1.533 stopped=budget
+   105s claims=90 active=False cost=$1.545 stopped=budget
+OUTCOME done cost 1.5447867220000002 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "4c05db3b-e652-4708-95db-eee86f364327", "text": "The Arizona Diamondbacks win the 2026 MLB National League West division.", "credence": 0.5199882461736448, "firstImpression": 0.5, "neutralCredence": 0.5199882461736448, "verdictsDisagree": false, "share": 0.15890378201240493}, {"ref": "b3da249c-9ca7-4aad-8f8d-07e3f30dd559", "text": "The Colorado Rockies win the 2026 MLB National League West division.", "credence": 0.2881483205751421, "firstImpression": 0.5, "neutralCredence": 0.2881483205751421, "verdictsDisagree": false, "share": 0.059377123900512266

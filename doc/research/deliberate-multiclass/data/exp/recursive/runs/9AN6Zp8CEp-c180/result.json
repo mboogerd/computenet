@@ -1,0 +1,137 @@
+{
+ "root": "b4975ec6-1fa5-44e7-b9b3-ebac8bb2a77b",
+ "outcome": "done",
+ "elapsed": 180.15760612487793,
+ "question": {
+  "root": "b4975ec6-1fa5-44e7-b9b3-ebac8bb2a77b",
+  "text": "Which team will win the 2026 FIFA World Cup?",
+  "claims": 180,
+  "active": false,
+  "yieldRounds": 62,
+  "yieldRecent": 0.05590121875000001,
+  "yieldEarlier": 0.11045858535879631,
+  "stoppedBy": "budget",
+  "paused": false,
+  "costUsd": 3.7993967079999997,
+  "projectedUsd": 3.7993967079999997,
+  "cost": {
+   "backends": [
+    {
+     "backend": "claude",
+     "models": [
+      "claude-sonnet-5"
+     ],
+     "calls": 143,
+     "inputTokens": 941689,
+     "cachedInputTokens": 639212,
+     "cacheWriteTokens": 302193,
+     "outputTokens": 7833,
+     "reasoningTokens": 865,
+     "usd": 1.4155123999999997,
+     "unpricedCalls": 0,
+     "rate": "as reported by Claude Code (total_cost_usd per call)",
+     "rateSource": "Claude Code CLI",
+     "assumed": false,
+     "note": "API-equivalent as reported by Claude Code; not your bill if you use a subscription."
+    },
+    {
+     "backend": "codex",
+     "models": [
+      "gpt-5.6-sol"
+     ],
+     "calls": 131,
+     "inputTokens": 1579259,
+     "cachedInputTokens": 1122944,
+     "cacheWriteTokens": 0,
+     "outputTokens": 4137,
+     "reasoningTokens": 0,
+     "usd": 2.3571776000000004,
+     "unpricedCalls": 0,
+     "rate": "$4.00/1M input \u00b7 $0.40/1M cached input \u00b7 $20.00/1M output \u00b7 cache writes 1.25\u00d7 input \u00b7 prompts over 272K tokens 2\u00d7 input, 1.5\u00d7 output",
+     "rateSource": "developers.openai.com/api/docs/models/gpt-5.6-sol",
+     "rateDate": "2026-09-27",
+     "assumed": false,
+     "note": "Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21."
+    },
+    {
+     "backend": "jev",
+     "models": [
+      "jev-1.13.0"
+     ],
+     "calls": 638,
+     "inputTokens": 635874,
+     "cachedInputTokens": 0,
+     "cacheWriteTokens": 0,
+     "outputTokens": 52078,
+     "reasoningTokens": 0,
+     "usd": 0.026706708000000003,
+     "unpricedCalls": 0,
+     "rate": "$0.042/1M input \u00b7 output free",
+     "rateSource": "third-party: OpenRouter typesafe/jev-1.13, MindStudio",
+     "rateDate": "2026-09-27",
+     "assumed": true,
+     "note": "TypeSafe publishes no pricing; this is a third-party listing."
+    }
+   ],
+   "rounds": 77,
+   "queued": 0,
+   "perRoundUsd": 0.04934281438961039
+  },
+  "cruxes": [
+   "d68ee221-0331-4ff9-9041-cc06e3ac924b",
+   "226eb6e1-811a-4781-a810-fbf3ae10d299",
+   "5387e951-401c-417f-9dca-f1a4cdf32941"
+  ],
+  "verdictsDisagree": false,
+  "framing": {
+   "mode": "POSITIONS",
+   "positions": [
+    {
+     "ref": "60294330-2126-44db-a8eb-8b532cde4ea9",
+     "text": "Spain wins the 2026 FIFA World Cup.",
+     "credence": 0.5300985916895506,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5300985916895506,
+     "verdictsDisagree": false,
+     "share": 0.21648652617823647
+    },
+    {
+     "ref": "cdb96c8f-2a00-46f3-8d32-a968876e738f",
+     "text": "France wins the 2026 FIFA World Cup.",
+     "credence": 0.48459044837759513,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.48459044837759513,
+     "verdictsDisagree": false,
+     "share": 0.18042775890402185
+    },
+    {
+     "ref": "9f42d81a-8643-491d-b596-e871e9366424",
+     "text": "England wins the 2026 FIFA World Cup.",
+     "credence": 0.47868808955431114,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.47868808955431114,
+     "verdictsDisagree": false,
+     "share": 0.17621218734450095
+    },
+    {
+     "ref": "3f22af7c-841c-46c2-bc15-2d7e98beb5d2",
+     "text": "Argentina wins the 2026 FIFA World Cup.",
+     "credence": 0.4965641417163848,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.4965641417163848,
+     "verdictsDisagree": false,
+     "share": 0.1892832467314028
+    },
+    {
+     "ref": "aa8f8f2f-bf3e-44fa-82c1-efbbf507e74f",
+     "text": "A team other than Spain, France, England and Argentina wins the 2026 FIFA World Cup.",
+     "credence": 0.5531878752782217,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5531878752782217,
+     "verdictsDisagree": false,
+     "share": 0.23759028084183792
+    }
+   ]
+  }
+ }
+}

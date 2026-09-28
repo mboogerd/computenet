@@ -1,0 +1,82 @@
+{
+ "order": [
+  "MARINE",
+  "FISH",
+  "MAMMAL"
+ ],
+ "ratings": {
+  "d1": {
+   "MARINE": "0",
+   "FISH": "--",
+   "MAMMAL": "+"
+  },
+  "d2": {
+   "MARINE": "0",
+   "FISH": "--",
+   "MAMMAL": "++"
+  },
+  "d3": {
+   "MARINE": "++",
+   "FISH": "0",
+   "MAMMAL": "0"
+  },
+  "d4": {
+   "MARINE": "+",
+   "FISH": "-",
+   "MAMMAL": "+"
+  },
+  "d5": {
+   "MARINE": "0",
+   "FISH": "-",
+   "MAMMAL": "+"
+  },
+  "d6": {
+   "MARINE": "+",
+   "FISH": "+",
+   "MAMMAL": "0"
+  },
+  "d7": {
+   "MARINE": "0",
+   "FISH": "-",
+   "MAMMAL": "+"
+  },
+  "d8": {
+   "MARINE": "0",
+   "FISH": "--",
+   "MAMMAL": "+"
+  }
+ },
+ "contested": {
+  "d1": {
+   "MARINE": "air-breathing might slightly suggest a non-marine animal (-), or blowholes suggest cetaceans (+)",
+   "FISH": "lungfish breathe air, so some would rate '-'",
+   "MAMMAL": "the blowhole is cetacean-specific, so some would rate '++'"
+  },
+  "d2": {
+   "FISH": "follows by entailment from mammal; some might rate '-' since the claim does not directly address fish"
+  },
+  "d3": {
+   "FISH": "living in the sea might slightly favour fish (+)"
+  },
+  "d4": {
+   "FISH": "fluke orientation strongly marks cetaceans, so '--' is arguable",
+   "MAMMAL": "could be '++', since horizontal flukes are distinctive to marine mammals",
+   "MARINE": "flukes imply an aquatic but not necessarily marine animal; '0' is arguable"
+  },
+  "d5": {
+   "FISH": "some fish (tuna, opah) are partly warm-blooded, so '-' rather than '--'; others would choose '--'",
+   "MAMMAL": "birds are also warm-blooded, so not '++'"
+  },
+  "d6": {
+   "MAMMAL": "fins might slightly count against mammal (-)",
+   "MARINE": "could be '0', since freshwater animals also have fins"
+  },
+  "d7": {
+   "FISH": "some sharks and guppies bear live young, hence '-' not '--'",
+   "MAMMAL": "some might rate '++'"
+  },
+  "d8": {
+   "FISH": "lacking gills essentially rules out fish; lungfish still have gills"
+  }
+ }
+}

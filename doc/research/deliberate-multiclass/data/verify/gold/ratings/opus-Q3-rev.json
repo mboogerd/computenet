@@ -1,0 +1,112 @@
+{
+ "order": [
+  "NONE",
+  "EQ",
+  "DR",
+  "SP"
+ ],
+ "ratings": {
+  "b1": {
+   "NONE": "-",
+   "EQ": "-",
+   "DR": "+",
+   "SP": "-"
+  },
+  "b2": {
+   "NONE": "0",
+   "EQ": "-",
+   "DR": "-",
+   "SP": "+"
+  },
+  "b3": {
+   "NONE": "+",
+   "EQ": "+",
+   "DR": "+",
+   "SP": "-"
+  },
+  "b4": {
+   "NONE": "-",
+   "EQ": "-",
+   "DR": "+",
+   "SP": "-"
+  },
+  "b5": {
+   "NONE": "+",
+   "EQ": "0",
+   "DR": "+",
+   "SP": "0"
+  },
+  "b6": {
+   "NONE": "+",
+   "EQ": "0",
+   "DR": "0",
+   "SP": "0"
+  },
+  "b7": {
+   "NONE": "0",
+   "EQ": "-",
+   "DR": "-",
+   "SP": "+"
+  },
+  "b8": {
+   "NONE": "0",
+   "EQ": "+",
+   "DR": "-",
+   "SP": "-"
+  },
+  "b9": {
+   "NONE": "0",
+   "EQ": "0",
+   "DR": "-",
+   "SP": "0"
+  },
+  "b10": {
+   "NONE": "++",
+   "EQ": "--",
+   "DR": "--",
+   "SP": "--"
+  }
+ },
+ "contested": {
+  "b1": {
+   "NONE": "could be 0: drought evidence fits multi-causal accounts equally",
+   "EQ": "could be 0: drought evidence need not bear on earthquakes"
+  },
+  "b2": {
+   "NONE": "could be -: supports a single invader cause over a mix",
+   "EQ": "could be 0: attack on Egypt says little about quake damage elsewhere",
+   "DR": "could be 0: raids are compatible with drought-driven migration"
+  },
+  "b3": {
+   "NONE": "could be 0: absence of warfare traces does not favour multiple causes",
+   "DR": "could be 0: famine explains the lack of destruction debris only weakly"
+  },
+  "b4": {
+   "DR": "could be ++: it makes drought the root cause of the invasions too",
+   "SP": "could be --: invasions become a proximate effect rather than the primary cause",
+   "NONE": "could be +: it describes an interacting causal chain"
+  },
+  "b5": {
+   "EQ": "could be +: an earthquake storm is spread over decades",
+   "SP": "could be +: waves of raids",
+   "DR": "could be 0"
+  },
+  "b6": {
+   "NONE": "could be 0: cascade can amplify any single primary trigger"
+  },
+  "b8": {
+   "DR": "could be 0: quake damage does not bear on drought",
+   "SP": "could be 0"
+  },
+  "b9": {
+   "DR": "could be 0: regional drought may have spared the Nile valley; SP could be - since Egypt repelled them",
+   "SP": "could be -: Egypt repelled the attackers and survived"
+  },
+  "b10": {
+   "NONE": "could be +: a single cause could still act differently at different sites",
+   "EQ": "could be -: exceptional multi-region cause possible",
+   "DR": "could be -: drought is regional-wide and could reach all three sites",
+   "SP": "could be -"
+  }
+ }
+}

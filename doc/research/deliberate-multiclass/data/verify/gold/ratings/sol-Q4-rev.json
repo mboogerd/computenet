@@ -1,0 +1,69 @@
+{
+ "order": [
+  "MARINE",
+  "FISH",
+  "MAMMAL"
+ ],
+ "ratings": {
+  "d1": {
+   "MARINE": "+",
+   "FISH": "--",
+   "MAMMAL": "++"
+  },
+  "d2": {
+   "MARINE": "0",
+   "FISH": "--",
+   "MAMMAL": "++"
+  },
+  "d3": {
+   "MARINE": "++",
+   "FISH": "+",
+   "MAMMAL": "-"
+  },
+  "d4": {
+   "MARINE": "+",
+   "FISH": "--",
+   "MAMMAL": "++"
+  },
+  "d5": {
+   "MARINE": "0",
+   "FISH": "-",
+   "MAMMAL": "+"
+  },
+  "d6": {
+   "MARINE": "+",
+   "FISH": "+",
+   "MAMMAL": "-"
+  },
+  "d7": {
+   "MARINE": "0",
+   "FISH": "-",
+   "MAMMAL": "+"
+  },
+  "d8": {
+   "MARINE": "0",
+   "FISH": "--",
+   "MAMMAL": "+"
+  }
+ },
+ "contested": {
+  "d1": {
+   "MARINE": "Could be 0 because a blowhole indicates aquatic life but not specifically saltwater."
+  },
+  "d3": {
+   "FISH": "Could be 0 because marine habitat alone does not establish fish taxonomy.",
+   "MAMMAL": "Could be 0 because fully marine mammals are a well-established group."
+  },
+  "d4": {
+   "MARINE": "Could be 0 because horizontal flukes indicate aquatic locomotion, not specifically life at sea.",
+   "MAMMAL": "Could be + because horizontal flukes are highly diagnostic of living marine mammals but not definitionally exclusive to mammals."
+  },
+  "d6": {
+   "MARINE": "Could be 0 because streamlined, finned animals can inhabit fresh water.",
+   "MAMMAL": "Could be 0 because aquatic mammals commonly have streamlined bodies and structures called fins."
+  },
+  "d7": {
+   "FISH": "Could be 0 because live-bearing occurs in numerous fish lineages."
+  }
+ }
+}

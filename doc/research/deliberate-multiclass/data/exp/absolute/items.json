@@ -1,0 +1,499 @@
+[
+ {
+  "id": "Q1-00",
+  "qid": "Q1",
+  "claim": "Dark energy is a cosmological constant: its density stays exactly the same forever.",
+  "cls": "BR",
+  "intent": "A"
+ },
+ {
+  "id": "Q1-01",
+  "qid": "Q1",
+  "claim": "The expansion of the universe is accelerating now and will keep accelerating forever.",
+  "cls": "BC",
+  "intent": "A"
+ },
+ {
+  "id": "Q1-02",
+  "qid": "Q1",
+  "claim": "Dark energy has an equation-of-state parameter w that is less than -1 and stays below -1.",
+  "cls": "HD",
+  "intent": "A"
+ },
+ {
+  "id": "Q1-03",
+  "qid": "Q1",
+  "claim": "Dark energy will decay and turn negative within 20 billion years, halting and reversing the expansion.",
+  "cls": "BR",
+  "intent": "A"
+ },
+ {
+  "id": "Q1-04",
+  "qid": "Q1",
+  "claim": "A Big Rip needs dark energy whose density grows over time, and no known physical field behaves that way without instabilities.",
+  "cls": "BR",
+  "intent": "A"
+ },
+ {
+  "id": "Q1-05",
+  "qid": "Q1",
+  "claim": "Heat death is the outcome predicted by the simplest model that fits all current cosmological data (Lambda-CDM).",
+  "cls": "BR",
+  "intent": "C"
+ },
+ {
+  "id": "Q1-06",
+  "qid": "Q1",
+  "claim": "Big Rip models need more free parameters than a cosmological constant, so Occam's razor favours heat death.",
+  "cls": "BR",
+  "intent": "C"
+ },
+ {
+  "id": "Q1-07",
+  "qid": "Q1",
+  "claim": "Most cosmologists consider heat death the most likely fate of the universe.",
+  "cls": "BC",
+  "intent": "C"
+ },
+ {
+  "id": "Q1-08",
+  "qid": "Q1",
+  "claim": "The observed acceleration is fitted slightly better by a constant dark energy than by a growing one.",
+  "cls": "BR",
+  "intent": "C"
+ },
+ {
+  "id": "Q1-09",
+  "qid": "Q1",
+  "claim": "Heat death follows from well-tested thermodynamics, while a Big Crunch relies on speculative future changes in dark energy.",
+  "cls": "BC",
+  "intent": "C"
+ },
+ {
+  "id": "Q1-10",
+  "qid": "Q1",
+  "claim": "The universe is measured to be spatially flat to within 0.2%, while classic Big Crunch models assume a closed universe.",
+  "cls": "BC",
+  "intent": "M"
+ },
+ {
+  "id": "Q1-11",
+  "qid": "Q1",
+  "claim": "Recent survey results hint that dark energy is weakening over time.",
+  "cls": "BR",
+  "intent": "M"
+ },
+ {
+  "id": "Q2-00",
+  "qid": "Q2",
+  "claim": "National law in this country forbids municipalities from charging fees for the use of public roads.",
+  "cls": "CC",
+  "intent": "A"
+ },
+ {
+  "id": "Q2-01",
+  "qid": "Q2",
+  "claim": "The city's budget cannot fund any new bus or tram service in the next five years, and no outside funding is available.",
+  "cls": "PT",
+  "intent": "A"
+ },
+ {
+  "id": "Q2-02",
+  "qid": "Q2",
+  "claim": "The centre has almost no on-street parking; nearly all parking is in private garages the city cannot regulate.",
+  "cls": "PK",
+  "intent": "A"
+ },
+ {
+  "id": "Q2-03",
+  "qid": "Q2",
+  "claim": "Trials in comparable cities found that congestion charges did not reduce central car traffic at all.",
+  "cls": "CC",
+  "intent": "A"
+ },
+ {
+  "id": "Q2-04",
+  "qid": "Q2",
+  "claim": "Congestion charges are unpopular and have been voted down in referenda in several cities.",
+  "cls": "CC",
+  "intent": "A"
+ },
+ {
+  "id": "Q2-05",
+  "qid": "Q2",
+  "claim": "A congestion charge reduces central car traffic more per euro spent than any other measure.",
+  "cls": "PT",
+  "intent": "C"
+ },
+ {
+  "id": "Q2-06",
+  "qid": "Q2",
+  "claim": "Protected cycle lanes are much cheaper to build than new tram lines.",
+  "cls": "PT",
+  "intent": "C"
+ },
+ {
+  "id": "Q2-07",
+  "qid": "Q2",
+  "claim": "Parking reform can be implemented faster than a congestion charge.",
+  "cls": "CC",
+  "intent": "C"
+ },
+ {
+  "id": "Q2-08",
+  "qid": "Q2",
+  "claim": "Expanding public transport is more popular with voters than a congestion charge.",
+  "cls": "CC",
+  "intent": "C"
+ },
+ {
+  "id": "Q2-09",
+  "qid": "Q2",
+  "claim": "In cities of this size, cycling investments achieved larger traffic reductions than bus expansions.",
+  "cls": "PT",
+  "intent": "C"
+ },
+ {
+  "id": "Q2-10",
+  "qid": "Q2",
+  "claim": "A congestion charge also raises revenue that could fund the other measures.",
+  "cls": "PK",
+  "intent": "C"
+ },
+ {
+  "id": "Q2-11",
+  "qid": "Q2",
+  "claim": "Many residents live beyond cycling distance of the centre, so cycle lanes would change only a small share of car trips.",
+  "cls": "CY",
+  "intent": "M"
+ },
+ {
+  "id": "Q2-12",
+  "qid": "Q2",
+  "claim": "The centre's streets are narrow, so protected cycle lanes would require removing bus lanes as well as car lanes.",
+  "cls": "CY",
+  "intent": "M"
+ },
+ {
+  "id": "Q3-00",
+  "qid": "Q3",
+  "claim": "Pollen cores show no drought in the eastern Mediterranean between 1250 and 1100 BCE.",
+  "cls": "DR",
+  "intent": "A"
+ },
+ {
+  "id": "Q3-01",
+  "qid": "Q3",
+  "claim": "Destruction layers at the affected cities show no signs of seismic damage.",
+  "cls": "EQ",
+  "intent": "A"
+ },
+ {
+  "id": "Q3-02",
+  "qid": "Q3",
+  "claim": "The Sea Peoples appear in Egyptian records only after most of the affected cities had already been abandoned.",
+  "cls": "SP",
+  "intent": "A"
+ },
+ {
+  "id": "Q3-03",
+  "qid": "Q3",
+  "claim": "Bronze Age cities routinely rebuilt within a generation after earthquakes.",
+  "cls": "EQ",
+  "intent": "A"
+ },
+ {
+  "id": "Q3-04",
+  "qid": "Q3",
+  "claim": "Egyptian inscriptions at Medinet Habu explicitly describe invasions by the Sea Peoples.",
+  "cls": "DR",
+  "intent": "C"
+ },
+ {
+  "id": "Q3-05",
+  "qid": "Q3",
+  "claim": "Most historians today give more weight to climate than to invasions.",
+  "cls": "SP",
+  "intent": "C"
+ },
+ {
+  "id": "Q3-06",
+  "qid": "Q3",
+  "claim": "Evidence for the drought is stronger and more widespread than evidence for an earthquake storm.",
+  "cls": "EQ",
+  "intent": "C"
+ },
+ {
+  "id": "Q3-07",
+  "qid": "Q3",
+  "claim": "The last letters from Ugarit describe enemy ships attacking the coast.",
+  "cls": "EQ",
+  "intent": "C"
+ },
+ {
+  "id": "Q3-08",
+  "qid": "Q3",
+  "claim": "Hittite texts from the period request urgent grain shipments from Egypt.",
+  "cls": "SP",
+  "intent": "C"
+ },
+ {
+  "id": "Q3-09",
+  "qid": "Q3",
+  "claim": "Drought evidence is found across the whole region, whereas earthquake damage is found at only some sites.",
+  "cls": "EQ",
+  "intent": "M"
+ },
+ {
+  "id": "Q3-10",
+  "qid": "Q3",
+  "claim": "The Sea Peoples were themselves probably refugees displaced by famine in their homelands.",
+  "cls": "SP",
+  "intent": "M"
+ },
+ {
+  "id": "Q3-11",
+  "qid": "Q3",
+  "claim": "Arrowheads are found embedded in the walls of several destroyed cities.",
+  "cls": "EQ",
+  "intent": "M"
+ },
+ {
+  "id": "Q5-00",
+  "qid": "Q5",
+  "claim": "None of the five engineers knows Java, and the startup cannot afford to hire anyone who does.",
+  "cls": "JV",
+  "intent": "A"
+ },
+ {
+  "id": "Q5-01",
+  "qid": "Q5",
+  "claim": "The product depends on a numerical library that exists only as a Python package, with no bindings for Go.",
+  "cls": "GO",
+  "intent": "A"
+ },
+ {
+  "id": "Q5-02",
+  "qid": "Q5",
+  "claim": "Go's database tooling is immature, so the team would hand-write large amounts of data-access code.",
+  "cls": "GO",
+  "intent": "A"
+ },
+ {
+  "id": "Q5-03",
+  "qid": "Q5",
+  "claim": "The investors' contract forbids interpreted languages in production.",
+  "cls": "PY",
+  "intent": "A"
+ },
+ {
+  "id": "Q5-04",
+  "qid": "Q5",
+  "claim": "Go programs usually run faster than equivalent Python programs.",
+  "cls": "PY",
+  "intent": "C"
+ },
+ {
+  "id": "Q5-05",
+  "qid": "Q5",
+  "claim": "Python has more web-framework options than Go.",
+  "cls": "GO",
+  "intent": "C"
+ },
+ {
+  "id": "Q5-06",
+  "qid": "Q5",
+  "claim": "Java has a larger hiring pool than Go in most markets.",
+  "cls": "GO",
+  "intent": "C"
+ },
+ {
+  "id": "Q5-07",
+  "qid": "Q5",
+  "claim": "Python lets small teams ship a first version faster than Java does.",
+  "cls": "JV",
+  "intent": "C"
+ },
+ {
+  "id": "Q5-08",
+  "qid": "Q5",
+  "claim": "The team's two senior engineers each have ten years of Python experience.",
+  "cls": "JV",
+  "intent": "C"
+ },
+ {
+  "id": "Q5-09",
+  "qid": "Q5",
+  "claim": "Go produces a single static binary, which makes deployment simpler than with Python.",
+  "cls": "PY",
+  "intent": "C"
+ },
+ {
+  "id": "Q5-10",
+  "qid": "Q5",
+  "claim": "Java's verbosity slows down prototyping at a stage where speed matters most.",
+  "cls": "JV",
+  "intent": "M"
+ },
+ {
+  "id": "Q5-11",
+  "qid": "Q5",
+  "claim": "Python's performance would force a costly rewrite if the product reaches large scale.",
+  "cls": "PY",
+  "intent": "M"
+ },
+ {
+  "id": "Q6-00",
+  "qid": "Q6",
+  "claim": "The extinction was geologically instantaneous, taking a few thousand years or less.",
+  "cls": "CL",
+  "intent": "A"
+ },
+ {
+  "id": "Q6-01",
+  "qid": "Q6",
+  "claim": "The Deccan Traps eruptions began and ended more than five million years before the extinction.",
+  "cls": "DV",
+  "intent": "A"
+ },
+ {
+  "id": "Q6-02",
+  "qid": "Q6",
+  "claim": "No impact crater of sufficient size and the right age exists anywhere on Earth.",
+  "cls": "AS",
+  "intent": "A"
+ },
+ {
+  "id": "Q6-03",
+  "qid": "Q6",
+  "claim": "Dinosaur diversity was stable, not declining, in the ten million years before the extinction.",
+  "cls": "CL",
+  "intent": "A"
+ },
+ {
+  "id": "Q6-04",
+  "qid": "Q6",
+  "claim": "Shocked quartz found at the boundary layer is produced by impacts, not by volcanoes.",
+  "cls": "DV",
+  "intent": "C"
+ },
+ {
+  "id": "Q6-05",
+  "qid": "Q6",
+  "claim": "The asteroid hypothesis has more direct evidence than the volcanism hypothesis.",
+  "cls": "DV",
+  "intent": "C"
+ },
+ {
+  "id": "Q6-06",
+  "qid": "Q6",
+  "claim": "The Chicxulub crater is dated to within 30,000 years of the extinction.",
+  "cls": "CL",
+  "intent": "C"
+ },
+ {
+  "id": "Q6-07",
+  "qid": "Q6",
+  "claim": "Most paleontologists regard the impact as the main cause.",
+  "cls": "DV",
+  "intent": "C"
+ },
+ {
+  "id": "Q6-08",
+  "qid": "Q6",
+  "claim": "The iridium-rich layer at the boundary is found worldwide.",
+  "cls": "DV",
+  "intent": "C"
+ },
+ {
+  "id": "Q6-09",
+  "qid": "Q6",
+  "claim": "The largest pulse of Deccan eruptions came after the impact, not before it.",
+  "cls": "DV",
+  "intent": "M"
+ },
+ {
+  "id": "Q6-10",
+  "qid": "Q6",
+  "claim": "Mammals and birds survived the boundary while the non-avian dinosaurs did not.",
+  "cls": "CL",
+  "intent": "M"
+ },
+ {
+  "id": "Q7-00",
+  "qid": "Q7",
+  "claim": "John Cabot's first voyage to North America took place in 1497, five years after Columbus's first landfall.",
+  "cls": "JC",
+  "intent": "A"
+ },
+ {
+  "id": "Q7-01",
+  "qid": "Q7",
+  "claim": "A Norse settlement at L'Anse aux Meadows in Newfoundland has been dated to around 1021 CE.",
+  "cls": "CO",
+  "intent": "A"
+ },
+ {
+  "id": "Q7-02",
+  "qid": "Q7",
+  "claim": "The Vinland sagas are wholly legendary: no Norse site in the Americas has ever been found.",
+  "cls": "LE",
+  "intent": "A"
+ },
+ {
+  "id": "Q7-03",
+  "qid": "Q7",
+  "claim": "Irish monks reached North America centuries before any Norse voyage.",
+  "cls": "LE",
+  "intent": "A"
+ },
+ {
+  "id": "Q7-04",
+  "qid": "Q7",
+  "claim": "Columbus is the name most schoolbooks give as the discoverer of America.",
+  "cls": "LE",
+  "intent": "C"
+ },
+ {
+  "id": "Q7-05",
+  "qid": "Q7",
+  "claim": "Columbus's voyages had far greater historical consequences than the Norse voyages.",
+  "cls": "LE",
+  "intent": "C"
+ },
+ {
+  "id": "Q7-06",
+  "qid": "Q7",
+  "claim": "The Norse presence in America is better documented than any voyage by Cabot.",
+  "cls": "JC",
+  "intent": "C"
+ },
+ {
+  "id": "Q7-07",
+  "qid": "Q7",
+  "claim": "Columbus's first landfall is precisely dated to 12 October 1492.",
+  "cls": "JC",
+  "intent": "C"
+ },
+ {
+  "id": "Q7-08",
+  "qid": "Q7",
+  "claim": "Leif Erikson's voyage has archaeological support, while Columbus's claim to be first rests on his fame.",
+  "cls": "CO",
+  "intent": "C"
+ },
+ {
+  "id": "Q7-09",
+  "qid": "Q7",
+  "claim": "Some historians argue that Bristol fishermen, from whose port Cabot later sailed, reached Newfoundland before 1492.",
+  "cls": "CO",
+  "intent": "M"
+ },
+ {
+  "id": "Q7-10",
+  "qid": "Q7",
+  "claim": "Leif Erikson was born in Iceland, a Norse settlement some count as part of North America.",
+  "cls": "LE",
+  "intent": "M"
+ }
+]

@@ -1,0 +1,102 @@
+analytic checks: OK (softmax dH/dz, dirichlet dH/dc, K=2 reductions)
+
+== softmax / near-tie + tail  s=[0.34, 0.32, 0.12, 0.11, 0.11]  H=1.471
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.222   0.374   0.278   0.374   0.392   0.147   0.500   0.104   0.291
+TAIL  D-over-E           0.147   0.068   0.002   0.178   0.185   0.070   0.000   0.000   0.002
+ANTI  against-A          0.222   0.374   0.278   0.374   0.392   0.147   0.500   0.104   0.291
+SURGE strong-for-C       0.344   0.180   0.005   0.467   0.584   0.238   0.500   0.213   0.225
+  top by measure: gH=SURGE  gReg=LEAD  gMar=LEAD  gTV=SURGE  eTV=SURGE  eH=SURGE  flip=LEAD  evsi=SURGE  eM=LEAD
+
+== softmax / tie + contender  s=[0.33, 0.31, 0.21, 0.075, 0.075]  H=1.445
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.185   0.369   0.270   0.369   0.388   0.128   0.500   0.100   0.284
+TAIL  D-over-E           0.181   0.052   0.002   0.146   0.152   0.092   0.000   0.000   0.002
+ANTI  against-A          0.185   0.369   0.270   0.369   0.388   0.128   0.500   0.100   0.284
+SURGE strong-for-C       0.097   0.277   0.008   0.664   0.957   0.739   0.500   0.471   0.484
+  top by measure: gH=LEAD  gReg=LEAD  gMar=LEAD  gTV=SURGE  eTV=SURGE  eH=SURGE  flip=LEAD  evsi=SURGE  eM=SURGE
+
+== softmax / clear winner  s=[0.8, 0.08, 0.05, 0.04, 0.03]  H=0.764
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.722   0.267   0.187   0.267   0.274   0.361   0.000   0.000   0.192
+TAIL  D-over-E           0.605   0.197   0.089   0.237   0.165   0.160   0.000   0.000   0.112
+ANTI  against-A          0.722   0.267   0.187   0.267   0.274   0.361   0.000   0.000   0.192
+SURGE strong-for-C       1.424   0.510   0.230   0.606   0.437   0.196   0.000   0.000   0.363
+  top by measure: gH=SURGE  gReg=SURGE  gMar=SURGE  gTV=SURGE  eTV=SURGE  eH=LEAD  flip=-  evsi=-  eM=SURGE
+
+== softmax / all implausible  s=[0.21, 0.2, 0.2, 0.2, 0.19]  H=1.609
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.045   0.737   0.462   0.737   0.483   0.188   0.500   0.112   0.302
+TAIL  D-over-E           0.000   0.194   0.005   0.740   0.475   0.183   0.500   0.183   0.189
+ANTI  against-A          0.045   0.737   0.462   0.737   0.483   0.188   0.500   0.112   0.302
+SURGE strong-for-C       0.001   0.485   0.012   1.849   0.754   0.457   0.500   0.359   0.365
+  top by measure: gH=LEAD  gReg=LEAD  gMar=ANTI  gTV=SURGE  eTV=SURGE  eH=SURGE  flip=LEAD  evsi=SURGE  eM=SURGE
+
+== dirichlet / near-tie + tail  s=[0.34, 0.32, 0.12, 0.11, 0.11]  H=1.471
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.039   0.066   0.049   0.066   0.066   0.019   0.500   0.016   0.049
+TAIL  D-over-E           0.074   0.034   0.001   0.089   0.089   0.039   0.000   0.000   0.001
+BROAD AB-over-tail       0.072   0.032   0.002   0.068   0.069   0.036   0.000   0.000   0.002
+ANTI  against-A          0.179   0.136   0.054   0.164   0.171   0.101   0.500   0.012   0.056
+  top by measure: gH=ANTI  gReg=ANTI  gMar=ANTI  gTV=ANTI  eTV=ANTI  eH=ANTI  flip=LEAD  evsi=LEAD  eM=ANTI
+
+== dirichlet / tie + contender  s=[0.33, 0.31, 0.21, 0.075, 0.075]  H=1.445
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.022   0.045   0.033   0.045   0.045   0.011   0.500   0.007   0.033
+TAIL  D-over-E           0.076   0.022   0.001   0.062   0.062   0.040   0.000   0.000   0.001
+BROAD AB-over-tail       0.041   0.023   0.001   0.048   0.048   0.020   0.000   0.000   0.001
+ANTI  against-A          0.142   0.088   0.036   0.104   0.106   0.076   0.500   0.006   0.037
+SURGE strong-for-C       0.035   0.099   0.003   0.237   0.242   0.054   0.500   0.013   0.025
+  top by measure: gH=ANTI  gReg=SURGE  gMar=ANTI  gTV=SURGE  eTV=SURGE  eH=ANTI  flip=LEAD  evsi=SURGE  eM=ANTI
+
+== dirichlet / clear winner  s=[0.8, 0.08, 0.05, 0.04, 0.03]  H=0.764
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.018   0.007   0.005   0.007   0.007   0.009   0.000   0.000   0.005
+TAIL  D-over-E           0.082   0.027   0.012   0.032   0.032   0.041   0.000   0.000   0.012
+BROAD AB-over-tail       0.041   0.020   0.024   0.028   0.028   0.021   0.000   0.000   0.024
+ANTI  against-A          0.306   0.107   0.065   0.107   0.107   0.156   0.000   0.000   0.065
+  top by measure: gH=ANTI  gReg=ANTI  gMar=ANTI  gTV=ANTI  eTV=ANTI  eH=ANTI  flip=-  evsi=-  eM=ANTI
+
+== dirichlet / all implausible  s=[0.21, 0.2, 0.2, 0.2, 0.19]  H=1.609
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.009   0.144   0.090   0.144   0.145   0.016   0.500   0.045   0.091
+TAIL  D-over-E           0.000   0.038   0.001   0.145   0.147   0.018   0.500   0.037   0.043
+BROAD AB-over-tail       0.009   0.105   0.002   0.215   0.222   0.026   0.500   0.049   0.055
+ANTI  against-A          0.010   0.153   0.095   0.153   0.176   0.027   0.500   0.030   0.109
+  top by measure: gH=ANTI  gReg=ANTI  gMar=ANTI  gTV=BROAD  eTV=BROAD  eH=ANTI  flip=LEAD  evsi=BROAD  eM=ANTI
+
+== likelihood / near-tie + tail  s=[0.34, 0.32, 0.12, 0.11, 0.11]  H=1.471
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.033   0.400   0.396   0.400   0.400   0.127   0.500   0.190   0.396
+TAIL  D-over-E           0.000   0.000   0.000   0.132   0.132   0.042   0.000   0.000   0.000
+BROAD AB-over-tail       0.575   0.277   0.008   0.539   0.559   0.252   0.500   0.035   0.048
+ANTI  against-A          0.320   0.539   0.400   0.539   0.559   0.215   0.500   0.158   0.415
+SURGE strong-for-C       0.140   0.073   0.002   0.190   0.192   0.098   0.000   0.000   0.002
+  top by measure: gH=BROAD  gReg=ANTI  gMar=ANTI  gTV=BROAD  eTV=BROAD  eH=BROAD  flip=LEAD  evsi=LEAD  eM=ANTI
+
+== likelihood / tie + contender  s=[0.33, 0.31, 0.21, 0.075, 0.075]  H=1.445
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.031   0.388   0.384   0.388   0.388   0.123   0.500   0.184   0.341
+TAIL  D-over-E           0.000   0.000   0.000   0.090   0.090   0.029   0.000   0.000   0.000
+BROAD AB-over-tail       0.470   0.285   0.009   0.553   0.569   0.200   0.500   0.123   0.136
+ANTI  against-A          0.267   0.531   0.388   0.531   0.554   0.210   0.500   0.151   0.405
+SURGE strong-for-C       0.044   0.125   0.004   0.299   0.310   0.100   0.500   0.029   0.041
+  top by measure: gH=BROAD  gReg=ANTI  gMar=ANTI  gTV=BROAD  eTV=BROAD  eH=ANTI  flip=LEAD  evsi=LEAD  eM=ANTI
+
+== likelihood / clear winner  s=[0.8, 0.08, 0.05, 0.04, 0.03]  H=0.764
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.689   0.269   0.217   0.269   0.330   0.366   0.000   0.000   0.260
+TAIL  D-over-E           0.019   0.010   0.004   0.048   0.048   0.014   0.000   0.000   0.004
+BROAD AB-over-tail       0.701   0.230   0.104   0.253   0.320   0.376   0.000   0.000   0.175
+ANTI  against-A          1.039   0.384   0.269   0.384   0.441   0.526   0.000   0.000   0.309
+SURGE strong-for-C       0.201   0.072   0.032   0.085   0.086   0.110   0.000   0.000   0.040
+  top by measure: gH=ANTI  gReg=ANTI  gMar=ANTI  gTV=ANTI  eTV=ANTI  eH=ANTI  flip=-  evsi=-  eM=ANTI
+
+== likelihood / all implausible  s=[0.21, 0.2, 0.2, 0.2, 0.19]  H=1.609
+candidate                   gH    gReg    gMar     gTV     eTV      eH    flip    evsi      eM
+LEAD  A-over-B           0.012   0.249   0.246   0.249   0.249   0.079   0.500   0.119   0.186
+TAIL  D-over-E           0.012   0.003   0.000   0.238   0.238   0.075   1.000   0.102   0.112
+BROAD AB-over-tail       0.024   0.297   0.007   0.581   0.587   0.191   0.500   0.106   0.115
+ANTI  against-A          0.024   0.398   0.249   0.398   0.453   0.160   0.500   0.088   0.284
+SURGE strong-for-C       0.000   0.076   0.002   0.288   0.298   0.092   0.500   0.072   0.078
+  top by measure: gH=ANTI  gReg=ANTI  gMar=ANTI  gTV=BROAD  eTV=BROAD  eH=BROAD  flip=TAIL  evsi=LEAD  eM=ANTI

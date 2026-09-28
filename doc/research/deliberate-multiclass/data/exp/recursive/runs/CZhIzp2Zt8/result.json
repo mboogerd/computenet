@@ -1,0 +1,119 @@
+{
+ "root": "15065b57-9bfa-49f7-aec9-93efc8414b22",
+ "outcome": "done",
+ "elapsed": 105.05799603462219,
+ "question": {
+  "root": "15065b57-9bfa-49f7-aec9-93efc8414b22",
+  "text": "Who will win the 2026 Democratic primary for US Senator in Michigan?",
+  "claims": 90,
+  "active": false,
+  "yieldRounds": 27,
+  "yieldRecent": 0.09331646093750001,
+  "yieldEarlier": 0.19356976480263158,
+  "stoppedBy": "budget",
+  "paused": false,
+  "costUsd": 1.6509455180000001,
+  "projectedUsd": 1.6509455180000001,
+  "cost": {
+   "backends": [
+    {
+     "backend": "claude",
+     "models": [
+      "claude-sonnet-5"
+     ],
+     "calls": 70,
+     "inputTokens": 459669,
+     "cachedInputTokens": 313743,
+     "cacheWriteTokens": 145788,
+     "outputTokens": 3957,
+     "reasoningTokens": 136,
+     "usd": 0.6857465999999999,
+     "unpricedCalls": 0,
+     "rate": "as reported by Claude Code (total_cost_usd per call)",
+     "rateSource": "Claude Code CLI",
+     "assumed": false,
+     "note": "API-equivalent as reported by Claude Code; not your bill if you use a subscription."
+    },
+    {
+     "backend": "codex",
+     "models": [
+      "gpt-5.6-sol"
+     ],
+     "calls": 63,
+     "inputTokens": 805797,
+     "cachedInputTokens": 642816,
+     "cacheWriteTokens": 0,
+     "outputTokens": 2155,
+     "reasoningTokens": 0,
+     "usd": 0.9521504000000002,
+     "unpricedCalls": 0,
+     "rate": "$4.00/1M input \u00b7 $0.40/1M cached input \u00b7 $20.00/1M output \u00b7 cache writes 1.25\u00d7 input \u00b7 prompts over 272K tokens 2\u00d7 input, 1.5\u00d7 output",
+     "rateSource": "developers.openai.com/api/docs/models/gpt-5.6-sol",
+     "rateDate": "2026-09-27",
+     "assumed": false,
+     "note": "Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21."
+    },
+    {
+     "backend": "jev",
+     "models": [
+      "jev-1.13.0"
+     ],
+     "calls": 310,
+     "inputTokens": 310679,
+     "cachedInputTokens": 0,
+     "cacheWriteTokens": 0,
+     "outputTokens": 25489,
+     "reasoningTokens": 0,
+     "usd": 0.013048517999999997,
+     "unpricedCalls": 0,
+     "rate": "$0.042/1M input \u00b7 output free",
+     "rateSource": "third-party: OpenRouter typesafe/jev-1.13, MindStudio",
+     "rateDate": "2026-09-27",
+     "assumed": true,
+     "note": "TypeSafe publishes no pricing; this is a third-party listing."
+    }
+   ],
+   "rounds": 36,
+   "queued": 0,
+   "perRoundUsd": 0.04585959772222222
+  },
+  "cruxes": [
+   "10c9e912-b22a-49e9-9dbb-065582fd79e1",
+   "6b6f4446-c820-42ac-b0d8-931e228c0ff7",
+   "b9805e6e-2ff3-49b4-98e0-c525f78db85f"
+  ],
+  "verdictsDisagree": false,
+  "framing": {
+   "mode": "POSITIONS",
+   "positions": [
+    {
+     "ref": "47539f98-fc8c-4230-86bb-95b064191ef4",
+     "text": "Abdul El-Sayed wins the 2026 Democratic primary for US Senator in Michigan.",
+     "credence": 0.431102895771513,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.431102895771513,
+     "verdictsDisagree": false,
+     "share": 0.2700244268538585
+    },
+    {
+     "ref": "563f4c54-3edb-4de1-9d3f-16b7af4e5c08",
+     "text": "Haley Stevens wins the 2026 Democratic primary for US Senator in Michigan.",
+     "credence": 0.5715756040532967,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5715756040532967,
+     "verdictsDisagree": false,
+     "share": 0.4753957851057424
+    },
+    {
+     "ref": "854919a8-7457-4c91-a1b2-459e973fa30c",
+     "text": "Mallory McMorrow wins the 2026 Democratic primary for US Senator in Michigan.",
+     "credence": 0.4167204619348416,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.4167204619348416,
+     "verdictsDisagree": false,
+     "share": 0.254579788040399
+    }
+   ]
+  }
+ }
+}

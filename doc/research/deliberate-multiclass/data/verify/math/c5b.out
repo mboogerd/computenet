@@ -1,0 +1,3 @@
+prior tweak on E +0: s=[0.2, 0.2, 0.2, 0.2, 0.2] leader=A eM(for A)=0.0899 eM(for B)=0.0686 eM(for E)=0.0686
+prior tweak on E +0.0001: s=[0.2, 0.2, 0.2, 0.2, 0.2] leader=E eM(for A)=0.0686 eM(for B)=0.0686 eM(for E)=0.0899
+prior tweak on E -0.0001: s=[0.2, 0.2, 0.2, 0.2, 0.2] leader=A eM(for A)=0.0899 eM(for B)=0.0686 eM(for E)=0.0685

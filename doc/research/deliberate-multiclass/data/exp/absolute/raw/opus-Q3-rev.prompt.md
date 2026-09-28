@@ -1,0 +1,36 @@
+You are an expert rater building a gold-standard reference. Work alone, from your own knowledge.
+
+Question: What was the primary cause of the collapse of Late Bronze Age civilisations in the eastern Mediterranean around 1200-1150 BCE?
+The answers compete as the single PRIMARY cause.
+
+Listed answers:
+- SP: Invasions and raids by the 'Sea Peoples'.
+- DR: A prolonged drought and the famine it caused.
+- EQ: A sequence of major earthquakes (an 'earthquake storm').
+
+Each item below is a claim offered as an objection to ONE listed answer. Assume the claim is TRUE. Classify the KIND of objection:
+  ABSOLUTE     it counts against that answer on its own terms: it shows the answer false, infeasible, ineffective or bad.
+               It would still count against the answer even if no other answer existed (e.g. if this were the only
+               answer anyone had proposed). This is about kind, not strength: a weak objection can be ABSOLUTE.
+  COMPARATIVE  it counts against that answer ONLY by favouring a rival (a rival is better, cheaper, better supported,
+               more popular, or has evidence for it). If no rival answer existed it would say nothing against this answer.
+  MIXED        it genuinely has both parts, or reasonable experts would split between the two.
+Also give "abs": your probability (0-100) that an expert panel would call it ABSOLUTE rather than COMPARATIVE.
+
+Items:
+- Q3-11: objection to EQ: "Arrowheads are found embedded in the walls of several destroyed cities."
+- Q3-10: objection to SP: "The Sea Peoples were themselves probably refugees displaced by famine in their homelands."
+- Q3-09: objection to EQ: "Drought evidence is found across the whole region, whereas earthquake damage is found at only some sites."
+- Q3-08: objection to SP: "Hittite texts from the period request urgent grain shipments from Egypt."
+- Q3-07: objection to EQ: "The last letters from Ugarit describe enemy ships attacking the coast."
+- Q3-06: objection to EQ: "Evidence for the drought is stronger and more widespread than evidence for an earthquake storm."
+- Q3-05: objection to SP: "Most historians today give more weight to climate than to invasions."
+- Q3-04: objection to DR: "Egyptian inscriptions at Medinet Habu explicitly describe invasions by the Sea Peoples."
+- Q3-03: objection to EQ: "Bronze Age cities routinely rebuilt within a generation after earthquakes."
+- Q3-02: objection to SP: "The Sea Peoples appear in Egyptian records only after most of the affected cities had already been abandoned."
+- Q3-01: objection to EQ: "Destruction layers at the affected cities show no signs of seismic damage."
+- Q3-00: objection to DR: "Pollen cores show no drought in the eastern Mediterranean between 1250 and 1100 BCE."
+
+Reply with ONLY one JSON object, no prose, no code fence:
+{"<item id>": {"label": "ABSOLUTE|COMPARATIVE|MIXED", "abs": <0-100>}, ...}
+Include all 12 items.

@@ -1,0 +1,8 @@
+    15s claims=14 active=True cost=$0.188 stopped=None
+    30s claims=32 active=True cost=$0.431 stopped=None
+    45s claims=45 active=True cost=$0.715 stopped=None
+    60s claims=55 active=True cost=$0.939 stopped=None
+    75s claims=69 active=True cost=$1.220 stopped=None
+    90s claims=83 active=True cost=$1.505 stopped=None
+   105s claims=90 active=False cost=$1.709 stopped=budget
+OUTCOME done cost 1.7089560979999996 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "2cf9c5c3-a28d-4198-a2ab-19deddd34499", "text": "Byron Donalds is the 2026 Republican nominee for Governor of Florida.", "credence": 0.5825230607641727, "firstImpression": 0.5, "neutralCredence": 0.5825230607641727, "verdictsDisagree": false, "share": 0.34860026824351786}, {"ref": "0790b144-5b65-47f9-ab9b-3d095bb8465a", "text": "James Fishback is the 2026 Republican nominee for Governor of Florida.", "credence": 0.49498966977943215, "firstImpression": 0.5, "neutralCredence": 0.49498966977943215, "verdictsDisagree": false, "share": 0.24487415959781084

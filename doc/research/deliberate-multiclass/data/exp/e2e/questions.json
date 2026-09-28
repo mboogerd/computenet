@@ -1,0 +1,543 @@
+{
+ "questions": [
+  {
+   "id": "ht90hnS25U",
+   "root_question": "F1: Who will win the 2026 TAG Heuer Gran Premio de Espa\u00f1a (Spanish Grand Prix)?",
+   "classes": {
+    "C1": "Kimi Antonelli (Mercedes-AMG Petronas)",
+    "C2": "George Russell (Mercedes-AMG Petronas)",
+    "C3": "Lewis Hamilton (Scuderia Ferrari HP)",
+    "C4": "Lando Norris (McLaren Mastercard)",
+    "C5": "Charles Leclerc (Scuderia Ferrari HP)",
+    "C6": "Max Verstappen (Oracle Red Bull Racing)",
+    "C7": "Oscar Piastri (McLaren Mastercard)",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/105du/f1-who-will-win-the-2026-tag-heuer",
+   "resolved": "2026-09-13",
+   "bettors": 32,
+   "truncated": false
+  },
+  {
+   "id": "uqsu6qqRh8",
+   "root_question": "F1: Who will win the 2026 Qatar Airways Azerbaijan Grand Prix?",
+   "classes": {
+    "C1": "Kimi Antonelli (Mercedes-AMG Petronas)",
+    "C2": "George Russell (Mercedes-AMG Petronas)",
+    "C3": "Lewis Hamilton (Scuderia Ferrari HP)",
+    "C4": "Lando Norris (McLaren Mastercard)",
+    "C5": "Charles Leclerc (Scuderia Ferrari HP)",
+    "C6": "Max Verstappen (Oracle Red Bull Racing)",
+    "C7": "Oscar Piastri (McLaren Mastercard)",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C2",
+   "source": "https://manifold.markets/105du/f1-who-will-win-the-2026-qatar-airw",
+   "resolved": "2026-09-26",
+   "bettors": 31,
+   "truncated": false
+  },
+  {
+   "id": "z5uEgZt95z",
+   "root_question": "F1: Who will win the 2026 Mo\u00ebt & Chandon Belgian Grand Prix?",
+   "classes": {
+    "C1": "Kimi Antonelli (Mercedes-AMG Petronas)",
+    "C2": "George Russell (Mercedes-AMG Petronas)",
+    "C3": "Lewis Hamilton (Scuderia Ferrari HP)",
+    "C4": "Charles Leclerc (Scuderia Ferrari HP)",
+    "C5": "Lando Norris (McLaren Mastercard)",
+    "C6": "Oscar Piastri (McLaren Mastercard)",
+    "C7": "Max Verstappen (Oracle Red Bull Racing)",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/105du/f1-who-will-win-the-2026-moet-chand",
+   "resolved": "2026-07-19",
+   "bettors": 26,
+   "truncated": false
+  },
+  {
+   "id": "lPQQZcItEs",
+   "root_question": "Who will win the 2026 F1 Hungarian Grand Prix?",
+   "classes": {
+    "C1": "Kimi Antonelli",
+    "C2": "George Russell",
+    "C3": "Lewis Hamilton",
+    "C4": "Charles Leclerc",
+    "C5": "Max Verstappen",
+    "C6": "Oscar Piastri",
+    "C7": "Lando Norris",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C7",
+   "source": "https://manifold.markets/MrMelone/who-will-win-the-2026-f1-belgian-gr",
+   "resolved": "2026-07-27",
+   "bettors": 23,
+   "truncated": true
+  },
+  {
+   "id": "p2hNQNl6Lp",
+   "root_question": "F1: Who will win the 2026 Pirelli British Grand Prix?",
+   "classes": {
+    "C1": "Kimi Antonelli (Mercedes-AMG Petronas)",
+    "C2": "George Russell (Mercedes-AMG Petronas)",
+    "C3": "Lewis Hamilton (Scuderia Ferrari HP)",
+    "C4": "Oscar Piastri (McLaren Mastercard)",
+    "C5": "Lando Norris (McLaren Mastercard)",
+    "C6": "Charles Leclerc (Scuderia Ferrari HP)",
+    "C7": "Max Verstappen (Oracle Red Bull Racing)",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C6",
+   "source": "https://manifold.markets/105du/f1-who-will-win-the-2026-pirelli-br",
+   "resolved": "2026-07-05",
+   "bettors": 19,
+   "truncated": false
+  },
+  {
+   "id": "ygAPp8pRtL",
+   "root_question": "Who will win the 2026 Formula 1 Dutch Grand Prix?",
+   "classes": {
+    "C1": "Kimi Antonelli",
+    "C2": "Max Verstappen",
+    "C3": "Lando Norris",
+    "C4": "Lewis Hamilton",
+    "C5": "Charles Leclerc",
+    "C6": "Georges Russel",
+    "C7": "Isack Hadjar",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/Muskat_fan/f1-dutch-gp-2026-winner",
+   "resolved": "2026-08-23",
+   "bettors": 16,
+   "truncated": true
+  },
+  {
+   "id": "9AN6Zp8CEp",
+   "root_question": "Which team will win the 2026 FIFA World Cup?",
+   "classes": {
+    "C1": "Spain",
+    "C2": "France",
+    "C3": "England",
+    "C4": "Argentina",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/waitblock/who-will-win-the-2026-fifa-world-cu-nQhy6d56OE",
+   "resolved": "2026-07-19",
+   "bettors": 30,
+   "truncated": false
+  },
+  {
+   "id": "Cc0R2ycUU9",
+   "root_question": "Which team will come 2nd in the 2026 FIFA World Cup?",
+   "classes": {
+    "C1": "Brazil",
+    "C2": "Portugal",
+    "C3": "Argentina",
+    "C4": "Belgium",
+    "C5": "Germany",
+    "C6": "Spain",
+    "C7": "France",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/itsTomekK/which-team-will-come-2nd-in-the-202",
+   "resolved": "2026-07-19",
+   "bettors": 34,
+   "truncated": true
+  },
+  {
+   "id": "QE0l9dn2yt",
+   "root_question": "2026 Wimbledon - Women\u2019s singles winner?",
+   "classes": {
+    "C1": "Iga Swiatek",
+    "C2": "Aryna Sabalenka",
+    "C3": "Jessica Pegula",
+    "C4": "Coco Gauff",
+    "C5": "Mirra Andreeva",
+    "C6": "Amanda Anisimova",
+    "C7": "Elena Rybakina",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "OTHER",
+   "source": "https://manifold.markets/McLovin/2026-wimbledon-womens-singles-winne",
+   "resolved": "2026-07-11",
+   "bettors": 37,
+   "truncated": true
+  },
+  {
+   "id": "A2cEL82hnh",
+   "root_question": "Who will win the Points Classification / Green Jersey at the 2026 Tour de France?",
+   "classes": {
+    "C1": "Jasper Philipsen",
+    "C2": "Olav Kooij",
+    "C3": "Mads Pedersen",
+    "C4": "Tim Merlier",
+    "C5": "Biniam Girmay",
+    "C6": "Max Kanter",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/RedzoneITG/who-will-win-the-points-classificat-cQAA6II0tR",
+   "resolved": "2026-07-27",
+   "bettors": 40,
+   "truncated": false
+  },
+  {
+   "id": "ECEIOSh6ZO",
+   "root_question": "Who will come third at the 2026 Tour de France?",
+   "classes": {
+    "C1": "Tadej Pogacar",
+    "C2": "Jonas Vingegaard",
+    "C3": "Remco Evenepoel",
+    "C4": "Florian Lipowitz",
+    "C5": "Paul Seixas",
+    "C6": "Isaac del Toro",
+    "C7": "Juan Ayuso",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C6",
+   "source": "https://manifold.markets/Lion/who-will-come-third-at-the-2026-tou",
+   "resolved": "2026-07-26",
+   "bettors": 27,
+   "truncated": false
+  },
+  {
+   "id": "RstpUcdPzR",
+   "root_question": "Who will finish second in the 2026 Vuelta a Espana?",
+   "classes": {
+    "C1": "Felix Gall",
+    "C2": "Primoz Roglic",
+    "C3": "Mattias Skjelmose",
+    "C4": "Oscar Onley",
+    "C5": "Enric Mas",
+    "C6": "Richard Carapaz",
+    "C7": "Tadej Pogacar",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C2",
+   "source": "https://manifold.markets/RedzoneITG/who-will-finish-second-in-the-2026",
+   "resolved": "2026-09-13",
+   "bettors": 30,
+   "truncated": true
+  },
+  {
+   "id": "SzESlu6nyA",
+   "root_question": "Who will win the men's elite road race at the 2026 UCI Road World Championships?",
+   "classes": {
+    "C1": "Remco Evenepoel",
+    "C2": "Isaac del Toro",
+    "C3": "Mathieu van der Poel",
+    "C4": "Paul Seixas",
+    "C5": "Mattias Skjelmose",
+    "C6": "Juan Ayuso",
+    "C7": "Wout van Aert",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "OTHER",
+   "source": "https://manifold.markets/RedzoneITG/cycling-world-championships-2026-me",
+   "resolved": "2026-09-27",
+   "bettors": 26,
+   "truncated": true
+  },
+  {
+   "id": "ds2IN0lQS9",
+   "root_question": "Who will win the July 2026 grand sumo tournament?",
+   "classes": {
+    "C1": "Onosato",
+    "C2": "Hoshoryu",
+    "C3": "Aonishiki",
+    "C4": "Kirishima",
+    "C5": "Takayasu",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/sointex/who-will-win-the-july-2026-grand-su",
+   "resolved": "2026-07-26",
+   "bettors": 30,
+   "truncated": false
+  },
+  {
+   "id": "hN9gtSNN8q",
+   "root_question": "Who will win the SEPTEMBER 2026 grand sumo tournament?",
+   "classes": {
+    "C1": "Onosato",
+    "C2": "Aonishiki",
+    "C3": "Kirishima",
+    "C4": "Atamifuji",
+    "C5": "Takayasu",
+    "C6": "Kotozakura",
+    "C7": "Fujinokawa",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/sointex/who-will-win-the-september-2026-gra",
+   "resolved": "2026-09-27",
+   "bettors": 19,
+   "truncated": true
+  },
+  {
+   "id": "CdOARZ8PE9",
+   "root_question": "Who will win the 2026 Sinquefield Cup chess tournament (GCT 5th event)?",
+   "classes": {
+    "C1": "Vincent Keymer",
+    "C2": "Fabiano Caruana",
+    "C3": "Sam Sevian",
+    "C4": "Anish Giri",
+    "C5": "Wesley So",
+    "C6": "Rameshbabu Praggnanandhaa",
+    "C7": "Maxime Vachier-Lagrave",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C5",
+   "source": "https://manifold.markets/archvenison/who-will-win-the-2026-sinquefield-c",
+   "resolved": "2026-08-19",
+   "bettors": 28,
+   "truncated": true
+  },
+  {
+   "id": "5QzLhsduNU",
+   "root_question": "Which party will win the 2026 Clacton by-election?",
+   "classes": {
+    "C1": "Reform UK",
+    "C2": "Conservative",
+    "C3": "Labour",
+    "C4": "Restore Britain",
+    "C5": "Reclaim",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/a_l_e_x/which-party-will-win-the-clacton-by",
+   "resolved": "2026-08-14",
+   "bettors": 30,
+   "truncated": false
+  },
+  {
+   "id": "CZhIzp2Zt8",
+   "root_question": "Who will win the Democratic Primary for Michigan Senator in 2026?",
+   "classes": {
+    "C1": "Abdul El-Sayed",
+    "C2": "Haley Stevens",
+    "C3": "Mallory McMorrow"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/NFNL2zc/who-will-win-the-democratic-primary-69cttNn2l0",
+   "resolved": "2026-08-05",
+   "bettors": 29,
+   "truncated": false
+  },
+  {
+   "id": "Eyu5LLuc5s",
+   "root_question": "Who will be the 2026 Republican nominee for Governor of Florida?",
+   "classes": {
+    "C1": "Byron Donalds",
+    "C2": "James Fishback",
+    "C3": "Jay Collins",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/Jack1/who-will-be-the-2026-republican-nom-IlCc0OtpNC",
+   "resolved": "2026-08-18",
+   "bettors": 34,
+   "truncated": false
+  },
+  {
+   "id": "6O5QlIUZlt",
+   "root_question": "Golf: Who will win the 2026 Open Championship (British Open)?",
+   "classes": {
+    "C1": "Scottie Scheffler",
+    "C2": "Rory McIlroy",
+    "C3": "Tommy Fleetwood",
+    "C4": "Bryson DeChambeau",
+    "C5": "Dan Brown",
+    "C6": "Lucas Herbert",
+    "C7": "Sam Burns",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "OTHER",
+   "source": "https://manifold.markets/kurt/golf-who-will-win-the-2026-open-cha",
+   "resolved": "2026-07-19",
+   "bettors": 25,
+   "truncated": true
+  },
+  {
+   "id": "chRLAqAcqI",
+   "root_question": "Which show will win the 2026 Primetime Emmy Award for Outstanding Comedy Series?",
+   "classes": {
+    "C1": "Widow's Bay",
+    "C2": "Hacks",
+    "C3": "The Bear",
+    "C4": "Abbott Elementary",
+    "C5": "Margo's Got Money Troubles",
+    "C6": "Nobody Wants This",
+    "C7": "Only Murders in the Building",
+    "C8": "Shrinking"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/Ziddletwix/emmy-for-outstanding-comedy-series",
+   "resolved": "2026-09-19",
+   "bettors": 17,
+   "truncated": false
+  },
+  {
+   "id": "gCn5zQz6nl",
+   "root_question": "Which city will host the Eurovision Song Contest 2027?",
+   "classes": {
+    "C1": "Sofia",
+    "C2": "Plodiv",
+    "C3": "Varna",
+    "C4": "Burgas",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C4",
+   "source": "https://manifold.markets/someoneR5c8l/which-city-will-host-eurovision-202-pI5zzAN6gd",
+   "resolved": "2026-08-13",
+   "bettors": 15,
+   "truncated": false
+  },
+  {
+   "id": "tSIlCOQt02",
+   "root_question": "Which country will win the 2026 Chess Olympiad (Women's event)?",
+   "classes": {
+    "C1": "China",
+    "C2": "India",
+    "C3": "Ukraine",
+    "C4": "USA",
+    "C5": "Georgia",
+    "C6": "Russia",
+    "C7": "Poland",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/archvenison/which-country-will-win-the-2026-che-20hSs62AlZ",
+   "resolved": "2026-09-27",
+   "bettors": 19,
+   "truncated": true
+  },
+  {
+   "id": "2nl5I6cN66",
+   "root_question": "Which Dota 2 team will win The International 2026?",
+   "classes": {
+    "C1": "Team Vision",
+    "C2": "Team Liquid",
+    "C3": "Team Spirit",
+    "C4": "Team Falcons",
+    "C5": "Team Yandex",
+    "C6": "BoomBoys",
+    "C7": "Nigma Galaxy",
+    "C8": "Iron Wing"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/Mochi/which-dota-2-team-will-win-the-inte-5CPcUhl0uL",
+   "resolved": "2026-08-23",
+   "bettors": 17,
+   "truncated": false
+  },
+  {
+   "id": "0ncEn65h8l",
+   "root_question": "Which team will win the League of Legends Mid-Season Invitational (MSI) 2026?",
+   "classes": {
+    "C1": "Hanwha Life",
+    "C2": "Secret Whales",
+    "C3": "G2 Esports",
+    "C4": "Bilibili Gaming",
+    "C5": "Top Esports",
+    "C6": "T1",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/Cy/league-of-legends-msi-2026-winner",
+   "resolved": "2026-07-14",
+   "bettors": 18,
+   "truncated": false
+  },
+  {
+   "id": "N8ql0I2d9P",
+   "root_question": "Which team will win the 2026 MLB National League West division?",
+   "classes": {
+    "C1": "Arizona",
+    "C2": "Colorado",
+    "C3": "Los Angeles",
+    "C4": "San Diego",
+    "C5": "San Francisco"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/PMattW/2026-mlb-national-league-west-divis",
+   "resolved": "2026-09-17",
+   "bettors": 17,
+   "truncated": false
+  },
+  {
+   "id": "9uSOIZNcSI",
+   "root_question": "Which ticket will win the 2026 FIDE presidential election?",
+   "classes": {
+    "C1": "Jan Henric Buettner / Malcolm Pein",
+    "C2": "Wadim Rosenstein / Gordon Tang",
+    "C3": "Timur Turlov / Viswanathan Anand",
+    "C4": "None of the above"
+   },
+   "answer": "C3",
+   "source": "https://manifold.markets/diadematus/which-ticket-will-win-the-2026-fide",
+   "resolved": "2026-09-26",
+   "bettors": 15,
+   "truncated": false
+  },
+  {
+   "id": "hdN5d0pz9u",
+   "root_question": "Which party will the winner of the 2026 Greater Manchester mayoral by-election be from?",
+   "classes": {
+    "C1": "Labour",
+    "C2": "Reform",
+    "C3": "Liberal Democrats",
+    "C4": "Restore Britain",
+    "C5": "Green",
+    "C6": "Conservative",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C1",
+   "source": "https://manifold.markets/Tetraspace/what-party-will-the-next-mayor-of-g",
+   "resolved": "2026-07-31",
+   "bettors": 19,
+   "truncated": false
+  },
+  {
+   "id": "sIc58zydQu",
+   "root_question": "Who will be the next Chancellor of the Exchequer of the United Kingdom?",
+   "classes": {
+    "C1": "Pat McFadden",
+    "C2": "Jonathan Reynolds",
+    "C3": "Darren Jones",
+    "C4": "Yvette Cooper",
+    "C5": "Ed Miliband",
+    "C6": "Mel Stride",
+    "C7": "Jeremy Hunt",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "OTHER",
+   "source": "https://manifold.markets/lisamarsh/who-will-be-the-next-chancellor-of-nhdSLUtyAL",
+   "resolved": "2026-07-21",
+   "bettors": 19,
+   "truncated": true
+  },
+  {
+   "id": "6OLPgSUPqc",
+   "root_question": "In which month will Keir Starmer officially resign to the Monarch?",
+   "classes": {
+    "C1": "June 2026",
+    "C2": "July 2026",
+    "C3": "August 2026",
+    "C4": "September 2026",
+    "C5": "October 2026",
+    "OTHER": "Someone or something not listed among the other answers"
+   },
+   "answer": "C2",
+   "source": "https://manifold.markets/Jack1/in-which-month-will-keir-starmer-of",
+   "resolved": "2026-07-21",
+   "bettors": 36,
+   "truncated": false
+  }
+ ]
+}

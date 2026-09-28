@@ -1,0 +1,8 @@
+    15s claims=14 active=True cost=$0.146 stopped=None
+    30s claims=29 active=True cost=$0.396 stopped=None
+    45s claims=46 active=True cost=$0.726 stopped=None
+    60s claims=61 active=True cost=$1.019 stopped=None
+    75s claims=80 active=True cost=$1.341 stopped=None
+    90s claims=90 active=True cost=$1.597 stopped=budget
+   105s claims=90 active=False cost=$1.651 stopped=budget
+OUTCOME done cost 1.6509455180000001 claims 90 framing {"mode": "POSITIONS", "positions": [{"ref": "47539f98-fc8c-4230-86bb-95b064191ef4", "text": "Abdul El-Sayed wins the 2026 Democratic primary for US Senator in Michigan.", "credence": 0.431102895771513, "firstImpression": 0.5, "neutralCredence": 0.431102895771513, "verdictsDisagree": false, "share": 0.2700244268538585}, {"ref": "563f4c54-3edb-4de1-9d3f-16b7af4e5c08", "text": "Haley Stevens wins the 2026 Democratic primary for US Senator in Michigan.", "credence": 0.5715756040532967, "firstImpression": 0.5, "neutralCredence": 0.5715756040532967, "verdictsDisagree": false, "share": 0.475395785105

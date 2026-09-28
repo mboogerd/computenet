@@ -1,0 +1,137 @@
+{
+ "root": "50745d19-736f-461e-8983-344c74c42809",
+ "outcome": "done",
+ "elapsed": 105.0868399143219,
+ "question": {
+  "root": "50745d19-736f-461e-8983-344c74c42809",
+  "text": "Which city will host the Eurovision Song Contest 2027?",
+  "claims": 90,
+  "active": false,
+  "yieldRounds": 23,
+  "yieldRecent": 0.074485140625,
+  "yieldEarlier": 0.1499462204861111,
+  "stoppedBy": "budget",
+  "paused": false,
+  "costUsd": 1.6160443279999999,
+  "projectedUsd": 1.6160443279999999,
+  "cost": {
+   "backends": [
+    {
+     "backend": "claude",
+     "models": [
+      "claude-sonnet-5"
+     ],
+     "calls": 71,
+     "inputTokens": 461657,
+     "cachedInputTokens": 318290,
+     "cacheWriteTokens": 143227,
+     "outputTokens": 5108,
+     "reasoningTokens": 1127,
+     "usd": 0.6879260000000001,
+     "unpricedCalls": 0,
+     "rate": "as reported by Claude Code (total_cost_usd per call)",
+     "rateSource": "Claude Code CLI",
+     "assumed": false,
+     "note": "API-equivalent as reported by Claude Code; not your bill if you use a subscription."
+    },
+    {
+     "backend": "codex",
+     "models": [
+      "gpt-5.6-sol"
+     ],
+     "calls": 67,
+     "inputTokens": 834772,
+     "cachedInputTokens": 684800,
+     "cacheWriteTokens": 0,
+     "outputTokens": 2053,
+     "reasoningTokens": 0,
+     "usd": 0.9148679999999997,
+     "unpricedCalls": 0,
+     "rate": "$4.00/1M input \u00b7 $0.40/1M cached input \u00b7 $20.00/1M output \u00b7 cache writes 1.25\u00d7 input \u00b7 prompts over 272K tokens 2\u00d7 input, 1.5\u00d7 output",
+     "rateSource": "developers.openai.com/api/docs/models/gpt-5.6-sol",
+     "rateDate": "2026-09-27",
+     "assumed": false,
+     "note": "Reasoning tokens are billed as output. The input price is promotional through at least 2026-11-21."
+    },
+    {
+     "backend": "jev",
+     "models": [
+      "jev-1.13.0"
+     ],
+     "calls": 318,
+     "inputTokens": 315484,
+     "cachedInputTokens": 0,
+     "cacheWriteTokens": 0,
+     "outputTokens": 26375,
+     "reasoningTokens": 0,
+     "usd": 0.013250328000000004,
+     "unpricedCalls": 0,
+     "rate": "$0.042/1M input \u00b7 output free",
+     "rateSource": "third-party: OpenRouter typesafe/jev-1.13, MindStudio",
+     "rateDate": "2026-09-27",
+     "assumed": true,
+     "note": "TypeSafe publishes no pricing; this is a third-party listing."
+    }
+   ],
+   "rounds": 38,
+   "queued": 0,
+   "perRoundUsd": 0.04252748231578947
+  },
+  "cruxes": [
+   "ff464862-e116-486c-a106-3272d6bb9645",
+   "596e63d6-c4db-47ca-8489-2ee51fbbd273",
+   "f5c412ee-f00a-4da6-89be-27a37a11c854"
+  ],
+  "verdictsDisagree": false,
+  "framing": {
+   "mode": "POSITIONS",
+   "positions": [
+    {
+     "ref": "f2adfd1f-f90d-43ed-8f6e-bf8fae8e2336",
+     "text": "Sofia hosts the Eurovision Song Contest 2027.",
+     "credence": 0.32032609947183643,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.32032609947183643,
+     "verdictsDisagree": false,
+     "share": 0.09741658993384483
+    },
+    {
+     "ref": "f8e37ecf-5d1f-4ec7-9abd-0f30bf8b8a1a",
+     "text": "Plovdiv hosts the Eurovision Song Contest 2027.",
+     "credence": 0.49222634475509003,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.49222634475509003,
+     "verdictsDisagree": false,
+     "share": 0.20037146816012685
+    },
+    {
+     "ref": "4fd7d1a2-8467-4b4f-85b8-286e8e048919",
+     "text": "Varna hosts the Eurovision Song Contest 2027.",
+     "credence": 0.6001469481573484,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.6001469481573484,
+     "verdictsDisagree": false,
+     "share": 0.31024041865859997
+    },
+    {
+     "ref": "ce55e8bd-775f-493e-b59e-16e64529ef23",
+     "text": "Burgas hosts the Eurovision Song Contest 2027.",
+     "credence": 0.30757852702451993,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.30757852702451993,
+     "verdictsDisagree": false,
+     "share": 0.09181775635128346
+    },
+    {
+     "ref": "e30235da-d88e-41eb-8655-fa122a833f93",
+     "text": "A city other than Sofia, Plovdiv, Varna and Burgas hosts the Eurovision Song Contest 2027.",
+     "credence": 0.5921896712297373,
+     "firstImpression": 0.5,
+     "neutralCredence": 0.5921896712297373,
+     "verdictsDisagree": false,
+     "share": 0.3001537668961449
+    }
+   ]
+  }
+ }
+}

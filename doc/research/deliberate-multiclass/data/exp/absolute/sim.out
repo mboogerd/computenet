@@ -1,0 +1,48 @@
+| judge | routine ΔΩ mean / p95 / max / frac>.05 | +weak objections to every class mean / max | all-elim ΔΩ mean / P(Ω) |
+|---|---|---|---|
+| oracle (revise2 up0) | +0.003 / +0.011 / +0.023 / 0.0% | +0.006 / +0.031 | +0.114 / 0.230 |
+| revise2 up.3 (the feared case) | +0.027 / +0.077 / +0.152 / 18.1% | +0.029 / +0.150 | +0.116 / 0.232 |
+| Jev noul|A parametric bu=0.19 bd=0.32 sd=0.14 | +0.017 / +0.050 / +0.106 / 4.9% | +0.018 / +0.095 | +0.062 / 0.179 |
+| Jev noul|A empirical | +0.016 / +0.044 / +0.102 / 2.7% | +0.017 / +0.096 | +0.057 / 0.173 |
+| Jev noul|B parametric bu=0.42 bd=0.20 sd=0.12 | +0.041 / +0.113 / +0.212 / 35.1% | +0.042 / +0.205 | +0.084 / 0.200 |
+| Jev noul|B empirical | +0.041 / +0.111 / +0.200 / 35.1% | +0.042 / +0.210 | +0.081 / 0.197 |
+| Jev score|A parametric bu=0.14 bd=0.22 sd=0.15 | +0.013 / +0.040 / +0.085 / 2.3% | +0.014 / +0.084 | +0.076 / 0.192 |
+| Jev score|A empirical | +0.011 / +0.032 / +0.076 / 0.7% | +0.012 / +0.071 | +0.068 / 0.185 |
+| Jev score|B parametric bu=0.21 bd=0.20 sd=0.13 | +0.018 / +0.054 / +0.113 / 7.3% | +0.020 / +0.107 | +0.081 / 0.197 |
+| Jev score|B empirical | +0.017 / +0.050 / +0.110 / 5.3% | +0.019 / +0.094 | +0.076 / 0.192 |
+| Jev noul parametric bu=0.31 bd=0.26 sd=0.12 | +0.028 / +0.079 / +0.154 / 18.9% | +0.029 / +0.142 | +0.073 / 0.189 |
+| Jev noul empirical | +0.027 / +0.074 / +0.155 / 18.3% | +0.028 / +0.147 | +0.069 / 0.185 |
+| Jev score parametric bu=0.17 bd=0.21 sd=0.14 | +0.015 / +0.046 / +0.097 / 4.1% | +0.017 / +0.094 | +0.078 / 0.195 |
+| Jev score empirical | +0.014 / +0.041 / +0.092 / 2.1% | +0.015 / +0.082 | +0.072 / 0.188 |
+| Jev all parametric bu=0.24 bd=0.23 sd=0.13 | +0.021 / +0.061 / +0.127 / 9.5% | +0.022 / +0.116 | +0.076 / 0.192 |
+| Jev all empirical | +0.020 / +0.057 / +0.126 / 7.9% | +0.022 / +0.110 | +0.071 / 0.187 |
+| Jev noul LOQO-rescaled empirical (comp mean 0.06, abs mean 0.85) | +0.005 / +0.022 / +0.065 / 0.4% | +0.007 / +0.064 | +0.076 / 0.192 |
+| Jev score LOQO-rescaled empirical (comp mean 0.05, abs mean 0.88) | +0.004 / +0.016 / +0.043 / 0.0% | +0.007 / +0.047 | +0.081 / 0.197 |
+| Jev all LOQO-rescaled empirical (comp mean 0.05, abs mean 0.87) | +0.004 / +0.018 / +0.051 / 0.1% | +0.007 / +0.053 | +0.079 / 0.195 |
+| Jev score thresholded at .5 | +0.000 / +0.000 / +0.000 / 0.0% | +0.003 / +0.008 | +0.068 / 0.184 |
+| Jev all thresholded at .5 | +0.002 / +0.022 / +0.114 / 0.7% | +0.006 / +0.138 | +0.078 / 0.194 |
+
+| judge | S1 routine two-sided, K=2 | S1c contrastive debate, K=3 | Sol-cx | S3 all eliminated | S5 Late Bronze Age collapse, listed debate only |
+|---|---|---|---|---|---|
+| oracle (revise2 up0) | 0.055 | 0.052 | 0.059 | 0.275 | 0.560 |
+| revise2 up.3 (the feared case) | 0.096 | 0.067 | 0.193 | 0.275 | 0.583 |
+| Jev noul|A parametric bu=0.19 bd=0.32 sd=0.14 | 0.079 | 0.061 | 0.121 | 0.183 | 0.506 |
+| Jev noul|A empirical | 0.077 | 0.059 | 0.118 | 0.179 | 0.489 |
+| Jev noul|B parametric bu=0.42 bd=0.20 sd=0.12 | 0.129 | 0.078 | 0.327 | 0.213 | 0.561 |
+| Jev noul|B empirical | 0.128 | 0.080 | 0.343 | 0.226 | 0.574 |
+| Jev score|A parametric bu=0.14 bd=0.22 sd=0.15 | 0.072 | 0.059 | 0.099 | 0.206 | 0.516 |
+| Jev score|A empirical | 0.075 | 0.055 | 0.093 | 0.223 | 0.528 |
+| Jev score|B parametric bu=0.21 bd=0.20 sd=0.13 | 0.081 | 0.062 | 0.129 | 0.213 | 0.529 |
+| Jev score|B empirical | 0.089 | 0.059 | 0.135 | 0.215 | 0.546 |
+| Jev noul parametric bu=0.31 bd=0.26 sd=0.12 | 0.099 | 0.068 | 0.198 | 0.198 | 0.532 |
+| Jev noul empirical | 0.099 | 0.069 | 0.206 | 0.201 | 0.533 |
+| Jev score parametric bu=0.17 bd=0.21 sd=0.14 | 0.076 | 0.061 | 0.112 | 0.210 | 0.523 |
+| Jev score empirical | 0.081 | 0.057 | 0.111 | 0.219 | 0.537 |
+| Jev all parametric bu=0.24 bd=0.23 sd=0.13 | 0.086 | 0.064 | 0.146 | 0.204 | 0.527 |
+| Jev all empirical | 0.089 | 0.063 | 0.151 | 0.210 | 0.532 |
+| Jev noul LOQO-rescaled empirical (comp mean 0.06, abs mean 0.85) | 0.059 | 0.051 | 0.071 | 0.229 | 0.516 |
+| Jev score LOQO-rescaled empirical (comp mean 0.05, abs mean 0.88) | 0.061 | 0.050 | 0.069 | 0.233 | 0.534 |
+| Jev all LOQO-rescaled empirical (comp mean 0.05, abs mean 0.87) | 0.059 | 0.050 | 0.066 | 0.232 | 0.526 |
+| Jev score thresholded at .5 | 0.050 | 0.050 | 0.050 | 0.284 | 0.543 |
+| Jev all thresholded at .5 | 0.061 | 0.050 | 0.050 | 0.284 | 0.543 |
+(Ω0: S1 .05, S1c .05, Sol-cx .05, S3 .10, S5 .40; A0 = Ω0 exactly on every row)

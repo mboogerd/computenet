@@ -1,0 +1,485 @@
+computenet-port http 8197
+deliberate: http://localhost:8197  (proposers: claude, codex, framing: claude, Config(argsPerCall=1, maxRounds=3, saturation=0.22, maxArgsPerSide=6, maxArgsPerSideChild=3, roundDecay=0.5, maxDepth=2147483647, maxClaims=90, workers=8, voiEpsilon=0.01, exploreLinks=true, startPaused=false))
+  UI not built — see demo/deliberate/README.md
+  layers: dfquad, wlo, jnb, woe, euler, qe, mlp  (headline consensus, consensus wlo, jnb, woe)
+  keeping deliberations in /Users/merlijn/Documents/local-projects/computenet/data/deliberate-multiclass/exp/recursive/runs/5QzLhsduNU/data (kill -9 safe)
+  cost: claude as reported by its CLI; codex $4.00/1M input · $0.40/1M cached input · $20.00/1M output · cache writes 1.25× input · prompts over 272K tokens 2× input, 1.5× output; jev $0.042/1M input · output free (assumed)
+deliberate: usage claude total_cost_usd=0.0 usage={"input_tokens":0,"output_tokens":0}
+deliberate: usage jev "usage":{"input_tokens":714,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":714,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":714,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":713,"output_tokens":66}
+deliberate: usage claude total_cost_usd=0.0090494 usage={"input_tokens":2,"cache_creation_input_tokens":1889,"cache_read_input_tokens":4547,"output_tokens":58,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1889,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":58,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1889,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1889},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0089734 usage={"input_tokens":2,"cache_creation_input_tokens":1890,"cache_read_input_tokens":4547,"output_tokens":50,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1890,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":50,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1890,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1890},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0092894 usage={"input_tokens":2,"cache_creation_input_tokens":1914,"cache_read_input_tokens":4547,"output_tokens":72,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1914,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":72,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1914,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1914},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0089634 usage={"input_tokens":2,"cache_creation_input_tokens":1895,"cache_read_input_tokens":4547,"output_tokens":47,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1895,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":47,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1895,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1895},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.009027400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":1891,"cache_read_input_tokens":4547,"output_tokens":55,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1891,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":55,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1891,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1891},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0091274 usage={"input_tokens":2,"cache_creation_input_tokens":1891,"cache_read_input_tokens":4547,"output_tokens":65,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1891,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":65,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1891,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1891},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1348,"output_tokens":151}
+deliberate: usage jev "usage":{"input_tokens":1346,"output_tokens":150}
+deliberate: usage claude total_cost_usd=0.0089934 usage={"input_tokens":2,"cache_creation_input_tokens":1910,"cache_read_input_tokens":4547,"output_tokens":44,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1910,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":44,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1910,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1910},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1354,"output_tokens":152}
+deliberate: usage claude total_cost_usd=0.0091294 usage={"input_tokens":2,"cache_creation_input_tokens":1889,"cache_read_input_tokens":4547,"output_tokens":66,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1889,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":66,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1889,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1889},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1383,"output_tokens":150}
+deliberate: usage claude total_cost_usd=0.0087694 usage={"input_tokens":2,"cache_creation_input_tokens":1889,"cache_read_input_tokens":4547,"output_tokens":30,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1889,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":30,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1889,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1889},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10638,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10610,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10612,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1897,"output_tokens":230}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10612,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":33,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":740,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":935,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":934,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":946,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":472,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":517,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21378,"cached_input_tokens":19328,"cache_write_input_tokens":0,"output_tokens":82,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21287,"cached_input_tokens":19328,"cache_write_input_tokens":0,"output_tokens":58,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1865,"output_tokens":230}
+deliberate: usage jev "usage":{"input_tokens":2001,"output_tokens":248}
+deliberate: usage jev "usage":{"input_tokens":727,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":956,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":953,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1068,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":742,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":954,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":940,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":941,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":734,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":735,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":66}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10641,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":33,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":515,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":439,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":479,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":517,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10643,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":31,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2039,"output_tokens":246}
+deliberate: usage claude total_cost_usd=0.0090334 usage={"input_tokens":2,"cache_creation_input_tokens":1915,"cache_read_input_tokens":4547,"output_tokens":46,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1915,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":46,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1915,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1915},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0098674 usage={"input_tokens":2,"cache_creation_input_tokens":2126,"cache_read_input_tokens":4547,"output_tokens":45,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2126,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":45,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2126,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2126},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":935,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":933,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":954,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":749,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":727,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":492,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":504,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.009779399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2129,"cache_read_input_tokens":4547,"output_tokens":35,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2129,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":35,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2129,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2129},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1548,"output_tokens":151}
+deliberate: usage claude total_cost_usd=0.0101154 usage={"input_tokens":2,"cache_creation_input_tokens":2158,"cache_read_input_tokens":4547,"output_tokens":57,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2158,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":57,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2158,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2158},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0100814 usage={"input_tokens":2,"cache_creation_input_tokens":2157,"cache_read_input_tokens":4547,"output_tokens":54,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2157,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":54,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2157,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2157},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1624,"output_tokens":152}
+deliberate: usage claude total_cost_usd=0.0094334 usage={"input_tokens":2,"cache_creation_input_tokens":2015,"cache_read_input_tokens":4547,"output_tokens":46,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2015,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":46,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2015,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2015},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.010549399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2034,"cache_read_input_tokens":4547,"output_tokens":150,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2034,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":150,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2034,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2034},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0093954 usage={"input_tokens":2,"cache_creation_input_tokens":2023,"cache_read_input_tokens":4547,"output_tokens":39,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2023,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":39,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2023,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2023},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2128,"output_tokens":258}
+deliberate: usage claude total_cost_usd=0.0093974 usage={"input_tokens":2,"cache_creation_input_tokens":1991,"cache_read_input_tokens":4547,"output_tokens":52,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1991,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":52,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1991,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1991},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0094314 usage={"input_tokens":2,"cache_creation_input_tokens":1997,"cache_read_input_tokens":4547,"output_tokens":53,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1997,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":53,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1997,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1997},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0211914 usage={"input_tokens":2,"cache_creation_input_tokens":1887,"cache_read_input_tokens":4547,"output_tokens":1273,"output_tokens_details":{"thinking_tokens":1224},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1887,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":1273,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1887,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1887},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0096294 usage={"input_tokens":2,"cache_creation_input_tokens":2019,"cache_read_input_tokens":4547,"output_tokens":64,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2019,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":64,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2019,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2019},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2047,"output_tokens":244}
+deliberate: usage jev "usage":{"input_tokens":1300,"output_tokens":151}
+deliberate: usage jev "usage":{"input_tokens":2132,"output_tokens":258}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10774,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":33,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0095094 usage={"input_tokens":2,"cache_creation_input_tokens":2029,"cache_read_input_tokens":4547,"output_tokens":48,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2029,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":48,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2029,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2029},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1272,"output_tokens":127}
+deliberate: usage claude total_cost_usd=0.0091334 usage={"input_tokens":2,"cache_creation_input_tokens":1920,"cache_read_input_tokens":4547,"output_tokens":54,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1920,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":54,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1920,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1920},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1364,"output_tokens":150}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10769,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2057,"output_tokens":233}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1024,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":1158,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":726,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":928,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":524,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10784,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":25,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":494,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10774,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10788,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2055,"output_tokens":232}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10695,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":718,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":739,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":1050,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1038,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1189,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":945,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":723,"output_tokens":67}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21603,"cached_input_tokens":19456,"cache_write_input_tokens":0,"output_tokens":56,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":527,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10693,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2611,"output_tokens":315}
+deliberate: usage jev "usage":{"input_tokens":538,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":2298,"output_tokens":273}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10620,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":931,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":936,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":734,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":930,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":939,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":730,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":935,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":928,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":730,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":502,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":512,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":552,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10622,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":35,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1936,"output_tokens":247}
+deliberate: usage jev "usage":{"input_tokens":716,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":994,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":920,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":935,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":731,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":438,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10728,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":29,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":494,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10697,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":36,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1359,"output_tokens":134}
+deliberate: usage jev "usage":{"input_tokens":732,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":937,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":934,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":563,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10730,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":23,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2356,"output_tokens":287}
+deliberate: usage jev "usage":{"input_tokens":957,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":730,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":952,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":734,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":962,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":580,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":518,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0099954 usage={"input_tokens":2,"cache_creation_input_tokens":2143,"cache_read_input_tokens":4547,"output_tokens":51,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2143,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":51,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2143,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2143},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0099874 usage={"input_tokens":2,"cache_creation_input_tokens":2141,"cache_read_input_tokens":4547,"output_tokens":51,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2141,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":51,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2141,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2141},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21255,"cached_input_tokens":19200,"cache_write_input_tokens":0,"output_tokens":61,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.009967400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2161,"cache_read_input_tokens":4547,"output_tokens":41,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2161,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":41,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2161,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2161},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1582,"output_tokens":153}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21259,"cached_input_tokens":19200,"cache_write_input_tokens":0,"output_tokens":63,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0100654 usage={"input_tokens":2,"cache_creation_input_tokens":2163,"cache_read_input_tokens":4547,"output_tokens":50,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2163,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":50,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2163,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2163},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1363,"output_tokens":151}
+deliberate: usage jev "usage":{"input_tokens":2055,"output_tokens":231}
+deliberate: usage jev "usage":{"input_tokens":730,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":984,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":731,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":985,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":542,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":472,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.009965400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2138,"cache_read_input_tokens":4547,"output_tokens":50,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2138,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":50,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2138,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2138},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0100394 usage={"input_tokens":2,"cache_creation_input_tokens":2144,"cache_read_input_tokens":4547,"output_tokens":55,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2144,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":55,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2144,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2144},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1577,"output_tokens":152}
+deliberate: usage claude total_cost_usd=0.0092634 usage={"input_tokens":2,"cache_creation_input_tokens":1930,"cache_read_input_tokens":4547,"output_tokens":63,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1930,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":63,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1930,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1930},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0090914 usage={"input_tokens":2,"cache_creation_input_tokens":1932,"cache_read_input_tokens":4547,"output_tokens":45,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1932,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":45,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1932,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1932},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1377,"output_tokens":150}
+deliberate: usage claude total_cost_usd=0.0088414 usage={"input_tokens":2,"cache_creation_input_tokens":1907,"cache_read_input_tokens":4547,"output_tokens":30,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1907,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":30,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1907,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1907},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0090234 usage={"input_tokens":2,"cache_creation_input_tokens":1910,"cache_read_input_tokens":4547,"output_tokens":47,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1910,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":47,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1910,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1910},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0101414 usage={"input_tokens":2,"cache_creation_input_tokens":2202,"cache_read_input_tokens":4547,"output_tokens":42,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2202,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":42,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2202,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2202},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1311,"output_tokens":150}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10784,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0101894 usage={"input_tokens":2,"cache_creation_input_tokens":2199,"cache_read_input_tokens":4547,"output_tokens":48,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2199,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":48,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2199,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2199},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1592,"output_tokens":151}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10769,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10804,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":26,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10774,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2045,"output_tokens":233}
+deliberate: usage jev "usage":{"input_tokens":723,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1022,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":524,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":521,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0101614 usage={"input_tokens":2,"cache_creation_input_tokens":2227,"cache_read_input_tokens":4547,"output_tokens":34,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2227,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":34,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2227,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2227},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1631,"output_tokens":162}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10780,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":26,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2044,"output_tokens":233}
+deliberate: usage jev "usage":{"input_tokens":1016,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":718,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1033,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":935,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":734,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":516,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":532,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10799,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2177,"output_tokens":244}
+deliberate: usage jev "usage":{"input_tokens":1018,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":1024,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":734,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":719,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":1032,"output_tokens":51}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10625,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":532,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":547,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.018747399999999997 usage={"input_tokens":2,"cache_creation_input_tokens":1956,"cache_read_input_tokens":4547,"output_tokens":1001,"output_tokens_details":{"thinking_tokens":959},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1956,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":1001,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1956,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1956},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10621,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":39,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1116,"output_tokens":120}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10826,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":29,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0100114 usage={"input_tokens":2,"cache_creation_input_tokens":2142,"cache_read_input_tokens":4547,"output_tokens":53,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2142,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":53,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2142,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2142},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1437,"output_tokens":141}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10821,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":27,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1696,"output_tokens":170}
+deliberate: usage claude total_cost_usd=0.0101634 usage={"input_tokens":2,"cache_creation_input_tokens":2170,"cache_read_input_tokens":4547,"output_tokens":57,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2170,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":57,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2170,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2170},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":930,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1532,"output_tokens":148}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10830,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":26,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21305,"cached_input_tokens":19328,"cache_write_input_tokens":0,"output_tokens":59,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":532,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":2184,"output_tokens":244}
+deliberate: usage jev "usage":{"input_tokens":1142,"output_tokens":120}
+deliberate: usage claude total_cost_usd=0.0102034 usage={"input_tokens":2,"cache_creation_input_tokens":2165,"cache_read_input_tokens":4547,"output_tokens":63,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2165,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":63,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2165,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2165},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1062,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":723,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1060,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":727,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":721,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1067,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":952,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":949,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":952,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":724,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":573,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":514,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":551,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":486,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0101434 usage={"input_tokens":2,"cache_creation_input_tokens":2160,"cache_read_input_tokens":4547,"output_tokens":59,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2160,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":59,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2160,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2160},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2572,"output_tokens":301}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10623,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1069,"output_tokens":113}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":982,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":971,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":714,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":473,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":521,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10754,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":39,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1530,"output_tokens":148}
+deliberate: usage jev "usage":{"input_tokens":731,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":735,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":940,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":936,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":588,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0092514 usage={"input_tokens":2,"cache_creation_input_tokens":1932,"cache_read_input_tokens":4547,"output_tokens":61,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1932,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":61,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1932,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1932},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0092594 usage={"input_tokens":2,"cache_creation_input_tokens":1934,"cache_read_input_tokens":4547,"output_tokens":61,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1934,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":61,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1934,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1934},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21335,"cached_input_tokens":19328,"cache_write_input_tokens":0,"output_tokens":33,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1420,"output_tokens":150}
+deliberate: usage jev "usage":{"input_tokens":924,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":721,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":463,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.009489399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":1959,"cache_read_input_tokens":4547,"output_tokens":74,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1959,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":74,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1959,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1959},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.010671400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2317,"cache_read_input_tokens":4547,"output_tokens":49,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2317,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":49,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2317,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2317},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21581,"cached_input_tokens":19456,"cache_write_input_tokens":0,"output_tokens":62,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0096634 usage={"input_tokens":2,"cache_creation_input_tokens":1965,"cache_read_input_tokens":4547,"output_tokens":89,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1965,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":89,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1965,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1965},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1526,"output_tokens":149}
+deliberate: usage jev "usage":{"input_tokens":1479,"output_tokens":150}
+deliberate: usage jev "usage":{"input_tokens":563,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0105794 usage={"input_tokens":2,"cache_creation_input_tokens":2319,"cache_read_input_tokens":4547,"output_tokens":39,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2319,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":39,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2319,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2319},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2304,"output_tokens":263}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10789,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0099054 usage={"input_tokens":2,"cache_creation_input_tokens":2148,"cache_read_input_tokens":4547,"output_tokens":40,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2148,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":40,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2148,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2148},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10670,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0099274 usage={"input_tokens":2,"cache_creation_input_tokens":2146,"cache_read_input_tokens":4547,"output_tokens":43,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2146,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":43,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2146,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2146},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1557,"output_tokens":151}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21633,"cached_input_tokens":19456,"cache_write_input_tokens":0,"output_tokens":63,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0089354 usage={"input_tokens":2,"cache_creation_input_tokens":1928,"cache_read_input_tokens":4547,"output_tokens":31,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1928,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":31,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1928,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1928},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2654,"output_tokens":316}
+deliberate: usage jev "usage":{"input_tokens":733,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":961,"output_tokens":51}
+deliberate: usage claude total_cost_usd=0.0098794 usage={"input_tokens":2,"cache_creation_input_tokens":2129,"cache_read_input_tokens":4547,"output_tokens":45,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2129,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":45,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2129,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2129},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":580,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":556,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0099054 usage={"input_tokens":2,"cache_creation_input_tokens":2128,"cache_read_input_tokens":4547,"output_tokens":48,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2128,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":48,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2128,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2128},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1521,"output_tokens":152}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21609,"cached_input_tokens":16512,"cache_write_input_tokens":0,"output_tokens":55,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2084,"output_tokens":245}
+deliberate: usage jev "usage":{"input_tokens":1000,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":996,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":744,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":984,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":739,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":728,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":554,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":516,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10810,"cached_input_tokens":8960,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.008961400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":1922,"cache_read_input_tokens":4547,"output_tokens":36,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1922,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":36,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1922,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1922},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0091674 usage={"input_tokens":2,"cache_creation_input_tokens":1921,"cache_read_input_tokens":4547,"output_tokens":57,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1921,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":57,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1921,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1921},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1344,"output_tokens":152}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10808,"cached_input_tokens":8960,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1274,"output_tokens":123}
+deliberate: usage jev "usage":{"input_tokens":748,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1024,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1027,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":752,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":544,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":540,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10855,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":25,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10954,"cached_input_tokens":5888,"cache_write_input_tokens":0,"output_tokens":27,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2284,"output_tokens":259}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":1057,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1214,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":717,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":573,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":573,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.009269399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":1989,"cache_read_input_tokens":4547,"output_tokens":40,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1989,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":40,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1989,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1989},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10781,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":27,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1189,"output_tokens":127}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10775,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10779,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":24,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0188754 usage={"input_tokens":2,"cache_creation_input_tokens":1923,"cache_read_input_tokens":4547,"output_tokens":1027,"output_tokens_details":{"thinking_tokens":971},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1923,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":1027,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1923,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1923},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2046,"output_tokens":233}
+deliberate: usage jev "usage":{"input_tokens":1348,"output_tokens":150}
+deliberate: usage jev "usage":{"input_tokens":1032,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1154,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":932,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":726,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":717,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":526,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":500,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10786,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2113,"output_tokens":245}
+deliberate: usage jev "usage":{"input_tokens":1000,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1004,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1011,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":719,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":508,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10643,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":545,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.010383400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2275,"cache_read_input_tokens":4547,"output_tokens":37,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2275,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":37,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2275,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2275},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1384,"output_tokens":127}
+deliberate: usage claude total_cost_usd=0.009403400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2020,"cache_read_input_tokens":4547,"output_tokens":41,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2020,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":41,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2020,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2020},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1216,"output_tokens":128}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10641,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1171,"output_tokens":123}
+deliberate: usage jev "usage":{"input_tokens":723,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":732,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":961,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":969,"output_tokens":51}
+deliberate: usage claude total_cost_usd=0.0098654 usage={"input_tokens":2,"cache_creation_input_tokens":2138,"cache_read_input_tokens":4547,"output_tokens":40,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2138,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":40,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2138,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2138},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":499,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":490,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10631,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":37,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0098934 usage={"input_tokens":2,"cache_creation_input_tokens":2140,"cache_read_input_tokens":4547,"output_tokens":42,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2140,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":42,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2140,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2140},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0104274 usage={"input_tokens":2,"cache_creation_input_tokens":2216,"cache_read_input_tokens":4547,"output_tokens":65,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2216,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":65,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2216,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2216},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1535,"output_tokens":152}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10660,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1257,"output_tokens":134}
+deliberate: usage jev "usage":{"input_tokens":928,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":493,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0103694 usage={"input_tokens":2,"cache_creation_input_tokens":2219,"cache_read_input_tokens":4547,"output_tokens":58,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2219,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":58,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2219,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2219},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2236,"output_tokens":245}
+deliberate: usage claude total_cost_usd=0.009101399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":1927,"cache_read_input_tokens":4547,"output_tokens":48,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1927,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":48,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1927,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1927},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10629,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":33,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.010217400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2246,"cache_read_input_tokens":4547,"output_tokens":32,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2246,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":32,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2246,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2246},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1915,"output_tokens":231}
+deliberate: usage jev "usage":{"input_tokens":728,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":735,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":983,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":989,"output_tokens":51}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10821,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":22,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":511,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":1366,"output_tokens":127}
+deliberate: usage jev "usage":{"input_tokens":504,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":532,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.010213400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2245,"cache_read_input_tokens":4547,"output_tokens":32,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2245,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":32,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2245,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2245},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10652,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":889,"output_tokens":41}
+deliberate: usage jev "usage":{"input_tokens":486,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10785,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10790,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.010405399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2283,"cache_read_input_tokens":4547,"output_tokens":36,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2283,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":36,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2283,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2283},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":2148,"output_tokens":246}
+deliberate: usage jev "usage":{"input_tokens":1021,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":723,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":720,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1019,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":521,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10837,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":518,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.009869399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2139,"cache_read_input_tokens":4547,"output_tokens":40,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2139,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":40,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2139,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2139},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0107494 usage={"input_tokens":2,"cache_creation_input_tokens":2274,"cache_read_input_tokens":4547,"output_tokens":74,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2274,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":74,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2274,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2274},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1712,"output_tokens":152}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10841,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":32,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2327,"output_tokens":262}
+deliberate: usage jev "usage":{"input_tokens":732,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":740,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1039,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":938,"output_tokens":51}
+deliberate: usage claude total_cost_usd=0.0180594 usage={"input_tokens":2,"cache_creation_input_tokens":1929,"cache_read_input_tokens":4547,"output_tokens":943,"output_tokens_details":{"thinking_tokens":894},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":1929,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":943,"cache_read_input_tokens":4547,"cache_creation_input_tokens":1929,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1929},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":516,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":1362,"output_tokens":150}
+deliberate: usage jev "usage":{"input_tokens":577,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0099654 usage={"input_tokens":2,"cache_creation_input_tokens":2143,"cache_read_input_tokens":4547,"output_tokens":48,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2143,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":48,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2143,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2143},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1556,"output_tokens":152}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10834,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10830,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":1669,"output_tokens":152}
+deliberate: usage jev "usage":{"input_tokens":1019,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1142,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":722,"output_tokens":67}
+deliberate: usage claude total_cost_usd=0.009973399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2155,"cache_read_input_tokens":4547,"output_tokens":44,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2155,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":44,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2155,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2155},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.0098774 usage={"input_tokens":2,"cache_creation_input_tokens":2126,"cache_read_input_tokens":4547,"output_tokens":46,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2126,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":46,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2126,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2126},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":720,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":609,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0098554 usage={"input_tokens":2,"cache_creation_input_tokens":2123,"cache_read_input_tokens":4547,"output_tokens":45,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2123,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":45,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2123,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2123},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":583,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":1534,"output_tokens":152}
+deliberate: usage jev "usage":{"input_tokens":490,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":490,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.0094454 usage={"input_tokens":2,"cache_creation_input_tokens":2018,"cache_read_input_tokens":4547,"output_tokens":46,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2018,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":46,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2018,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2018},"type":"message"}],"speed":"standard"}
+deliberate: usage claude total_cost_usd=0.009571399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2012,"cache_read_input_tokens":4547,"output_tokens":61,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2012,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":61,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2012,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2012},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1425,"output_tokens":150}
+deliberate: usage jev "usage":{"input_tokens":533,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10865,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":533,"output_tokens":20}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10861,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":29,"reasoning_output_tokens":0}}
+deliberate: usage jev "usage":{"input_tokens":2165,"output_tokens":233}
+deliberate: usage jev "usage":{"input_tokens":743,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":719,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":1342,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":1161,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":617,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":594,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.010007400000000001 usage={"input_tokens":2,"cache_creation_input_tokens":2161,"cache_read_input_tokens":4547,"output_tokens":45,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2161,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":45,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2161,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2161},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1583,"output_tokens":151}
+deliberate: usage jev "usage":{"input_tokens":513,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":513,"output_tokens":20}
+deliberate: usage claude total_cost_usd=0.010263399999999999 usage={"input_tokens":2,"cache_creation_input_tokens":2185,"cache_read_input_tokens":4547,"output_tokens":61,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2185,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":61,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2185,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2185},"type":"message"}],"speed":"standard"}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10773,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":28,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21321,"cached_input_tokens":19328,"cache_write_input_tokens":0,"output_tokens":64,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":21364,"cached_input_tokens":19328,"cache_write_input_tokens":0,"output_tokens":98,"reasoning_output_tokens":0}}
+deliberate: usage codex {"type":"turn.completed","usage":{"input_tokens":10777,"cached_input_tokens":8832,"cache_write_input_tokens":0,"output_tokens":22,"reasoning_output_tokens":0}}
+deliberate: usage claude total_cost_usd=0.0103454 usage={"input_tokens":2,"cache_creation_input_tokens":2183,"cache_read_input_tokens":4547,"output_tokens":70,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":2183,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":70,"cache_read_input_tokens":4547,"cache_creation_input_tokens":2183,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2183},"type":"message"}],"speed":"standard"}
+deliberate: usage jev "usage":{"input_tokens":1939,"output_tokens":231}
+deliberate: usage jev "usage":{"input_tokens":2018,"output_tokens":232}
+deliberate: usage jev "usage":{"input_tokens":2170,"output_tokens":231}
+deliberate: usage jev "usage":{"input_tokens":995,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":729,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":725,"output_tokens":66}
+deliberate: usage jev "usage":{"input_tokens":1025,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":726,"output_tokens":67}
+deliberate: usage jev "usage":{"input_tokens":930,"output_tokens":51}
+deliberate: usage jev "usage":{"input_tokens":526,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":511,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":494,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":500,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":478,"output_tokens":20}
+deliberate: usage jev "usage":{"input_tokens":523,"output_tokens":20}

@@ -1,0 +1,16 @@
+## C4/C7: today (=linear eM) vs design eM (tree linear, combination exact) vs fully exact, K=2
+| case | headline | today/linear | design hybrid | exact |
+|---|---|---|---|---|
+| top-level claim s=0.5, p=.5 | wlo+jnb+woe | 0.2052 | 0.2023 | 0.2023 |
+| top-level claim s=0.5, p=.5 | woe | 0.1942 | 0.1967 | 0.1967 |
+| top-level claim s=0.9, p=.5 | wlo+jnb+woe | 0.3793 | 0.3445 | 0.3445 |
+| top-level claim s=0.9, p=.5 | woe | 0.4328 | 0.3092 | 0.3092 |
+top credence per layer: {'wlo': 0.789, 'jnb': 0.809, 'woe': 0.765}
+| leaf under top(s=1) near WoE emax | woe | 0.0000 | 0.0760 | 0.0590 |
+| leaf under top(s=1) near WoE emax | wlo+jnb+woe | 0.0651 | 0.0900 | 0.0822 |
+| decisive leaf, p=0.5 | wlo+jnb+woe | 0.2289 | 0.2302 | 0.1888 |
+| decisive leaf, p=0.9 | wlo+jnb+woe | 0.0484 | 0.0458 | 0.0582 |
+| decisive leaf, p=0.1 | wlo+jnb+woe | 0.0526 | 0.0540 | 0.0604 |
+
+random trees (n=1278, exact eM>=1e-4): linear/exact quantiles 5%=0.62 25%=0.93 50%=1.03 75%=1.13 95%=1.31; min=0.19 max=2.05
+cases where linear < voiEps 0.01 but exact >= 0.01 (premature DIMINISHING): 15
