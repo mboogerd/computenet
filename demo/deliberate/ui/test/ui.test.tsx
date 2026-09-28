@@ -108,6 +108,15 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('2 of 3 claims settled');
   });
 
+  it('renders any node error as a failed call, with no sentinel exempt (EXP-06, computenet-dq2fy.24.1)', () => {
+    expect(renderToString(() => <TreeView graph={graph} root="q" />)).not.toContain('a call failed');
+    const errored: GraphDto = {
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'BUDGET', error: 'budget exhausted' } : n)),
+    };
+    expect(renderToString(() => <TreeView graph={errored} root="q" />)).toContain('a call failed');
+  });
+
   it('says in the question header when nothing left could change the answer, and nothing while the tree grows', () => {
     expect(renderToString(() => <TreeView graph={graph} root="q" />)).not.toContain('stopped:');
     const stopped: GraphDto = {
