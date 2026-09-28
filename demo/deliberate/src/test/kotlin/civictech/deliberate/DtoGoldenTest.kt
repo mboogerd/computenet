@@ -186,14 +186,15 @@ class DtoGoldenTest {
         )
 
         // ---- nodes ----
+        // SPEC FRA-02: a reading/position is a claim of its question (root = the question ref, proposer "reading"/"position").
         private val nQ1 = NodeDto(ref = "q1", kind = "CLAIM", credence = 0.5, root = "q1", text = "What does ‘freedom’ mean here?", depth = 0, status = Status.FRAMED, proposer = "question")
-        private val nPos1 = NodeDto(ref = "pos1", kind = "CLAIM", credence = 0.65, root = "pos1", text = "Reading A", depth = 0, status = Status.SATURATED, proposer = "question", positionOf = "q1")
-        private val nP1a = NodeDto(ref = "p1a", kind = "CLAIM", credence = 0.55, root = "pos1", text = "An argument for reading A.", depth = 1, proposer = "claude")
-        private val eP1a = NodeDto(ref = "e-p1a", kind = "EDGE", credence = 0.5, root = "pos1", polarity = "SUPPORT", source = "p1a", target = "pos1", strength = 0.5)
-        private val nPos2 = NodeDto(ref = "pos2", kind = "CLAIM", credence = 0.4, root = "pos2", text = "Reading B", proposer = "question", positionOf = "q1")
+        private val nPos1 = NodeDto(ref = "pos1", kind = "CLAIM", credence = 0.65, root = "q1", text = "Reading A", depth = 0, status = Status.SATURATED, proposer = "reading", positionOf = "q1")
+        private val nP1a = NodeDto(ref = "p1a", kind = "CLAIM", credence = 0.55, root = "q1", text = "An argument for reading A.", depth = 1, proposer = "claude")
+        private val eP1a = NodeDto(ref = "e-p1a", kind = "EDGE", credence = 0.5, root = "q1", polarity = "SUPPORT", source = "p1a", target = "pos1", strength = 0.5)
+        private val nPos2 = NodeDto(ref = "pos2", kind = "CLAIM", credence = 0.4, root = "q1", text = "Reading B", proposer = "reading", positionOf = "q1")
 
         private val nQ3 = NodeDto(ref = "q3", kind = "CLAIM", credence = 0.5, root = "q3", text = "Which option is best?", depth = 0, status = Status.FRAMED, proposer = "question")
-        private val nPos3 = NodeDto(ref = "pos3", kind = "CLAIM", credence = 0.5, root = "pos3", text = "Position C", proposer = "question", positionOf = "q3")
+        private val nPos3 = NodeDto(ref = "pos3", kind = "CLAIM", credence = 0.5, root = "q3", text = "Position C", proposer = "position", positionOf = "q3")
 
         private val nQ2 = NodeDto(
             ref = "q2", kind = "CLAIM", credence = 0.52, root = "q2",
