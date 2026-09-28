@@ -16,7 +16,9 @@ question's claim budget is spent), or stop it. The goal specification is [`SPEC.
    A new argument gets both judgments as soon as its round ends: plausibility in its own request, in parallel with one request that asks its strength, quality and relevance (see *Exploration*).
 3. Both judgments are recorded as stances of the user `jev`, on the claim and on the edge (an edge is a claim too: it has its own credence, and an undercutter attacks it).
 4. One cell graph propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **seven semantics at once** — every claim and edge cell computes a credence *vector*, one value per layer: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy) and `mlp`. An edge tells its target both its own credence vector (the strength) and its source's, so every semantics computes its own energy from the two — `jnb` conditions on the source's credence exactly as its definition says.
-5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it. Each claim cell derives both from its vector and emits them with it; they only summarise and never feed back into a layer. The deliberation code never propagates credence itself.
+5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it — visible only in the *research view* (below). Each claim cell derives both from its vector and emits them with it; they only summarise and never feed back into a layer. The deliberation code never propagates credence itself.
+6. The plausibility judgment also asks a **knowledge** question: does judging this claim need knowledge Jev doesn't have? "Outside my knowledge" maps the plausibility to 0.5 — neither believed nor doubted — whatever the five-level score would have said, rather than the low score a model gives what it hasn't heard of. No Jev request carries a current date; that pulled the judgment of claims about recent events.
+7. The question's root also gets a second verdict: the same arguments weighed from a **neutral prior** (½) instead of Jev's own first impression of the question — "what the arguments say" alongside "what Jev thought going in". See *First impression vs. arguments alone* below.
 
 ## Exploration
 
@@ -124,6 +126,25 @@ its top-3 cruxes — the claims and links with the highest value of information
 settled it is (plausible/strong, as a percentage) and, when known, which way
 it would pull the answer. Nothing is shown until the backend names a crux.
 
+### First impression vs. arguments alone
+
+Every question carries two verdicts. **First impression** is Jev's own
+plausibility of the question, judged before any argument exists — the prior
+the ordinary credence graph starts from and never stops reflecting. **Arguments
+alone** re-weighs the very same arguments, but starting the root from a neutral
+½ instead of that first impression. The gauge caption reads "first impression
+90% · arguments alone 62%"; when the two verdicts land on opposite sides of the
+answer, a note under the gauge says so and names which way the arguments alone
+lean — the first impression, not the arguments, is deciding the side.
+
+All seven credence rules are still computed for every claim, but by default
+the UI shows only the consensus: no spread band, no per-rule numbers, no "By
+rule" breakdown. A **rules** button in the header (or `?research` in the URL)
+turns on the *research view* for the session, restoring the band, the
+"rules: a–b%" caption and each rule's own value everywhere they used to show.
+The root claim's "before any argument" fact is labelled **First impression**
+(other claims keep "Plausible on its own").
+
 ## Prerequisites
 
 - JDK 21 (the Gradle toolchain provisions it) and Node 22+ for the UI.
@@ -203,7 +224,7 @@ chance to stop a side before the cap supplies the dependable stop.
 - `POST /question` with form field `text=…` returns `{"root":"<ref>"}`.
 - `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. The ref is a claim's, or an edge's to steer its link. Bad input returns 400, and an unknown ref returns 404.
 - `POST /question/pause` with form fields `root=<question ref>&paused=true|false` returns `ok` (SPEC CTL-05). A paused question finishes its rounds in flight and starts no new one; `EXPAND` on one of its claims or links still runs that one. The UI's **Pause/Resume** button sits next to the question's cost figure.
-- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh` and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer").
+- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh` and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer") and, model D, `firstImpression` (Jev's plausibility of the question before any argument), `neutralCredence` (the root's headline credence from the same arguments weighed from a neutral prior) and `verdictsDisagree` (the two fall on strictly opposite sides of 50%).
 - `GET /events` is an SSE stream. Every message is a full `GraphDto`, and messages are coalesced to at most about 10 per second.
 
 ## Cost and time
