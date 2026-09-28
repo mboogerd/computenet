@@ -175,11 +175,14 @@ class JevJudgeTest {
         // Around midnight the clock may have moved on while the requests were sent.
         val dates = listOf(today.minusDays(1), today, today.plusDays(1)).map { it.toString() }
         val isoDate = Regex("""\b\d{4}-\d{2}-\d{2}\b""")
+        // A date written out ("Today is September 28, 2026") has no ISO form and may sit under any key.
+        val years = (today.year - 1..today.year + 1).map { Regex("""\b$it\b""") }
         val dateWords = setOf("date", "today", "now", "time", "timestamp", "current", "year")
         seen.forEach { req ->
             val text = req.body.toString()
             dates.forEach { assertTrue(it !in text, "a request carries today's date: $text") }
             assertTrue(isoDate.find(text) == null, "a request carries a date: $text")
+            years.forEach { assertTrue(it.find(text) == null, "a request carries the current year: $text") }
             keysOf(req.body).forEach { key ->
                 val words = key.lowercase().split('_', '-', ' ').toSet()
                 assertTrue(words.none { it in dateWords }, "a request carries a current-date field `$key`")

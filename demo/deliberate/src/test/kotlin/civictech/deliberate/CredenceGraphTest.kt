@@ -80,6 +80,27 @@ class CredenceGraphTest {
     }
 
     @Test
+    fun `model D - only a question root carries the neutral-prior verdict, which follows its arguments`() {
+        val g = graph(LayerSet.of(listOf("dfquad")))
+        val r = g.createClaim("R", question = true)
+        g.setStance(r, "jev", 0.9)
+        awaitUntil("the root starts at its first impression, the neutral verdict at one half") {
+            g.credenceOf(r)?.let { abs(it.values.single() - 0.9) < 1e-12 && it.neutral == listOf(0.5) } == true
+        }
+        val a = g.createClaim("A")
+        val e = g.createEdge(a, r, Polarity.SUPPORT)
+        g.setStance(a, "jev", 0.8)
+        g.setStance(e, "jev", 0.5)
+        // DF-QuAD, one support of energy 0.5 x 0.8 = 0.4: 0.9 + 0.1 x 0.4 = 0.94 from 0.9, 0.5 + 0.5 x 0.4 = 0.7 from one half.
+        awaitUntil("both root verdicts follow the support") {
+            g.credenceOf(r)?.let { abs(it.values.single() - 0.94) < 1e-12 && abs(it.neutral!!.single() - 0.7) < 1e-12 } == true
+        }
+        awaitUntil("the argument's credence reaches the hub") { g.credenceOf(a)?.values?.single() == 0.8 && g.credenceOf(e) != null }
+        assertEquals(null, g.credenceOf(a)!!.neutral, "a claim that is not a question root carries no neutral-prior vector")
+        assertEquals(null, g.credenceOf(e)!!.neutral, "an edge carries no neutral-prior vector")
+    }
+
+    @Test
     fun `an undercutter lowers the edge's credence and with it the argument's influence`() {
         val g = graph(LayerSet.of(listOf("dfquad", "jnb")))
         val refs = g.tree()
