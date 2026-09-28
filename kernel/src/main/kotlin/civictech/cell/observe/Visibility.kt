@@ -34,12 +34,13 @@ data class VisibleVacuously(override val wave: Timestamp) : Visibility
  * the wave's completeness condition — [AlignedCompositeCell] shrunk it, never
  * dropped it silently. Produced when the wave that retired the write was
  * released with a non-empty dropped set: a DEGRADE-mode suspension still in
- * effect at release (including one still disclosed as "behind" because its
- * edge has not yet caught its watermark up to the flushed high-water for its
- * source, `[22-OBS-01]`), a terminal re-scope, or an edge closing while the
- * wave was held. [droppedEdges] names every excluded edge — see
- * [AlignedCompositeCell] and [AlignedComposite.droppedEdges] for how a wave's
- * dropped set is assembled and disclosed.
+ * effect at release, an edge dropped from an earlier wave that is still open
+ * and whose watermark has not yet caught up to the flushed high-water for its
+ * source — whether or not it is still suspended, i.e. including one already
+ * resumed but not yet caught up (`[22-OBS-01]`) — a terminal re-scope, or an
+ * edge closing while the wave was held. [droppedEdges] names every excluded
+ * edge — see [AlignedCompositeCell] and [AlignedComposite.droppedEdges] for
+ * how a wave's dropped set is assembled and disclosed.
  *
  * A handle for a wave published **before** the shrink is never retroactively
  * degraded: it completed [Visible] or [VisibleVacuously] when its own
