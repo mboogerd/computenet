@@ -25,6 +25,13 @@ export function App() {
   let sparkState: SparkState | undefined;
   const [sparkPoints, setSparkPoints] = createSignal<number[]>([]);
 
+  // computenet-lmfg8: activating a cruxes or "where the rules disagree" entry
+  // focuses that claim/link in TreeView (ClaimCard.focusInTree). `n` is bumped
+  // on every activation so re-picking the same entry re-scrolls/re-highlights.
+  let focusSeq = 0;
+  const [focusRequest, setFocusRequest] = createSignal<{ ref: string; n: number }>();
+  const focusClaim = (ref: string) => setFocusRequest({ ref, n: ++focusSeq });
+
   onMount(() => onCleanup(startSync()));
 
   // Nothing chosen yet (or the chosen one vanished): follow the newest question.
@@ -96,9 +103,9 @@ export function App() {
               <div class="qheader">
                 <Sparkline points={sparkPoints()} />
               </div>
-              <TreeView graph={graph()} root={root()} research={research()} />
-              <CruxesPanel graph={graph()} root={root()} />
-              <DisagreementPanel graph={graph()} root={root()} />
+              <TreeView graph={graph()} root={root()} research={research()} focus={focusRequest} />
+              <CruxesPanel graph={graph()} root={root()} onFocus={focusClaim} />
+              <DisagreementPanel graph={graph()} root={root()} onFocus={focusClaim} />
             </>
           )}
         </Show>
