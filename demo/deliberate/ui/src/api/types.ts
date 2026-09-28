@@ -24,7 +24,10 @@ export interface QuestionDto {
   yieldRecent?: number;
   /** Mean yield of every recorded round before those; absent until there are more than `yieldWindow`. */
   yieldEarlier?: number;
-  /** Why the tree stopped growing early: the claim budget, or diminishing returns that halted queued work. */
+  /**
+   * Why the tree stopped growing early: the claim budget (the hard cap), or — no
+   * work left — model C's value-of-information stop, when it left a node DIMINISHING.
+   */
   stoppedBy?: StoppedBy;
   /**
    * CTL-05: the question is paused — no new round starts until it is resumed.
@@ -39,6 +42,12 @@ export interface QuestionDto {
   projectedUsd?: number;
   /** What the figure is made of, per backend. */
   cost?: CostDto;
+  /**
+   * Model C, "what would change the answer": up to 3 node refs (claims below the
+   * root, links as EDGE refs) with the highest |sensitivity| × 4·p·(1 − p), best
+   * first. Has a Kotlin default and is always sent; optional so older fixtures stay valid.
+   */
+  cruxes?: string[];
 }
 
 /** SPEC §12: the details behind a question's cost figure. */
@@ -80,7 +89,7 @@ export interface BackendCostDto {
   note?: string;
 }
 
-export type StoppedBy = 'budget' | 'diminishing';
+export type StoppedBy = 'budget' | 'voi';
 
 export type Status =
   | 'QUEUED'
@@ -163,10 +172,16 @@ export interface NodeDto {
   /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
   quality?: number;
   /**
-   * SPEC §3 "Exploration order" priority: reach × relevance × quality × 4·p·(1 − p),
+   * Shown only since model C (the queue follows sensitivity × 4·p·(1 − p)): reach × relevance × quality × 4·p·(1 − p),
    * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
    */
   contribution?: number;
+  /**
+   * Model C: d headline(root) / d this node's credence — how far the question's
+   * answer moves per unit move of this node (root ≈ 1; a link's is its edge's).
+   * Absent until the sensitivity cells reached it.
+   */
+  sensitivity?: number;
   /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */
   reach?: number;
   /** Last Jev saturation probabilities per side (EXP-04). */

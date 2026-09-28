@@ -16,11 +16,12 @@ type ExpectedQuestionDto = {
   yieldRounds?: number;
   yieldRecent?: number;
   yieldEarlier?: number;
-  stoppedBy?: 'budget' | 'diminishing';
+  stoppedBy?: 'budget' | 'voi';
   paused?: boolean;
   costUsd?: number;
   projectedUsd?: number;
   cost?: CostDto;
+  cruxes?: string[];
 };
 type ExpectedCostDto = { backends: BackendCostDto[]; rounds: number; queued: number; perRoundUsd?: number };
 type ExpectedBackendCostDto = {
@@ -68,6 +69,7 @@ type ExpectedNodeDto = {
   relevance?: number;
   quality?: number;
   contribution?: number;
+  sensitivity?: number;
   reach?: number;
   proSaturation?: number;
   conSaturation?: number;

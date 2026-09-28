@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, onMount, Show } from 'solid-js';
+import { CruxesPanel } from './components/CruxesPanel';
 import { EmptyState } from './components/EmptyState';
 import { Legend } from './components/Legend';
 import { QuestionInput } from './components/QuestionInput';
@@ -60,7 +61,12 @@ export function App() {
 
       <main class="stage">
         <Show when={selected()} fallback={<EmptyState onPick={(q) => void ask(q)} disabled={asking()} />}>
-          {(root) => <TreeView graph={graph()} root={root()} />}
+          {(root) => (
+            <>
+              <TreeView graph={graph()} root={root()} />
+              <CruxesPanel graph={graph()} root={root()} />
+            </>
+          )}
         </Show>
       </main>
       <Toasts />
