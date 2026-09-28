@@ -530,7 +530,7 @@ typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
 parameters and `maxDepth` as a stop rule are removed by model C — §3
 "Sensitivity and value of information" — and appear only as history.
 `--voi-eps`'s default is a starting value from a one-off scratch model
-review, not a calibration run; `CALIBRATION.md` records its status.)
+review, not a calibration run.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
