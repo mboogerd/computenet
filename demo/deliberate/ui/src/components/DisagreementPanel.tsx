@@ -31,9 +31,9 @@ export function disagreementsOf(graph: GraphDto, root: string): Disagreement[] {
 
 /**
  * "Where the rules disagree": the question's claims with the widest spread
- * between the credence rules, widest first. Selecting an entry focuses that
- * claim in the tree the same way the cruxes panel does (CruxesPanel.tsx):
- * a `data-ref` marker, nothing more.
+ * between the credence rules, widest first. Like the cruxes panel
+ * (CruxesPanel.tsx), each entry carries only a `data-ref` marker: nothing
+ * reads it yet, so selecting an entry does not focus the claim in the tree.
  */
 export function DisagreementPanel(props: { graph: GraphDto; root: string }) {
   const rows = createMemo(() => disagreementsOf(props.graph, props.root));
