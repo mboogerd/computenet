@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildForest } from '../tree/buildTree';
-import type { ArgumentNode, TreeNode } from '../tree/buildTree';
+import type { TreeNode } from '../tree/buildTree';
 import { FramingSummary, Reading } from './Framing';
 import {
   ACTIVITY_VERB,
@@ -61,27 +61,20 @@ export function TreeView(props: { graph: GraphDto; root: string; research?: bool
   );
 }
 
-function tallyArg(a: ArgumentNode, acc: { pro: number; con: number }): void {
-  if (a.edge.polarity === 'SUPPORT') acc.pro++;
-  else acc.con++;
-  tallyNode(a.node, acc);
-  for (const la of a.linkArgs) tallyArg(la, acc);
-}
-
-function tallyNode(node: TreeNode, acc: { pro: number; con: number }): void {
-  for (const a of node.children) tallyArg(a, acc);
-}
-
 /**
- * UI-09: pro/con arguments across every position's whole subtree (every
- * level, not just each position's own direct arguments) — the same span
- * `questionProgress` already counts via `root`. Used for a framed question's
- * hero meta line, which has no arguments of its own to count with
- * {@link sideCounts} (its children live under its readings/positions).
+ * UI-09: a framed question's hero pro/con — each reading/position's own direct
+ * arguments ({@link sideCounts}), summed. That is the level an unframed hero
+ * counts (the root's direct arguments); deeper claims reply to an argument, not
+ * to the question, so their polarity is not counted for it. A framed root has
+ * no arguments of its own to count (they live under its readings/positions).
  */
 function framedSideCounts(positions: TreeNode[]): { pro: number; con: number } {
   const acc = { pro: 0, con: 0 };
-  for (const p of positions) tallyNode(p, acc);
+  for (const p of positions) {
+    const c = sideCounts(p);
+    acc.pro += c.pro;
+    acc.con += c.con;
+  }
   return acc;
 }
 
@@ -99,8 +92,8 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
     return map;
   });
   // UI-09: a framed root has no arguments of its own (they live under its
-  // readings/positions), so its hero meta line sums pro/con over every
-  // position's whole subtree instead of sideCounts(root).
+  // readings/positions), so its hero meta line sums each position's own
+  // direct pro/con instead of sideCounts(root).
   const frameCounts = createMemo(() => (framing() ? framedSideCounts(props.tree()?.positions ?? []) : undefined));
 
   return (

@@ -622,10 +622,12 @@ Every status change is broadcast.
   cost (§12), pause (CTL-05) and the cruxes panel (UI-07) stay per question,
   shown once, above the reading/position sections — they already span every
   position's subtree, since a position's claims count as the question's
-  (§3 "Framing", FRA-02). The hero's "N pro · M con" line follows the same
-  rule: a framed root has no arguments of its own (they live under its
-  readings/positions), so it sums pro/con over every position's whole
-  subtree instead of counting the root's direct children. The hero also
+  (§3 "Framing", FRA-02). The hero's "N pro · M con" line is adapted too:
+  a framed root has no arguments of its own (they live under its
+  readings/positions), so it sums each reading/position's own direct
+  pro/con arguments — the level an unframed hero counts, the root's direct
+  arguments; deeper claims reply to an argument, not to the question, and
+  are not counted. The hero also
   drops its own status/override control when framed, since EXPAND/STOP on a
   framed root run no round (FRA-02); each position keeps its own control
   instead. The Legend explains readings and positions.

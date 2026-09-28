@@ -9,6 +9,7 @@ import { QuestionInput } from '../src/components/QuestionInput';
 import { ThemeToggle } from '../src/components/ThemeToggle';
 import { TreeView } from '../src/components/TreeView';
 import { Facts } from '../src/components/ClaimCard';
+import { MockSource } from '../src/mock/mockSource';
 
 vi.mock('../src/sync/store', () => ({
   source: {
@@ -540,6 +541,23 @@ describe('UI-09 model A: framing', () => {
     const con = hero.match(/class="con-text"[^>]*>([^<]+)</)?.[1];
     expect(pro).toBe('1 pro');
     expect(con).toBe('0 con');
+  });
+
+  it('computenet-qkngi: the ?mock framed question counts each position\'s direct arguments, the level the unframed hero counts', () => {
+    // ?mock's framed READINGS question w0 (seedFinished): reading w0p1 has direct args
+    // w1 SUPPORT and w2 ATTACK, reading w0p2 has w6 ATTACK. Deeper claims — w3 attacking
+    // w1, and w4/w5 on the w1→w0p1 link — are replies to arguments, not to a position,
+    // so they are not counted: an unframed hero counts only the root's direct arguments.
+    const mock = new MockSource(10);
+    mock.start(() => undefined, () => undefined);
+    const g = mock.snapshot();
+    mock.stop();
+    const html = renderToString(() => <TreeView graph={g} root="w0" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    const hero = text.slice(text.indexOf('aria-label="Question"'), text.indexOf('class="readings"'));
+    expect(hero.match(/class="pro-text"[^>]*>([^<]+)</)?.[1]).toBe('1 pro');
+    expect(hero.match(/class="con-text"[^>]*>([^<]+)</)?.[1]).toBe('2 con');
+    expect(hero).not.toContain('aria-label="Exploration override"');
   });
 
   it('computenet-qkngi: framed hero has no question-level override control (EXPAND on a framed root runs no round)', () => {
