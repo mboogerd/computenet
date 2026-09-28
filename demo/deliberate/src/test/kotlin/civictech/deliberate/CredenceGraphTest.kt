@@ -285,9 +285,16 @@ class CredenceGraphTest {
         // call afterwards: sharesOf() and sharesMatch() each re-read the live hub, so a read taken
         // after awaitUntil returns can race a further, unrelated update and no longer be the value
         // the predicate actually observed (computenet-y6cj6).
+        // Every position, not just positions[0], must have reached its own stance before
+        // `before` is sampled: sharesMatch() only checks that sharesOf(root) is consistent
+        // with the positions' *current* credences, so it can hold while positions[1]/[2]
+        // are still rising toward their stance — sampling then bakes an unsettled, too-low
+        // baseline for them into `before`, and the later "the others fall" comparison can
+        // fail even though the model is right (computenet-ic9ym).
         lateinit var before: Shares
         awaitUntil("shares settle") {
-            (g.sharesMatch(root, positions) && g.near(positions[0], List(4) { 0.8 })).also { settled ->
+            val allPositionsSettled = positions.zip(stances3).all { (p, v) -> g.near(p, List(4) { v }) }
+            (allPositionsSettled && g.sharesMatch(root, positions)).also { settled ->
                 if (settled) before = g.sharesOf(root)!!
             }
         }
