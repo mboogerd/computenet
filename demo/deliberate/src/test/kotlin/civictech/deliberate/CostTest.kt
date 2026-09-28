@@ -139,10 +139,16 @@ class CostTest {
             Usage.report(CallUsage(Pricing.JEV, listOf("jev-test"), inputTokens = 1_000_000, outputTokens = 3))
         }
         override fun plausibility(question: String, claim: String) = 0.5.also { bill(question) }
-        /** Four single judgments (plausibility, strength, quality, relevance), each billed as its own request. */
+        /**
+         * Four single judgments (plausibility, strength, quality, relevance), each billed as its own
+         * request. Strength is side-dependent (0.8 support, 0.5 attack) so a scenario with equal
+         * supports and attacks still yields asymmetric DF-QuAD energy per side — see
+         * `cost survives a restart...` below, which relies on this to make its converged neutral-prior
+         * value diverge from `ClaimNode`'s 0.5 pristine default.
+         */
         override fun assess(question: String, path: List<String>, child: String, side: Side) = Assessment(
             plausibility = plausibility(question, child),
-            strength = 0.8.also { bill(question) },
+            strength = (if (side == Side.SUPPORT) 0.8 else 0.5).also { bill(question) },
             quality = 1.0.also { bill(question) },
             relevance = 1.0.also { bill(question) },
         )
@@ -271,26 +277,36 @@ class CostTest {
             // neutral-prior verdict (derived from the root cell) keeps moving briefly after idle(), and
             // a heuristic "settled" read (e.g. two reads N ms apart agreeing) can false-positive on that
             // gap under load, whatever N is — it is still guessing, not knowing, that propagation is done.
-            // PricedJudge/PricedProposer are fully deterministic here (fixed plausibility 0.5, strength
-            // 0.8, quality/relevance 1.0, no randomness) and argsPerCall=1/maxRounds=3/maxDepth=0/
-            // maxArgsPerSide=10 is symmetric: jevSaturates(0.0) is false at the default saturation
-            // threshold (0.22), so neither side ever saturates before the round limit, and the root always
-            // ends with exactly 3 supports and 3 attacks (7 claims total), each of DF-QuAD energy
-            // 0.8 x 0.5 = 0.4. DF-QuAD's probSum is then equal on both sides (1 - 0.6^3 = 0.784) so
-            // `combine` leaves the base (0.5, the average of the root's one 0.5 plausibility stance)
-            // exactly unchanged — for the ordinary verdict AND the neutral-prior one (shrinking a base
-            // that is already 0.5 towards the 0.5 neutral prior is a no-op regardless of weight). So the
-            // converged neutralCredence is the known constant 0.5, not a heuristically-guessed value;
-            // confirmed empirically as deterministic across 5/5 runs (computenet-y6cj6: claims=7,
-            // neutralCredence=0.5 every time — see also the model D `settledQuestion()` idiom at
-            // DeliberationEngineTest.kt:2131, which this mirrors). The bead's "converged 0.5421875"
-            // reading was never this test's true fixed point: it was the *restarted* engine's own
-            // not-yet-converged snapshot (the second engine replays and re-converges independently and
-            // can be caught mid-flight the same way), which is why both reads below wait on the same
-            // known target instead of on each other.
-            val expectedNeutral = 0.5
-            // Return the snapshot the predicate matched, never a second read: 0.5 is also the pristine
-            // value, so a later read can land mid-cascade (CI run 36381914733 read 0.527 right after a match).
+            // PricedJudge/PricedProposer are fully deterministic here (fixed plausibility 0.5, quality/
+            // relevance 1.0, no randomness) and argsPerCall=1/maxRounds=3/maxDepth=0/maxArgsPerSide=10 is
+            // symmetric in COUNT: jevSaturates(0.0) is false at the default saturation threshold (0.22),
+            // so neither side ever saturates before the round limit, and the root always ends with
+            // exactly 3 supports and 3 attacks (7 claims total). PricedJudge's strength is, however,
+            // side-dependent (0.8 support, 0.5 attack — see its assess() above), on purpose: at the old
+            // symmetric strength (0.8 both sides) the neutral-prior base (forced to exactly 0.5,
+            // `LayerSet.WEAK_PRIOR_WEIGHT` = 0) and `ClaimNode`'s pristine/default credence (also 0.5,
+            // Cells.kt:107-111) were numerically identical, so `awaitUntil { neutralCredence == 0.5 }`
+            // matched on the very first poll every time — before any propagation could be observed — and
+            // never actually proved settlement (computenet-fj3rb; the bead's own poll-counter experiment,
+            // 6/6 runs at polls=1, is the evidence for that). Each support now has DF-QuAD energy
+            // 0.8 x 0.5 = 0.4, each attack 0.5 x 0.5 = 0.25; probSum(supports) = 1 - 0.6^3 = 0.784,
+            // probSum(attacks) = 1 - 0.75^3 = 0.578125, and DF-QuAD's `combine` on a base of 0.5 is
+            // `base + (1 - base) * (es - ea)` when es >= ea, giving the converged neutralCredence =
+            // 0.5 + 0.5 * (0.784 - 0.578125) = 0.6029375 exactly — a value only the real argument cascade
+            // can produce, never the pristine default, so any match (first-poll or later) is now proof of
+            // genuine convergence rather than an artifact indistinguishable from "nothing happened yet".
+            // Re-verified with the same poll-counter instrumentation (reverted before commit): `before`
+            // matched on poll 1 (its cascade had already finished inside `e1.idle()`'s wait), `after`
+            // needed poll 2 (the restarted engine was still re-converging when first snapshotted) — both
+            // readings are non-default, so both are load-bearing evidence, not a first-poll coincidence.
+            // The bead's "converged 0.5421875" reading was never this test's true fixed point: it was the
+            // *restarted* engine's own not-yet-converged snapshot (the second engine replays and
+            // re-converges independently and can be caught mid-flight the same way), which is why both
+            // reads below wait on the same known target instead of on each other.
+            val expectedNeutral = 0.6029375
+            // Return the snapshot the predicate matched, never a second read: a later read can land
+            // mid-cascade even after a match (CI run 36381914733 read 0.527 right after a match on the
+            // old symmetric scenario, where the target coincided with the pristine default).
             fun DeliberationEngine.settledDurable(): QuestionDto {
                 var matched: QuestionDto? = null
                 awaitUntil("the root's neutral-prior verdict settles on $expectedNeutral", timeoutMs = 30_000) {
