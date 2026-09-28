@@ -268,12 +268,22 @@ class CostTest {
             // Cruxes (model C) come from sensitivity cells a restart rebuilds from scratch; they are not compared.
             fun durable(q: QuestionDto) = q.copy(cruxes = emptyList())
             // Idle means no claim is pending, not that credence propagation has settled: the model D
-            // neutral-prior verdict (derived from the root cell) is taken once two reads agree.
+            // neutral-prior verdict (derived from the root cell) keeps moving briefly after idle().
+            // A single "two reads 100ms apart agree" check can false-positive on that gap — under
+            // load, both reads can land on the pristine pre-propagation value before the async
+            // recompute cascade has even started (computenet-y6cj6: caught neutralCredence == 0.5,
+            // the pristine baseline, instead of the converged 0.5421875). Require the value to stay
+            // unchanged continuously for a sustained window (many fine-grained samples, not one
+            // lucky pair) before accepting it as settled.
             var before = durable(e1.snapshot().questions.single())
-            awaitUntil("the root's verdicts settle before the restart") {
-                Thread.sleep(100)
+            var stableSinceMs = System.currentTimeMillis()
+            awaitUntil("the root's verdicts settle before the restart", timeoutMs = 30_000) {
                 val next = durable(e1.snapshot().questions.single())
-                (next == before).also { before = next }
+                if (next != before) {
+                    before = next
+                    stableSinceMs = System.currentTimeMillis()
+                }
+                System.currentTimeMillis() - stableSinceMs >= 500
             }
             e1.close()
             assertNotNull(before.neutralCredence)
