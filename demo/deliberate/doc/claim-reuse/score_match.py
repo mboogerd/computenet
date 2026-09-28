@@ -7,6 +7,7 @@ S = {p["pair"]: p for p in common.expand(common.load("sample.json"), claims)}
 G = {g["pair"]: g for g in common.load("gold.json")}
 J = {v: {int(k): r["label"] for k, r in common.load(f"jev_{v}.json").items()} for v in ("bare", "ctx")}
 E = {int(k): v for k, v in common.load("jev_entail.json").items()}
+W = {int(k): v for k, v in common.load("implication_belief.json").items()}  # graded, pairs at cos >= .80
 P = common.load("pairs.json")
 assert set(G) == set(S), "gold must label every sampled pair"
 
@@ -40,6 +41,8 @@ for tau in (.85, .9):
     report("4-way Choice, + question/parent", lambda p: J["ctx"][p] == "SAME", tau)
     report("mutual implication", lambda p: p in E and E[p]["ab"] == E[p]["ba"] == "YES", tau)
     report("implication either direction", lambda p: p in E and "YES" in (E[p]["ab"], E[p]["ba"]), tau)
+    for t in (.5, .75):
+        report(f"graded mutual, min(w) >= {t}", lambda p: p in W and min(W[p]["w_ab"], W[p]["w_ba"]) >= t, tau)
 
 labs = ["SAME", "CONTEXT_DEPENDENT", "OVERLAP", "DIFFERENT"]
 print("\nconfusion, gold (rows) x Jev ctx (cols):", labs)
