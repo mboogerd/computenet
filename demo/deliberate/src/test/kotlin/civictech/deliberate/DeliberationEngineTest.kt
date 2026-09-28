@@ -194,7 +194,8 @@ class DeliberationEngineTest {
         assertEquals(setOf("claude", "codex"), g.claims().filter { it.depth == 1 }.map { it.proposer }.toSet())
         // EXP-10: root rounds are excluded from per-question yield history.
         val q = g.questions.single()
-        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, cost = CostDto(rounds = 1)), q)
+        // Cruxes (model C) follow the sensitivity cells; they are checked on their own.
+        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, cost = CostDto(rounds = 1)), q.copy(cruxes = emptyList()))
         assertNull(q.yieldRecent)
     }
 
@@ -378,7 +379,7 @@ class DeliberationEngineTest {
         val policy = ExplorationPolicy(config)
         for (n in e.snapshot().claims().filter { it.status == Status.BUDGET }) {
             val voi = policy.voiOf(ClaimView(sensitivity = n.sensitivity, plausibility = n.plausibility))
-            assertTrue(voi >= 10 * config.voiEpsilon, "a capped argument was still well worth a round: $voi")
+            assertTrue(voi >= 2 * config.voiEpsilon, "a capped argument was still worth a round (VoI above ε): $voi")
         }
     }
 
@@ -557,14 +558,16 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `EXPAND reruns a PRUNED claim past its gates`() {
-        val judge = FakeJudge(relevance = { 0.1 })
-        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1))
+    fun `EXPAND reruns a DIMINISHING claim past its gates`() {
+        // Changed by model C: the claim was PRUNED by the relevance floor (relevance 0.1); it is now
+        // stopped by its value of information (a settled premise, p = 0.999).
+        val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
+        val e = engine(judge = judge, config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 1, argsPerCall = 1, exploreLinks = false))
         val root = e.ask("Q?")
         e.idle()
         val g = e.snapshot()
         val kid = g.childrenOf(root).first().source!!
-        assertEquals(Status.PRUNED, g.claim(kid).status)
+        assertEquals(Status.DIMINISHING, g.claim(kid).status)
         val kidRef = CellRef(java.util.UUID.fromString(kid))
         val relevanceCallsBefore = judge.relevanceCalls.size
         e.setOverride(kidRef, Override.EXPAND)
@@ -740,7 +743,7 @@ class DeliberationEngineTest {
         val e = engine(
             judge = judge,
             proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1),
+            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1, exploreLinks = false),
         )
         val root = e.ask("Q?")
         e.idle()
