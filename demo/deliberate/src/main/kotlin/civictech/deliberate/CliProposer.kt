@@ -177,6 +177,32 @@ class CliProposer internal constructor(
 
     internal fun commandLine(prompt: String, outFile: File): List<String> = command(prompt, outFile)
 
+    /**
+     * Kills the timed-out process and every descendant [descendantsOf] can see, taking
+     * a second snapshot after a grace wait so a descendant that appears during that
+     * wait is still targeted (computenet-lmpn3). This narrows the miss window from
+     * "the whole timeout" to "the gap around the second snapshot"; it does NOT close
+     * it (computenet-i6gnd, decision accepted rather than fixed further):
+     *
+     * - A descendant that first becomes visible to `descendantsOf` only AFTER the
+     *   second snapshot — forked in the gap between that snapshot and
+     *   [Process.destroyForcibly], or (in a shell-scripted fixture) recorded later than
+     *   timeout + 1 s grace — still survives as an orphan.
+     * - A descendant that re-parents away (double-fork/daemonize) is outside
+     *   [ProcessHandle.descendants]'s reach at ANY snapshot count, because that API
+     *   walks the OS process tree by parent pid, not by process group.
+     *
+     * Closing both fully needs killing by process group instead of by discovered
+     * descendant, which needs the child launched as its own group leader
+     * (`setpgid` at fork time). The JDK exposes no such [ProcessBuilder] option, and
+     * neither host this runs on offers a drop-in fix: macOS ships no `setsid` binary,
+     * and reaching `setpgid` any other way (JNI, or wrapping every CLI invocation
+     * through an external interpreter to call it before `exec`) trades this
+     * unobserved-in-practice race for a new dependency in the hot path of every
+     * `claude`/`codex` call. No orphan from either CLI has actually been observed
+     * (they are direct children with no shell in between); the fix is deferred until
+     * one is.
+     */
     private fun destroyTree(process: Process) {
         fun snapshot(): List<ProcessHandle> = try {
             descendantsOf(process)
