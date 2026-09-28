@@ -39,7 +39,16 @@ export function Legend() {
             </span>
             Band
           </dt>
-          <dd>Several rules weigh the arguments; the number is their consensus, the band their range. Wide means they disagree.</dd>
+          <dd>
+            Several rules weigh the arguments; the number is their consensus. The <em>rules</em> button shows each rule's
+            value and the band of their range. Wide means they disagree.
+          </dd>
+          <dt>First impression</dt>
+          <dd>
+            Jev's judgment of the question before any argument: the starting point the arguments move. <em>Arguments
+            alone</em> weighs the same arguments from an even start; when the two land on different sides, the question
+            says so.
+          </dd>
           <dt>
             <span class="glyph glyph--stripe glyph--pro" aria-hidden="true" />
             <span class="pro-text">Pro</span> / <span class="glyph glyph--stripe glyph--con" aria-hidden="true" />

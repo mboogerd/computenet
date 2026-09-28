@@ -189,7 +189,8 @@ describe('SPEC UI contract', () => {
     const html = renderToString(() => <TreeView graph={bare} root="q" />);
     expect(html).toContain('no arguments yet — all rules agree with the first impression');
     expect(html).not.toContain('leaning yes');
-    expect(html).toContain('gauge__band');
+    // model D: only the consensus by default — the rules' band is in the research view
+    expect(html).not.toContain('gauge__band');
     expect(html).toMatch(/class="gauge__mark"[^>]*left:\s*63%/);
     expect(html).toContain('first impression: 63%');
   });
@@ -221,8 +222,22 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('58%');
   });
 
-  it('headlines the consensus with the rules\' spread as a band, and lists every rule', () => {
+  it('shows only the consensus by default: no band, no per-rule values', () => {
     const html = renderToString(() => <TreeView graph={layered} root="q" />);
+    expect(html).toContain('too close to call');
+    expect(html).toContain('41%');
+    expect(html).not.toContain('gauge__band');
+    expect(html).not.toContain('bar__band');
+    expect(html).not.toContain('rules disagree');
+    expect(html).not.toContain('rules: 31–72%');
+    const facts = renderToString(() => <Facts id="f" claim={layered.nodes[0]} members={layered.consensusMembers} />);
+    expect(facts).not.toContain('By rule');
+    expect(facts).not.toContain('weighted log-odds');
+    expect(facts).not.toContain('rules disagree');
+  });
+
+  it('headlines the consensus with the rules\' spread as a band, and lists every rule, in the research view', () => {
+    const html = renderToString(() => <TreeView graph={layered} root="q" research />);
     // consensus 41% drives the verdict, not the primary layer's 63%
     expect(html).toContain('too close to call');
     expect(html).not.toContain('leaning yes');
@@ -235,7 +250,7 @@ describe('SPEC UI contract', () => {
     expect(gauge.indexOf('gauge__fill')).toBeLessThan(gauge.indexOf('gauge__band'));
     expect(gauge).toMatch(/class="gauge__mark"[^>]*left:\s*41%/);
     expect(gauge).toContain('rules: 31–72%');
-    const facts = renderToString(() => <Facts id="f" claim={layered.nodes[0]} members={layered.consensusMembers} />);
+    const facts = renderToString(() => <Facts id="f" claim={layered.nodes[0]} members={layered.consensusMembers} research />);
     expect(facts).toContain('weighted log-odds · 41% · in consensus');
     expect(facts).toContain('Euler-based · 72%');
     expect(facts).toContain('rules disagree: 31–72%');
@@ -292,17 +307,39 @@ describe('SPEC UI contract', () => {
   it('says why a claim with no arguments has no spread band', () => {
     const leaf = layered.nodes.find((n) => n.ref === 'b')!;
     const flat = { ...leaf, consensus: 0.3, spreadLow: 0.3, spreadHigh: 0.3, credences: { dfquad: 0.3, wlo: 0.3 } };
-    const facts = renderToString(() => <Facts id="f" claim={flat} leaf />);
+    const facts = renderToString(() => <Facts id="f" claim={flat} leaf research />);
     expect(facts).toContain('no arguments yet — all rules agree with the first impression');
-    const notLeaf = renderToString(() => <Facts id="f" claim={flat} />);
+    const notLeaf = renderToString(() => <Facts id="f" claim={flat} research />);
     expect(notLeaf).toContain('rules agree');
     expect(notLeaf).not.toContain('no arguments yet');
     // the card draws a tick for the single value instead of an invisible band
     const tree: GraphDto = { ...graph, nodes: graph.nodes.map((n) => (n.ref === 'b' ? flat : n)) };
-    const html = renderToString(() => <TreeView graph={tree} root="q" />);
+    const html = renderToString(() => <TreeView graph={tree} root="q" research />);
     expect(html).toContain('bar--leaf');
     expect(html).toContain('bar__tick');
     expect(html).toContain('no arguments yet — all rules agree with the first impression');
+  });
+
+  it('model D: shows the first impression and what the arguments alone say, and flags a disagreement', () => {
+    const q = { ...graph.questions[0], firstImpression: 0.9, neutralCredence: 0.3, verdictsDisagree: true };
+    const html = renderToString(() => <TreeView graph={{ ...graph, questions: [q] }} root="q" />);
+    const text = html.replace(/<!--[^>]*-->/g, '');
+    expect(text).toContain('first impression 90% · arguments alone 30%');
+    expect(text).toMatch(/class="hero__prior"[^>]*role="note"/);
+    expect(text).toContain('The first impression decides the side: weighed from a neutral start, the arguments lean no (30%).');
+    // the research view adds the rules' range to the same caption
+    const research = renderToString(() => <TreeView graph={{ ...graph, questions: [q] }} root="q" research />).replace(/<!--[^>]*-->/g, '');
+    expect(research).toContain('first impression 90% · arguments alone 30% · rules agree: 63%');
+    // agreeing verdicts are not flagged
+    const agree = { ...q, neutralCredence: 0.7, verdictsDisagree: false };
+    const calm = renderToString(() => <TreeView graph={{ ...graph, questions: [agree] }} root="q" />);
+    expect(calm).toContain('arguments alone 70%');
+    expect(calm).not.toContain('hero__prior');
+    // the root's facts name its plausibility as the first impression
+    const root = { ...graph.nodes[0], plausibility: 0.9 };
+    const facts = renderToString(() => <Facts id="f" claim={root} />);
+    expect(facts).toContain('First impression');
+    expect(facts).not.toContain('Plausible on its own');
   });
 
   it('shows what the deliberation is doing now, links included', () => {

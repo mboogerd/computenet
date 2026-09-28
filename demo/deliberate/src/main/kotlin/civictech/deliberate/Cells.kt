@@ -47,6 +47,12 @@ data class Credence(
     val spreadLow: Double,
     val spreadHigh: Double,
     val size: Double,
+    /**
+     * Model D, a question root only: the same arguments weighed from a neutral
+     * prior ([LayerSet.WEAK_PRIOR_WEIGHT]) instead of Jev's first impression —
+     * "what the arguments say". Null for every other node.
+     */
+    val neutral: List<Double>? = null,
 ) : java.io.Serializable, Magnitude {
     override fun size(): Double = size
 }
@@ -86,6 +92,8 @@ private fun maxDelta(a: List<Double>, b: List<Double>): Double =
 open class ClaimNode(
     override val ref: CellRef,
     protected val layers: LayerSet,
+    /** Model D: a question root, which also emits [Credence.neutral]. */
+    private val neutralPrior: Boolean = false,
 ) : Cell {
     val stanceInlet = registerPort("stanceInlet", FanInlet.create<Propagate<Stance>>())
     val influenceInlet = registerPort("influenceInlet", FanInlet.create<Propagate<Influence>>())
@@ -96,7 +104,11 @@ open class ClaimNode(
     /** Ref-sorted so every layer folds its arguments in one fixed order (FP determinism). */
     private val influences = TreeMap<CellRef, Influence>(REF_ORDER)
 
-    var credence: Credence = credenceOf(layers.evaluate(emptyList(), emptyList(), emptyList()), size = 0.0)
+    var credence: Credence = credenceOf(
+        layers.evaluate(emptyList(), emptyList(), emptyList()),
+        if (neutralPrior) layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT) else null,
+        size = 0.0,
+    )
         private set
 
     init {
@@ -112,8 +124,8 @@ open class ClaimNode(
         credenceOutlet.catchUpOnLinked { credence.copy(size = 0.0) }
     }
 
-    private fun credenceOf(values: List<Double>, size: Double) =
-        Credence(ref, values, layers.consensus(values), values.min(), values.max(), size)
+    private fun credenceOf(values: List<Double>, neutral: List<Double>?, size: Double) =
+        Credence(ref, values, layers.consensus(values), values.min(), values.max(), size, neutral)
 
     private fun recompute() {
         val attacks = ArrayList<List<Arg>>()
@@ -123,8 +135,10 @@ open class ClaimNode(
             if (i.polarity == Polarity.SUPPORT) supports += args else attacks += args
         }
         val values = layers.evaluate(stances.values, attacks, supports)
-        if (values != credence.values) {
-            credence = credenceOf(values, maxDelta(values, credence.values))
+        val neutral = if (neutralPrior) layers.evaluate(stances.values, attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT) else null
+        if (values != credence.values || neutral != credence.neutral) {
+            val size = maxOf(maxDelta(values, credence.values), neutral?.let { maxDelta(it, credence.neutral!!) } ?: 0.0)
+            credence = credenceOf(values, neutral, size)
             credenceOutlet.call.propagate(credence)
             onCredence()
         }
@@ -194,7 +208,7 @@ class CredenceHubView(private val onUpdate: () -> Unit = {}) : View<Credence, Ma
     private var credences: Map<CellRef, Credence> = emptyMap()
 
     override fun apply(delta: Credence): Boolean {
-        val changed = credences[delta.source]?.values != delta.values
+        val changed = credences[delta.source].let { it?.values != delta.values || it.neutral != delta.neutral }
         if (changed) {
             credences = credences + (delta.source to delta)
             onUpdate()

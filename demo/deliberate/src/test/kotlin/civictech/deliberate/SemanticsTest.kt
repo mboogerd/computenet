@@ -145,6 +145,32 @@ class SemanticsTest {
     }
 
     @Test
+    fun `a claim outside the judge's knowledge enters every layer and the consensus at one half`() {
+        val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
+        val values = all.evaluate(listOf(Judge.OUTSIDE_KNOWLEDGE), emptyList(), emptyList())
+        values.forEach { assertEquals(0.5, it, 1e-12) }
+        assertEquals(0.5, all.consensus(values), 1e-12)
+    }
+
+    @Test
+    fun `the second root verdict weighs the same arguments from a neutral prior`() {
+        val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
+        val attacks = listOf(List(all.ids.size) { Arg(strength = 0.5, credence = 0.8) })
+        val neutral = all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = LayerSet.WEAK_PRIOR_WEIGHT)
+        // With the default weight 0 the first impression drops out entirely: it is the verdict from ½.
+        assertEquals(0.0, LayerSet.WEAK_PRIOR_WEIGHT)
+        assertEquals(all.evaluate(listOf(LayerSet.NEUTRAL_PRIOR), attacks, emptyList()), neutral)
+        // Weight 1 is the ordinary credence; a weight in between shrinks the prior towards ½.
+        assertEquals(all.evaluate(listOf(0.9), attacks, emptyList()), all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = 1.0))
+        all.evaluate(listOf(0.7), attacks, emptyList())
+            .zip(all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = 0.5))
+            .forEach { (a, b) -> assertEquals(a, b, 1e-12) }
+        assertTrue(LayerSet.oppositeSides(0.54, 0.3))
+        assertTrue(!LayerSet.oppositeSides(0.94, 0.7))
+        assertTrue(!LayerSet.oppositeSides(0.5, 0.2), "½ is on neither side")
+    }
+
+    @Test
     fun `unknown semantics are refused`() {
         assertFailsWith<IllegalArgumentException> { SemanticsCatalog.of("nope") }
     }

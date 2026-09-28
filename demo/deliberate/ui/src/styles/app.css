@@ -152,6 +152,21 @@ button {
   transform: rotate(180deg);
 }
 
+/* Model D: the research view toggle — a text pill, lit while per-rule values show. */
+.research {
+  width: auto;
+  padding: 0 10px;
+  border-radius: 15px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.research.is-on {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--surface-sunk);
+}
+
 /* ---------- legend ---------- */
 
 .legend {
@@ -619,6 +634,15 @@ button {
 .crux__meta {
   font-size: var(--text-xs);
   color: var(--text-3);
+  cursor: help;
+}
+
+/* Model D: the first impression, not the arguments, decides the side — a quiet note under the gauge */
+.hero__prior {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  font-style: italic;
   cursor: help;
 }
 

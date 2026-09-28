@@ -265,8 +265,18 @@ class CostTest {
                 .also { engines += it }
             val root = e1.ask("Durable?")
             e1.idle()
+            // Cruxes (model C) come from sensitivity cells a restart rebuilds from scratch; they are not compared.
+            fun durable(q: QuestionDto) = q.copy(cruxes = emptyList())
+            // Idle means no claim is pending, not that credence propagation has settled: the model D
+            // neutral-prior verdict (derived from the root cell) is taken once two reads agree.
+            var before = durable(e1.snapshot().questions.single())
+            awaitUntil("the root's verdicts settle before the restart") {
+                Thread.sleep(100)
+                val next = durable(e1.snapshot().questions.single())
+                (next == before).also { before = next }
+            }
             e1.close()
-            val before = e1.snapshot().questions.single()
+            assertNotNull(before.neutralCredence)
             assertTrue(before.costUsd > 0)
             assertNotNull(before.projectedUsd)
             val record = store.load().getValue("q:${root.id}")
@@ -275,8 +285,9 @@ class CostTest {
             val e2 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
                 .also { engines += it }
             e2.idle()
-            // Cruxes (model C) are derived from the sensitivity cells, which a restart recomputes asynchronously.
-            assertEquals(before.copy(cruxes = emptyList()), e2.snapshot().questions.single().copy(cruxes = emptyList()))
+            // A restart recomputes the neutral-prior verdict from the replayed inputs: it must converge to where it was.
+            runCatching { awaitUntil("the restarted question matches", timeoutMs = 20_000) { durable(e2.snapshot().questions.single()) == before } }
+            assertEquals(before, durable(e2.snapshot().questions.single()))
         } finally {
             dir.deleteRecursively()
         }

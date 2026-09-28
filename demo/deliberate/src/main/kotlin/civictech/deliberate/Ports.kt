@@ -121,7 +121,9 @@ interface Judge {
      * CRED-01: plausibility of [claim] in [0,1], judged on the root [question]
      * and the claim alone — without its path or arguments. The engine asks it
      * for a claim that has no attach-time [assess] result (the root, or an
-     * argument whose assessment failed).
+     * argument whose assessment failed). A claim the judge says is outside its
+     * knowledge is [OUTSIDE_KNOWLEDGE] (model D). No current date is passed:
+     * the judgment rests on the judge's own knowledge.
      */
     fun plausibility(question: String, claim: String): Double
 
@@ -156,4 +158,13 @@ interface Judge {
      */
     fun bearing(ctx: ClaimContext, link: LinkContext, candidates: List<String>): List<Bearing> =
         candidates.map { Bearing.DISPUTES_CLAIM }
+
+    companion object {
+        /**
+         * Model D: the plausibility of a claim the judge answers is outside its
+         * knowledge — neither believed nor doubted, rather than the low score a
+         * model gives what it has not heard of.
+         */
+        const val OUTSIDE_KNOWLEDGE = 0.5
+    }
 }

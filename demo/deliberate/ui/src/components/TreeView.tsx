@@ -7,9 +7,12 @@ import {
   agreementText,
   bandCaption,
   clip,
+  isResearch,
   LEAF_AGREEMENT,
   linkParts,
   pct,
+  priorDecidesText,
+  priorText,
   questionProgress,
   shown,
   STATUS_HINT,
@@ -24,7 +27,8 @@ import { CostBadge } from './CostBadge';
 import { OverrideControl } from './OverrideControl';
 import { PauseControl } from './PauseControl';
 
-export function TreeView(props: { graph: GraphDto; root: string }) {
+/** [research]: model D's research view — per-rule values shown (default: the `?research` URL flag). */
+export function TreeView(props: { graph: GraphDto; root: string; research?: boolean }) {
   const tree = createMemo(() => buildTree(props.graph, props.root));
   const index = createMemo<TreeIndex>(() => {
     const t = tree();
@@ -36,6 +40,7 @@ export function TreeView(props: { graph: GraphDto; root: string }) {
     selected,
     toggle: (ref) => setSelected((cur) => (cur === ref ? undefined : ref)),
     members: () => props.graph.consensusMembers ?? DEFAULT_CONSENSUS,
+    research: () => props.research ?? isResearch(),
   };
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -90,18 +95,28 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                 title={
                   unargued()
                     ? LEAF_AGREEMENT
-                    : `Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())}). The band is the range from the lowest to the highest rule.`
+                    : props.sel.research?.()
+                      ? `Credence: how likely the answer is yes, after weighing every argument — the consensus of the credence rules (${agreementText(claim())}). The band is the range from the lowest to the highest rule.`
+                      : 'Credence: how likely the answer is yes, after weighing every argument from Jev\'s first impression — the consensus of the credence rules.'
                 }
               >
                 <span class="gauge__con" aria-hidden="true">no</span>
                 <span class="gauge__track" aria-hidden="true">
                   <span class="gauge__fill" style={{ transform: `scaleX(${shown(claim())})` }} />
-                  <SpreadBand node={claim()} class="gauge__band" />
+                  <Show when={props.sel.research?.()}>
+                    <SpreadBand node={claim()} class="gauge__band" />
+                  </Show>
                   <span class="gauge__mark" style={{ left: `${shown(claim()) * 100}%` }} />
                   <span class="gauge__mid" />
                 </span>
                 <span class="gauge__pro" aria-hidden="true">yes</span>
-                <p class="gauge__caption">{unargued() ? `first impression: ${pct(shown(claim()))}` : bandCaption(claim())}</p>
+                <p class="gauge__caption">
+                  {unargued()
+                    ? `first impression: ${pct(shown(claim()))}`
+                    : [priorText(question()), props.sel.research?.() ? bandCaption(claim()) : undefined]
+                        .filter((x) => x !== undefined)
+                        .join(' · ')}
+                </p>
               </div>
 
               <div class="hero__row">
@@ -182,6 +197,14 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                 </span>
               </p>
 
+              <Show when={!unargued() && priorDecidesText(question())}>
+                {(text) => (
+                  <p class="hero__prior" role="note" title="Jev's first impression of the question is the prior the arguments start from; from a neutral ½ they point the other way">
+                    {text()}
+                  </p>
+                )}
+              </Show>
+
               <NowLine graph={props.graph} root={props.root} />
 
               <Show when={open()}>
@@ -190,6 +213,7 @@ function Question(props: { root: string; index: () => TreeIndex; graph: () => Gr
                   claim={claim()}
                   leaf={e().node.children.length === 0}
                   members={props.sel.members?.()}
+                  research={props.sel.research?.()}
                 />
               </Show>
             </section>
