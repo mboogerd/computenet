@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { NodeDto } from '../src/api/types';
+import type { FramingDto, NodeDto } from '../src/api/types';
 import {
   agreementText,
+  framingText,
   layerLines,
   phaseOf,
+  priorDecidesText,
+  priorText,
   STATUS_HINT,
   STATUS_LABEL,
   stoppedHint,
@@ -196,5 +199,30 @@ describe('credence layers', () => {
   it('names the UNDERCUT triage action', () => {
     expect(triageText({ ADD: 1, UNDERCUT: 2 })).toBe('1 added · 2 undercut a link');
     expect(triageText({ OTHER_SIDE: 1 }, true)).toBe('1 moved to parent');
+  });
+});
+
+describe('model A framing', () => {
+  it('reads a READINGS heading with its term, or "depends on the reading" without one', () => {
+    const withTerm: FramingDto = { mode: 'READINGS', term: 'sleep', positions: [] };
+    const noTerm: FramingDto = { mode: 'READINGS', positions: [] };
+    expect(framingText(withTerm)).toBe('depends on what you mean by sleep');
+    expect(framingText(noTerm)).toBe('depends on the reading');
+  });
+
+  it('reads a POSITIONS heading as "several possible answers", term or not', () => {
+    const positions: FramingDto = { mode: 'POSITIONS', positions: [] };
+    expect(framingText(positions)).toBe('several possible answers');
+  });
+
+  it('priorText/priorDecidesText read a PositionDto the same way they read a QuestionDto', () => {
+    const p1 = { firstImpression: 0.9, neutralCredence: 0.55, verdictsDisagree: false };
+    const p2 = { firstImpression: 0.1, neutralCredence: 0.4, verdictsDisagree: true };
+    expect(priorText(p1)).toBe('first impression 90% · arguments alone 55%');
+    expect(priorText(p2)).toBe('first impression 10% · arguments alone 40%');
+    expect(priorDecidesText(p1)).toBeUndefined();
+    expect(priorDecidesText(p2)).toBe(
+      'The first impression decides the side: weighed from a neutral start, the arguments lean no (40%).',
+    );
   });
 });

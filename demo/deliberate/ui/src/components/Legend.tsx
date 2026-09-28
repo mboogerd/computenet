@@ -49,6 +49,11 @@ export function Legend() {
             alone</em> weighs the same arguments from an even start; when the two land on different sides, the question
             says so.
           </dd>
+          <dt>Readings / positions</dt>
+          <dd>
+            An ambiguous question is split into readings — each explored on its own, with its own verdict. An open
+            question is split into possible answers instead; their shares sum to 100%.
+          </dd>
           <dt>
             <span class="glyph glyph--stripe glyph--pro" aria-hidden="true" />
             <span class="pro-text">Pro</span> / <span class="glyph glyph--stripe glyph--con" aria-hidden="true" />

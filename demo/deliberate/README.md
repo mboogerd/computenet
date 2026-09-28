@@ -145,6 +145,36 @@ turns on the *research view* for the session, restoring the band, the
 The root claim's "before any argument" fact is labelled **First impression**
 (other claims keep "Plausible on its own").
 
+### Framing
+
+Before a question's first round, Claude is asked once whether it should be
+explored as asked, or **framed**: split into several readings of an
+ambiguous term, or several competing answers to an open question, each then
+explored as a root of its own. "Do fish sleep?" comes back **READINGS**
+(ambiguous term "sleep"): "Do fish enter a rest state with lowered
+responsiveness?" and "Do fish show REM-like brain activity?", up to 3. "How
+many will attend?" comes back **POSITIONS** (an open question): up to 5
+mutually exclusive answers, e.g. "under 100", "100 to 300", "over 300". A
+question with one natural reading comes back unframed and explores as asked;
+so does a failed framing call.
+
+Each reading or position is a claim of the same question, at the question's
+depth, explored exactly like a root — its own first impression, its own
+"arguments alone" verdict, its own cruxes — while the question root itself
+takes no round and finishes **FRAMED**. For POSITIONS, each position's
+share of the answer is a softmax over their credences (temperature 1 is
+plain odds normalisation: credences (0.8, 0.6, 0.2) give shares (0.70, 0.26,
+0.04)); the shares are derived for display only and never feed back into any
+credence.
+
+In the UI a framed question's hero keeps its text but, since there is no
+single yes/no verdict to show, replaces the gauge with the framing line
+("depends on what you mean by sleep", or "several possible answers" with the
+position shares as a small bar chart) and lists one section per reading or
+position below — each with its own gauge, caption, status, override control
+and argument tree. The question's cost, pause control, "now" line and cruxes
+panel stay above them, shown once.
+
 ## Prerequisites
 
 - JDK 21 (the Gradle toolchain provisions it) and Node 22+ for the UI.
@@ -308,6 +338,7 @@ fact-check and blind pairwise preference against each provider's default.
 |---|---|---|
 | Claude proposer | CLI default (`claude-sonnet-5`) | Haiku 4.5 only qualifies with thinking off and is not cheaper per call (Sonnet reads cached prompt tokens); Opus is ~4× the cost. |
 | Claude merger | CLI default (`claude-sonnet-5`) | Nothing cheaper qualified. |
+| Claude framer | CLI default (`claude-sonnet-5`) | Same process gate and timeout as the merger; not part of the model experiment above — not measured. |
 | Codex proposer | `gpt-5.6-sol`, `model_reasoning_effort="none"` | Same-or-better Jev contribution than effort `low`, ~6 s instead of ~17 s per call. |
 
 `gpt-5.6-luna` (effort `none`) scores as well by Jev at ~1/30 of the Codex

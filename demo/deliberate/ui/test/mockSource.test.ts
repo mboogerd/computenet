@@ -164,4 +164,60 @@ describe('MockSource', () => {
     expect(source.snapshot().nodes.find((n) => n.ref === explored[0].ref)?.override).toBe('EXPAND');
     source.stop();
   });
+
+  it('model A: the ?mock graph has one READINGS and one POSITIONS question, each FRAMED with no direct edges', () => {
+    const source = new MockSource(10, false);
+    source.start(() => undefined, () => undefined);
+    const g = source.snapshot();
+
+    const framed = g.questions.filter((q) => q.framing !== undefined);
+    expect(framed.map((q) => q.framing?.mode).sort()).toEqual(['POSITIONS', 'READINGS']);
+
+    const byRef = new Map(g.nodes.map((n) => [n.ref, n]));
+    for (const q of framed) {
+      const root = byRef.get(q.root)!;
+      expect(root.status).toBe('FRAMED');
+      expect(g.nodes.some((n) => n.kind === 'EDGE' && n.target === q.root)).toBe(false);
+      // every position's NodeDto has positionOf equal to this root, and is not itself a question
+      for (const p of q.framing!.positions) {
+        expect(byRef.get(p.ref)?.positionOf).toBe(q.root);
+      }
+      expect(g.questions.some((other) => other.root === q.framing!.positions[0]?.ref)).toBe(false);
+    }
+    source.stop();
+  });
+
+  it('model A READINGS: two readings in order, each explored as a root, with a pro/con of its own', () => {
+    const source = new MockSource(10, false);
+    source.start(() => undefined, () => undefined);
+    const g = source.snapshot();
+    const readings = g.questions.find((q) => q.framing?.mode === 'READINGS')!;
+    expect(readings.framing!.term).toBeDefined();
+    expect(readings.framing!.positions).toHaveLength(2);
+    expect(readings.framing!.positions.every((p) => p.share === undefined)).toBe(true);
+    const [p1, p2] = readings.framing!.positions;
+    expect(p1.firstImpression).toBeDefined();
+    // the first reading's own argument is under it, not the second reading's
+    const argsUnderP1 = g.nodes.filter((n) => n.kind === 'EDGE' && n.target === p1.ref);
+    const argsUnderP2 = g.nodes.filter((n) => n.kind === 'EDGE' && n.target === p2.ref);
+    expect(argsUnderP1.length).toBeGreaterThan(0);
+    expect(argsUnderP2.length).toBeGreaterThan(0);
+    source.stop();
+  });
+
+  it('model A POSITIONS: shares sum to 1 and are proportional to consensus (softmax odds normalisation)', () => {
+    const source = new MockSource(10, false);
+    source.start(() => undefined, () => undefined);
+    const g = source.snapshot();
+    const positions = g.questions.find((q) => q.framing?.mode === 'POSITIONS')!;
+    const shares = positions.framing!.positions.map((p) => p.share!);
+    expect(shares.every((s) => s !== undefined)).toBe(true);
+    expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 9);
+    // the highest-consensus position gets the highest share
+    const byRef = new Map(g.nodes.map((n) => [n.ref, n]));
+    const consensuses = positions.framing!.positions.map((p) => byRef.get(p.ref)!.consensus ?? byRef.get(p.ref)!.credence);
+    const order = [...shares.keys()].sort((a, b) => consensuses[b] - consensuses[a]);
+    expect([...shares.keys()].sort((a, b) => shares[b] - shares[a])).toEqual(order);
+    source.stop();
+  });
 });

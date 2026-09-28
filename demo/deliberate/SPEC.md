@@ -415,6 +415,60 @@ child rewords its link), and explores the link exactly like a claim:
   the budget gate prevents another automatic link round once the claim ceiling
   is reached. Human-forced CTL-02 rounds remain deliberately outside the cap.
 
+### Framing (model A)
+
+Before a question root runs its first round, it may be **framed**: split into
+several readings of an ambiguous term, or several competing answers to an
+open question, each explored as a root of its own.
+
+- **FRA-01 Framing call.** Once per question root, before round 1 (never on a
+  reading/position — a root-like claim of the same question — or a link), the
+  root is asked a [`Framer`] (`CliFramer` over the `claude` CLI, EXP-08/EXP-09
+  process gate and COST-01 billing apply like any proposer/judge call), which
+  answers `NONE` (one natural reading — explored as asked), `READINGS`
+  (the question is ambiguous: up to `Framing.MAX_READINGS` (3) restated
+  yes/no questions, each fixing one sense of the ambiguous term) or
+  `POSITIONS` (the question is open — what/which/how/why, not yes/no: up to
+  `Framing.MAX_POSITIONS` (5) mutually exclusive declarative answers). Fewer
+  than 2 items in a `READINGS`/`POSITIONS` answer is treated as `NONE`. A
+  failed call (the root records `error = "framing: …"`) also explores the
+  question unframed. Prompt hygiene follows EXP-02: canonical, topic-neutral
+  examples only.
+- **FRA-02 Readings/positions are question-root claims.** Each item becomes
+  its own claim of the same question — `root` = the original question's ref,
+  `parent = null` (a second root of the same tree, `proposer` = `Claim.READING`
+  ("reading") or `Claim.POSITION` ("position") by mode) — so it inherits, with
+  no engine change beyond creating it: its own CRED-01 first impression
+  (`Judge.plausibility`, judged with `root_question` the *original* question
+  and `claim` the item's restated text — the pilot's "restated question"
+  judged in the original's context), its own model D neutral-prior verdict
+  and disagreement flag, its own model C sensitivity root and value of
+  information (1, like any root), and the shared budget (EXP-06), cost
+  (§12) and pause (CTL-05) of the question. The question root itself takes no
+  round: it finishes `Status.FRAMED` (§5) the moment framing succeeds, and an
+  `EXPAND` on it runs no round either.
+- **FRA-03 POSITIONS: the issue cell.** A `POSITIONS` root additionally gets
+  one `IssueNode` cell, fed by every position's credence outlet, emitting
+  `Shares` (per layer, and the consensus) to a `sharesHub` — derived and
+  volatile like credence (DUR-01), never journaled, and wired **one-way**:
+  nothing flows from it back into any credence or sensitivity cell (CRED-03).
+  `Softmax.shares` computes it: `score = logit(clamped credence) / T`,
+  `Softmax.TEMPERATURE` (`T`) 1 → normalised odds — monotone in every
+  credence, sums to 1; e.g. credences (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
+  shares (0.696, 0.261, 0.043). Before any position has emitted, every share
+  is 1/n. `READINGS` spawns no `IssueNode`: each reading's verdict is its own
+  credence, with no shares to fold.
+- **FRA-04 Durability.** `CredenceGraph` logs one structure op, `"issue"`
+  (`{ref = root, mode, positions = [refs, in order]}`), **before** any
+  position claim, with the position refs pre-allocated; replay drops an
+  `"issue"` op whose positions are not all present as claims (a torn frame)
+  and skips its listed positions — framing completes before any position is
+  enqueued, so a torn frame never has edges into it, and edges touching a
+  skipped ref are skipped anyway. The root claim's record carries
+  `framingMode`/`framingTerm` (null when unframed); on restart a root that
+  had finished `FRAMED` but whose issue op did not survive replay restores
+  `QUEUED` and is framed again (EngineRecords).
+
 ## 4. Human control (requirements CTL-*)
 
 - **CTL-01** The human can set any claim's — or link's (§3 "Links as
@@ -459,7 +513,10 @@ child rewords its link), and explores the link exactly like a claim:
 `QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
 alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
 `DIMINISHING` (its value of information fell below `--voi-eps`; model C, §3
-"Sensitivity and value of information"), `STOPPED`, `FAILED`.
+"Sensitivity and value of information"), `STOPPED`, `FAILED`, and — a
+question root only, reached from `QUEUED` in place of `JUDGING` — `FRAMED`
+(model A, §3 "Framing"): the root was split into readings or positions, each
+explored as a root of its own; the root itself never runs a round.
 Every status change is broadcast.
 
 ## 6. HTTP surface (the UI contract)
@@ -490,7 +547,14 @@ Every status change is broadcast.
   null until the root cell emits) and `verdictsDisagree` (true when the root's
   ordinary credence and `neutralCredence` fall strictly on different sides of
   0.5 — `LayerSet.oppositeSides`; a value of exactly 0.5 on either side is on
-  neither, so it never sets the flag).
+  neither, so it never sets the flag), and — model A, §3 "Framing" — `framing`
+  (`FramingDto { mode: "READINGS" | "POSITIONS", term?, positions:
+  PositionDto[] }`; null when the question was explored as asked, and then
+  the model D fields above are the question's own; when set they are null/false
+  on the question and each `PositionDto { ref, text, credence, firstImpression?,
+  neutralCredence?, verdictsDisagree?, share? }` carries its own — `share`
+  only for `POSITIONS`, absent for `READINGS`). A node's `positionOf` (set
+  only on a reading/position, to its question's root ref) marks it as one.
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
 
@@ -540,12 +604,32 @@ Every status change is broadcast.
   pre-argument judgment is labelled "First impression" (a non-root claim keeps
   "Plausible on its own"); the Legend explains both the rules button and
   "First impression"/"Arguments alone".
+- **UI-09 (model A).** When a question's `framing` is set, its hero keeps the
+  question text but hides the yes/no gauge and the model D caption/note
+  (UI-08) — there is no single verdict to show — and instead shows a framing
+  line: "depends on what you mean by `<term>`" (`READINGS` with a term),
+  "depends on the reading" (`READINGS`, no term) or "several possible
+  answers" (`POSITIONS`); `POSITIONS` additionally shows a distribution, one
+  row per position in `framing.positions` order with its share as a
+  percentage and a bar proportional to it. Below the hero, one reading/
+  position section follows per position, in the same order: its text as a
+  heading, its own credence gauge (the same markup and research-view band as
+  the question's, driven by its own node), its own model D caption built from
+  its `PositionDto` (and, when its verdicts disagree, the same disagreement
+  note as UI-08), a status/override control keyed by the position's own ref,
+  a Facts toggle, and its argument tree beneath it — built exactly as the
+  question's tree is, rooted at the position instead. The "now" line (UI-06),
+  cost (§12), pause (CTL-05) and the cruxes panel (UI-07) stay per question,
+  shown once, above the reading/position sections — they already span every
+  position's subtree, since a position's claims count as the question's
+  (§3 "Framing", FRA-02). The Legend explains readings and positions.
 
 ## 8. Non-goals (v1)
 
 Multiple users; human stances; editing claims; cross-tree links; merging
-equivalent claims across branches. (Exploring an edge as a claim of its own
-is in scope: §3 "Links as claims".)
+equivalent claims across branches (cross-branch claim reuse — a DAG with
+contradiction detection — is deferred). (Exploring an edge as a claim of its
+own is in scope: §3 "Links as claims".)
 
 ## 9. Acceptance
 

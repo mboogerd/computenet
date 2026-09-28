@@ -1,4 +1,14 @@
-import { ACTIVE_STATUSES, DEFAULT_CONSENSUS, type GraphDto, type NodeDto, type Override, type Polarity, type QuestionDto } from '../api/types';
+import {
+  ACTIVE_STATUSES,
+  DEFAULT_CONSENSUS,
+  type FramingDto,
+  type GraphDto,
+  type NodeDto,
+  type Override,
+  type Polarity,
+  type PositionDto,
+  type QuestionDto,
+} from '../api/types';
 
 /** The backend's credence layers, and per-layer log-odds shifts that make the mock's rules disagree plausibly. */
 const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp'] as const;
@@ -44,6 +54,8 @@ export class MockSource implements GraphSource {
   private nextQuestion = 0;
   /** CTL-05: paused questions; their script holds still until resumed. */
   private paused = new Set<string>();
+  /** Model A: framed roots, by ref, with their mode/term and their positions' refs in order. */
+  private framing = new Map<string, { mode: 'READINGS' | 'POSITIONS'; term?: string; positions: string[] }>();
 
   constructor(
     private stepMs = 650,
@@ -56,12 +68,14 @@ export class MockSource implements GraphSource {
     this.onGraph = onGraph;
     this.nodes.clear();
     this.paused.clear();
+    this.framing.clear();
     this.nextQuestion = 0;
     if (this.empty) {
       onGraph(this.snapshot());
       return;
     }
     seedFinished(this);
+    seedFramedPositions(this);
     this.run();
   }
 
@@ -175,6 +189,17 @@ export class MockSource implements GraphSource {
     this.set(`${child}>${parent}`, { strength, credence: strength });
   }
 
+  /**
+   * Model A: mark [root] framed — its own claim goes FRAMED and has no
+   * arguments of its own; [positions] (already created as root-like claims
+   * with `positionOf: root`, in framing order) become its readings or
+   * positions. `framingOf` reads it back into a `FramingDto` at snapshot time.
+   */
+  frame(root: string, mode: 'READINGS' | 'POSITIONS', positions: readonly string[], term?: string): void {
+    this.framing.set(root, { mode, term, positions: [...positions] });
+    this.set(root, { status: 'FRAMED' });
+  }
+
   snapshot(): GraphDto {
     const nodes = [...this.nodes.values()].map((n) => ({ ...n }));
     // EXP-05 reach, derived as the backend does: root 1, child = parent × edge strength.
@@ -216,9 +241,12 @@ export class MockSource implements GraphSource {
       if (n.status === 'JUDGING') n.activity = 'judging';
       else if (n.status === 'EXPLORING') n.activity = 'exploring';
     }
-    const roots = nodes.filter((n) => n.kind === 'CLAIM' && n.depth === 0);
+    // Model A: a reading/position is also depth 0 (explored as a root of its own; SPEC §3
+    // "Framing (model A)"), so it is excluded here by `positionOf` — it is not a question.
+    const roots = nodes.filter((n) => n.kind === 'CLAIM' && n.depth === 0 && n.positionOf === undefined);
     const questions = roots.map((r) => {
       const claims = nodes.filter((n) => n.kind === 'CLAIM' && n.root === r.ref);
+      const framing = framingOf(this.framing.get(r.ref), byRef);
       return {
         root: r.ref,
         text: r.text ?? '',
@@ -227,7 +255,8 @@ export class MockSource implements GraphSource {
         paused: this.paused.has(r.ref),
         ...mockCost(claims),
         cruxes: mockCruxes(nodes.filter((n) => n.root === r.ref && n.ref !== r.ref)),
-        ...mockPrior(r),
+        // Model A: a framed question's model D fields live per position instead (SPEC §6).
+        ...(framing ? { framing } : mockPrior(r)),
       };
     });
     return { questions, nodes, consensusMembers: [...DEFAULT_CONSENSUS] };
@@ -245,6 +274,45 @@ export function mockPrior(root: NodeDto): { firstImpression?: number; neutralCre
   const verdict = root.consensus ?? root.credence;
   const neutral = Math.min(0.999, Math.max(0.001, 0.5 + verdict - first));
   return { firstImpression: first, neutralCredence: neutral, verdictsDisagree: (verdict - 0.5) * (neutral - 0.5) < 0 };
+}
+
+/**
+ * Model A: the `FramingDto` for a framed root, built from its recorded
+ * mode/term/position refs and each position's own NodeDto (SPEC §6). A
+ * position ref absent from the snapshot is left out (mirrors buildTree/
+ * buildForest skipping a source claim that has not arrived yet).
+ */
+export function framingOf(
+  spec: { mode: 'READINGS' | 'POSITIONS'; term?: string; positions: string[] } | undefined,
+  byRef: ReadonlyMap<string, NodeDto>,
+): FramingDto | undefined {
+  if (!spec) return undefined;
+  const nodes = spec.positions.map((ref) => byRef.get(ref)).filter((n): n is NodeDto => n !== undefined);
+  const shares = spec.mode === 'POSITIONS' ? mockShares(nodes) : undefined;
+  const positions: PositionDto[] = nodes.map((n, i) => ({
+    ref: n.ref,
+    text: n.text ?? '',
+    credence: n.consensus ?? n.credence,
+    ...mockPrior(n),
+    ...(shares ? { share: shares[i] } : {}),
+  }));
+  return { mode: spec.mode, term: spec.term, positions };
+}
+
+/**
+ * Model A, POSITIONS: the "softmax cell" mirrored in TS — score = logit(clamped
+ * credence), temperature 1 → shares = normalised odds (exp(logit)/Σ, which is
+ * the same as each position's own credence-odds normalised over the set).
+ * Sums to 1; before any position has emitted (all credences equal) every
+ * share is 1/n.
+ */
+export function mockShares(nodes: readonly NodeDto[]): number[] {
+  const odds = nodes.map((n) => {
+    const p = clampP(n.consensus ?? n.credence);
+    return p / (1 - p);
+  });
+  const sum = odds.reduce((a, b) => a + b, 0);
+  return sum === 0 ? nodes.map(() => 1 / nodes.length) : odds.map((o) => o / sum);
 }
 
 /** Model C: the top 3 of [nodes] by |sensitivity| × 4·p·(1 − p) (a link's p is its strength), as the backend ranks them. */
@@ -305,26 +373,66 @@ export function mockCost(claims: readonly NodeDto[]): Pick<QuestionDto, 'costUsd
   };
 }
 
+/**
+ * Model A: this question is ambiguous, and is framed READINGS with two
+ * readings (SPEC §3 "Framing (model A)") — the root goes FRAMED with no
+ * arguments of its own; each reading is a root-like claim (`positionOf`
+ * the question, depth 0, proposer "reading") with its own small subtree,
+ * carrying over the finished example's old direct-on-root arguments.
+ */
 function seedFinished(m: MockSource): void {
   const q = 'w0';
-  m.claim(q, q, 'Should our team adopt a four-day work week?', 0, 'question', {
-    status: 'SATURATED', credence: 0.58, plausibility: 0.5, rounds: 2, proSaturation: 0.81, conSaturation: 0.74,
+  m.claim(q, q, 'Should our team adopt a four-day work week?', 0, 'question', { status: 'QUEUED' });
+  m.claim('w0p1', q, 'A four-day week with the same total pay and fewer hours worked.', 0, 'reading', {
+    positionOf: q, status: 'SATURATED', credence: 0.65, plausibility: 0.6, rounds: 1, proSaturation: 0.78, conSaturation: 0.7,
   });
-  m.arg('w1', q, q, 'SUPPORT', 'Trials report stable output with fewer hours worked.', 'claude', { status: 'SATURATED', credence: 0.71, plausibility: 0.75, relevance: 0.83, rounds: 1 });
-  m.arg('w2', q, q, 'ATTACK', 'Customer support coverage would drop on the fifth day.', 'codex', { status: 'PRUNED', credence: 0.42, plausibility: 0.5, relevance: 0.31 });
-  m.edge('w1', q, 0.72);
-  m.edge('w2', q, 0.48);
+  m.claim('w0p2', q, 'A four-day week that compresses the same weekly hours into fewer, longer days.', 0, 'reading', {
+    positionOf: q, status: 'SATURATED', credence: 0.4, plausibility: 0.35, rounds: 1, proSaturation: 0.66, conSaturation: 0.6,
+  });
+  m.arg('w1', q, 'w0p1', 'SUPPORT', 'Trials report stable output with fewer hours worked.', 'claude', { status: 'SATURATED', credence: 0.71, plausibility: 0.75, relevance: 0.83, rounds: 1 });
+  m.arg('w2', q, 'w0p1', 'ATTACK', 'Customer support coverage would drop on the fifth day.', 'codex', { status: 'PRUNED', credence: 0.42, plausibility: 0.5, relevance: 0.31 });
+  m.edge('w1', 'w0p1', 0.72);
+  m.edge('w2', 'w0p1', 0.48);
   m.arg('w3', q, 'w1', 'ATTACK', 'Trial participants self-selected and are not representative.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.55, plausibility: 0.5 });
   m.edge('w3', 'w1', 0.61);
-  // The link w1 → w0 explored as a claim: one reason it holds, one that it fails.
-  const link = m.link('w1', q);
+  // The link w1 → w0p1 explored as a claim: one reason it holds, one that it fails.
+  const link = m.link('w1', 'w0p1');
   m.set(link, { status: 'ROUND_LIMIT', rounds: 1, credence: 0.64, triage: { ADD: 2 } });
   m.arg('w4', q, link, 'SUPPORT', 'The trials measured output with the same metrics used before the change.', 'claude', { status: 'DEPTH_LIMIT', credence: 0.7, plausibility: 0.75 });
   m.arg('w5', q, link, 'ATTACK', 'Output in the trials was measured over six months, too short to show attrition effects.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.62, plausibility: 0.75 });
   m.edge('w4', link, 0.7);
   m.edge('w5', link, 0.66);
-  m.set(m.link('w2', q), { status: 'PRUNED' });
+  m.set(m.link('w2', 'w0p1'), { status: 'PRUNED' });
   m.set(m.link('w3', 'w1'), { status: 'DEPTH_LIMIT' });
+  // The second reading gets a small subtree of its own.
+  m.arg('w6', q, 'w0p2', 'ATTACK', 'Compressed ten-hour days increase fatigue-related errors.', 'codex', { status: 'SATURATED', credence: 0.35, plausibility: 0.4, relevance: 0.6, rounds: 1 });
+  m.edge('w6', 'w0p2', 0.58);
+  m.frame(q, 'READINGS', ['w0p1', 'w0p2'], 'four-day week');
+}
+
+/**
+ * Model A: an open question framed POSITIONS — three possible answers with
+ * no privileged ordering claim, whose shares (softmax over their consensus)
+ * the UI shows as a distribution instead of a single verdict.
+ */
+function seedFramedPositions(m: MockSource): void {
+  const q = 'i0';
+  m.claim(q, q, 'How many vehicles a day will the new river bridge carry at peak?', 0, 'question', { status: 'QUEUED' });
+  // POSITIONS items are proposer "position" (READINGS items are "reading"; Claim.READING/Claim.POSITION).
+  m.claim('i0p1', q, 'Under 5,000 vehicles a day.', 0, 'position', {
+    positionOf: q, status: 'SATURATED', credence: 0.7, plausibility: 0.72, rounds: 1, proSaturation: 0.7, conSaturation: 0.6,
+  });
+  m.claim('i0p2', q, 'Between 5,000 and 15,000 vehicles a day.', 0, 'position', {
+    positionOf: q, status: 'SATURATED', credence: 0.42, plausibility: 0.45, rounds: 1, proSaturation: 0.55, conSaturation: 0.5,
+  });
+  m.claim('i0p3', q, 'Over 15,000 vehicles a day.', 0, 'position', {
+    positionOf: q, status: 'QUEUED', credence: 0.12, plausibility: 0.15,
+  });
+  m.arg('i1', q, 'i0p1', 'SUPPORT', 'Traffic on the current ferry route has stayed under 4,000 a day for a decade.', 'claude', { status: 'SATURATED', credence: 0.68, plausibility: 0.7, relevance: 0.75, rounds: 1 });
+  m.edge('i1', 'i0p1', 0.7);
+  m.arg('i2', q, 'i0p2', 'SUPPORT', 'Comparable bridges elsewhere settle in this band within two years of opening.', 'codex', { status: 'SATURATED', credence: 0.6, plausibility: 0.6, relevance: 0.62, rounds: 1 });
+  m.edge('i2', 'i0p2', 0.62);
+  m.frame(q, 'POSITIONS', ['i0p1', 'i0p2', 'i0p3']);
 }
 
 /** The scripted claims, by ref: the built-in example question's, and a topic-neutral set for any typed question. */
