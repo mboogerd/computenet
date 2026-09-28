@@ -84,12 +84,11 @@ function cardElement(ref: string): HTMLElement | undefined {
  * way.
  *
  * The scroll/highlight step is deferred a microtask past the ancestor
- * expansion: it is called from inside the entry's own click/keydown handler,
- * and Solid does not guarantee the newly-expanded ancestor's children are in
- * the DOM again before that handler returns (its delegated event dispatch
- * batches the signal updates a click handler makes, flushing only once the
- * handler itself has returned) — so looking the target up synchronously here
- * can still find it un-mounted right after a card was just expanded to reach it.
+ * expansion: this runs inside TreeView's focus effect, and Solid queues the
+ * `setCollapsed` writes made during an effect until that effect returns, so
+ * a just-expanded ancestor's children are not mounted yet here. They are
+ * mounted synchronously once it returns, before the activating handler does,
+ * so one microtask is always enough (no async scheduling is involved).
  */
 export function focusInTree(ref: string, index: TreeIndex): void {
   let owner = ref;
