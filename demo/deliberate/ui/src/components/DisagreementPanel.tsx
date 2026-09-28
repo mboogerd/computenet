@@ -1,6 +1,6 @@
 import { createMemo, For, Show } from 'solid-js';
 import type { GraphDto } from '../api/types';
-import { pct, spreadOf } from '../util/format';
+import { AGREE_POINTS, pct, spreadOf } from '../util/format';
 
 /** One claim as the "where the rules disagree" view shows it. */
 export interface Disagreement {
@@ -16,7 +16,12 @@ export interface Disagreement {
  * The question's claims ordered by spread width, widest first, top 10. A
  * claim with no spread fields at all (spreadLow and spreadHigh both absent —
  * a single credence layer, nothing to disagree about) is excluded, not
- * scored as a zero-width tie.
+ * scored as a zero-width tie. So is a claim whose spread, rounded to
+ * percentage points the way {@link agreementText} reads it, is no wider than
+ * {@link AGREE_POINTS}: that function would call the same claim "rules
+ * agree" or "rules agree within N points", so listing it here would
+ * contradict the panel's own title. Reuses the constant rather than a
+ * separate cutoff so the two views cannot drift apart.
  */
 export function disagreementsOf(graph: GraphDto, root: string): Disagreement[] {
   return graph.nodes
@@ -25,6 +30,7 @@ export function disagreementsOf(graph: GraphDto, root: string): Disagreement[] {
       const { low, high } = spreadOf(n);
       return { ref: n.ref, text: n.text ?? '', low, high, width: high - low };
     })
+    .filter((r) => Math.round(r.high * 100) - Math.round(r.low * 100) > AGREE_POINTS)
     .sort((a, b) => b.width - a.width)
     .slice(0, 10);
 }

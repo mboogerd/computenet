@@ -2674,6 +2674,44 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `model A - a graph write failure on a READINGS answer is not re-asked after a pause during the root's plausibility call`() {
+        // computenet-mnzog: a READINGS/POSITIONS answer whose graph write (service.frame)
+        // throws only set c.error, leaving c.framing null, so a pause landing during the
+        // plausibility call that follows it (parkIfHeld turns JUDGING back to QUEUED) led
+        // start() to call the framer a second time on resume — the same shape computenet-3iu1k
+        // fixed for a null tryCall result.
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val rootKnown = CountDownLatch(1)
+        val rootRef = AtomicReference<CellRef>()
+        val framer = FakeFramer({ readings("R1", "R2") }, before = {
+            // Force service.frame(root, ...) to throw for real: give the root an argument
+            // before the engine calls it, tripping CredenceGraph.frame's own
+            // "root already has arguments" guard.
+            assertTrue(rootKnown.await(20, TimeUnit.SECONDS), "root ref published before the framer ran")
+            val bystander = service.createClaim("bystander")
+            service.createEdge(bystander, rootRef.get(), Polarity.SUPPORT)
+        })
+        val judge = FakeJudge(plausibility = { entered.countDown(); release.await(20, TimeUnit.SECONDS); 0.5 })
+        val e = engine(judge = judge, framer = framer)
+        val root = e.ask("Q?")
+        rootRef.set(root)
+        rootKnown.countDown()
+        assertTrue(entered.await(20, TimeUnit.SECONDS), "plausibility reached, so the graph write already failed")
+        e.setPaused(root, true)
+        release.countDown()
+        e.idle()
+        assertTrue(e.snapshot().questions.single().paused, "the pause landed before the round started")
+        e.setPaused(root, false)
+        e.idle()
+        val g = e.snapshot()
+        assertEquals(1, framer.counter.get(), "the framer is asked once, even across the graph-write failure and the pause")
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertNull(g.questions.single().framing)
+        assertTrue(g.node(root).error!!.startsWith("framing: "), g.node(root).error)
+    }
+
+    @Test
     fun `model A - a NONE framing survives a restart without asking the framer again`() {
         // computenet-3iu1k: EngineRecords.recordOf wrote framingMode only when the mode was not
         // NONE, so a NONE outcome never reached the store; restoreFraming only restored framing

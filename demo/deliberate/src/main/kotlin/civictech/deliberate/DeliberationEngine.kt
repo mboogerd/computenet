@@ -693,7 +693,13 @@ class DeliberationEngine(
                 service.frame(c.ref, CredenceGraph.IssueMode.valueOf(framing.mode.name), framing.items)
             }
         } catch (e: Exception) {
-            update { c.error = "framing: $e" }
+            // computenet-mnzog: a READINGS/POSITIONS answer that fails to write into the
+            // graph (service.frame threw) is a failed call the same way a null tryCall
+            // result is (computenet-3iu1k): remember it as NONE so a re-entry before
+            // round 1 — a pause landing during the root's plausibility call, a
+            // budget-gate-then-EXPAND, or a restart before round 1 — does not bill a
+            // second Framer call.
+            update { c.error = "framing: $e"; c.framing = Framing.NONE }
             return false
         }
         val proposer = if (framing.mode == FramingMode.READINGS) Claim.READING else Claim.POSITION
