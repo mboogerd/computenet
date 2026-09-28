@@ -55,13 +55,24 @@ class JevJudge(
      * CRED-01: judged on `root_question` and `claim` alone — no path, parent or
      * direction, which pulled the judgment towards the claim's role in the
      * argument (measured live; SPEC CRED-01).
+     *
+     * Model D: beside the five-level score, one request asks a `knowledge`
+     * Choice — does judging `claim` need knowledge Jev does not have? — and
+     * [KNOWLEDGE_OUTSIDE] maps the plausibility to [Judge.OUTSIDE_KNOWLEDGE]
+     * whatever the score says. No request carries a current date: a date
+     * moved the judgment of claims about recent events.
      */
     override fun plausibility(question: String, claim: String): Double {
         val state = buildJsonObject {
             put("root_question", question)
             put("claim", claim)
         }
-        return scoreOf(evaluate(state, mapOf("plausibility" to plausibilityQuestion())).getValue("plausibility"), PLAUSIBILITY_LEVELS.size)
+        val answers = evaluate(state, mapOf("plausibility" to plausibilityQuestion(), "knowledge" to knowledgeQuestion()))
+        return when (val known = choiceOf(answers.getValue("knowledge"))) {
+            KNOWLEDGE_OUTSIDE -> Judge.OUTSIDE_KNOWLEDGE
+            KNOWLEDGE_WITHIN -> scoreOf(answers.getValue("plausibility"), PLAUSIBILITY_LEVELS.size)
+            else -> throw JevException(null, "unknown knowledge answer '$known'")
+        }
     }
 
     /** CRED-02 on its own: strength in [0,1] with which [child] bears on [parent] as [side]. Calibration-only; the engine uses [assess]. */
@@ -436,6 +447,35 @@ class JevJudge(
                 "claim is true or false. If `claim` is phrased as a question, judge how likely its answer is yes.",
             PLAUSIBILITY_LEVELS,
         )
+
+        /** Model D: the `knowledge` Choice's answers. */
+        const val KNOWLEDGE_WITHIN = "WITHIN_MY_KNOWLEDGE"
+        const val KNOWLEDGE_OUTSIDE = "OUTSIDE_MY_KNOWLEDGE"
+
+        fun knowledgeQuestion() = buildJsonObject {
+            put("type", "choice")
+            // Like every Choice here, the instructions are an object with the question in it.
+            putJsonObject("instructions") {
+                put(
+                    "question",
+                    "Can you judge how likely `claim` is to be true from your own general knowledge? Answer " +
+                        "$KNOWLEDGE_OUTSIDE only when it concerns events, facts or details you have no knowledge of " +
+                        "(for example, something too recent or too obscure), not merely when the evidence is mixed.",
+                )
+            }
+            putJsonObject("criteria") {
+                put(
+                    KNOWLEDGE_WITHIN,
+                    "Within my knowledge: I know enough about what `claim` asserts to judge it, even if the answer is " +
+                        "uncertain or contested.",
+                )
+                put(
+                    KNOWLEDGE_OUTSIDE,
+                    "Outside my knowledge: `claim` concerns something I have no knowledge of, so any judgment of it " +
+                        "would be a guess.",
+                )
+            }
+        }
 
         fun strengthQuestion(child: String, side: Side) = score(
             "`$child` is offered as an argument that ${side.verb} `parent_claim`. Assume `$child` is " +

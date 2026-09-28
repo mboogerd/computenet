@@ -164,7 +164,7 @@ class CredenceGraph(
         ref: CellRef = CellRef(UUID.randomUUID()),
         question: Boolean = false,
     ): CellRef = synchronized(mutationLock) {
-        val cell = ClaimNode(ref, layers)
+        val cell = ClaimNode(ref, layers, neutralPrior = question)
         // Persist before any hosted operation can block or fail. A logged but
         // incompletely wired node is rebuilt in full on the next replay.
         log(StructureOp("claim", ref.id.toString(), text = text, question = question))

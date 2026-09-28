@@ -51,6 +51,25 @@ data class QuestionDto(
      * unjudged ½ — best first. Nodes whose sensitivity is not known yet are left out.
      */
     val cruxes: List<String> = emptyList(),
+    /**
+     * Model D: Jev's plausibility of the question itself, judged before any
+     * argument — its "first impression", which stays the root's prior (so the
+     * root node's `credence` still starts from it). Null until judged.
+     */
+    val firstImpression: Double? = null,
+    /**
+     * Model D, "what the arguments say": the root's headline credence with the
+     * same arguments weighed from a neutral prior (weight
+     * `LayerSet.WEAK_PRIOR_WEIGHT` on the first impression) instead. Every layer
+     * is computed; this is the headline of them. Null until the root cell emitted.
+     */
+    val neutralCredence: Double? = null,
+    /**
+     * Model D: true when the root's credence and [neutralCredence] fall strictly
+     * on different sides of ½ — the first impression, not the arguments, decides
+     * which way the answer leans.
+     */
+    val verdictsDisagree: Boolean = false,
 )
 
 /** SPEC §12: the details behind a question's cost figure. */

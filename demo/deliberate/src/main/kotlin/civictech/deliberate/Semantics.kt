@@ -219,9 +219,21 @@ class LayerSet(
     fun headlineOf(values: List<Double>, consensus: Double): Double =
         if (headline == CONSENSUS) consensus else values[headlineIndex]
 
-    /** One credence per layer for a node with these [stances] and arguments. */
-    fun evaluate(stances: Collection<Double>, attacks: List<List<Arg>>, supports: List<List<Arg>>): List<Double> =
-        semantics.mapIndexed { l, s -> s.evaluate(s.base(stances), attacks.map { it[l] }, supports.map { it[l] }) }
+    /**
+     * One credence per layer for a node with these [stances] and arguments.
+     * [priorWeight] < 1 shrinks each layer's base towards [NEUTRAL_PRIOR] —
+     * `½ + w·(base − ½)` — before the arguments are weighed (model D's second
+     * root verdict); 1 (the default) is the ordinary credence.
+     */
+    fun evaluate(
+        stances: Collection<Double>,
+        attacks: List<List<Arg>>,
+        supports: List<List<Arg>>,
+        priorWeight: Double = 1.0,
+    ): List<Double> = semantics.mapIndexed { l, s ->
+        val base = s.base(stances).let { if (priorWeight == 1.0) it else NEUTRAL_PRIOR + priorWeight * (it - NEUTRAL_PRIOR) }
+        s.evaluate(base, attacks.map { it[l] }, supports.map { it[l] })
+    }
 
     /** SPEC CRED-05, over a credence vector. Same arithmetic, same order as [Consensus.of]. */
     fun consensus(values: List<Double>): Double = Consensus.ofValues(memberIndex.map { values[it] })
@@ -249,6 +261,19 @@ class LayerSet(
     companion object {
         /** Headline value meaning "show the consensus" rather than one layer (the default). */
         const val CONSENSUS = "consensus"
+
+        /** Model D: the prior the second root verdict shrinks Jev's first impression towards. */
+        const val NEUTRAL_PRIOR = 0.5
+
+        /**
+         * Model D: the weight Jev's first impression keeps in the second root
+         * verdict ("what the arguments say"), `½ + w·(p − ½)`. 0 — a neutral
+         * prior — is the smallest choice; a weak prior would be 0 < w < 1.
+         */
+        const val WEAK_PRIOR_WEIGHT = 0.0
+
+        /** Model D: [a] and [b] fall strictly on different sides of ½ (a value of exactly ½ is on neither). */
+        fun oppositeSides(a: Double, b: Double): Boolean = (a - NEUTRAL_PRIOR) * (b - NEUTRAL_PRIOR) < 0
 
         /** Every layer in [ids] from the catalog. */
         fun of(

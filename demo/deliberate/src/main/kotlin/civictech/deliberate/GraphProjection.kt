@@ -64,6 +64,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
         }
         val window = DeliberationEngine.Config.YIELD_WINDOW
         val sensitivity = graph.associate { it.ref to it.sensitivity }
+        val credences = graph.associate { it.ref to it.credence }
         val qs = state.questions.map { (root, text) ->
             // Links are part of the question's work (activity, rounds, cost), not of its claim count.
             val tree = state.claims.values.filter { it.root == root }
@@ -76,6 +77,10 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                     policy.cruxScore(sensitivity[n.ref], p)?.takeIf { it > 0.0 }?.let { n to it }
                 }
                 .sortedByDescending { it.second }.take(CRUXES).map { it.first.ref.id.toString() }
+            // Model D: the verdict from Jev's first impression against what the arguments say from a neutral prior.
+            val rootCredence = credences[root]
+            val verdict = rootCredence?.let { layers.headlineOf(it.values, it.consensus) }
+            val neutral = rootCredence?.neutral?.let { layers.headlineOf(it, layers.consensus(it)) }
             QuestionDto(
                 root.id.toString(), text, tree.count { !it.isLink }, queued > 0,
                 yieldRounds = ys.size,
@@ -87,6 +92,9 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 ),
                 paused = root in state.paused,
                 cruxes = cruxes,
+                firstImpression = state.claims[root]?.plausibility,
+                neutralCredence = neutral,
+                verdictsDisagree = verdict != null && neutral != null && LayerSet.oppositeSides(verdict, neutral),
             ).withCost(ledger.costOf(root, rounds = tree.sumOf { it.rounds }, queued = queued))
         }
         return GraphDto(qs, nodes, layers.members)

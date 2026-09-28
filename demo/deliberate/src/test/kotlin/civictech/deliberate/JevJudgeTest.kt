@@ -71,6 +71,15 @@ class JevJudgeTest {
            "usage":{"input_tokens":300,"output_tokens":20}}""",
     )
 
+    /** Model D: a plausibility request is answered with its score and its `knowledge` Choice. */
+    private fun plausibilityAnswers(score: Double, knowledge: String = "WITHIN_MY_KNOWLEDGE") =
+        """"plausibility":{"type":"score","score":$score},"knowledge":{"type":"choice","choice":"$knowledge"}"""
+
+    private fun plausibilityReply(score: Double, knowledge: String = "WITHIN_MY_KNOWLEDGE") = reply(
+        200,
+        """{"model":"jev-1.13.0","answers":{${plausibilityAnswers(score, knowledge)}},"usage":{"input_tokens":300,"output_tokens":20}}""",
+    )
+
     private fun noulReply(id: String, p: Double) =
         reply(200, """{"model":"jev-1.13.0","answers":{"$id":{"type":"noul","noul":$p}},"usage":{"input_tokens":1,"output_tokens":1}}""")
 
@@ -80,7 +89,7 @@ class JevJudgeTest {
 
     @Test
     fun `plausibility sends a five-level score and maps it to unit range`() {
-        scoreReply("plausibility", 3.0)
+        plausibilityReply(3.0)
         assertEquals(0.75, judge.plausibility("Q?", "Claim."), 1e-9)
         val req = seen.single()
         assertEquals("Bearer test-key", req.auth)
@@ -99,6 +108,83 @@ class JevJudgeTest {
         assertTrue("directly contradict" in criteria.first())
         assertTrue(criteria.last().startsWith("Almost certainly true:"))
         assertTrue("directly support" in criteria.last())
+        // Model D: the same request offers an explicit "outside my knowledge" answer.
+        assertEquals(setOf("plausibility", "knowledge"), req.body["questions"]!!.jsonObject.keys)
+        val k = question(req.body, "knowledge")
+        assertEquals("choice", k["type"]!!.jsonPrimitive.content)
+        assertEquals(setOf("WITHIN_MY_KNOWLEDGE", "OUTSIDE_MY_KNOWLEDGE"), k["criteria"]!!.jsonObject.keys)
+        assertTrue("Outside my knowledge" in k["criteria"]!!.jsonObject["OUTSIDE_MY_KNOWLEDGE"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `outside my knowledge maps plausibility to one half whatever the score says`() {
+        plausibilityReply(0.0, knowledge = "OUTSIDE_MY_KNOWLEDGE")
+        assertEquals(Judge.OUTSIDE_KNOWLEDGE, judge.plausibility("Q?", "A bill passed last week does X."), 0.0)
+        assertEquals(0.5, Judge.OUTSIDE_KNOWLEDGE)
+        plausibilityReply(4.0, knowledge = "OUTSIDE_MY_KNOWLEDGE")
+        assertEquals(0.5, judge.plausibility("Q?", "C."), 0.0)
+        // Within its knowledge, the score is used as before.
+        plausibilityReply(1.0)
+        assertEquals(0.25, judge.plausibility("Q?", "C."), 1e-9)
+        // assess takes the same path for its plausibility.
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{${plausibilityAnswers(4.0, "OUTSIDE_MY_KNOWLEDGE")}}}"""
+        routed["strength"] = """{"model":"jev-1.13.0","answers":{
+               "strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},
+               "relevant":{"type":"noul","noul":0.4}}}"""
+        assertEquals(0.5, judge.assess("Q?", listOf("Q?"), "Child.", Polarity.SUPPORT).plausibility, 0.0)
+    }
+
+    @Test
+    fun `an unknown knowledge answer fails`() {
+        plausibilityReply(3.0, knowledge = "MAYBE")
+        val error = assertFailsWith<JevException> { judge.plausibility("Q?", "C.") }
+        assertTrue("unknown knowledge answer" in error.message!!)
+    }
+
+    /** Every JSON object key under [e], at any depth. */
+    private fun keysOf(e: kotlinx.serialization.json.JsonElement): List<String> = when (e) {
+        is JsonObject -> e.keys.toList() + e.values.flatMap(::keysOf)
+        is JsonArray -> e.flatMap(::keysOf)
+        else -> emptyList()
+    }
+
+    @Test
+    fun `no request carries today's date or any current-date field`() {
+        // One request of every kind JevJudge sends: plausibility, assess (two requests), relation strength,
+        // quality, triage, bearing, saturation, relevance.
+        routed["plausibility"] = """{"answers":{${plausibilityAnswers(3.0)}}}"""
+        routed["strength"] = """{"answers":{"strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},"relevant":{"type":"noul","noul":0.4}}}"""
+        judge.plausibility("Q?", "C.")
+        judge.assess("Q?", listOf("Q?", "Parent."), "Child.", Polarity.ATTACK)
+        routed.clear()
+        scoreReply("strength", 1.0)
+        judge.relationStrength("Q?", "Parent.", "Child.", Polarity.SUPPORT)
+        noulReply("quality", 0.9)
+        judge.quality("Q?", "Parent.", "Child.", Polarity.SUPPORT)
+        reply(200, """{"answers":{${choice("a0", "ADD")},${choice("t0", "none")}}}""")
+        judge.triage(ctx, listOf(Candidate("new", Polarity.SUPPORT)))
+        reply(200, """{"answers":{${choice("b0", "NEITHER")}}}""")
+        judge.bearing(ctx, link, listOf("x"))
+        noulReply("missing", 0.5)
+        judge.saturation(ctx, Polarity.SUPPORT)
+        noulReply("relevant", 0.5)
+        judge.relevance(ctx)
+
+        assertEquals(9, seen.size)
+        val today = java.time.LocalDate.now()
+        // Around midnight the clock may have moved on while the requests were sent.
+        val dates = listOf(today.minusDays(1), today, today.plusDays(1)).map { it.toString() }
+        val isoDate = Regex("""\b\d{4}-\d{2}-\d{2}\b""")
+        val dateWords = setOf("date", "today", "now", "time", "timestamp", "current", "year")
+        seen.forEach { req ->
+            val text = req.body.toString()
+            dates.forEach { assertTrue(it !in text, "a request carries today's date: $text") }
+            assertTrue(isoDate.find(text) == null, "a request carries a date: $text")
+            keysOf(req.body).forEach { key ->
+                val words = key.lowercase().split('_', '-', ' ').toSet()
+                assertTrue(words.none { it in dateWords }, "a request carries a current-date field `$key`")
+            }
+        }
     }
 
     @Test
@@ -266,7 +352,7 @@ class JevJudgeTest {
 
     @Test
     fun `assess asks plausibility alone and strength, quality and relevance together`() {
-        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":3.0}}}"""
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{${plausibilityAnswers(3.0)}}}"""
         routed["strength"] = """{"model":"jev-1.13.0","answers":{
                "strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},
                "relevant":{"type":"noul","noul":0.4}},
@@ -415,14 +501,14 @@ class JevJudgeTest {
     @Test
     fun `every successful request reports its usage, retried ones do not`() {
         reply(429, """{"error":"rate limited"}""")
-        scoreReply("plausibility", 3.0)
+        plausibilityReply(3.0)
         val (_, usage) = recording { judge(sleeper = {}).plausibility("Q?", "C.") }
         assertEquals(listOf(CallUsage("jev", listOf("jev-1.13.0"), inputTokens = 300, outputTokens = 20)), usage)
     }
 
     @Test
     fun `assess reports both of its parallel requests to the caller's sink`() {
-        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":3.0}},
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{${plausibilityAnswers(3.0)}},
                "usage":{"input_tokens":70,"output_tokens":2}}"""
         routed["strength"] = """{"model":"jev-1.13.0","answers":{
                "strength":{"type":"score","score":2.0},"quality":{"type":"noul","noul":0.9},
@@ -435,7 +521,7 @@ class JevJudgeTest {
 
     @Test
     fun `a response without usage still answers and reports nothing`() {
-        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{"plausibility":{"type":"score","score":4.0}}}"""
+        routed["plausibility"] = """{"model":"jev-1.13.0","answers":{${plausibilityAnswers(4.0)}}}"""
         val (p, usage) = recording { judge.plausibility("Q?", "C.") }
         assertEquals(1.0, p, 1e-9)
         assertTrue(usage.isEmpty())

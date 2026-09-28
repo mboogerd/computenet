@@ -195,7 +195,11 @@ class DeliberationEngineTest {
         // EXP-10: root rounds are excluded from per-question yield history.
         val q = g.questions.single()
         // Cruxes (model C) follow the sensitivity cells; they are checked on their own.
-        assertEquals(QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, cost = CostDto(rounds = 1)), q.copy(cruxes = emptyList()))
+        // Model D: the neutral-prior verdict also follows the cells; with a first impression of ½ it never disagrees.
+        assertEquals(
+            QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, cost = CostDto(rounds = 1), firstImpression = 0.5),
+            q.copy(cruxes = emptyList(), neutralCredence = null),
+        )
         assertNull(q.yieldRecent)
     }
 
@@ -2109,6 +2113,89 @@ class DeliberationEngineTest {
             scheduler2.shutdown()
             dir.deleteRecursively()
         }
+    }
+
+    // ------------------------------------------------------------ model D: first impression vs the arguments
+
+    /** One argument on [side] of the root "[q]", strength 0.5 from a claim of plausibility 0.8; the root's is 0.9. */
+    private fun modelDEngine(q: String, side: Side, graph: CredenceGraph = service, store: MetaStore = InMemoryMetaStore()) =
+        DeliberationEngine(
+            graph,
+            FakeJudge(plausibility = { if (it == q) 0.9 else 0.8 }, strength = { 0.5 }),
+            listOf(FakeProposer("claude") { ctx, s, _ -> if (ctx.path.isEmpty() && s == side) listOf("$q arg") else emptyList() }),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+            store = store,
+        ).also { engines += it }
+
+    private fun DeliberationEngine.settledQuestion(expectedNeutral: Double): QuestionDto {
+        awaitUntil("the neutral-prior root verdict settles on $expectedNeutral") {
+            snapshot().questions.single().neutralCredence?.let { abs(it - expectedNeutral) < 1e-9 } == true
+        }
+        return snapshot().questions.single()
+    }
+
+    @Test
+    fun `model D - the first impression is kept and a neutral-prior verdict that disagrees is flagged`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-model-d").toFile()
+        val log = java.io.File(dir, "graph.jsonl")
+        val store = InMemoryMetaStore()
+        try {
+            // DF-QuAD, one attack of energy 0.5 x 0.8 = 0.4: from Jev's 0.9 the root keeps 0.9 x 0.6 = 0.54,
+            // from a neutral ½ the same argument leaves 0.5 x 0.6 = 0.3 — the first impression decides the side.
+            val e = modelDEngine("Q?", Polarity.ATTACK, CredenceGraph(host, registry, dfquad, structureLog = log), store)
+            val root = e.ask("Q?")
+            e.idle()
+            val q = e.settledQuestion(0.3)
+            awaitUntil("the root settles on 0.54") { abs(e.snapshot().node(root).credence - 0.54) < 1e-9 }
+            assertEquals(0.9, q.firstImpression)
+            assertEquals(0.9, e.snapshot().node(root).plausibility, "the first impression stays the root's prior")
+            assertTrue(e.snapshot().questions.single().verdictsDisagree)
+            e.close()
+
+            // Nothing of it is journaled: a restart recomputes both verdicts and the flag from the stances.
+            assertTrue(store.load().values.none { f -> f.keys.any { it.contains("neutral") || it.contains("impression") } })
+            val e2 = restart(log, store, DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false))
+            e2.idle()
+            val after = e2.settledQuestion(0.3)
+            assertEquals(0.9, after.firstImpression)
+            awaitUntil("the restarted root flags the disagreement") { e2.snapshot().questions.single().verdictsDisagree }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `model D - verdicts on the same side of one half are not flagged`() {
+        // One support: 0.9 + 0.1 x 0.4 = 0.94 from Jev's first impression, 0.5 + 0.5 x 0.4 = 0.7 from ½.
+        val e = modelDEngine("P?", Polarity.SUPPORT)
+        val root = e.ask("P?")
+        e.idle()
+        val q = e.settledQuestion(0.7)
+        awaitUntil("the root settles on 0.94") { abs(e.snapshot().node(root).credence - 0.94) < 1e-9 }
+        assertEquals(0.9, q.firstImpression)
+        assertTrue(!e.snapshot().questions.single().verdictsDisagree)
+    }
+
+    @Test
+    fun `model D - a claim outside the judge's knowledge enters credence at one half`() {
+        val all = CredenceGraph(host, registry, LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS))
+        val e = DeliberationEngine(
+            all,
+            FakeJudge(plausibility = { if (it == "Q?") 0.9 else Judge.OUTSIDE_KNOWLEDGE }, strength = { 0.5 }),
+            listOf(FakeProposer("claude") { ctx, s, _ -> if (ctx.path.isEmpty() && s == Polarity.SUPPORT) listOf("unknown") else emptyList() }),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+        ).also { engines += it }
+        val root = e.ask("Q?")
+        e.idle()
+        awaitUntil("the unknown claim's credence reaches the hub") {
+            e.snapshot().claims().any { it.text == "unknown" && it.credences.size == SemanticsCatalog.IDS.size }
+        }
+        val claim = e.snapshot().claims().single { it.text == "unknown" }
+        assertEquals(0.5, claim.plausibility)
+        claim.credences.values.forEach { assertEquals(0.5, it, 1e-12) }
+        assertEquals(0.5, claim.consensus, 1e-12)
+        assertEquals(0.5, claim.credence, 1e-12)
+        assertTrue(e.snapshot().node(root).credence > 0.5)
     }
 
     // ------------------------------------------------------------ restart safety: DUR-06, CTL-05
