@@ -35,6 +35,7 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -399,7 +400,11 @@ class WriteVisibilityTest {
         val ingress = ActorIngress(UUID.randomUUID())
         val ops = graph.ops
         val itemsLink = sink.inlets.getValue("items").linking.links.single()
-        val composites = Collections.synchronizedList(mutableListOf<AlignedComposite>())
+        // Copy-on-write, not `Collections.synchronizedList`: the dispatcher thread
+        // appends while this thread polls `any { }` below, and a synchronized
+        // list's iterator is unguarded — it threw ConcurrentModificationException
+        // in 14 of 1000 local loop iterations once the read became a poll.
+        val composites = CopyOnWriteArrayList<AlignedComposite>()
         sink.onComposite { composites += it }
 
         // Stamped, but nothing has propagated yet: `items` is still queued
