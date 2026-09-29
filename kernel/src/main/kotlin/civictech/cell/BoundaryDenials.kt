@@ -68,6 +68,22 @@ enum class BoundarySeam {
 
     /** Seam 3, `PORT_API` inbound: `BoundaryPolicy.integrity` refused an arriving delta. */
     INTEGRITY,
+
+    /**
+     * The G-28 spawn walk refusing a remote-driven spawn (ECO1, epic
+     * `computenet-66m`, decision `66m-D10`). A **host-level admission
+     * predicate**, not one of the four membrane seams above: it runs during
+     * `ManagedHost` spawn, before any `Exposure` or `BoundaryPolicy` is
+     * consulted, so it cannot be folded into [ADMISSION] (the wire crossing)
+     * or [LINK_AUTHORITY] (a mediated-inlet link request) without collapsing
+     * "may this peer exist on this host at all" into "may this peer cross
+     * this membrane" — two different questions answered at two different
+     * points in a cell's lifecycle. The hosting `ManagedHost`'s own
+     * `BoundaryDenialSink` reports it; feature `computenet-5o1rf` (F3) owns
+     * the plumbing that calls [BoundaryDenialSink.deny] with this seam — this
+     * arm is declared here with no caller yet.
+     */
+    HOST_ADMISSION,
 }
 
 /**
@@ -312,6 +328,46 @@ enum class DenialReason {
      * material, statement bytes or credential appears in it.
      */
     IDENTITY_MISMATCH,
+
+    /**
+     * A [civictech.cell.BudgetLedger] held a bucket for this principal's
+     * [civictech.cell.ClaimClass] and the claim's price exceeded what remains
+     * in it (ECO1, epic `computenet-66m`, `[ECO1-DEN-01]`).
+     *
+     * **Distinct from [BUDGET_NOT_GRANTED]**: this is a *decision* — the
+     * principal has a nonzero bucket and this claim simply does not fit in
+     * what is left of it (`BudgetOutcome.Refused.shortfall` names by how
+     * much). [BUDGET_NOT_GRANTED] means there was never a bucket to decide
+     * against in the first place.
+     */
+    BUDGET_EXHAUSTED,
+
+    /**
+     * A [civictech.cell.BudgetLedger] resolved this principal's bootstrap
+     * grant for the claimed [civictech.cell.ClaimClass] to zero — an
+     * unvouched principal, or an issuer row that explicitly grants zero
+     * (ECO1, epic `computenet-66m`, `[ECO1-MINT-04r]`).
+     *
+     * **Distinct from [UNVOUCHED]**, an admission failure at the hello seam:
+     * that principal never got onto the wire at all. This principal is
+     * already on a live link; what it lacks is a nonzero allotment for this
+     * claim class. **Distinct from [NOT_ADMITTED]**, the allowlist seam: this
+     * is never about whether the peer may connect, only about what it was
+     * granted once connected.
+     */
+    BUDGET_NOT_GRANTED,
+
+    /**
+     * A [civictech.cell.BudgetLedger] threw, or otherwise could not reach a
+     * decision, while charging a claim (ECO1, epic `computenet-66m`,
+     * `[ECO1-CHG-10]`). Fail-closed: an indeterminate ledger refuses rather
+     * than admits.
+     *
+     * **Distinct from [BUDGET_EXHAUSTED]**, which is a completed decision
+     * against a known balance. This reason means no such decision was ever
+     * reached.
+     */
+    LEDGER_FAILURE,
 }
 
 /**
