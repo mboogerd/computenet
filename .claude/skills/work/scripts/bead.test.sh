@@ -23,7 +23,10 @@ ok()  { pass=$((pass+1)); echo "  PASS $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL $*"; }
 
 # Fake bd: `bd show <id> --json` emits one issue whose description is
-# BODY_CHARS long. Any other id exits 1 with no JSON, as the real one does.
+# BODY_CHARS long (x-filled), or, when BODY_TEXT is set, that literal text
+# (jq -Rs handles the JSON escaping, so it works for multi-paragraph text
+# with real newlines in it). Any other id exits 1 with no JSON, as the real
+# one does.
 mkdir -p "$ROOT/bin"
 cat > "$ROOT/bin/bd" <<'FAKE'
 #!/usr/bin/env bash
@@ -34,8 +37,13 @@ cat > "$ROOT/bin/bd" <<'FAKE'
 if [ "$1" = -C ]; then printf '%s\n' "$2" > "$SEEN_C"; shift 2; else : > "$SEEN_C"; fi
 [ "$1" = show ] || exit 1
 [ "$2" = known ] || { echo "no issue found" >&2; exit 1; }
-body=$(head -c "${BODY_CHARS:-100}" /dev/zero | tr '\0' 'x')
-printf '[{"id":"known","title":"t","status":"open","description":"%s"}]\n' "$body"
+if [ -n "${BODY_TEXT:-}" ]; then
+  body=$BODY_TEXT
+else
+  body=$(head -c "${BODY_CHARS:-100}" /dev/zero | tr '\0' 'x')
+fi
+body_json=$(printf '%s' "$body" | jq -Rs .)
+printf '[{"id":"known","title":"t","status":"open","description":%s}]\n' "$body_json"
 FAKE
 chmod +x "$ROOT/bin/bd"
 export PATH="$ROOT/bin:$PATH"
@@ -148,6 +156,24 @@ out=$(BODY_CHARS=40000 bash "$SCRIPT" -C /some/checkout known 2>&1); rc=$?
 grep -q 'exceeds one tool result' <<<"$out" && ok "spilled" || bad "no spill -- ${out:0:80}"
 spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
 [ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"
+rm -f "$ROOT"/bead-known.*
+
+echo "case 7: a multi-paragraph description spills as real newlines, not one"
+echo "        giant line the Read tool truncates at (computenet-gcojq)"
+paragraphs=""
+for i in $(seq 1 30); do
+  para="paragraph $i: $(head -c 2000 /dev/zero | tr '\0' 'x')"
+  paragraphs="${paragraphs}${paragraphs:+$'\n\n'}${para}"
+done
+out=$(BODY_TEXT=$paragraphs bash "$SCRIPT" known 2>&1); rc=$?
+[ $rc -eq 3 ] && ok "exit 3" || bad "exit $rc -- ${out:0:200}"
+spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
+[ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"
+longest=$(awk '{ print length }' "$spilled" | sort -rn | head -1)
+[ "$longest" -lt 5000 ] && ok "no single line exceeds 5000 chars (longest: $longest)" \
+  || bad "a line is $longest chars long -- the Read tool would truncate it (this is the bug)"
+grep -q '^paragraph 15: ' "$spilled" && ok "a middle paragraph landed on its own line" \
+  || bad "paragraphs got collapsed into one line"
 rm -f "$ROOT"/bead-known.*
 
 echo
