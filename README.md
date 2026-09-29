@@ -58,6 +58,7 @@ Every demo serves HTTP + SSE; the port is the first argument (default 8080, or
 | backlog-triage | `./gradlew :demo:backlog-triage:run --args="8094"` | Collective ranking with pluggable engines (elo, Bradley–Terry, TrueSkill…), JSON agent API |
 | social | `./gradlew :demo:social:run --args="8095"` | LDBC-SNB social graph as four per-key keyed-cell families behind one ingress API |
 | alignment | `./gradlew :demo:alignment:run --args="8096"` | Team alignment: rate ideas 1–9 per creator-defined dimension, creator-weighted live value × factor ÷ cost aggregate with facilitator-configured dimension direction and a split marker, JSON API + SSE |
+| alignment (triage) | `./gradlew :demo:alignment:run --args="8097 --seed-beads ../.. --journal ~/.local/state/computenet-triage/triage.jsonl"` | The same board seeded from this repo's own ready beads epics, on the two Eisenhower axes, with a heuristic `jev` rater and a bias-safe agent worklist — see [demo/alignment/TRIAGE.md](demo/alignment/TRIAGE.md) |
 
 Durability: `shopping`, `agora`, and `exchange` accept `--journal <dir>` and
 become `kill -9` safe — restart with the same flag and state recovers from the
