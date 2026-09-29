@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for session-holder.sh. Uses REAL processes rather than a ps stub: the
 # whole point of the token is that it tracks a live OS process, and a stubbed
-# ps would test the parser instead of the property. Expect "12 passed, 0 failed".
+# ps would test the parser instead of the property. Expect "15 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-holder.sh"}
@@ -55,6 +55,22 @@ out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" 2>&1); rc
   && ok "a live pid older than HOLDER_MAX_AGE_S reads STALE" \
   || bad "old-token STALE — got '$out' rc=$rc, wanted 'STALE' rc=1"
 check "test-actor:$elder:$estart" LIVE 0 "the same fresh token reads LIVE under the default max age"
+
+# computenet-jqxqk: a STALE-aged token whose bead was written moments ago is a
+# long-running session, not residue. Releasing it put two sessions on one epic.
+recent=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "$recent" 2>&1); rc=$?
+{ [ "$out" = LIVE ] && [ "$rc" = 0 ]; } \
+  && ok "an old token whose bead was just written reads LIVE, not STALE" \
+  || bad "recent-write override — got '$out' rc=$rc, wanted 'LIVE' rc=0"
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "2020-01-01T00:00:00Z" 2>&1); rc=$?
+{ [ "$out" = STALE ] && [ "$rc" = 1 ]; } \
+  && ok "an old token with an old write still reads STALE" \
+  || bad "old-write STALE — got '$out' rc=$rc, wanted 'STALE' rc=1"
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "not-a-date" 2>&1); rc=$?
+{ [ "$out" = STALE ] && [ "$rc" = 1 ]; } \
+  && ok "an unparseable updated-at falls back to STALE" \
+  || bad "unparseable updated-at — got '$out' rc=$rc, wanted 'STALE' rc=1"
 kill "$elder" 2>/dev/null; wait "$elder" 2>/dev/null
 
 # 8-9. Nothing established is UNKNOWN (exit 3), never an all-clear.

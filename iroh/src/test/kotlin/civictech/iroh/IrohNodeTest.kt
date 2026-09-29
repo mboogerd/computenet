@@ -100,9 +100,19 @@ class IrohNodeTest {
         val admitted = CopyOnWriteArrayList<IrohNode.LinkView>()
         val downs = CopyOnWriteArrayList<Pair<IrohNode.LinkView, IrohTransport.IrohConnection.LinkOutcome?>>()
 
-        override fun onUp(link: IrohNode.LinkView) { ups += link }
-        override fun onAdmitted(link: IrohNode.LinkView) { admitted += link }
+        /** Every event as `up:<id>`, `admitted:<id>` or `down:<id>`, in the order delivered. */
+        val log = CopyOnWriteArrayList<String>()
+
+        override fun onUp(link: IrohNode.LinkView) {
+            log += "up:${link.linkId}"
+            ups += link
+        }
+        override fun onAdmitted(link: IrohNode.LinkView) {
+            log += "admitted:${link.linkId}"
+            admitted += link
+        }
         override fun onDown(link: IrohNode.LinkView, outcome: IrohTransport.IrohConnection.LinkOutcome?) {
+            log += "down:${link.linkId}"
             downs += link to outcome
         }
     }
@@ -165,7 +175,7 @@ class IrohNodeTest {
         withNode { fake, _, node ->
             val events = Events()
             node.onLinkEvent(events)
-            node.gate = HelloGate { _, _, _, _ -> Verdict.CloseQuietly("a test's verdict") }
+            node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("a test's verdict") }
             val remote = nodeId()
 
             fake.presentInbound(9, remote)
@@ -189,11 +199,54 @@ class IrohNodeTest {
         }
     }
 
+    /**
+     * The surface this task adds: [HelloGate.judge] carries the id of the
+     * link whose hello is being judged, on both an accepted link and a
+     * dialled one — not a fixed value, not the other direction's link, and
+     * not the previous hello's id (`computenet-2utc8`).
+     *
+     * `IrohNode.LinkView.linkId` is this same node's own account of each
+     * link's id, read once each is admitted, and is the independent source of
+     * truth the gate's argument is checked against.
+     */
+    @Test
+    fun `HelloGate judge carries the link id of the hello actually being judged`() {
+        withNode { fake, _, node ->
+            val seen = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+            node.gate = HelloGate { _, _, _, linkId, _ ->
+                seen += linkId
+                Verdict.Admit
+            }
+
+            // An accepted link: the fake assigns the id (41), and it is the
+            // only fact this test needs to check the argument against.
+            val acceptedRemote = nodeId()
+            fake.presentInbound(41, acceptedRemote)
+            fake.hello1From(41)
+            await("the accepted link to be admitted") { node.links(acceptedRemote).firstOrNull()?.peered == true }
+            assertEquals(41L, node.links(acceptedRemote).single().linkId)
+
+            // A dialled link: its id is not known until `openAndAdmit` returns
+            // it, which is exactly the case `linkId` is read lazily for.
+            val dialledRemote = nodeId()
+            val discovered = Discovered(node, dialledRemote)
+            val dialledLinkId = fake.openAndAdmit(discovered.connection, dialledRemote)
+            await("the dialled link to be admitted") { node.links(dialledRemote).firstOrNull()?.peered == true }
+            assertEquals(dialledLinkId, node.links(dialledRemote).single().linkId)
+
+            assertEquals(
+                listOf(41L, dialledLinkId),
+                seen.toList(),
+                "the gate saw each hello's own link id, not a constant and not the other link's",
+            )
+        }
+    }
+
     @Test
     fun `a Refuse verdict is a real denial, recorded with the gate's own reason`() {
         withNode { fake, _, node ->
             val remote = nodeId()
-            node.gate = HelloGate { _, _, _, resolved ->
+            node.gate = HelloGate { _, _, _, _, resolved ->
                 Verdict.Refuse(DenialReason.NOT_ADMITTED, resolved, "a test's refusal")
             }
 
@@ -226,7 +279,7 @@ class IrohNodeTest {
         val friendly = side(allow = setOf(resolved(side(), friend)))
         withNode(friendly) { fake, _, node ->
             val consults = AtomicInteger()
-            node.gate = HelloGate { _, _, _, _ ->
+            node.gate = HelloGate { _, _, _, _, _ ->
                 consults.incrementAndGet()
                 Verdict.Admit
             }
@@ -270,7 +323,7 @@ class IrohNodeTest {
     @Test
     fun `an outbound link the gate closes quietly costs the peer nothing and is not re-dialled`() {
         withNode { fake, _, node ->
-            node.gate = HelloGate { _, _, _, _ -> Verdict.CloseQuietly("a test's tie-break") }
+            node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("a test's tie-break") }
             val peer = nodeId()
             val discovered = Discovered(node, peer)
 
@@ -302,6 +355,50 @@ class IrohNodeTest {
             assertFalse(outcome.afterRefusal)
             assertNull(outcome.lastDenial)
             assertEquals(1L, quiesced { fake.dials.get() }, "reconnect is the caller's: this connection dials nothing")
+        }
+    }
+
+    /**
+     * computenet-3mcum: the peer ADMITTED our dialler hello, so it holds our
+     * mirror ref and announces to it — and only then does its acceptor hello
+     * reach our gate, which closes the link quietly (a mutual dial's losing
+     * link over real sidecars). The peer's frames that were already in flight
+     * arrive with no ingress. They are dropped, and counted as quiet-close
+     * drops: the hello they follow was admitted, so none of them is a
+     * pre-hello drop (F3-D5, refined by ktn1l-D12).
+     */
+    @Test
+    fun `frames after an outbound link's quiet close are quiet-close drops, never pre-hello drops`() {
+        withNode { fake, _, node ->
+            node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("a test's tie-break") }
+            val peer = nodeId()
+            val discovered = Discovered(node, peer)
+
+            val opened = ArrayBlockingQueue<Result<Unit>>(1)
+            Thread({ opened.put(runCatching { discovered.connection.openLink(30.seconds) }) }, "open-link")
+                .apply { isDaemon = true }
+                .start()
+            val dial = fake.nextDial()
+            // Our hello goes out, the peer's acceptor hello comes back and is judged.
+            fake.admit(dial.link, peer)
+            (opened.poll(30, TimeUnit.SECONDS) ?: fail("openLink did not settle within 30s")).getOrThrow()
+            assertEquals(HostMessage.CloseLink(dial.link), fake.nextHostMessage(), "the gate closed the link quietly")
+
+            // The peer's announcements, written before our close reached it.
+            repeat(3) { fake.send(SidecarMessage.Data(dial.link, byteArrayOf(0x42, it.toByte()))) }
+            // Wait on the TOTAL, so the assertions below say which counter the
+            // frames went to rather than timing out when it is the wrong one.
+            await("the three in-flight frames to be accounted") {
+                discovered.connection.quietCloseDrops + discovered.connection.preHelloDrops == 3L
+            }
+
+            fake.send(SidecarMessage.LinkDown(dial.link, "closed"))
+            assertTrue(discovered.nextOutcome().quiet, "the gate's quiet close is what ended this link")
+
+            assertEquals(0L, discovered.connection.preHelloDrops, "frames after an admitted hello are not pre-hello drops")
+            assertEquals(0L, node.preHelloDrops, "and the node charges none either")
+            assertEquals(3L, discovered.connection.quietCloseDrops, "the drops survive the link's retirement, counted once")
+            assertEquals(0L, node.admissionDenialCount, "a quiet close is not a denial")
         }
     }
 
@@ -389,19 +486,190 @@ class IrohNodeTest {
 
             val dial = fake.nextDial()
             fake.send(SidecarMessage.LinkUp(dial.link, peer, DIRECTION_OUTBOUND))
-            (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle within 30s")).getOrThrow()
-            assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello is its first frame")
+            val connection =
+                (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle within 30s")).getOrThrow()
+            // Without this, the connection's own re-dial loop (backoff 10ms)
+            // outlives this test: withNode closes the client and fake, not any
+            // configured connection, so an unclosed one spins on "client is
+            // closed" and prints a "re-dial attempt" line every 10ms for the
+            // rest of the :iroh:test JVM (computenet-raitp).
+            try {
+                assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello is its first frame")
 
-            val view = node.links(peer).single()
-            assertEquals(IrohNode.LinkSource.CONFIGURED, view.source)
-            assertEquals(LinkDirection.OUTBOUND, view.direction)
-            assertEquals(dial.link, view.linkId)
+                val view = node.links(peer).single()
+                assertEquals(IrohNode.LinkSource.CONFIGURED, view.source)
+                assertEquals(LinkDirection.OUTBOUND, view.direction)
+                assertEquals(dial.link, view.linkId)
 
-            // Unplanned: this one re-dials itself, unlike a discovered peering.
-            fake.send(SidecarMessage.LinkDown(dial.link, "transport drop"))
-            val redial = fake.nextDial()
-            assertTrue(redial.link != dial.link, "a re-dial is a new link id")
-            assertContentEquals(peer, redial.peerId)
+                // Unplanned: this one re-dials itself, unlike a discovered peering.
+                fake.send(SidecarMessage.LinkDown(dial.link, "transport drop"))
+                val redial = fake.nextDial()
+                assertTrue(redial.link != dial.link, "a re-dial is a new link id")
+                assertContentEquals(peer, redial.peerId)
+            } finally {
+                connection.close()
+            }
+        }
+    }
+
+    // ------------------------- a LINK_DOWN that overtakes registration
+
+    /**
+     * computenet-wad38: a dialled link's `LINK_DOWN` is dispatched before the
+     * dialling thread registers the link with the node. The client releases a
+     * dialled link's events once the dial has decided, which is before
+     * `openLink` reaches the node's observer, so the reader can run `retire`
+     * and the node's `down` first. [RegistrationHold] holds the dialling
+     * thread in exactly that window.
+     *
+     * Before the fix, `down` found no record and returned silently, and the
+     * `up` that followed registered a link that was already gone: a record in
+     * [IrohNode.links] for good, and an `onUp` with no `onDown` ever to follow.
+     */
+    @Test
+    fun `a dialled link whose LINK_DOWN overtakes its registration is reported up then down and never held`() {
+        withNode { fake, _, node ->
+            val events = Events()
+            node.onLinkEvent(events)
+            val peer = nodeId()
+            val discovered = Discovered(node, peer)
+            val hold = civictech.iroh.discover.RegistrationHold(node)
+
+            val opened = ArrayBlockingQueue<Result<Unit>>(1)
+            Thread({ opened.put(runCatching { discovered.connection.openLink(30.seconds) }) }, "open-link")
+                .apply { isDaemon = true }
+                .start()
+            val dial = fake.nextDial()
+            fake.send(SidecarMessage.LinkUp(dial.link, peer, DIRECTION_OUTBOUND))
+            assertEquals(dial.link, hold.awaitHeld(), "the dialling thread is held with the link in hand")
+
+            // The far side closes at once. The delegate hears of it only after
+            // the node's `down` has run (`reportUnplanned` calls the observer
+            // first), so this outcome is proof the down came first.
+            fake.send(SidecarMessage.LinkDown(dial.link, "closed within microseconds of LINK_UP"))
+            val outcome = discovered.nextOutcome()
+            assertFalse(outcome.peered)
+            assertTrue(events.log.isEmpty(), "nothing is reported for a link the node has not been told of: ${events.log}")
+
+            hold.release()
+            (opened.poll(30, TimeUnit.SECONDS) ?: fail("openLink did not settle within 30s")).getOrThrow()
+
+            assertTrue(node.links(peer).isEmpty(), "a link that is already down is not a link this node holds")
+            assertTrue(
+                node.linksWithSettledDials(peer).isEmpty(),
+                "nor one the down classifier's registry read sees as up",
+            )
+            assertEquals(
+                listOf("up:${dial.link}", "down:${dial.link}"),
+                events.log.toList(),
+                "the link is reported up and then down, so a listener that learnt of it some other way sees it end",
+            )
+            assertEquals(outcome, events.downs.single().second, "the down carries the connection's own classification")
+            assertNull(discovered.connection.mirrorRef, "the connection holds no dead link instance either")
+            // No hello went out on a link that was already gone.
+            assertTrue(
+                neverWithin(500) { fake.pollHostMessage(50) is HostMessage.Data },
+                "no hello is written on a link that is already down",
+            )
+        }
+    }
+
+    /**
+     * The same overtaking, on a CONFIGURED connection's own re-dial loop. The
+     * loop dials while the connection has no current Session, and `retire`
+     * of a link the loop dialled finds the loop's single-flight guard held and
+     * leaves the retry to it. Before the fix `openLink` then installed the
+     * dead link's Session after `retire` had cleared it, the hello on it
+     * threw, and the loop — seeing a current Session — stopped: the configured
+     * peer was never re-dialled again (computenet-wad38).
+     */
+    @Test
+    fun `a configured re-dial whose LINK_DOWN overtakes registration does not strand the re-dial loop`() {
+        withNode { fake, _, node ->
+            val peer = nodeId()
+            val connected = ArrayBlockingQueue<Result<IrohTransport.IrohConnection>>(1)
+            Thread({
+                connected.put(runCatching { node.connectConfigured(peer, listOf("127.0.0.1:4242"), backoff = { 0L }) })
+            }, "connect-configured").apply { isDaemon = true }.start()
+            assertIs<HostMessage.AddPeer>(fake.nextHostMessage())
+            fake.send(SidecarMessage.PeerAdded(peer))
+            val first = fake.nextDial()
+            fake.send(SidecarMessage.LinkUp(first.link, peer, DIRECTION_OUTBOUND))
+            val connection = (connected.poll(30, TimeUnit.SECONDS) ?: fail("connectConfigured did not settle")).getOrThrow()
+            // withNode closes the client, not the node: without this the loop,
+            // whose backoff is zero, spins on "client is closed" for the rest
+            // of the test JVM.
+            try {
+                assertIs<HostMessage.Data>(fake.nextHostMessage(), "the dialler's hello")
+
+                // An ordinary unplanned drop starts the loop; the loop's dial is
+                // the one whose down overtakes its registration.
+                val hold = civictech.iroh.discover.RegistrationHold(node)
+                fake.send(SidecarMessage.LinkDown(first.link, "transport drop"))
+                val second = fake.nextDial()
+                fake.send(SidecarMessage.LinkUp(second.link, peer, DIRECTION_OUTBOUND))
+                assertEquals(second.link, hold.awaitHeld(), "the loop's dialling thread is held with the link in hand")
+                fake.send(SidecarMessage.LinkDown(second.link, "closed within microseconds of LINK_UP"))
+                // A marker behind the LINK_DOWN on the one reader thread: once the
+                // node holds it, the reader has dispatched the down, `retire` included.
+                val marker = nodeId()
+                fake.presentInbound(90, marker)
+                await("the reader to dispatch past the LINK_DOWN") { node.links(marker).isNotEmpty() }
+
+                hold.release()
+                val third = fake.nextDial()
+                assertContentEquals(peer, third.peerId, "the loop re-dials the configured peer")
+                assertTrue(third.link != second.link, "as a new link")
+                assertTrue(node.links(peer).none { it.linkId == second.link }, "and the node holds no dead link for it")
+            } finally {
+                connection.close()
+            }
+        }
+    }
+
+    /**
+     * The discovery policy's view of the same race (computenet-wad38): a
+     * discovered key whose only link went down before the node registered it
+     * must read as unlinked — back in the dialable set and re-dialled at once
+     * ([DSC2-DIAL-06]) — and never as linked for good.
+     *
+     * The retry schedule is a minute and the clock never moves, so a re-dial
+     * here can only be the link-down path's, never a failed dial's backoff.
+     */
+    @Test
+    fun `a discovered key whose link went down before registration is re-dialled, not linked for good`() {
+        val own = civictech.iroh.discover.freshNodeId()
+        val peer = civictech.iroh.discover.freshNodeId()
+        civictech.iroh.discover.FakeNode.start(
+            "A",
+            own,
+            civictech.iroh.discover.sideWith(peer = PeerId("A")),
+            civictech.iroh.discover.DialPolicy(schedule = { 60_000L }),
+        ).use { a ->
+            val hold = a.holdDialRegistration()
+            a.discover(peer)
+            val dial = a.fake.nextDial()
+            assertContentEquals(peer, dial.peerId)
+            a.fake.send(SidecarMessage.LinkUp(dial.link, peer, DIRECTION_OUTBOUND))
+            assertEquals(dial.link, hold.awaitHeld())
+
+            a.fake.send(SidecarMessage.LinkDown(dial.link, "closed within microseconds of LINK_UP"))
+            // A marker behind the LINK_DOWN on the one reader thread: once the
+            // policy has counted it, the reader has finished dispatching the
+            // down, `retire` and the node's `down` included.
+            val selfDropped = a.peering.counters.selfDropped.count
+            a.fake.send(SidecarMessage.PeerDiscovered(own, listOf("127.0.0.1:1")))
+            await("the reader to dispatch past the LINK_DOWN") { a.peering.counters.selfDropped.count == selfDropped + 1 }
+
+            hold.release()
+            val redial = a.fake.nextDial()
+            assertContentEquals(peer, redial.peerId, "the key is re-dialled: nothing holds it linked")
+            assertTrue(redial.link != dial.link)
+            assertTrue(a.node.links(peer).isEmpty())
+            assertTrue(
+                a.node.linksWithSettledDials(peer).none { it.linkId == dial.link },
+                "the down classifier's opposite-link read does not see the dead link",
+            )
         }
     }
 }

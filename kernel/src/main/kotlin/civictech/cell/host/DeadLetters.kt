@@ -160,6 +160,10 @@ internal class DeadLetters(
             BoundarySeam.LINK_AUTHORITY -> HostedPortInvocation.Type.PORT_MANAGEMENT
             BoundarySeam.PROTOCOL_AUTHORITY -> HostedPortInvocation.Type.PORT_PROTOCOL
             BoundarySeam.DISCLOSURE, BoundarySeam.INTEGRITY -> HostedPortInvocation.Type.PORT_API
+            // computenet-66m (66m-D10): same *kind* as ADMISSION / LINK_AUTHORITY
+            // above ("can this peer touch this host at all") and, like seam 1,
+            // has no real Invocation to classify.
+            BoundarySeam.HOST_ADMISSION -> HostedPortInvocation.Type.PORT_MANAGEMENT
         }
         val description = "boundary denial at exposure '${denial.exposure}' on $cellRef: " +
             "seam=${denial.seam}, reason=${denial.reason}, " +

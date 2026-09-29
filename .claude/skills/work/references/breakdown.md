@@ -176,10 +176,11 @@ and dotted ids would then collide on `child_counters`). Under any parent the
 session does not hold, use `create-ticket.sh` either way.
 
 Backticks inside a double-quoted argument execute, so bodies go in files
-written with a quoted heredoc ([traps.md](traps.md#bd)):
+written with a quoted heredoc, and acceptance, which has no file flag, as
+`"$(cat <file>)"` ([traps.md](traps.md#bd)):
 
 ```bash
-bd create --type=task --parent=<feature-id> --validate --title="<outcome>" --body-file <scratch>/<feature-id>-t1-desc.md --acceptance="<EARS rules, no backticks>" --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
+bd create --type=task --parent=<feature-id> --validate --title="<outcome>" --body-file <scratch>/<feature-id>-t1-desc.md --acceptance="$(cat <scratch>/<feature-id>-t1-accept.md)" --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
 ```
 
 ## Epic breakdown
@@ -237,8 +238,9 @@ bd update <feature-id> --design-file <scratch>/<feature-id>-design.md
   verification command.
 - Size by read-surface (what a fresh agent must read and hold), so a task
   fits one implementer session ([implement.md](implement.md#hand-off)).
-- A test-only task names how its implementer will show the tests are not
-  vacuous without leaving its claim ([evidence.md](evidence.md#mutation-checks)).
+- A prescribed or reserved mutation names the assertion it must redden
+  ([evidence.md](evidence.md#mutation-checks)); a test-only task also says
+  how its implementer shows the tests are not vacuous without leaving its claim.
 - Anchors in code a blocker has not landed yet are `unverified:`.
 - If the feature's `metadata.files` omits a file a task must edit, widen it
   with `bd update <feature-id> --set-metadata files=<list>`, since the feature

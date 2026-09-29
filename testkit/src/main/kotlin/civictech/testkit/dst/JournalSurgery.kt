@@ -1,5 +1,6 @@
 package civictech.testkit.dst
 
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RecoveryIncomplete
@@ -297,6 +298,8 @@ class MutatingJournal(
      */
     override val formatVersion: Int get() = delegate.formatVersion
 
+    override val durability: DurabilityClass get() = delegate.durability
+
     @Synchronized
     override fun append(record: ByteArray) {
         val accepted = ledger.accepted
@@ -342,6 +345,8 @@ class PrefixJournal(private val delegate: Journal, val k: Int) : Journal {
     }
 
     override val formatVersion: Int get() = delegate.formatVersion
+
+    override val durability: DurabilityClass get() = delegate.durability
 
     /** How many records the underlying log actually holds — `k` may exceed it, harmlessly. */
     fun total(): Int = delegate.replay().size
@@ -402,6 +407,8 @@ class FrontierRollbackJournal(
     }
 
     override val formatVersion: Int get() = delegate.formatVersion
+
+    override val durability: DurabilityClass get() = delegate.durability
 
     /**
      * How many `RECORD_FRONTIER` records follow the last `RECORD_CHECKPOINT` — the number of

@@ -329,6 +329,65 @@ class BoundedStateReadTest {
     }
 
     @Test
+    fun `a keyBound is refused KEY_BOUND_UNSUPPORTED on the caller's thread for every family that does not declare it`() {
+        val plain = PlainBoundedCell().also { host.managementInlet.call.spawn(it) }
+        val refusedPlain = host.readState(plain.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        refusedPlain.isDone.shouldBeTrue()
+        refusedPlain.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        controller.step().shouldBeFalse()
+        plain.reads shouldBe 0
+
+        val set = spawn(SetCell())
+        val refusedSet = host.readState(set.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        refusedSet.isDone.shouldBeTrue()
+        refusedSet.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        set.supportsKeyBound.shouldBeFalse()
+
+        val list = civictech.cell.data.ListCell<String>().also { host.managementInlet.call.spawn(it) }
+        val refusedList = host.readState(list.ref, StateRead(keyBound = civictech.cell.KeyBound("a", "z")))
+        refusedList.isDone.shouldBeTrue()
+        refusedList.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED)
+        list.supportsKeyBound.shouldBeFalse()
+
+        // control: keyBound = null is served normally, on any of the above
+        val servedPlain = host.readState(plain.ref, StateRead(keyBound = null))
+        controller.runToIdle()
+        servedPlain.get().shouldBeInstanceOf<StateReadResult.Page>()
+        plain.reads shouldBe 1
+    }
+
+    @Test
+    fun `a mistyped KeyBound is named KEY_BOUND_MISTYPED, distinct from every other readBounded throw (computenet-5woy9)`() {
+        // The dedicated D9 exception EntryOrder.admits throws (see
+        // BoundedRangeScanTest's `D9 ...` test for the real walk-driven path)
+        // is named apart from an ordinary readBounded failure, which still
+        // answers READ_FAILED — a caller that retries forever on READ_FAILED
+        // now has a way to tell "your bound is mistyped, permanent" apart from
+        // "the cell broke, maybe transient".
+        val mistypedCell = ThrowingBoundedCell(
+            civictech.cell.KeyBoundMistypedException(
+                "KeyBound refused (D9): `to` end is java.lang.Integer but the walked key is java.lang.Long"
+            )
+        ).also { host.managementInlet.call.spawn(it) }
+        val mistyped = host.readState(mistypedCell.ref, StateRead(limit = 10))
+        controller.runToIdle()
+        mistyped.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.KEY_BOUND_MISTYPED)
+
+        // any other throw from readBounded still answers READ_FAILED
+        val brokenCell = ThrowingBoundedCell(IllegalStateException("boom")).also { host.managementInlet.call.spawn(it) }
+        val broken = host.readState(brokenCell.ref, StateRead(limit = 10))
+        controller.runToIdle()
+        broken.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.READ_FAILED)
+
+        // including a plain IllegalArgumentException that is not the dedicated
+        // D9 subtype: only KeyBoundMistypedException is distinguished by name
+        val plainIaeCell = ThrowingBoundedCell(IllegalArgumentException("unrelated")).also { host.managementInlet.call.spawn(it) }
+        val plainIae = host.readState(plainIaeCell.ref, StateRead(limit = 10))
+        controller.runToIdle()
+        plainIae.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.READ_FAILED)
+    }
+
+    @Test
     fun `the byte budget shortens pages without ever stalling a walk`() {
         val cell = populated(60)
 
@@ -399,7 +458,21 @@ class BoundedStateReadTest {
     private class PlainBoundedCell(
         override val ref: civictech.cell.CellRef = civictech.cell.CellRef(java.util.UUID.randomUUID()),
     ) : civictech.cell.Cell, civictech.cell.BoundedStateful {
-        override fun readBounded(request: StateRead) = StatePage(entries = emptyList())
+        var reads = 0
+        override fun readBounded(request: StateRead): StatePage {
+            reads++
+            return StatePage(entries = emptyList())
+        }
+        override fun snapshot(): Serializable = 0
+        override fun restore(state: Serializable) = Unit
+    }
+
+    /** A [civictech.cell.BoundedStateful] cell whose `readBounded` always throws [throwable]. */
+    private class ThrowingBoundedCell(
+        private val throwable: Throwable,
+        override val ref: civictech.cell.CellRef = civictech.cell.CellRef(java.util.UUID.randomUUID()),
+    ) : civictech.cell.Cell, civictech.cell.BoundedStateful {
+        override fun readBounded(request: StateRead): StatePage = throw throwable
         override fun snapshot(): Serializable = 0
         override fun restore(state: Serializable) = Unit
     }

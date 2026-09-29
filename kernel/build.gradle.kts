@@ -154,7 +154,76 @@ val reportExpectedFailures = tasks.register("reportExpectedFailures") {
     }
 }
 
+// Files outside :kernel's classpath that :kernel's tests read as TEXT, declared as inputs of the
+// test task (computenet-wx593; mechanism in computenet-0ehza). Several tests walk up from
+// `user.dir` to `settings.gradle.kts` and read the repository directly. None of what they read
+// was a task input, so the cache key covered kernel's classes and runtime classpath only: a PR
+// touching only `demo/social` replayed a green `:kernel:test` FROM-CACHE while the fence it
+// violated went red the next time the suite actually executed (#929 -> computenet-lomhb).
+//
+// What each repo-root reader reads (enumerated 2026-09-22 against 4cda46ab; re-grep for
+// `settings.gradle.kts` under kernel/src/test when adding one — a new reader is invisible here):
+//   BoundedReadConsumerFenceTest  <every top-level dir>/src/main/kotlin + demo/*/src/main/kotlin
+//   DemoSurfaceAllowlistTest      demo/*/src/main/kotlin, inspect/src/main/kotlin
+//   IdentityDerivationRatchetTest settings.gradle.kts, then <every included project>/src/main/kotlin
+//                                 (loader/fixtures/* included), plus
+//                                 kernel/src/test/resources/architecture/peerid-constructions.txt
+//   ModuleInventoryTest           settings.gradle.kts, doc/ARCHITECTURE.md
+//   ArchitectureRatchetTest       kernel/src/main/kotlin, and
+//                                 kernel/src/test/resources/architecture/package-edges.txt
+//   ExtractionFenceTest           kernel/src/main/kotlin/civictech/cell/host/InstanceIndex.kt
+//   LeaderElectionTest            kernel/src/main/kotlin/civictech/cell/replication/*.kt
+//   C12AdjudicationRecordTest     doc/spec/90-roadmap/91-gap-analysis.md, the D-C12 ticket,
+//                                 concord/corpus/21-propagation/21-REBASE-01.yaml,
+//                                 concord/corpus/DISPUTES.md, doc/spec/CONCORDANCE.md,
+//                                 doc/evidence-lane-findings.md, and the TEXT of
+//                                 kernel/src/test/kotlin/civictech/cell/repro/**/*.kt
+// Kernel's own source text is listed too: a comment-only edit changes no class file, and the
+// scans read comments (KDoc markers, allowlist tokens), so the classpath does not cover it.
+//
+// Constraints kept, so cross-machine build-cache hits survive when nothing read has changed:
+// RELATIVE path sensitivity, every tree rooted at the repository root (so the normalized paths
+// are repo-relative), and no pattern that reaches a `build/` directory — `src/main/kotlin` and
+// the named files are sources, never :kernel's (or anyone's) outputs. The patterns are
+// depth-anchored rather than `**/src/main/kotlin`, which would descend into node_modules and,
+// in the main checkout, into every `.claude/worktrees/*` sibling checkout.
+//
+// Limit: this covers the readers listed above as they are written today. A test that starts
+// reading some other file is uncovered until it is added here; nothing enforces that.
+val repoRootDir = rootDir
+val includedProjectMainSources = rootProject.allprojects
+    .map { it.projectDir.relativeTo(repoRootDir).invariantSeparatorsPath }
+    .filter { it.isNotEmpty() }
+    .map { "$it/src/main/kotlin/**/*.kt" }
+    .sorted()
+
 tasks.named<Test>("test") {
+    inputs.files(
+        fileTree(repoRootDir) {
+            include("*/src/main/kotlin/**/*.kt")
+            include("demo/*/src/main/kotlin/**/*.kt")
+            include(includedProjectMainSources)
+        },
+    ).withPropertyName("repoScannedMainSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .ignoreEmptyDirectories()
+    inputs.files(
+        fileTree(repoRootDir) {
+            include("settings.gradle.kts")
+            include("doc/ARCHITECTURE.md")
+            include("doc/evidence-lane-findings.md")
+            include("doc/spec/CONCORDANCE.md")
+            include("doc/spec/90-roadmap/91-gap-analysis.md")
+            include("doc/spec/90-roadmap/99-defects-engines-plan/tickets/D-C12.md")
+            include("concord/corpus/DISPUTES.md")
+            include("concord/corpus/21-propagation/21-REBASE-01.yaml")
+            include("kernel/src/test/resources/architecture/**")
+            include("kernel/src/test/kotlin/civictech/cell/repro/**/*.kt")
+        },
+    ).withPropertyName("repoScannedDocsAndBaselines")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .ignoreEmptyDirectories()
+
     val reportFile = expectedFailureReport.get().asFile
     val stampService = expectedFailureStamp
     val stampPrefix = expectedFailureStampPrefix

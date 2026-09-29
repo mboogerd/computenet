@@ -29,7 +29,10 @@ The lane works in two modes, and the nightly scheduled run does both:
 ## 1. Start
 
 ```bash
-echo "${BEADS_ACTOR:?}"; git fetch origin main; bd dolt pull
+echo "${BEADS_ACTOR:?}"
+M=$(git worktree list | head -1 | awk '{print $1}')      # the main checkout
+[ "$(bd where | head -1)" = "$M/.beads" ] || { echo "bd resolves to $(bd where | head -1), not $M/.beads — cd $M and run every bd call there"; exit 1; }
+git fetch origin main; bd dolt pull
 .claude/skills/remediate-friction/scripts/recurrence-audit.py   # landed fixes that did not take
 bd list --parent=computenet-wpvy --all --json | sed -n '/^[[{]/,/^[]}]/p' \
   | jq '[(if type=="array" then . else (.issues // []) end)[] | select(.status != "closed")]'
@@ -134,7 +137,8 @@ change explains itself.
 
 ## 6. Finalize
 
-Run `publish-beads.sh` with a timeout of at least 300s. Then report:
+File the retro record (/work's `references/retro.md`; `file-retro.sh --skill
+remediate-friction`), then run `publish-beads.sh` with a timeout of at least 300s. Then report:
 
 - verdict counts per triage row, with PRs for fix-now items;
 - the revision PR, if any;

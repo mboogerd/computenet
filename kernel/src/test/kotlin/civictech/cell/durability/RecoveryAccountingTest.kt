@@ -24,9 +24,8 @@ import java.util.UUID
 /**
  * T05 finding 4: `HostDurability.recoverFrom`'s bare `forEach` over
  * `journal.replay()` had no per-record handling — any decode/`readObject`
- * throw abandoned every remaining record silently (`recovering` still reset
- * in the `finally`, so the host resumed live traffic on truncated state with
- * nothing to say so). Worse, `submit` is `enqueueHostedInvocation`, which
+ * throw abandoned every remaining record silently (the host resumed live
+ * traffic on truncated state with nothing to say so). Worse, `submit` is `enqueueHostedInvocation`, which
  * throws `IntakeSaturatedException` once a durable host's `intakeBound`
  * high-water is exceeded — since nothing drains during the synchronous
  * replay, a journal longer than high-water deterministically aborted
@@ -139,6 +138,7 @@ class RecoveryAccountingTest {
 
         // Arm 1 — the pre-retrofit decorator, verbatim from 67399fc23^ (RecoveryAccountingTest.kt:82).
         val preRetrofit = object : Journal {
+            override val durability: DurabilityClass get() = journal.durability
             override fun append(record: ByteArray) = journal.append(record)
             override fun replay(): List<ByteArray> =
                 journal.replay().mapIndexed { i, r -> if (i == corruptAt) byteArrayOf(99) else r }

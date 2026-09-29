@@ -87,7 +87,7 @@ cat <<'JSON'
  {"number":108,"headRefName":"feature/spaced"}]
 JSON
 EOF
-  # BD_MODE: ok | listfail-pr | listfail-branch | closefail.
+  # BD_MODE: ok | listfail-pr | listfail-branch | closefail | closeblocked.
   # The two list failures are separate on purpose — with one combined mode,
   # swallowing the `pr` guard alone still left the suite green, because the
   # `branch` guard's die covered for it.
@@ -97,6 +97,10 @@ mode=\${BD_MODE:-ok}
 if [ "\$1" = "close" ]; then
   echo "\$2" >> "\$BD_LOG"
   [ "\$mode" = "closefail" ] && { echo "boom" >&2; exit 1; }
+  # bd's real refusal text (format string in the bd binary, computenet-9ha2y).
+  [ "\$mode" = "closeblocked" ] && {
+    echo "Error: cannot close \$2: blocked by open issues [t-resid t-resid2] (use --force to override)" >&2
+    exit 1; }
   exit 0
 fi
 case "\$3" in
@@ -236,6 +240,19 @@ grep -qx t-dirty "$BD_LOG" \
 [ -d "$WTS/clean" ] && ok "failing bd close: worktree kept for the failed bead" \
   || bad "failing bd close: removed the worktree of a bead that did not close"
 has "$out" "closed 0 bead(s)" "failing bd close: still prints its summary"
+
+# A close refused because the merged bead is blocked by open issues — its own
+# review residual, which review.md makes the feature depend on. A bare FAILED
+# "left for the next sweep" never succeeds, and main's CI may already be red on
+# that residual (computenet-9ha2y). The report must carry the refusal and ids.
+fixture
+out=$(BD_MODE=closeblocked run); rc=$?
+[ "$rc" -eq 1 ] && ok "blocked close: exits 1" || bad "blocked close: exits $rc, wanted 1"
+has "$out" "blocked by open issues [t-resid t-resid2]" "blocked close: quotes bd's refusal"
+has "$out" "blockers of t-clean: t-resid t-resid2" "blocked close: names the blocking ids"
+has "$out" "check main's CI" "blocked close: says to check main's CI for them"
+[ -d "$WTS/clean" ] && ok "blocked close: worktree kept" \
+  || bad "blocked close: removed the worktree of a bead that did not close"
 
 # Worktree removal fails -> exit 1, and the branch is (still) untouched.
 fixture

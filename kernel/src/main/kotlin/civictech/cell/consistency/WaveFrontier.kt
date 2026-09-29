@@ -52,6 +52,19 @@ fun interface ReplicaFrontier {
  * [ProtocolSupport] delivery path — identical whether the arm is in-process or
  * bridged (spec 40/41 point 4).
  *
+ * **Several inlets, one fold** (KE4.3, nt17o-D2; spec 20/22 §Local
+ * glitch-freedom `[22-GF-01]`/`[22-GF-02]`): one wave may reach one cell on two
+ * inlets (a diamond whose arms land on different ports). Installing a
+ * per-inlet [arm] on each (`inlet.install(frontier.arm())`) attaches that inlet
+ * to this one completeness fold — the expected-edge set, watermarks, pending
+ * waves, replica gates and stall handling all range over the union of the
+ * arms' edges — and a ready wave's buffered invocations are released
+ * together, each to the inlet that received it. The arm attached first
+ * releases first (then arrival order within an arm). Installed directly
+ * (`inlet.install(WaveFrontier(...))`) the frontier is its own single implicit
+ * arm, byte-identical to the one-inlet fold; installing that bare frontier on a
+ * second inlet throws, naming [arm]. A frontier spans inlets of ONE cell only.
+ *
  * ponytail: static link-set frontier; real upstream traversal ("describe your
  * frontier") needs multiplex ports (G-13). Unwaved traffic passes through.
  */
@@ -64,7 +77,61 @@ class WaveFrontier(
     // PN-9: the wave-completeness fold is the ALIGN tier (reorders/buffers).
     override val tier get() = civictech.cell.port.PolicyTier.ALIGN
 
-    private lateinit var release: (Invocation) -> Unit
+    /**
+     * One inlet's attachment to this fold (nt17o-D2). Holds that inlet's
+     * `release` and its attach index — the release-order key within a wave.
+     * Every [EdgeState] opened on the inlet is tagged with its arm, so the same
+     * outlet feeding two arms is two edges, matched without ambiguity.
+     */
+    private inner class Arm(private val implicit: Boolean) : InletFrontier {
+        override val tier get() = civictech.cell.port.PolicyTier.ALIGN
+
+        var inlet: FanInlet<*>? = null
+            private set
+        var attachIndex: Int = -1
+            private set
+        lateinit var release: (Invocation) -> Unit
+            private set
+
+        override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
+            val attached = this.inlet
+            check(attached == null || attached === inlet) {
+                if (implicit) {
+                    "WaveFrontier is already attached to inlet ${attached!!.ref}; a frontier installed " +
+                        "directly serves one inlet — install one frontier.arm() per inlet to span " +
+                        "several inlets of a cell under one completeness fold"
+                } else {
+                    "this WaveFrontier arm() is already attached to inlet ${attached!!.ref}; " +
+                        "call arm() once per inlet"
+                }
+            }
+            if (attached == null) attachIndex = nextAttachIndex++
+            this.inlet = inlet
+            this.release = release
+            registerHandlers(this, inlet)
+        }
+
+        override fun offer(invocation: Invocation) = this@WaveFrontier.offer(this, invocation)
+
+        override fun reset() = this@WaveFrontier.reset()
+    }
+
+    private var nextAttachIndex = 0
+
+    /** The arm a directly-installed frontier acts as (the single-inlet fold). */
+    private var implicitArm: Arm? = null
+
+    private fun implicitArm(): Arm = implicitArm ?: Arm(implicit = true).also { implicitArm = it }
+
+    /**
+     * A per-inlet façade sharing this frontier's completeness fold (nt17o-D2):
+     * install one on each inlet of a cell that one wave may reach on several
+     * inlets. A wave is released once it is complete on every open Consume edge
+     * of every arm (by data or [Progress]); its invocations are released in
+     * arm-attach order — the arm attached first releases first — each to its
+     * own inlet's handler.
+     */
+    fun arm(): InletFrontier = Arm(implicit = false)
 
     /**
      * PN-0a (plan §2 F1): count of invocations [offer] could not match to any
@@ -126,11 +193,15 @@ class WaveFrontier(
     /** The gate governing [edge], if it is replica-fed (per-outlet declaration, else the blanket). */
     private fun gateFor(edge: EdgeState): ReplicaGate? = replicaFedBy[edge.link.from] ?: blanketGate
 
-    private val pending = LinkedHashMap<Timestamp, LinkedHashMap<UUID, Invocation>>()
+    /** A buffered wave invocation and the arm (inlet) it arrived on. */
+    private class Buffered(val arm: Arm, val invocation: Invocation)
 
-    private data class EdgeState(
+    private val pending = LinkedHashMap<Timestamp, LinkedHashMap<UUID, Buffered>>()
+
+    private class EdgeState(
         val link: Link,
         val floors: Map<UUID, Long>,
+        val arm: Arm,
         var open: Boolean = true,
     )
 
@@ -151,14 +222,16 @@ class WaveFrontier(
     /** Highest flushed wave per source: replayed stragglers pass through, never re-buffer. */
     private val flushedHighWater = mutableMapOf<UUID, Long>()
 
-    override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
-        this.release = release
+    override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) =
+        implicitArm().attach(inlet, release)
+
+    private fun registerHandlers(arm: Arm, inlet: FanInlet<*>) {
         // PN-9: register through the inlet's edge-event fan-out (not directly on
         // ProtocolSupport) so a sibling PullOnOpen policy can also observe EdgeOpen.
         inlet.onEdgeEvent { link, event ->
             when (event) {
                 EdgeOpen -> {
-                    edges[link.id] = EdgeState(link, flushedHighWater.toMap())
+                    edges[link.id] = EdgeState(link, flushedHighWater.toMap(), arm)
                     // PN-9: on-demand pull-on-open is no longer welded here — it is
                     // the separately installable [civictech.cell.port.PullOnOpen]
                     // policy (GlitchFreeCell installs both). The frontier now only
@@ -228,7 +301,11 @@ class WaveFrontier(
      * dialects, not a transitional one. Treat the null arm as a second,
      * load-bearing catch-up path, not an incidental default.
      */
-    override fun offer(invocation: Invocation) {
+    override fun offer(invocation: Invocation) = offer(implicitArm(), invocation)
+
+    /** The shared fold's entry: [invocation] arrived on [arm]'s inlet. */
+    private fun offer(arm: Arm, invocation: Invocation) {
+        val release: (Invocation) -> Unit = { arm.release(it) }
         val ctx = invocation.context
         if (ctx == null) {
             // unwaved traffic (push catch-up OR context-free management/
@@ -245,7 +322,7 @@ class WaveFrontier(
             release(invocation)
             return
         }
-        val edge = edges.values.singleOrNull { it.open && it.link.from == ctx.sourcePort } ?: run {
+        val edge = edges.values.singleOrNull { it.open && it.arm === arm && it.link.from == ctx.sourcePort } ?: run {
             // PN-0a (plan §2 F1): no open edge matches this invocation's source
             // (a replayed journal frame, a streamTo/tap producer that never fired
             // EdgeOpen, a duplicate edge). The frontier is a per-inlet policy with
@@ -265,7 +342,7 @@ class WaveFrontier(
             release(invocation)
         } else {
             advanceWatermark(edge.link.id, ctx.timestamp.sourceId, ctx.timestamp.counter)
-            pending.getOrPut(ctx.timestamp) { LinkedHashMap() }[edge.link.id] = invocation
+            pending.getOrPut(ctx.timestamp) { LinkedHashMap() }[edge.link.id] = Buffered(arm, invocation)
             flushReady()
         }
     }
@@ -376,8 +453,8 @@ class WaveFrontier(
      */
     private fun ready(timestamp: Timestamp): Boolean {
         val wave = pending[timestamp] ?: return false
-        val replicaFed = wave.entries.mapNotNull { (edgeId, invocation) ->
-            edges[edgeId]?.let { edge -> gateFor(edge)?.let { gate -> gate to invocation } }
+        val replicaFed = wave.entries.mapNotNull { (edgeId, buffered) ->
+            edges[edgeId]?.let { edge -> gateFor(edge)?.let { gate -> gate to buffered.invocation } }
         }
         if (replicaFed.isNotEmpty()) {
             // Replica-fed wave: gate purely on the merged watermark, no phantom siblings.
@@ -412,7 +489,9 @@ class WaveFrontier(
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue
             flushedHighWater.merge(timestamp.sourceId, timestamp.counter, ::maxOf)
-            wave.values.forEach { release(it) } // each under its own context
+            // each under its own context, to its own inlet; the arm attached
+            // first releases first (stable: arrival order within an arm)
+            wave.values.sortedBy { it.arm.attachIndex }.forEach { it.arm.release(it.invocation) }
         }
     }
 }

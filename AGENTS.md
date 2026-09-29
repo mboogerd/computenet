@@ -9,6 +9,13 @@ parallel model from nearby implementation accidents.
 Detailed architecture (module graph, kernel package map, KSP generation flow,
 runtime lifecycle, concord, demos): `doc/ARCHITECTURE.md`.
 
+## Talking to the human
+
+Bead ids mean nothing to the user. In text meant for a person, say what the
+item *is*; add the id in parentheses only when they may act on it or two items
+would otherwise read alike. Agent-to-agent text (prompts, bead notes, commits)
+may use bare ids.
+
 ## Start every task here
 
 1. Read the complete assigned work item — tickets live in the file your
@@ -78,6 +85,14 @@ for documentation maintenance.
   machine-distinguishable refusal reasons, and key-derived `PeerId`
   fingerprints implementing the kernel's `SignatureVerifier` seam (DSC1, epic
   `computenet-ssa`). Depends on `:kernel`; `:kernel` must not depend on it.
+- `demograph/` (`:demograph`): data structures for capturing subjective
+  stances and personal preferences per actor, and consolidating them into
+  aggregate views (DGR, epic `computenet-drz8`). Same dependency shape as
+  `:identity` — depends on `:kernel` (and, transitively, `:nature`); `:kernel`
+  must not depend on it. `civictech.demograph.Vocabulary` KDocs the six-term
+  charter vocabulary (actor, stance, preference, weight, contestation,
+  aggregation) and its boundary line (no need, credit, subsidy, or
+  vote-as-civic-act).
 - `concord/`: the executable specification — implementation-neutral conformance
   suite. YAML scenarios in `concord/corpus/` cover EARS requirement ids in
   `doc/spec/`; `concord/schema/*.md` are the authoring contracts (single-writer,
@@ -96,6 +111,11 @@ for documentation maintenance.
     semantic/invariant tests; use it to detect accidental API or behavior
     regressions. Its SolidJS/Vite frontend lives in `demo/agora/ui/` (npm, not
     Gradle).
+  - `demo/deliberate/` (`:demo:deliberate`): LLM-explored deliberation graph —
+    Claude/Codex propose claims and edges, Jev judges them, credence lives in
+    vector-valued cells, and durability journals inputs only (judgements are
+    recomputed). Depends on `:kernel`, `:demo:shell` and `:demo:agora`. Its
+    SolidJS/Vite frontend lives in `demo/deliberate/ui/` (npm, not Gradle).
   - `demo/beadsmirror/` (`:demo:beadsmirror`): mirrors a bd/Dolt-backed beads
     workspace — polls the Dolt commit feed, projects it through kernel cells
     into a materialized OR-map fold, and serves the fold over `:demo:shell`'s
@@ -187,19 +207,20 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   the command before it is evidence about the repository. Write
   `"${R}:testkit/x"`. A literal `origin/main:concord/x` is safe — modifiers
   follow only an expansion (computenet-frgu1, computenet-wk53).
-- Same zsh family, different operator: **an unquoted glob in a `--flag=*.ext`
-  argument is expanded by the shell before the command sees it**, so
-  `grep -rln 'Foo' --include=*.kt .` dies with
-  `(eval):1: no matches found: --include=*.kt` and **the grep never runs**.
-  Quote it: `--include='*.kt'`. The danger is not the error text — it is that
-  an agent scanning for a symbol reads a grep that never ran as "this symbol
-  does not exist anywhere". That produced a `metadata.files` claim omitting a
-  file the task had to edit, and separately let the false premise ":oracle is
-  a leaf that nothing depends on" survive two reports and a review
-  (computenet-l5rc, recurred as computenet-u0b0 and computenet-rf0a). It is
-  recorded HERE, not only in `.claude/skills/work/references/agent.md`,
-  because that file is handed to dispatched agents and the orchestrator never
-  reads it — which is why the first fix did not stop the recurrence.
+- Same zsh family, different operator: **an unquoted glob that matches nothing
+  aborts the command before it runs** — in a `--flag=*.ext` argument, and
+  among BARE OPERANDS, where it also suppresses the operands that WOULD have
+  matched (`ls -d a/ b/ nosuch-*` prints nothing at all; computenet-aagi9). So
+  `grep -rln 'Foo' --include=*.kt .` dies with `(eval):1: no matches found:
+  --include=*.kt` and **never runs**. Quote it: `--include='*.kt'`. The danger
+  is not the error text — it is that an agent scanning for a symbol reads a
+  grep that never ran as "this symbol does not exist anywhere". That produced
+  a `metadata.files` claim omitting a file the task had to edit, and
+  separately let the false premise ":oracle is a leaf that nothing depends on"
+  survive two reports and a review (computenet-l5rc, recurred as
+  computenet-u0b0 and computenet-rf0a). It is recorded HERE, not only in
+  `.claude/skills/work/references/agent.md`, because the orchestrator never
+  reads that file; de-duplicating this is what let it recur.
 - Third member of the same family, in git itself: a pathspec ending at a
   directory name matches a FILE by that name, not the tree under it —
   `git grep -ln 'X' -- '*/src/main'` is 0 hits where `-- '*/src/main/*'`
@@ -239,7 +260,7 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   the mutation LANDED — a non-empty `git diff HEAD -- <file>` — before the
   test result is read at all. Note which half each check covers: here the
   variable held the test INVOCATION, so the mutation may well have landed and
-  step 3 would pass. It is step 4's `grep -E '^e:|BUILD' "$SCRATCH/mut.log"`
+  step 5 would pass. It is step 6's `grep -aE '^e:|BUILD' "$SCRATCH/mut.log"`
   that catches this one — a command that exited 127 writes no `BUILD` line at
   all.
 - Sixth member, and the only one where every command is correct: **never
@@ -299,8 +320,7 @@ Typical commands:
 `dist` or `dur` scenario, so it is **not** evidence for any of them. That is the
 whole of `concord/corpus/42-replication/` and `15-durability/`, **and** single
 files inside otherwise-`core` directories — `24-data-cells/`, `33-mobility/`,
-`41-location/` — so a directory is not core just because most of it is. Since
-computenet-j2x.7 the
+`41-location/` — so a directory is not core just because most of it is. The
 run says so itself — each excluded scenario reports as a named `SKIPPED` node and
 one summary node states the active set and the excluded count — so read the
 `skipped` count before citing a green concord run.
@@ -311,9 +331,7 @@ a `--tests 'fully.qualified.TestName'` filter and the plain module gate
 unchanged test task as `UP-TO-DATE` and skips it, and it does not care whether
 you filtered: a rerun of the exact command above that produced real JUnit
 output can complete in under a second with no test output at all —
-indistinguishable from a pass at a glance. This paragraph used to describe only
-the filtered case, and an agent running the whole `:kernel` suite reasonably
-read itself as outside the warning; it is not (computenet-0frx). When you need
+indistinguishable from a pass at a glance. When you need
 proof a test actually executed (reviews, verifying a fix is not a no-op), add
 `--rerun` to the specific test task:
 `./gradlew :kernel:test --tests 'fully.qualified.TestName' --rerun`.
@@ -363,10 +381,6 @@ GH_PAGER=cat gh api repos/mboogerd/computenet/rulesets/20149495 \
   | jq -r '.rules[]|select(.type=="required_status_checks")
            |.parameters.required_status_checks[].context'
 ```
-
-`kernel-test` was missing here until 2026-08-17 while `gh pr checks` reported
-it on every PR, so a session deciding whether a red check blocked had to guess
-(computenet-4prd).
 
 **Auto-merge is enabled, and a workflow arms it on every PR** (`.github/workflows/auto-merge.yml`,
 skipping drafts and forks). The practical consequence:

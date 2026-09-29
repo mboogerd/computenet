@@ -1,0 +1,366 @@
+{
+    "questions": [
+        {
+            "root": "q1",
+            "text": "What does ‘freedom’ mean here?",
+            "claims": 4,
+            "active": true,
+            "yieldRounds": 0,
+            "paused": false,
+            "costUsd": 0.0,
+            "cost": {
+                "backends": [],
+                "rounds": 0,
+                "queued": 0
+            },
+            "cruxes": [],
+            "verdictsDisagree": false,
+            "framing": {
+                "mode": "READINGS",
+                "term": "freedom",
+                "positions": [
+                    {
+                        "ref": "pos1",
+                        "text": "Reading A",
+                        "credence": 0.65,
+                        "firstImpression": 0.7,
+                        "neutralCredence": 0.4,
+                        "verdictsDisagree": true,
+                        "share": 0.6
+                    },
+                    {
+                        "ref": "pos2",
+                        "text": "Reading B",
+                        "credence": 0.4,
+                        "verdictsDisagree": false
+                    }
+                ]
+            }
+        },
+        {
+            "root": "q3",
+            "text": "Which option is best?",
+            "claims": 2,
+            "active": false,
+            "yieldRounds": 0,
+            "paused": false,
+            "costUsd": 0.0,
+            "cost": {
+                "backends": [],
+                "rounds": 0,
+                "queued": 0
+            },
+            "cruxes": [],
+            "verdictsDisagree": false,
+            "framing": {
+                "mode": "POSITIONS",
+                "positions": [
+                    {
+                        "ref": "pos3",
+                        "text": "Position C",
+                        "credence": 0.5,
+                        "verdictsDisagree": false,
+                        "share": 0.55
+                    }
+                ]
+            }
+        },
+        {
+            "root": "q2",
+            "text": "Should the city adopt X?",
+            "claims": 4,
+            "active": false,
+            "yieldRounds": 5,
+            "yieldRecent": 0.6,
+            "yieldEarlier": 0.4,
+            "stoppedBy": "voi",
+            "paused": true,
+            "costUsd": 1.23,
+            "projectedUsd": 2.5,
+            "cost": {
+                "backends": [
+                    {
+                        "backend": "claude",
+                        "models": [
+                            "claude-4"
+                        ],
+                        "calls": 3,
+                        "inputTokens": 1000,
+                        "cachedInputTokens": 200,
+                        "cacheWriteTokens": 50,
+                        "outputTokens": 300,
+                        "reasoningTokens": 0,
+                        "unpricedCalls": 3,
+                        "rate": "$4.00/1M input · $20.00/1M output",
+                        "rateSource": "anthropic-pricing-2026-01",
+                        "assumed": false,
+                        "note": "Subscription usage — cost not billed per call."
+                    },
+                    {
+                        "backend": "codex",
+                        "models": [
+                            "codex-5"
+                        ],
+                        "calls": 2,
+                        "inputTokens": 500,
+                        "cachedInputTokens": 0,
+                        "cacheWriteTokens": 0,
+                        "outputTokens": 150,
+                        "reasoningTokens": 40,
+                        "usd": 1.23,
+                        "unpricedCalls": 0,
+                        "rate": "$3.00/1M input · $15.00/1M output",
+                        "rateSource": "openai-pricing-2026-01",
+                        "rateDate": "2026-01-15",
+                        "assumed": true
+                    }
+                ],
+                "rounds": 5,
+                "queued": 1,
+                "perRoundUsd": 0.42
+            },
+            "cruxes": [
+                "a1",
+                "e-a1"
+            ],
+            "firstImpression": 0.55,
+            "neutralCredence": 0.6,
+            "verdictsDisagree": true
+        }
+    ],
+    "nodes": [
+        {
+            "ref": "q1",
+            "kind": "CLAIM",
+            "credence": 0.5,
+            "root": "q1",
+            "credences": {},
+            "consensus": 0.5,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.5,
+            "text": "What does ‘freedom’ mean here?",
+            "depth": 0,
+            "status": "FRAMED",
+            "proposer": "question"
+        },
+        {
+            "ref": "pos1",
+            "kind": "CLAIM",
+            "credence": 0.65,
+            "root": "q1",
+            "credences": {},
+            "consensus": 0.65,
+            "spreadLow": 0.65,
+            "spreadHigh": 0.65,
+            "text": "Reading A",
+            "depth": 0,
+            "status": "SATURATED",
+            "proposer": "reading",
+            "positionOf": "q1"
+        },
+        {
+            "ref": "p1a",
+            "kind": "CLAIM",
+            "credence": 0.55,
+            "root": "q1",
+            "credences": {},
+            "consensus": 0.55,
+            "spreadLow": 0.55,
+            "spreadHigh": 0.55,
+            "text": "An argument for reading A.",
+            "depth": 1,
+            "proposer": "claude"
+        },
+        {
+            "ref": "e-p1a",
+            "kind": "EDGE",
+            "credence": 0.5,
+            "root": "q1",
+            "credences": {},
+            "consensus": 0.5,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.5,
+            "polarity": "SUPPORT",
+            "source": "p1a",
+            "target": "pos1",
+            "strength": 0.5
+        },
+        {
+            "ref": "pos2",
+            "kind": "CLAIM",
+            "credence": 0.4,
+            "root": "q1",
+            "credences": {},
+            "consensus": 0.4,
+            "spreadLow": 0.4,
+            "spreadHigh": 0.4,
+            "text": "Reading B",
+            "proposer": "reading",
+            "positionOf": "q1"
+        },
+        {
+            "ref": "q3",
+            "kind": "CLAIM",
+            "credence": 0.5,
+            "root": "q3",
+            "credences": {},
+            "consensus": 0.5,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.5,
+            "text": "Which option is best?",
+            "depth": 0,
+            "status": "FRAMED",
+            "proposer": "question"
+        },
+        {
+            "ref": "pos3",
+            "kind": "CLAIM",
+            "credence": 0.5,
+            "root": "q3",
+            "credences": {},
+            "consensus": 0.5,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.5,
+            "text": "Position C",
+            "proposer": "position",
+            "positionOf": "q3"
+        },
+        {
+            "ref": "q2",
+            "kind": "CLAIM",
+            "credence": 0.52,
+            "root": "q2",
+            "credences": {
+                "wlo": 0.5,
+                "jnb": 0.55,
+                "woe": 0.51
+            },
+            "consensus": 0.517,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.55,
+            "text": "Should the city adopt X?",
+            "depth": 0,
+            "status": "EXPLORING",
+            "proposer": "question"
+        },
+        {
+            "ref": "a1",
+            "kind": "CLAIM",
+            "credence": 0.7,
+            "root": "q2",
+            "credences": {},
+            "consensus": 0.7,
+            "spreadLow": 0.7,
+            "spreadHigh": 0.7,
+            "text": "An argument for X.",
+            "depth": 1,
+            "status": "SATURATED",
+            "activity": "exploring",
+            "proposer": "claude",
+            "alsoProposedBy": [
+                "codex"
+            ],
+            "merged": true,
+            "evidence": [
+                "Some evidence text."
+            ],
+            "plausibility": 0.7,
+            "relevance": 0.9,
+            "quality": 0.8,
+            "contribution": 0.55,
+            "sensitivity": 0.4,
+            "reach": 0.8,
+            "proSaturation": 0.6,
+            "conSaturation": 0.3,
+            "rounds": 3,
+            "duplicatesDropped": 1,
+            "triage": {
+                "ADD": 2,
+                "DUPLICATE": 1
+            }
+        },
+        {
+            "ref": "e-a1",
+            "kind": "EDGE",
+            "credence": 0.8,
+            "root": "q2",
+            "credences": {},
+            "consensus": 0.8,
+            "spreadLow": 0.8,
+            "spreadHigh": 0.8,
+            "text": "“An argument for X.” is a reason for “Should the city adopt X?”",
+            "depth": 1,
+            "status": "SATURATED",
+            "override": "EXPAND",
+            "polarity": "SUPPORT",
+            "source": "a1",
+            "target": "q2",
+            "strength": 0.8
+        },
+        {
+            "ref": "u1",
+            "kind": "CLAIM",
+            "credence": 0.3,
+            "root": "q2",
+            "credences": {},
+            "consensus": 0.3,
+            "spreadLow": 0.3,
+            "spreadHigh": 0.3,
+            "text": "The link to X does not hold.",
+            "depth": 2,
+            "status": "QUEUED",
+            "proposer": "codex",
+            "undercuts": "e-a1",
+            "onLink": "e-a1"
+        },
+        {
+            "ref": "e-u1",
+            "kind": "EDGE",
+            "credence": 0.35,
+            "root": "q2",
+            "credences": {},
+            "consensus": 0.35,
+            "spreadLow": 0.35,
+            "spreadHigh": 0.35,
+            "polarity": "ATTACK",
+            "source": "u1",
+            "target": "e-a1",
+            "strength": 0.35
+        },
+        {
+            "ref": "f1",
+            "kind": "CLAIM",
+            "credence": 0.5,
+            "root": "q2",
+            "credences": {},
+            "consensus": 0.5,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.5,
+            "text": "A claim whose calls all failed.",
+            "depth": 1,
+            "status": "FAILED",
+            "override": "STOP",
+            "proposer": "codex",
+            "error": "Every call for this claim failed."
+        },
+        {
+            "ref": "e-plain",
+            "kind": "EDGE",
+            "credence": 0.5,
+            "root": "q2",
+            "credences": {},
+            "consensus": 0.5,
+            "spreadLow": 0.5,
+            "spreadHigh": 0.5,
+            "polarity": "SUPPORT",
+            "source": "f1",
+            "target": "q2",
+            "strength": 0.5
+        }
+    ],
+    "consensusMembers": [
+        "wlo",
+        "jnb",
+        "woe"
+    ]
+}

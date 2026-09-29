@@ -10,6 +10,7 @@ import civictech.cell.UuidSerializer
 import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.data.delta.WatermarkDelta
+import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.data.delta.ListDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -202,6 +203,10 @@ object WireCodec {
                 subclass(PnCounterDelta::class)
                 // delivered-watermark lattice (spec 40/42 §Delivered watermarks, E3.2)
                 subclass(WatermarkDelta::class)
+                // lateness/eviction floor over event time, max-merge (spec 20/24
+                // §Lateness and waterlines, [24-WL-03]/[KE4-06]): additive, not a
+                // wave position ([24-WL-04])
+                subclass(WaterlineDelta::class)
                 @Suppress("UNCHECKED_CAST")
                 subclass(SetDelta::class, SetDelta.serializer(polyAny) as KSerializer<SetDelta<*>>)
                 @Suppress("UNCHECKED_CAST")

@@ -524,8 +524,15 @@ object IrohTransport {
      *   reason. What does not follow is any announcement: [bindAndAnnounce] is
      *   never reached, so no `announceTo` sweep starts and no `Remote` location
      *   is published for this link. The peer may therefore hold our mirror ref
-     *   and address it; frames it sends arrive with [ingress] still null and
-     *   take the counted drop path above.
+     *   and address it; frames it sends arrive with [ingress] still null.
+     *   They are dropped — there is nothing to route them to — and counted on
+     *   [quietCloseDrops], **not** [preHelloDrops] (computenet-3mcum): the
+     *   hello they follow was *admitted*, and the close is blame-free by
+     *   F3-D5 ("without touching `unadmitted`/`preHelloDrops`"), which
+     *   ktn1l-D12 refines and does not re-decide. Over real sidecars this is
+     *   the mutual dial in which the peer admitted our dialler hello on its
+     *   inbound link and announced on it before our gate, holding the other
+     *   direction already, judged the peer's acceptor hello here.
      * - The mirror [hello] minted on that dialling side is detached by [onDown]
      *   when the close lands, exactly as on any other drop — a quiet close is a
      *   different *reason* for a link to end, never a different lifecycle.
@@ -623,6 +630,17 @@ object IrohTransport {
          * default makes every existing site unchanged.
          */
         private val onAdmitted: (PeerId) -> Unit = {},
+        /**
+         * This link's id, read lazily at [gate] consult time rather than taken
+         * as a plain value: an outbound [IrohConnection] does not know its
+         * link's id until the dial that opens it returns, while this `Session`
+         * is constructed and handed to that dial as its listener beforehand
+         * (see [IrohConnection.openLink]). An inbound [IrohListener]/[IrohNode]
+         * session already knows its id at construction and can close over it
+         * directly. The default is a sentinel used only by call sites that pass
+         * no [gate] of their own — [HelloGate.ADMIT_ALL] never inspects it.
+         */
+        private val linkId: () -> Long = { -1L },
     ) {
         /**
          * This side's announcement signer is borrowed from the `Peering.Side`,
@@ -686,9 +704,34 @@ object IrohTransport {
          * asynchronous — the peer may already have written more — and those
          * frames have nowhere to route. They are dropped, exactly as before, and
          * now counted rather than silent.
+         *
+         * NOT counted here: frames after a hello the allowlist *admitted* and
+         * the [gate] then closed quietly. Those are [quietCloseDrops] — see the
+         * class KDoc's ktn1l-D12 section. A non-zero value here therefore
+         * always means a hello this side did not admit.
          */
         private val preHelloDropCount = AtomicLong()
         val preHelloDrops: Long get() = preHelloDropCount.get()
+
+        /**
+         * Set, on the reader thread, the instant [admitAndBind] takes a
+         * [Verdict.CloseQuietly] — before the close is asked for, so every
+         * frame dispatched after it on this link sees it.
+         */
+        @Volatile
+        private var closedQuietly = false
+
+        /**
+         * Frames that arrived on this link after the [gate] closed it quietly
+         * (ktn1l-D12, computenet-3mcum): dropped, since no ingress exists, and
+         * counted so the drop is not silent — but kept apart from
+         * [preHelloDrops] because nothing about them is a refusal. On a dialled
+         * link the peer may have read our hello and announced to our mirror
+         * before our close reached it; that is the expected shape of a mutual
+         * dial's losing link, not a fault on either side.
+         */
+        private val quietCloseDropCount = AtomicLong()
+        val quietCloseDrops: Long get() = quietCloseDropCount.get()
 
         /** @see admissionSink */
         val admissionDenialCount: Long get() = admissionSink.denialCount
@@ -831,7 +874,7 @@ object IrohTransport {
                 onHello(payload)
                 return
             }
-            preHelloDropCount.incrementAndGet()
+            if (closedQuietly) quietCloseDropCount.incrementAndGet() else preHelloDropCount.incrementAndGet()
         }
 
         /**
@@ -1036,7 +1079,7 @@ object IrohTransport {
          */
         private fun admitAndBind(bound: IdentityResolution.Bound, key: KeyId, peerMirrorRef: UUID) {
             if (!admitted(bound.peer)) return
-            when (val verdict = gate.judge(key, remoteNodeId, direction, bound.peer)) {
+            when (val verdict = gate.judge(key, remoteNodeId, direction, linkId(), bound.peer)) {
                 is Verdict.Admit -> Unit
 
                 is Verdict.CloseQuietly -> {
@@ -1045,6 +1088,7 @@ object IrohTransport {
                     // class KDoc's re-derivation of the happens-before argument
                     // for why leaving at this exact point is safe.
                     System.err.println("[IrohTransport] closing link quietly: ${verdict.detail}")
+                    closedQuietly = true
                     closeQuietly()
                     return
                 }
@@ -1410,6 +1454,14 @@ object IrohTransport {
          * re-dial loop's). **Enqueue only** on all three.
          */
         internal interface LinkObserver {
+            /**
+             * Test seam (computenet-wad38): [SidecarClient.dial] has just
+             * returned [link] on the dialling thread, and nothing about it is
+             * installed yet — the start of the window in which its `LINK_DOWN`
+             * can overtake [onUp]. Does nothing outside tests.
+             */
+            fun dialReturned(link: SidecarLink) {}
+
             fun onUp(link: SidecarLink)
             fun onAdmitted(linkId: Long, peer: PeerId)
 
@@ -1425,6 +1477,9 @@ object IrohTransport {
 
         /** Drops charged to links that are already gone; see [preHelloDrops]. */
         private val retiredPreHelloDrops = AtomicLong()
+
+        /** @see retiredPreHelloDrops — the same, for [quietCloseDrops]. */
+        private val retiredQuietCloseDrops = AtomicLong()
 
         /**
          * Set immediately before this side asks for a close, and consumed by the
@@ -1530,6 +1585,13 @@ object IrohTransport {
          * the case it exists for.
          */
         val preHelloDrops: Long get() = retiredPreHelloDrops.get() + (currentSession.get()?.preHelloDrops ?: 0L)
+
+        /**
+         * Frames dropped after this connection's gate closed a link quietly
+         * (`Session.quietCloseDrops`), summed over every link instance like
+         * [preHelloDrops] — and, unlike it, no sign of a refused peer.
+         */
+        val quietCloseDrops: Long get() = retiredQuietCloseDrops.get() + (currentSession.get()?.quietCloseDrops ?: 0L)
 
         /** True while a link is up whose peer hello was admitted. */
         val peered: Boolean get() = currentSession.get()?.peered ?: false
@@ -1716,6 +1778,11 @@ object IrohTransport {
                     linkHolder.get()?.close()
                 },
                 onAdmitted = { peer -> linkHolder.get()?.let { observer?.onAdmitted(it.id, peer) } },
+                // Read lazily (see the parameter's own KDoc): `client.dial`
+                // below has not returned yet, so no link id exists when this
+                // Session is built, but `linkHolder` is set before any frame —
+                // and so any hello — can be delivered on it.
+                linkId = { linkHolder.get()!!.id },
             )
             val link = client.dial(
                 peerNodeId,
@@ -1735,15 +1802,36 @@ object IrohTransport {
                 },
                 timeout,
             )
+            observer?.dialReturned(link)
             linkHolder.set(link)
             currentLink.set(link)
             currentSession.set(session)
+            // The link's LINK_DOWN may already have been dispatched: the client
+            // releases a dialled link's events once the dial has decided, which
+            // is before this thread gets here (computenet-wad38). If `retire`
+            // ran first, its compare-and-sets found nothing to clear and the two
+            // sets above installed a dead link — a configured connection's
+            // re-dial loop, which runs while `currentSession` is null, would
+            // then stop for good. The reader marks `downDelivered` before it
+            // calls `retire`, so either this reads it and clears, or `retire`
+            // runs after the sets and clears them itself.
+            //
+            // Such a link still returns normally, without a hello: it did come
+            // up, and classifying and reporting its down is `retire`'s — a
+            // hello written now could only fail on a link that is gone, and
+            // would turn a dial that succeeded into a failed one.
+            val alreadyDown = link.downDelivered.get()
+            if (alreadyDown) {
+                currentSession.compareAndSet(session, null)
+                currentLink.compareAndSet(link, null)
+            }
             // The dialler's hello is its FIRST frame, and it is what adopts the
             // QUIC stream at the accepting sidecar (PROTOCOL.md §3). The peer
             // cannot have spoken before it: an accepting Session sends nothing
             // until it has read this hello (Session.onHello), so no inbound DATA
             // can reach the listener above before this line runs.
             observer?.onUp(link)
+            if (alreadyDown) return
             session.openLocalHello()
         }
 
@@ -1759,6 +1847,7 @@ object IrohTransport {
          */
         private fun retire(session: Session, link: SidecarLink, reason: String) {
             retiredPreHelloDrops.addAndGet(session.preHelloDrops)
+            retiredQuietCloseDrops.addAndGet(session.quietCloseDrops)
             session.onDown()
             currentSession.compareAndSet(session, null)
             currentLink.compareAndSet(link, null)
@@ -1991,15 +2080,19 @@ sealed interface Verdict {
  * the same value the allowlist judged and the same one the mirror will be
  * stamped with. [key] and [remoteNodeId] are two views of the *same* proven
  * key: the fingerprint and the 32 raw NodeId bytes, the latter being what a
- * peer table keyed by key identifier compares (F3-D3).
+ * peer table keyed by key identifier compares (F3-D3). [linkId] is the id of
+ * the link the hello being judged arrived on — the same id [IrohNode.LinkView]
+ * and every `NodeLinkListener` event carry — so a consumer that arbitrates
+ * *between* links of one key (a peer table tie-break) can name the one this
+ * hello is for without recovering it by inference (task `.1`).
  */
 fun interface HelloGate {
 
-    fun judge(key: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, resolved: PeerId): Verdict
+    fun judge(key: KeyId, remoteNodeId: ByteArray, direction: LinkDirection, linkId: Long, resolved: PeerId): Verdict
 
     companion object {
         /** The default: every admitted hello proceeds. Existing callers get exactly today's path. */
-        val ADMIT_ALL: HelloGate = HelloGate { _, _, _, _ -> Verdict.Admit }
+        val ADMIT_ALL: HelloGate = HelloGate { _, _, _, _, _ -> Verdict.Admit }
     }
 }
 

@@ -3,6 +3,11 @@ package civictech.cell.host
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
+import civictech.cell.graph.InletId
+import civictech.cell.link.Link
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.streamTo
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
@@ -105,21 +110,35 @@ sealed interface RoutedInletResolution {
  * Validation is eager where the metadata allows: if [cell] is currently local,
  * the port must exist and be a [Propagate]-shaped [civictech.cell.port.Use], or
  * this throws naming the cell and port. The **payload** type ([D]) is erased on
- * the registered port and cannot be checked — a `Propagate<A>` vs `Propagate<B>`
- * mismatch is not caught here (see [RoutedInletResolution.Usable]); the wrapper
- * shape is. A remote cell cannot be introspected across the wire (M5.4), so its
- * port validation is deferred to delivery (best-effort); an entirely unknown ref
- * is rejected.
+ * the registered port and cannot be checked at runtime — a `Propagate<A>` vs
+ * `Propagate<B>` mismatch is not caught here (see [RoutedInletResolution.Usable]);
+ * the wrapper shape is. The generated typed-id overload below closes that gap at
+ * the call site instead, checking `D` at compile time. A remote cell cannot be
+ * introspected across the wire (M5.4), so its port validation is deferred to
+ * delivery (best-effort); an entirely unknown ref is rejected.
  *
  * @throws IllegalArgumentException if no cell [cell] is published, or the cell
  *     is local but has no port named [port].
  * @throws IllegalStateException if the local port is not a usable [Propagate] inlet.
  */
 inline fun <reified D : Any> LocationRegistry.inlet(cell: CellRef, port: String): Propagate<D> =
-    inlet(cell, port, D::class.java)
+    routedInlet(cell, port)
 
-/** Class-taking form of [inlet] — the reified overload's delegate; validation and routing live here. */
-fun <D : Any> LocationRegistry.inlet(cell: CellRef, port: String, @Suppress("UNUSED_PARAMETER") payloadType: Class<D>): Propagate<D> {
+/**
+ * Typed front door to [inlet]: [port] is a generated `<CellName>Ports.<port>`
+ * id (`civictech.cell.graph.InletId<Propagate<D>>`), so `D` is bound from the
+ * id at the call site — a payload-type mismatch (`Propagate<A>` expected,
+ * `Propagate<B>` returned) is a compile error, not a delivery-time surprise
+ * (jnkvu-D1/D2/R1). Lowers to the exact same [RoutedPropagate] over the same
+ * name; nothing about validation, staging or delivery changes from the string
+ * form — only the type-checking moves earlier.
+ */
+fun <D : Any> LocationRegistry.inlet(cell: CellRef, port: InletId<Propagate<D>>): Propagate<D> =
+    routedInlet(cell, port.name)
+
+/** Shared delegate for both [LocationRegistry.inlet] overloads — validation and routing live here. */
+@PublishedApi
+internal fun <D : Any> LocationRegistry.routedInlet(cell: CellRef, port: String): Propagate<D> {
     when (val location = location(cell)) {
         is LocationRegistry.Local -> validateRoutedInlet(location.host, cell, port)
         // A bridge egress cannot be asked for a remote cell's ports (M5.4, spec 41);
@@ -140,13 +159,37 @@ fun <D : Any> LocationRegistry.inlet(cell: CellRef, port: String, @Suppress("UNU
  * handle. The cell must live on [this] host at resolve time.
  */
 inline fun <reified D : Any> ManagedHost.inlet(cell: CellRef, port: String): Propagate<D> =
-    inlet(cell, port, D::class.java)
+    routedInlet(cell, port)
 
-/** Class-taking form of the fixed-host [inlet]. */
-fun <D : Any> ManagedHost.inlet(cell: CellRef, port: String, @Suppress("UNUSED_PARAMETER") payloadType: Class<D>): Propagate<D> {
+/** Typed front door to the fixed-host [inlet] — same [InletId]-bound `D` as the [LocationRegistry] overload. */
+fun <D : Any> ManagedHost.inlet(cell: CellRef, port: InletId<Propagate<D>>): Propagate<D> =
+    routedInlet(cell, port.name)
+
+/** Shared delegate for both [ManagedHost.inlet] overloads. */
+@PublishedApi
+internal fun <D : Any> ManagedHost.routedInlet(cell: CellRef, port: String): Propagate<D> {
     validateRoutedInlet(this, cell, port)
     return RoutedPropagate(cell, port, this::enqueueHostedInvocation)
 }
+
+/**
+ * Routes [this] outlet's emissions to a target inlet addressed by [cell] and
+ * [port] — `outlet.routeTo(registry, ref, <Cell>Ports.port)` collapses
+ * `outlet.streamTo(registry.inlet(ref, port))` to one call (jnkvu-D2/R4).
+ * Delivery is staged through [LocationRegistry.inlet]/[streamTo] exactly as a
+ * hand-built `streamTo(registry.inlet(...))` call would be — never a fused
+ * synchronous call — and the returned [Link] tears the hop down on
+ * [Link.unlink] like any `streamTo` link. Takes [registry] as a parameter
+ * because an outlet holds no registry of its own; there is no
+ * [ManagedHost]-bound form (a fixed-host handle from [ManagedHost.inlet] can
+ * still be wired with `streamTo` directly).
+ */
+fun <D : Any> FanOutlet<Propagate<D>>.routeTo(
+    registry: LocationRegistry,
+    cell: CellRef,
+    port: InletId<Propagate<D>>,
+    at: PortRef = PortRef.generate(),
+): Link = streamTo(registry.inlet(cell, port), at)
 
 /** Shared lookup-time guard: translate a host's [RoutedInletResolution] into a typed failure or a pass. */
 @PublishedApi

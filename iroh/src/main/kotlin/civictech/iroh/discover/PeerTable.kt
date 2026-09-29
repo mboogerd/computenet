@@ -65,7 +65,21 @@ sealed interface PeerState {
     /** A dial is in flight. [attempt] is the 0-based retry index this dial is. */
     data class Dialling(val attempt: Int, val since: Long) : PeerState
 
-    /** A link for this key was admitted and carries [attributedPeer] — the `PeerId` a `Session` stamped. */
+    /**
+     * A link for this key was admitted and carries [attributedPeer] — the `PeerId` a `Session` stamped.
+     *
+     * [linkId] and [direction] name a LIVE admitted link whenever one exists
+     * (computenet-oqpqf). A key can hold several admitted links at once — a
+     * same-direction sibling (see `PeerTable.Entry.upLinks`), or the loser of
+     * a mutual dial between its verdict and its `LINK_DOWN` — and when the
+     * one named here drops while another admitted link survives,
+     * [PeerTable.linkDown] re-points this state at the most recently admitted
+     * survivor, keeping [since]. When the only survivors are links not yet
+     * admitted (a mutual dial's other direction before its hello, say), or a
+     * CONFIGURED key's only link dropped, the state keeps naming the dropped
+     * link until a later hello re-points it; [PeerTable.judge] then treats it
+     * as NOT live, so it blocks no hello with `IDENTITY_MISMATCH`.
+     */
     data class Peered(
         val direction: LinkDirection,
         val linkId: Long,
@@ -129,15 +143,24 @@ sealed interface Judgement {
     /**
      * Admit this link. [close]/[closeLinkId] name a link that must be closed
      * quietly because this link won the tie-break against it; both are null
-     * when nothing has to be closed.
+     * when nothing has to be closed. [evicted] names an entry [judge] dropped
+     * to make room for a brand-new key ([DSC2-MDNS-05]); the caller counts
+     * `evicted`. Non-null only when this [Judgement] was reached by creating
+     * a fresh entry — cases 4 and 5 of [judge]'s precedence, never 2 or 3,
+     * which require an entry that already existed.
      */
-    data class Admit(val close: NodeKey?, val closeLinkId: Long?) : Judgement
+    data class Admit(val close: NodeKey?, val closeLinkId: Long?, val evicted: NodeKey? = null) : Judgement
 
     /** This link's direction is the tie-break loser and the other direction is up. Close it with no denial and no blame (aas-D7). The caller counts `tieBreakClosed`. */
     data object CloseQuietly : Judgement
 
-    /** Admit this link and treat [oldKey] as [PeerState.Superseded] by this one (F3-D6, [DSC2-ID-06]). The caller counts `superseded`. */
-    data class Supersede(val oldKey: NodeKey) : Judgement
+    /**
+     * Admit this link and treat [oldKey] as [PeerState.Superseded] by this
+     * one (F3-D6, [DSC2-ID-06]). The caller counts `superseded`. [evicted]
+     * is the same eviction-on-create as [Admit.evicted] — the caller counts
+     * `evicted` too, in addition to `superseded`, when it is non-null.
+     */
+    data class Supersede(val oldKey: NodeKey, val evicted: NodeKey? = null) : Judgement
 
     /**
      * Refuse this link: a LIVE link for the same key is attributed to [live],
@@ -201,8 +224,8 @@ data class PeerView(
  * @param ownNodeId this node's own endpoint id. A sighting of it is dropped by
  *   [observe] as [Observation.Self] and never retained.
  * @param maxRetained the bound on retained entries ([DSC2-MDNS-05]). See
- *   [observe] for exactly what it bounds — and [linkUp] for the one documented
- *   way past it.
+ *   [observe] for exactly what it bounds — and [linkUp] for the documented,
+ *   protection-only way the link-backed paths ([linkUp], [judge]) can pass it.
  * @param clock the only source of time in this class; there is no
  *   `System.currentTimeMillis()` here ([DSC2-DIAL-08]).
  */
@@ -230,8 +253,44 @@ class PeerTable(
         var lastDenial: DenialReason? = null,
         var attributedPeer: PeerId? = null,
     ) {
-        /** Links the caller has reported UP for this key, admitted or not, by direction. At most one per direction. */
-        val upLinks: MutableMap<LinkDirection, Long> = LinkedHashMap()
+        /**
+         * Every link the caller has reported UP for this key and not yet
+         * reported DOWN, admitted or not: link id to direction.
+         *
+         * Keyed by LINK ID, not by direction, because one key can hold
+         * several live links of the SAME direction and nothing in production
+         * rules that out (computenet-ru6n4). The plainest producer: a remote
+         * peer's process dies and restarts, and re-dials this node — a second
+         * INBOUND link — while the first one's `LINK_DOWN` has not arrived,
+         * which for a peer that vanished without closing is the transport's
+         * idle timeout. `SidecarClient` closing an OUTBOUND `LINK_UP` that no
+         * pending dial owns (computenet-r2zhu) removes one outbound producer,
+         * an abandoned dial's late link, but not a re-dial made while an
+         * older outbound link's down is still in flight; and nothing on this
+         * side bounds the inbound links a remote opens. A map keyed by
+         * direction remembered only the newer link, so the NEWER one's down
+         * emptied it while the older was still up: the key read linkless —
+         * re-dialled, evictable, and re-created on its next `Admitted`.
+         */
+        val upLinks: MutableMap<Long, LinkDirection> = LinkedHashMap()
+
+        /**
+         * The live links this table has ADMITTED for this key — by a [judge]
+         * verdict that left the key [PeerState.Peered] on them, or by
+         * [admitted] — and the identity each carries, in admission order.
+         * Always a subset of [upLinks]: [linkDown] removes a link from both.
+         * It is what [linkDown] re-points a [PeerState.Peered] state to when
+         * the link it names drops and a sibling survives (computenet-oqpqf).
+         */
+        val attributedLinks: MutableMap<Long, PeerId> = LinkedHashMap()
+
+        /** Make [linkId] the entry's Peered link, attributed to [peer]. Caller holds the lock and has put [linkId] in [upLinks]. */
+        fun peer(direction: LinkDirection, linkId: Long, peer: PeerId, since: Long) {
+            attributedPeer = peer
+            attributedLinks.remove(linkId)
+            attributedLinks[linkId] = peer
+            state = PeerState.Peered(direction, linkId, peer, since)
+        }
     }
 
     /** How many keys are retained right now — the `keysRetained` gauge of [DiscoveryCounters] ([DSC2-OBS-01]). */
@@ -396,12 +455,24 @@ class PeerTable(
      * accepted them, not by this table.
      *
      * [judge] creates an entry for an unknown key on the same reasoning, and
-     * does not attempt eviction at all — so the two link-backed paths, not this
-     * one alone, are where the table can pass its bound.
+     * attempts eviction the same way this path does — so the two link-backed
+     * paths agree, and it is that shared, protection-only overshoot (not one
+     * path alone) that can pass the table's bound.
+     *
+     * @return the key of the entry this call evicted to make room for [key],
+     *   or null when nothing was evicted — the key was already known, there
+     *   was room, or every existing entry was protected. The caller counts
+     *   `evicted` on a non-null result ([DSC2-OBS-01..03]).
      */
-    fun linkUp(key: NodeKey, direction: LinkDirection, linkId: Long, source: EntrySource) = lock.withLock {
+    fun linkUp(key: NodeKey, direction: LinkDirection, linkId: Long, source: EntrySource): NodeKey? = lock.withLock {
+        var evicted: NodeKey? = null
         val entry = entries[key] ?: run {
-            if (entries.size >= maxRetained) evictionVictim()?.let { entries.remove(it) }
+            if (entries.size >= maxRetained) {
+                evictionVictim()?.let {
+                    entries.remove(it)
+                    evicted = it
+                }
+            }
             val fresh = Entry(
                 key = key,
                 state = PeerState.Retained(addresses = emptyList(), lastSeen = clock(), dueAt = null, attempt = 0),
@@ -412,7 +483,8 @@ class PeerTable(
             entries[key] = fresh
             fresh
         }
-        entry.upLinks[direction] = linkId
+        entry.upLinks[linkId] = direction
+        evicted
     }
 
     /**
@@ -422,9 +494,8 @@ class PeerTable(
      */
     fun admitted(key: NodeKey, linkId: Long, peer: PeerId): Boolean = lock.withLock {
         val entry = entries[key] ?: return false
-        val direction = entry.upLinks.entries.firstOrNull { it.value == linkId }?.key ?: return false
-        entry.attributedPeer = peer
-        entry.state = PeerState.Peered(direction = direction, linkId = linkId, attributedPeer = peer, since = clock())
+        val direction = entry.upLinks[linkId] ?: return false
+        entry.peer(direction, linkId, peer, since = clock())
         return true
     }
 
@@ -438,11 +509,28 @@ class PeerTable(
      * (its reconnects belong to whoever configured it), and a key that still
      * holds another live link — which is what a quiet tie-break close looks
      * like from here, and must not provoke a re-dial of a peer this node is
-     * still linked to.
+     * still linked to. "Another live link" includes one of the SAME direction
+     * (see `Entry.upLinks`).
+     *
+     * A [PeerState.Peered] entry whose OWN link was the one that dropped is
+     * re-pointed at the most recently admitted link that survives, so its
+     * `linkId`/`direction` never name a dead link while a live admitted one
+     * exists (computenet-oqpqf). With no admitted survivor it keeps naming the
+     * dropped link — see [PeerState.Peered] for why that is safe.
      */
     fun linkDown(key: NodeKey, linkId: Long, now: Long): DownOutcome = lock.withLock {
         val entry = entries[key] ?: return DownOutcome.NoRedial
-        entry.upLinks.entries.removeIf { it.value == linkId }
+        entry.upLinks.remove(linkId)
+        entry.attributedLinks.remove(linkId)
+        val peered = entry.state as? PeerState.Peered
+        if (peered != null && peered.linkId == linkId) {
+            val survivor = entry.attributedLinks.entries.lastOrNull()
+            if (survivor != null) {
+                val direction = entry.upLinks.getValue(survivor.key)
+                entry.attributedPeer = survivor.value
+                entry.state = PeerState.Peered(direction, survivor.key, survivor.value, since = peered.since)
+            }
+        }
         if (entry.upLinks.isNotEmpty()) return DownOutcome.NoRedial
         if (entry.source == EntrySource.CONFIGURED) return DownOutcome.NoRedial
         return when (entry.state) {
@@ -483,7 +571,14 @@ class PeerTable(
      * Precedence, and it is a total order, not a preference (ktn1l-D18):
      *
      * 1. **[Judgement.Refuse] (IDENTITY_MISMATCH)** — a live link for THIS key
-     *    is attributed to a different identity. A key whose identity changed
+     *    is attributed to a different identity. "Live" is checked, not
+     *    assumed: the [PeerState.Peered] link must still be in the entry's
+     *    up links. [DSC2-ID-05] refuses a hello whose identity differs from
+     *    one "already attributed to the same key identifier on a live link",
+     *    so a key whose admitted link has dropped — a CONFIGURED key, whose
+     *    state [linkDown] leaves Peered, or any key whose only survivors are
+     *    not yet admitted — refuses nothing on this ground (computenet-oqpqf).
+     *    A key whose identity changed
      *    under a live link is refused before any tie-break gets to reason about
      *    its directions, because the tie-break's premise (these two links are
      *    the same peer) is exactly what has failed ([DSC2-ID-05]).
@@ -500,6 +595,10 @@ class PeerTable(
      * [PeerState.Superseded], its dial cancelled). Cases 1 and 2 change
      * nothing at all — the live link stays as it was, and it is the caller
      * that closes a link and records a denial.
+     *
+     * Creating the entry for an unknown [key] attempts eviction exactly like
+     * [linkUp] — see its KDoc for why a link-backed path is allowed past
+     * [maxRetained] at all, and why it still tries to make room first.
      */
     fun judge(
         key: NodeKey,
@@ -508,7 +607,14 @@ class PeerTable(
         resolved: PeerId,
         now: Long,
     ): Judgement = lock.withLock {
+        var evictedOnCreate: NodeKey? = null
         val entry = entries[key] ?: run {
+            if (entries.size >= maxRetained) {
+                evictionVictim()?.let {
+                    entries.remove(it)
+                    evictedOnCreate = it
+                }
+            }
             val fresh = Entry(
                 key = key,
                 state = PeerState.Retained(addresses = emptyList(), lastSeen = now, dueAt = null, attempt = 0),
@@ -519,40 +625,44 @@ class PeerTable(
             entries[key] = fresh
             fresh
         }
-        entry.upLinks[direction] = linkId
+        entry.upLinks[linkId] = direction
 
         // 1. Identity mismatch on this key, against a link that is still live.
         val peered = entry.state as? PeerState.Peered
-        if (peered != null && peered.linkId != linkId && peered.attributedPeer != resolved) {
-            entry.upLinks.entries.removeIf { it.value == linkId }
+        if (peered != null && peered.linkId != linkId && peered.linkId in entry.upLinks &&
+            peered.attributedPeer != resolved
+        ) {
+            entry.upLinks.remove(linkId)
+            entry.attributedLinks.remove(linkId)
             return Judgement.Refuse(DenialReason.IDENTITY_MISMATCH, live = peered.attributedPeer)
         }
 
-        // 2/3. Both directions of this key are up: exactly one survives.
-        val other = entry.upLinks.entries.firstOrNull { it.key != direction && it.value != linkId }
+        // 2/3. Both directions of this key are up: exactly one survives. A
+        // live link of THIS direction is not a tie-break partner — the
+        // tie-break arbitrates a mutual dial, which is one link per direction.
+        val other = entry.upLinks.entries.firstOrNull { it.value != direction && it.key != linkId }
         if (other != null) {
             if (direction == loserDirection(ownKey.bytes, key.bytes)) {
-                entry.upLinks.entries.removeIf { it.value == linkId }
+                entry.upLinks.remove(linkId)
+                entry.attributedLinks.remove(linkId)
                 return Judgement.CloseQuietly
             }
-            entry.attributedPeer = resolved
-            entry.state = PeerState.Peered(direction, linkId, resolved, since = now)
-            return Judgement.Admit(close = key, closeLinkId = other.value)
+            entry.peer(direction, linkId, resolved, since = now)
+            return Judgement.Admit(close = key, closeLinkId = other.key)
         }
 
         // 4. The identity is already peered under a DIFFERENT key: a rotation or a second device.
         val old = entries.values.firstOrNull { candidate ->
             candidate.key != key && (candidate.state as? PeerState.Peered)?.attributedPeer == resolved
         }
-        entry.attributedPeer = resolved
-        entry.state = PeerState.Peered(direction, linkId, resolved, since = now)
+        entry.peer(direction, linkId, resolved, since = now)
         if (old != null) {
             old.state = PeerState.Superseded(byKey = key, since = now)
-            return Judgement.Supersede(old.key)
+            return Judgement.Supersede(old.key, evicted = evictedOnCreate)
         }
 
         // 5. Nothing else holds this key or this identity.
-        return Judgement.Admit(close = null, closeLinkId = null)
+        return Judgement.Admit(close = null, closeLinkId = null, evicted = evictedOnCreate)
     }
 
     /** Every retained key, as an observability surface sees it. A copy; the caller may hold it. */

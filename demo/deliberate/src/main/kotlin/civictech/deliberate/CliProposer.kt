@@ -1,0 +1,635 @@
+package civictech.deliberate
+
+import civictech.agora.cell.Polarity
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
+import java.io.File
+import java.nio.file.Files
+import java.time.Duration
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+
+/** Bounds concurrent CLI processes app-wide (EXP-07); share one instance. Fair, so no caller starves. */
+class ProcessGate(maxProcesses: Int = Options.DEFAULT_MAX_PROCESSES) {
+    init {
+        require(maxProcesses > 0) { "maxProcesses must be positive" }
+    }
+
+    private val permits = Semaphore(maxProcesses, true)
+
+    fun <T> run(block: () -> T): T {
+        permits.acquire()
+        try {
+            return block()
+        } finally {
+            permits.release()
+        }
+    }
+}
+
+/**
+ * EXP-03 MERGE through the same CLI machinery as [CliProposer] (process gate,
+ * empty temp dir, no tools, timeout): the CLI rewrites two overlapping
+ * arguments as one sentence, answered as a JSON string ([parseSentence]).
+ */
+class CliMerger(private val cli: CliProposer) : Merger {
+    override fun merge(claim: String, side: Side, a: String, b: String): String = parseSentence(cli.run(prompt(claim, side, a, b)))
+
+    companion object {
+        fun prompt(claim: String, side: Side, a: String, b: String): String {
+            val direction = if (side == Polarity.SUPPORT) "FOR (supporting)" else "AGAINST (attacking)"
+            return """
+                |You are helping map a deliberation. The two arguments below, both $direction the claim, make
+                |overlapping points. Rewrite them as ONE argument.
+                |
+                |Claim:
+                |  $claim
+                |
+                |Argument A:
+                |  $a
+                |
+                |Argument B:
+                |  $b
+                |
+                |Write a single argument that states the shared point once, keeps what each argument adds, and adds
+                |nothing new. No numbering, labels or commentary.
+                |
+                |${CliProposer.CANONICAL_RULES}
+                |
+                |Output ONLY that sentence as one JSON string, e.g. "The merged argument.". No other text.
+            """.trimMargin()
+        }
+
+        /**
+         * The first non-blank JSON string literal in [text] (surrounding prose,
+         * code fences or an enclosing array are tolerated), trimmed. Throws
+         * [IllegalArgumentException] when there is none.
+         */
+        fun parseSentence(text: String): String {
+            var start = text.indexOf('"')
+            while (start >= 0) {
+                val end = closingQuote(text, start) ?: break
+                val s = runCatching { Json.parseToJsonElement(text.substring(start, end + 1)) }.getOrNull()
+                if (s is JsonPrimitive && s.isString && s.content.isNotBlank()) return s.content.trim()
+                // Resume after this literal, so the text between two literals is never read as one.
+                start = text.indexOf('"', end + 1)
+            }
+            throw IllegalArgumentException("no JSON string in output: ${text.take(300)}")
+        }
+
+        private fun closingQuote(text: String, start: Int): Int? {
+            var i = start + 1
+            while (i < text.length) {
+                when (text[i]) {
+                    '\\' -> i++
+                    '"' -> return i
+                }
+                i++
+            }
+            return null
+        }
+    }
+}
+
+/**
+ * Model A: frames a question through the same CLI machinery as [CliProposer]
+ * (process gate, empty temp dir, no tools, timeout). The CLI answers one JSON
+ * object `{"mode", "term", "items"}` ([parseFraming]).
+ */
+class CliFramer(private val cli: CliProposer) : Framer {
+    override fun frame(question: String): Framing = parseFraming(cli.run(prompt(question)))
+
+    companion object {
+        fun prompt(question: String): String = """
+            |You are helping map a deliberation. Before it starts, decide how the question below should be explored.
+            |
+            |Question:
+            |  $question
+            |
+            |Choose exactly one mode:
+            |- NONE: the question has one natural reading and is a yes/no question. It is explored as asked.
+            |- READINGS: the question is a yes/no question, but one term in it is ambiguous and the answer depends on which
+            |  sense is meant. Give at most ${Framing.MAX_READINGS} readings. Each reading is a complete yes/no question that
+            |  replaces the ambiguous term by one explicit sense. Name the ambiguous term as "term".
+            |- POSITIONS: the question is open (what, which, how, why) rather than yes/no. Give at most ${Framing.MAX_POSITIONS}
+            |  positions: declarative sentences, each one possible answer. The positions are mutually exclusive and together
+            |  cover the answers people seriously hold.
+            |Prefer NONE unless the ambiguity or openness really changes the answer.
+            |
+            |Write each position in canonical form:
+            |${CliProposer.CANONICAL_RULES}
+            |
+            |Examples (the subjects are invented and only show the form):
+            |- "Is the Riverton pool busy?" → {"mode":"READINGS","term":"busy","items":["Does the Riverton municipal pool admit more than 500 visitors on a typical summer day?","Is the Riverton municipal pool's lane space fully booked at peak hours on weekdays?"]}
+            |- "Which kettle should the Eastmere office buy?" → {"mode":"POSITIONS","items":["The Eastmere office should buy the Model K2 kettle.","The Eastmere office should buy the Model K5 kettle.","The Eastmere office should keep its current kettle."]}
+            |- "Does the Model K2 kettle boil one litre in under three minutes?" → {"mode":"NONE"}
+            |
+            |Output ONLY one JSON object: {"mode":"NONE"|"READINGS"|"POSITIONS","term":"<the ambiguous term, READINGS only>","items":[...]}. No other text.
+        """.trimMargin()
+
+        /**
+         * The first JSON object in [text] with a known `mode` (surrounding prose
+         * and code fences are tolerated). Items are trimmed, blanks dropped,
+         * de-duplicated by normalised text (case, whitespace, trailing
+         * punctuation) and capped to the mode's maximum; fewer than 2 items
+         * is [Framing.NONE], and NONE ignores items and term. Throws
+         * [IllegalArgumentException] when there is no object or its mode is unknown.
+         */
+        fun parseFraming(text: String): Framing {
+            val obj = firstObject(text) ?: throw IllegalArgumentException("no JSON object in output: ${text.take(300)}")
+            val modeName = (obj["mode"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.uppercase()
+            val mode = FramingMode.entries.firstOrNull { it.name == modeName }
+                ?: throw IllegalArgumentException("unknown framing mode: ${obj["mode"]}")
+            if (mode == FramingMode.NONE) return Framing.NONE
+            val max = if (mode == FramingMode.READINGS) Framing.MAX_READINGS else Framing.MAX_POSITIONS
+            val seen = HashSet<String>()
+            val items = (obj["items"] as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim() }
+                .filter { it.isNotEmpty() && seen.add(normalize(it)) }
+                .take(max)
+            if (items.size < 2) return Framing.NONE
+            val term = if (mode == FramingMode.READINGS) {
+                (obj["term"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.ifEmpty { null }
+            } else null
+            return Framing(mode, term, items)
+        }
+
+        private fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ").trimEnd('.', '!', '?', ';')
+
+        private fun firstObject(text: String): JsonObject? {
+            for (start in text.indices) {
+                if (text[start] != '{') continue
+                val end = matchingBrace(text, start) ?: continue
+                val obj = runCatching { Json.parseToJsonElement(text.substring(start, end + 1)) }.getOrNull()
+                if (obj is JsonObject && "mode" in obj) return obj
+            }
+            return null
+        }
+
+        /** Index of the `}` closing the `{` at [start], skipping braces inside JSON strings. */
+        private fun matchingBrace(text: String, start: Int): Int? {
+            var depth = 0
+            var inString = false
+            var i = start
+            while (i < text.length) {
+                val c = text[i]
+                when {
+                    inString && c == '\\' -> i++
+                    c == '"' -> inString = !inString
+                    inString -> {}
+                    c == '{' -> depth++
+                    c == '}' -> if (--depth == 0) return i
+                }
+                i++
+            }
+            return null
+        }
+    }
+}
+
+/**
+ * How a finished CLI call's output becomes its answer text (SPEC EXP-09, §12).
+ * A reader also [Usage.report]s what the call used; a failure to read the
+ * usage never fails the call.
+ */
+fun interface CliReader {
+    fun read(stdout: String, outFile: String?): String
+
+    companion object {
+        /** The out file when the command wrote one, else stdout; no usage. */
+        val PLAIN = CliReader { stdout, outFile -> outFile?.takeIf { it.isNotEmpty() } ?: stdout }
+    }
+}
+
+/**
+ * [Proposer] that shells out to an LLM CLI (EXP-09). Each call runs [command]'s
+ * argv inside the [gate], in a fresh empty temp directory (deleted afterwards),
+ * with stdin closed and a [timeout] after which the whole process tree is
+ * destroyed. The [reader] turns its output into the answer text (by default
+ * [outFile][command]'s content when the command wrote one, else stdout); it
+ * must contain a JSON array of strings ([parseArguments]).
+ */
+class CliProposer internal constructor(
+    override val id: String,
+    private val command: (prompt: String, outFile: File) -> List<String>,
+    private val gate: ProcessGate,
+    private val timeout: Duration = Duration.ofSeconds(120),
+    private val descendantsOf: (Process) -> List<ProcessHandle> = { it.descendants().toList() },
+    private val reader: CliReader = CliReader.PLAIN,
+) : Proposer {
+
+    init {
+        require(!timeout.isNegative && !timeout.isZero) { "timeout must be positive" }
+    }
+
+    override fun propose(ctx: ClaimContext, side: Polarity, max: Int): List<String> =
+        parseArguments(run(prompt(ctx, side, max)), max)
+
+    /** Runs the CLI once and returns its answer text; throws on non-zero exit or timeout. */
+    internal fun run(prompt: String): String {
+        val scratch = Files.createTempDirectory("deliberate-$id-").toFile()
+        try {
+            val work = File(scratch, "work").apply { mkdir() }
+            val out = File(scratch, "answer.txt")
+            val stdout = File(scratch, "stdout.txt")
+            val stderr = File(scratch, "stderr.txt")
+            val process = gate.run {
+                val p = ProcessBuilder(commandLine(prompt, out))
+                    .directory(work)
+                    .redirectOutput(stdout)
+                    .redirectError(stderr)
+                    .start()
+                try {
+                    p.outputStream.close()
+                    if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                        destroyTree(p)
+                        throw IllegalStateException("$id timed out after ${timeout.toMillis()} ms")
+                    }
+                    p
+                } catch (e: InterruptedException) {
+                    destroyTree(p)
+                    Thread.currentThread().interrupt()
+                    throw e
+                } catch (e: Exception) {
+                    if (p.isAlive) destroyTree(p)
+                    throw e
+                }
+            }
+            check(process.exitValue() == 0) {
+                "$id exited ${process.exitValue()}: ${stderr.readText().takeLast(500)}"
+            }
+            return reader.read(stdout.readText(), out.takeIf { it.isFile }?.readText())
+        } finally {
+            scratch.deleteRecursively()
+        }
+    }
+
+    internal fun commandLine(prompt: String, outFile: File): List<String> = command(prompt, outFile)
+
+    /**
+     * Kills the timed-out process and every descendant [descendantsOf] can see, taking
+     * a second snapshot after a grace wait so a descendant that appears during that
+     * wait is still targeted (computenet-lmpn3). This narrows the miss window from
+     * "the whole timeout" to "the gap around the second snapshot"; it does NOT close
+     * it (computenet-i6gnd, decision accepted rather than fixed further):
+     *
+     * - A descendant that first becomes visible to `descendantsOf` only AFTER the
+     *   second snapshot — forked in the gap between that snapshot and
+     *   [Process.destroyForcibly], or (in a shell-scripted fixture) recorded later than
+     *   timeout + 1 s grace — still survives as an orphan.
+     * - A descendant that re-parents away (double-fork/daemonize) is outside
+     *   [ProcessHandle.descendants]'s reach at ANY snapshot count, because that API
+     *   walks the OS process tree by parent pid, not by process group.
+     *
+     * Closing both fully needs killing by process group instead of by discovered
+     * descendant, which needs the child launched as its own group leader
+     * (`setpgid` at fork time). The JDK exposes no such [ProcessBuilder] option, and
+     * neither host this runs on offers a drop-in fix: macOS ships no `setsid` binary,
+     * and reaching `setpgid` any other way (JNI, or wrapping every CLI invocation
+     * through an external interpreter to call it before `exec`) trades this
+     * unobserved-in-practice race for a new dependency in the hot path of every
+     * `claude`/`codex` call. No orphan from either CLI has actually been observed
+     * (they are direct children with no shell in between); the fix is deferred until
+     * one is.
+     */
+    private fun destroyTree(process: Process) {
+        fun snapshot(): List<ProcessHandle> = try {
+            descendantsOf(process)
+        } catch (_: RuntimeException) {
+            emptyList()
+        }
+
+        // A descendant that has not spawned yet (or has spawned but not yet made
+        // itself discoverable to `descendantsOf`, e.g. a shell that has not finished
+        // recording a background job's pid) is invisible to this first snapshot. The
+        // grace-period wait below gives the tree up to a second to keep running while
+        // nothing is watching for new descendants; without a second look, a child
+        // that appears during that window is missed and survives the parent's kill as
+        // an orphan (computenet-lmpn3).
+        var descendants = snapshot()
+        descendants.asReversed().forEach { it.destroyForcibly() }
+        // Let the direct process reap terminated children before forcing it down;
+        // otherwise a killed child can remain observable as a zombie.
+        if (!process.waitFor(1, TimeUnit.SECONDS)) {
+            // Re-snapshot: anything that spawned during the wait above is still
+            // alive and still a target. Union with the first snapshot rather than
+            // replacing it, in case a fast-exiting descendant is no longer enumerable
+            // by the time this second look runs.
+            descendants = (descendants + snapshot()).distinctBy { it.pid() }
+            descendants.asReversed().forEach { it.destroyForcibly() }
+            process.destroyForcibly()
+            process.waitFor(5, TimeUnit.SECONDS)
+        }
+        // ProcessHandle.destroyForcibly() is asynchronous. In particular, a
+        // descendant can still report alive briefly after its parent has
+        // reaped it, so do not return the gate permit until the captured tree
+        // has actually disappeared (or the bounded cleanup wait expires).
+        descendants.asReversed().forEach { child ->
+            if (child.isAlive) child.destroyForcibly()
+            try {
+                child.onExit().get(5, TimeUnit.SECONDS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            } catch (_: Exception) {
+                // Best effort: the original timeout/failure remains the call's error.
+            }
+        }
+    }
+
+    companion object {
+        /**
+         * Claude Code CLI in print mode with every tool disabled. `--output-format json`
+         * wraps the answer (`result`) with the call's usage and cost ([CLAUDE_JSON]).
+         */
+        fun claude(gate: ProcessGate, model: String? = null) = CliProposer("claude", { prompt, _ ->
+            // `--tools` is variadic: `--` stops it from swallowing the prompt as a tool name.
+            listOf(
+                "claude", "-p", "--output-format", "json", "--safe-mode", "--restricted",
+                "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+                "--permission-prompts", "none", "--no-session-persistence",
+            ) +
+                model.flag("--model") + listOf("--", prompt)
+        }, gate, reader = CLAUDE_JSON)
+
+        /**
+         * Codex CLI with local/hosted tools disabled; the last message goes to the out
+         * file, and `--json` makes stdout a JSONL event stream carrying the usage ([codexReader]).
+         */
+        fun codex(gate: ProcessGate, model: String? = null) = CliProposer("codex", { prompt, out ->
+            listOf(
+                "codex", "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
+                "--ignore-rules", "--strict-config", "--disable", "shell_tool", "--disable", "unified_exec",
+                "--disable", "multi_agent", "--disable", "apps",
+                // codex 0.155 rejects `-c tools.view_image=…` under --strict-config; image
+                // viewing/generation and browser/computer use are features there.
+                "--disable", "view_image", "--disable", "image_generation", "--disable", "browser_use",
+                "--disable", "computer_use", "--disable", "in_app_browser", "-s", "read-only",
+                "-c", "web_search=\"disabled\"",
+                // "none": same-or-better Jev contribution than "low" at ~6 s vs ~17 s per call
+                // (model experiment, 2026-09-27; see README "Models").
+                "-c", "model_reasoning_effort=\"none\"",
+            ) +
+                // Always pin the model: under --ignore-user-config codex otherwise falls back to
+                // its built-in default (gpt-6-astra on 0.155), which rejects effort "none" and is
+                // not what the cost rates or the model experiment assume.
+                listOf("-m", model ?: Pricing.DEFAULT_CODEX_MODEL) + listOf("--json", "-o", out.absolutePath, "--", prompt)
+        }, gate, reader = codexReader(model ?: Pricing.DEFAULT_CODEX_MODEL))
+
+        /**
+         * SPEC §12: reads Claude Code's `--output-format json` envelope. The answer is
+         * its `result`; an envelope flagged `is_error` fails the call. Output that is
+         * not a JSON object is taken as the answer itself (no usage).
+         */
+        val CLAUDE_JSON = CliReader { stdout, _ ->
+            val envelope = claudeEnvelope(stdout)
+                ?: return@CliReader stdout
+            val result = (envelope["result"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            val isError = (envelope["is_error"] as? JsonPrimitive)?.booleanOrNull == true
+            Usage.raw("claude") { "total_cost_usd=${envelope["total_cost_usd"]} usage=${envelope["usage"]}" }
+            Usage.capture("claude") { claudeUsage(envelope) }
+            check(!isError && result != null) {
+                "claude reported an error: ${(result ?: envelope["subtype"]?.toString() ?: "no result").take(300)}"
+            }
+            result
+        }
+
+        /**
+         * Claude normally emits one JSON object. Tolerate non-JSON diagnostic
+         * lines around that object without handing the envelope's own arrays
+         * to [parseArguments] as though they were the answer.
+         */
+        private fun claudeEnvelope(stdout: String): JsonObject? {
+            fun parse(text: String) = runCatching { Json.parseToJsonElement(text.trim()) as? JsonObject }.getOrNull()
+            fun JsonObject.isEnvelope() = string("type") == "result" || "result" in this || "is_error" in this
+            return parse(stdout)?.takeIf { it.isEnvelope() }
+                ?: stdout.lineSequence().mapNotNull(::parse).firstOrNull { it.isEnvelope() }
+        }
+
+        /**
+         * The usage in a Claude Code JSON envelope: Anthropic reports cache reads and
+         * writes beside `input_tokens`, so they are added in ([CallUsage] counts them
+         * as part of the input); the cost is the CLI's own `total_cost_usd`.
+         */
+        fun claudeUsage(envelope: JsonObject): CallUsage {
+            val u = envelope["usage"]?.jsonObject ?: throw IllegalArgumentException("no usage")
+            val plain = u.long("input_tokens")
+            val read = u.long("cache_read_input_tokens")
+            val write = u.long("cache_creation_input_tokens")
+            return CallUsage(
+                backend = Pricing.CLAUDE,
+                models = (envelope["modelUsage"] as? JsonObject)?.keys?.toList().orEmpty(),
+                inputTokens = plain + read + write,
+                cachedInputTokens = read,
+                cacheWriteTokens = write,
+                outputTokens = u.long("output_tokens"),
+                reasoningTokens = (u["output_tokens_details"] as? JsonObject)?.long("thinking_tokens") ?: 0,
+                reportedUsd = (envelope["total_cost_usd"] as? JsonPrimitive)?.doubleOrNull,
+            )
+        }
+
+        /**
+         * SPEC §12: the answer is the `-o` out file (the last agent message in the
+         * JSONL stream if the file is missing); the usage is every
+         * `turn.completed.usage` of the stream, summed ([codexUsage]).
+         */
+        fun codexReader(model: String) = CliReader { stdout, outFile ->
+            Usage.raw("codex") { stdout.lineSequence().filter { "turn.completed" in it }.joinToString(" ") }
+            Usage.capture("codex") { codexUsage(stdout, model) }
+            outFile?.takeIf { it.isNotEmpty() } ?: lastCodexMessage(stdout) ?: stdout
+        }
+
+        /** Sums `turn.completed.usage` over a `codex exec --json` stream; null when it holds none. */
+        fun codexUsage(jsonl: String, model: String): CallUsage? {
+            val turns = codexEvents(jsonl).filter { it.string("type") == "turn.completed" }
+                .mapNotNull { it["usage"] as? JsonObject }
+            if (turns.isEmpty()) return null
+            return CallUsage(
+                backend = Pricing.CODEX,
+                models = listOf(model),
+                inputTokens = turns.sumOf { it.long("input_tokens") },
+                cachedInputTokens = turns.sumOf { it.long("cached_input_tokens") },
+                cacheWriteTokens = turns.sumOf { it.long("cache_write_input_tokens") },
+                outputTokens = turns.sumOf { it.long("output_tokens") },
+                reasoningTokens = turns.sumOf { it.long("reasoning_output_tokens") },
+                longestPromptTokens = turns.maxOf { it.long("input_tokens") },
+            )
+        }
+
+        private fun lastCodexMessage(jsonl: String): String? = codexEvents(jsonl)
+            .filter { it.string("type") == "item.completed" }
+            .mapNotNull { it["item"] as? JsonObject }
+            .lastOrNull { it.string("type") == "agent_message" }
+            ?.string("text")
+
+        private fun codexEvents(jsonl: String): List<JsonObject> = jsonl.lineSequence()
+            .map { it.trim() }.filter { it.startsWith("{") }
+            .mapNotNull { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+            .toList()
+
+        private fun JsonObject.long(key: String): Long = (this[key] as? JsonPrimitive)?.longOrNull ?: 0
+        private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+
+        private fun String?.flag(name: String) = if (this == null) emptyList() else listOf(name, this)
+
+        private fun bullets(items: List<String>) = if (items.isEmpty()) "  (none yet)" else items.joinToString("\n") { "  - $it" }
+
+        fun prompt(ctx: ClaimContext, side: Polarity, max: Int): String {
+            ctx.link?.let { return linkPrompt(ctx, it, side, max) }
+            val direction = if (side == Polarity.SUPPORT) "FOR (supporting)" else "AGAINST (attacking)"
+            val path = if (ctx.path.isEmpty()) "  (the claim is the question itself)"
+            else ctx.path.mapIndexed { i, c -> "  ${i + 1}. $c" }.joinToString("\n")
+            return """
+                |You are helping map a deliberation. Propose new arguments $direction the claim below.
+                |
+                |Question under deliberation:
+                |  ${ctx.question}
+                |
+                |Path of claims from the question down to this claim:
+                |$path
+                |
+                |Claim:
+                |  ${ctx.claim}
+                |
+                |Existing arguments for the claim:
+                |${bullets(ctx.pros)}
+                |
+                |Existing arguments against the claim:
+                |${bullets(ctx.cons)}
+                |
+                |Give at most $max new arguments $direction the claim, each a substantively new reason, not a rewording of an existing argument above.
+                |
+                |$CANONICAL_RULES
+                |
+                |$CANONICAL_EXAMPLES
+                |
+                |Output ONLY a JSON array of at most $max strings, e.g. ["First argument.", "Second argument."]. No numbering, labels or other text.
+            """.trimMargin()
+        }
+
+        /**
+         * SPEC §3 "Links as claims": the variant for a link — "A is a reason
+         * for/against B". It asks about the *connection* only: FOR, why A,
+         * if true, really bears on B that way; AGAINST (undercutters), why A
+         * does not show it even if true. Neither side may argue that A or B
+         * is true or false. The canonical rules and examples are shared.
+         */
+        fun linkPrompt(ctx: ClaimContext, link: LinkContext, side: Polarity, max: Int): String {
+            val relation = if (link.side == Polarity.SUPPORT) "a reason FOR" else "a reason AGAINST"
+            val ask = if (side == Polarity.SUPPORT) {
+                "Give at most $max new reasons why the connection HOLDS: why, if the argument is true, it really does " +
+                    "count as $relation the claim (a principle, mechanism or fact that ties the two together)."
+            } else {
+                "Give at most $max new reasons why the connection FAILS: why, even if the argument is true, it does not " +
+                    "bear on the claim in that way (a gap, confounder, different scope, or exception in the inference)."
+            }
+            val path = if (ctx.path.isEmpty()) "  (the claim is the question itself)"
+            else ctx.path.mapIndexed { i, c -> "  ${i + 1}. $c" }.joinToString("\n")
+            return """
+                |You are helping map a deliberation. Below, an argument is offered as $relation a claim. Examine the
+                |LINK between them — whether the argument bears on the claim — not whether either is true.
+                |
+                |Question under deliberation:
+                |  ${ctx.question}
+                |
+                |Path of claims from the question down to the claim:
+                |$path
+                |
+                |Claim:
+                |  ${link.parent}
+                |
+                |Argument offered as $relation it:
+                |  ${link.argument}
+                |
+                |Existing reasons the connection holds:
+                |${bullets(ctx.pros)}
+                |
+                |Existing reasons the connection fails:
+                |${bullets(ctx.cons)}
+                |
+                |$ask Assume the argument is true; do not dispute it, and do not argue about the claim on other grounds.
+                |For example, if "The path is wet" is offered to show "It rained", "A sprinkler also wets the path"
+                |undercuts that link; "The forecast says it will stay dry" is a counter-argument, not an undercutter.
+                |Each must be substantively new, not a rewording of an existing reason above.
+                |
+                |$CANONICAL_RULES
+                |
+                |$CANONICAL_EXAMPLES
+                |
+                |Output ONLY a JSON array of at most $max strings, e.g. ["First reason.", "Second reason."]. No numbering, labels or other text.
+            """.trimMargin()
+        }
+
+        /**
+         * The canonical form every argument is asked for (proposals and merges
+         * alike): one checkable proposition, the reason rather than its bearing
+         * on the claim — how strongly it bears is Jev's strength judgment.
+         */
+        val CANONICAL_RULES = """
+            |Write each argument in canonical form, so that it can be judged true or false on its own:
+            |1. ONE proposition: a single subject-predicate assertion. No second clause that draws a conclusion ("…, which shows…", "…, suggesting…", "…, so…", "…, making…", "because…"), and no list of separate reasons joined by "and".
+            |2. State the REASON, not its bearing on the claim. Give the fact, finding or principle itself; never add that it supports, undermines, is evidence for, or is best explained by the claim's thesis. How strongly it bears on the claim is judged separately.
+            |3. EXPLICIT SUBJECT: name every person, place, group and thing ("the Riverton municipal pool", "adults over 65", "the Model K2 kettle"). No pronouns or references to things outside the sentence ("he", "this", "these trials", "such bans").
+            |4. EXPLICIT SCOPE: say how many, how often, where, for whom ("most", "in at least five depots", "in trials of adults aged 40–65"). Do not overgeneralise ("all", "always", "never") unless that is literally true.
+            |5. NO HEDGES: no "can", "may", "might", "could", "often", "tends to", "suggests", "some evidence". If uncertainty or frequency is the point, state it as a quantity or proportion ("in 3 of 11 trials", "in roughly a third of cases").
+            |6. DATED ONLY WHEN IT MATTERS: for an event or a state that changes over time (office-holders, prices, opening hours, current rules, the latest research), name the year or period ("in the 2024 season", "as of 2025"). Do not date timeless facts.
+            |7. ACCURATE AND CHECKABLE: prefer established, checkable facts; never invent studies, numbers or quotes. Give precise numbers or citations only when they are widely known. If unsure of a detail, drop the detail rather than guess.
+            |8. SHORT: at most 25 words. Do not restate the claim's own wording.
+        """.trimMargin()
+
+        /**
+         * Four examples of the form, about invented, mundane subjects only: they
+         * teach the shape of a canonical argument and must not leak content into
+         * any deliberation (no real person, political figure or contested topic).
+         */
+        val CANONICAL_EXAMPLES = """
+            |Examples (bad → canonical; the subjects are invented and only show the form):
+            |- "The new kettle is great because it boils fast, so everyone should buy one." → "The Model K2 kettle boils one litre of water in under three minutes in the manufacturer's published tests."  (one proposition: the reason, without the conclusion)
+            |- "It rains a lot there, suggesting the harvest will suffer." → "The village of Eastmere recorded rain on more than half of the days in June 2024."  (explicit subject, scope as a quantity, dated because weather changes)
+            |- "The new cart may help workers pack faster." → "Packing teams using Lift-A carts completed more orders in 7 of 9 timed warehouse trials."  (no hedge: the frequency is stated as a proportion)
+            |- "The pool is popular and should stay open." → "The Riverton municipal pool recorded more than 18,000 visits in 2023."  (the fact with its scope and year, not the recommendation)
+        """.trimMargin()
+
+        /**
+         * The first well-formed JSON array of strings in [text] (surrounding prose and
+         * code fences are tolerated), trimmed, blanks dropped, capped to [max].
+         * Throws [IllegalArgumentException] when there is none.
+         */
+        fun parseArguments(text: String, max: Int): List<String> {
+            for (start in text.indices) {
+                if (text[start] != '[') continue
+                val end = matchingBracket(text, start) ?: continue
+                val array = runCatching { Json.parseToJsonElement(text.substring(start, end + 1)) }.getOrNull()
+                if (array !is JsonArray || !array.all { it is JsonPrimitive && it.isString }) continue
+                return array.map { (it as JsonPrimitive).content.trim() }.filter { it.isNotEmpty() }.take(max)
+            }
+            throw IllegalArgumentException("no JSON array of strings in output: ${text.take(300)}")
+        }
+
+        /** Index of the `]` closing the `[` at [start], skipping brackets inside JSON strings. */
+        private fun matchingBracket(text: String, start: Int): Int? {
+            var depth = 0
+            var inString = false
+            var i = start
+            while (i < text.length) {
+                val c = text[i]
+                when {
+                    inString && c == '\\' -> i++
+                    c == '"' -> inString = !inString
+                    inString -> {}
+                    c == '[' -> depth++
+                    c == ']' -> if (--depth == 0) return i
+                }
+                i++
+            }
+            return null
+        }
+    }
+}

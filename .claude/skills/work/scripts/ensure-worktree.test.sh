@@ -215,6 +215,21 @@ else
   bad "base reporting (resumed): script exited non-zero"
 fi
 
+# ------------------------------------------- mis-split call refused, no writes
+co=$(sandbox missplit)
+tab=$(printf '\t')
+for args in "feature/x${tab}$co/../wt-ms|origin/main" "rel/wt|feature/x" "$co/../wt-ms|origin/main" "$co/../wt-ms|refs/heads/x"; do
+  p=${args%%|*}; b=${args#*|}
+  before=$(git -C "$co" for-each-ref --format='%(refname)' refs/heads; git -C "$co" worktree list --porcelain)
+  if run "$co" "$p" "$b" >/dev/null 2>&1; then
+    bad "mis-split ($(printf %q "$p") $b): accepted"
+  elif [ "$before" != "$(git -C "$co" for-each-ref --format='%(refname)' refs/heads; git -C "$co" worktree list --porcelain)" ]; then
+    bad "mis-split ($(printf %q "$p") $b): refused but wrote a ref or worktree"
+  else
+    ok "mis-split ($(printf %q "$p") $b): refused before any write"
+  fi
+done
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

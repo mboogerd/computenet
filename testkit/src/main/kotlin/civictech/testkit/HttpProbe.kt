@@ -122,6 +122,14 @@ class HttpProbe(private val baseUrl: String) : AutoCloseable {
                 .POST(HttpRequest.BodyPublishers.ofString(body)),
         )
 
+    /** PUT a JSON [body] to `$baseUrl$path`; returns the full response. */
+    fun putJson(body: String, path: String): HttpResponse<String> =
+        send(
+            HttpRequest.newBuilder(URI("$baseUrl$path"))
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(body)),
+        )
+
     /** GET `$baseUrl$path`; returns the full response. */
     fun get(path: String = "/state"): HttpResponse<String> = send(HttpRequest.newBuilder(URI("$baseUrl$path")))
 

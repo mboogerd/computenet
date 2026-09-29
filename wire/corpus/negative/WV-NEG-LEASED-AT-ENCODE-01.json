@@ -1,0 +1,22 @@
+{
+  "id": "WV-NEG-LEASED-AT-ENCODE-01",
+  "title": "A Leased arg is refused at the bridge egress before any byte is produced",
+  "category": "negative",
+  "kind": "negative",
+  "covers": ["WIR1-C08", "WIR1-I16", "23 ownership"],
+  "codecVersion": 2,
+  "direction": "encode",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{"type": "Leased", "fields": {"value": {"type": "kotlin.String", "value": "x"}}}]
+    }
+  },
+  "expect": {"reject": "leased-at-encode"},
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: its single arg Stall(SUSPENDED) replaced by the lease wrapper around the kotlin.String \"x\" — SCHEMA.md §Encode-direction negatives' worked example, verbatim. Normative (spec 23 ownership: \"Leased MUST NOT cross machine boundaries\"): the sender's egress must refuse the send before encoding, so NO bytes exist to pin and this vector carries no `encoded`. The JVM driver builds the invocation from `decoded` with the wrapper stripped, re-wraps that arg in Leased, offers it to BridgeEgressCell.deliver and asserts the refusal classifies `leased-at-encode` and the egress outlet saw zero byte arrays ([WIR1-I16], epic B3.9)."
+}

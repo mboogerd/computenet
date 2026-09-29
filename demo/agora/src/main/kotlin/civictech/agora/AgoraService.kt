@@ -3,6 +3,7 @@ package civictech.agora
 import civictech.agora.cell.*
 import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
+import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
@@ -10,6 +11,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.link.Link
 import civictech.cell.port.streamTo
 import civictech.cell.host.inlet
+import civictech.cell.host.routeTo
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay
@@ -19,10 +21,13 @@ import civictech.cell.host.inlet
  * contains at least one head, because any new cycle runs through the edge
  * that closed it).
  *
- * All wiring is **routed** through the host queue (`streamTo` + registry
+ * All wiring is **routed** through the host queue (`streamTo` + typed registry
  * inlet handles, the demo idiom) rather than DSL-linked: co-hosted DSL links fuse
  * into synchronous calls that bypass the scheduler, and magnitude-based
- * prioritization needs every hop staged.
+ * prioritization needs every hop staged. Hops into a `ClaimCell` or `EdgeCell`
+ * resolve through the generated `ClaimCellPorts`/`EdgeCellPorts` ids
+ * (computenet-jnkvu R5); the `hub` (`ObserveCell`, generic) keeps the reified
+ * string form (jnkvu-D6).
  */
 class AgoraService(
     private val host: ManagedHost,
@@ -174,15 +179,15 @@ class AgoraService(
         manage.spawn(edge)
         cells[ref] = edge
         edge.credenceOutlet.streamTo(routedHub())
-        edge.influenceOutlet.streamTo(routedInfluence(target))
-        sourceLinks[ref] = cells.getValue(source).credenceOutlet.streamTo(routedSource(ref))
+        edge.influenceOutlet.routeTo(registry, target, ClaimCellPorts.influenceInlet)
+        sourceLinks[ref] = cells.getValue(source).credenceOutlet.routeTo(registry, ref, EdgeCellPorts.sourceInlet)
         return ref
     }
 
     fun setStance(id: CellRef, user: String, value: Double?) {
         synchronized(nodesLock) { require(id in nodes) { "unknown node ${id.id}" } }
         value?.let { require(it in 0.0..1.0) { "stance must be between 0 and 1 (was $it)" } }
-        routedStance(id).propagate(StanceDelta(user, value))
+        registry.inlet(id, ClaimCellPorts.stanceInlet).propagate(StanceDelta(user, value))
     }
 
     /**
@@ -211,7 +216,7 @@ class AgoraService(
                 if (info.target !in doomed && !replaying) {
                     // retraction urgency: the edge's credence bounds its influence
                     val size = hub.credenceOf(ref) ?: 1.0
-                    routedInfluence(info.target!!).propagate(InfluenceDelta(ref, info.polarity!!, null, size))
+                    registry.inlet(info.target!!, ClaimCellPorts.influenceInlet).propagate(InfluenceDelta(ref, info.polarity!!, null, size))
                 }
             }
         }
@@ -227,6 +232,19 @@ class AgoraService(
         val snapshot = synchronized(nodesLock) { nodes.entries.map { it.key to it.value } }
         return snapshot.map { (ref, info) -> Node(ref, info, hub.credenceOf(ref) ?: 0.5) }
     }
+
+    /**
+     * Every cell instance this service spawned and still holds: [hub] plus every
+     * live claim and edge cell. A point-in-time copy for callers at rest — the
+     * underlying map is mutated by [createClaim]/[createEdge]/[remove] on the
+     * app's mutation thread, so a caller racing those sees one side of the race.
+     *
+     * Added for `:timetravel`'s `GraphSource` contract (computenet-3qkx1 D12):
+     * a reconstruction adapter hands back `GraphBuild(cells())`, and that must be
+     * *all* of the spawned instances or the reconstructor refuses with
+     * `GRAPH_SOURCE_INCOMPLETE`.
+     */
+    fun cells(): Collection<Cell> = listOf<Cell>(hub) + cells.values.toList()
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 
@@ -259,17 +277,9 @@ class AgoraService(
         return false
     }
 
+    /** Hub hop into the generic `ObserveCell`: reified string form (jnkvu-D6). */
     private fun routedHub(): Propagate<CredenceUpdate> =
         registry.inlet(hub.ref, "inlet")
-
-    private fun routedSource(edge: CellRef): Propagate<CredenceUpdate> =
-        registry.inlet(edge, "sourceInlet")
-
-    private fun routedInfluence(target: CellRef): Propagate<InfluenceDelta> =
-        registry.inlet(target, "influenceInlet")
-
-    private fun routedStance(id: CellRef): Propagate<StanceDelta> =
-        registry.inlet(id, "stanceInlet")
 
     companion object {
         /**

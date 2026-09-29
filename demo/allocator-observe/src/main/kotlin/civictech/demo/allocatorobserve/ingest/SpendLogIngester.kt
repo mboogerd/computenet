@@ -83,7 +83,12 @@ data class SpendPollOutcome(
  * module does not depend on `:demo:beadsmirror`, and the epic defers a shared
  * connector SPI to CON2 (`computenet-rrf`). Unlike that projector, the deltas
  * here are not dot-minted from a feed position, so the cell's own `SetOps`
- * inlet is the right seam — this is the only writer of this cell.
+ * inlet is the right seam — not only for this ingester's own adds and
+ * removes, but for `AllocatorObserveApp.convergeOnDeletedLog` (design entry
+ * 6jbep-D1, see the [TailReason.LogAbsent] bullet below), which writes
+ * through the same inlet to clear every record of a log this process had
+ * read that has since disappeared. This is not the only writer of the cell,
+ * but every writer uses this one seam.
  *
  * ## What one [poll] does
  *
@@ -100,6 +105,8 @@ data class SpendPollOutcome(
  *   and finds it empty.
  * - [TailReason.LogAbsent]: nothing at all. A log that has not arrived yet is
  *   not an empty log, so the fold is left alone rather than reconciled to empty.
+ *   A log that HAD arrived and is now gone is the app-level case design entry
+ *   6jbep-D1 covers (`AllocatorObserveApp.convergeOnDeletedLog`), not this poll.
  *
  * ## Cadence
  *

@@ -78,7 +78,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `sweep-stale-claims.sh` | `[--hours N] [--dry-run]` — reopens this machine's task claims abandoned by a dead run |
 | `sweep-merged-prs.sh` | `[--dry-run] [--limit N]` — closes beads whose PR merged after their session; removes their worktrees (holder-blind) |
 | `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — removes worktrees of closed beads, when provably safe |
-| `session-holder.sh` | `[--check <token>]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN |
+| `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 15min reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
 | `claim-epic.sh` | `<epic-id>` — claims or takes over an epic and pushes the acquisition |
 | `claim-item.sh` | `<id>` — claims an item with the session holder token |
@@ -98,6 +98,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `twin-scan.py` | `<parent-id>` — children filed twice by a double breakdown |
 | `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim]` — the create path under a shared parent |
 | `breakdown-marker.sh` | `<subcommand> <epic-id>` — check, acquire (pull+push), or survivor (adjudicate) the epic's write-time breakdown marker |
+| `file-retro.sh` | `--skill S --file F [--skill-version <sha>] [--started T] [--model M]` — files the session's retro record (references/retro.md) |
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — files a friction item |
 | `publish-beads.sh` | `(no arguments)` — the publication push, with rejection recovery |
 
@@ -182,7 +183,7 @@ skill from `origin/main`.
 **Release what dead runs left.** Run `sweep-stale-claims.sh`, then list
 `bd list --status=in_progress --assignee="$BEADS_ACTOR" --limit 0 --json` to a
 file and check each non-`skill-friction` row's `metadata.holder` with
-`session-holder.sh --check`:
+`session-holder.sh --check <token> <updated_at>` (the `updated_at` is what keeps a long-running session off the STALE path):
 
 | Answer | Do |
 |---|---|
@@ -211,8 +212,8 @@ candidate; all closed → add the missing edges and re-run with
 the epic of <id>` line on stderr means that row was not classified: resolve it
 with `epic-of.sh` first. Empty and nothing resumable:
 
-- Every child closed (at least one) → `bd close <epic>`; on success,
-  `bd update <epic> --remove-label=owner:$BEADS_ACTOR`.
+- Every child closed (at least one) → `bd close <epic>`. Keep its `owner:`
+  label; `check-dotted-ids.sh` reads it.
 - Children open, none ready → the blocked flag goes stale, so run
   `verify-ready.sh` on them. Any READY → work it. None → comment why, `bd defer <epic>`.
 
@@ -246,7 +247,7 @@ Agent({
   run_in_background: true,
   prompt: `You are breaking down epic <epic-id> into features. It is claimed for you; do not claim it.
 You own no worktree: you work in <main-checkout>, SHARED with live sessions — never modify its working tree (no git checkout/restore/stash/clean).
-Read .claude/skills/work/references/agent.md and .../breakdown.md with git show origin/main:<path>; those reads are slow, so give every Bash call a generous timeout.
+Read .claude/skills/work/references/agent.md and .../breakdown.md from <main-checkout> with the Read tool, not cat or git show: under host load plain Bash reads hang 30-120s and the Read tool does not.
 The breakdown token is <token>; stamp every feature you create with it.
 Report the feature ids created, and any re-scope of the epic.`
 })
@@ -401,7 +402,7 @@ Agent({
 Worktree <task-worktree>, branch task/<task-id>; base commit (cut from, not a diff baseline): <sha> <subject>.
 Diff your work against git merge-base <feature-branch> HEAD.
 Read <task-worktree>/.claude/skills/work/references/agent.md, then <task-worktree>/.claude/skills/work/references/implement.md.
-Read the bead: .claude/skills/work/scripts/bead.sh -C <main-checkout> <task-id>; comments: bd -C <main-checkout> comments <task-id> --json.
+Read the bead: .claude/skills/work/scripts/bead.sh -C <main-checkout> <task-id>; its feature's design: bead.sh -C <main-checkout> <feature-id> -r '.design'; comments: bd -C <main-checkout> comments <task-id> --json.
 Change only files in metadata.files. If the acceptance needs another, comment the file and clause on the bead at once and keep working inside the claim.
 Tracker writes: <cross_bead, or "only this bead and items you create">.
 Gate: <"the repo-wide ./gradlew test" | "scope to <modules>; the PR's required checks give repo-wide evidence">.
@@ -463,11 +464,11 @@ proof → do not close; retry. A parked task with a commit worth keeping → `--
 
 Task branches exist only on this machine, so merge passes this session. Comments
 describing commits this machine lacks mean the work lives elsewhere; say so in
-the next dispatch. A merge conflict means claims overlapped: resolve, fix both
-claims, and name the merge sha in the feature review's prompt. Then return to
-5b: `next-batch.py` again until its verdict routes to 5e. Once the PR exists,
-glance at `gh pr checks <pr>` output on each return; a red check on touched code
-becomes a task under the feature, carrying the log excerpt.
+the next dispatch. The script regenerates a conflict confined to generated `doc/spec/CONCORDANCE.md`
+with Gradle, so run it unsandboxed with a 600000 ms timeout. Any other conflict means claims
+overlapped: resolve, fix both claims, and name the merge sha in the feature review's prompt. Then
+back to 5b until `next-batch.py` routes to 5e. Once the PR exists, glance at `gh pr checks <pr>` on
+each return; a red check on touched code becomes a task under the feature, carrying the log excerpt.
 
 ### 5d. Draft PR
 
@@ -517,11 +518,11 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 
 **Ship**, after the reviewer's completion notification:
 
-1. List commits landed on `main` since the fork. If any touch this PR's files
-   and are not independent of it (a shared hunk, or a change to a rule, name or
-   path the other relies on), send it back to a reviewer. Otherwise merge
-   `origin/main` and push; the READY stands, and the checks on the new head
-   (step 3) are the evidence.
+1. Merge `origin/main` only when a commit landed since the fork touches this
+   PR's files and is not independent of it (a shared hunk, or a change to a rule,
+   name or path the other relies on) — then push and send it back to a reviewer.
+   Disjoint commits need no merge (read the ruleset — no required check wants an
+   up-to-date branch — and chasing a busy `main` never ends): ship the green head.
 2. Local HEAD must equal `gh pr view <pr> --json headRefOid`, and `gh pr list
    --head <branch>` must show only your PR.
 3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row must
@@ -532,7 +533,7 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 
 Every new head restarts the required checks; keep at most about two open PRs on
 any one file, sequencing the rest. Close the feature once MERGED, not on the
-verdict. Still open well after shipping: `DIRTY`/`BEHIND` → Ship step 1 again;
+verdict. Still open well after shipping: `DIRTY` → Ship step 1 again (`BEHIND` never blocks);
 red → recovery.md; `CLEAN` → arm again, then push a fresh commit. Cannot land it
 → leave `in_progress` with `review=passed`, name the PR and blocked command in the summary.
 
@@ -546,12 +547,12 @@ routes 2b, 3 and 4 may still dispatch a breakdown.
 | 0 | a capacity lane frees while a unit runs | start a second unit if capacity allows, its claim is disjoint from running units, build contention is handled (scoped gate or no Gradle), and it gets its own branch and PR; candidate from route 3 or 4. Else leave the lane idle and note it on the epic |
 | 2b | your feature is blocked by a sibling feature (check before 1) | park it naming the blocker; work the blocker if it fits the budget (5a), else break it down unclaimed |
 | 1 | another feature under the epic is ready or in progress | 5a (sub-epic → step 4) |
-| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY`/`BEHIND` → resolve; merged → fetch, start; else park |
+| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY` → resolve; merged → fetch, start; else park |
 | 3 | remaining work is blocked only by an item in another epic | acquire the item: pull; `epic-of.sh` — skip if its epic is held by someone or touched within 15 minutes (an `(unparented)` item skips this test); `claim-item.sh`; push |
 | 4 | the epic is dry, budget remains | continuation work, below |
 | 5 | nothing can progress | step 6 |
 
-**Continuation work:** `bd ready --json` items with no epic ancestor (`epic-of.sh`
+**Continuation work:** `bd ready --json --exclude-type=retro` items with no epic ancestor (`epic-of.sh`
 → `(unparented)`) and features or tasks of other epics. Drop `human`-labelled,
 SDLC, recently parked, claim-overlapping, and reviews of your own session's
 output. Prefer dependents of what you finished and items touching your branches'
@@ -591,11 +592,13 @@ Uncertified → leave in draft; push what is committed. Running agents → do no
 wait; the next session resumes them. Report the main checkout's HEAD against
 `<scratch>/step1-head` if it moved.
 
-1. **Epic:** closed by someone else → remove only your `owner:` label. All
-   children closed (at least one) → close it, remove the label. Work remains →
+1. **Epic:** closed by someone else → leave it. All children closed (at least
+   one) → close it. Either way keep the `owner:` label. Work remains →
    `bd update <epic> --status=open --assignee="" --unset-metadata holder`.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
-3. **Friction:** step 7.
+3. **Friction:** step 7. Then the **retro record**, always, even for an empty
+   run: fill [retro.md](references/retro.md)'s template and
+   `.claude/skills/work/scripts/file-retro.sh --skill work --file <scratch>/retro.md --skill-version <sha> --started <t> --model <id>`.
 4. **Publish:** in each feature worktree you touched, `git status --short`
    (leftovers: report, do not commit) and push. Then `publish-beads.sh`; exit 2 →
    its ESCALATE line names a conflict (recovery.md) or a failure, and the

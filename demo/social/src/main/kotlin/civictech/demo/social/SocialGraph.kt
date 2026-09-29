@@ -72,11 +72,13 @@ import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import java.util.SortedSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class SocialGraph(
@@ -135,6 +137,14 @@ class SocialGraph(
     private val listening = AtomicBoolean(false)
 
     /**
+     * Set by [close] (computenet-cpybp). Once set, [fireChange] is a no-op, so
+     * a listener invocation still queued on a sink's dispatcher when [close]
+     * shut it down drains in constant time instead of running the app's
+     * broadcast — see [awaitDispatchers] for why that queue is long.
+     */
+    private val closed = AtomicBoolean(false)
+
+    /**
      * Per family: ids whose creating write threw *after*
      * [civictech.cell.host.KeyedCells.getOrSpawn] had already minted their key,
      * and which have had no successful write since (`computenet-5ab6f`; see
@@ -150,16 +160,55 @@ class SocialGraph(
     private val unadmittedForums = ConcurrentHashMap.newKeySet<Long>()
     private val unadmittedMessages = ConcurrentHashMap.newKeySet<Long>()
 
-    /** Registers [listener] to fire on every settled change of every sink, present and future. */
+    /**
+     * Registers [listener] to fire on every settled change of every sink,
+     * present and future, made AFTER this call. A sink's state as it already
+     * stands at registration is not announced: a caller that needs it reads it
+     * (`/state`, and `/events`' own connect frame, do exactly that).
+     *
+     * **The bulk attach skips each pre-existing sink's catch-up**
+     * (computenet-l3msn). [ObservationSink.onChange] always delivers one
+     * late-join catch-up per registration; for the first [onChange] that is
+     * one invocation per pre-existing sink — N `/state` computations for a
+     * preloaded source of N sinks (297 at `SnbGenerator(42, 0.05)`), which
+     * [SocialApp]'s coalescing only divided by a load-dependent factor (CI
+     * measured 101-233). So the bulk path registers [skipFirst]: its first
+     * invocation is dropped, and that first invocation is always the catch-up
+     * — `ObserveCell.onChange` adds the listener and submits the catch-up
+     * inside one `synchronized(lock)` block, and `propagate` submits a
+     * change only under the same lock, to the same single-consumer executor
+     * (`kernel/.../observe/Observe.kt`, `onChange` and `propagate`). No
+     * change fold can therefore be submitted for this listener before its
+     * catch-up, and every fold after registration still gets its own later
+     * invocation, so no change is dropped. The skip leans on that ordering,
+     * which the kernel states as a guarantee in `ObserveCell`'s class KDoc
+     * (T08 finding 4), not on an implementation accident.
+     *
+     * [attach], for a sink created AFTER listening started, keeps its
+     * catch-up: that sink's creating write may already have folded by the time
+     * the listener is registered, and then the catch-up is the only
+     * notification of it.
+     */
     fun onChange(listener: () -> Unit) {
         changeListeners += listener
         // Flag BEFORE iterating: a sink inserted concurrently is either seen by
         // this iteration or sees the flag in [attach] (possibly both — a
-        // doubly-attached sink fires fireChange twice, which is harmless).
+        // doubly-attached sink still gets [attach]'s catch-up, and fires
+        // fireChange twice per later change, which is harmless).
         if (listening.compareAndSet(false, true)) {
             (personSinks.values + forumSinks.values + messageSinks.values + authoredSinks.values)
-                .forEach { it.onChange { fireChange() } }
+                .forEach { it.onChange(skipFirst()) }
         }
+    }
+
+    /**
+     * A per-registration listener that ignores its first invocation — the
+     * late-join catch-up, see [onChange] — and calls [fireChange] on every
+     * later one. One instance per sink: the skip is per registration.
+     */
+    private fun <S> skipFirst(): (S) -> Unit {
+        val caughtUp = AtomicBoolean(false)
+        return { if (!caughtUp.compareAndSet(false, true)) fireChange() }
     }
 
     /** Gives a newly created [sink] the change listener once any [onChange] exists. */
@@ -167,6 +216,7 @@ class SocialGraph(
         sink.also { if (listening.get()) it.onChange { fireChange() } }
 
     private fun fireChange() {
+        if (closed.get()) return
         changeListeners.forEach { it() }
     }
 
@@ -239,15 +289,15 @@ class SocialGraph(
     }
 
     private fun requirePerson(id: Long) {
-        if (id !in personIds()) throw IllegalArgumentException("unknown person $id")
+        if (!isPerson(id)) throw IllegalArgumentException("unknown person $id")
     }
 
     private fun requireForum(id: Long) {
-        if (id !in forumIds()) throw IllegalArgumentException("unknown forum $id")
+        if (!isForum(id)) throw IllegalArgumentException("unknown forum $id")
     }
 
     private fun requireMessage(id: Long) {
-        if (id !in messageIds()) throw IllegalArgumentException("unknown message $id")
+        if (!isMessage(id)) throw IllegalArgumentException("unknown message $id")
     }
 
     /**
@@ -268,7 +318,7 @@ class SocialGraph(
         id: Long,
         write: () -> T,
     ): T {
-        val fresh = id !in family.keys()
+        val fresh = !family.contains(id)
         return try {
             write().also { unadmitted.remove(id) }
         } catch (failure: Throwable) {
@@ -413,8 +463,115 @@ class SocialGraph(
     fun forumIds(): SortedSet<Long> = (graph.families.forum.keys() - unadmittedForums).toSortedSet()
     fun messageIds(): SortedSet<Long> = (graph.families.message.keys() - unadmittedMessages).toSortedSet()
 
+    /**
+     * Whether [id] is an admitted person — same predicate as `id in personIds()`
+     * (a live key whose creating write has not been suppressed), but O(1):
+     * [KeyedCells.contains] against the family plus a small-set membership
+     * check, never a copy of the whole family (`computenet-uedpp`, residual of
+     * `computenet-tbmhn`). [suppressUnwrittenKeys] keeps [unadmittedPersons]
+     * covering a restart's ghost keys, so this stays correct across a restart
+     * the same way [personIds] does.
+     */
+    fun isPerson(id: Long): Boolean = graph.families.person.contains(id) && id !in unadmittedPersons
+
+    /** [isPerson]'s counterpart for forums — see its KDoc. */
+    fun isForum(id: Long): Boolean = graph.families.forum.contains(id) && id !in unadmittedForums
+
+    /** [isPerson]'s counterpart for messages — see its KDoc. */
+    fun isMessage(id: Long): Boolean = graph.families.message.contains(id) && id !in unadmittedMessages
+
     fun personFacts(id: Long): Set<PersonFact> = personSinks[id]?.current() ?: emptySet()
     fun authored(id: Long): Set<Message> = authoredSinks[id]?.current() ?: emptySet()
     fun forumFacts(id: Long): Set<ForumFact> = forumSinks[id]?.current() ?: emptySet()
     fun messageFacts(id: Long): Set<MessageFact> = messageSinks[id]?.current() ?: emptySet()
+
+    /**
+     * Stops every sink's dispatcher thread, if it ever minted one
+     * (`kernel/.../observe/Observe.kt`, [ObserveCell.close]: "a caller that
+     * never despawns the sink ... may call this directly at shutdown"), and
+     * turns [fireChange] into a no-op ([closed]). [ObservationSink] itself does
+     * not expose `close` — only [ObserveCell], the sole implementation
+     * [personCell]/[forumCell]/[messageCell]/[authoredCell] ever construct via
+     * `host.observe`, does — so this casts rather than despawning through the
+     * host: despawn tears the cell down through the full management lifecycle,
+     * which is more than a stopping app that will never read these sinks again
+     * needs. Idempotent, like [ObserveCell.close] itself. The only caller is
+     * `SocialApp.stop` (computenet-a77tu): a running app never despawns these
+     * cells itself, so nothing else releases the thread each one may have
+     * minted.
+     *
+     * [ObserveCell.close] is `ExecutorService.shutdown()`: it returns at once
+     * and the thread exits only after its queue drains. Call
+     * [awaitDispatchers] to wait for that (computenet-cpybp).
+     */
+    fun close() {
+        closed.set(true)
+        allSinks().forEach { it.close() }
+    }
+
+    /**
+     * Waits, up to [timeoutMs] in total, for every dispatcher thread minted by
+     * a sink of this graph to terminate, and returns the names of any still
+     * alive at the deadline — empty on success (computenet-cpybp). Valid only
+     * after [close]: that is what guarantees no sink mints another dispatcher
+     * (`ObserveCell.dispatchIfOpen` refuses under the same lock `close` sets
+     * `closed` under), so the set enumerated here is final.
+     *
+     * **Why a wait is needed at all** (measured 2026-09-25, darwin/arm64, a
+     * throwaway probe against `SocialApp(source = SnbGenerator(42, 0.05))`):
+     * the first [onChange] gives each of the ~297 preloaded sinks a listener,
+     * and each attach queues a late-join catch-up that runs
+     * `SocialApp.broadcast` — one full `/state` computation, serialized on
+     * `DemoShell`'s broadcast lock. At `stop()` many are still queued (37-121
+     * of 297 alive when `stop()` returned, nearly all `BLOCKED` in
+     * `DemoShell.broadcast`), and `shutdown()` runs queued tasks rather than
+     * dropping them. [closed] empties that work; this wait makes its end
+     * observable to the caller. (That measurement predates computenet-l3msn:
+     * [onChange]'s bulk attach now drops each preloaded sink's catch-up
+     * without broadcasting, so that queue is short. The wait stays: any
+     * listener invocation can still be queued or running at `stop()`.)
+     *
+     * **How the threads are found — a stated dependency on a kernel naming
+     * convention, not an API.** [ObserveCell] exposes no handle to its
+     * dispatcher and no way to await it, so this enumerates live threads named
+     * `observe-cell-<ref.id>` (`ObserveCell.newDispatcher`, Observe.kt) for
+     * this graph's sinks and joins them. Should that naming change, this finds
+     * nothing and returns empty without waiting; `SocialServerTest`'s
+     * dispatcher test, which selects the same threads by the same prefix,
+     * then fails to see any minted and goes red rather than passing silently.
+     * The proper seam is an `ObserveCell.awaitTermination`, a kernel change
+     * this demo does not make.
+     *
+     * **Not covered:** a sink the host re-activates after [close] (a
+     * `SupervisionPolicy.RESTART` landing mid-stop reopens it,
+     * `ObserveCell.reopen`) may mint a fresh dispatcher after this returns.
+     */
+    fun awaitDispatchers(timeoutMs: Long): List<String> {
+        val names = allSinks().mapTo(HashSet()) { "observe-cell-${it.ref.id}" }
+        val dispatchers = liveThreads().filter { it.name in names }
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        for (thread in dispatchers) {
+            val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (remainingMs <= 0) break
+            thread.join(remainingMs)
+        }
+        return dispatchers.filter { it.isAlive }.map { it.name }
+    }
+
+    private fun allSinks(): List<ObserveCell<*, *>> =
+        listOf(personSinks.values, forumSinks.values, messageSinks.values, authoredSinks.values)
+            .flatMap { sinks -> sinks.map { it as ObserveCell<*, *> } }
+
+    /** Every live thread in the JVM, enumerated from the root thread group. */
+    private fun liveThreads(): List<Thread> {
+        var root = Thread.currentThread().threadGroup
+        while (root.parent != null) root = root.parent
+        var buffer = arrayOfNulls<Thread>(root.activeCount() * 2 + 64)
+        var n = root.enumerate(buffer, true)
+        while (n == buffer.size) {
+            buffer = arrayOfNulls(buffer.size * 2)
+            n = root.enumerate(buffer, true)
+        }
+        return buffer.take(n).filterNotNull()
+    }
 }

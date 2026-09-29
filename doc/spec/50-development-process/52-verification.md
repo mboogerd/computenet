@@ -1,6 +1,6 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; the replica-convergence invariant harness with its departed-stream rule, W3.3; observation membrane, exclusive-payload discharge + taps, and monitor bands remain design decided in 93, unimplemented)
+> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; the replica-convergence invariant harness with its departed-stream rule, W3.3; the lateness harness, KE4.6; observation membrane, exclusive-payload discharge + taps, and monitor bands remain design decided in 93, unimplemented)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
 > **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); `cell.verify.ReplicaConvergence` (replica-convergence invariant harness); seeded harness = `cell.host.SimulationController`
 
@@ -84,6 +84,40 @@ deterministically by step count.) The first seeded
 invariant harness is the glitch-freedom diamond test (20/22): 200 seeds
 asserted invariant-style, plus a control run proving the harness can produce
 the failure it guards against.
+
+*(Lateness harness, KE4.6 — [24 §Lateness and
+waterlines](../20-dataflow-semantics/24-data-cells.md#lateness-and-waterlines))*:
+two standing invariants over the seeded lateness harness
+(`LatenessHarnessTest` in `:kernel` tests, generator `LatenessGen`, 100 seeds per
+envelope, writer sources fanned straight into a `WaterlineCell` and the
+evicting cell, the floor oracle independent of the cells under test).
+(1) **Incremental == batch over the late-filtered input**, under
+`[24-WL-10]`'s restriction — for the window-keyed `GroupByCell`, both sides
+restricted to window keys strictly above the final floor; for `JoinSetCell`,
+the whole state against a batch join with the evicted rows also removed — and
+the `late` outlet carrying exactly the dropped adds, tags verbatim: *B6 - no
+violations - every seed equals the restricted batch and nothing is late*,
+*B6 - with violations - every seed equals the restricted batch and late drops
+are exact*, and their `B6 join -` twins. (2) **Window-keyed state bounded by
+the lateness horizon** (`[24-WL-19]`): no window at or below the final
+floor remains in the cell's groups or contents (asserted on every B6 seed),
+and the live-window count stays within a bound stated
+as a formula of the envelope (lateness, disorder, source lag, window) at 1k
+and at 10k elements — a bound on windows, never on elements: *B7 - live
+windows stay within the envelope's bound at 1k and at 10k*; for the join
+shape only the declaring-inlet row horizon and minted tags == batch pairs are
+asserted, no whole-state bound (*B7 join - live rows stay above the floor and
+within the horizon, and minted tags equal the batch pairs, at 1k and at 10k*).
+The bound is qualified as `[24-WL-19]` is: an idle source suspends it
+(`[24-WL-14]`), refused windows are retained (`[24-WL-17]`), and `Replicable`
+cells evict nothing (`[24-WL-18]`); the harness carries no exclusives, no
+idle source and no `Replicable` cell. Two standing controls, one per shape,
+prove the equivalence check can fail: *B3 control - evict without retract
+diverges the two subscribers* and *B14 control - exit without tags leaves the
+consumer holding dead pairs* (test-side relays; no production cell carries a
+fault switch). The bound checks have no standing control: their
+red-capability was shown once, by production mutations that disabled
+eviction, in the task reviews of `computenet-fh1fo.1`/`.2`.
 
 ## Live invariants (production)
 
@@ -184,8 +218,10 @@ live re-delivery are *deduped* (dropped as already-processed) rather than
 re-acted. Divergence, recorded: the I-7 resolution's linchpin was replay
 with outlets NoOp-served (this section's suppression mechanism) so recovery
 never re-transmits; the landed M10 design instead replays intake frames
-with emission un-suppressed by default (the recovering flag only prevents
-re-journaling), made safe for *state* by replay-stable identity + idempotent
+with emission un-suppressed by default (replay identity is per frame: a
+replayed frame and its same-journal derivations are not re-appended, while
+live traffic accepted during recovery is journaled), made safe for *state*
+by replay-stable identity + idempotent
 merges + catch-up dedup, and safe for *effects* specifically by the
 processed-frontier check at the `Effectful` inlet — the frontier is the
 decided closure for that case.

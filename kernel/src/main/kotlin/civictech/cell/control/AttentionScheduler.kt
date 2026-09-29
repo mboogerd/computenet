@@ -6,12 +6,16 @@ import java.util.LinkedHashMap
 
 /**
  * Data-plane dispatch (spec 34, M6.3/M17), extracted from [civictech.cell.host.ManagedHost]
- * (RS-8.1): messages stage in per-cell FIFO queues; each staged message submits
- * one dispatcher task at data priority, and each dispatch picks the next cell
- * by attention band. Per-cell FIFO (a superset of per-link FIFO, spec 31 rule 3)
- * holds because band selection happens BETWEEN cells, never within one — and the
- * one-task-per-message shape keeps drain's phase 2 (priority 30) behind every
- * accepted message.
+ * (RS-8.1): messages stage in per-cell FIFO queues, and each dispatch picks the
+ * next cell by attention band. Per-cell FIFO (a superset of per-link FIFO, spec
+ * 31 rule 3) holds because band selection happens BETWEEN cells, never within one.
+ *
+ * The host dispatches every accepted message by a data-band task submitted after
+ * its staging: with its `dispatchBatch == 1` that is one [dispatchOne] task per
+ * message (message count <= task count); with `dispatchBatch > 1` one armed task
+ * runs [dispatchUpTo] and re-arms while work remains. Either way drain's phase 2
+ * (priority 30) runs after them, because schedulers order by priority. Batching
+ * changes the task count only: selection is per message, inside [dispatchOne].
  *
  * Shares [dataLock] with the owning host rather than owning an independent lock:
  * several host-only critical sections (intake saturation transitions, teardown
@@ -54,8 +58,13 @@ class AttentionScheduler(
     private var strideCount = 0
     private val lastAttended = mutableMapOf<CellRef, Long>()
 
-    /** Attention-parked traffic (spec 34 decision 2): parked, never dropped. Callers hold [dataLock]. */
-    internal val attentionParked = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
+    /**
+     * Attention-parked traffic (spec 34 decision 2): parked, never dropped. Callers hold
+     * [dataLock]. Each entry keeps the host sequence it was staged under (the same
+     * `dataSequence` as [dataQueues]) so [stagedInSequence] can merge parked and queued
+     * frames into one acceptance order (computenet-xy7w4 D3).
+     */
+    internal val attentionParked = mutableMapOf<CellRef, MutableList<Pair<Long, HostedPortInvocation>>>()
 
     /**
      * Magnitude-band boost (spec 34, M17): per cell, the band its largest
@@ -98,11 +107,26 @@ class AttentionScheduler(
         dataQueues.mapValuesTo(LinkedHashMap()) { (_, queue) -> queue.size }
     }
 
+    /**
+     * Every frame accepted and not yet dispatched — queued in [dataQueues] or
+     * attention-parked — in host-sequence (`dataSequence`, 93 I-7 R7's host sequence
+     * number; acceptance) order (computenet-xy7w4 D3). A
+     * coalesced entry is the staged merge, not its originals. What
+     * [civictech.cell.host.HostDurability.checkpoint] carries into a compacted journal.
+     * Callers hold [dataLock], and must keep holding it for as long as the answer has to
+     * stay true.
+     */
+    fun stagedInSequence(): List<HostedPortInvocation> =
+        (dataQueues.values.asSequence().flatten() + attentionParked.values.asSequence().flatten())
+            .sortedBy { it.first }
+            .map { it.second }
+            .toList()
+
     /** Callers hold dataLock. Same source+wave slot preserves wave identity and source FIFO. */
     fun stage(hostedInvocation: HostedPortInvocation) {
         val cellRef = hostedInvocation.cellRef
         attentionParked[cellRef]?.let {
-            it += hostedInvocation // parked cells accumulate in arrival order
+            it += ++dataSequence to hostedInvocation // parked cells accumulate in arrival order
             return // no boost: magnitude is urgency, interest owns park/resume
         }
         dataQueues.getOrPut(cellRef) { ArrayDeque() }.addLast(++dataSequence to hostedInvocation)
@@ -171,11 +195,32 @@ class AttentionScheduler(
         next?.let { deliver(it) }
     }
 
+    /**
+     * Batched dispatch (KBLK, `computenet-t6b.2-D4`): run [dispatchOne] up to
+     * [bound] times, stopping early once nothing is staged, and return how many
+     * iterations ran. [dispatchOne] is unchanged and re-runs band selection and
+     * the stride floor on every iteration, so fairness is **per message, not per
+     * task**: the stride floor bounds how long lower-band work is passed over by
+     * the same number of dispatched messages with or without batching.
+     *
+     * An iteration that parks a region (band NONE past the window) counts
+     * against [bound] exactly as it consumes one task unbatched.
+     */
+    suspend fun dispatchUpTo(bound: Int): Int {
+        var dispatched = 0
+        while (dispatched < bound) {
+            if (synchronized(dataLock) { dataQueues.isEmpty() }) break
+            dispatchOne()
+            dispatched++
+        }
+        return dispatched
+    }
+
     fun parkForAttention(cellRef: CellRef) {
         synchronized(dataLock) {
             val queue = dataQueues.remove(cellRef) ?: ArrayDeque()
             magnitudeBoost.remove(cellRef) // re-staged on unpark replay
-            attentionParked[cellRef] = queue.map { it.second }.toMutableList()
+            attentionParked[cellRef] = queue.toMutableList()
         }
         notifyParked(cellRef)
     }
@@ -185,6 +230,6 @@ class AttentionScheduler(
             attentionParked.remove(cellRef)?.also { lastAttended[cellRef] = dispatchStep }
         } ?: return
         notifyResumed(cellRef)
-        parked.forEach { submit(it) }
+        parked.forEach { submit(it.second) }
     }
 }

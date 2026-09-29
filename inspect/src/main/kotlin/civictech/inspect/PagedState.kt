@@ -359,7 +359,7 @@ internal class PagedState(
         }
 
         /**
-         * The kernel's nine `StateReadResult.Reason` arms in the contract's
+         * The kernel's eleven `StateReadResult.Reason` arms in the contract's
          * `unreadable` vocabulary.
          *
          * `SCHEDULER_TERMINATED` and `READ_FAILED` are mapped explicitly rather
@@ -367,13 +367,16 @@ internal class PagedState(
          * answers about a live local host, which is exactly what `"unknown"` is
          * reserved *not* to mean.
          *
-         * The four remaining arms are **unreachable from this endpoint** as long
-         * as it passes `allowWholeCopy = true` and neither `since` nor `scope`
-         * — `NOT_BOUNDED` and `CHECKPOINT_NOT_BOUNDED` are the refusals that
-         * flag turns off, and `SINCE_UNSUPPORTED`/`SCOPE_UNSUPPORTED` are
-         * refused only for a bound this endpoint never asks for. They are mapped
-         * to [CellState.UNKNOWN] rather than guessed at a nicer word: if one
-         * ever appears, the server is doing something it does not think it is.
+         * The six remaining arms are **unreachable from this endpoint** as long
+         * as it passes `allowWholeCopy = true` and neither `since`, `scope` nor
+         * `keyBound` — `NOT_BOUNDED` and `CHECKPOINT_NOT_BOUNDED` are the
+         * refusals that flag turns off,
+         * `SINCE_UNSUPPORTED`/`SCOPE_UNSUPPORTED`/`KEY_BOUND_UNSUPPORTED` are
+         * refused only for a bound this endpoint never asks for, and
+         * `KEY_BOUND_MISTYPED` (D9) can only fire for a request that carries a
+         * `keyBound` in the first place. They are mapped to [CellState.UNKNOWN]
+         * rather than guessed at a nicer word: if one ever appears, the server
+         * is doing something it does not think it is.
          */
         fun unreadableOf(reason: StateReadResult.Reason): String = when (reason) {
             StateReadResult.Reason.MIGRATING -> CellState.MIGRATING
@@ -385,6 +388,8 @@ internal class PagedState(
             StateReadResult.Reason.CHECKPOINT_NOT_BOUNDED,
             StateReadResult.Reason.SINCE_UNSUPPORTED,
             StateReadResult.Reason.SCOPE_UNSUPPORTED,
+            StateReadResult.Reason.KEY_BOUND_UNSUPPORTED,
+            StateReadResult.Reason.KEY_BOUND_MISTYPED,
             -> CellState.UNKNOWN
         }
     }

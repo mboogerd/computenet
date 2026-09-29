@@ -476,8 +476,14 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
  * [AlignedCompositeCell], behind [observeAligned] (spec 20/22 §The observation
  * frontier, `[22-OBS-01]`/`[22-OBS-02]`). This composite remains the right
  * choice when an arm may stall and a stale-but-prompt read beats a delayed
- * aligned one — the aligned sink is the WAIT shape and holds a wave until every
- * contributing view has settled it.
+ * aligned one — the aligned sink defaults to WAIT, holding a wave until every
+ * contributing view has settled it, and in DEGRADE publishes past a
+ * recoverably stalled arm with that arm disclosed in
+ * [AlignedComposite.droppedEdges] until it catches up, so this composite
+ * remains the choice only when the app wants no wave alignment at all. A
+ * point-consistent sink witnesses no
+ * per-source frontier, so it offers no write-visibility handle (it is not a
+ * [FrontierWitness]) — `[22-OBS-01]`'s frontier is the aligned sink's alone.
  *
  * T08 finding 4: routes its own listener dispatch through the same
  * dedicated-executor mechanism as [ObserveCell] (its own `dispatcher`, not a

@@ -123,6 +123,8 @@ optional descriptor param the driver binds. The v1 named params:
 | `replica-of` | logical replica-group id (dist profile) |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
+| `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
+| `lateness` | event-time lateness `L`, a non-negative integer, on `window` (tumbling), `join`, `semi-join`, `intersect` or `waterline` — see below (`computenet-t4od7`, additive) |
 
 `agg`, `k`, and `window` are **additive** (W3-0 / R2-B): existing files deserialize
 unchanged (all optional; `window` absent on every non-`window` cell). The parser
@@ -149,9 +151,90 @@ payload — the same `[k, v]` convention `join`/`group-by` use); its `agg` field
 | `size` | the window length, in event-time/sequence units (no wall clock) |
 | `slide` | the hop between successive window starts; **required** for `sliding`, ignored for `tumbling` |
 
-Windows never close (`24-OP-WINDOW-02`): a late element is an ordinary add and a
-retraction flows into the window aggregate exactly as any other `group-by` view —
-there is no eviction, no timer, no watermark (deferred with trigger, spec 24).
+Without `lateness`, windows never close (`24-OP-WINDOW-02`, `[24-WL-11]`): a late
+element is an ordinary add and a retraction flows into the window aggregate
+exactly as any other `group-by` view. Closing is **opt-in**: a `kind: tumbling`
+window that declares `lateness` (below) evicts every window whose end the
+waterline floor has passed, through ordinary retractions (`[24-WL-06]`), and
+routes an add below the floor to its `late` outlet instead of the aggregate
+(`[24-WL-07]`). There is still no wall clock and no timer — the floor is itself
+a function of the elements' event times.
+
+#### `lateness` (`computenet-t4od7`, spec 24 §Lateness and waterlines)
+
+`lateness: L` declares an operator's event-time lateness bound `L`
+(`[24-WL-01]`), a non-negative integer in the same units as the event times.
+It is additive: absent on every pre-existing file, and absent means the
+operator is exactly the pre-lateness one (`[24-WL-11]`). It is legal on these
+catalog ids only; on any other the kernel driver refuses the cell
+(`UnsupportedCatalogBinding`):
+
+| type | what `lateness` does | event time of an element |
+|---|---|---|
+| `waterline` | **required** — the floor it computes is `min` over sources of (max event time − `L`), monotone (`[24-WL-02]`/`[24-WL-03]`) | `[at, value]` → `at` |
+| `window` (`kind: tumbling`) | guards the data inlet against the floor on its `waterline` inlet; evicts passed windows; below-floor adds leave on `late` | `[at, value]` → `at` |
+| `join`, `semi-join` | declares the same `L` on **both** data inlets (per-side lateness is not expressible); below-floor rows leave on `lateLeft` / `lateRight` | row `[k, at]` → `at`; row `[k, [at, payload]]` → `at` |
+| `intersect` | as the join family, same `L` on both inlets | `[at, value]` → `at` |
+
+`window` with `kind: sliding` **and** `lateness` is refused: its binding has no
+`waterline` inlet and no `late` outlet.
+
+**The waterline is an explicit cell; the driver spawns nothing.** A
+lateness-declaring operator does not compute its own floor — it reads one on
+its `waterline` inlet, and the scenario wires that inlet itself, with
+port-addressed links (no new link syntax):
+
+```yaml
+cells:
+  - {id: a,  type: set-source}
+  - {id: wl, type: waterline, lateness: 2}
+  - {id: w,  type: window, window: {kind: tumbling, size: 10}, lateness: 2}
+  - {id: v,  type: count-view}
+  - {id: l,  type: set-view}
+  - {id: f,  type: value-view}           # optional: observe the floor itself
+links:
+  - {from: a,  to: wl}                    # the waterline folds the source's event times
+  - {from: a,  to: w}
+  - {from: wl, to: w, inlet: waterline}   # the floor feeds the evicting operator
+  - {from: w,  to: v}
+  - {from: w,  to: l, outlet: late}       # below-floor adds (join family: lateLeft / lateRight)
+  - {from: wl, to: f}
+```
+
+An operator declaring `lateness` with nothing linked into `waterline` never
+receives a floor, so it never drops or evicts. The waterline's `inlet` is a
+fan-in (several sources may feed one waterline; its floor is the minimum of
+their promises), and its `waterline`-linked consumers likewise accept several
+waterline cells. A waterline's elements are read as `[at, value]` — so for a
+join whose rows are `[k, at]`, the waterline is fed by a source of `[at, …]`
+elements, not by the join's row sources. Every `lateness` value in a graph is
+the author's to keep consistent: the operator's `lateness` sets its own
+per-inlet declaration and the waterline's sets the floor it receives.
+
+**The batch oracle's lateness model, and the quiesce rule** (computenet-t4od7.2,
+`[24-WL-10]`). `incremental-equals-batch` folds a `waterline` and a
+lateness-declaring cell in script order, not as a multiset: a waterline's floor
+after each step is `[24-WL-02]`'s running max of min over its sources (each
+upstream source cell, direct or through `map fn: identity` relays, is one
+`sourceId`) of (max emitted `at` − `L`), with a `disconnect` of an edge into the
+waterline retiring what that edge carried (`[24-WL-12]`) and a `restart` of a
+`rebaseline-source` retiring its epoch (`[24-WL-13]`); an evicting operator's floor
+is the max over the waterlines linked into its `waterline` inlet — its own
+`lateness` number is never read. An add on a lateness-declaring inlet is **late**
+iff its event time is strictly below the floor **as of the last `quiesce` before
+it**, and certainly **admitted** at or above the highest floor that can reach the
+operator first — on one host (FIFO scheduling) the floor raised by the adds applied
+before it in its quiesce block, on several hosts the floor at the end of that block.
+An add between the two is order-dependent: the oracle refuses the view
+(`OracleUnsupported`, naming the step) unless both outcomes fold alike (its window, or
+its row, is evicted by the final floor either way) — **so an author separates a
+floor-raising add from a later add below the floor it raises with a `quiesce`.** The
+batch side is then `[24-WL-10]`'s: a tumbling `window` folds its late-filtered input
+and drops every window whose end (`start + size`) is at or below the final floor; a
+`join`/`semi-join`/`intersect` drops every row whose time is strictly below the final
+floor from both sides, then folds as usual; a `late`/`lateLeft`/`lateRight` view
+folds the adds that side late-dropped. `sliding` + `lateness`, a data input that is
+not a set source, and a `connect`/`disconnect` into the operator are refused.
 
 #### `interest` (W4-A followup, `42-INTEREST-01`)
 
@@ -189,6 +272,9 @@ ticket.
 
 `{from, to, inlet?, outlet?, role?}`. `role` selects consume vs observe
 (23-ownership). Endpoints are cell `id`s.
+
+A link into an `aligned-view` **must** name `inlet:` as one of that cell's
+`views:` names; there is no default inlet on it.
 
 ## `script` — the step verbs
 
@@ -642,7 +728,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 |---|---|---|
 | final-view | `{type: final-view, view: v, equals: <value>}` | at quiescence `readView(v)` equals the golden |
 | views-converge | `{type: views-converge, views: [a, b]}` | all listed views equal at quiescence |
-| incremental-equals-batch | `{type: incremental-equals-batch, view: v}` | view equals the harness batch oracle (catalog semantics over the accepted-op multiset) |
+| incremental-equals-batch | `{type: incremental-equals-batch, view: v}` | view equals the harness batch oracle (catalog semantics over the accepted-op multiset; a lateness cone in script order — see §`lateness`) |
 | late-join-equals-early | `{type: late-join-equals-early, early?: e, late?: l}` | late- and early-linked folds equal |
 | observations-all-satisfy | `{type: observations-all-satisfy, view: v, fn: even}` | every observation-stream event satisfies a catalog predicate |
 | observations-monotone | `{type: observations-monotone, view: v, order?: ...}` | stream never regresses under the order |
@@ -650,6 +736,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
 | effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) — unkeyed, per key the script *fed* it (see below) |
 | observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
+| composite-whole-waves | `{type: composite-whole-waves, view: c, source: s, members?: [items, evens]}` | every composite on the `aligned-view` `c`'s stream has all checked members at their arm-derived folds of **one common** op prefix of `s` (see below) |
 | wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 | emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
@@ -880,6 +967,32 @@ count, so a driver that does not observe refusals at the named cell MUST fail
 loudly rather than answer `0` — see the next section — and the evaluator reports
 that as this check's failure. A negative reading fails for the same reason: a
 tally that only ascends cannot produce one, so it is not a count of refusals.
+
+### `composite-whole-waves`: one common prefix across members
+
+(`computenet-5ubdv`, spec 22 `[22-OBS-01]`/`[22-OBS-02]`.) An `aligned-view`
+observation is a composite `{name → member value}`. `observations-whole-waves`
+cannot assert its wave-completeness: it reads one set stream against one source
+and accepts any prefix, while a composite's property is the members' **joint**
+prefix — `{items: [1, 2], evens: []}` has each member at a valid prefix on its
+own and is still torn.
+
+The check passes iff every observation is a map in which, for one prefix length
+`p` of `source`'s accepted `add`/`remove` script (the same enumeration
+`observations-whole-waves` performs), every checked member equals that member's
+expected fold of prefix `p`, compared as a set. `members` defaults to every name
+of the view's `views:`. A member's expected fold is the prefix set passed
+through its **arm** — the cells from `source` to the link `{to: c, inlet:
+<member>}` — where each arm cell is `map` (`fn` absent or `identity`, a no-op)
+or `filter` (a catalog predicate), each with exactly one inbound link, applied
+in chain order.
+
+Anything the evaluator cannot model fails **loudly**, naming the member and the
+offending cell or id, and never passes: a member whose id is not `set-view`, an
+arm through any other cell type (`group-by`, `union`, …), a fan-in on the arm,
+an inlet with zero or several inbound links, an arm not ending at `source`, a
+`members:` name not in `views:`, or a source op other than `add`/`remove`. An
+empty observation stream fails as for the other `observations-*` checks.
 
 ### What a conforming driver must observe (the four checks that need one)
 

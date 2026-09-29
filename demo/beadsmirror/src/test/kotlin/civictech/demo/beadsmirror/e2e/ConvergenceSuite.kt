@@ -199,6 +199,13 @@ abstract class ConvergenceSuite(private val newRig: () -> TwoNodeRig) {
      * failure on the test thread once both have finished — a `bd` exit
      * failure from either side must fail the test, not vanish on a
      * background thread.
+     *
+     * Each step goes through [TwoNodeRig.mutate]'s lambda overload
+     * (computenet-mivve), not a bare `it.apply(rig.listenerWorkspace)`: both
+     * nodes are already started here, and the caller awaits equal folds
+     * afterward, exactly the shape [TwoNodeRig.mutate]'s KDoc documents as
+     * needing the commit-visibility wait. `ScheduleStep.apply` itself is
+     * unchanged; the wait wraps it rather than being built into it.
      */
     private fun runConcurrently(
         rig: TwoNodeRig,
@@ -210,14 +217,14 @@ abstract class ConvergenceSuite(private val newRig: () -> TwoNodeRig) {
 
         val listenerThread = Thread({
             try {
-                listenerSteps.forEach { it.apply(rig.listenerWorkspace) }
+                listenerSteps.forEach { step -> rig.mutate(rig.listener) { step.apply(rig.listener.workspace) } }
             } catch (t: Throwable) {
                 listenerFailure = t
             }
         }, "seeded-schedule-listener")
         val dialerThread = Thread({
             try {
-                dialerSteps.forEach { it.apply(rig.dialerWorkspace) }
+                dialerSteps.forEach { step -> rig.mutate(rig.dialer) { step.apply(rig.dialer.workspace) } }
             } catch (t: Throwable) {
                 dialerFailure = t
             }

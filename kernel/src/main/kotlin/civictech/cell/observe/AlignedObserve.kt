@@ -8,7 +8,10 @@ import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.onEach
+import civictech.cell.consistency.GlitchFreeCell
+import civictech.cell.consistency.GlitchViolation
 import civictech.cell.control.Progress
+import civictech.cell.control.StallNotice
 import civictech.cell.data.MapApi
 import civictech.cell.data.SetApi
 import civictech.cell.data.op.FilterSetApi
@@ -28,11 +31,14 @@ import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import java.io.Serializable
+import java.util.TreeMap
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The **wave-aligned** multi-view observation sink (spec 20/22 §The observation
@@ -83,15 +89,43 @@ import java.util.concurrent.TimeUnit
  * still retires), the flushed high-water straggler rule, and per-source-ordered
  * release.
  *
- * ### Deliberately not mirrored: this is the WAIT-mode shape
+ * ### Stalled edges: WAIT, DEGRADE and RE-SCOPE (spec 20/22 §Completeness over silent or stuck edges)
  *
- * Like [civictech.cell.data.op.CoalescingCombineCell], this cell does **not**
- * mirror [civictech.cell.consistency.GlitchFreeCell.WaveMode.DEGRADE] frontier
- * shrinking, terminal-stall RE-SCOPE, replica-fed settlement (E3.4), or
- * pull-on-open. A stalled arm's waves stay buffered until it resumes, produces a
- * later wave, absorb-acks, or its edge closes — `EdgeClose` shrinks the
- * condition exactly as it does for the frontier ([bufferedWaves] is the
- * observability hook).
+ * The `Protocols.Suspension` lane is mirrored per arm inlet, exactly as
+ * `WaveFrontier.attach` handles it, with the [mode] reused from
+ * [GlitchFreeCell.WaveMode] (there is no third, RE-SCOPE, mode — a terminal
+ * stall re-scopes in every mode):
+ *
+ * - **WAIT** (the default): a *recoverable* `Stall` changes nothing — the
+ *   stalled edge's waves stay buffered until it resumes and delivers, produces
+ *   a later wave, absorb-acks, or its edge closes. [heldWaves] names, per held
+ *   wave, the expected edges it is waiting on.
+ * - **DEGRADE**: a recoverable `Stall` removes the edge from every pending and
+ *   future wave's expected set (the frontier shrinks) and the waves that
+ *   thereby complete publish at once; `Resume` restores it. An edge dropped
+ *   this way stays *disclosed* on every later composite until its own
+ *   watermark catches up with the flushed frontier — a late straggler it
+ *   delivers installs into its view, and the composite that install publishes
+ *   still names the edge, because that view is behind the composite's
+ *   frontier until it has caught up.
+ * - **RE-SCOPE** (a terminal `Stall`, `recoverable == false`, every mode): with
+ *   a `Stall.timestamp` the edge's watermark advances past exactly that wave
+ *   (the edge stays open, so the next wave waits for it again); without one
+ *   the edge closes, exactly as `EdgeClose`. Either way [violations] counts it
+ *   and [onViolation] receives a [GlitchViolation].
+ *
+ * **Disclosure.** Every published composite is an immutable [AlignedComposite]
+ * ([composite], [onComposite]): the views, the flushed [AlignedComposite.frontier],
+ * and [AlignedComposite.droppedEdges] — every edge that was expected for the
+ * released wave and did not settle it by its own watermark (DEGRADE-suspended
+ * at release, re-scoped for that wave, or closed while the wave was held on it),
+ * plus every still-open edge a DEGRADE shrink has left behind the frontier.
+ * A composite published before a shrink is never retroactively marked. The
+ * same set completes that wave's write-visibility handles
+ * ([VisibleDegraded] when non-empty).
+ *
+ * **Still not mirrored:** replica-fed settlement (E3.4) and pull-on-open — as
+ * for [civictech.cell.data.op.CoalescingCombineCell].
  *
  * **The phantom expected edge (G-13).** The frontier is a static link set with
  * no upstream traversal, so an arm that structurally *never* carries a given
@@ -163,13 +197,46 @@ import java.util.concurrent.TimeUnit
  * [onChange] takes the same [lock] that [flushReady] holds for the whole
  * apply-all-arms-then-publish sequence, so its catch-up snapshot is a composite
  * from before that wave or after it, never inside it.
+ *
+ * **Write-visibility handles run elsewhere — except when already complete.**
+ * A [visibilityOf] handle that has to wait is registered and retired under
+ * [lock], but its completion is *submitted* to the JDK default async pool
+ * (`CompletableFuture.runAsync`), so the `complete` call and every plain
+ * `thenAccept`/`thenApply` dependent run on a pool thread — never on the host
+ * scheduler thread, never under [lock], and never on the listener dispatcher
+ * (which a handle-only sink therefore never mints) — save that a thread
+ * blocked in `get`/`join` on the handle may run a pending plain dependent
+ * itself, per [FrontierWitness.visibilityOf]. That pool guarantee is for the
+ * waiting case only: [visibilityOf] also returns an already-complete handle
+ * for a closed sink, a wave already at or behind the flushed frontier, or the
+ * outstanding-handle bound exceeded, and a plain dependent registered on one
+ * of those runs synchronously on the calling thread instead, per
+ * [FrontierWitness.visibilityOf]. Handles
+ * carry no ordering guarantee relative to each other or to listener
+ * notifications.
  */
 class AlignedCompositeCell(
     views: Map<String, View<*, *>>,
     /** What each named view was registered as (T08 finding 2) — [get]'s checked-cast diagnostic. */
     @PublishedApi internal val registeredAs: Map<String, String> = emptyMap(),
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell, Stateful, ObservationSink<Map<String, Any?>> {
+    /** The bound on outstanding write-visibility handles (zvq3e-D7): a default, not a measurement. */
+    override val maxOutstandingHandles: Int = 1024,
+    /** What a *recoverable* stall does: WAIT holds its waves, DEGRADE shrinks the frontier (see the class doc). */
+    val mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
+    /**
+     * Invoked once per terminal-stall RE-SCOPE. The sink has no `errorOutlet`,
+     * so the default is a no-op and [violations] is the always-on observable.
+     * Runs synchronously **under the sink's lock** on the delivering thread:
+     * it must not block, and must not register listeners or handles on this
+     * sink (reading [current]/[composite] is fine — they are lock-free).
+     */
+    private val onViolation: (GlitchViolation) -> Unit = {},
+) : Cell, Stateful, ObservationSink<Map<String, Any?>>, FrontierWitness {
+
+    init {
+        require(maxOutstandingHandles > 0) { "maxOutstandingHandles must be positive (was $maxOutstandingHandles)" }
+    }
 
     /** One contributing view: its name, its fold, and the inlet that carries only its deltas. */
     private class Arm(val name: String, val view: View<Any, Any?>, val inlet: FanInlet<Propagate<Any>>)
@@ -213,12 +280,54 @@ class AlignedCompositeCell(
     /** The transient version buffer, keyed by wave; a wave known only from an ack holds an empty list. */
     private val pending = LinkedHashMap<Timestamp, MutableList<Buffered>>()
 
+    /** Edges a recoverable DEGRADE-mode stall removed from the expected set, until `Resume`. */
+    private val suspendedEdges = mutableSetOf<UUID>()
+
     /**
-     * Waves currently held awaiting the shared frontier — the WAIT-shape
-     * observability hook (a stalled or phantom expected edge shows up here, and
-     * a healthy graph returns to 0 at quiescence). Diagnostic only.
+     * Edges dropped from a specific wave at the moment it happened — a terminal
+     * re-scope for that wave, or a close while the wave was held on the edge —
+     * read (and removed) when the wave releases. Entries for waves that never
+     * arrive are pruned once their source's flushed high-water passes them.
+     */
+    private val exclusions = mutableMapOf<Timestamp, MutableSet<DroppedEdge>>()
+
+    /**
+     * Edges released-without (dropped from a flushed wave) per source, kept
+     * until the edge's own watermark reaches that source's flushed high-water
+     * or the edge closes: while listed and behind, the edge is disclosed on
+     * every published composite, because its view lags the composite frontier.
+     */
+    private val behind = mutableMapOf<UUID, MutableSet<UUID>>()
+
+    /**
+     * Waves currently held awaiting the shared frontier (a stalled or phantom
+     * expected edge shows up here, and a healthy graph returns to 0 at
+     * quiescence). Diagnostic only; [heldWaves] names what each is waiting on.
      */
     val bufferedWaves: Int get() = synchronized(lock) { pending.size }
+
+    /**
+     * Every held wave mapped to its unsettled expected edges ([KE2-13]) — the
+     * base completeness predicate (open `Consume` edges above their floor),
+     * **before** the DEGRADE suspension filter, so a WAIT-mode reader sees the
+     * stalled edge a wave is held on. Diagnostic snapshot, taken under the lock.
+     */
+    fun heldWaves(): Map<Timestamp, Set<DroppedEdge>> = synchronized(lock) {
+        pending.keys.associateWith { timestamp ->
+            edges.values
+                .filter { isBaseExpected(it, timestamp) && !isSettled(it.link.id, timestamp) }
+                .mapTo(LinkedHashSet()) { DroppedEdge(it.arm.name, it.link.id) }
+        }
+    }
+
+    /**
+     * Terminal stalls re-scoped so far (each also reported to `onViolation`,
+     * incremented before it runs). Always observable, since the sink has no
+     * error outlet.
+     */
+    @Volatile
+    var violations: Long = 0L
+        private set
 
     /**
      * Deltas that matched no open `Consume` edge and were therefore installed
@@ -236,6 +345,7 @@ class AlignedCompositeCell(
 
     private val lock = Any()
     private val listeners = mutableListOf<(Map<String, Any?>) -> Unit>()
+    private val compositeListeners = mutableListOf<(AlignedComposite) -> Unit>()
 
     /** T08 finding 4: single-consumer ⇒ FIFO submission order is delivery order. */
     private fun newDispatcher(): ExecutorService = Executors.newSingleThreadExecutor { r ->
@@ -263,8 +373,23 @@ class AlignedCompositeCell(
     @Volatile
     private var closed = false
 
+    // ---- write-visibility handles (FrontierWitness, KE2 §5.5) ----
+
+    /** Registered handles: source → counter → futures. Lock-guarded. */
+    private val handles = mutableMapOf<UUID, TreeMap<Long, MutableList<CompletableFuture<Visibility>>>>()
+
+    /** Registered-and-uncompleted handle count; an atomic so it is readable without [lock]. */
+    private val outstanding = AtomicInteger(0)
+
+    override val outstandingHandles: Int get() = outstanding.get()
+
+    /**
+     * The one published value. [current] and [composite] both read this single
+     * `@Volatile`, so a reader never pairs one wave's views with another's
+     * dropped set (the torn-pair rule); there is deliberately no second one.
+     */
     @Volatile
-    private var latest: Map<String, Any?> = assemble()
+    private var latest: AlignedComposite = assemble(dropped = emptySet())
 
     init {
         arms.values.forEach { arm ->
@@ -275,9 +400,31 @@ class AlignedCompositeCell(
                 synchronized(lock) {
                     when (event) {
                         EdgeOpen -> edges[link.id] = EdgeState(arm, link, flushedHighWater.toMap())
-                        EdgeClose -> edges[link.id]?.open = false
+                        EdgeClose -> edges[link.id]?.let(::closeEdge)
                     }
                     flushReady() // the shared condition just grew or shrank
+                }
+            }
+            // WaveFrontier.attach's Suspension handler, mirrored at cell scope.
+            ProtocolSupport.of(arm.inlet).handle(Protocols.Suspension) { link, message ->
+                synchronized(lock) {
+                    when (val notice = message as StallNotice) {
+                        is StallNotice.Stall -> when {
+                            !notice.recoverable -> reScope(link, notice)
+                            mode == GlitchFreeCell.WaveMode.DEGRADE -> {
+                                suspendedEdges += link.id
+                                flushReady() // shrinking the frontier may complete waves
+                            }
+                            // WAIT: nothing — the wave stays held (heldWaves names it)
+                            // until Resume + a real delta, a later wave, an ack, or a close.
+                            else -> Unit
+                        }
+
+                        StallNotice.Resume -> {
+                            suspendedEdges -= link.id
+                            flushReady()
+                        }
+                    }
                 }
             }
             ProtocolSupport.of(arm.inlet).handle(Protocols.Progress) { link, message ->
@@ -291,7 +438,7 @@ class AlignedCompositeCell(
         }
     }
 
-    override fun current(): Map<String, Any?> = latest
+    override fun current(): Map<String, Any?> = latest.views
 
     override fun onChange(listener: (Map<String, Any?>) -> Unit) {
         synchronized(lock) {
@@ -299,6 +446,24 @@ class AlignedCompositeCell(
             // late-join catch-up: one submission with the materialized composite,
             // made under the lock so no interleaving publication's submission can
             // land out of order around it.
+            val snapshot = latest.views
+            dispatchIfOpen { listener(snapshot) }
+        }
+    }
+
+    /** The latest published [AlignedComposite] — the same swap [current] reads. */
+    fun composite(): AlignedComposite = latest
+
+    /**
+     * [onChange] for the full [AlignedComposite]: the same catch-up (one
+     * submission with the current composite, under the lock, on the same
+     * dispatcher) and the same per-publication firing — a publication notifies
+     * [onChange] and [onComposite] listeners from one submission, so both see
+     * the same wave.
+     */
+    fun onComposite(listener: (AlignedComposite) -> Unit) {
+        synchronized(lock) {
+            compositeListeners += listener
             val snapshot = latest
             dispatchIfOpen { listener(snapshot) }
         }
@@ -318,6 +483,71 @@ class AlignedCompositeCell(
                 "(actual snapshot type ${value?.let { it::class.simpleName } ?: "null"}), " +
                 "requested ${T::class.simpleName ?: T::class}",
         )
+    }
+
+    /**
+     * Registration (zvq3e-D3), in order: a closed sink abandons with
+     * `SINK_CLOSED`; a wave at or behind the flushed frontier is already
+     * visible; past the bound, `BOUND_EXCEEDED` and nothing registered;
+     * otherwise the handle waits for [completeHandles].
+     */
+    override fun visibilityOf(wave: Timestamp): CompletableFuture<Visibility> {
+        synchronized(lock) {
+            if (closed) {
+                return CompletableFuture.failedFuture(VisibilityAbandoned(VisibilityAbandoned.Reason.SINK_CLOSED, wave))
+            }
+            val flushed = flushedHighWater[wave.sourceId]
+            if (flushed != null && wave.counter <= flushed) {
+                return CompletableFuture.completedFuture(Visible(Timestamp(wave.sourceId, flushed)))
+            }
+            if (outstanding.get() >= maxOutstandingHandles) {
+                return CompletableFuture.failedFuture(VisibilityAbandoned(VisibilityAbandoned.Reason.BOUND_EXCEEDED, wave))
+            }
+            val future = CompletableFuture<Visibility>()
+            handles.getOrPut(wave.sourceId) { TreeMap() }.getOrPut(wave.counter) { mutableListOf() } += future
+            outstanding.incrementAndGet()
+            return future
+        }
+    }
+
+    /**
+     * The single completion point (zvq3e-D4): every handle for
+     * `timestamp.sourceId` with counter ≤ `timestamp.counter`, completed with
+     * the one outcome this retirement earned. Called from [flushReady] after
+     * the wave's publish, so [latest] already reflects it. Completion is
+     * submitted to the default async pool (zvq3e-D5).
+     */
+    private fun completeHandles(timestamp: Timestamp, effective: Boolean, dropped: Set<DroppedEdge>) {
+        val bySource = handles[timestamp.sourceId] ?: return
+        val due = bySource.headMap(timestamp.counter, true)
+        if (due.isEmpty()) return
+        val futures = due.values.flatten()
+        due.clear()
+        if (bySource.isEmpty()) handles.remove(timestamp.sourceId)
+        outstanding.addAndGet(-futures.size)
+        val outcome: Visibility = when {
+            dropped.isNotEmpty() -> VisibleDegraded(timestamp, dropped)
+            effective -> Visible(timestamp)
+            else -> VisibleVacuously(timestamp)
+        }
+        futures.forEach { future -> CompletableFuture.runAsync { future.complete(outcome) } }
+    }
+
+    /** Removes every registered handle, paired with its wave, and zeroes the counter. Lock-guarded. */
+    private fun drainHandles(): List<Pair<Timestamp, CompletableFuture<Visibility>>> {
+        val drained = handles.flatMap { (sourceId, byCounter) ->
+            byCounter.flatMap { (counter, futures) -> futures.map { Timestamp(sourceId, counter) to it } }
+        }
+        handles.clear()
+        outstanding.set(0)
+        return drained
+    }
+
+    private fun abandon(handles: List<Pair<Timestamp, CompletableFuture<Visibility>>>, reason: VisibilityAbandoned.Reason) {
+        handles.forEach { (wave, future) ->
+            val cause = VisibilityAbandoned(reason, wave)
+            CompletableFuture.runAsync { future.completeExceptionally(cause) }
+        }
     }
 
     // ---- arrival: buffer the waved, install the unwaved ----
@@ -344,7 +574,10 @@ class AlignedCompositeCell(
             if (timestamp.counter <= floor || timestamp.counter <= flushed) {
                 // The wave already completed without this edge (a late-opened arm,
                 // a resume replay): install late rather than buffer forever —
-                // catch-up, spec 21 — and never lose the delta.
+                // catch-up, spec 21 — and never lose the delta. The watermark still
+                // records that this edge has now delivered the wave, which is what
+                // lets a DEGRADE-dropped edge stop being disclosed once caught up.
+                advanceWatermark(edge.link.id, timestamp.sourceId, timestamp.counter)
                 return@synchronized install(arm, value)
             }
             advanceWatermark(edge.link.id, timestamp.sourceId, timestamp.counter)
@@ -353,9 +586,14 @@ class AlignedCompositeCell(
         }
     }
 
-    /** Fold a delta that belongs to no wave set straight into its view, publishing if effective. */
+    /**
+     * Fold a delta that belongs to no wave set straight into its view, publishing
+     * if effective. It drops no edge of its own, so its composite discloses only
+     * the edges a DEGRADE shrink has left behind the frontier (none, outside
+     * DEGRADE).
+     */
     private fun install(arm: Arm, delta: Any) {
-        if (arm.view.apply(delta)) publish()
+        if (arm.view.apply(delta)) publish(stillBehind())
     }
 
     // ---- the fold's mechanics, mirrored from WaveFrontier / CoalescingCombineCell ----
@@ -393,18 +631,79 @@ class AlignedCompositeCell(
      */
     private fun expectedEdges(timestamp: Timestamp): Set<UUID> = edges.values
         .asSequence()
-        .filter { it.link.role == LinkRole.Consume }
-        .filter { it.open }
-        .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
+        .filter { isBaseExpected(it, timestamp) }
+        .filter { it.link.id !in suspendedEdges }
         .map { it.link.id }
         .toSet()
 
+    /** The completeness predicate before the DEGRADE suspension filter: open, `Consume`, above its floor. */
+    private fun isBaseExpected(edge: EdgeState, timestamp: Timestamp): Boolean =
+        edge.link.role == LinkRole.Consume &&
+            edge.open &&
+            (edge.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter
+
     private fun ready(timestamp: Timestamp): Boolean = expectedEdges(timestamp).all { isSettled(it, timestamp) }
+
+    /**
+     * Records [edge] as dropped from every wave it is expected for and has not
+     * settled — every pending wave, or (with [through]) the pending waves of that
+     * source up to it plus [through] itself even if not yet pending. Called at the
+     * moment of a close or a re-scope, **before** the watermark moves or the edge
+     * closes, since afterwards the edge would no longer look unsettled.
+     */
+    private fun recordExclusions(edge: EdgeState, through: Timestamp?) {
+        val waves = if (through == null) {
+            pending.keys.toList()
+        } else {
+            val flushed = flushedHighWater[through.sourceId] ?: Long.MIN_VALUE
+            pending.keys.filter { it.sourceId == through.sourceId && it.counter <= through.counter } +
+                listOfNotNull(through.takeIf { it.counter > flushed })
+        }
+        val dropped = DroppedEdge(edge.arm.name, edge.link.id)
+        for (wave in waves.toSet()) {
+            if (isBaseExpected(edge, wave) && !isSettled(edge.link.id, wave)) {
+                exclusions.getOrPut(wave) { mutableSetOf() } += dropped
+            }
+        }
+    }
+
+    /** `EdgeClose`, or a terminal stall without a timestamp: the edge leaves the condition. */
+    private fun closeEdge(edge: EdgeState) {
+        if (!edge.open) return
+        recordExclusions(edge, through = null)
+        edge.open = false
+    }
+
+    /**
+     * RE-SCOPE, `WaveFrontier.reScope` mirrored: with a known [StallNotice.Stall.timestamp]
+     * only that edge's watermark advances past the poisoned wave (the edge stays
+     * open); without one the edge closes. [violations] is incremented before
+     * [onViolation] runs.
+     */
+    private fun reScope(link: Link, stall: StallNotice.Stall) {
+        val timestamp = stall.timestamp
+        val edge = edges[link.id]
+        if (timestamp != null) {
+            edge?.let { recordExclusions(it, through = timestamp) }
+            advanceWatermark(link.id, timestamp.sourceId, timestamp.counter)
+        } else {
+            edge?.let(::closeEdge)
+        }
+        violations++
+        val detail = if (timestamp != null) " wave $timestamp" else ""
+        onViolation(GlitchViolation("edge ${link.id} ${stall.reason}$detail — advanced past the poisoned wave"))
+        flushReady()
+    }
 
     /**
      * Release every complete wave in per-source counter order (per-link FIFO
      * makes completion monotone per source), applying its buffered deltas to
      * their own views and publishing at most one composite per wave.
+     *
+     * A wave's dropped set is fixed here, at release: the exclusions recorded for
+     * it (re-scoped or closed while it was held), plus every base-expected edge
+     * that is DEGRADE-suspended and has not settled it. Each such edge is then
+     * remembered as [behind] for that source until it catches up.
      */
     private fun flushReady() {
         val ready = pending.keys
@@ -412,32 +711,77 @@ class AlignedCompositeCell(
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue
+            val dropped = LinkedHashSet<DroppedEdge>()
+            exclusions.remove(timestamp)?.let { dropped += it }
+            edges.values
+                .filter { it.link.id in suspendedEdges && isBaseExpected(it, timestamp) && !isSettled(it.link.id, timestamp) }
+                .forEach { dropped += DroppedEdge(it.arm.name, it.link.id) }
+            dropped.forEach { behind.getOrPut(it.linkId) { mutableSetOf() } += timestamp.sourceId }
             flushedHighWater.merge(timestamp.sourceId, timestamp.counter, ::maxOf)
             var effective = false
             // arrival order within the wave; the wave itself is the alignment unit
             for (buffered in wave) if (buffered.arm.view.apply(buffered.delta)) effective = true
-            if (effective) publish()
+            val disclosed = dropped + stillBehind()
+            if (effective) publish(disclosed)
+            completeHandles(timestamp, effective, dropped = disclosed)
         }
+        // A stall for a wave that never arrives must not leak its exclusion.
+        exclusions.keys.removeIf { it !in pending && it.counter <= (flushedHighWater[it.sourceId] ?: Long.MIN_VALUE) }
+    }
+
+    /**
+     * The open edges a DEGRADE shrink released waves without and whose own
+     * watermark has not yet reached the flushed high-water of that source — their
+     * views lag the composite frontier. Resolved entries (caught up, or the edge
+     * closed) are forgotten here.
+     */
+    private fun stillBehind(): Set<DroppedEdge> {
+        val result = LinkedHashSet<DroppedEdge>()
+        val iterator = behind.entries.iterator()
+        while (iterator.hasNext()) {
+            val (edgeId, sources) = iterator.next()
+            val edge = edges[edgeId]
+            if (edge == null || !edge.open) {
+                iterator.remove()
+                continue
+            }
+            sources.removeIf { source ->
+                (watermark[edgeId]?.get(source) ?: Long.MIN_VALUE) >= (flushedHighWater[source] ?: Long.MIN_VALUE)
+            }
+            if (sources.isEmpty()) iterator.remove() else result += DroppedEdge(edge.arm.name, edgeId)
+        }
+        return result
     }
 
     /**
      * The one composite snapshot: assembled under [lock], immutable, published
      * once. The [latest] swap *is* the publication — it is what a [current]
      * read sees, and it happens whether or not anyone is listening, so an
-     * aligned view's visibility never depends on the dispatcher.
+     * aligned view's visibility never depends on the dispatcher. [onChange]
+     * and [onComposite] listeners are notified from one submission.
      */
-    private fun publish() {
-        val snapshot = assemble()
+    private fun publish(disclosed: Set<DroppedEdge>) {
+        val snapshot = assemble(disclosed)
         latest = snapshot
         val fired = listeners.toList()
+        val firedComposite = compositeListeners.toList()
         // Nothing to notify ⇒ no submission, so an unobserved aligned view never
         // mints a dispatcher (see the class doc). Without this the lazy mint
         // would merely relocate from construction to the first released wave.
-        if (fired.isNotEmpty()) dispatchIfOpen { fired.forEach { it(snapshot) } }
+        if (fired.isNotEmpty() || firedComposite.isNotEmpty()) {
+            dispatchIfOpen {
+                fired.forEach { it(snapshot.views) }
+                firedComposite.forEach { it(snapshot) }
+            }
+        }
     }
 
-    private fun assemble(): Map<String, Any?> =
-        arms.entries.associateTo(LinkedHashMap()) { (name, arm) -> name to arm.view.current() }
+    private fun assemble(dropped: Set<DroppedEdge>): AlignedComposite = AlignedComposite(
+        views = arms.entries.associateTo(LinkedHashMap()) { (name, arm) -> name to arm.view.current() },
+        frontier = flushedHighWater.toMap(),
+        droppedEdges = dropped.toSet(),
+        alignedFrom = emptyMap(),
+    )
 
     /**
      * Submits [block] to [dispatcher] unless [close]d, minting the dispatcher on
@@ -477,14 +821,19 @@ class AlignedCompositeCell(
      * Idempotent. Wired into [onDeactivate] (which the host calls on despawn),
      * so a despawned sink's dispatch thread does not outlive it; a caller that
      * never despawns the sink may call this directly at shutdown.
+     *
+     * Every outstanding write-visibility handle is abandoned with
+     * [VisibilityAbandoned.Reason.SINK_CLOSED] (zvq3e-D6); [onDeactivate]
+     * abandons them first with `HOST_SHUTDOWN`, so this finds none on that path.
      */
     fun close() {
-        val doomed = synchronized(lock) {
+        val (doomed, abandoned) = synchronized(lock) {
             if (closed) return
             closed = true
-            dispatcher
+            dispatcher to drainHandles()
         }
         doomed?.shutdown()
+        abandon(abandoned, VisibilityAbandoned.Reason.SINK_CLOSED)
     }
 
     /**
@@ -524,10 +873,16 @@ class AlignedCompositeCell(
      * RESTART re-enters by catch-up, not restore (93 I-18): the transient wave
      * buffer is dropped — a partially collected wave was never observed by the
      * app. Floors, watermarks and flushed high-water record what genuinely
-     * happened and stay valid.
+     * happened and stay valid. Write-visibility handles are transient too: each
+     * is abandoned with [VisibilityAbandoned.Reason.HOST_SHUTDOWN] before
+     * [close] runs, and [snapshot]/[restore] never carry them.
      */
     override fun onDeactivate(ctx: CellContext) {
-        synchronized(lock) { pending.clear() }
+        val abandoned = synchronized(lock) {
+            pending.clear()
+            drainHandles()
+        }
+        abandon(abandoned, VisibilityAbandoned.Reason.HOST_SHUTDOWN)
         close()
     }
 
@@ -540,10 +895,30 @@ class AlignedCompositeCell(
             @Suppress("UNCHECKED_CAST")
             val folds = state as Map<String, Serializable>
             folds.forEach { (name, fold) -> arms[name]?.view?.restore(fold) }
-            latest = assemble()
+            latest = assemble(dropped = emptySet())
         }
     }
 }
+
+/**
+ * One published aligned composite, immutable ([KE2-12]: a composite published
+ * before a frontier shrink is never retroactively marked).
+ *
+ * @property views the named views' folds — exactly what [AlignedCompositeCell.current] returns.
+ * @property frontier the sink's flushed high-water per source at assembly: the
+ *   per-source frontier this composite is the output for.
+ * @property droppedEdges every contributing edge this composite was released
+ *   without (see [AlignedCompositeCell]'s class doc, §Stalled edges); empty for
+ *   a fully aligned composite.
+ * @property alignedFrom always empty in this delivery: F5 (`computenet-zvdt1`)
+ *   adds the one write that fills it.
+ */
+data class AlignedComposite(
+    val views: Map<String, Any?>,
+    val frontier: Map<UUID, Long>,
+    val droppedEdges: Set<DroppedEdge>,
+    val alignedFrom: Map<UUID, Long>,
+)
 
 /**
  * Declarative builder for [observeAligned]: names one fold per source outlet —
@@ -628,14 +1003,24 @@ class AlignedObserveBuilder internal constructor() {
  * Choose this when a mixed-wave read is a *correctness* problem (an SSE frame or
  * a `/state` document whose named views must agree); keep [observeAll] when an
  * arm may stall and a stale-but-prompt read beats a delayed aligned one —
- * [AlignedCompositeCell] is the WAIT shape and holds a wave until every arm
- * settles it (see its class doc for the phantom-expected-edge caveat).
+ * [AlignedCompositeCell] defaults to WAIT and holds a wave until every arm
+ * settles it (see its class doc for the phantom-expected-edge caveat); pass
+ * [mode] `DEGRADE` to shrink the frontier on a recoverable stall instead, with
+ * the dropped edges disclosed on [AlignedCompositeCell.composite].
  */
-fun Use<HostManagementApi>.observeAligned(block: AlignedObserveBuilder.() -> Unit): AlignedCompositeCell {
+fun Use<HostManagementApi>.observeAligned(
+    maxOutstandingHandles: Int = 1024,
+    mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
+    onViolation: (GlitchViolation) -> Unit = {},
+    block: AlignedObserveBuilder.() -> Unit,
+): AlignedCompositeCell {
     val builder = AlignedObserveBuilder().apply(block)
     val cell = AlignedCompositeCell(
         views = builder.specs.mapValues { it.value.view },
         registeredAs = builder.specs.mapValues { it.value.kind },
+        maxOutstandingHandles = maxOutstandingHandles,
+        mode = mode,
+        onViolation = onViolation,
     )
     call.spawn(cell)
     builder.specs.forEach { (name, spec) ->
@@ -649,5 +1034,9 @@ fun Use<HostManagementApi>.observeAligned(block: AlignedObserveBuilder.() -> Uni
 }
 
 /** Convenience for the common case of observing cells on this [ManagedHost]. */
-fun ManagedHost.observeAligned(block: AlignedObserveBuilder.() -> Unit): AlignedCompositeCell =
-    managementInlet.observeAligned(block)
+fun ManagedHost.observeAligned(
+    maxOutstandingHandles: Int = 1024,
+    mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
+    onViolation: (GlitchViolation) -> Unit = {},
+    block: AlignedObserveBuilder.() -> Unit,
+): AlignedCompositeCell = managementInlet.observeAligned(maxOutstandingHandles, mode, onViolation, block)

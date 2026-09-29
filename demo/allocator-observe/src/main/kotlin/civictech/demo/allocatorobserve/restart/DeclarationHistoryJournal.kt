@@ -40,10 +40,11 @@ import java.time.Instant
  *
  * `<runDir>/declaration-history`, deliberately extensionless and built by
  * [Path.resolve] rather than by any literal containing a separator: this
- * module's `ingest/NoHardcodedLogPathTest` is a lexical scan of `src/main` that
- * fails any string literal starting with `/` or ending in `.jsonl`, and it
- * cannot tell a run-directory-relative file name from a hardcoded deployment
- * path (over-broad, filed as `computenet-fpml.6`; not fixed here, avoided).
+ * module's `ingest/NoHardcodedLogPathTest` is a lexical scan that fails any
+ * string literal starting with `/` or ending in `.jsonl`. It scans `ingest/`
+ * and `AllocatorObserveApp.kt` only (`computenet-fpml.6`) — this file is
+ * outside that scope, so the literal-free construction here is a style choice
+ * rather than something the guard would catch either way.
  *
  * @param runDir the same run directory the byte-offset checkpoint lives in. It
  *   is created if absent, exactly as `OffsetCheckpoint` does.

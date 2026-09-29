@@ -135,8 +135,12 @@ class PullRebaselineTest {
 
         // The edit is one-sided by construction — only WL ever writes a1 —
         // which is what makes "the two exports agree on every shared id"
-        // (union() below) a fact rather than a hope.
-        pair.pusher.run("update", a1, "--title", "a1 after the edit")
+        // (union() below) a fact rather than a hope. Routed through
+        // TwoNodeRig.mutate (computenet-r5gah): this is a post-start mutation
+        // on the listener's own workspace followed by a rig.await on the
+        // dialer's fold, the shape TwoNodeRig.mutate's KDoc documents as
+        // needing the commit-visibility wait.
+        rig.mutate(listener, "update", a1, "--title", "a1 after the edit")
         rig.await("the title edit gossips to the dialer's fold") {
             dialer.view()[a1]?.get("title") == titleAfter
         }

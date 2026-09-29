@@ -71,14 +71,23 @@ glitch-free-wave semantics pinned), realized at the `enqueueHostedInvocation`
 seam keyed by (senderHostColor, targetHostColor), including the cross-wire
 saturation frame vs transport flow control (93 I-12/I-15/I-9/I-19/I-26).
 
-**Durable hosts** *(G-25 resolved, M10)*: a host constructed with a
-`Journal` write-ahead appends every accepted invocation as a wire frame at
-the intake (the single funnel — journal order = acceptance order), so a
-process death loses nothing it acknowledged. `checkpoint(journal)` compacts
-the log to one snapshot record of every `Stateful` cell; `recoverFrom`
-(after the graph is rebuilt) restores the checkpoint and replays the tail
-through the ordinary decode path. Durability is a hosting decision, not a
-cell concern (24).
+**Durable hosts** *(G-25 resolved, M10)*: a host constructed with a `Journal`
+write-ahead appends every accepted invocation as a wire frame at the intake
+(the single funnel — journal order = acceptance order), so a process death
+loses nothing it acknowledged. `checkpoint(journal)` compacts the log to one
+snapshot record of every `Stateful` cell, followed by every frame accepted for
+that journal and not yet delivered (read and reset under the intake's lock, in
+acceptance order), so a checkpoint is safe at any inter-invocation boundary of
+a live host — no quiescence fence is needed for a frame still staged there (93
+I-7 R7); not covered, and still lost by the reset: a frame already dequeued and
+held elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-
+activation tail — and, on a suspending scheduler, a delivery suspended mid-
+handler (computenet-hknt0); `recoverFrom` (after the graph is rebuilt) restores
+the checkpoint and replays the tail through the ordinary decode path. Replay
+only stages frames, so `recoverFrom` returns a `Recovery` handle whose
+`awaitApplied` fences on delivery of the replayed tail and of every same-host
+frame that delivery cascades into. Durability is a hosting decision, not a cell
+concern (24).
 
 *Cross-build replay* is a supported path — a journal on disk outlives the
 process that wrote it, so crash-restart across a build upgrade is a real
@@ -116,7 +125,9 @@ replayed from topology entries in a preserve-refs GraphSpec mode.
 *Emission*: I-7's linchpin is replay with outlets NoOp-served (the G-32
 suppression) so recovery never re-transmits; the landed `recoverFrom`
 replays frames through the ordinary decode path with un-suppressed emission
-(the recovering flag only prevents re-journaling), made safe for *state* by
+(replay identity is per frame: a replayed frame and its same-journal
+derivations are not re-appended, while live traffic accepted during recovery
+is journaled), made safe for *state* by
 replay-stable identity (ref-derived tags/PN slots, tag counter in
 snapshots) + idempotent merges + anti-entropy/catch-up dedup. `Effectful`
 sinks *(G-59 resolved in part, W2.6, closes C-9)* are the one case

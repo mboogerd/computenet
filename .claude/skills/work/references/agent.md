@@ -21,6 +21,9 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   log and body file in it. Never write to the shared scratchpad directly:
   other agents keep files there under the names you would pick. Shell
   variables do not survive between Bash calls, so spell the path out.
+- Your shell starts in the orchestrator's session worktree, not yours. If
+  your dispatch names a worktree, first `cd` into it and check `git branch
+  --show-current` against it; never edit or commit under `.claude/worktrees/`.
 - Edit only the files your dispatch or your item's `metadata.files` names.
   Siblings run in parallel on the assumption the claim is accurate. If the
   work needs a file outside it, report that rather than working around it.
@@ -32,9 +35,10 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
 - **Never `git push` and never `bd dolt push`.** Your bead writes stay local
   and ride out on the orchestrator's next sync. The one exception: a feature
   reviewer pushes its own repair commits to the feature branch.
-- Read `.claude/skills/work/**` from your own worktree, which is cut from
-  `origin/main`; without one, use `git show origin/main:<path>`. The main
-  checkout's working copy is stale.
+- Read `.claude/skills/work/**` for instruction with the **Read tool**, not `cat`:
+  under host load plain Bash reads hang 30-120s while the Read tool does not.
+  Your own worktree's copy is cut from `origin/main`; the main checkout's is stale.
+  (Reading another REVISION still needs `git show` — review.md does it on purpose.)
 - A refused command is not retried in a different disguise, and a refused
   sanctioned path never justifies a banned shortcut. Do the permitted
   equivalent (such as a refused script's steps, by hand), or list the exact
@@ -110,6 +114,11 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   message: a job that outlives you keeps waking the orchestrator with stale
   copies of your report. An empty ledger is the positive answer that you
   started none.
+- **Stop only what you started**: a PID in your ledger, or a background task
+  through the harness's stop tool. Never `pkill`, `killall`, `kill $(pgrep …)`
+  or `./gradlew --stop` outside a signature this file or evidence.md names:
+  sibling agents run Gradle on this host, and a build you kill reads to them
+  as a flaky red. Tear down an app run by its own PID.
 
 ## Your final message
 

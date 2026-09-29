@@ -16,6 +16,8 @@ import civictech.cell.link.PeerId
 import civictech.cell.observe.View
 import civictech.cell.host.link
 import civictech.cell.observe.observe
+import civictech.cell.observe.AlignedCompositeCell
+import civictech.cell.observe.observeAligned
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.replication.Replication
@@ -25,6 +27,9 @@ import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
+import civictech.inspect.edit.Capability
+import civictech.inspect.edit.KernelEntries
+import civictech.inspect.edit.WritePlane
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.net.URI
@@ -162,6 +167,18 @@ class DemoApp(
     private var produceRef: CellRef? = null
     private var wantedRef: CellRef? = null
 
+    /**
+     * The wave-aligned `{items, produce}` sink (`[22-OBS-01]`/`[22-OBS-02]`):
+     * both descend from [itemsUnion], so folding them through one
+     * [AlignedCompositeCell] instead of two independent `host.observe` hubs is
+     * what makes one SSE frame carry both fields' change together — see the
+     * comment above [broadcast].
+     */
+    private lateinit var aligned: AlignedCompositeCell
+
+    /** Diagnostic (G-13): 0 at idle: no wave held awaiting a stalled or phantom arm. */
+    internal val alignedBufferedWaves: Int get() = aligned.bufferedWaves
+
     private var inspector: civictech.inspect.InspectorServer? = null
 
     /** The `--listen` listener, kept so [boundWsPort] can report what it actually bound. */
@@ -204,9 +221,23 @@ class DemoApp(
         wantedRef = wantedCell.ref
         manage.link(itemsUnion.outlet, produceCell.cell.inlet)
 
-        host.observe(itemsUnion.ref, View.set<String>()) { synchronized(state) { items = it }; broadcast() }
+        // items+produce share itemsUnion as their common Consume root, so one
+        // AlignedCompositeCell settles one shared frontier over both arms and
+        // publishes one composite per settled wave — see the comment above
+        // [broadcast] for the boundary against the point-consistent hubs below.
+        aligned = host.observeAligned {
+            set("items", itemsUnion.ref)
+            set("produce", produceCell.ref)
+        }
+        aligned.onChange { snap ->
+            @Suppress("UNCHECKED_CAST")
+            synchronized(state) {
+                items = snap["items"] as Set<String>
+                produce = snap["produce"] as Set<String>
+            }
+            broadcast()
+        }
         host.observe(votesUnion.ref, View.set<String>()) { synchronized(state) { votes = it }; broadcast() }
-        host.observe(produceCell.ref, View.set<String>()) { synchronized(state) { produce = it }; broadcast() }
 
         // Derived view: items ∩ votes — "still wanted" is the incremental
         // intersection of two independently-mutating streams (the binary
@@ -363,10 +394,20 @@ class DemoApp(
         exchange.respond(200, "ok")
     }
 
-    // ponytail: fires once per hub update, so a single op can push a few frames
-    // whose four views are momentarily out of step (e.g. the filtered aisle
-    // updates one frame before the master list) before converging. Fine for the
-    // full-state SSE transport; coalescing to one frame per wave is M6+ material.
+    // ponytail: `items`/`produce` are the aligned pair — they share itemsUnion
+    // as their Consume root, so `aligned` (an AlignedCompositeCell) settles one
+    // shared wave frontier over both arms and calls broadcast() once per
+    // settled wave with both fields already written together (`[22-OBS-01]`):
+    // no frame can show a `produce` element absent from `items`. `votes`,
+    // `wanted` and `shared` stay separate host.observe hubs and are only
+    // point-consistent: each may lead or trail the aligned pair's frame by a
+    // beat before converging. `wanted` in particular descends from two
+    // independent roots (itemsUnion and votesUnion) and cannot be folded into
+    // the aligned pair without over-alignment across independent sources
+    // (`[22-LIVE-01]`, G-13's phantom-expected-edge) — see the demo-findings
+    // entry "Independent-root composite cannot be wave-aligned (shopping
+    // `wanted`)". Fine for the full-state SSE transport either way; coalescing
+    // every view into one frame per wave is M6+ material.
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String = synchronized(state) {
@@ -404,11 +445,21 @@ class DemoApp(
      * that is exactly how each side addresses its counterpart without a
      * discovery protocol), so they can be both named and declared here before
      * the peer has ever connected.
+     *
+     * [writePlane] is [WritePlane.Disabled] by default (`[WKB2-06]`): the write
+     * plane is a per-process opt-in, decided by `main`'s `--inspect-write`
+     * flag, never by this method's own defaults changing. WKB2 F12 (va0c4-D10):
+     * an [WritePlane.Enabled] plane also populates the named-factory catalogue
+     * ([KernelEntries.register]) before the server starts — the palette is
+     * part of the opt-in, not of the read-only instrument, so a disabled
+     * plane leaves the catalogue exactly as it found it.
      */
     fun startInspector(
         inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
         netName: String = this.netName ?: "local",
+        writePlane: WritePlane = WritePlane.Disabled,
     ): civictech.inspect.InspectorServer {
+        if (writePlane is WritePlane.Enabled) KernelEntries.register()
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
         val peerShared = CellRef(SHARED_ID, sharedInstance(peerRole))
@@ -417,6 +468,7 @@ class DemoApp(
             put(votesUnion.ref, "votes")
             produceRef?.let { put(it, "produce") }
             wantedRef?.let { put(it, "wanted") }
+            put(aligned.ref, "ui-aligned")
             if (wire != null) {
                 put(peerItems, "items@$peerRole")
                 put(peerVotes, "votes@$peerRole")
@@ -444,6 +496,7 @@ class DemoApp(
             port = inspectPort,
             cellNames = names,
             netName = netName,
+            writePlane = writePlane,
         ).nameGraph(itemsUnion.ref, "shopping").start()
         if (wire != null) {
             started.declareLink(itemsUnion.ref, "outlet", peerItems, "inlet")
@@ -503,10 +556,12 @@ fun main(args: Array<String>) {
     val inspectPort = args.value("--inspect-port")?.trim()?.toIntOrNull()
         ?: System.getenv("INSPECT_PORT")?.trim()?.toIntOrNull()
     val netName = args.value("--net-name")?.trim()?.takeUnless { it.isEmpty() }
+    val writeCapabilityValue = args.value("--inspect-write-capability")?.trim()?.takeUnless { it.isEmpty() }
+        ?: System.getenv("INSPECT_WRITE_CAPABILITY")?.trim()?.takeUnless { it.isEmpty() }
     // strip the inspector's own `--flag value` pairs before [demoPort], which
     // reads the first non-`--` argument as this demo's port and would
     // otherwise take one of their values (the skillmatch pilot's precedent)
-    val demoArgs = stripPairs(args, "--inspect-port", "--net-name")
+    val demoArgs = stripPairs(args, "--inspect-port", "--net-name", "--inspect-write-capability")
 
     val port = demoPort(demoArgs)
     val wire = args.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
@@ -517,6 +572,11 @@ fun main(args: Array<String>) {
     // needs NO stripPairs entry: `demoPort` skips any token starting with `--`
     // (DemoShell.kt:128-130), so it can never be mistaken for the demo's port.
     val replicate = "--replicate" in args
+    // WKB2-06: presence of the bare flag is the ONLY opt-in — a capability
+    // given without it is ignored and the plane stays Disabled. Same
+    // bare-flag posture as `--replicate` above, for the same reason: an
+    // optional positional value would collide with `demoPort`'s convention.
+    val writeEnabled = "--inspect-write" in args
 
     val app = DemoApp(port, wire, journalDir, netName, replicate).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
@@ -539,10 +599,21 @@ fun main(args: Array<String>) {
         if (wire == null) println("  (no --listen/--peer: the replica mesh has no peer to gossip with)")
     }
     inspectPort?.let { p ->
-        val inspector = app.startInspector(p, netName ?: "local")
+        val writePlane = if (writeEnabled) {
+            WritePlane.Enabled(writeCapabilityValue?.let(::Capability) ?: Capability.mint())
+        } else {
+            WritePlane.Disabled
+        }
+        val inspector = app.startInspector(p, netName ?: "local", writePlane)
         println("computenet inspector: http://localhost:${inspector.boundPort}/api/inspect/topology")
         announcePort("inspect", inspector.boundPort)
         println("  this JVM's network host: ${netName ?: "local"}")
+        if (writePlane is WritePlane.Enabled) {
+            println(
+                "inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}; " +
+                    "catalogue entries: ${civictech.inspect.edit.Catalogue.entries().size}",
+            )
+        }
     }
 }
 

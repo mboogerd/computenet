@@ -5,6 +5,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Cursor
 import civictech.cell.ExclusiveEntry
+import civictech.cell.KeyBound
 import civictech.cell.Propagate
 import civictech.cell.ReadCaveat
 import civictech.cell.StatePage
@@ -12,6 +13,7 @@ import civictech.cell.StateRead
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.data.EntryOrder
+import civictech.cell.data.admits
 import civictech.cell.data.KeyWalk
 import civictech.cell.data.PageBudget
 import civictech.cell.data.Replicable
@@ -215,6 +217,10 @@ class ShardCell<E>(
      *   insertion order ordinary set churn destroys — a fold that kills an
      *   element's last tag removes it, and a later re-add re-inserts it at the
      *   tail — and which `restore` discards when it refills from a `HashMap`.
+     *   A [StateRead.keyBound] is therefore a bound over the **element** `E`,
+     *   not over `keyFn(e)`: the walk enumerates elements in this order, so
+     *   that is the only order a bound over it can mean. It composes with
+     *   `scope` (which *is* over `keyFn(e)`) by conjunction, at walk open only.
      * - **`frontier` is real**: [currentFrontier], the same "highest tag counter
      *   per source over the scope-admitted keys" this shard's pull reply already
      *   reports. It is exact on the first page of a walk and on the last, and an
@@ -227,6 +233,10 @@ class ShardCell<E>(
      *   *gains*, so a mid-walk shed (which retracts tags rather than minting
      *   them) can leave the endpoint stamps equal — equal endpoints are
      *   necessary but not sufficient here too.
+     *   The frontier is **not narrowed by a key bound**: it stays
+     *   `currentFrontier(scope)`, so an out-of-bound mutation mid-walk can
+     *   report a walk unstable that was in fact stable within the bound —
+     *   conservative, never a false "stable".
      *
      * **[StatePage.attributes] carries `interest` and `assignedEpoch`, on every
      * page, and that is load-bearing rather than convenient.** A shard's
@@ -246,8 +256,10 @@ class ShardCell<E>(
      */
     override fun readBounded(request: StateRead): StatePage {
         val scope = request.scope
+        // scope and keyBound are applied only when the walk opens; a resumed
+        // page carries them in its frozen `order` and never re-reads keyBound.
         @Suppress("UNCHECKED_CAST")
-        val walk = (request.cursor?.token as? KeyWalk<E>) ?: openWalk(scope)
+        val walk = (request.cursor?.token as? KeyWalk<E>) ?: openWalk(scope, request.keyBound)
         val order = walk.order
         val opening = walk.opening as TagFrontier
 
@@ -295,13 +307,19 @@ class ShardCell<E>(
     override val supportsScope: Boolean get() = true
     override val supportsSince: Boolean get() = true
 
+    /** A key bound over the element `E`, the domain this shard's walk order is imposed over (see [readBounded]). */
+    override val supportsKeyBound: Boolean get() = true
+
     /**
      * The walk's one O(n log n) pass (V1C-CELLS): impose the element order and
      * compute the opening frontier once, never per page.
      */
-    private fun openWalk(scope: Interest?): KeyWalk<E> {
-        val admit: (E) -> Boolean =
+    private fun openWalk(scope: Interest?, bound: KeyBound?): KeyWalk<E> {
+        val inScope: (E) -> Boolean =
             if (scope == null || scope is Interest.Total) { _ -> true } else { e -> scope.admits(keyFn(e)) }
+        // the bound is over the element itself, never keyFn(e); the frontier stays unnarrowed.
+        val admit: (E) -> Boolean =
+            if (bound == null) inScope else { e -> inScope(e) && EntryOrder.admits(e, bound) }
         return KeyWalk(EntryOrder.freeze(state.elements, admit), 0, currentFrontier(scope))
     }
 

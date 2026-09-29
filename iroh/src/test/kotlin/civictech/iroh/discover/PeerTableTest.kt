@@ -162,6 +162,41 @@ class PeerTableTest {
     }
 
     @Test
+    fun `linkUp on an unknown key evicts the oldest evictable entry and returns the victim`() {
+        // computenet-u5ok6: linkUp's eviction was silent — the caller had no
+        // way to know it happened, so DiscoveredPeering.counters.evicted
+        // undercounted. Prescribed mutation: make linkUp return `null`
+        // unconditionally and this reddens on the `assertEquals(oldest, ...)`.
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+        val oldest = key(0x02)
+
+        table.observe(oldest, listOf("a"), 1)
+        table.observe(key(0x03), listOf("a"), 2)
+        table.observe(key(0x04), listOf("a"), 3)
+
+        val evicted = table.linkUp(key(0x05), LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.ACCEPTED)
+
+        assertEquals(oldest, evicted, "linkUp made room the way observe does, and reports its victim")
+        assertEquals(3, table.keysRetained, "linkUp made room instead of growing past maxRetained")
+        assertNull(table.stateOf(oldest), "the oldest evictable entry — not a random one — is the one linkUp gave up")
+    }
+
+    @Test
+    fun `linkUp on an unknown key returns null when nothing was evicted`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+
+        assertNull(table.linkUp(key(0x02), LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.ACCEPTED))
+
+        table.observe(key(0x03), listOf("a"), 1)
+        assertNull(
+            table.linkUp(key(0x03), LinkDirection.OUTBOUND, linkId = 2, source = EntrySource.DISCOVERED),
+            "the key already existed; nothing was evicted to make room for it",
+        )
+    }
+
+    @Test
     fun `a table of nothing but peered entries rejects a new key and does not grow`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
@@ -283,6 +318,39 @@ class PeerTableTest {
     }
 
     @Test
+    fun `judge supersedes on a full table with one evictable entry and reports the evicted victim`() {
+        // computenet-ik0q1: `Judgement.Supersede.evicted` is set by judge's
+        // case 4 (computenet-u5ok6) but was asserted by no PeerTableTest —
+        // only `Judgement.Admit.evicted` was, by the sibling test above.
+        // Prescribed mutation: drop `evicted = evictedOnCreate` from the
+        // `Judgement.Supersede` this branch returns and the `evicted`
+        // assertion below reddens (Supersede(old) with evicted == null).
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 2) { now }
+        val old = key(0x02)
+        val evictable = key(0x03)
+        val fresh = key(0x04)
+
+        table.observe(old, listOf("a"), 1)
+        table.linkUp(old, LinkDirection.OUTBOUND, linkId = 1, source = EntrySource.DISCOVERED)
+        table.admitted(old, linkId = 1, peer = alice)
+        table.observe(evictable, listOf("a"), 2)
+        assertEquals(2, table.keysRetained, "the table is at capacity: old (peered, protected) and evictable")
+
+        val judgement = table.judge(fresh, LinkDirection.INBOUND, linkId = 2, resolved = alice, now = 7)
+
+        assertEquals(
+            Judgement.Supersede(old, evicted = evictable),
+            judgement,
+            "fresh's hello resolves the identity old already carries, and creating fresh's entry evicted the " +
+                "oldest evictable one to make room",
+        )
+        assertEquals(PeerState.Superseded(byKey = fresh, since = 7), table.stateOf(old))
+        assertNull(table.stateOf(evictable), "the evictable entry, not the protected peered one, was dropped")
+        assertEquals(2, table.keysRetained, "eviction made room; the table stayed bounded")
+    }
+
+    @Test
     fun `a hello resolving this key to another identity than its live link is refused as IDENTITY_MISMATCH`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
@@ -318,6 +386,50 @@ class PeerTableTest {
             Judgement.Refuse(DenialReason.IDENTITY_MISMATCH, live = alice),
             table.judge(k, LinkDirection.INBOUND, linkId = 2, resolved = bob, now = 7),
         )
+    }
+
+    @Test
+    fun `judge on an unknown key attempts eviction like linkUp — a table at capacity with an evictable entry stays bounded`() {
+        // computenet-u5ok6: judge's eviction was as silent as linkUp's.
+        // Prescribed mutation: drop `evicted = evictedOnCreate` from the
+        // `Judgement.Admit` this branch returns and this reddens on the
+        // `evicted` assertion below.
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+        val oldest = key(0x02)
+
+        table.observe(oldest, listOf("a"), 1)
+        table.observe(key(0x03), listOf("a"), 2)
+        table.observe(key(0x04), listOf("a"), 3)
+
+        val judgement = table.judge(key(0x05), LinkDirection.INBOUND, linkId = 1, resolved = alice, now = 5)
+
+        assertEquals(
+            oldest,
+            (judgement as Judgement.Admit).evicted,
+            "judge made room the way linkUp does, and reports its victim",
+        )
+        assertEquals(3, table.keysRetained, "judge made room the way linkUp does, instead of growing past maxRetained")
+        assertNull(table.stateOf(oldest), "the oldest evictable entry — not a random one — is the one judge gave up")
+    }
+
+    @Test
+    fun `judge on an unknown key still exceeds maxRetained by one when every entry is eviction-protected, matching linkUp`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 3) { now }
+
+        listOf(key(0x02), key(0x03), key(0x04)).forEachIndexed { i, k ->
+            table.observe(k, listOf("a"), i.toLong())
+            table.linkUp(k, LinkDirection.OUTBOUND, linkId = i.toLong(), source = EntrySource.DISCOVERED)
+            table.admitted(k, linkId = i.toLong(), peer = PeerId("peer$i"))
+        }
+
+        table.judge(key(0x05), LinkDirection.INBOUND, linkId = 9, resolved = alice, now = 5)
+
+        // No entry was evictable, so — like linkUp — the table is allowed to
+        // exceed maxRetained by exactly one: an inbound hello for an unknown
+        // key must still be judgeable.
+        assertEquals(4, table.keysRetained)
     }
 
     // ---- 7. expiry, backoff and the in-flight bound ----
@@ -422,6 +534,121 @@ class PeerTableTest {
     }
 
     @Test
+    fun `a same-direction sibling's drop leaves the key linked — NoRedial, not Retained, not evictable`() {
+        var now = 0L
+        // computenet-ru6n4: two INBOUND links for one key — a remote that
+        // restarted and re-dialled before this side saw the first link's
+        // LINK_DOWN. B is up and admitted, then C comes up and is admitted
+        // too; C drops while B is still live. The table must still see B.
+        val table = PeerTable(bytes(0x01), maxRetained = 2) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 10, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Admit(close = null, closeLinkId = null),
+            table.judge(k, LinkDirection.INBOUND, linkId = 10, resolved = alice, now = 1),
+        )
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 11, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Admit(close = null, closeLinkId = null),
+            table.judge(k, LinkDirection.INBOUND, linkId = 11, resolved = alice, now = 2),
+            "a same-direction sibling is not a tie-break partner",
+        )
+
+        now = 3
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 11, now = 3), "B (10) is still live")
+        val state = table.stateOf(k)
+        assertTrue(state is PeerState.Peered, "a key still holding link 10 must not fall back to Retained, was $state")
+        assertEquals(emptyList(), table.nextDue(now = 3, maxInFlight = 8), "a linked key is not re-dialled")
+        assertFalse(table.expire(k), "a key still holding a live link is not expired")
+
+        // Evictability: fill the table's second slot, then offer a third key.
+        // The only candidate is k; it holds a live link, so the table rejects.
+        assertEquals(Observation.Dialable, table.observe(key(0x03), listOf("a"), now = 4))
+        table.markDialling(key(0x03), attempt = 0)
+        assertEquals(Observation.Rejected, table.observe(key(0x04), listOf("b"), now = 5), "k must not be evicted")
+        assertEquals(2, table.keysRetained)
+
+        // Only when B itself drops is the key linkless and dialable again.
+        assertEquals(DownOutcome.Redial, table.linkDown(k, linkId = 10, now = 6))
+        assertTrue(table.stateOf(k) is PeerState.Retained)
+    }
+
+    /**
+     * computenet-oqpqf, criterion 1: B (10) then C (11), both INBOUND, both
+     * admitted for one key; the entry is Peered on C. C drops while B is live,
+     * and the Peered state must name B — not the dead C — and keep its
+     * identity and `since`.
+     *
+     * The second half is why it matters: the `IDENTITY_MISMATCH` guard now
+     * treats a Peered link that is no longer up as not live ([DSC2-ID-05]),
+     * so a state left naming dead C would let a hello resolving a DIFFERENT
+     * identity through while B, attributed to alice, is still live.
+     *
+     * Mutation: drop the re-point in `linkDown` — the state names 11 and the
+     * later bob hello is admitted rather than refused.
+     */
+    @Test
+    fun `a same-direction sibling's drop re-points Peered at the surviving admitted link, which still guards identity`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 10, source = EntrySource.ACCEPTED)
+        table.judge(k, LinkDirection.INBOUND, linkId = 10, resolved = alice, now = 1)
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 11, source = EntrySource.ACCEPTED)
+        table.judge(k, LinkDirection.INBOUND, linkId = 11, resolved = alice, now = 2)
+        assertEquals(PeerState.Peered(LinkDirection.INBOUND, 11, alice, since = 2), table.stateOf(k), "Peered on the newer link")
+
+        now = 3
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 11, now = 3))
+        assertEquals(
+            PeerState.Peered(LinkDirection.INBOUND, 10, alice, since = 2),
+            table.stateOf(k),
+            "Peered names the surviving admitted link B (10), not the dropped C (11)",
+        )
+
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 12, source = EntrySource.ACCEPTED)
+        assertEquals(
+            Judgement.Refuse(DenialReason.IDENTITY_MISMATCH, live = alice),
+            table.judge(k, LinkDirection.INBOUND, linkId = 12, resolved = bob, now = 4),
+            "[DSC2-ID-05]: B is live and attributed to alice, so bob on this key is refused",
+        )
+    }
+
+    /**
+     * computenet-oqpqf, criterion 2, and [DSC2-ID-05]'s own wording: a hello
+     * is refused `IDENTITY_MISMATCH` when its identity differs from one
+     * "already attributed to the same key identifier on a LIVE link". A
+     * CONFIGURED key whose only link dropped keeps its Peered state (its
+     * reconnects are its owner's, so `linkDown` resets nothing), but no link
+     * of it is live — so a new link's hello is judged afresh, not refused.
+     *
+     * Mutation: drop `peered.linkId in entry.upLinks` from `judge`'s guard —
+     * the new hello is refused against a link that no longer exists.
+     */
+    @Test
+    fun `a configured key whose only link dropped refuses no new hello with IDENTITY_MISMATCH`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+
+        table.linkUp(k, LinkDirection.OUTBOUND, linkId = 20, source = EntrySource.CONFIGURED)
+        table.judge(k, LinkDirection.OUTBOUND, linkId = 20, resolved = alice, now = 1)
+        now = 2
+        assertEquals(DownOutcome.NoRedial, table.linkDown(k, linkId = 20, now = 2), "a configured key is never re-dialled here")
+        assertTrue(table.stateOf(k) is PeerState.Peered, "and stays Peered, naming the dead link")
+
+        table.linkUp(k, LinkDirection.OUTBOUND, linkId = 21, source = EntrySource.CONFIGURED)
+        assertEquals(
+            Judgement.Admit(close = null, closeLinkId = null),
+            table.judge(k, LinkDirection.OUTBOUND, linkId = 21, resolved = bob, now = 3),
+            "no live link carries alice, so bob's hello is not an identity mismatch",
+        )
+        assertEquals(PeerState.Peered(LinkDirection.OUTBOUND, 21, bob, since = 3), table.stateOf(k))
+    }
+
+    @Test
     fun `dialFailed advances dueAt on the injected schedule and nextDue respects maxInFlight`() {
         var now = 0L
         val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
@@ -445,6 +672,68 @@ class PeerTableTest {
         // The budget is maxInFlight MINUS what is already dialling.
         table.markDialling(other, attempt = 0)
         assertEquals(emptyList(), table.nextDue(now = 700, maxInFlight = 1))
+    }
+
+    @Test
+    fun `dialFailed returns null for a key a PEER_EXPIRED moved off Dialling while its dial was still in flight`() {
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+        val schedule = { _: Int -> 100L }
+
+        table.observe(k, listOf("a"), 0)
+        assertTrue(table.markDialling(k, attempt = 0))
+
+        // The PEER_EXPIRED lands before the dial itself has failed — the
+        // entry is moved off Dialling while the dial is still outstanding.
+        now = 5
+        assertTrue(table.expire(k), "the expiry sees a Dialling entry with no live link and takes it")
+        assertTrue(table.stateOf(k) is PeerState.Expired)
+
+        // The dial's later, stale failure finds no Dialling entry to update.
+        assertNull(
+            table.dialFailed(k, now = now, schedule = schedule),
+            "dialFailed must not resurrect an Expired entry or arm anything for it",
+        )
+        assertTrue(table.stateOf(k) is PeerState.Expired, "dialFailed changed nothing when it returned null")
+        assertEquals(emptyList(), table.nextDue(now = 9_999, maxInFlight = 8), "never dialled again")
+    }
+
+    @Test
+    fun `dialFailed still arms a retry when a LINK_DOWN — not an expiry — moved the key off Dialling first`() {
+        // The contrast with the PEER_EXPIRED ordering above: linkDown answers
+        // Redial rather than terminating the key, so the policy's pump()
+        // (DiscoveredPeering, not this pure table) re-dials at once — putting
+        // the entry back in Dialling before a stale failure for the earlier
+        // dial ever arrives. From the table's point of view alone this is
+        // just: a Dialling entry, taken off Dialling by something other than
+        // expire/abandon/supersede, is dialable again rather than terminal.
+        var now = 0L
+        val table = PeerTable(bytes(0x01), maxRetained = 8) { now }
+        val k = key(0x02)
+        val schedule = { _: Int -> 100L }
+
+        table.observe(k, listOf("a"), 0)
+        assertTrue(table.markDialling(k, attempt = 0))
+
+        // A link for the same key came up out of band (a concurrent inbound
+        // open) while the outbound dial was still in flight, then dropped
+        // before it was ever admitted.
+        table.linkUp(k, LinkDirection.INBOUND, linkId = 9, source = EntrySource.ACCEPTED)
+        now = 5
+        assertEquals(DownOutcome.Redial, table.linkDown(k, linkId = 9, now = now))
+        assertTrue(table.stateOf(k) is PeerState.Retained, "linkDown put it back to Retained, not Expired")
+
+        // The policy re-dials immediately (dueAt == now); simulated here as
+        // the caller re-marking it Dialling before the earlier dial's failure
+        // is applied.
+        assertTrue(table.markDialling(k, attempt = 0))
+
+        assertEquals(
+            105L,
+            table.dialFailed(k, now = now, schedule = schedule),
+            "unlike the PEER_EXPIRED ordering, the stale failure finds a Dialling entry and arms a retry",
+        )
     }
 
     // ---- 8. counters and the view ----

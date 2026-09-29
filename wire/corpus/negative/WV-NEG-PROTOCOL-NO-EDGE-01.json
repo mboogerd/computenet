@@ -1,0 +1,21 @@
+{
+  "id": "WV-NEG-PROTOCOL-NO-EDGE-01",
+  "title": "A PORT_PROTOCOL frame with protocolId but no edge",
+  "category": "negative",
+  "kind": "negative",
+  "covers": [
+    "WIR1-C08",
+    "WIR1-I10"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"protocolId\":\"wire-vector-negative-protocol-01\",\"portName\":\"inlet\",\"type\":\"PORT_PROTOCOL\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwcm90b2NvbElkIjoid2lyZS12ZWN0b3ItbmVnYXRpdmUtcHJvdG9jb2wtMDEiLCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfUFJPVE9DT0wiLCJhcmdzIjpbWyJTdGFsbCIseyJyZWFzb24iOiJTVVNQRU5ERUQifV1dfQ=="
+  },
+  "expect": {
+    "reject": "missing-required-field"
+  },
+  "notes": "source: WV-PORT-API-STALL-SUSPENDED-01, mutation: `\"type\":\"PORT_API\"` rewritten to `\"type\":\"PORT_PROTOCOL\"` plus a pinned `\"protocolId\":\"wire-vector-negative-protocol-01\"` literal (`WireFrame.protocolId` is a `String?`); no `edge` key is added. pinned-because-current ([WIR1-C16], epic table item a): observed java.lang.IllegalStateException \"PORT_PROTOCOL frame missing edge\", thrown by WireCodec.invocation's second checkNotNull AFTER protocolId's own check passes and the envelope's JSON parse has already succeeded — same order caveat as WV-NEG-PROTOCOL-NO-PROTOCOLID-01. Dead-letter accounting on the receiving side is covered by wire/src/test/kotlin/civictech/wire/WsIngressDecodeFailureTest.kt, not retested here."
+}

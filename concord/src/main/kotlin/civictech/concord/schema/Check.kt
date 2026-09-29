@@ -107,6 +107,39 @@ data class ObservationsWholeWaves(
 ) : Check
 
 /**
+ * The **composite** whole-wave check (spec 22 §The observation frontier,
+ * `[22-OBS-01]`/`[22-OBS-02]`; computenet-5ubdv 5ubdv-D3): every composite on
+ * the `aligned-view` [view]'s observation stream must be one whose checked
+ * members all equal their expected folds **at one common op prefix** of
+ * [source]'s accepted `add`/`remove` script — never a composite whose members
+ * reflect different waves.
+ *
+ * `observations-whole-waves` cannot express this: it reads one set-valued
+ * stream against one source and asks whether each state is *some* prefix. A
+ * composite is a map of member streams, and the property is their *joint*
+ * prefix — `{items: [1, 2], evens: []}` has each member at a valid prefix on
+ * its own (2 and 1 respectively) and is still torn.
+ *
+ * [members] names the member names checked (default: every name of the view's
+ * `views:` map, in declaration order). Each member's expected fold is derived
+ * per arm — the chain of cells from [source] to the link `{to: view, inlet:
+ * member}` — through `map fn: identity` (no-op) and `filter fn: <predicate>`
+ * cells only, each with exactly one inbound link, applied in chain order. A
+ * `group-by` (or any other) arm cell, a non-`set-view` member, an inlet with
+ * zero or several inbound links, a fan-in on the chain, a chain that does not
+ * end at [source], or a source op other than `add`/`remove` is a **loud
+ * failure** naming the member and the unmodelable cell or id, never a pass.
+ * An empty observation stream fails, as for `observations-whole-waves`.
+ */
+@Serializable
+@SerialName("composite-whole-waves")
+data class CompositeWholeWaves(
+    val view: String,
+    val source: String,
+    val members: List<String>? = null,
+) : Check
+
+/**
  * **A bounded read perturbs nothing** (spec 21 §Pull, `[21-PULL-02]`): across
  * every `read-state` walk this scenario performed on [cell], that cell's wave
  * plane did not advance.

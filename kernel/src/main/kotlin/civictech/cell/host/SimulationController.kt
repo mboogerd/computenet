@@ -30,6 +30,31 @@ import kotlin.coroutines.resume
  * drain order is untouched, and every simulation that submits from the controller's own
  * thread — which is all of them today — traces exactly as it did before. See
  * [SimulatedScheduler.submit] for that argument in full.
+ *
+ * ## Supported seam for non-test consumers
+ *
+ * This class is a `:kernel`-only, deterministic drive seam — a benchmark or bulk loader with
+ * no `:testkit` on its classpath uses it directly: construct `SimulationController(seed)`,
+ * pass [scheduler] to each `ManagedHost` it builds, and drive the graph with [step] or
+ * [runToIdle], asserting quiescence (and, for a seeded run, the resulting state and step
+ * count) rather than sleeping past an assumed settle time. `civictech.testkit.SimWorld` is a
+ * *test-side convenience* over exactly this constructor/scheduler/runToIdle idiom — a
+ * budgeted [runToIdle] plus a bundled [LocationRegistry] and host — but it is not required to
+ * use the seam; a non-test caller that does not want the `:testkit` dependency drives this
+ * class directly, as above.
+ *
+ * Seeded determinism, precisely: with a [seed], [step] picks uniformly at random only
+ * *across* hosts that currently have work (see [step] above); within one host the order is
+ * always `(priority, submission sequence)` — never randomized — so per-link FIFO holds under
+ * every seed. Two runs built with the same seed, driving the same operations against the same
+ * graph shape, reach the same quiescent state after the same number of [step] calls.
+ *
+ * [runToIdle] throws `IllegalStateException` — naming the exhausted budget in its message —
+ * when [DEFAULT_BUDGET] (or an explicitly larger budget) is exhausted before the graph goes
+ * quiescent; see [runToIdle]'s own doc. A caller with a legitimately longer drain (a deep
+ * seed sweep, a large multi-host mesh) passes a larger explicit budget to its own
+ * [runToIdle] call rather than raising [DEFAULT_BUDGET], which is calibrated against this
+ * repo's own suite and shared by every caller that does not override it.
  */
 class SimulationController(seed: Long? = null) {
 

@@ -31,6 +31,10 @@ checks the implementation against requirement ids embedded in the spec.
       :demo:exchange┘            ▲                    :demo:skillmatch —
       :demo:{agora,slotfinder,skillmatch,tiering,backlog-triage}    --inspect-port)
                                   (every runnable demo depends on :demo:shell)
+
+                :kernel ◄── :timetravel ◄── test ── :demo:agora  (offline journal reader / reconstruction / diff; TTD1)
+
+                :kernel ◄── :demograph  (subjective-stance/preference structures + aggregate views; DGR, epic computenet-drz8)
 ```
 
 `:gen` is a `ksp(...)`-only (processor-time) dependency of `:kernel` and every
@@ -54,8 +58,10 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:iroh` | Wraps the iroh sidecar crate at `iroh/sidecar/` — dial/accept by NodeId, length-prefixed frames on one bi-directional QUIC stream per peer link (DSC0, epic `computenet-egl`). A Kotlin/JVM module (`buildsrc.convention.kotlin-jvm`) whose `civictech.iroh` package is the JVM half of the sidecar's local-socket protocol (`iroh/sidecar/PROTOCOL.md`, the normative contract): `SidecarProtocol`/`SidecarCodec` are the pure, IO-free codec of all seventeen message kinds (the four discovery kinds `WATCH_PEERS`/`WATCHING`/`PEER_DISCOVERED`/`PEER_EXPIRED` since DSC2, `computenet-aas`) — malformed input is a typed `Decoded.Malformed`, never a thrown decode; `SidecarProcess` spawns the binary and reads §1's single handshake line, and `--mdns` (LAN peer enumeration) is opt-in, passed explicitly by callers in their `sidecarArgs`, never steered by a property; `SidecarClient` owns the loopback socket, runs one reader thread, and offers request/reply for the control verbs plus per-link send with exactly-once `LINK_DOWN`. Both `DATA` directions build their header at one site in the codec, so `computenet-ey4v`'s pending refusal-contract decision has a single place to land. Cargo tasks (`cargoBuild`, `cargoTest`) are registered — and wired into `build`/`check` — only behind the `-Piroh.enabled=true` project property, which also sets the `iroh.sidecar.binary` system property on the module's `Test` tasks; that property is the only channel by which a test locates the sidecar, so the default build and CI stay pure-JVM with no Rust toolchain required and every sidecar-backed test reports SKIPPED there (the codec tests run unconditionally). Boundary admission over this transport is a **public-key allowlist**: `IrohTransport.Session` is admitted on the `KeyId` fingerprinted from the connection's own iroh NodeId (`fingerprint(Ed25519.publicKeyFromRaw(remoteNodeId))`), never on a hello token, and the identity it stamps is resolved through the kernel's single `PeerIdentityBinding` seam (`computenet-egl.3`, on `computenet-376c`'s vocabulary); the hello it sends carries no name, and a hello that asserts one is refused `ID_MISMATCH` unless it matches. `civictech.iroh.discover` (DSC2 feature 3, `computenet-ktn1l`) is the discovery-driven dial policy over `IrohNode` — one live peering per key identifier across discovered, accepted and configured sources, aas-D7 mutual-dial tie-break, key-rotation supersession, bounded and clock-injected dials on its own three kinds of thread, counters and a read-only `snapshot()` view; identity stays at the hello, so the package reads no allowlist and constructs no `PeerId`. | `implementation(:kernel)`, `implementation(:identity)`, `testImplementation(:testkit)`, `testImplementation(:wire)`, `testImplementation(libs.java.websocket)`; `:kernel` must not depend on it. The `:wire`/`java-websocket` edges are test-scoped only (`computenet-5y8t.5.2`: `IrohWireStableNameTest` dials one listener over both `IrohTransport` and `WsTransport`) — production stays free of `:wire`. Rust deps pinned in `iroh/sidecar/Cargo.toml` |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
 | `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo, and also consumed by `:inspect` (not itself a demo). `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
-| `:demo:*` (11 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6), and it additionally depends on `:iroh` for the second binding of the same `MirrorTransport` seam (`IrohMirrorTransport`, `computenet-egl.4.1` — pure-JVM on the default path, since `:iroh`'s cargo tasks exist only under `-Piroh.enabled`); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests); `:demo:allocator-observe` is the newest leaf, ingesting a socaity-owned JSONL spend log (epic `computenet-fpml`); `:demo:social` is the newest leaf, holding the LDBC-SNB social graph schema (SOC1, epic `computenet-07k`). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:demo:*` (13 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6), and it additionally depends on `:iroh` for the second and third bindings of the same `MirrorTransport` seam (`IrohMirrorTransport`, `computenet-egl.4.1`, and `DiscoveredIrohMirrorTransport`, DSC2 `computenet-63um5`, selected by `--discover <sidecar-binary>` — pure-JVM on the default path, since `:iroh`'s cargo tasks exist only under `-Piroh.enabled`); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` (`RatingCell`, `@CellBase` — T09 §C) and `:demo:alignment` (`WeightedFusionCell`, two inlets `stats`/`weights` — the first two-inlet `@CellBase` cell outside `:kernel`) define their own KSP cells (`agora` applies `ksp-cell` for generated typed port ids — `ClaimCellPorts`/`EdgeCellPorts`, computenet-jnkvu — while defining no annotated cells of its own); only `:demo:exchange` needs `:nature` (it asserts composed manifests); `:demo:allocator-observe` is the newest leaf, ingesting a socaity-owned JSONL spend log (epic `computenet-fpml`); `:demo:social` is the newest leaf, holding the LDBC-SNB social graph schema (SOC1, epic `computenet-07k`); `:demo:deliberate` depends on `:demo:agora` (reuses its claim/edge vocabulary) and ships an npm-only SolidJS/Vite frontend in `demo/deliberate/ui/`; `:demo:agora` additionally depends on `:timetravel` in **test** scope only (`testImplementation(project(":timetravel"))`, the TTD1 F7 journal walkthrough — `:timetravel` stays a main-scope leaf). | `:kernel`, `:demo:shell`, + per-demo extras |
 | `:inspect` | The Inspector backend — a read-only HTTP/SSE view of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`, all six milestones M0–M5 merged). Reuses `:demo:shell`'s JDK-`httpserver`/SSE framing rather than duplicating it; adds no third-party dependency beyond kotlinx.serialization. Its frontend `inspect/ui/` (SolidJS + Vite + TypeScript) is npm-only and deliberately not wired into Gradle — same decision as `demo/agora/ui`. Required five kernel accessors added specifically for it: `ManagedHost.outletAt`, `ManagedHost.snapshotOf`, `ManagedHost.isDrained`, `ManagedHost.isSuspended`, `LocationRegistry.describe` — rationale in `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md`'s orchestrator closing note. | `:kernel`, `:demo:shell`, kotlinx.serialization |
+| `:demograph` | Data structures for capturing subjective stances and personal preferences per actor, and consolidating them into aggregate views — insights over the participating actors (DGR, epic `computenet-drz8`). Same dependency shape as `:identity`: depends on `:kernel` (and, transitively through `:kernel`'s own `api(:nature)`, on `:nature`); `:kernel` never depends on it. `civictech.demograph.Vocabulary` KDocs the six terms the charter fixes — actor, stance, preference, weight, contestation, aggregation — and states the boundary line: the module never models need, credit, subsidy, or vote-as-civic-act (the societal layer). Collective ranking and deliberation graphs are the first two families DGR.2/DGR.3 build on this vocabulary, not its extent; gated on socaity M1 or an XDEP ranking-view pull. Its own `ModuleDependencyTest` enforces the direction against `:kernel`/`:nature`/`:gen`'s build files (inbound) and against its own build file and runtime classpath (outbound), the same shape `:oracle` and `:loader` use. | `api(:kernel)`; must not depend on `:concord`, `:wire`, `:inspect`, `:oracle` or any `:demo:*` module |
+| `:timetravel` | Offline, headless time-travel tooling over durability journals — reader, reconstruction, diff, and a CLI (TTD1, epic `computenet-ocv`). Consumes the kernel's read-side seam (`JournalRecords.decode` / `scanJournalFile`). The CLI (`civictech.timetravel.cli.Main`) is `timetravel inspect | reconstruct | diff` over a journal file or directory, `--json` on each emitting the same DTOs the Kotlin API returns; it exits 0 (ran; for `diff`, no divergence), 1 (`diff` ran and found a divergence) or 2 (could not read or reconstruct — an unreadable path, a bad `--at`, or `reconstruct` refusing `NO_GRAPH_SOURCE` when given neither `--graph <serialized GraphSpec>` nor `--graph-provider <fqcn> [--graph-arg <s>]`, while `inspect` and record-level `diff` on the same path still succeed) (`[TTD1-47]`–`[TTD1-50]`). A leaf on `:kernel` by design (epic §2 "Module"); nothing depends on it in main scope until TTD2 adds `:inspect -> :timetravel` — `:demo:agora`'s **test** source set is its only consumer today (`AgoraGraphSource`, the structure-log adapter over `graph.jsonl` that lives in agora because `:timetravel` takes no application convention, epic §9.1), the same test-scope-consumer shape `:query` has with its four demo modules. Must not depend on `:inspect`, `:wire`, `:concord`, `:identity`, `:iroh`, `:oracle`, `:query` or any `:demo:*` module; its own `ModuleDependencyTest` enforces that against both the build file (both directions) and the runtime classpath ([TTD1-53]). | `:kernel`, kotlinx.serialization |
 
 Non-module directories: `buildSrc/` (two convention plugins —
 `buildsrc.convention.kotlin-jvm`: JDK 21 toolchain, JUnit platform, shared test
@@ -64,7 +70,8 @@ stack (kotest-assertions, JUnit, kotlin-test), test heap 2g / forkEvery 80
 5-minute-per-test-method timeout backstop; `buildsrc.convention.ksp-cell`:
 the KSP plugin + `ksp(project(":gen"))` (processor-time only — no
 `implementation` dependency, T09 §A) + the generated-source dir, for
-cell-authoring modules (`:kernel`, `:demo:backlog-triage`, and the
+cell-authoring modules (`:kernel`, `:demo:backlog-triage`,
+`:demo:alignment`, and the
 JAR1 fixtures `:loader:fixtures:valid-basic`, `:loader:fixtures:util-a`,
 `:loader:fixtures:util-b`)), `scripts/`
 (`stage-preview.sh`, `plan-orchestrator/`), `backlog/` (idea inbox, one file
@@ -82,7 +89,9 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `MessageContext` (waves, `Timestamp`, `TagFrontier`, `ReBaselineNotice`),
   `Ownership` (`Owned`/`Leased`/`Borrowed`/`Frozen`/`Redacted`),
   `Propagate<T>`, `Consumer<T>`, `Stateful`, `MergeablePayload`, color markers
-  (`BlockingCell`/`SuspendingCell`), serializers.
+  (`BlockingCell`/`SuspendingCell`), serializers, `Budget`
+  (`ClaimClass`/`BudgetClaim`/`BudgetOutcome`/`BudgetLedger` — an inert seam,
+  ECO1, epic `computenet-66m`).
 - `.nature` — runtime twin of the KSP scan: `manifestOf(Class)` derives
   `Manifest` tags from marker interfaces; `NatureNegotiation`/`Reconciliation`.
 - `.port` — port ADT and mechanism: `Port`, `PortRef`, `PortRegistry`,
@@ -251,7 +260,9 @@ payload.
 **Durability.** `HostDurability` writes wire-encoded invocation frames,
 checkpoints (state + processed-frontier atomically), and `Effectful` frontier
 advances to an opaque `Journal`. Recovery: rebuild the graph, then
-`host.recoverFrom(journal)`, then `host.checkpoint(journal)` to compact.
+`host.recoverFrom(journal).awaitApplied()` (replay only stages frames; the
+`Recovery` handle fences on their delivery, `ManagedHost.quiescence()` being the
+general form), then `host.checkpoint(journal)` to compact.
 `KeyedCells` packages the correct ordering for per-key cell families
 (pre-spawn known keys before replay so re-minted tags cannot resurrect removed
 elements).
@@ -346,6 +357,12 @@ else `$PORT`, else 8080. See the README for run commands.
   semantics; every edge is itself a claim), cycle heads, magnitude-band
   attention, structure-log + journal durability. Has a SolidJS/Vite frontend
   in `demo/agora/ui/` (not a Gradle module).
+- `:demo:deliberate` — LLM-explored deliberation graph: Claude/Codex propose
+  claims and edges, Jev judges them, credence is held in vector-valued cells,
+  and durability journals inputs only (derived state is recomputed on
+  replay). Depends on `:kernel`, `:demo:shell` and `:demo:agora`; has a
+  SolidJS/Vite frontend in `demo/deliberate/ui/` (npm, not a Gradle module),
+  checked by the non-required CI job `deliberate-ui-test`.
 - `:demo:slotfinder` — smallest showcase: one `QuorumSetCell` fan-in read at
   two thresholds (intersection and near-miss), filter, group-by.
 - `:demo:skillmatch` — relational operators: equi-join, negated semijoin,
@@ -354,6 +371,11 @@ else `$PORT`, else 8080. See the README for run commands.
   board.
 - `:demo:backlog-triage` — collective ranking with pluggable rating engines
   (elo, Bradley–Terry, TrueSkill, …) and a JSON agent API.
+- `:demo:alignment` — team alignment: ideas rated 1–9 per creator-defined
+  dimension, `KeyedSetCell` → `GroupByCell` stats → demo-local
+  `WeightedFusionCell` weighted value × factor ÷ cost aggregate
+  (facilitator-configured dimension direction) with a split marker, JSON/SSE
+  API, JSONL journal (ALN1, epic `computenet-6brvy`).
 - `:demo:dialogue` — argumentation extraction from recorded dialogue
   transcripts (AGO1, epic `computenet-2aw`); depends on `:kernel`,
   `:demo:shell` and `:demo:agora` (reuses agora's claim/edge vocabulary
@@ -366,12 +388,17 @@ else `$PORT`, else 8080. See the README for run commands.
   materialized composite-key `OrMapCell` fold, and serves the fold over
   `:demo:shell`'s HTTP/SSE plumbing (`BeadsMirrorAppKt --workspace <path>`).
   `:wire` is an opt-in dependency for its two-node mode only
-  (`--rig`/`--listen`/`--peer`, `MirrorPeering`): the projector's two replica
-  cells then gossip their deltas over an injected transport seam
-  (`MirrorTransport`), whose only binding — `WsMirrorTransport`, in
-  `MirrorTransport.kt`, the module's one file naming a `:wire` type — carries
-  them over a real WebSocket. `MirrorPeering` itself names no socket type, and
-  a solo run loads none of the binding. CI asserts its e2e evidence ran: `TwoNodeRigTest` in
+  (`--rig`/`--listen`/`--peer`/`--discover`, `MirrorPeering`): the projector's
+  two replica cells then gossip their deltas over an injected transport seam
+  (`MirrorTransport`), with three bindings — `WsMirrorTransport`, in
+  `MirrorTransport.kt`, the module's one file naming a `:wire` type, which
+  carries them over a real WebSocket; `IrohMirrorTransport`, which hands the
+  dialling end the listening end's NodeId/addresses directly; and
+  `DiscoveredIrohMirrorTransport` (DSC2, `computenet-63um5`), selected by
+  `--discover <sidecar-binary>`, which forms the peering by the sidecar's mDNS
+  discovery with no NodeId or address configured on either end. `MirrorPeering`
+  itself names no socket type, and a solo run loads none of the bindings. CI
+  asserts its e2e evidence ran: `TwoNodeRigTest` in
   `build-test-fast` and, tagged `@Tag("multi-jvm")`, `TwoJvmMirrorTest` in
   `build-test-serial`. Most of the rest of its suite drives a real `bd`/`dolt`
   scratch workspace (`BdScratchWorkspace`) and self-skips, visibly, if those
@@ -424,11 +451,17 @@ else `$PORT`, else 8080. See the README for run commands.
   (`polls`, `reBaselineCount`, `lastPollAt`, the failure counters,
   `checkpointOffset`) is per-process by construction, and a log truncation or
   replacement that happened while the app was down is absorbed uncounted by the
-  cold-start whole read. The one case where the *fold* still diverges is a log
-  **deleted** while the app is down: `TailReason.LogAbsent` leaves an
-  uninterrupted process's fold alone, while a restarted process has nothing to
-  re-read and serves an empty report until the log returns (measured; which
-  reading is right is undecided because the log's lifecycle is socaity's).
+  cold-start whole read. A log **deleted** — while the app is down or while it
+  runs — converges both processes on its absence (`computenet-6jbep`, design
+  entry 6jbep-D1): a log the process has read and that is now gone is treated
+  as the log replaced by an empty one, the same convergence a truncation to
+  zero bytes already gets, so an uninterrupted process empties its fold as a
+  restarted one starts empty, both serve the same empty report, and both
+  re-read the log whole when it returns. A log the process has never read is
+  still left alone, since one that has not arrived yet is not an empty log.
+  The alternative — a restarted process keeping the old records — would need a
+  second durable copy of the fold beside the log, which the cold-start design
+  declined.
   Feature `computenet-fpml.5` lands both halves of the differential oracle
   against socaity's replay script in `oracle/`: an in-repo differential suite
   that runs in CI, comparing the served report against `ReferenceReport` — a

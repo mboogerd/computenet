@@ -592,6 +592,23 @@ async fn start_pumps(
     tokio::spawn(async move {
         while let Some(payload) = frames_rx.recv().await {
             if let Err(e) = sender.send_frame(&payload).await {
+                if link_went_down(&e) {
+                    // The send failed only because the link's connection is
+                    // gone — closed by the peer, by a CLOSE_LINK, or lost. That
+                    // is a link going DOWN, and the task below reports it with
+                    // the link's one LINK_DOWN; an ERROR as well would tell the
+                    // host a second, different story about the same event
+                    // (computenet-yfg48: a mutual-dial tie-break loser with
+                    // frames still queued surfaced as a refused link).
+                    //
+                    // So the pump stays silent and keeps draining: frames the
+                    // host wrote before it read the LINK_DOWN are accepted and
+                    // dropped, exactly as frames queued at the moment of any
+                    // other link-down are, rather than refused with "no longer
+                    // sending". The queue closes when the link is deregistered.
+                    while frames_rx.recv().await.is_some() {}
+                    break;
+                }
                 send(
                     &send_errors,
                     Message::new(kind::ERROR, id, format!("send failed: {e}").into_bytes()),
@@ -616,6 +633,21 @@ async fn start_pumps(
     });
 }
 
+/// Whether a failed send failed because the link's QUIC connection is closed,
+/// which the link's `LINK_DOWN` already reports — as opposed to a failure that
+/// leaves the connection up (the peer stopping the stream, say), which only an
+/// `ERROR` can report.
+fn link_went_down(e: &crate::error::Error) -> bool {
+    matches!(
+        e,
+        crate::error::Error::Send(source)
+            if matches!(
+                source.downcast_ref::<iroh::endpoint::WriteError>(),
+                Some(iroh::endpoint::WriteError::ConnectionLost(_))
+            )
+    )
+}
+
 async fn pump_frames(
     receiver: &mut crate::link::LinkReceiver,
     out: &mpsc::Sender<Message>,
@@ -638,6 +670,173 @@ mod tests {
 
     use super::*;
     use crate::endpoint::SidecarConfig;
+
+    /// A dialled link whose stream is adopted at the far end, the far end's
+    /// half, and a pump harness around the near half: the `out` queue the
+    /// host would read, the link's send queue, and the link registry.
+    struct PumpRig {
+        near: Link,
+        far: Link,
+        near_end: SidecarEndpoint,
+        far_end: SidecarEndpoint,
+    }
+
+    async fn pump_rig() -> PumpRig {
+        let far_end = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("bind the far endpoint");
+        let near_end = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("bind the near endpoint");
+        near_end.add_peer(far_end.bound_addr());
+        let acceptor = far_end.clone();
+        let accepting = tokio::spawn(async move { acceptor.accept().await });
+        let mut near = tokio::time::timeout(RIG_TIMEOUT, near_end.dial(far_end.id()))
+            .await
+            .expect("the dial did not time out")
+            .expect("the dial succeeded");
+        // The dialler's first frame is what adopts the stream at the far end.
+        near.send_frame(b"hello").await.expect("the first frame went out");
+        let mut far = tokio::time::timeout(RIG_TIMEOUT, accepting)
+            .await
+            .expect("the accept did not time out")
+            .expect("the accept task ran")
+            .expect("the accept succeeded")
+            .expect("the far endpoint is open");
+        assert_eq!(
+            far.recv_frame().await.expect("read the hello"),
+            Some(b"hello".to_vec())
+        );
+        PumpRig {
+            near,
+            far,
+            near_end,
+            far_end,
+        }
+    }
+
+    const RIG_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// computenet-yfg48, the interleaving itself, forced: the far side closes
+    /// the link (a mutual-dial tie-break discarding it) while the host still
+    /// has frames queued for it. The pumps start only AFTER this side has seen
+    /// the connection go, so every queued frame meets a closed connection —
+    /// no race is left to chance.
+    ///
+    /// Everything the pumps tell the host, to the end, must be the one
+    /// `LINK_DOWN`: the link went down, and that is the only thing that
+    /// happened. Before the fix the host also got
+    /// `ERROR "send failed: sending a frame failed: connection lost"`, which a
+    /// host is bound to read as a refusal on an established link (`PROTOCOL.md`
+    /// §2) — the link error BS-08's tie-break loser logged on CI.
+    #[tokio::test]
+    async fn frames_queued_for_a_link_that_went_down_draw_its_link_down_and_no_error() {
+        let rig = pump_rig().await;
+        let watcher = rig.near.watcher();
+        let (frames, frames_rx) = mpsc::channel::<Vec<u8>>(QUEUE_DEPTH);
+        let (out, mut out_rx) = mpsc::channel::<Message>(QUEUE_DEPTH);
+        let links: Links = Arc::new(Mutex::new(HashMap::new()));
+        links.lock().expect("links mutex").insert(
+            7,
+            LinkHandle {
+                frames: frames.clone(),
+                watcher: watcher.clone(),
+            },
+        );
+
+        rig.far.close();
+        tokio::time::timeout(RIG_TIMEOUT, watcher.closed())
+            .await
+            .expect("this side observed the far side's close");
+        for n in 0..3u8 {
+            frames.send(vec![n]).await.expect("the queue is open");
+        }
+
+        start_pumps(7, rig.near, watcher, frames_rx, out, links.clone()).await;
+        // Our clones gone, the pumps hold the only senders left; once both
+        // have finished, the channel closes and the list below is complete.
+        drop(frames);
+        let mut told = Vec::new();
+        while let Some(msg) = tokio::time::timeout(RIG_TIMEOUT, out_rx.recv())
+            .await
+            .expect("both pumps finished")
+        {
+            told.push((msg.kind, msg.link, String::from_utf8_lossy(&msg.payload).into_owned()));
+        }
+
+        assert_eq!(
+            told.iter().map(|(k, l, _)| (*k, *l)).collect::<Vec<_>>(),
+            vec![(kind::LINK_DOWN, 7)],
+            "a link that went down with frames queued reports exactly its LINK_DOWN; got {told:?}"
+        );
+        assert!(
+            links.lock().expect("links mutex").is_empty(),
+            "the link is deregistered"
+        );
+        rig.near_end.close().await;
+        rig.far_end.close().await;
+    }
+
+    /// computenet-yfg48's second string: a `DATA` the host writes after the
+    /// pump met the closed connection but before the link is deregistered must
+    /// not find the queue closed — that is what the `DATA` handler answers
+    /// with `ERROR "link N is no longer sending"`. The pump keeps draining
+    /// instead, so the queue accepts until the link is gone.
+    ///
+    /// The failed send is made certain rather than timed: the frame is queued
+    /// after this side has seen the close, and the pump is started with it.
+    /// What is waited on is the NEGATIVE — the queue must stay open — so a
+    /// slow machine can only make this pass later, never fail it.
+    #[tokio::test]
+    async fn a_link_whose_send_met_its_close_keeps_accepting_until_it_is_deregistered() {
+        let rig = pump_rig().await;
+        let watcher = rig.near.watcher();
+        let (frames, frames_rx) = mpsc::channel::<Vec<u8>>(QUEUE_DEPTH);
+        let (out, mut out_rx) = mpsc::channel::<Message>(QUEUE_DEPTH);
+        // Held here, not in a registry: the link is never deregistered, so
+        // only the pump can close its queue.
+        let links: Links = Arc::new(Mutex::new(HashMap::new()));
+
+        rig.far.close();
+        tokio::time::timeout(RIG_TIMEOUT, watcher.closed())
+            .await
+            .expect("this side observed the far side's close");
+        frames.send(vec![1]).await.expect("the queue is open");
+        start_pumps(7, rig.near, watcher, frames_rx, out, links).await;
+
+        let mut told = Vec::new();
+        loop {
+            let msg = tokio::time::timeout(RIG_TIMEOUT, out_rx.recv())
+                .await
+                .expect("the link-down observer reported")
+                .expect("a message");
+            told.push((msg.kind, String::from_utf8_lossy(&msg.payload).into_owned()));
+            if msg.kind == kind::LINK_DOWN {
+                break;
+            }
+        }
+        // Give the send pump every chance to have met the closed connection
+        // and, if it were going to, to have dropped its queue.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            !matches!(
+                frames.try_send(vec![2]),
+                Err(mpsc::error::TrySendError::Closed(_))
+            ),
+            "the queue of a link whose send met its close still accepts, so a DATA racing the \
+             LINK_DOWN is not answered 'no longer sending' (host was told {told:?})"
+        );
+        while let Ok(msg) = out_rx.try_recv() {
+            told.push((msg.kind, String::from_utf8_lossy(&msg.payload).into_owned()));
+        }
+        assert_eq!(
+            told.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            vec![kind::LINK_DOWN],
+            "nothing but the LINK_DOWN reached the host: {told:?}"
+        );
+        rig.near_end.close().await;
+        rig.far_end.close().await;
+    }
 
     /// The `PEER_DISCOVERED` payload really is an `ADD_PEER` payload — pinned
     /// by parsing it back with `ADD_PEER`'s own parser rather than by

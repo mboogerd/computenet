@@ -52,7 +52,12 @@ feature, with its claim. Those claims seed the disjointness test, so a unit
 dispatched through SKILL.md 5f route 0 — a direct child of the epic, invisible
 to a query about one feature — can no longer have its files handed to a second
 agent (computenet-z6q2). It is emitted so the caller can see what a short batch
-was held behind.
+was held behind. Each unit carries its `holder` liveness; a DEAD or STALE one
+is a resume marker, not a running agent, so it is reported but blocks nothing
+(computenet-09o4w). A FEATURE's claim is its tasks' aggregate, marked
+`aggregate`: its running tasks hold their own files, so an overlap with the
+aggregate alone is a warning, not a skip; `GENERATED` files never block
+(computenet-pl6wv).
 """
 import json
 import os
@@ -193,6 +198,11 @@ def overlaps(files, taken):
             if "." in (f, t) or f == t or f.startswith(t + "/") or t.startswith(f + "/"):
                 hits.add(t)
     return hits
+
+
+# Regenerated, never hand-edited: every writer produces the same content, so a
+# shared claim on one is not a merge conflict and blocks nothing (computenet-pl6wv).
+GENERATED = frozenset({"doc/spec/CONCORDANCE.md"})
 
 
 # Cores one dispatched agent needs to itself. See capacity_limit().
@@ -634,13 +644,20 @@ def plan_batch(candidates, feature=None, elsewhere=()):
     over a path that does not exist, and batches like any other.
     """
     batch, skipped, taken = [], [], set()
+    elsewhere = [u for u in elsewhere if u.get("holder") not in RELEASABLE]
     # Seed with what is already running outside this feature (computenet-z6q2),
     # so an overlap with a route-0 unit is skipped by the same rule that skips
     # an overlap with a sibling — no second implementation, no memory.
+    # Another feature's aggregate claim is not a running unit: its running
+    # tasks are listed on their own and hold their files; the aggregate only
+    # warns (aggregate_warnings, computenet-pl6wv).
     outside = {}
     for unit in elsewhere:
+        if unit.get("aggregate"):
+            continue
         for f in unit["files"]:
-            outside[f] = unit["id"]
+            if f not in GENERATED:
+                outside[f] = unit["id"]
     taken |= set(outside)
     for task, resumed in candidates:
         tid = task["id"]
@@ -674,7 +691,8 @@ def plan_batch(candidates, feature=None, elsewhere=()):
             skipped.extend({"id": t["id"], "reason": f"deferred behind {behind} task"}
                            for t, _ in candidates if t["id"] != tid and t["id"] not in already)
             break
-        collisions = overlaps(files, taken)
+        contested = files - GENERATED
+        collisions = overlaps(contested, taken)
         if collisions:
             # Name the RUNNING UNIT, not just the path: the caller's next move
             # for "overlaps a sibling in this batch" is to wait one round, and
@@ -686,9 +704,28 @@ def plan_batch(candidates, feature=None, elsewhere=()):
                 reason += " — running outside this feature: " + ",".join(owners)
             skipped.append({"id": tid, "reason": reason})
             continue
-        taken |= files
+        taken |= contested
         batch.append(_entry(task, resumed, sorted(files), feature))
     return batch, skipped
+
+
+def aggregate_warnings(batch, elsewhere):
+    """Advisory lines for batched tasks whose claim meets only another
+    feature's AGGREGATE metadata.files — no running task of it holds the file,
+    so it is not a skip (computenet-pl6wv), but a later task of that feature
+    may still touch it."""
+    out = []
+    for unit in elsewhere:
+        if not unit.get("aggregate") or unit.get("holder") in RELEASABLE:
+            continue
+        for e in batch:
+            hits = overlaps(set(e["files"]) - GENERATED, unit["files"])
+            if hits:
+                out.append("%s overlaps %s's aggregate files claim (%s) but no "
+                           "running task of it holds them -- batched; check "
+                           "before that feature dispatches a task on them"
+                           % (e["id"], unit["id"], ",".join(sorted(hits))))
+    return out
 
 
 def drop_unmerged_blocked(candidates):
@@ -737,10 +774,11 @@ def running_elsewhere(actor, feature, candidate_ids):
     Everything `in_progress` and assigned to this actor counts, minus the
     candidates themselves (this feature's resumable tasks are legitimately in
     the batch) and minus epics and this feature, which claim no files of their
-    own. A STALE claim from a dead session therefore blocks a batch — the
-    conservative direction, and visible: every unit found is reported in the
-    output, so the caller can see what it was held behind rather than
-    wondering why the batch is short.
+    own. Each unit's `metadata.holder` is checked: DEAD or STALE marks a resume
+    marker left by a dead session (a feature left in_progress on purpose), which
+    plan_batch() does not treat as running. A unit with no holder, or one that
+    cannot be checked, still blocks — the conservative direction. Every unit is
+    reported, so the caller can see what a short batch was held behind.
     """
     out = []
     for task in bd("list", "--status", "in_progress", "--assignee", actor):
@@ -754,8 +792,29 @@ def running_elsewhere(actor, feature, candidate_ids):
         except ClaimError:
             continue                      # not ours to diagnose; 5b names it
         if files:
-            out.append({"id": tid, "files": sorted(files)})
+            token = (task.get("metadata") or {}).get("holder")
+            unit = {"id": tid, "files": sorted(files),
+                    "holder": holder_state(token, task.get("updated_at")) if token else "NONE"}
+            if task.get("issue_type") == "feature":
+                unit["aggregate"] = True  # its running tasks are listed apart
+            out.append(unit)
     return out
+
+
+RELEASABLE = ("DEAD", "STALE")
+
+
+def holder_state(token, updated_at=None):
+    """session-holder.sh --check's answer for `token`; UNKNOWN if it cannot run.
+    `updated_at` keeps a long-running session off the STALE path (computenet-jqxqk)."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session-holder.sh")
+    cmd = [script, "--check", token] + ([updated_at] if updated_at else [])
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "UNKNOWN"
+    words = out.stdout.split()
+    return words[0] if words else "UNKNOWN"
 
 
 def _siblings():
@@ -851,7 +910,8 @@ def main():
 
     verdict, parked = _assess(feature, batch)
     warnings = []
-    warnings = dir_claim_warnings(candidates, batch, skipped)
+    warnings = (dir_claim_warnings(candidates, batch, skipped)
+                + aggregate_warnings(batch, elsewhere))
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "warnings": warnings,
                       "running_elsewhere": elsewhere,

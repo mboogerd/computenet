@@ -28,6 +28,7 @@ import civictech.cell.control.AttentionScheduler
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.StallNotice
 import civictech.cell.control.StallReason
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.graph.CellFactory
@@ -36,6 +37,7 @@ import civictech.cell.graph.requireBoundRef
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.control.ParkQueue
+import civictech.cell.KeyBoundMistypedException
 import civictech.nature.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
@@ -85,6 +87,28 @@ open class ManagedHost(
      * pre-CP-C1 behavior. When omitted, the selector derives from [journal].
      */
     private val journalFor: ((CellRef) -> Journal?)? = null,
+    /**
+     * Per-PORT journal selector (computenet-xy7w4 D4): one cell may journal
+     * some inlets and not others — an inlet fed externally (durable) beside a
+     * `derived` inlet fed only by another journaled cell's cascade (volatile,
+     * since replaying the upstream cell re-derives it). Mutually exclusive
+     * with [journalFor] (an `init` refusal names both are set). Effective
+     * selector: [journalForPort] if given, else [journalFor] lifted to ignore
+     * the port, else the whole-host [journal] constant — each a byte-identical
+     * degenerate case of the one before it.
+     *
+     * Every journaled port of ONE cell MUST name the same [Journal] instance:
+     * a cell's `Stateful` snapshot, outlet-wave state and durable epoch are
+     * captured once per **cell**, not once per port, so two journals for one
+     * cell's ports have no coherent meaning. Checked at spawn ([cellJournal])
+     * and refused by name (cell ref plus the two disagreeing port names) — a
+     * configuration error, not a dead letter. An outlet may only echo its
+     * cell's inlet journal (a port-blind selector answers for it too); a
+     * journal named for an outlet alone, or one disagreeing with the inlets',
+     * is refused the same way — outlet-side journaling of spontaneous
+     * emissions is undecided (spec 90 roadmap I-7 §8). See [cellJournal].
+     */
+    private val journalForPort: ((CellRef, String) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
     private val intakeBound: IntakeBound? = null,
     /**
@@ -96,7 +120,42 @@ open class ManagedHost(
      * fires.
      */
     private val hopBound: Int = 64,
+    /**
+     * Batched ingress dispatch (KBLK, `computenet-t6b.2-D4`): the maximum number
+     * of staged invocations one data-band (priority 20) scheduler task may
+     * dispatch. A **scheduling** setting beside [attention] and [intakeBound] —
+     * not a durability one: it never changes which journal a cell uses or when
+     * an append happens.
+     *
+     * `1` (the default) is the pre-KBLK path, byte-for-byte: every accepted
+     * invocation submits its own `dispatchOne` task. A value above `1` (a
+     * benchmark host passes e.g. `64`) coalesces task submission instead: one
+     * armed task drains up to this many staged invocations, then re-arms while
+     * staged work remains (see [drainBatch]).
+     *
+     * It changes the **task count only**, never which message runs next: the
+     * band selection and stride floor run per message inside the task
+     * ([AttentionScheduler.dispatchUpTo] loops the unchanged
+     * [AttentionScheduler.dispatchOne]), so per-cell FIFO, per-link FIFO,
+     * [civictech.cell.MessageContext] and the attention starvation bound are the
+     * same either way. Staging and the journal append stay per invocation, under
+     * [dataLock], at acceptance time.
+     *
+     * The one observable cost: a task that delivers into a cell whose handler
+     * genuinely suspends parks the host (spec 32; [SimulationController],
+     * [CoroutineScheduler]) for the rest of its batch, exactly as one message
+     * does unbatched — only longer, and other-band work (management, protocol)
+     * waits behind a whole batch rather than behind one message.
+     */
+    private val dispatchBatch: Int = 1,
 ) : Host {
+
+    init {
+        require(dispatchBatch >= 1) { "dispatchBatch must be >= 1 (was $dispatchBatch)" }
+        require(journalFor == null || journalForPort == null) {
+            "pass either journalFor or journalForPort, not both (computenet-xy7w4 D4)"
+        }
+    }
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
     internal var parentHost: ManagedHost? = null
@@ -113,12 +172,100 @@ open class ManagedHost(
     private val childHosts = CopyOnWriteArrayList<ManagedHost>()
 
     /**
-     * The effective per-cell journal selector (CP-C1). Explicit [journalFor]
-     * wins; otherwise the whole-host [journal] becomes the constant selector
-     * (returning it — possibly null — for every cell), preserving pre-CP-C1
-     * behavior exactly.
+     * The effective PER-PORT journal selector (computenet-xy7w4 D4). Explicit
+     * [journalForPort] wins; otherwise [journalFor] lifts into a selector that
+     * ignores the port; otherwise the whole-host [journal] becomes the
+     * port-and-cell-constant selector — each a byte-identical degenerate case
+     * of the one before it, preserving pre-D4 behavior exactly when unused.
      */
-    private val journalSelector: (CellRef) -> Journal? = journalFor ?: { journal }
+    private val portJournalSelector: (CellRef, String) -> Journal? =
+        journalForPort
+            ?: journalFor?.let { f -> { ref: CellRef, _: String -> f(ref) } }
+            ?: { _, _ -> journal }
+
+    /**
+     * Cache of each spawned cell's unique journal (computenet-xy7w4 D4),
+     * populated by [cellJournal] at spawn time and never cleared on despawn
+     * (same cumulative convention as [journaledSpawnCounts]) — so a
+     * cellRef-only lookup (checkpoint's frontier/baseline filtering, after
+     * the cell may have despawned) still answers correctly without a live
+     * [Cell] instance. Absent = volatile or never spawned; [ConcurrentHashMap]
+     * for the same concurrent-reader reason [cells] uses one.
+     */
+    private val cellJournals = ConcurrentHashMap<CellRef, Journal>()
+
+    /**
+     * The effective per-cell journal selector (CP-C1), now DERIVED from
+     * [portJournalSelector] (computenet-xy7w4 D4) rather than independently
+     * configured: a cell's [Journal] for checkpoint/epoch/accounting purposes
+     * is the ONE instance every one of its journaled ports names — see
+     * [cellJournal]. Reads the spawn-time cache, so it stays answerable for a
+     * cellRef whose cell has since despawned.
+     */
+    private val journalSelector: (CellRef) -> Journal? = { cellRef -> cellJournals[cellRef] }
+
+    /**
+     * The unique [Journal] instance ONE cell's journaled ports all name (D4).
+     *
+     * When no explicit [journalForPort] was given, this is exactly today's per-cell
+     * answer — `journalFor(cellRef)` if given (its null wins), else `journal` — with no port enumeration and no new
+     * refusal: a whole-cell selector was never port-aware, so applying the new
+     * per-port rules to it retroactively would refuse a cell's ordinary `outlet` port
+     * (which every existing selector "answers" the same way it answers every other
+     * port, since it never looks at the port at all) for a config it did not opt into.
+     *
+     * Only when [journalForPort] is explicit does this evaluate it over every one of
+     * [cell]'s registered ports and refuse — naming [cellRef] and the two offending
+     * port names — if two journaled INLETS disagree, since a cell's `Stateful`
+     * snapshot, outlet-wave state and durable epoch are captured once per CELL, not
+     * once per port.
+     *
+     * Outlets are checked separately, and more permissively: an outlet is never the
+     * target of an accepted invocation, so nothing ever actually journals through
+     * one — a selector that blankets a whole cell (`{ ref, _ -> ... }`-style,
+     * ignoring the port, the ordinary style for "journal everything U does") answers
+     * for a cell's outlet exactly as it answers for its inlets, and that echo is inert
+     * and allowed. What IS refused is an outlet asked to carry a journaling decision
+     * of its own: a journal named for an outlet with no journaled inlet on the same
+     * cell (nothing to reconcile it with), or one that disagrees with the cell's
+     * inlet-derived journal. Outlet-side journaling of spontaneous emissions is
+     * undecided (spec 90 roadmap I-7 §8, this feature's D6 non-goal); this is the
+     * fail-fast for someone trying to configure it as if it existed. Called once, at
+     * spawn; the result is cached in [cellJournals].
+     */
+    private fun cellJournal(cellRef: CellRef, cell: Cell): Journal? {
+        // An explicit journalFor's null wins outright (volatile), exactly as pre-D4's
+        // `journalFor ?: { journal }` — never a fallback to the whole-host journal.
+        val explicit = journalForPort ?: return if (journalFor != null) journalFor.invoke(cellRef) else journal
+        val registry = PortRegistry.of(cell)
+        var chosen: Journal? = null
+        var chosenPort: String? = null
+        val outlets = mutableListOf<Pair<String, Journal>>()
+        registry.names().forEach { name ->
+            val portJournal = explicit(cellRef, name) ?: return@forEach
+            if (registry[name] is FanOutlet<*>) {
+                outlets += name to portJournal
+                return@forEach
+            }
+            val previousPort = chosenPort
+            if (chosen == null) {
+                chosen = portJournal
+                chosenPort = name
+            } else require(portJournal === chosen) {
+                "cell $cellRef has journaled ports naming different journals: '$previousPort' and " +
+                    "'$name' — every journaled port of one cell must name the same Journal instance " +
+                    "(computenet-xy7w4 D4)"
+            }
+        }
+        outlets.forEach { (name, portJournal) ->
+            require(chosen != null && portJournal === chosen) {
+                "journal selector named a journal for outlet port '$name' on $cellRef with no " +
+                    "matching journaled inlet — only inlet ports may be journaled (outlet-side " +
+                    "journaling is undecided, computenet-xy7w4 D6)"
+            }
+        }
+        return chosen
+    }
 
     internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
@@ -401,6 +548,49 @@ open class ManagedHost(
     internal fun volatileDurableSpawns(): Long = volatileDurableSpawnCount.get()
 
     /**
+     * `[KBLK-06]`/`[KBLK-07]`: per-[DurabilityClass] cumulative spawn count —
+     * how many cells, of ANY manifest, were spawned onto a journal of that
+     * class (`journalSelector(cell.ref)?.durability`). Counted at the same
+     * spawn site as [volatileDurableSpawnCount] (`spawn()`, below), for every
+     * cell whose selector returned a journal — not only `DURABLE`-manifest
+     * ones, because the question this answers is "what class of journal
+     * serves this host's cells", not "which cells declared durability".
+     * Cumulative, like [volatileDurableSpawnCount]: never decremented on
+     * despawn (`computenet-t6b.2-D3`).
+     *
+     * Deliberately not a refusal: PN-12's rationale above (a durable-capable
+     * cell run volatile can be a legitimate deployment) applies equally here.
+     * The kernel only counts; a deployment that requires synchronous
+     * durability asserts over [durabilityAccounting] itself at startup —
+     * e.g. `check(acct.journaledSpawns[DurabilityClass.BATCHED] == 0L &&
+     * acct.journaledSpawns[DurabilityClass.IN_MEMORY] == 0L &&
+     * acct.volatileDurableSpawns == 0L)`. The only way to weaken a cell's
+     * durability is the [Journal] instance [journalFor] returns for it; the
+     * only "no durability" spelling is `journalFor(cellRef) == null`
+     * (`[KBLK-04]`) — there is no second, host-level mechanism.
+     */
+    private val journaledSpawnCounts: Map<DurabilityClass, AtomicLong> =
+        DurabilityClass.entries.associateWith { AtomicLong() }
+
+    /**
+     * Snapshot of this host's per-[DurabilityClass] and volatile-durable
+     * spawn counts (`[KBLK-06]`). Public, not `internal`, because the
+     * deployment that asserts over it (`[KBLK-07]`) lives outside `:kernel`.
+     */
+    data class DurabilityAccounting(
+        /** Every [DurabilityClass] present, zero-filled — never a partial map. */
+        val journaledSpawns: Map<DurabilityClass, Long>,
+        /** The existing PN-12 counter ([ManagedHost.volatileDurableSpawns]), re-exposed here. */
+        val volatileDurableSpawns: Long,
+    )
+
+    /** `[KBLK-06]`/`[KBLK-07]`: see [journaledSpawnCounts] and [DurabilityAccounting]. */
+    fun durabilityAccounting(): DurabilityAccounting = DurabilityAccounting(
+        journaledSpawns = journaledSpawnCounts.mapValues { (_, count) -> count.get() },
+        volatileDurableSpawns = volatileDurableSpawnCount.get(),
+    )
+
+    /**
      * Refusals reported to this host by a hosted membrane's
      * [civictech.cell.BoundaryDenialSink], summed over every boundary
      * (computenet-usd.6).
@@ -437,14 +627,26 @@ open class ManagedHost(
     )
 
     /**
-     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues; each
-     * staged message submits one dispatcher task at data priority, and each
-     * dispatch picks the next cell by attention band. Per-cell FIFO (a superset
-     * of per-link FIFO, spec 31 rule 3) holds because band selection happens
-     * BETWEEN cells, never within one — and the one-task-per-message shape
-     * keeps drain's phase 2 (priority 30) behind every accepted message.
+     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues, and
+     * each dispatch picks the next cell by attention band. Per-cell FIFO (a
+     * superset of per-link FIFO, spec 31 rule 3) holds because band selection
+     * happens BETWEEN cells, never within one.
+     *
+     * Every accepted message is dispatched by a data-band (priority 20) task
+     * submitted after its staging. With [dispatchBatch] `== 1` that is one task
+     * per message (message count <= task count); with [dispatchBatch] `> 1` one
+     * armed task drains up to the bound and re-arms while work remains
+     * ([drainBatch]). Either way drain's phase 2 (priority 30) runs after them,
+     * because every [HostScheduler] orders by priority, then sequence.
      */
     private val dataLock = Any()
+
+    /**
+     * Batched dispatch only ([dispatchBatch] `> 1`): true while a [drainBatch]
+     * task is submitted-and-not-yet-finished. Guarded by [dataLock]; never read
+     * or written on the `dispatchBatch == 1` path.
+     */
+    private var dispatchArmed = false
 
     /**
      * Attention-driven dispatch (spec 34, M6.3/M17) — per-cell FIFO staging,
@@ -497,21 +699,32 @@ open class ManagedHost(
 
     /**
      * WAL/journal/checkpoint/frontier durability (M10.1/M10.2, G-59) —
-     * extracted to [HostDurability] (RS-8.2). Shares [journalSelector] (the
-     * SAME lambda instance this host also uses for its own two
-     * `enqueueHostedInvocation` journal writes and the PN-12 spawn check) so
-     * per-cell journal selection stays byte-identical; reads a live view of
-     * [cells] and delegates dead-letter reporting and replayed-frame
-     * re-intake back to the host. [checkpoint] still runs via
-     * [enqueueAwaiting] at management priority 0, unable to interleave with
-     * a dispatching cell — nothing here touches [dataLock].
+     * extracted to [HostDurability] (RS-8.2). Shares both [portJournalSelector]
+     * (the SAME lambda instance this host's own `journalTee` uses) and
+     * [journalSelector] (computenet-xy7w4 D4: the cell-level, cache-backed
+     * form the PN-12 spawn check and [journaledSpawnCounts] also use), so
+     * per-port and per-cell journal selection stay byte-identical between the
+     * host and this delegate; reads a live view of [cells] and delegates
+     * dead-letter reporting and replayed-frame re-intake back to the host.
+     * [checkpoint] still runs via [enqueueAwaiting] at management priority 0,
+     * unable to interleave with a dispatching cell; its staged-set read and
+     * journal reset run under [dataLock] (computenet-xy7w4 D3) so the
+     * compaction carries every accepted-but-undelivered frame atomically with
+     * respect to the intake — lock order `dataLock` -> journal monitor, as on
+     * the intake path.
      */
     private val hostDurability = HostDurability(
-        journalSelector = journalSelector,
+        journalSelector = portJournalSelector,
+        cellJournalSelector = journalSelector,
         cellsView = { cells },
         deadLetter = { message -> deadLetter(null, message) },
         submit = ::enqueueHostedInvocation,
         awaitOnManagementBand = { action -> enqueueAwaiting(0, action) },
+        underIntakeLock = { action ->
+            synchronized(dataLock) {
+                action(attentionScheduler.stagedInSequence())
+            }
+        },
     )
 
     /**
@@ -539,9 +752,9 @@ open class ManagedHost(
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
-        synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach {
+        synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
             parkedDrainedOnTeardownCount.incrementAndGet()
-            deadLetter(null, "cell $cellRef left the host while attention-parked", it)
+            deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
         }
         // T05 finding 5: a FanInlet's ACTIVATE-tier cold tail (invocations
         // that arrived before a handler was installed, spec 10/15 §Admission
@@ -582,7 +795,8 @@ open class ManagedHost(
             // attention-parked traffic is accepted work: flush it before
             // deactivation, same guarantee as the ordinary queue (spec 33/34)
             val parked = synchronized(dataLock) {
-                attentionScheduler.attentionParked.values.flatten().also { attentionScheduler.attentionParked.clear() }
+                attentionScheduler.attentionParked.values.flatten().map { it.second }
+                    .also { attentionScheduler.attentionParked.clear() }
             }
             parked.forEach { deliver(it) }
             snapshots.clear()
@@ -667,6 +881,14 @@ open class ManagedHost(
         set(value) { hostDurability.replayAsBaseline = value }
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
+        // computenet-xy7w4 D1: a frame accepted while a replayed frame's delivery is on
+        // this thread is derived from it — it inherits that replay's provenance, so a
+        // cascade of any depth carries it (see [civictech.cell.ReplayProvenance]).
+        val ambient = civictech.cell.ReplayProvenance.get()
+        accept(if (ambient == null || hostedInvocation.replayOf != null) hostedInvocation else hostedInvocation.copy(replayOf = ambient))
+    }
+
+    private fun accept(hostedInvocation: HostedPortInvocation) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             require(hostedInvocation.invocation.context == null) { "protocol invocations must carry null MessageContext" }
             val id = requireNotNull(hostedInvocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
@@ -699,13 +921,15 @@ open class ManagedHost(
         // Pre-fix, a durable host with an intakeBound deterministically
         // aborted recovery once the journal exceeded high-water (nothing
         // drains during the synchronous replay under the sim controller).
-        if (!isManagement && !hostDurability.recovering) {
+        // computenet-xy7w4 D2: keyed on the frame's replay provenance, not on
+        // a time window — a live frame accepted during recovery IS gated.
+        if (!isManagement && hostedInvocation.replayOf == null) {
             synchronized(dataLock) {
                 if (intakeControl.intakeState == IntakeState.SATURATED) {
                     if (intakeBound?.policy == SaturationPolicy.Coalesce && intakeControl.coalesce(hostedInvocation)) {
                         // Coalescing is acceptance, not loss: retain every original
                         // in the WAL so recovery may replay the equivalent sequence.
-                        if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
+                        journalTee(hostedInvocation)
                         return
                     }
                     throw IntakeSaturatedException(ref)
@@ -730,20 +954,92 @@ open class ManagedHost(
         // contention matters.
         //
         // stage at SEND time (not dispatch time) so a backlog can form and band
-        // selection has something to choose between; one dispatcher task per
-        // message keeps message count <= task count (a task may find nothing)
+        // selection has something to choose between; every accepted message is
+        // then dispatched by a data-band task submitted after its staging. With
+        // dispatchBatch == 1 that is one task per message (message count <=
+        // task count; a task may find nothing); with dispatchBatch > 1 one armed
+        // task drains up to the bound and re-arms while work remains
+        // (drainBatch). Either way drain's phase 2 at 30 runs after them because
+        // schedulers order by priority.
         //
         // T04 finding 1: checkSaturationOnAccept returns a deferred announce
         // instead of running Protocols.sendUpstream's relay traversal here —
         // that traversal can reach another host's enqueueHostedInvocation
         // and ITS dataLock, so it must run only after this lock releases.
         val announce = synchronized(dataLock) {
-            if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
+            journalTee(hostedInvocation)
             attentionScheduler.stage(hostedInvocation)
             intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
         announce?.invoke()
-        enqueue(20) { attentionScheduler.dispatchOne() }
+        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+    }
+
+    /**
+     * The write-ahead tee's one append rule (computenet-xy7w4 D2): append to the target's
+     * journal unless the frame is a replay of THAT journal (`replayOf === journal`) — the
+     * replayed frame itself, or a same-host frame derived from delivering one. Live frames
+     * (no provenance) are appended whenever they arrive, recovery running or not; a derived
+     * frame whose target tees to a DIFFERENT journal is appended there as live, because that
+     * journal may never have received it (in flight at the crash) — see
+     * `ReplayProvenanceTest` R-B'. Caller holds [dataLock].
+     *
+     * Keyed on the target `(cellRef, portName)` (computenet-xy7w4 D4), not the cell alone:
+     * a per-port selector may journal one inlet of a cell and leave a sibling inlet
+     * volatile (`PerPortJournalTest` R-E).
+     */
+    private fun journalTee(hostedInvocation: HostedPortInvocation) {
+        val journal = portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) ?: return
+        if (hostedInvocation.replayOf === journal) return
+        journal.append(hostDurability.journalFrame(hostedInvocation))
+    }
+
+    /**
+     * Batched dispatch ([dispatchBatch] `> 1`), called after a message is
+     * staged: submits a [drainBatch] task unless one is already armed. An armed
+     * task that has not yet made its final check (in [drainBatch]'s `finally`)
+     * is guaranteed to see this message — both that check and the staging
+     * happen under [dataLock], and the check re-arms whenever anything is
+     * staged — so skipping the submit here never strands a message.
+     */
+    private fun armBatchDispatch() {
+        val arm = synchronized(dataLock) {
+            if (dispatchArmed) false else true.also { dispatchArmed = true }
+        }
+        if (arm) enqueue(20) { drainBatch() }
+    }
+
+    /**
+     * One batched data-band task: dispatch up to [dispatchBatch] staged
+     * messages (band selection and the stride floor re-run per message inside
+     * [AttentionScheduler.dispatchUpTo]), then — in `finally`, so an exception
+     * escaping the dispatch loop cannot leave the flag armed with nobody coming
+     * (a cell handler's own exception is absorbed by [deliver] before it gets
+     * here) — disarm and, if staged work remains, re-arm by submitting the next
+     * task.
+     *
+     * **Drain ordering.** [beginDrain] closes the intake and then submits its
+     * phase 2 at priority 30. Every message accepted before the intake closed
+     * is either already dispatched, or staged with an armed [drainBatch]
+     * pending or running. A pending one runs first (20 < 30). A running one
+     * re-arms at 20 before it returns, and a host drains one task at a time,
+     * so that re-armed task is enqueued before the scheduler next polls — and
+     * wins against the pending 30 on priority, whatever its sequence number.
+     * That holds on every scheduler because each orders by `(priority,
+     * sequence)`: [SimulationController]'s `PriorityQueue<ScheduledTask>`,
+     * [VirtualThreadScheduler]'s and [CoroutineScheduler]'s
+     * `PriorityBlockingQueue<ScheduledTask>`, all via [ScheduledTask.compareTo].
+     * So phase 2 still runs after every accepted message, as it does unbatched.
+     */
+    private suspend fun drainBatch() {
+        try {
+            attentionScheduler.dispatchUpTo(dispatchBatch)
+        } finally {
+            val rearm = synchronized(dataLock) {
+                attentionScheduler.dataQueues.isNotEmpty().also { dispatchArmed = it }
+            }
+            if (rearm) enqueue(20) { drainBatch() }
+        }
     }
 
     /**
@@ -770,12 +1066,30 @@ open class ManagedHost(
     /**
      * Replay this host's [journal] (M10.1). See [HostDurability.recoverFrom]
      * for the full behavior; delegates there (RS-8.2).
+     *
+     * Replay only STAGES frames, so this returns a [Recovery] handle whose
+     * [Recovery.awaitApplied] fences on their delivery and on every same-host
+     * frame those deliveries cascade into (computenet-q5jzk). The fence is
+     * taken AFTER the replay's last submit — the order is what makes it sound.
+     * A failed replay throws [RecoveryIncomplete] and returns no handle.
      */
-    fun recoverFrom(journal: Journal) = hostDurability.recoverFrom(journal)
+    fun recoverFrom(journal: Journal): Recovery {
+        val frames = hostDurability.recoverFrom(journal)
+        return Recovery(frames, scheduler.quiescence())
+    }
+
+    /**
+     * A [Quiescence] fence on this host's scheduler: completes once its queue
+     * holds no task at any band. See [Quiescence] for the argument and its limits.
+     */
+    fun quiescence(): Quiescence = scheduler.quiescence()
 
     /**
      * Checkpoint (M10.2, extended G-59). See [HostDurability.checkpoint] for
-     * the full behavior; delegates there (RS-8.2).
+     * the full behavior; delegates there (RS-8.2). Callable on a live host at
+     * any time: frames accepted and not yet delivered are carried into the
+     * compacted journal (93 I-7 R7, computenet-xy7w4 D3), so no quiescence
+     * fence is needed for safety.
      */
     fun checkpoint(journal: Journal) = hostDurability.checkpoint(journal)
 
@@ -1065,8 +1379,14 @@ open class ManagedHost(
                             // long gone by now. withSuspending carries it across
                             // any suspension the handler does, even to a
                             // different worker thread.
+                            //
+                            // computenet-xy7w4 D1: likewise re-install the frame's replay
+                            // provenance, so every frame this handler emits into an intake
+                            // inherits it (and is not re-journaled into the replayed journal).
                             civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                hostedInvocation.invocation.invokeSuspending(port.call)
+                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                    hostedInvocation.invocation.invokeSuspending(port.call)
+                                }
                             }
                             if (cell is Effectful) {
                                 // per-cell tee (CP-C1): the frontier advance rides the same
@@ -1331,11 +1651,18 @@ open class ManagedHost(
                             "registry $registered — registerPort's name must equal the property name (G-17)"
                     }
                 }
+                // computenet-xy7w4 D4: resolve and validate this cell's unique journal (across
+                // every journaled port) BEFORE the per-cell accounting below, which reads it
+                // through [journalSelector] — the cache [cellJournal] populates here.
+                cellJournal(cell.ref, cell)?.let { cellJournals[cell.ref] = it }
                 // PN-12: surface a durable cell placed volatile (see [volatileDurableSpawnCount]).
                 if (descriptor != null &&
                     civictech.nature.Manifest.DURABLE in descriptor.manifest &&
                     journalSelector(cell.ref) == null
                 ) volatileDurableSpawnCount.incrementAndGet()
+                // [KBLK-06]: per-class accounting, for every cell whose selector
+                // returned a journal (see [journaledSpawnCounts]).
+                journalSelector(cell.ref)?.durability?.let { journaledSpawnCounts.getValue(it).incrementAndGet() }
                 // KFX-12 (spec [24-DUR-04], 93 I-14 Rule S1): a journaled cell's outlets
                 // emit under their ref-derived epoch, so a rebuilt instance re-mints the
                 // identity the network already observed instead of a fresh random one.
@@ -1368,9 +1695,14 @@ open class ManagedHost(
                 // for introspection; membrane/exposure enforcement is G-9 (unbuilt,
                 // out of this ticket's scope) — a non-null parent is bookkept only.
                 val ref = identity.resolve()
-                val cell = factory.create(ref)
-                requireBoundRef("spawnBound", identity, ref, cell.ref)
                 return try {
+                    // [15-APPLY-01]/G-51: factory construction and the bound-ref
+                    // check are part of "the step", not preconditions to it — a
+                    // throwing factory or an identity/ref mismatch is as much a
+                    // rejected step as a spawn() failure, so both live inside this
+                    // dead-lettering try alongside spawn() itself.
+                    val cell = factory.create(ref)
+                    requireBoundRef("spawnBound", identity, ref, cell.ref)
                     spawn(cell).also { spawnedRef -> if (parent != null) cellParents[spawnedRef] = parent }
                 } catch (e: Exception) {
                     // G-51: per-step rejections surface as dead letters on the
@@ -1650,6 +1982,18 @@ open class ManagedHost(
     }
 
     /**
+     * The port registered as [name] on the cell [ref] names, when that cell is
+     * hosted here; null when it is not, or when it registers no such port.
+     * Same rationale as [outletAt]: everything handed back is already reachable
+     * via `PortRegistry.of(cell)` to any caller holding the cell object — this
+     * threads the host's own [cells] map into that lookup rather than
+     * reflecting the map out of it. The caller is
+     * [civictech.cell.graph.precheck], which reads a live boundary port
+     * (policies, cardinality, payload class, natures) without linking it.
+     */
+    fun portAt(ref: CellRef, name: String): Port? = cells[ref]?.let { findPort(it, name) }
+
+    /**
      * Host-routed state read (the [Stateful] half of the observation seam,
      * spec 33 §Snapshot / G-25): [ref]'s own `snapshot()`, captured **on this
      * host's execution context** rather than on the caller's thread — off-thread
@@ -1777,10 +2121,11 @@ open class ManagedHost(
      * caller learns what a read costs *before* paying for it — which is what
      * the inspector's search notice currently has to reconstruct afterwards.
      *
-     * **A bound is never silently widened.** [StateRead.since] and
-     * [StateRead.scope] are refused up front — on the caller's thread, before
-     * anything is submitted — for a cell that does not declare
-     * [BoundedStateful.supportsSince] / [BoundedStateful.supportsScope].
+     * **A bound is never silently widened.** [StateRead.since],
+     * [StateRead.scope] and [StateRead.keyBound] are refused up front — on the
+     * caller's thread, before anything is submitted — for a cell that does not
+     * declare [BoundedStateful.supportsSince] / [BoundedStateful.supportsScope]
+     * / [BoundedStateful.supportsKeyBound].
      *
      * **This is not a back door around a pull refusal.** It is not a
      * `StateRequest`, installs no link and fires no `PullOnOpen`, so a
@@ -1849,6 +2194,9 @@ open class ManagedHost(
         if (request.scope != null && request.scope !is Interest.Total && !cell.supportsScope) {
             return answered(unavailable(StateReadResult.Reason.SCOPE_UNSUPPORTED))
         }
+        if (request.keyBound != null && !cell.supportsKeyBound) {
+            return answered(unavailable(StateReadResult.Reason.KEY_BOUND_UNSUPPORTED))
+        }
 
         return submitRead {
             runCatching { cell.readBounded(request) }
@@ -1861,7 +2209,14 @@ open class ManagedHost(
                             else page
                         )
                     },
-                    onFailure = { unavailable(StateReadResult.Reason.READ_FAILED) },
+                    // A mistyped KeyBound (D9) is a caller error, named apart from
+                    // every other readBounded throw — see [KeyBoundMistypedException].
+                    onFailure = { thrown ->
+                        unavailable(
+                            if (thrown is KeyBoundMistypedException) StateReadResult.Reason.KEY_BOUND_MISTYPED
+                            else StateReadResult.Reason.READ_FAILED
+                        )
+                    },
                 )
         }
     }

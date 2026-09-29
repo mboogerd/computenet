@@ -1,0 +1,3 @@
+# Experiment data stays local, not in git (see ../claim-reuse/README.md).
+*
+!.gitignore

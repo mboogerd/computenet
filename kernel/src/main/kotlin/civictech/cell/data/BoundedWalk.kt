@@ -117,6 +117,50 @@ internal object EntryOrder : Comparator<Any?> {
 }
 
 /**
+ * Does [bound] admit [key] under this order's `[from, to)` sense (D3)? A
+ * `null` bound admits everything. An inverted or empty bound (`from` compares
+ * `>= to`) admits nothing, by the arithmetic below — no special case: every
+ * key fails one of the two comparisons.
+ *
+ * **A mistyped bound is refused, not answered (D9, maintainer decision
+ * 2026-09-27, option (b)).** When a non-null end's runtime class differs from a
+ * non-null [key]'s, this throws [civictech.cell.KeyBoundMistypedException] (an
+ * [IllegalArgumentException] subtype) naming both classes. Rule 3 (compare by
+ * class name) would otherwise answer — `KeyBound(1, 10)` over `Long` keys
+ * admits nothing, `KeyBound(100, null)` admits everything — and the second is
+ * exactly the "full state as though the bound had been applied" that
+ * `BoundedStateful` obligation 5 forbids. The throw is the refusal surface
+ * because a walk has nowhere else to carry one: every family calls this only
+ * while freezing its walk order at walk open (never on a resumed page), so
+ * the refusal fires on the first page, before any entry is answered. Behind
+ * `ManagedHost.readState` this dedicated exception type is named
+ * `StateReadResult.Reason.KEY_BOUND_MISTYPED`; every other throw from a
+ * cell's `readBounded`/`snapshot` still surfaces as
+ * `StateReadResult.Reason.READ_FAILED`. A `null` key has no class and is
+ * ordered by rule 1 as before; a key the walk's `scope` already rejected is
+ * never compared, because the families conjoin scope first.
+ */
+internal fun EntryOrder.admits(key: Any?, bound: civictech.cell.KeyBound?): Boolean {
+    if (bound == null) return true
+    if (key != null) {
+        requireSameClass(key, bound.from, "from", bound)
+        requireSameClass(key, bound.to, "to", bound)
+    }
+    if (bound.from != null && compare(bound.from, key) > 0) return false
+    if (bound.to != null && compare(key, bound.to) >= 0) return false
+    return true
+}
+
+private fun requireSameClass(key: Any, end: Any?, side: String, bound: civictech.cell.KeyBound) {
+    if (end != null && end.javaClass != key.javaClass) {
+        throw civictech.cell.KeyBoundMistypedException(
+            "KeyBound refused (D9): `$side` end is ${end.javaClass.name} but the walked key is " +
+                "${key.javaClass.name}; a bound's ends must be the keys' runtime class ($bound)"
+        )
+    }
+}
+
+/**
  * Crude per-entry size estimates for [civictech.cell.StateRead.byteBudget]
  * (V1C-CELLS), matching the register `SetCell` uses: the budget is **advisory**
  * and cell-estimated, so these are rough JVM object sizes, not an encoder's

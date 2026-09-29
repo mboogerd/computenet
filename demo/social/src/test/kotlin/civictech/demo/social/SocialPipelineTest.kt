@@ -1,13 +1,17 @@
 package civictech.demo.social
 
+import civictech.cell.link.Interest
 import civictech.testkit.SimWorld
 import civictech.testkit.forEachSeed
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * B14/B15 for SOC1's update stream (epic `computenet-07k`, feature
@@ -30,7 +34,8 @@ class SocialPipelineTest {
 
     private class Rig(seed: Long) {
         val world = SimWorld(seed)
-        val graph = SocialGraph(world.host, SnbPipeline.build(world.host, journalDir = null))
+        val pipeline = SnbPipeline.build(world.host, journalDir = null, registry = world.registry)
+        val graph = SocialGraph(world.host, pipeline)
         val source = SnbGenerator(seed, SCALE)
 
         /** Loads the static slice once and runs to idle. */
@@ -175,6 +180,119 @@ class SocialPipelineTest {
         val iu8 = sample(IU8AddFriendship::class.java)
         assertTrue(Knows(iu8.b, iu8.creationDate) in g.personFacts(iu8.a), "IU8 $iu8 on a")
         assertTrue(Knows(iu8.a, iu8.creationDate) in g.personFacts(iu8.b), "IU8 $iu8 on b")
+    }
+
+    // --- [SOC1-CREAD-04] ------------------------------------------------------
+
+    /**
+     * SOC1 F6 (feature `computenet-flfkm`, design flfkm-D9): `BatchModel.ic2/
+     * ic8/ic3` equal the live incremental paths — `FeedSession.board(20)`
+     * (one session per viewer, retained across events, rebuilt only when the
+     * viewer's `knows` set changes) and `ComplexReads.ic8`/`ic3` — after
+     * EVERY event, for three `Random(seed)`-drawn viewers, over five seeds.
+     */
+    @Test
+    fun `SOC1-CREAD-04 ic2, ic8 and ic3 equal the batch model after every event for three viewers over five seeds`() {
+        forEachSeed(0L until 5L) { seed ->
+            val rig = Rig(seed).load()
+            val model = BatchModel().also { it.load(rig.source.staticSlice()) }
+
+            val allPersonIds = rig.source.staticSlice().persons.map { it.id }
+            val viewers = allPersonIds.shuffled(Random(seed)).take(3)
+
+            val reader = HostBoundedReader(rig.world.host)
+            val locator = GraphLocator(rig.graph, rig.pipeline.families)
+            val reads = ComplexReads(reader, locator)
+
+            val sessions = HashMap<Long, FeedSession>()
+            val sessionScopes = HashMap<Long, Set<Long>>()
+
+            fun sessionFor(viewer: Long): FeedSession {
+                val currentKnows = model.knows[viewer]?.mapTo(HashSet()) { it.otherId } ?: emptySet()
+                val existing = sessions[viewer]
+                if (existing != null && sessionScopes[viewer] == currentKnows) return existing
+                val session = FeedSession(
+                    viewer = viewer,
+                    scope = Interest.Ranges(currentKnows.map { Interest.Ranges.Range(it, it + 1) }),
+                    families = rig.pipeline.families,
+                    registry = rig.world.registry,
+                    reader = reader,
+                )
+                sessions[viewer] = session
+                sessionScopes[viewer] = currentKnows
+                return session
+            }
+
+            fun window(): Pair<Long, Long> =
+                if (model.messages.isEmpty()) {
+                    0L to 1L
+                } else {
+                    model.messages.values.minOf { it.creationDate } to (model.messages.values.maxOf { it.creationDate } + 1)
+                }
+
+            fun <T> await(future: CompletableFuture<ReadOutcome<List<T>>>, label: String): List<T> {
+                rig.world.runToIdle()
+                return when (val outcome = future.get(20, TimeUnit.SECONDS)) {
+                    is ReadOutcome.Found -> outcome.value
+                    ReadOutcome.Empty -> emptyList()
+                    is ReadOutcome.Refused -> fail("$label: refused (${outcome.reason})")
+                }
+            }
+
+            fun compareAll(label: String) {
+                val (from, to) = window()
+                for (viewer in viewers) {
+                    val vlabel = "$label viewer=$viewer"
+
+                    val session = sessionFor(viewer)
+                    val pullFuture = session.pull()
+                    rig.world.runToIdle()
+                    pullFuture.get(20, TimeUnit.SECONDS)
+                    assertEquals(model.ic2(viewer, 20), session.board(20), "$vlabel query=ic2")
+
+                    val liveIc8 = await(reads.ic8(viewer, 20), "$vlabel query=ic8")
+                    assertEquals(model.ic8(viewer, 20), liveIc8, "$vlabel query=ic8")
+
+                    val liveIc3 = await(reads.ic3(viewer, 6L, 7L, from, to, 20), "$vlabel query=ic3")
+                    assertEquals(model.ic3(viewer, 6L, 7L, from, to), liveIc3, "$vlabel query=ic3")
+                }
+            }
+
+            compareAll("seed=$seed event=-1")
+
+            val stream = UpdateStream(rig.source, rig.graph)
+            var i = 0
+            while (stream.step()) {
+                rig.world.runToIdle()
+                model.apply(stream.events[i])
+                compareAll("seed=$seed event=$i")
+                i++
+            }
+
+            // Non-vacuity: at least one viewer non-empty per query, over the full window.
+            val (from, to) = window()
+            val ic2NonEmpty = viewers.any { model.ic2(it, 20).isNotEmpty() }
+            val ic8NonEmpty = viewers.any { model.ic8(it, 20).isNotEmpty() }
+            val ic3NonEmpty = viewers.any { model.ic3(it, 6L, 7L, from, to).isNotEmpty() }
+            if (ic2NonEmpty && ic8NonEmpty && ic3NonEmpty) return@forEachSeed
+
+            // Widen: the three drawn viewers were degenerate — check the rest of the
+            // static persons (batch model only; this validates the fixture, it does
+            // not re-run the live comparison for the widened set).
+            val rest = allPersonIds - viewers.toSet()
+            assertTrue(
+                ic2NonEmpty || rest.any { model.ic2(it, 20).isNotEmpty() },
+                "seed=$seed: no person among all ${allPersonIds.size} has a non-empty ic2",
+            )
+            assertTrue(
+                ic8NonEmpty || rest.any { model.ic8(it, 20).isNotEmpty() },
+                "seed=$seed: no person among all ${allPersonIds.size} has a non-empty ic8",
+            )
+            assertTrue(
+                ic3NonEmpty || rest.any { model.ic3(it, 6L, 7L, from, to).isNotEmpty() },
+                "seed=$seed: no person among all ${allPersonIds.size} has an ic3 row over the full window",
+            )
+        }
     }
 
     private companion object {

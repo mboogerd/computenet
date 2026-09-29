@@ -92,9 +92,43 @@ internal class TagState<E>(
     fun removeObserved(element: E): SetDelta<E> {
         val observed = live[element]?.toSet() ?: return SetDelta()
         if (observed.isEmpty()) return SetDelta()
-        live.remove(element)
-        if (retainTombstones) tombstones.getOrPut(element) { mutableSetOf() } += observed
+        kill(element, observed)
         return SetDelta(dels = mapOf(element to observed))
+    }
+
+    /**
+     * Watermark-driven eviction (spec 24 §Lateness and waterlines,
+     * `[24-WL-08]`/`[24-WL-09]`): for every live element [predicate] admits,
+     * remove its whole live tag set and return the union of those removals as
+     * `dels` — the caller (a waterline-evicting operator) is minting a fresh
+     * delta, not folding one it was handed, so this does not route through
+     * [foldDels]. Destructive and one-shot: once this returns, every evicted
+     * element is no longer live, so a later ordinary del for one of its tags
+     * is a no-op through [apply] (the tag is not in `live` to intersect
+     * against). Under [retainTombstones] the killed tags are tombstoned
+     * exactly as [removeObserved] tombstones an observed remove — the same
+     * catch-up/resurrection hazard applies to an evicted element re-entering
+     * via a late writer catch-up. Elements [predicate] does not admit,
+     * [deadSources], and other elements' tombstones are untouched. A
+     * predicate matching nothing returns an empty [SetDelta] and changes
+     * nothing.
+     */
+    fun evictBelow(predicate: (E) -> Boolean): SetDelta<E> {
+        val dels = mutableMapOf<E, Set<Timestamp>>()
+        live.keys.toList().forEach { element ->
+            if (!predicate(element)) return@forEach
+            val tags = live.getValue(element).toSet()
+            if (tags.isEmpty()) return@forEach
+            kill(element, tags)
+            dels[element] = tags
+        }
+        return SetDelta(dels = dels)
+    }
+
+    /** Shared removal of [element]'s [tags] from [live], tombstoning under [retainTombstones]. */
+    private fun kill(element: E, tags: Set<Timestamp>) {
+        live.remove(element)
+        if (retainTombstones) tombstones.getOrPut(element) { mutableSetOf() } += tags
     }
 
     /**

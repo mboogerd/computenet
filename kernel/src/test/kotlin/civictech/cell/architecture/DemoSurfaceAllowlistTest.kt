@@ -42,6 +42,16 @@ import java.io.File
  *   behavior is called. Deliberate widening for T20 / guardrail G3 — see
  *   `doc/architecture-decisions.md` "Guardrails › Amended". Shrinks the day
  *   `ShardCell` gains an Api marker interface.
+ * - `graph`: the WKB2 write plane's construction surface —
+ *   `GraphSpec`/`Precheck`/`applyRemote`, used by F2/F12/F3/F6
+ *   (`inspect/src/main`'s `Catalogue.kt`, `DraftCompiler.kt`, and F3's
+ *   `Draft.kt`/`StagedApplier.kt`). Maintainer decision, computenet-va0c4.2,
+ *   2026-09-27 — see `doc/architecture-decisions.md` "Guardrails › Amended".
+ * - `membrane`: the `TrafficLightCell` catalogue entry
+ *   (`inspect/src/main`'s `KernelEntries.kt`), the one journal-free
+ *   replicable kernel cell whose `replicas` lowering passes
+ *   `InstanceSetStep.validate`. Maintainer decision, computenet-va0c4.2,
+ *   2026-09-27 — see `doc/architecture-decisions.md` "Guardrails › Amended".
  */
 class DemoSurfaceAllowlistTest {
 
@@ -77,6 +87,8 @@ class DemoSurfaceAllowlistTest {
             "wire",
             "proxy", // see class KDoc — forced by FanOutlet.tap / Remote.sink shapes
             "partition", // see class KDoc — ShardCell has no Api marker; Class literal only (T20)
+            "graph", // see class KDoc — WKB2 write plane's construction surface (computenet-va0c4.2)
+            "membrane", // see class KDoc — TrafficLightCell catalogue entry (computenet-va0c4.2)
         )
     }
 
@@ -161,10 +173,13 @@ class DemoSurfaceAllowlistTest {
         assertTrue(!disallowedImport("civictech.cell.consistency.GlitchFreeCell", demoCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.protocol.Protocols", demoCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.proxy.Invocation", demoCellPrefixes))
-        // inspect may reach .proxy and .partition (documented above) but not .protocol or .evolve
+        // inspect may reach .proxy, .partition, .graph and .membrane (documented above)
+        // but not .protocol or .evolve
         assertTrue(!disallowedImport("civictech.cell.proxy.Proxy", inspectCellPrefixes))
         assertTrue(!disallowedImport("civictech.cell.partition.ShardCell", inspectCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.partition.ShardCell", demoCellPrefixes))
+        assertTrue(!disallowedImport("civictech.cell.graph.GraphSpec", inspectCellPrefixes))
+        assertTrue(!disallowedImport("civictech.cell.membrane.TrafficLightCell", inspectCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.protocol.Protocols", inspectCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.evolve.Shadow", inspectCellPrefixes))
     }

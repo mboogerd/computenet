@@ -37,6 +37,18 @@ data class IngestFailureCounts(
  * @param lastPollAt the clock reading at the most recent poll tick, or null
  *   before the first.
  * @param declarationEvents the size of the declaration history at this tick.
+ * @param declarationReplayFailures the count of declaration-history journal
+ *   lines this process could not parse while replaying at construction
+ *   (`DeclarationHistoryJournal.replayFailures`, surfaced in-process as
+ *   `AllocatorObserveApp.declarationReplayFailures`). A sibling of [failures]
+ *   rather than a fourth member of it: [failures] pairs three counters that
+ *   grow every poll tick from live ingestion, one value per document instant;
+ *   this one is fixed once at process construction, before any tick, so
+ *   folding it into that per-poll triad would misstate what the pairing
+ *   guarantees (`computenet-utib7`). Defaults to 0 so the fixtures in
+ *   `oracle/ReferenceReportTest.kt`, `restart/DeclarationHistoryJournalTest.kt`
+ *   and `http/AllocatorRoutesTest.kt` — outside this field's claim and
+ *   indifferent to replay accounting — need no edit.
  */
 data class IngestHealth(
     val recordCount: Int,
@@ -46,6 +58,7 @@ data class IngestHealth(
     val lastPollAt: Instant?,
     val failures: IngestFailureCounts,
     val declarationEvents: Int,
+    val declarationReplayFailures: Long = 0L,
 )
 
 /**

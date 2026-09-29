@@ -328,6 +328,18 @@ runs_for_head() {
 }
 
 rows=""
+# Names failed required rows above the verdict token $1. A red row settles
+# nothing: under SETTLED the next move would be `gh pr ready`, under
+# TIMEOUT-PENDING another wait on a head that cannot ship (computenet-2jyq,
+# computenet-4zpht).
+say_red() {
+  local red
+  red=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '{print $1}' | tr '\n' ' ')
+  [ -n "$red" ] || return 0
+  echo "wait-checks: RED — required check(s) FAILED: ${red% }"
+  echo "wait-checks: $1 is not a verdict. Do NOT gh pr ready or wait again; go to recovery.md § A red required check."
+}
+
 state=query-failed
 last_cause=""
 consecutive_failed=0
@@ -430,11 +442,7 @@ for i in $(seq 1 "$rounds"); do
     # like a passing one, and the caller's next move is `gh pr ready`, which on
     # this repo merges itself — so name the red rows rather than leaving them
     # six lines above the word (computenet-2jyq).
-    red=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '{print $1}' | tr '\n' ' ')
-    if [ -n "$red" ]; then
-      echo "wait-checks: RED — required check(s) FAILED: ${red% }"
-      echo "wait-checks: SETTLED is not a verdict. Do NOT gh pr ready; go to recovery.md § A red required check."
-    fi
+    say_red SETTLED
     echo SETTLED
     exit 0
   fi
@@ -445,7 +453,9 @@ for i in $(seq 1 "$rounds"); do
       echo "wait-checks: wall-clock budget ${DEADLINE_SECONDS}s reached after $i of" \
            "$rounds rounds — stopping short of the 600s foreground cap rather than" \
            "being auto-backgrounded. Rounds are slower than 20s here. This is a" \
-           "TIMEOUT, not a fault: call again (two calls is the normal cold start)."
+           "TIMEOUT, not a fault: call again (two calls is the normal cold start)." \
+           "max-rounds alone cannot lengthen a call; raise WAIT_CHECKS_DEADLINE_SECONDS with it," \
+           "and keep that deadline plus ~100s inside your own Bash timeout (600s in the foreground)."
       break
     fi
     sleep 20
@@ -482,11 +492,13 @@ if [ -n "$ages" ]; then
   done
   if [ "$oldest" -lt "$STUCK_AFTER_MIN" ]; then
     echo "wait-checks: ORDINARY — every pending required check is under ${STUCK_AFTER_MIN}m." \
-         "A cold-start settle normally takes TWO invocations; re-run this exact command."
+         "A cold-start settle normally takes TWO invocations; re-run this exact command" \
+         "(a feature reviewer does not: review.md gives it one call per head)."
   else
     echo "wait-checks: STUCK — a required check has run for ${oldest}m (>= ${STUCK_AFTER_MIN}m)." \
          "Investigate rather than re-running."
   fi
 fi
+say_red TIMEOUT-PENDING
 echo TIMEOUT-PENDING
 exit 4

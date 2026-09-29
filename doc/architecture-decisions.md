@@ -142,6 +142,29 @@ say which part changed.
   `--replicate` pilot is expected to remain part of `demo/shopping` (per
   V4-PILOT's own report) until a later ticket extracts it into its own module,
   at which point the prefix moves with it rather than dropping.
+- **G1 widened: `graph` and `membrane` added to `inspectCellPrefixes`**
+  (2026-09-27, maintainer decision — computenet-va0c4.2, mlboogerd, decided
+  through a three-reviewer panel (Opus 5.5, Sol, Jev), unanimous on option
+  (a), confidence 75/82/80). WKB2 (epic computenet-7p8) puts the write plane's
+  construction surface in the inspector by design: F12's `DraftCompiler`
+  lowers drafts using `GraphSpec`/`Precheck`/`applyRemote`, all of which live
+  under `civictech.cell.graph` (`inspect/src/main`'s `Catalogue.kt`,
+  `DraftCompiler.kt`; F3's `Draft.kt`/`StagedApplier.kt` need the same
+  package). Separately, `KernelEntries.kt` registers
+  `civictech.cell.membrane.TrafficLightCell` as a catalogue entry — the one
+  journal-free replicable kernel cell whose `replicas` lowering passes
+  `InstanceSetStep.validate` — which computenet-va0c4.2's own test depends
+  on. Both couplings are load-bearing type references (constructed and
+  invoked), not incidental: F12/F3/F6 cannot avoid `graph`, and the
+  replicas-lowering test cannot avoid `membrane`. Rejected alternatives: a
+  kernel-owned facade outside `graph` would only re-export the same types
+  under a different name; moving the write-plane compiler into another module
+  contradicts the va0c4 design. **Shrink trigger:** none identified — the
+  write plane is designed to live in the inspector; drop `graph` only if a
+  kernel-owned observe/construction seam later subsumes it (as with `proxy`'s
+  B2 trigger), and drop `membrane` only if the replicas-lowering test moves to
+  a different journal-free cell that lives under an already-allowed prefix.
+  Recorded in the test's class KDoc.
 
 ### Remediation closed — 2026-07-28
 

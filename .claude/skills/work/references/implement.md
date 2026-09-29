@@ -58,8 +58,10 @@ computed in your worktree; the base commit it names is not a diff baseline.
 ## Build
 
 **A bug fix starts red.** Write the reproduction and run it against the
-unfixed code. Quote the failing test name and its assertion message; that
-output, not the later green, is the evidence your fix is not a no-op.
+unfixed code — before the fix, or with the fix reverted per [Mutation
+checks](evidence.md#mutation-checks), never via `git stash`. Quote the failing
+test name and its assertion message; that output, not the later green, is the
+evidence your fix is not a no-op.
 
 A prescribed reproduction, mutation or measurement is a hypothesis. It
 describes the code as it was when the bead was written. When a prescribed

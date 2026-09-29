@@ -11,6 +11,7 @@
  */
 package civictech.demo.social
 
+import civictech.cell.StateReadResult
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -18,6 +19,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Interest
 import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.demo.shell.DemoShell
@@ -29,7 +31,10 @@ import com.sun.net.httpserver.HttpExchange
 import java.io.File
 import java.net.URLDecoder
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -86,6 +91,11 @@ class SocialApp(
     // handle because start()'s quiescence fence submits onto it. Tests pass
     // SimulationController.scheduler().
     scheduler: HostScheduler? = null,
+    // 4q9is-D7: appended LAST. Opt-in because the spawn it wires in is
+    // durable (`authored/keys` grows for every admitted-but-absent friend,
+    // forever) — the default app never spawns ahead of a post, matching
+    // SocialFeedScatterGatherTest's AMENDS behaviour and [SOC1-SREAD-03].
+    private val interestDriven: Boolean = false,
 ) {
     private val registry = LocationRegistry()
     private val hostScheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("SocialApp")
@@ -112,15 +122,73 @@ class SocialApp(
     // once and shared by the short reads and every feed session (8eb53).
     private val boundedReader: BoundedReader = reader(host)
 
-    val shortReads: ShortReads = ShortReads(boundedReader, GraphLocator(graph, pipeline.families))
+    // flfkm-D8: shared with complexReads below, so a read of the same person
+    // through IS1-IS7 and IC8/IC3 never spawns a cell twice.
+    private val locator: EntityLocator = GraphLocator(graph, pipeline.families)
+
+    val shortReads: ShortReads = ShortReads(boundedReader, locator)
+
+    /** IC8, IC3 (feature `computenet-flfkm`, flfkm-D4..D6) over [locator]. */
+    val complexReads: ComplexReads = ComplexReads(boundedReader, locator)
+
+    // 4q9is-D7: opt-in join of a derived scope to KeyedCells.getOrSpawn over
+    // the authored family. Null unless interestDriven — the default app never
+    // spawns ahead of a post.
+    private val spawner: InterestDrivenFamily? =
+        if (interestDriven) InterestDrivenFamily(pipeline.families.authored) else null
+
+    // computenet-pvtcj: this app's own pool for FeedSession.fanOut to
+    // dispatch spawner.admit() onto (Feed.kt's companion KDoc explains why a
+    // separate thread is needed). Null unless interestDriven, matching
+    // [spawner] above — every FeedSession this app builds gets this instance
+    // instead of FeedSession's own (unused-here) default, so [stop] can shut
+    // it down rather than leaving its daemon threads running past the app's
+    // lifetime.
+    private val spawnExecutor: ExecutorService? =
+        if (interestDriven) {
+            Executors.newCachedThreadPool { r -> Thread(r, "FeedSession-spawn").apply { isDaemon = true } }
+        } else {
+            null
+        }
 
     /**
      * A scatter-gather feed for [viewer] over the authored cells [scope]
-     * admits (feature `computenet-8eb53`). The scope is the caller's: this
-     * app does not derive it from `knows`, and there is no `/feed` route yet.
+     * admits (feature `computenet-8eb53`). The scope is the caller's, fixed
+     * for the session's lifetime ([ScopeSource.fixed]); `SocialPipelineTest`
+     * and `SocialFeedScatterGatherTest` use this overload directly.
      */
     fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
-        FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
+        if (spawnExecutor != null) {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner, spawnExecutor)
+        } else {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
+        }
+
+    /**
+     * `/feed`'s session (4q9is-D8): the scope is [ViewerInterest], derived
+     * from the viewer's `knows` set fresh on every [FeedSession.pull] — the
+     * session itself tracks a friend add/remove, so [feedSessions] below
+     * never needs to rebuild it.
+     */
+    fun feedSession(viewer: Long, pageLimit: Int = 200): FeedSession {
+        val scope = ViewerInterest(locator, boundedReader, registry, pageLimit)
+        return if (spawnExecutor != null) {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner, spawnExecutor)
+        } else {
+            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
+        }
+    }
+
+    /**
+     * `/feed`'s per-viewer [FeedSession] cache (4q9is-D8): one session per
+     * viewer, for as long as the viewer keeps polling — never rebuilt, so a
+     * friend add or remove neither discards a retained frontier nor drops
+     * `handleFeed`'s reused session. Each session derives its own scope from
+     * the viewer's current `knows` set on every pull ([ViewerInterest]); a
+     * friend change is picked up on the pull that follows it, with no cache
+     * comparison here.
+     */
+    private val feedSessions = ConcurrentHashMap<Long, FeedSession>()
 
     // One observe sink per static dimension set (jo2jk-D2), read the same way
     // SocialGraph reads its keyed families: sink.current() only.
@@ -183,13 +251,36 @@ class SocialApp(
         if (recovery?.completed == false) {
             awaitQuiescence()
             completeRecovery()
+        } else if (stream != null) {
+            // computenet-l3msn: the source load's writes may still be folding
+            // into their sinks. [SocialGraph.onChange] below skips each
+            // pre-existing sink's catch-up, but a fold that lands AFTER it
+            // registers is a real change and broadcasts — so without this
+            // fence the startup broadcast count would again grow with how
+            // much of an N-sink load is still queued on a slow host. After
+            // it, every preloaded fold precedes the listeners, and the
+            // startup count is independent of N. Reached only with a
+            // `source`; no SimulationController test starts one (see
+            // [awaitQuiescence]).
+            awaitQuiescence()
         }
         val s = DemoShell(port)
-        s.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        // flfkm-D8 404 guard: DemoShell.route is server.createContext(path), and
+        // the JDK HttpServer's "/" context is the root context that otherwise
+        // catches every unregistered path (observed 2026-09-23: a probe of a
+        // server with only "/" and "/person/" contexts answered `/shortest ->
+        // 200 PAGE`, quoted on the feature's breakdown comment). Guard on the
+        // exact path here rather than relying on DemoShell to refuse.
+        s.route("/") {
+            if (it.requestURI.path == "/") it.respond(200, PAGE, "text/html; charset=utf-8") else it.respond(404, "not found")
+        }
         s.route("/state") { it.respond(200, stateJson(), "application/json") }
         s.route("/op") { handleOp(it) }
         s.route("/person/") { handlePerson(it) }
         s.route("/message/") { handleMessage(it) }
+        s.route("/feed") { handleFeed(it) }
+        s.route("/replies") { handleReplies(it) }
+        s.route("/fof") { handleFof(it) }
         s.sse("/events") { stateJson() }
         shell = s
 
@@ -199,33 +290,149 @@ class SocialApp(
         s.start()
     }
 
-    /** Safe on a never-started app. */
+    /**
+     * Safe on a never-started app. Also releases every observe-sink dispatcher
+     * thread this app minted (computenet-a77tu): [SocialGraph.close] for the
+     * per-keyed-cell sinks, plus this app's own four static-set sinks
+     * ([tags]/[tagClasses]/[places]/[organisations]), cast to [ObserveCell]
+     * the same way and for the same reason [SocialGraph.close] does — the
+     * sole implementation `host.observe` ever returns, and the one that
+     * exposes `close`. Idempotent, since both [SocialGraph.close] and
+     * [ObserveCell.close] are. computenet-pvtcj: also shuts down [spawnExecutor]
+     * when this app minted one (`interestDriven = true`), so no
+     * `FeedSession-spawn` thread outlives the app; `shutdownNow` rather than
+     * `shutdown`, since a pending `admit()` running past `stop()` would race
+     * a graph this method just closed. `ExecutorService.shutdownNow` is
+     * itself idempotent.
+     *
+     * computenet-cpybp: returns only after every observe-cell dispatcher
+     * thread this app caused has terminated, waiting at most
+     * [STOP_DISPATCHER_BOUND_MS] ([SocialGraph.awaitDispatchers] says how the
+     * threads are found, and the one case it does not cover). Only
+     * [SocialGraph]'s sinks can have minted one: the four static-set sinks
+     * never get a listener, and `ObserveCell` mints its dispatcher only to run
+     * a listener. Every other step runs first, so a bound overrun still leaves
+     * the app fully stopped.
+     *
+     * @throws IllegalStateException naming the survivors, if any dispatcher is
+     *   still alive after [STOP_DISPATCHER_BOUND_MS].
+     */
     fun stop() {
         shell?.stop()
+        graph.close()
+        listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
+        spawnExecutor?.shutdownNow()
+        val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS)
+        check(survivors.isEmpty()) {
+            "SocialApp.stop: ${survivors.size} observe-cell dispatcher(s) still alive " +
+                "${STOP_DISPATCHER_BOUND_MS}ms after stop: $survivors"
+        }
     }
+
+    // computenet-1uf0s / computenet-l3msn: how many `/state` computations a
+    // burst of change notifications costs.
+    //
+    // The startup burst is gone at its source, not coalesced: start() fences
+    // the source load, and [SocialGraph.onChange]'s bulk attach drops each
+    // preloaded sink's late-join catch-up (see its KDoc for the ordering that
+    // makes that drop exact). A preloaded app therefore makes no startup
+    // broadcast per sink; the count no longer depends on N at all.
+    //
+    // What remains is [broadcast]'s single-flight worker, kept for live
+    // bursts (one /op writes up to three cells, each a separate sink firing
+    // on its own dispatcher thread): a call that lands while a broadcast is
+    // computing/sending only marks [broadcastQueued], and the worker runs once
+    // more afterward — one extra computation that reflects every call queued
+    // behind it. Calls that arrive while no broadcast is in flight each start
+    // their own, so this bounds calls *overlapping one in-flight broadcast*
+    // at one re-run; it does not bound a burst spread out in time (that was
+    // the 1uf0s over-claim: measured, a spread-out startup burst cost ~7% of
+    // N, and 101-233 of 297 on CI). No call is ever dropped without a later
+    // computation that post-dates it, so a live change is never lost.
+    //
+    // Both branches check/mutate [broadcastInFlight]/[broadcastQueued] under
+    // the same [broadcastLock], including the loop's own exit check — closing
+    // the lost-wakeup window a naive pair of `AtomicBoolean`s would leave
+    // between "the loop decides nothing more is queued" and "the flag is
+    // actually cleared": a caller arriving in exactly that window sees
+    // `broadcastInFlight` still true under the lock and marks
+    // `broadcastQueued` instead of returning without effect.
+    //
+    // A throw from stateJson() or DemoShell.broadcast (computenet-l3msn)
+    // resets both flags in the `finally` and propagates: that frame, and any
+    // re-run queued behind it, are lost — as a throw cost one frame before
+    // the worker existed — but the next call broadcasts normally. Without the
+    // reset `broadcastInFlight` stayed true forever and every later change
+    // frame was silently dropped.
+    private val broadcastLock = Any()
+    private var broadcastInFlight = false
+    private var broadcastQueued = false
+
+    /** Test-only (computenet-1uf0s): total stateJson() computations [broadcast] has made. */
+    internal val broadcastCount = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * Test-only (computenet-l3msn): when set, run inside each broadcast's
+     * frame computation just before `stateJson()`, so a test can make a
+     * broadcast throw. Null in every production path.
+     */
+    @Volatile
+    internal var frameFault: (() -> Unit)? = null
 
     /** A no-op until [start] built the shell. */
     private fun broadcast() {
-        shell?.broadcast { stateJson() }
+        val s = shell ?: return
+        synchronized(broadcastLock) {
+            if (broadcastInFlight) {
+                broadcastQueued = true
+                return
+            }
+            broadcastInFlight = true
+        }
+        // True once the loop has cleared broadcastInFlight itself, under the
+        // lock; after that another worker may own the flags, so the `finally`
+        // must not touch them.
+        var released = false
+        try {
+            while (true) {
+                broadcastCount.incrementAndGet()
+                s.broadcast {
+                    frameFault?.invoke()
+                    stateJson()
+                }
+                synchronized(broadcastLock) {
+                    if (broadcastQueued) {
+                        broadcastQueued = false
+                    } else {
+                        broadcastInFlight = false
+                        released = true
+                    }
+                }
+                if (released) return
+            }
+        } finally {
+            if (!released) {
+                synchronized(broadcastLock) {
+                    broadcastInFlight = false
+                    broadcastQueued = false
+                }
+            }
+        }
     }
 
     /**
-     * Blocks until the host queue has drained: `DialogueRuntime.afterQuiescence`'s
-     * six lines (re-implemented because `:testkit`'s `awaitDrained` is test-only).
-     * One task at [Int.MAX_VALUE] priority sorts below every band the host uses,
-     * so it runs only once nothing else is queued, however deep the cascade
-     * the replay enqueues. [QUIESCENCE_TIMEOUT_MS] is a hang backstop, not a
-     * convergence budget. Must not be reached on a `SimulationController`,
-     * which nothing steps while this thread waits.
+     * Blocks until the host queue has drained: delegates to
+     * [civictech.cell.host.Quiescence] via [ManagedHost.quiescence]
+     * (computenet-q5jzk). One task at [Int.MAX_VALUE] priority sorts below
+     * every band the host uses, so it runs only once nothing else is queued,
+     * however deep the cascade the replay enqueues. [QUIESCENCE_TIMEOUT_MS] is
+     * a hang backstop, not a convergence budget. Must not be reached on a
+     * `SimulationController`, which nothing steps while this thread waits.
      *
      * @throws IllegalStateException if the host never drained in time.
      */
     private fun awaitQuiescence() {
-        val drained = CountDownLatch(1)
-        hostScheduler.submit(Int.MAX_VALUE) { drained.countDown() }
-        check(drained.await(QUIESCENCE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            "SocialApp.start: host queue never drained within ${QUIESCENCE_TIMEOUT_MS}ms of staging recovery"
-        }
+        host.quiescence().await(QUIESCENCE_TIMEOUT_MS, "SocialApp.start: staging recovery or loading the source")
     }
 
     // --- /op ------------------------------------------------------------------
@@ -349,12 +556,31 @@ class SocialApp(
      * carry, chosen here because the future itself, not the host, is what
      * failed to complete. [ShortReads] never blocks on its own; this is the
      * one place `:demo:social` does, deliberately.
+     *
+     * `computenet-1iz73`: a future that completes *exceptionally* — e.g. a
+     * `/feed` composition whose `session.pull()` call threw — is mapped to
+     * `503 {"refused":"READ_FAILED"}` rather than propagating the
+     * [ExecutionException] out of this method uncaught. `/feed`'s own fix
+     * (`FeedSession.pullShared`, `Feed.kt`) is expected to keep this path from
+     * firing in practice, but this method is the HTTP boundary's own defense:
+     * no composed future should be able to turn into an ungraceful
+     * 500/closed-connection response, whatever throws inside it.
+     *
+     * `computenet-4q9is.3`: when the cause is [ScopeUnavailable] (a `/feed`
+     * session's derived-scope read was refused), the reason reported is the
+     * scope read's own — the same shape [ReadOutcome.Refused] already uses —
+     * rather than the generic `READ_FAILED` every other exceptional
+     * completion still gets.
      */
     private fun <T> respondOutcome(exchange: HttpExchange, future: CompletableFuture<ReadOutcome<T>>, body: (T) -> String) {
         val outcome = try {
             future.get(shortReadTimeoutSeconds, TimeUnit.SECONDS)
         } catch (_: TimeoutException) {
             exchange.respond(503, """{"refused":"TIMEOUT"}""", "application/json")
+            return
+        } catch (e: ExecutionException) {
+            val reason = (e.cause as? ScopeUnavailable)?.reason ?: StateReadResult.Reason.READ_FAILED
+            exchange.respond(503, """{"refused":${esc(reason.name)}}""", "application/json")
             return
         }
         when (outcome) {
@@ -422,6 +648,142 @@ class SocialApp(
         }
     }
 
+    // --- /feed, /replies, /fof (SOC1 F6, feature `computenet-flfkm`, flfkm-D8) ---
+
+    /** A query param, URL-decoded (copied from `AlignmentApp.query`'s shape). */
+    private fun HttpExchange.query(key: String): String? =
+        requestURI.rawQuery?.split("&")?.firstOrNull { it.startsWith("$key=") }
+            ?.let { URLDecoder.decode(it.substringAfter("="), Charsets.UTF_8).trim() }
+
+    /** A required numeric param: 400 `"missing <name>"` when absent or non-numeric. */
+    private fun HttpExchange.requiredLong(name: String): Long = query(name)?.toLongOrNull() ?: throw Bad("missing $name")
+
+    /** An optional numeric param, or null when absent or non-numeric. */
+    private fun HttpExchange.optionalLong(name: String): Long? = query(name)?.toLongOrNull()
+
+    /** `limit`, defaulting to 20; 400 `"bad limit"` when non-numeric or `<= 0`. */
+    private fun HttpExchange.limitParam(): Int {
+        val raw = query("limit") ?: return 20
+        val n = raw.toIntOrNull() ?: throw Bad("bad limit")
+        if (n <= 0) throw Bad("bad limit")
+        return n
+    }
+
+    /**
+     * `GET /feed?person=<id>&limit=<n>[&before=<ms>]` — IC2 (4q9is-D8). No
+     * `shortReads.is3` read and no scope comparison here: [feedSessions]
+     * caches one [FeedSession] per viewer, built once over [ViewerInterest]
+     * ([feedSession]), and every pull re-derives that viewer's scope from
+     * their current `knows` set (see [FeedSession]'s "Scope" doc) — a friend
+     * add or remove neither rebuilds the session nor loses its retained
+     * frontiers. An unknown viewer never reaches the cache: `/feed` answers
+     * `{"found":false}` at zero authored reads, matching `is1`'s own
+     * unknown-id behavior. A refused scope read fails [FeedSession.pull]
+     * exceptionally with [ScopeUnavailable], which [respondOutcome] maps to
+     * 503 with that refusal's own reason. A [LegOutcome.Deferred] leg is not
+     * a refusal — [FeedSession.board] still answers from whatever the other
+     * legs delivered.
+     *
+     * **`pullShared` and a just-applied write (`computenet-flfkm` review
+     * lead, relayed on this task's bead).** [FeedSession.pullShared] hands an
+     * overlapping caller the future of a pull already in flight, and that
+     * pull derived its scope, and read every leg's page, before the write
+     * landed — so a request arriving right after a friend add/remove or a
+     * new post can join a pull that does not reflect it. Deriving the scope
+     * per pull (this task) widens that window relative to task 1iz73's
+     * baseline: there, `handleFeed` re-read `is3` fresh on every request and
+     * replaced the cached session outright on a scope change, so a friend
+     * change was visible to the very request that raced it; here it is
+     * visible only once that request's own call to [FeedSession.pullShared]
+     * starts a pull after the write. The intended semantics: `/feed` is
+     * next-pull consistent, not read-your-write consistent, for both a
+     * friend change and a post — the same guarantee `[SOC1-FEED-03/04]`'s
+     * retained-frontier design already gives message content, now extended
+     * to scope. No poller loses data: a friend removed keeps hiding what it
+     * hid, an add keeps widening from the next pull woken by any caller.
+     */
+    private fun handleFeed(exchange: HttpExchange) {
+        val person: Long
+        val limit: Int
+        val before: Long?
+        try {
+            person = exchange.requiredLong("person")
+            limit = exchange.limitParam()
+            before = exchange.optionalLong("before")
+        } catch (e: IllegalArgumentException) {
+            exchange.respond(400, e.message ?: "bad request")
+            return
+        }
+
+        val future: CompletableFuture<ReadOutcome<List<Message>>> =
+            if (locator.person(person) == null) {
+                CompletableFuture.completedFuture(ReadOutcome.Empty)
+            } else {
+                val session = feedSessions.computeIfAbsent(person) { feedSession(person) }
+                // computenet-1iz73: pullShared(), not pull(), because two /feed
+                // requests for the same viewer can reach this cached session
+                // while an earlier pull is still in flight (the cache-fetch
+                // above is atomic; a session's pull() is not reentrant, and
+                // this HTTP layer must never race that check).
+                session.pullShared()
+                    .thenApply { session.board(limit, before) }
+                    .thenApply<ReadOutcome<List<Message>>> { ReadOutcome.Found(it) }
+            }
+        respondOutcome(exchange, future) { messages ->
+            """{"found":true,"messages":${messages.joinToString(",", "[", "]") { it.json() }}}"""
+        }
+    }
+
+    /** `GET /replies?person=<id>&limit=<n>` — IC8 (flfkm-D8), served straight from [complexReads.ic8]. */
+    private fun handleReplies(exchange: HttpExchange) {
+        val person: Long
+        val limit: Int
+        try {
+            person = exchange.requiredLong("person")
+            limit = exchange.limitParam()
+        } catch (e: IllegalArgumentException) {
+            exchange.respond(400, e.message ?: "bad request")
+            return
+        }
+        respondOutcome(exchange, complexReads.ic8(person, limit)) { messages ->
+            """{"found":true,"messages":${messages.joinToString(",", "[", "]") { it.json() }}}"""
+        }
+    }
+
+    /**
+     * `GET /fof?person=<id>&countryA=<id>&countryB=<id>&from=<ms>&to=<ms>[&limit=<n>]`
+     * — IC3 at two hops (flfkm-D8), served from [complexReads.ic3]. `countryA
+     * == countryB` or `from > to` is validated here, before the call, so the
+     * `require` guards [ComplexReads.ic3] itself carries never throw past a
+     * `respondOutcome` bound.
+     */
+    private fun handleFof(exchange: HttpExchange) {
+        val person: Long
+        val countryA: Long
+        val countryB: Long
+        val from: Long
+        val to: Long
+        val limit: Int
+        try {
+            person = exchange.requiredLong("person")
+            countryA = exchange.requiredLong("countryA")
+            countryB = exchange.requiredLong("countryB")
+            from = exchange.requiredLong("from")
+            to = exchange.requiredLong("to")
+            limit = exchange.limitParam()
+            if (countryA == countryB) throw Bad("countryA and countryB must differ")
+            if (from > to) throw Bad("from must be <= to")
+        } catch (e: IllegalArgumentException) {
+            exchange.respond(400, e.message ?: "bad request")
+            return
+        }
+        respondOutcome(exchange, complexReads.ic3(person, countryA, countryB, from, to, limit)) { rows ->
+            """{"found":true,"rows":${
+                rows.joinToString(",", "[", "]") { """{"personId":${it.personId},"countA":${it.countA},"countB":${it.countB}}""" }
+            }}"""
+        }
+    }
+
     /** The full [Person], every field (IS1's pinned shape, rx8om-D8). */
     private fun Person.json(): String =
         """{"id":$id,"firstName":${esc(firstName)},"lastName":${esc(lastName)},"gender":${esc(gender)},""" +
@@ -433,7 +795,9 @@ class SocialApp(
         """{"id":$id,"creatorId":$creatorId,"creationDate":$creationDate,"content":${esc(content)},""" +
             """"forumId":${forumId ?: "null"},"replyOfId":${replyOfId ?: "null"}}"""
 
-    // --- /state (jo2jk-D6: pinned shape, sorted, esc'd, bounded) ---------------
+    // --- /state (jo2jk-D6: pinned shape, sorted, esc'd, bounded; flfkm-D7 ------
+    // appends the fixed "queries" key after "remaining", naming IC2/IC8/IC3 as
+    // "served" and IC5/IC6/IC12 as "finding" — see Queries.kt's own table) -----
 
     private fun stateJson(): String {
         val personIds = graph.personIds()
@@ -474,6 +838,7 @@ class SocialApp(
             """"counts":{"persons":${personIds.size},"knows":$knowsTotal,"forums":${forumIds.size},""" +
             """"messages":${messageIds.size},"likes":$likesTotal,"tags":$tagsTotal},""" +
             """"applied":${stream?.applied ?: 0},"remaining":${stream?.remaining ?: 0},""" +
+            """"queries":{"ic2":"served","ic8":"served","ic3":"served","ic5":"finding","ic6":"finding","ic12":"finding"},""" +
             """"persons":$personsJson,"forums":$forumsJson,"messages":$messagesJson}"""
     }
 
@@ -485,6 +850,18 @@ class SocialApp(
 
         /** Hang backstop for [awaitQuiescence] (v10ou-D3: 30 s, as `DialogueRuntime`). */
         const val QUIESCENCE_TIMEOUT_MS = 30_000L
+
+        /**
+         * Bound on [stop]'s wait for its observe-cell dispatchers
+         * (computenet-cpybp). A hang backstop, not a measured budget: once
+         * [SocialGraph.close] has made every queued listener a no-op, the only
+         * work that can hold a dispatcher is the [broadcast] worker already
+         * running on it — its in-flight `/state` computation plus at most one
+         * re-run queued behind it ([broadcastQueued]); every other dispatcher
+         * returns at once from [broadcast]. Locally (darwin/arm64) the whole wait takes milliseconds;
+         * no number here was measured on CI.
+         */
+        const val STOP_DISPATCHER_BOUND_MS = 10_000L
 
         /**
          * Bounds a short read's future at the HTTP boundary (rx8om-D8).

@@ -1,0 +1,81 @@
+# Ordering caveat (why quiesce separates a floor-raising add from a below-floor
+# add): the data path a/b -> w is one hop and the floor path a/b -> wl -> w is
+# two, so within one quiesce block an add whose time is below the floor the
+# block's OWN adds establish may be admitted-then-evicted or late-dropped
+# depending on delivery order. A quiesce between the floor-raising add and the
+# dependent add makes the outcome a spec consequence, not a schedule
+# (computenet-t4od7.3). Every add below is either strictly above the current
+# floor by construction (order-independent — its own contribution to the floor
+# cannot exceed its own event time) or is separated from the floor-raising add
+# by an explicit quiesce.
+#
+# `b` (not a re-add on `a`) carries the already-live-elsewhere case at the end,
+# because a `set-source`'s re-add of an already-live element is not something
+# this scenario should depend on (`b` is a genuinely different source, so its
+# add is a distinct tag on the same element value).
+#
+# Verification note (computenet-t4od7.3, evidence.md's schedule-dependence
+# check): deleting the quiesce between `add a [25, z]` and the `[4, late]` /
+# `[19, late2]` / `[22, w]` block does NOT redden this file's checks under the
+# 20-run schedule sweep. Two independent reasons cover the three affected
+# adds: `4` is below every floor this run ever reaches (even the pre-25 floor
+# of 7), so it is late regardless of which hop wins the race; and `19`, even
+# if transiently mis-admitted into window 10 by a stale floor, sits in a
+# window `[24-WL-06]` eviction (triggered once the delayed floor update
+# reaches 20) sweeps away anyway, so the final `MapDelta`/`late` observables
+# converge to the same state either way. The general hazard the quiesce rule
+# guards against is real (an add strictly between the pre- and post-rise
+# floor, inadmissible under a schedule-dependent race) — this file's chosen
+# values just do not sit in that gap, so the deletion experiment is a
+# negative result, recorded rather than assumed.
+id: 24-WL-LATE-01
+title: A window with lateness folds an out-of-order-but-above-floor add as ordinary, late-drops a below-floor add onto its late outlet, and never retracts a live copy
+covers: [24-WL-01, 24-WL-06, 24-WL-07, 24-OP-WINDOW-02, 24-WL-10]
+profile: core
+kind: example
+narrative:
+  given: two set sources of [event-time, value] pairs feeding a waterline (lateness 5) and a tumbling window (size 10, lateness 5) guarded by that waterline's floor, observed through a count view and, on the window's late outlet, a set view
+  when: an out-of-order add lands at or above the current floor, two adds land strictly below the floor after it has passed their window, and a second source's add of an already-admitted element itself lands below the floor
+  then: the above-floor add folds as an ordinary add (B2, [24-OP-WINDOW-02]'s surviving half); the below-floor adds are excluded from the aggregate and forwarded verbatim onto late ([24-WL-07]); and the second source's below-floor add of an element already live from the first source leaves the aggregate unchanged without retracting the live copy ([24-WL-07]'s side-effect clause)
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: wl, type: waterline, lateness: 5}
+    - {id: w, type: window, agg: count, window: {kind: tumbling, size: 10}, lateness: 5}
+    - {id: v, type: count-view}
+    - {id: l, type: set-view}
+  links:
+    - {from: a, to: wl}
+    - {from: b, to: wl}
+    - {from: a, to: w}
+    - {from: b, to: w}
+    - {from: wl, to: w, inlet: waterline}
+    - {from: w, to: v}
+    - {from: w, to: l, outlet: late}
+script:
+  # floor = min-over-sources(max event time) - 5; only `a` contributes until the last step.
+  - {type: apply, on: a, op: add, value: [3, x]}     # max=3, floor=-2
+  - {type: apply, on: a, op: add, value: [12, y]}    # max=12, floor=7
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [8, q]}     # out of order but 8 >= floor(7): ordinary add -> v {"0": 2, "10": 1}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [25, z]}    # max=25, floor=20: windows 0 (end 10) and 10 (end 20) evicted -> v {"20": 1}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [4, late]}    # 4 < 20: late, window 0 is not re-created
+  - {type: apply, on: a, op: add, value: [19, late2]}  # 19 < 20: late
+  - {type: apply, on: a, op: add, value: [22, w]}      # 22 >= 20: admitted -> v {"20": 2}
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [28, m]}    # max=28, floor=23: window 20 (end 30 > 23) stays live -> v {"20": 3}
+  - {type: quiesce}
+  # b joins the waterline low: candidate = min(28, 22) - 5 = 17 < 23, floor stays 23 ([24-WL-20]).
+  # At w, b's [22, w] is itself below the (unchanged) floor 23, so it is late-dropped —
+  # excluded before it ever touches state — leaving a's live [22, w] untouched: v unchanged.
+  - {type: apply, on: b, op: add, value: [22, w]}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: {"20": 3}}
+  - {type: final-view, view: l, equals: [[4, late], [19, late2], [22, w]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: incremental-equals-batch, view: l}
+  - {type: no-dead-letters}

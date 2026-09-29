@@ -20,7 +20,10 @@ import civictech.iroh.SidecarProtocol.DIRECTION_INBOUND
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
@@ -114,6 +117,31 @@ internal class FakeNode(
     /** Every link this node holds for [key] right now. */
     fun links(key: ByteArray): List<IrohNode.LinkView> = node.links(key)
 
+    /**
+     * Hold every dial thread of this node in the window between the reader
+     * settling its `DIAL` and `openLink` registering the link with the node
+     * (computenet-311xs), until the returned function is called.
+     *
+     * The hold sits in [SidecarClient.beforeDialAwait]: after the `DIAL` is
+     * written and before the wait for its answer. The reader still settles
+     * the dial when its `LINK_UP` arrives — the client registers the link and
+     * counts the latch down — but the dialling thread does not return from
+     * `SidecarClient.dial`, so the node has not yet been told the link is up.
+     * That is the window a slow dial thread opens on a real machine, held
+     * open for as long as the test needs it rather than sampled.
+     */
+    fun holdDialThreads(): () -> Unit {
+        val release = CountDownLatch(1)
+        client.beforeDialAwait = { _ -> release.await(30, TimeUnit.SECONDS) }
+        return {
+            client.beforeDialAwait = null
+            release.countDown()
+        }
+    }
+
+    /** @see RegistrationHold — held on this node's dialled links. */
+    fun holdDialRegistration(): RegistrationHold = RegistrationHold(node)
+
     override fun close() {
         runCatching { if (::peering.isInitialized) peering.close() }
         runCatching { client.close() }
@@ -151,6 +179,39 @@ internal class FakeNode(
             self.peering = startPeering()
             return self
         }
+    }
+}
+
+/**
+ * Holds every dialling thread of [node] just after `SidecarClient.dial` has
+ * returned its link and before the link's connection installs it or the node
+ * registers it (computenet-wad38), until [release].
+ *
+ * Unlike [FakeNode.holdDialThreads] this hold sits AFTER the dial has
+ * decided, so the client already delivers the link's events to the reader:
+ * a `LINK_DOWN` sent while held is dispatched, and reaches the node, before
+ * the node has been told the link is up. That is the ordering a far side that
+ * closes a link within microseconds of its `LINK_UP` produces on a real
+ * machine, held open for as long as the test needs it.
+ */
+internal class RegistrationHold(private val node: IrohNode) {
+    private val release = CountDownLatch(1)
+    private val held = LinkedBlockingQueue<Long>()
+
+    init {
+        node.beforeDialledLinkRegistered = { link ->
+            held.put(link.id)
+            release.await(30, TimeUnit.SECONDS)
+        }
+    }
+
+    /** The id of the next dialled link a thread is held on, waiting for one to be. */
+    fun awaitHeld(): Long = held.poll(30, TimeUnit.SECONDS) ?: fail("no dialled link was held within 30s")
+
+    /** Let every held thread, and every later one, through. */
+    fun release() {
+        node.beforeDialledLinkRegistered = null
+        release.countDown()
     }
 }
 
@@ -193,6 +254,9 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
 
     /** Frames this rig has moved. A stalled count is what "quiescent" means here. */
     val relayed = AtomicLong()
+
+    /** Every host message [pump] took off a fake, by the label of the node that wrote it, in order. */
+    val written = ConcurrentLinkedQueue<Pair<String, HostMessage>>()
 
     private var nextInboundLink = 10_000L
 
@@ -251,6 +315,7 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
                 val message = holder.fake.pollHostMessage(pollMillis) ?: break
                 moved++
                 relayed.incrementAndGet()
+                written += holder.label to message
                 when (message) {
                     is HostMessage.Dial -> pendingDials.getValue(holder.label).add(message)
 

@@ -1,6 +1,7 @@
 package civictech.testkit.dst
 
 import civictech.cell.CellRef
+import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.host.ManagedHost
@@ -245,6 +246,7 @@ class DstWorldTest {
         val world = DstWorld(seed = 1)
         val pinned = object : Journal {
             override val formatVersion: Int = 7
+            override val durability: DurabilityClass = DurabilityClass.IN_MEMORY
             override fun append(record: ByteArray) = Unit
             override fun replay(): List<ByteArray> = emptyList()
             override fun reset(records: List<ByteArray>) = Unit

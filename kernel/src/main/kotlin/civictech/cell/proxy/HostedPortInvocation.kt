@@ -66,6 +66,20 @@ data class HostedPortInvocation(
      * replay baseline, not a live wave.
      */
     val replayFrontier: TagFrontier? = null,
+    /**
+     * Replay provenance (computenet-xy7w4 D1): an opaque token naming the journal this
+     * frame is a replay of — the `Journal` instance `HostDurability.recoverFrom` was given,
+     * typed [Any] so this package does not depend on `civictech.cell.durability` — or a
+     * frame derived, at any cascade depth, from delivering one (the intake copies the
+     * ambient [civictech.cell.ReplayProvenance] onto every frame it accepts). Null = live.
+     * `ManagedHost.enqueueHostedInvocation` skips the journal append exactly when the
+     * target's journal is `===` this token, and lets a frame carrying it through a
+     * SATURATED intake; `ManagedHost.deliver` re-installs it around the handler via
+     * `ReplayProvenance.withSuspending`. Never serialized, same discipline as
+     * [replayFrontier] and [peer]: a frame arriving from the wire or a journal is not a
+     * replay on this host until this host's own `recoverFrom` stamps it.
+     */
+    val replayOf: Any? = null,
 ) {
     enum class Type {
         /**
