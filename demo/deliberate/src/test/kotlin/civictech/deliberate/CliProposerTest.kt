@@ -136,10 +136,9 @@ class CliProposerTest {
                 { _, _ -> listOf("sh", "-c", "pwd > '${pidFile.absolutePath}'; sleep 60 & echo \$! >> '${pidFile.absolutePath}'; wait") },
                 ProcessGate(1),
                 timeout = Duration.ofMillis(200),
-                descendantsOf = {
-                    val childPid = pidFile.readLines()[1].toLong()
-                    listOf(ProcessHandle.of(childPid).orElseThrow())
-                },
+                // Waits for the shell's own recording step rather than assuming it has
+                // run by the timeout: see [awaitRecordedGrandchild] (computenet-8scim).
+                descendantsOf = { listOf(awaitRecordedGrandchild(pidFile)) },
             )
             val error = assertFailsWith<IllegalStateException> { proposer.run("p") }
             assertTrue("timed out" in error.message!!)
@@ -178,12 +177,14 @@ class CliProposerTest {
                 descendantsOf = {
                     // First call (destroyTree's pre-grace-period snapshot): behave as
                     // though the grandchild had not been recorded yet. Every later call
-                    // (only the fix makes one) sees the real, by-then-recorded pid.
+                    // (only the fix makes one) waits for the real pid to be recorded —
+                    // the shell is still alive at that point, so it will be — rather
+                    // than returning empty when a loaded host has not yet let the shell
+                    // run (computenet-8scim, see [awaitRecordedGrandchild]).
                     if (calls.getAndIncrement() == 0) {
                         emptyList()
                     } else {
-                        val lines = pidFile.readLines()
-                        if (lines.size < 2) emptyList() else listOf(ProcessHandle.of(lines[1].toLong()).orElseThrow())
+                        listOf(awaitRecordedGrandchild(pidFile))
                     }
                 },
             )
@@ -203,6 +204,39 @@ class CliProposerTest {
             assertTrue(calls.get() >= 2, "fix must re-snapshot descendants after the kill grace period")
         } finally {
             pidFile.delete()
+        }
+    }
+
+    /**
+     * The grandchild `sleep 60` that the timeout tests' shell fixture records as line 2
+     * of [pidFile], waited for rather than read (computenet-8scim).
+     *
+     * The fixture's shell only records its pids once it gets CPU. Under package-level
+     * load it has been observed not to run its first command within the 200 ms timeout
+     * plus destroyTree's 1 s grace, so it was force-killed before writing anything:
+     * the pid file was empty ("grandchild pid was never recorded: []", and
+     * `IndexOutOfBoundsException: Index 0` on the first line). Reproduced
+     * deterministically by prefixing the fixture with `sleep 1.5;`.
+     *
+     * The wait belongs here, inside the injected `descendantsOf`: destroyTree calls it
+     * BEFORE it kills the shell, so the shell is still alive and the recording will
+     * happen. Waiting after `run()` returns cannot help, because the shell is dead by
+     * then and never writes. The deadline is only a hang guard; the signal is the
+     * recorded line. Throws [IllegalStateException] (which destroyTree treats as an
+     * empty snapshot) if the deadline passes, so the test's own assertions then fail.
+     */
+    private fun awaitRecordedGrandchild(pidFile: File): ProcessHandle {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (true) {
+            val text = pidFile.readText()
+            // `echo $!` writes its line in one write(2); require the newline so a
+            // half-observed line is never parsed.
+            val lines = text.lines()
+            if (text.endsWith("\n") && lines.size >= 3) {
+                return ProcessHandle.of(lines[1].toLong()).orElseThrow()
+            }
+            check(System.nanoTime() < deadline) { "grandchild pid not recorded within 30 s: $text" }
+            Thread.sleep(10)
         }
     }
 
