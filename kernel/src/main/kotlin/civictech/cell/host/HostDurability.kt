@@ -310,11 +310,6 @@ internal class HostDurability(
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
 ) {
 
-    /** Suppresses journaling while [recoverFrom] replays — replay must not re-journal itself. */
-    @Volatile
-    var recovering = false
-        private set
-
     /**
      * PN-2 (plan §3 Rule of recovery, §4 PN-2): stamp every replayed frame that
      * carries a wave context (a mid-graph cell's frames — root frames driven
@@ -359,7 +354,13 @@ internal class HostDurability(
      * `Stateful` state directly; invocation frames re-enter through the
      * ordinary intake (decode = the same path a network frame takes — a
      * journal is a bridge to disk). Call after the graph is rebuilt (cells
-     * spawned) and before new traffic; replays are not re-journaled.
+     * spawned). Replays are not re-journaled, and neither is anything their
+     * delivery derives into [journal] (computenet-xy7w4 D1/D2): every
+     * replayed frame is stamped `replayOf = journal`, a per-frame provenance
+     * the host's intake propagates down the cascade and compares by `===`
+     * against the target's journal. There is no host-wide replay
+     * window, so live traffic accepted while this runs is journaled (and
+     * saturation-gated) exactly as outside recovery.
      *
      * Per-cell (CP-C1): a journal only ever holds records for the cells whose
      * selector tees to it (the write path is per-cell), so replaying it
@@ -373,7 +374,6 @@ internal class HostDurability(
      * `awaitApplied` fences on that delivery.
      */
     fun recoverFrom(journal: Journal): Int {
-        recovering = true
         var frames = 0
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
@@ -393,46 +393,41 @@ internal class HostDurability(
         // around the handler call — surviving a suspension to a different
         // worker thread too.
         val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
-        try {
-            ReplayScope.with(scope) {
-                val records = journal.replay()
-                records.forEachIndexed { index, record ->
-                    // T05 finding 4: a bare forEach with no per-record handling
-                    // meant any decode/readObject throw (or the else -> error
-                    // below) silently abandoned every remaining record —
-                    // recovering still reset in the finally, and the host
-                    // resumed live traffic on truncated state with nothing
-                    // to say so. Dead-letter the bad record, then rethrow so
-                    // the caller cannot mistake a partial replay for a
-                    // complete one.
-                    try {
-                        when (val decoded = JournalRecords.decode(record)) {
-                            is DecodedJournalRecord.Frame -> {
-                                submit(
-                                    WireCodec.decode(decoded.payload).let { frame ->
-                                        (if (scope == null) frame else frame.baselined(scope))
-                                            .copy(replayFrontier = scope)
-                                    }
-                                )
-                                frames++
-                            }
-
-                            is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
-                            is DecodedJournalRecord.Frontier ->
-                                advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
-                            is DecodedJournalRecord.BaselineDischarge ->
-                                recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
-                            is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
-                            is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
+        ReplayScope.with(scope) {
+            val records = journal.replay()
+            records.forEachIndexed { index, record ->
+                // T05 finding 4: a bare forEach with no per-record handling
+                // meant any decode/readObject throw (or the else -> error
+                // below) silently abandoned every remaining record —
+                // and the host resumed live traffic on truncated state with nothing
+                // to say so. Dead-letter the bad record, then rethrow so
+                // the caller cannot mistake a partial replay for a
+                // complete one.
+                try {
+                    when (val decoded = JournalRecords.decode(record)) {
+                        is DecodedJournalRecord.Frame -> {
+                            submit(
+                                WireCodec.decode(decoded.payload).let { frame ->
+                                    (if (scope == null) frame else frame.baselined(scope))
+                                        .copy(replayFrontier = scope, replayOf = journal)
+                                }
+                            )
+                            frames++
                         }
-                    } catch (e: Exception) {
-                        deadLetter("journal replay: record $index of ${records.size} failed: $e")
-                        throw RecoveryIncomplete(index, records.size, e)
+
+                        is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
+                        is DecodedJournalRecord.Frontier ->
+                            advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
+                        is DecodedJournalRecord.BaselineDischarge ->
+                            recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
+                        is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
+                        is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
                     }
+                } catch (e: Exception) {
+                    deadLetter("journal replay: record $index of ${records.size} failed: $e")
+                    throw RecoveryIncomplete(index, records.size, e)
                 }
             }
-        } finally {
-            recovering = false
         }
         return frames
     }

@@ -756,6 +756,14 @@ open class ManagedHost(
         set(value) { hostDurability.replayAsBaseline = value }
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
+        // computenet-xy7w4 D1: a frame accepted while a replayed frame's delivery is on
+        // this thread is derived from it — it inherits that replay's provenance, so a
+        // cascade of any depth carries it (see [civictech.cell.ReplayProvenance]).
+        val ambient = civictech.cell.ReplayProvenance.get()
+        accept(if (ambient == null || hostedInvocation.replayOf != null) hostedInvocation else hostedInvocation.copy(replayOf = ambient))
+    }
+
+    private fun accept(hostedInvocation: HostedPortInvocation) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             require(hostedInvocation.invocation.context == null) { "protocol invocations must carry null MessageContext" }
             val id = requireNotNull(hostedInvocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
@@ -788,13 +796,15 @@ open class ManagedHost(
         // Pre-fix, a durable host with an intakeBound deterministically
         // aborted recovery once the journal exceeded high-water (nothing
         // drains during the synchronous replay under the sim controller).
-        if (!isManagement && !hostDurability.recovering) {
+        // computenet-xy7w4 D2: keyed on the frame's replay provenance, not on
+        // a time window — a live frame accepted during recovery IS gated.
+        if (!isManagement && hostedInvocation.replayOf == null) {
             synchronized(dataLock) {
                 if (intakeControl.intakeState == IntakeState.SATURATED) {
                     if (intakeBound?.policy == SaturationPolicy.Coalesce && intakeControl.coalesce(hostedInvocation)) {
                         // Coalescing is acceptance, not loss: retain every original
                         // in the WAL so recovery may replay the equivalent sequence.
-                        if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
+                        journalTee(hostedInvocation)
                         return
                     }
                     throw IntakeSaturatedException(ref)
@@ -832,12 +842,27 @@ open class ManagedHost(
         // that traversal can reach another host's enqueueHostedInvocation
         // and ITS dataLock, so it must run only after this lock releases.
         val announce = synchronized(dataLock) {
-            if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
+            journalTee(hostedInvocation)
             attentionScheduler.stage(hostedInvocation)
             intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
         announce?.invoke()
         if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+    }
+
+    /**
+     * The write-ahead tee's one append rule (computenet-xy7w4 D2): append to the target's
+     * journal unless the frame is a replay of THAT journal (`replayOf === journal`) — the
+     * replayed frame itself, or a same-host frame derived from delivering one. Live frames
+     * (no provenance) are appended whenever they arrive, recovery running or not; a derived
+     * frame whose target tees to a DIFFERENT journal is appended there as live, because that
+     * journal may never have received it (in flight at the crash) — see
+     * `ReplayProvenanceTest` R-B'. Caller holds [dataLock].
+     */
+    private fun journalTee(hostedInvocation: HostedPortInvocation) {
+        val journal = journalSelector(hostedInvocation.cellRef) ?: return
+        if (hostedInvocation.replayOf === journal) return
+        journal.append(hostDurability.journalFrame(hostedInvocation))
     }
 
     /**
@@ -1222,8 +1247,14 @@ open class ManagedHost(
                             // long gone by now. withSuspending carries it across
                             // any suspension the handler does, even to a
                             // different worker thread.
+                            //
+                            // computenet-xy7w4 D1: likewise re-install the frame's replay
+                            // provenance, so every frame this handler emits into an intake
+                            // inherits it (and is not re-journaled into the replayed journal).
                             civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                hostedInvocation.invocation.invokeSuspending(port.call)
+                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                    hostedInvocation.invocation.invokeSuspending(port.call)
+                                }
                             }
                             if (cell is Effectful) {
                                 // per-cell tee (CP-C1): the frontier advance rides the same
