@@ -11,6 +11,7 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
 - Running commands
 - Waiting
 - Your final message
+- Under Codex
 
 ## Scope
 
@@ -140,3 +141,21 @@ approval.
   report to your scratch directory.
 - Friction: one line per thing that cost real time, was not obvious, and is
   likely to recur. Report it; do not file it. "None" is a fine answer.
+
+## Under Codex
+
+Your dispatch says when you run under Codex CLI, not Claude Code. Everything
+above applies; where it names a Claude Code feature, use:
+
+- **Bash `timeout` / `run_in_background`** → bound every long run with the
+  `perl -e 'alarm …'` wrapper and wait on its log in the foreground, in short
+  polls. Nothing notifies you, and your turn ending is your completion.
+- **`dangerouslyDisableSandbox`** → nothing. Your sandbox already allows
+  Gradle (KSP included), the network, `~/.gradle`, and the shared `.git` and
+  `.beads`. An `Operation not permitted` beyond those is a finding: list the
+  command under `REQUIRED ORCHESTRATOR ACTION`; never work around it.
+- **The Read tool** → `sed -n` / `cat`. **The harness scratchpad** → the
+  scratch root your prompt names. **The stop tool** → kill only PIDs in your ledger.
+
+Your final message is saved to a file the orchestrator reads; its required
+contents are unchanged.

@@ -137,10 +137,11 @@ which in the description; never in `files`, where a sentence reads as a path.
 
 Create each task with `--metadata` carrying:
 
-- `model` — `sonnet` when the direction is decided, even across modules;
-  `opus` for novel design, subtle invariants, concurrency, wire formats, or
-  correctness that depends on code the task does not touch. Write for it:
-  outcome and entry points for `sonnet`; invariants and what is closed for `opus`.
+- `model` — the implementer (SKILL.md "Models"): `luna` when the direction is
+  decided, even across modules; `sol` for novel design, subtle invariants,
+  concurrency, wire formats, or correctness that depends on code the task does
+  not touch. Write for it: outcome and entry points for `luna`; invariants and
+  what is closed for `sol`.
 - `files` — the claim, one comma-separated string of repo-relative paths.
 - `cross_bead` — ids and action for any write the task must make to another
   bead. Omit it when there is none. The orchestrator relays this field into the
@@ -180,7 +181,7 @@ written with a quoted heredoc, and acceptance, which has no file flag, as
 `"$(cat <file>)"` ([traps.md](traps.md#bd)):
 
 ```bash
-bd create --type=task --parent=<feature-id> --validate --title="<outcome>" --body-file <scratch>/<feature-id>-t1-desc.md --acceptance="$(cat <scratch>/<feature-id>-t1-accept.md)" --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
+bd create --type=task --parent=<feature-id> --validate --title="<outcome>" --body-file <scratch>/<feature-id>-t1-desc.md --acceptance="$(cat <scratch>/<feature-id>-t1-accept.md)" --metadata '{"model":"luna","files":"<path-a>,<path-b>"}'
 ```
 
 ## Epic breakdown
@@ -208,7 +209,7 @@ Create each feature with the token the dispatch handed you, never `bd create
 --parent=` (see "Metadata and edges" above):
 
 ```bash
-.claude/skills/work/scripts/create-ticket.sh --type=feature --parent=<epic-id> --breakdown <token> --title="<outcome>" --desc-file <scratch>/<epic-id>-f1-desc.md --accept-file <scratch>/<epic-id>-f1-accept.md --metadata '{"model":"sonnet","files":"<path-a>,<path-b>"}'
+.claude/skills/work/scripts/create-ticket.sh --type=feature --parent=<epic-id> --breakdown <token> --title="<outcome>" --desc-file <scratch>/<epic-id>-f1-desc.md --accept-file <scratch>/<epic-id>-f1-accept.md --metadata '{"model":"luna","files":"<path-a>,<path-b>"}'
 ```
 
 ## Feature breakdown

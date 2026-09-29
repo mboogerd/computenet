@@ -47,7 +47,9 @@ of these:
 - the same judgment call made in different ways by different sessions;
 - an `other:<word>` tag that recurs, which may deserve a tag of its own;
 - council outcomes that went against the sessions' own defaults, or a run of
-  NO-CONSENSUS verdicts on the same kind of question.
+  NO-CONSENSUS verdicts on the same kind of question;
+- a task-review FAIL rate, or post-merge residuals, that differ by pairing —
+  the week's closed tasks' `metadata.model` × `metadata.reviewer_model`.
 
 For each pattern write down its instances (retro ids and evidence), what it
 cost, and whether an open friction item already covers it

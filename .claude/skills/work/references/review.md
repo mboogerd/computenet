@@ -9,6 +9,7 @@ Read this when a dispatch prompt makes you the task reviewer, the feature review
 - Feature review: the whole feature before it ships to `main`
 - Verdict and report: tokens, bead writes, the final message
 - Residuals and follow-ups: where found work is filed
+- Epic-close gate: the epic's own acceptance, against `main`, once every child is closed
 
 Hard constraints:
 
@@ -259,7 +260,24 @@ Resolve the epic with `epic-of.sh <reviewed-id>`. If it names one, read its stat
 A residual is work the feature does not wait for, so it goes where it will be scheduled. A blocking task is work the feature does wait for, so it goes under the feature. A closed epic schedules nothing, so a residual parented to one is never picked up.
 
 ```bash
-.claude/skills/work/scripts/create-ticket.sh --type <bug|task> --title "<one line>" <placement> --desc-file <scratch>/res-desc.md --accept-file <scratch>/res-accept.md --model <sonnet|opus> --metadata '{"files":"<comma-separated paths>"}' > <scratch>/residual-id
+.claude/skills/work/scripts/create-ticket.sh --type <bug|task> --title "<one line>" <placement> --desc-file <scratch>/res-desc.md --accept-file <scratch>/res-accept.md --model <luna|sol> --metadata '{"files":"<comma-separated paths>"}' > <scratch>/residual-id
 ```
 
 The script prints only the new id. Check that the file holds an id before any later call reads it. If the residual's subject exists only on the feature branch, also run `bd update <new-id> --set-metadata base_branch=feature/<feature-id>`. Otherwise the fix gets cut from `main`, where its subject does not exist yet. Set it only when the subject will NOT reach main soon. The branch you are reviewing usually merges within minutes, and the field then points at spent code without failing loudly — so when its PR is ready and green, leave the field unset and let the residual be cut from `main` after the merge, which is the normal path anyway (computenet-osax: five instances, one a feature branch cut from another feature's branch). `verify-ready.sh` prints `STALE-BASE` for a field that has gone stale regardless.
+
+## Epic-close gate
+
+Every child of the epic is closed. You judge whether the epic's own intent and acceptance hold on `origin/main` — not whether its children passed; they did, one at a time. Read only `## Epic-close gate`, `## Both reviews` "The standard", and [agent.md](agent.md). You write no code, run no builds and touch no worktree.
+
+- Read the epic (`bead.sh <epic-id>`), its comments, and its children at every depth (`bd list --parent=<id> --all --json`, recursing into sub-epics and features).
+- For each acceptance clause — the description's stated outcome where acceptance is absent — cite evidence on `origin/main`: `git show origin/main:<path>` with the lines, a test asserting it, or a merged PR. A closed child is not evidence; what it merged is. A clause a later decision on the epic re-scoped is met by quoting that decision. A clause only a run can settle is NOT VERIFIED, not a gap.
+
+First line of your final message:
+
+- **CLOSE** — every clause cites evidence or a quoted re-scope.
+- **GAPS** — for each unmet clause, one child under the epic that closes it: a `task` or `bug` via `bd create --parent=<epic-id>` (the epic is claimed; a feature needs a breakdown token you do not hold), the clause verbatim in its acceptance, and what [breakdown.md](breakdown.md) "What a child issue carries" requires. List the ids.
+- Your prompt names a prior `gaps` gate and a clause is still unmet → file nothing; GAPS with `REQUIRED ORCHESTRATOR ACTION: park <epic-id>` naming the clauses. One reopen already failed to close them.
+
+Only clauses hold the epic open. An improvement no clause asks for goes in your verdict comment, not a child — a child would keep the epic open for work nobody required.
+
+Writes, one per call: `bd comment <epic-id> --file <scratch>/verdict.md` with the evidence per clause, then `bd update <epic-id> --set-metadata epic_gate=<passed|gaps>`.
