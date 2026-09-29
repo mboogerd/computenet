@@ -536,91 +536,9 @@ its own template and silently drops edits made inside it.
 
 ## Choosing work: bv (beads_viewer)
 
-**`bv` is OPTIONAL and machine-specific — check it exists before relying on
-it, and fall back without diagnosing:**
-
-```bash
-command -v bv >/dev/null || echo "bv absent — use bd ready / bd list and move on"
-```
-
-It is installed on some machines and not others (absent on `Anva@A0030`,
-2026-08-16, where a session spent time working out why *the* documented entry
-point was missing — computenet-j9ku). There is no install step here, so
-absence is the expected state on a fresh machine, not a fault to fix. The
-fallback is `bd ready --json` plus `.claude/skills/work/scripts/ready-in-epic.sh`
-for epic scope (that path, not the repo-root `scripts/`, which has no such
-file); you lose the graph ranking, not the ability to select work.
-
-Work **selection and prioritization** starts with `bv`
-(https://github.com/Dicklesworthstone/beads_viewer), a graph-aware triage
-engine over the beads workspace. `bd` remains the single blessed CLI for
-mutations — create, update, claim, close, dep. Where the managed Beads blocks
-below say `bd ready` finds available work, read that as the *listing* command;
-the *decision* of what to pick up comes from `bv`. Do not use `br`
-(beads_rust); it is not installed here — `bd` is the mutation tool.
-
-Rules:
-
-- Use **only `--robot-*` flags**. Bare `bv` opens an interactive TUI that
-  blocks an agent session.
-- Run `bv` from the main repository checkout. It reads the passive export
-  `.beads/issues.jsonl`, which `bd` keeps fresh on every mutation; worktrees
-  have no export, so `bv` fails there by design.
-- `bv` output embeds `br ...` claim/show commands. Translate them to `bd`
-  (`bd update <id> --claim`, `bd show <id>`).
-- **Check the export is fresh before trusting `bv`.** `bd` refuses to
-  overwrite `.beads/issues.jsonl` when it holds a record the Dolt store no
-  longer has — the state a *deliberately deleted* bead leaves behind — and
-  then the export stops tracking the DB entirely while every `bd` command
-  still reports success. The refusal is announced only as a side effect of an
-  unrelated mutation, so a session that only reads never sees it, and `bv`
-  silently ranks against hours-old state with the newest beads invisible
-  (computenet-exb0; hit again 2026-08-17 when a dispatched reviewer created
-  and deleted 7 throwaway beads to test `bd` behaviour). One line, before the
-  triage:
-
-  ```bash
-  [ "$(bd list --all --limit 0 --json | sed -n '/^[[{]/,$p' \
-        | jq '(if type=="array" then . else .issues end) | length')" \
-    = "$(grep -c . .beads/issues.jsonl)" ] \
-    && echo "export FRESH" \
-    || echo "STALE export — bv is reading a frozen file; repair before triaging"
-  ```
-
-  Both sides are the same population — `bd list --all` and the exporter both
-  exclude infra, template, gate and memory records by default, and every line
-  of the export is one `"_type":"issue"` record — so the counts are
-  comparable. A gap of one or two records seconds after a `bd` write is just
-  the 60s export throttle, not the wedge: re-run it before repairing.
-
-  **Repair by moving the stale export aside** and letting the next `bd`
-  mutation re-export, or by filtering the deleted ids out of it. **Not** by
-  `bd init --from-jsonl`, which the warning itself suggests: it re-imports
-  from the stale file as a *re-init*, not a merge, resurrecting the beads
-  that were deliberately deleted.
-- Recommendations can include blocked or already-claimed work ranked by graph
-  importance. Only `quick_ref.top_picks` and entries marked actionable are
-  claimable; verify with `bd show <id>` before claiming.
-
-Commands (verified on **one machine** 2026-08-12 at bv v0.18.0, and again on
-`MacBoo` 2026-08-17 at the same version — a per-machine, per-version
-observation, not a repo-wide guarantee):
-
-```bash
-bv --robot-triage     # THE entry point: ranked picks, quick wins, blockers, health
-bv --robot-next       # single top pick only
-bv --robot-plan       # parallel execution tracks (multi-agent scheduling)
-bv --robot-alerts     # stale issues, blocking cascades
-bv --robot-suggest    # hygiene: duplicates, missing deps
-bv --robot-insights   # full graph metrics (PageRank, betweenness, cycles)
-bv --robot-triage --graph-root <epic-id>   # scope triage to one epic's subgraph
-```
-
-(`--format toon` is documented upstream but unavailable here — it needs the
-`tru` binary, which is not installed; bv falls back to JSON.)
-
-Workflow: `bv --robot-triage` → verify with `bd show <id>` → `bd update <id>
---claim` → work → `bd close <id>`.
+`bv` is optional and machine-specific; its rules (robot flags only, run from
+the main checkout, check the export is fresh first) live in `CLAUDE.md`,
+"Choosing work: bv". Without it, use `bd ready --json`.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
 ## Beads Issue Tracker
