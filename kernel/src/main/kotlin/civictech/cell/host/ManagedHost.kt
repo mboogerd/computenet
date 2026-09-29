@@ -87,6 +87,26 @@ open class ManagedHost(
      * pre-CP-C1 behavior. When omitted, the selector derives from [journal].
      */
     private val journalFor: ((CellRef) -> Journal?)? = null,
+    /**
+     * Per-PORT journal selector (computenet-xy7w4 D4): one cell may journal
+     * some inlets and not others — an inlet fed externally (durable) beside a
+     * `derived` inlet fed only by another journaled cell's cascade (volatile,
+     * since replaying the upstream cell re-derives it). Mutually exclusive
+     * with [journalFor] (an `init` refusal names both are set). Effective
+     * selector: [journalForPort] if given, else [journalFor] lifted to ignore
+     * the port, else the whole-host [journal] constant — each a byte-identical
+     * degenerate case of the one before it.
+     *
+     * Every journaled port of ONE cell MUST name the same [Journal] instance:
+     * a cell's `Stateful` snapshot, outlet-wave state and durable epoch are
+     * captured once per **cell**, not once per port, so two journals for one
+     * cell's ports have no coherent meaning. Checked at spawn ([cellJournal])
+     * and refused by name (cell ref plus the two disagreeing port names) — a
+     * configuration error, not a dead letter. A selected port must also be an
+     * inlet: outlet-side journaling of spontaneous emissions is undecided
+     * (spec 90 roadmap I-7 §8) and refused the same way.
+     */
+    private val journalForPort: ((CellRef, String) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
     private val intakeBound: IntakeBound? = null,
     /**
@@ -130,6 +150,9 @@ open class ManagedHost(
 
     init {
         require(dispatchBatch >= 1) { "dispatchBatch must be >= 1 (was $dispatchBatch)" }
+        require(journalFor == null || journalForPort == null) {
+            "pass either journalFor or journalForPort, not both (computenet-xy7w4 D4)"
+        }
     }
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
@@ -147,12 +170,98 @@ open class ManagedHost(
     private val childHosts = CopyOnWriteArrayList<ManagedHost>()
 
     /**
-     * The effective per-cell journal selector (CP-C1). Explicit [journalFor]
-     * wins; otherwise the whole-host [journal] becomes the constant selector
-     * (returning it — possibly null — for every cell), preserving pre-CP-C1
-     * behavior exactly.
+     * The effective PER-PORT journal selector (computenet-xy7w4 D4). Explicit
+     * [journalForPort] wins; otherwise [journalFor] lifts into a selector that
+     * ignores the port; otherwise the whole-host [journal] becomes the
+     * port-and-cell-constant selector — each a byte-identical degenerate case
+     * of the one before it, preserving pre-D4 behavior exactly when unused.
      */
-    private val journalSelector: (CellRef) -> Journal? = journalFor ?: { journal }
+    private val portJournalSelector: (CellRef, String) -> Journal? =
+        journalForPort
+            ?: journalFor?.let { f -> { ref: CellRef, _: String -> f(ref) } }
+            ?: { _, _ -> journal }
+
+    /**
+     * Cache of each spawned cell's unique journal (computenet-xy7w4 D4),
+     * populated by [cellJournal] at spawn time and never cleared on despawn
+     * (same cumulative convention as [journaledSpawnCounts]) — so a
+     * cellRef-only lookup (checkpoint's frontier/baseline filtering, after
+     * the cell may have despawned) still answers correctly without a live
+     * [Cell] instance. Absent = volatile or never spawned; [ConcurrentHashMap]
+     * for the same concurrent-reader reason [cells] uses one.
+     */
+    private val cellJournals = ConcurrentHashMap<CellRef, Journal>()
+
+    /**
+     * The effective per-cell journal selector (CP-C1), now DERIVED from
+     * [portJournalSelector] (computenet-xy7w4 D4) rather than independently
+     * configured: a cell's [Journal] for checkpoint/epoch/accounting purposes
+     * is the ONE instance every one of its journaled ports names — see
+     * [cellJournal]. Reads the spawn-time cache, so it stays answerable for a
+     * cellRef whose cell has since despawned.
+     */
+    private val journalSelector: (CellRef) -> Journal? = { cellRef -> cellJournals[cellRef] }
+
+    /**
+     * The unique [Journal] instance ONE cell's journaled ports all name (D4).
+     *
+     * When no explicit [journalForPort] was given, this is exactly today's per-cell
+     * answer — `journalFor(cellRef) ?: journal` — with no port enumeration and no new
+     * refusal: a whole-cell selector was never port-aware, so applying the new
+     * per-port rules to it retroactively would refuse a cell's ordinary `outlet` port
+     * (which every existing selector "answers" the same way it answers every other
+     * port, since it never looks at the port at all) for a config it did not opt into.
+     *
+     * Only when [journalForPort] is explicit does this evaluate it over every one of
+     * [cell]'s registered ports and refuse — naming [cellRef] and the two offending
+     * port names — if two journaled INLETS disagree, since a cell's `Stateful`
+     * snapshot, outlet-wave state and durable epoch are captured once per CELL, not
+     * once per port.
+     *
+     * Outlets are checked separately, and more permissively: an outlet is never the
+     * target of an accepted invocation, so nothing ever actually journals through
+     * one — a selector that blankets a whole cell (`{ ref, _ -> ... }`-style,
+     * ignoring the port, the ordinary style for "journal everything U does") answers
+     * for a cell's outlet exactly as it answers for its inlets, and that echo is inert
+     * and allowed. What IS refused is an outlet asked to carry a journaling decision
+     * of its own: a journal named for an outlet with no journaled inlet on the same
+     * cell (nothing to reconcile it with), or one that disagrees with the cell's
+     * inlet-derived journal. Outlet-side journaling of spontaneous emissions is
+     * undecided (spec 90 roadmap I-7 §8, this feature's D6 non-goal); this is the
+     * fail-fast for someone trying to configure it as if it existed. Called once, at
+     * spawn; the result is cached in [cellJournals].
+     */
+    private fun cellJournal(cellRef: CellRef, cell: Cell): Journal? {
+        val explicit = journalForPort ?: return journalFor?.invoke(cellRef) ?: journal
+        val registry = PortRegistry.of(cell)
+        var chosen: Journal? = null
+        var chosenPort: String? = null
+        val outlets = mutableListOf<Pair<String, Journal>>()
+        registry.names().forEach { name ->
+            val portJournal = explicit(cellRef, name) ?: return@forEach
+            if (registry[name] is FanOutlet<*>) {
+                outlets += name to portJournal
+                return@forEach
+            }
+            val previousPort = chosenPort
+            if (chosen == null) {
+                chosen = portJournal
+                chosenPort = name
+            } else require(portJournal === chosen) {
+                "cell $cellRef has journaled ports naming different journals: '$previousPort' and " +
+                    "'$name' — every journaled port of one cell must name the same Journal instance " +
+                    "(computenet-xy7w4 D4)"
+            }
+        }
+        outlets.forEach { (name, portJournal) ->
+            require(chosen != null && portJournal === chosen) {
+                "journal selector named a journal for outlet port '$name' on $cellRef with no " +
+                    "matching journaled inlet — only inlet ports may be journaled (outlet-side " +
+                    "journaling is undecided, computenet-xy7w4 D6)"
+            }
+        }
+        return chosen
+    }
 
     internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
@@ -586,17 +695,20 @@ open class ManagedHost(
 
     /**
      * WAL/journal/checkpoint/frontier durability (M10.1/M10.2, G-59) —
-     * extracted to [HostDurability] (RS-8.2). Shares [journalSelector] (the
-     * SAME lambda instance this host also uses for its own two
-     * `enqueueHostedInvocation` journal writes and the PN-12 spawn check) so
-     * per-cell journal selection stays byte-identical; reads a live view of
-     * [cells] and delegates dead-letter reporting and replayed-frame
-     * re-intake back to the host. [checkpoint] still runs via
-     * [enqueueAwaiting] at management priority 0, unable to interleave with
-     * a dispatching cell — nothing here touches [dataLock].
+     * extracted to [HostDurability] (RS-8.2). Shares both [portJournalSelector]
+     * (the SAME lambda instance this host's own `journalTee` uses) and
+     * [journalSelector] (computenet-xy7w4 D4: the cell-level, cache-backed
+     * form the PN-12 spawn check and [journaledSpawnCounts] also use), so
+     * per-port and per-cell journal selection stay byte-identical between the
+     * host and this delegate; reads a live view of [cells] and delegates
+     * dead-letter reporting and replayed-frame re-intake back to the host.
+     * [checkpoint] still runs via [enqueueAwaiting] at management priority 0,
+     * unable to interleave with a dispatching cell — nothing here touches
+     * [dataLock].
      */
     private val hostDurability = HostDurability(
-        journalSelector = journalSelector,
+        journalSelector = portJournalSelector,
+        cellJournalSelector = journalSelector,
         cellsView = { cells },
         deadLetter = { message -> deadLetter(null, message) },
         submit = ::enqueueHostedInvocation,
@@ -858,9 +970,13 @@ open class ManagedHost(
      * frame whose target tees to a DIFFERENT journal is appended there as live, because that
      * journal may never have received it (in flight at the crash) — see
      * `ReplayProvenanceTest` R-B'. Caller holds [dataLock].
+     *
+     * Keyed on the target `(cellRef, portName)` (computenet-xy7w4 D4), not the cell alone:
+     * a per-port selector may journal one inlet of a cell and leave a sibling inlet
+     * volatile (`PerPortJournalTest` R-E).
      */
     private fun journalTee(hostedInvocation: HostedPortInvocation) {
-        val journal = journalSelector(hostedInvocation.cellRef) ?: return
+        val journal = portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) ?: return
         if (hostedInvocation.replayOf === journal) return
         journal.append(hostDurability.journalFrame(hostedInvocation))
     }
@@ -1519,6 +1635,10 @@ open class ManagedHost(
                             "registry $registered — registerPort's name must equal the property name (G-17)"
                     }
                 }
+                // computenet-xy7w4 D4: resolve and validate this cell's unique journal (across
+                // every journaled port) BEFORE the per-cell accounting below, which reads it
+                // through [journalSelector] — the cache [cellJournal] populates here.
+                cellJournal(cell.ref, cell)?.let { cellJournals[cell.ref] = it }
                 // PN-12: surface a durable cell placed volatile (see [volatileDurableSpawnCount]).
                 if (descriptor != null &&
                     civictech.nature.Manifest.DURABLE in descriptor.manifest &&
