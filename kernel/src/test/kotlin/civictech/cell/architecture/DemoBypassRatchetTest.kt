@@ -126,8 +126,7 @@ class DemoBypassRatchetTest {
         // (a) scanned file with >= 1 bypass call not on the allowlist.
         offendersByPath.forEach { (path, counts) ->
             if (path !in allowlist) {
-                violations += "unlisted offender $path: ${formatCounts(counts)} — add it to " +
-                    "kernel/src/test/resources/architecture/demo-bypass-allowlist.txt, or revert the call"
+                violations += "unlisted offender $path: ${formatCounts(counts)} — revert the call"
             }
         }
 
