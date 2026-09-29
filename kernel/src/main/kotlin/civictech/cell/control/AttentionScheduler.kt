@@ -58,8 +58,13 @@ class AttentionScheduler(
     private var strideCount = 0
     private val lastAttended = mutableMapOf<CellRef, Long>()
 
-    /** Attention-parked traffic (spec 34 decision 2): parked, never dropped. Callers hold [dataLock]. */
-    internal val attentionParked = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
+    /**
+     * Attention-parked traffic (spec 34 decision 2): parked, never dropped. Callers hold
+     * [dataLock]. Each entry keeps the host sequence it was staged under (the same
+     * `dataSequence` as [dataQueues]) so [stagedInSequence] can merge parked and queued
+     * frames into one acceptance order (computenet-xy7w4 D3).
+     */
+    internal val attentionParked = mutableMapOf<CellRef, MutableList<Pair<Long, HostedPortInvocation>>>()
 
     /**
      * Magnitude-band boost (spec 34, M17): per cell, the band its largest
@@ -102,11 +107,26 @@ class AttentionScheduler(
         dataQueues.mapValuesTo(LinkedHashMap()) { (_, queue) -> queue.size }
     }
 
+    /**
+     * Every frame accepted and not yet dispatched — queued in [dataQueues] or
+     * attention-parked — in host-sequence (`dataSequence`, 93 I-7 R7's host sequence
+     * number; acceptance) order (computenet-xy7w4 D3). A
+     * coalesced entry is the staged merge, not its originals. What
+     * [civictech.cell.host.HostDurability.checkpoint] carries into a compacted journal.
+     * Callers hold [dataLock], and must keep holding it for as long as the answer has to
+     * stay true.
+     */
+    fun stagedInSequence(): List<HostedPortInvocation> =
+        (dataQueues.values.asSequence().flatten() + attentionParked.values.asSequence().flatten())
+            .sortedBy { it.first }
+            .map { it.second }
+            .toList()
+
     /** Callers hold dataLock. Same source+wave slot preserves wave identity and source FIFO. */
     fun stage(hostedInvocation: HostedPortInvocation) {
         val cellRef = hostedInvocation.cellRef
         attentionParked[cellRef]?.let {
-            it += hostedInvocation // parked cells accumulate in arrival order
+            it += ++dataSequence to hostedInvocation // parked cells accumulate in arrival order
             return // no boost: magnitude is urgency, interest owns park/resume
         }
         dataQueues.getOrPut(cellRef) { ArrayDeque() }.addLast(++dataSequence to hostedInvocation)
@@ -200,7 +220,7 @@ class AttentionScheduler(
         synchronized(dataLock) {
             val queue = dataQueues.remove(cellRef) ?: ArrayDeque()
             magnitudeBoost.remove(cellRef) // re-staged on unpark replay
-            attentionParked[cellRef] = queue.map { it.second }.toMutableList()
+            attentionParked[cellRef] = queue.toMutableList()
         }
         notifyParked(cellRef)
     }
@@ -210,6 +230,6 @@ class AttentionScheduler(
             attentionParked.remove(cellRef)?.also { lastAttended[cellRef] = dispatchStep }
         } ?: return
         notifyResumed(cellRef)
-        parked.forEach { submit(it) }
+        parked.forEach { submit(it.second) }
     }
 }

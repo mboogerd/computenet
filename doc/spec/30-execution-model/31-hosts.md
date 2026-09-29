@@ -75,7 +75,11 @@ saturation frame vs transport flow control (93 I-12/I-15/I-9/I-19/I-26).
 `Journal` write-ahead appends every accepted invocation as a wire frame at
 the intake (the single funnel — journal order = acceptance order), so a
 process death loses nothing it acknowledged. `checkpoint(journal)` compacts
-the log to one snapshot record of every `Stateful` cell; `recoverFrom`
+the log to one snapshot record of every `Stateful` cell, followed by every
+frame accepted for that journal and not yet delivered (read and reset under
+the intake's lock, in acceptance order), so a checkpoint is safe at any
+inter-invocation boundary of a live host — no quiescence fence is needed
+(93 I-7 R7); `recoverFrom`
 (after the graph is rebuilt) restores the checkpoint and replays the tail
 through the ordinary decode path. Replay only stages frames, so `recoverFrom`
 returns a `Recovery` handle whose `awaitApplied` fences on delivery of the

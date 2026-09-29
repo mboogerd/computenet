@@ -111,9 +111,10 @@ fun HostScheduler.quiescence(): Quiescence {
  * [Quiescence]'s: attention-parked traffic, other hosts, and writes submitted
  * after the fence are outside it.
  *
- * A caller that checkpoints after recovery calls [awaitApplied] first:
- * `checkpoint` runs at management priority 0 and would otherwise overtake the
- * still-staged replay frames and compact a journal whose state it never saw.
+ * A checkpoint before [awaitApplied] is safe — `checkpoint` runs at management
+ * priority 0 and overtakes the still-staged replay frames, but carries them into
+ * the compacted journal (computenet-xy7w4 D3) — yet compacts less: call
+ * [awaitApplied] first to compact the whole replayed tail.
  */
 class Recovery internal constructor(
     /** The number of journal `Frame` records the replay submitted; checkpoint, frontier, discharge and outlet-wave records are not frames. */
