@@ -29,7 +29,8 @@ class JournalRecordsTest {
     private val ref: CellRef = cell.ref
     private val journal = InMemoryJournal()
     private val durability = HostDurability(
-        journalSelector = { journal },
+        journalSelector = { _, _ -> journal },
+        cellJournalSelector = { journal },
         cellsView = { mapOf<CellRef, Cell>(ref to cell) },
         deadLetter = { error("unexpected dead letter: $it") },
         submit = { },

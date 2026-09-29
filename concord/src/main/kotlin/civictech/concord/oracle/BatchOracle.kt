@@ -912,8 +912,10 @@ class BatchOracle(private val scenario: Scenario) {
          *    `synchronized(dataLock)` block, so journal order **is** acceptance order.
          *    A coalesced invocation is appended too. Nothing accepted is missing from
          *    the replayed history, and nothing is reordered relative to it.
-         * 3. Replay cannot **grow** the history either: both append sites are guarded
-         *    by `!hostDurability.recovering`, so a replayed frame is never re-journaled.
+         * 3. Replay cannot **grow** the history either: every replayed frame carries a
+         *    per-frame replay provenance naming its journal (`HostedPortInvocation.replayOf`,
+         *    computenet-xy7w4), and the tee skips a frame whose target journal is that one,
+         *    so neither a replayed frame nor a same-journal derivation is re-journaled.
          * 4. A checkpoint substitutes a `Stateful` snapshot for the prefix it compacts
          *    (`[24-DUR-02]`), so checkpoint + surviving tail folds to the same value as
          *    the whole history.

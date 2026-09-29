@@ -290,30 +290,39 @@ object JournalRecords {
  * is the one `JournalFormatVersionTest` asserts head-on: nothing detects a
  * *forgotten* bump.
  *
- * Collaborators are the host's own [journalSelector] (the SAME lambda
- * instance the host keeps for its own two `enqueueHostedInvocation` journal
- * writes and the PN-12 spawn-time check — sharing it, rather than
- * re-deriving it, keeps the per-cell selection byte-identical), a live
- * [cellsView] of the host's `cells` map, the host's [deadLetter] reporter,
- * [submit] (`enqueueHostedInvocation`, for replayed frames re-entering the
- * intake), and [awaitOnManagementBand] (`enqueueAwaiting(0, ...)`, so
- * [checkpoint] keeps running on the management band, unable to interleave
- * with a dispatching cell, exactly as before). None of these paths touch
- * `dataLock` — durability runs on the management band / synchronous replay,
- * never under the data-plane lock.
+ * Collaborators are the host's own [journalSelector] (PORT-keyed, computenet-xy7w4
+ * D4 — the SAME lambda instance the host's own `journalTee` uses, so the intake
+ * tee and this class's frontier/baseline appends key on the target port
+ * identically) and [cellJournalSelector] (CELL-keyed — the SAME cache-backed
+ * lambda the host's PN-12 spawn-time check and per-class spawn accounting use,
+ * so state/wave/epoch capture stays byte-identical between the host and this
+ * delegate), a live [cellsView] of the host's `cells` map, the host's
+ * [deadLetter] reporter, [submit] (`enqueueHostedInvocation`, for replayed
+ * frames re-entering the intake), and [awaitOnManagementBand]
+ * (`enqueueAwaiting(0, ...)`, so [checkpoint] keeps running on the management
+ * band, unable to interleave with a dispatching cell, exactly as before), and
+ * [underIntakeLock] — the one path that takes the host's `dataLock`: it runs
+ * [checkpoint]'s staged-set read and `Journal.reset` under that monitor so the
+ * compaction is atomic with respect to the intake (computenet-xy7w4 D3). Its
+ * lock order is `dataLock` -> journal monitor, the same order the intake's
+ * append+stage takes; nothing here takes them the other way round.
  */
 internal class HostDurability(
-    private val journalSelector: (CellRef) -> Journal?,
+    private val journalSelector: (CellRef, String) -> Journal?,
+    private val cellJournalSelector: (CellRef) -> Journal?,
     private val cellsView: () -> Map<CellRef, Cell>,
     private val deadLetter: (String) -> Unit,
     private val submit: (HostedPortInvocation) -> Unit,
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
+    /**
+     * Runs its argument while holding the host's `dataLock`, handing it every staged
+     * (queued or attention-parked) invocation in host-sequence order
+     * ([civictech.cell.control.AttentionScheduler.stagedInSequence]). The default — nothing
+     * staged, no lock — is for a delegate built without a host (`JournalRecordsTest`);
+     * `ManagedHost` always passes its own.
+     */
+    private val underIntakeLock: ((staged: List<HostedPortInvocation>) -> Unit) -> Unit = { it(emptyList()) },
 ) {
-
-    /** Suppresses journaling while [recoverFrom] replays — replay must not re-journal itself. */
-    @Volatile
-    var recovering = false
-        private set
 
     /**
      * PN-2 (plan §3 Rule of recovery, §4 PN-2): stamp every replayed frame that
@@ -359,7 +368,13 @@ internal class HostDurability(
      * `Stateful` state directly; invocation frames re-enter through the
      * ordinary intake (decode = the same path a network frame takes — a
      * journal is a bridge to disk). Call after the graph is rebuilt (cells
-     * spawned) and before new traffic; replays are not re-journaled.
+     * spawned). Replays are not re-journaled, and neither is anything their
+     * delivery derives into [journal] (computenet-xy7w4 D1/D2): every
+     * replayed frame is stamped `replayOf = journal`, a per-frame provenance
+     * the host's intake propagates down the cascade and compares by `===`
+     * against the target's journal. There is no host-wide replay
+     * window, so live traffic accepted while this runs is journaled (and
+     * saturation-gated) exactly as outside recovery.
      *
      * Per-cell (CP-C1): a journal only ever holds records for the cells whose
      * selector tees to it (the write path is per-cell), so replaying it
@@ -373,7 +388,6 @@ internal class HostDurability(
      * `awaitApplied` fences on that delivery.
      */
     fun recoverFrom(journal: Journal): Int {
-        recovering = true
         var frames = 0
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
@@ -393,46 +407,41 @@ internal class HostDurability(
         // around the handler call — surviving a suspension to a different
         // worker thread too.
         val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
-        try {
-            ReplayScope.with(scope) {
-                val records = journal.replay()
-                records.forEachIndexed { index, record ->
-                    // T05 finding 4: a bare forEach with no per-record handling
-                    // meant any decode/readObject throw (or the else -> error
-                    // below) silently abandoned every remaining record —
-                    // recovering still reset in the finally, and the host
-                    // resumed live traffic on truncated state with nothing
-                    // to say so. Dead-letter the bad record, then rethrow so
-                    // the caller cannot mistake a partial replay for a
-                    // complete one.
-                    try {
-                        when (val decoded = JournalRecords.decode(record)) {
-                            is DecodedJournalRecord.Frame -> {
-                                submit(
-                                    WireCodec.decode(decoded.payload).let { frame ->
-                                        (if (scope == null) frame else frame.baselined(scope))
-                                            .copy(replayFrontier = scope)
-                                    }
-                                )
-                                frames++
-                            }
-
-                            is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
-                            is DecodedJournalRecord.Frontier ->
-                                advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
-                            is DecodedJournalRecord.BaselineDischarge ->
-                                recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
-                            is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
-                            is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
+        ReplayScope.with(scope) {
+            val records = journal.replay()
+            records.forEachIndexed { index, record ->
+                // T05 finding 4: a bare forEach with no per-record handling
+                // meant any decode/readObject throw (or the else -> error
+                // below) silently abandoned every remaining record —
+                // and the host resumed live traffic on truncated state with nothing
+                // to say so. Dead-letter the bad record, then rethrow so
+                // the caller cannot mistake a partial replay for a
+                // complete one.
+                try {
+                    when (val decoded = JournalRecords.decode(record)) {
+                        is DecodedJournalRecord.Frame -> {
+                            submit(
+                                WireCodec.decode(decoded.payload).let { frame ->
+                                    (if (scope == null) frame else frame.baselined(scope))
+                                        .copy(replayFrontier = scope, replayOf = journal)
+                                }
+                            )
+                            frames++
                         }
-                    } catch (e: Exception) {
-                        deadLetter("journal replay: record $index of ${records.size} failed: $e")
-                        throw RecoveryIncomplete(index, records.size, e)
+
+                        is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
+                        is DecodedJournalRecord.Frontier ->
+                            advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
+                        is DecodedJournalRecord.BaselineDischarge ->
+                            recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
+                        is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
+                        is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
                     }
+                } catch (e: Exception) {
+                    deadLetter("journal replay: record $index of ${records.size} failed: $e")
+                    throw RecoveryIncomplete(index, records.size, e)
                 }
             }
-        } finally {
-            recovering = false
         }
         return frames
     }
@@ -470,15 +479,16 @@ internal class HostDurability(
      * if the pre-crash run was already emitting under it — deriving it only inside
      * [recoverFrom] would restore an identity nothing downstream had ever recorded.
      *
-     * Deliberately gated on `journalSelector(cellRef) != null`: durability is a hosting
+     * Deliberately gated on `cellJournalSelector(cellRef) != null`: durability is a hosting
      * decision, not a cell concern (spec 30/31). A volatile cell has no journal to prove
      * counter continuity from, so 93 I-14 Rule S1's fresh-epoch default is the correct —
      * and unchanged — behaviour for it. Non-recovery epoch transitions (RESTART's
      * `mintFreshEpoch`, replica/candidate spawn, a fallback promotion swap) are untouched
-     * here too (`[KFX-14]`).
+     * here too (`[KFX-14]`). Cell-level (D4): an outlet is not itself a journaled port, so
+     * this reads the cell's unique journal, not any one port's.
      */
     fun installDurableEpochs(cellRef: CellRef, cell: Cell) {
-        if (journalSelector(cellRef) == null) return
+        if (cellJournalSelector(cellRef) == null) return
         forEachOutlet(cell) { _, outlet -> outlet.adoptWaveState(OutletWaveState.durable(outlet.ref)) }
     }
 
@@ -497,16 +507,55 @@ internal class HostDurability(
      * volatile cell). For the degenerate whole-host constant selector every
      * cell maps here, byte-identical to pre-CP-C1. Runs on the management band
      * so it can't interleave with a dispatching cell.
+     *
+     * **Safe at any inter-invocation boundary** (93 I-7 R7, computenet-xy7w4 D3). The
+     * management band runs between two deliveries of the single-consumer host, so at that
+     * point every frame accepted for [journal] is either DELIVERED — its effect is in the
+     * snapshot — or STAGED and not yet delivered: live traffic, frames a [recoverFrom]
+     * staged and no data task has applied yet, a coalesced entry, attention-parked
+     * traffic. The compacted journal is the checkpoint records followed by every staged
+     * frame whose target port tees to [journal] — or whose target cell's snapshot it holds,
+     * a per-port selector's volatile inlet included — re-encoded by [journalFrame] in host
+     * sequence order — so a host that recovers from it reproduces the fold of every frame
+     * accepted before this returns, with no quiescence fence and with writers running.
+     * The staged-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
+     * the monitor the intake's append+stage holds, so a frame accepted concurrently is
+     * either staged before the read (carried) or appended after the reset (tail) — never
+     * truncated unseen. The snapshot describes the host's staging sequence number
+     * (`AttentionScheduler`'s `dataSequence`, I-7 R7's host sequence) at that instant — the
+     * *anchor*: every carried frame was staged at or below it, every later append above
+     * it, and everything delivered before it is in the snapshot. The anchor is not persisted
+     * — the compacted journal is byte-compatible, checkpoint records followed by ordinary
+     * `RECORD_FRAME`s, no new record type and no `JOURNAL_FORMAT_VERSION` bump.
+     *
+     * The STAGED invocation is re-encoded, not the bytes originally appended: under
+     * `SaturationPolicy.Coalesce` the staged entry is the merge of the coalesced originals,
+     * so carrying it is carrying all of them. `WireCodec` does serialize
+     * [civictech.cell.MessageContext.baseline], so a replayed mid-graph frame carried here
+     * keeps the PN-2 stamp [recoverFrom] gave it — the stamp its next replay would have
+     * given it anyway (`baselined` keeps an existing one), so this changes no behaviour;
+     * `replayFrontier`/`replayOf` are never serialized and are re-stamped by that replay.
+     *
+     * `Recovery.awaitApplied` then `checkpoint` stays the recommended order after a
+     * restart: it compacts the whole replayed tail instead of carrying it. It is no longer
+     * a safety precondition.
+     *
+     * Not covered, and still lost by the reset: a frame already dequeued and held
+     * elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-activation
+     * tail — and, on a suspending (🟢) scheduler, a delivery suspended mid-handler.
      */
     fun checkpoint(journal: Journal) {
         awaitOnManagementBand {
             val cells = cellsView()
             val state = HashMap<CellRef, Serializable>()
             cells.forEach { (cellRef, cell) ->
-                if (cell is Stateful && journalSelector(cellRef) === journal) state[cellRef] = cell.snapshot()
+                if (cell is Stateful && cellJournalSelector(cellRef) === journal) state[cellRef] = cell.snapshot()
             }
+            // computenet-xy7w4 D4: the frontier/baseline filters below key on the PORT
+            // selector, not the cell one — an Effectful inlet's frontier rides its OWN
+            // port's journal, which may differ from a sibling port of the same cell.
             val frontier = processedFrontier
-                .filterKeys { journalSelector(it.first) === journal }
+                .filterKeys { (cellRef, portName) -> journalSelector(cellRef, portName) === journal }
                 .mapValues { HashMap(it.value) as Map<UUID, Long> }
             // KFX-12: each journaled outlet's emission epoch AT CHECKPOINT TIME, captured
             // on the same management-band pass as the `Stateful` snapshot so the two
@@ -521,7 +570,7 @@ internal class HostDurability(
             // derived lane already spent — see [OutletWaveRecord].
             val waves = ArrayList<ByteArray>()
             cells.forEach { (cellRef, cell) ->
-                if (journalSelector(cellRef) === journal) forEachOutlet(cell) { name, outlet ->
+                if (cellJournalSelector(cellRef) === journal) forEachOutlet(cell) { name, outlet ->
                     val wave = outlet.waveState()
                     waves += journalRecord(
                         RECORD_OUTLET_WAVE,
@@ -543,7 +592,7 @@ internal class HostDurability(
             // per inlet.
             val baselines = ArrayList<ByteArray>()
             dischargedBaselines.forEach { (key, positions) ->
-                if (journalSelector(key.first) !== journal) return@forEach
+                if (journalSelector(key.first, key.second) !== journal) return@forEach
                 positions.removeIf { (processedFrontier[key]?.get(it.sourceId) ?: -1L) >= it.counter }
                 positions.forEach {
                     baselines += journalRecord(RECORD_BASELINE, BaselineDischargeRecord(key.first, key.second, it))
@@ -559,7 +608,7 @@ internal class HostDurability(
             // sink whose whole durable contribution is "this catch-up already fired",
             // it is exactly what the truncated frames would otherwise be replayed for.
             require(state.isNotEmpty() || frontier.isNotEmpty() || baselines.isNotEmpty() ||
-                cells.keys.none { journalSelector(it) === journal }) {
+                cells.keys.none { cellJournalSelector(it) === journal }) {
                 "checkpoint would truncate a journal whose selected cells contribute " +
                     "no snapshot, no processed-frontier and no discharged baseline — frame " +
                     "replay is their only recovery, so resetting the WAL would destroy their state"
@@ -567,7 +616,24 @@ internal class HostDurability(
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
-            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + baselines)
+            val compacted = listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + baselines
+            // computenet-xy7w4 D3: carry every accepted-but-undelivered frame of this
+            // journal, read and reset under the intake's own lock. Encoded before the
+            // reset, so an unencodable frame fails the checkpoint and truncates nothing.
+            // Also carried: a frame staged for a VOLATILE port of a cell whose snapshot this
+            // journal holds (a per-port selector's `derived` inlet, D4). Its upstream frame
+            // may be folded into a snapshot by this very reset, and a restored snapshot
+            // re-emits nothing, so replay could no longer re-derive it; the cell's own
+            // snapshot would silently lack it (feature review, computenet-xy7w4).
+            underIntakeLock { staged ->
+                val carried = staged
+                    .filter {
+                        journalSelector(it.cellRef, it.portName) === journal ||
+                            cellJournalSelector(it.cellRef) === journal
+                    }
+                    .map(::journalFrame)
+                journal.reset(compacted + carried)
+            }
         }
     }
 
@@ -615,13 +681,15 @@ internal class HostDurability(
      * [ManagedHost.deliver]'s Effectful call shape (host-side): advance the
      * in-memory frontier AND journal the advance together, in that order —
      * exactly the two statements `deliver` used to run inline before this
-     * extraction. The per-cell tee (CP-C1): the frontier advance rides the
-     * same journal as this cell's frames — a volatile cell's selector (null)
-     * skips the write.
+     * extraction. Keyed on the target PORT (computenet-xy7w4 D4, was per-cell
+     * CP-C1): the frontier advance rides that inlet's own journal — a
+     * volatile inlet's selector (null) skips the write even if a sibling
+     * inlet on the same cell is journaled.
      */
     fun advanceAndJournalFrontier(cellRef: CellRef, portName: String, timestamp: Timestamp) {
         advanceFrontier(cellRef, portName, timestamp)
-        journalSelector(cellRef)?.append(journalRecord(RECORD_FRONTIER, FrontierRecord(cellRef, portName, timestamp)))
+        journalSelector(cellRef, portName)
+            ?.append(journalRecord(RECORD_FRONTIER, FrontierRecord(cellRef, portName, timestamp)))
     }
 
     /**
@@ -662,14 +730,14 @@ internal class HostDurability(
     /**
      * `[24-DUR-08]`, the baseline counterpart of [advanceAndJournalFrontier]: record that
      * this `Effectful` inlet acted on a baseline-marked frame at [timestamp], and journal
-     * that fact on the same per-cell tee (CP-C1) the frame itself rode — so `recoverFrom`
-     * meets the discharge beside the frame and does not re-fire it. The wave-position
-     * processed-frontier is deliberately NOT advanced: a baseline is anchored at the
-     * stamped link-install event, not at a wave position.
+     * that fact on the same per-port tee (computenet-xy7w4 D4, was per-cell CP-C1) the
+     * frame itself rode — so `recoverFrom` meets the discharge beside the frame and does
+     * not re-fire it. The wave-position processed-frontier is deliberately NOT advanced:
+     * a baseline is anchored at the stamped link-install event, not at a wave position.
      */
     fun recordAndJournalBaselineDischarge(cellRef: CellRef, portName: String, timestamp: Timestamp) {
         recordBaselineDischarge(cellRef, portName, timestamp)
-        journalSelector(cellRef)?.append(
+        journalSelector(cellRef, portName)?.append(
             journalRecord(RECORD_BASELINE, BaselineDischargeRecord(cellRef, portName, timestamp)),
         )
     }

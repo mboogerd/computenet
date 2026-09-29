@@ -1254,7 +1254,11 @@ concern. A host takes a `journalFor(cellRef)` selector naming the write-ahead
 cell **volatile** (never journaled, never replayed). `[24-DUR-01]` A host's
 `journalFor(cellRef)` selector SHALL name the `Journal` a cell's accepted
 invocations tee to, or `null` to make that cell volatile — never journaled,
-never replayed (Ubiquitous). The whole-host `Journal`
+never replayed (Ubiquitous). The selector may instead be given **per port**,
+`journalForPort(cellRef, portName)`: every journaled port of one cell SHALL
+name the same `Journal` instance (a cell's `Stateful` snapshot and durable
+epoch are captured once per cell, not once per port), and the per-cell form
+above is the degenerate case where every port maps alike. The whole-host `Journal`
 is the degenerate case: the constant selector returning that one journal for
 every cell, byte-identical to the pre-CP-C1 tee. For a journaled cell the host
 appends every accepted invocation **as a wire frame** (the same `WireCodec`
@@ -1269,8 +1273,14 @@ ever holds its own cells' records, so replaying it restores exactly those
 cells and re-delivers nothing to a co-hosted volatile cell — recover each
 distinct journal once. `[24-DUR-03]` A journal SHALL only ever hold its own
 cells' records, such that replaying it restores exactly those cells and
-re-delivers nothing to a co-hosted volatile cell (Ubiquitous). `checkpoint` is keyed the same way: it snapshots only
-the cells teeing to the passed journal and compacts that journal atomically;
+re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
+`checkpoint` is keyed the same way: it snapshots only the cells teeing to the
+passed journal and compacts that journal atomically; the compaction carries
+every frame accepted for that journal and not yet delivered, so a checkpoint is
+safe at any inter-invocation boundary (93 I-7 R7); not covered, and still lost
+by the reset: a frame already dequeued and held elsewhere — a supervision-
+SUSPENDed cell's park queue, a cold inlet's pre-activation tail — and, on a
+suspending scheduler, a delivery suspended mid-handler (computenet-hknt0);
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the
 per-cell scoping; its control shows a constant selector restores every cell).
 Cells stay oblivious — with one honest exception:

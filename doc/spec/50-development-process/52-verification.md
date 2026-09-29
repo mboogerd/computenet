@@ -218,8 +218,10 @@ live re-delivery are *deduped* (dropped as already-processed) rather than
 re-acted. Divergence, recorded: the I-7 resolution's linchpin was replay
 with outlets NoOp-served (this section's suppression mechanism) so recovery
 never re-transmits; the landed M10 design instead replays intake frames
-with emission un-suppressed by default (the recovering flag only prevents
-re-journaling), made safe for *state* by replay-stable identity + idempotent
+with emission un-suppressed by default (replay identity is per frame: a
+replayed frame and its same-journal derivations are not re-appended, while
+live traffic accepted during recovery is journaled), made safe for *state*
+by replay-stable identity + idempotent
 merges + catch-up dedup, and safe for *effects* specifically by the
 processed-frontier check at the `Effectful` inlet — the frontier is the
 decided closure for that case.

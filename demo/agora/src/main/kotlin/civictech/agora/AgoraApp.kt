@@ -59,10 +59,12 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         // Replay is fenced by the recovery handle: routes are registered only
         // after every replayed frame and its same-host cascade has been
         // applied (civictech.cell.host.Recovery.awaitApplied, computenet-q5jzk
-        // Q4/Q5). A checkpoint taken after the fence is safe; no startup
-        // checkpoint is added here — deferred until journals get big
-        // (computenet-vcrc7 owns adding one).
-        if (journal != null) host.recoverFrom(journal).awaitApplied(60_000)
+        // Q4/Q5). The checkpoint right after the fence compacts the replayed
+        // tail; replay itself re-journals nothing (computenet-xy7w4.1).
+        if (journal != null) {
+            host.recoverFrom(journal).awaitApplied(60_000)
+            host.checkpoint(journal)
+        }
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         shell.route("/graph") { it.respond(200, graphJson(), "application/json") }
         shell.route("/op") { handleOp(it) }

@@ -71,12 +71,12 @@ Durability = two files in the journal dir (`graph.jsonl` structure log +
 `host.journal` write-ahead data journal). Restart rebuilds cells under their
 recorded refs (with catch-up baselines suppressed — the journal holds the
 originals, and re-emitting them would clobber recovered state), then replays
-the journal. Replay re-journals the derived re-emissions it triggers —
-idempotent duplicates, bounded per restart; a post-replay checkpoint is safe
-behind `Recovery.awaitApplied()`, but compaction is still deferred until
-journals get big. `remove` cascades over dangling
-edges; a crash mid-cascade can leave a dangling influence until the next
-remove — accepted for v1 (single host).
+the journal. Replay re-transmits idempotent duplicates in-process but
+re-journals nothing (computenet-xy7w4.1): the journal grows with live
+traffic only, and a startup checkpoint taken right after
+`Recovery.awaitApplied()` compacts the replayed tail. `remove` cascades over
+dangling edges; a crash mid-cascade can leave a dangling influence until the
+next remove — accepted for v1 (single host).
 
 ## Tests
 
@@ -88,4 +88,7 @@ remove — accepted for v1 (single host).
 - `CycleQuiescenceTest` — mutual/self/3-cycles + the headless FP probe.
 - `MagnitudePriorityTest` / kernel `MagnitudeSchedulingTest` — scheduling order.
 - `DurabilityTest` — codec round-trip (K2 seam) + kill -9 recovery.
+- `RestartJournalGrowthTest` — repeated restarts with no new traffic leave
+  the journal's record count unchanged and credences equal (computenet-vcrc7,
+  computenet-xy7w4.4).
 - `AgoraServerTest` — HTTP/SSE smoke, including attacking an attack.
