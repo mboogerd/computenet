@@ -125,18 +125,25 @@ class DurabilityTest {
         val structure = java.io.File(dir, "graph.jsonl")
         val journalFile = java.io.File(dir, "host.journal")
 
-        fun world(name: String): Triple<HostScheduler, ManagedHost, AgoraService> {
+        // Held per world: `ManagedHost.checkpoint` keys a cell's state to the
+        // exact `Journal` instance passed to the host's constructor
+        // (`journalSelector(cellRef) === journal`, HostDurability.checkpoint),
+        // so checkpointing this host must reuse this instance rather than a
+        // fresh `FileJournal(journalFile)` on the same path.
+        data class World(val scheduler: HostScheduler, val host: ManagedHost, val service: AgoraService, val journal: FileJournal)
+        fun world(name: String): World {
             val registry = LocationRegistry()
             // the production scheduler, held explicitly: `awaitSettled` needs a
             // handle to fence against (ManagedHost mints exactly this otherwise)
             val scheduler = VirtualThreadScheduler("agora-live-durability-$name")
+            val journal = FileJournal(journalFile)
             val host = ManagedHost(
                 scheduler = scheduler,
                 registry = registry,
                 attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
-                journal = FileJournal(journalFile),
+                journal = journal,
             )
-            return Triple(scheduler, host, AgoraService(host, registry, quiescence = q, structureLog = structure))
+            return World(scheduler, host, AgoraService(host, registry, quiescence = q, structureLog = structure), journal)
         }
 
         /**
@@ -150,30 +157,19 @@ class DurabilityTest {
          * and settled ones on an idle machine (computenet-dqy.24). Both arms of
          * the comparison were exposed — a premature `before` baseline, or a
          * premature `after` — which is what produced a 0.1125 gap against a
-         * 0.025 tolerance: one arm settled, the other did not. It also let the
-         * previous phase's host still be churning when the next one replayed the
-         * same journal file.
+         * 0.025 tolerance: one arm settled, the other did not.
          *
          * [awaitDrained] replaces the guess with the fact: it blocks until the
-         * host's queue actually empties (see its doc for why starvation can only
-         * delay that, never counterfeit it). Every propagation hop here is
-         * staged through that one queue, and the observation sink folds and
-         * publishes inside the host task, so a drained queue means `graph()`
-         * reflects everything in flight. The second round is belt-and-braces: it
-         * costs another real drain, and confirms the snapshot no longer moves.
+         * host's queue actually empties (civictech.cell.host.Quiescence,
+         * computenet-q5jzk) — a fence, not a sample, so one drain and one read
+         * is the whole proof; there is nothing left to compare against.
          */
         fun awaitSettled(scheduler: HostScheduler, service: AgoraService, what: String): Map<CellRef, Double> {
-            var last: Map<CellRef, Double>? = null
-            repeat(4) {
-                scheduler.awaitDrained(what)
-                val now = service.graph().associate { it.ref to it.credence }
-                if (now == last) return now
-                last = now
-            }
-            error("$what: graph still moving after 4 full host drains: $last")
+            scheduler.awaitDrained(what)
+            return service.graph().associate { it.ref to it.credence }
         }
 
-        val (s1Scheduler, _, s1) = world("pre-crash")
+        val (s1Scheduler, _, s1, _) = world("pre-crash")
         val a = s1.createClaim("A")
         val b = s1.createClaim("B")
         val e1 = s1.createEdge(b, a, Polarity.ATTACK)
@@ -189,9 +185,9 @@ class DurabilityTest {
         s1Scheduler.shutdown()
 
         repeat(2) { phase ->
-            val (scheduler, host, service) = world("restart-${phase + 2}")
-            host.recoverFrom(FileJournal(journalFile))
-            val after = awaitSettled(scheduler, service, "restart ${phase + 2} settles")
+            val (scheduler, host, service, journal) = world("restart-${phase + 2}")
+            host.recoverFrom(journal).awaitApplied(30_000)
+            val after = service.graph().associate { it.ref to it.credence }
             assertEquals(before.keys, after.keys, "restart ${phase + 2}: recovered topology differs")
             before.forEach { (ref, credence) ->
                 assertTrue(
@@ -199,6 +195,10 @@ class DurabilityTest {
                     "restart ${phase + 2}, node $ref: before-crash $credence vs recovered ${after.getValue(ref)}"
                 )
             }
+            // Q4: a checkpoint taken right after the fence must be safe — the
+            // next restart still recovers the pre-checkpoint credences, proving
+            // the compacted journal did not race the still-staged replay.
+            if (phase == 0) host.checkpoint(journal)
             // this restart is done and proven quiescent; the next one replays the
             // same journal file, so leave nothing behind that could still write
             scheduler.shutdown()

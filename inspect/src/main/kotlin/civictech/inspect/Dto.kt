@@ -722,7 +722,7 @@ data class DeadLetterRow(
  */
 @Serializable
 data class BoundaryDenialSummary(
-    /** `BoundarySeam.name` — which seam refused (`ADMISSION`, `LINK_AUTHORITY`, `PROTOCOL_AUTHORITY`, `DISCLOSURE`, `INTEGRITY`). */
+    /** `BoundarySeam.name` — which seam refused (`ADMISSION`, `LINK_AUTHORITY`, `PROTOCOL_AUTHORITY`, `DISCLOSURE`, `INTEGRITY`, `HOST_ADMISSION`). */
     val seam: String,
     /** `DenialReason.name` — why it refused. */
     val reason: String,

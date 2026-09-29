@@ -635,8 +635,11 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   write-ahead and *inside the staging lock*
   (`ManagedHost.enqueueHostedInvocation` appends before `attentionScheduler.stage` in one
   `synchronized(dataLock)` block, the coalesce branch included), so journal order **is**
-  acceptance order and nothing accepted is missing or reordered; both append sites are
-  guarded by `!hostDurability.recovering`, so replay cannot grow the history either; a
+  acceptance order and nothing accepted is missing or reordered; every replayed frame
+  carries a per-frame replay provenance naming its journal
+  (`HostedPortInvocation.replayOf`, computenet-xy7w4), and the tee skips a frame whose
+  target journal is that one, so neither a replayed frame nor a same-journal derivation
+  is re-journaled; a
   checkpoint substitutes a `Stateful` snapshot for exactly the prefix it compacts
   (`[24-DUR-02]`), so checkpoint + tail folds to the whole history; and the set fold is
   idempotent under `add` regardless, the only op besides `remove` the binding admits.

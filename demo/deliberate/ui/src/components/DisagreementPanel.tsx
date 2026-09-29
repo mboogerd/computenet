@@ -1,0 +1,75 @@
+import { createMemo, For, Show } from 'solid-js';
+import type { GraphDto } from '../api/types';
+import { AGREE_POINTS, pct, spreadOf } from '../util/format';
+import { onActivateKey } from './CruxesPanel';
+
+/** One claim as the "where the rules disagree" view shows it. */
+export interface Disagreement {
+  ref: string;
+  text: string;
+  low: number;
+  high: number;
+  /** high - low, read through spreadOf(); what the list is sorted by. */
+  width: number;
+}
+
+/**
+ * The question's claims ordered by spread width, widest first, top 10. A
+ * claim with no spread fields at all (spreadLow and spreadHigh both absent —
+ * a single credence layer, nothing to disagree about) is excluded, not
+ * scored as a zero-width tie. So is a claim whose spread, rounded to
+ * percentage points the way {@link agreementText} reads it, is no wider than
+ * {@link AGREE_POINTS}: that function would call the same claim "rules
+ * agree" or "rules agree within N points", so listing it here would
+ * contradict the panel's own title. Reuses the constant rather than a
+ * separate cutoff so the two views cannot drift apart.
+ */
+export function disagreementsOf(graph: GraphDto, root: string): Disagreement[] {
+  return graph.nodes
+    .filter((n) => n.root === root && n.kind === 'CLAIM' && n.spreadLow !== undefined && n.spreadHigh !== undefined)
+    .map((n) => {
+      const { low, high } = spreadOf(n);
+      return { ref: n.ref, text: n.text ?? '', low, high, width: high - low };
+    })
+    .filter((r) => Math.round(r.high * 100) - Math.round(r.low * 100) > AGREE_POINTS)
+    .sort((a, b) => b.width - a.width)
+    .slice(0, 10);
+}
+
+/**
+ * "Where the rules disagree": the question's claims with the widest spread
+ * between the credence rules, widest first. Like the cruxes panel
+ * (CruxesPanel.tsx), activating an entry (click, or Enter/Space when
+ * focused) focuses that claim in the tree — computenet-lmfg8,
+ * ClaimCard.focusInTree, via the same `onActivateKey` helper.
+ */
+export function DisagreementPanel(props: { graph: GraphDto; root: string; onFocus?: (ref: string) => void }) {
+  const rows = createMemo(() => disagreementsOf(props.graph, props.root));
+  return (
+    <Show when={rows().length > 0}>
+      <section class="disagreement" aria-label="Where the rules disagree">
+        <h2 class="disagreement__title">Where the rules disagree</h2>
+        <ol class="disagreement__list">
+          <For each={rows()}>
+            {(r) => (
+              <li class="disagree">
+                <button
+                  type="button"
+                  class="disagree__btn"
+                  data-ref={r.ref}
+                  onClick={() => props.onFocus?.(r.ref)}
+                  onKeyDown={onActivateKey(() => props.onFocus?.(r.ref))}
+                >
+                  <span class="disagree__text">{r.text}</span>
+                  <span class="disagree__meta" title="Lowest and highest credence over every rule">
+                    {pct(r.low)}–{pct(r.high)}
+                  </span>
+                </button>
+              </li>
+            )}
+          </For>
+        </ol>
+      </section>
+    </Show>
+  );
+}

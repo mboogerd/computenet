@@ -9,6 +9,13 @@ parallel model from nearby implementation accidents.
 Detailed architecture (module graph, kernel package map, KSP generation flow,
 runtime lifecycle, concord, demos): `doc/ARCHITECTURE.md`.
 
+## Talking to the human
+
+Bead ids mean nothing to the user. In text meant for a person, say what the
+item *is*; add the id in parentheses only when they may act on it or two items
+would otherwise read alike. Agent-to-agent text (prompts, bead notes, commits)
+may use bare ids.
+
 ## Start every task here
 
 1. Read the complete assigned work item — tickets live in the file your
@@ -104,6 +111,11 @@ for documentation maintenance.
     semantic/invariant tests; use it to detect accidental API or behavior
     regressions. Its SolidJS/Vite frontend lives in `demo/agora/ui/` (npm, not
     Gradle).
+  - `demo/deliberate/` (`:demo:deliberate`): LLM-explored deliberation graph —
+    Claude/Codex propose claims and edges, Jev judges them, credence lives in
+    vector-valued cells, and durability journals inputs only (judgements are
+    recomputed). Depends on `:kernel`, `:demo:shell` and `:demo:agora`. Its
+    SolidJS/Vite frontend lives in `demo/deliberate/ui/` (npm, not Gradle).
   - `demo/beadsmirror/` (`:demo:beadsmirror`): mirrors a bd/Dolt-backed beads
     workspace — polls the Dolt commit feed, projects it through kernel cells
     into a materialized OR-map fold, and serves the fold over `:demo:shell`'s
@@ -248,7 +260,7 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   the mutation LANDED — a non-empty `git diff HEAD -- <file>` — before the
   test result is read at all. Note which half each check covers: here the
   variable held the test INVOCATION, so the mutation may well have landed and
-  step 3 would pass. It is step 4's `grep -E '^e:|BUILD' "$SCRATCH/mut.log"`
+  step 5 would pass. It is step 6's `grep -aE '^e:|BUILD' "$SCRATCH/mut.log"`
   that catches this one — a command that exited 127 writes no `BUILD` line at
   all.
 - Sixth member, and the only one where every command is correct: **never

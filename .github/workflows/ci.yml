@@ -624,3 +624,32 @@ jobs:
       - name: Test
         working-directory: demo/agora/ui
         run: npm test
+
+  deliberate-ui-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: demo/deliberate/ui/.nvmrc
+          cache: npm
+          cache-dependency-path: demo/deliberate/ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: demo/deliberate/ui
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: demo/deliberate/ui
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: demo/deliberate/ui
+        run: npm test
+
+      - name: Build
+        working-directory: demo/deliberate/ui
+        run: npm run build
