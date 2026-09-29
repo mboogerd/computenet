@@ -57,6 +57,10 @@ include(":identity")
 // consolidated aggregate views. Same dependency shape as :identity — depends
 // on :kernel (and, transitively, :nature); :kernel never depends on it.
 include(":demograph")
+// ECO1 (epic computenet-66m): validated, serializable economic policy and token-bucket
+// budget ledger. Same dependency shape as :identity/:demograph — depends on :kernel
+// (and, transitively, :nature); :kernel never depends on it.
+include(":economy")
 include(":inspect")
 include(":timetravel")
 include(":iroh")
