@@ -152,4 +152,4 @@ for f in "$SCRATCH"/dispatched-*; do
     if [ -z "$wake" ] || [ "$due" -lt "$wake" ]; then wake=$due; fi
   fi
 done
-[ -z "$wake" ] || echo "wake: ${wake}m — sleep a one-shot Monitor this long before ending a turn with agents live"
+[ -z "$wake" ] || echo "wake: ${wake}m — with agents live, arm a one-shot Monitor running \`sleep $(( wake * 60 )); echo wake\`"

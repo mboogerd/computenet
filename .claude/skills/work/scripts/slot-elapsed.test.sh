@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for slot-elapsed.sh. Fabricates slot-start/slot-seconds so every rung
-# and every gap case runs deterministically. Expect "49 passed, 0 failed".
+# and every gap case runs deterministically. Expect "50 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slot-elapsed.sh"}
@@ -144,6 +144,7 @@ says "$d" "agent fix: 40m since dispatch — OVER its 30m bound" "a per-unit bou
 d=$(slot 100 300); echo "$(( $(date -u +%s) - 10 * 60 )) 30" > "$d/dispatched-ok"
 says "$d" "agent ok: 10m since dispatch, 20m to its 30m bound" "an agent inside its bound is not OVER"
 says "$d" "wake: 20m" "wake is the earliest bound when it precedes the next rung"
+says "$d" "sleep 1200; echo wake" "wake prints the Monitor command in seconds"
 d=$(slot 100 300)
 says "$d" "wake: 95m" "with no agents, wake is the time to the next rung (T-90m at 195m)"
 d=$(slot 100 300); echo junk > "$d/dispatched-bad"
