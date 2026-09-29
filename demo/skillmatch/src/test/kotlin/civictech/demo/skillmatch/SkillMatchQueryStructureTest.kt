@@ -25,10 +25,16 @@ import kotlin.reflect.KClass
  * the [GraphSpec] [SkillMatchQuery] compiles to, compared cell-for-cell and link-for-link with the
  * one [SkillPipeline.buildWithSpec] records.
  *
- * **This test pins the residual between the compiled and the hand-wired graph; it does NOT claim
- * [QRY1-API-04] is met as literally written.** The residual is measured, not accepted: whether
- * it satisfies the requirement is the human decision computenet-cab.7.10 (under feature
- * computenet-cab.7), and the evidence is recorded as doc/demo-findings.md F-20.
+ * **This test pins the residual between the compiled and the hand-wired graph.** [QRY1-API-04]
+ * ("same cells, same links") is not met by the literal text of the requirement, but the human
+ * decision on bead computenet-cab.7.10 (2026-09-20, under feature computenet-cab.7) ACCEPTS
+ * structural equality on the relational core, with R1 and R2 below pinned as the recorded
+ * residual: R1 is a language-scope gap, not a compiler defect (the language has no expressions
+ * in rule heads at all, and widening it now would grow the compiler's — and the differential
+ * oracle's — surface against a single demo; expression syntax is deferred to BB-TPCH, a better
+ * test bed for designing it), and R2 is inherent to Datalog safety under [QRY1-LANG-07] (the
+ * direct form is UNSAFE_RULE; removing the extra projection would mean weakening safety
+ * analysis). The evidence is recorded as doc/demo-findings.md F-20.
  *
  * Method. Hand-wired handles map to compiled handles through the compiled SYMBOL TABLE, never by
  * guessing names: the two sources through [CompiledQuery.sourceHandles], each relational output
