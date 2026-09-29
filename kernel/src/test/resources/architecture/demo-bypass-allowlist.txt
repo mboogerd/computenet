@@ -1,0 +1,18 @@
+# Demo main-source files that still call raw subscribe/streamTo/routeTo,
+# skipping LinkAdmission (cycle admission, TopologyIndex, EdgeClose) and the
+# glitch-free wave frontier (LinkRole.Observe). Enforced by
+# kernel/src/test/kotlin/civictech/cell/architecture/DemoBypassRatchetTest.kt
+# (computenet-837mi.1), from doc/integration/2026-09-29/01-programming-model.md
+# findings F1-F4 and REPLAN.md Phase 0.
+#
+# Lines may ONLY ever be REMOVED, never added: this file is the ratchet's
+# shrink-only allowlist. A file is removed once it no longer contains such a
+# call outside comments (migrated onto the routed/glitch-free path — INT1
+# 1.1 tracks that migration). One repo-relative path per line, sorted.
+demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
+demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt
+demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
+demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt
+demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
+demo/shopping/src/main/kotlin/civictech/demo/Main.kt
+demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
