@@ -1,10 +1,14 @@
 package civictech.cell.durability
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.ReplayProvenance
+import civictech.cell.SuspendingCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.CoroutineScheduler
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.IntakeBound
@@ -15,14 +19,23 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SaturationPolicy
 import civictech.cell.host.SimulationController
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
 import io.kotest.assertions.withClue
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -194,8 +207,14 @@ class ReplayProvenanceTest {
      * routes through the host's intake (a hosted proxy as A's subscriber) — so every derived
      * delta is its own staged, journaled frame, the shape computenet-vcrc7 measured.
      */
-    private class Graph(scheduler: HostScheduler, selector: (CellRef) -> Journal?, aRef: CellRef, bRef: CellRef) {
-        val host = ManagedHost(scheduler = scheduler, journalFor = selector)
+    private class Graph(
+        scheduler: HostScheduler,
+        selector: (CellRef) -> Journal?,
+        aRef: CellRef,
+        bRef: CellRef,
+        intakeBound: IntakeBound? = null,
+    ) {
+        val host = ManagedHost(scheduler = scheduler, journalFor = selector, intakeBound = intakeBound)
         val a = SetCell<String>(aRef)
         val b = SetCell<String>(bRef)
 
@@ -297,5 +316,101 @@ class ReplayProvenanceTest {
         frameCount(journalA) shouldBe 5
         frameCount(journalB) shouldBe 10
         g.b.membership() shouldBe preCrashFold
+    }
+
+    /**
+     * D2's saturation clause, derived half: the SATURATED bypass keys on the frame's replay
+     * provenance AFTER the intake has inherited it, so a same-host frame derived from
+     * delivering a replayed frame passes a SATURATED intake like the replayed frame itself
+     * (it is re-derived, already-accepted history — T05 finding 4's reason), while a live
+     * frame is gated (the R-A saturation test). A journals to J; B is a volatile view fed
+     * only by A's deltas, so B's post-recovery fold exists only if every derived frame was
+     * accepted. Recovering 5 frames under `highWater = 2` leaves the intake SATURATED while
+     * they are delivered; before this feature the time-window flag had reset by then, the
+     * derived frames were refused into A's handler, and B recovered empty.
+     */
+    @Test
+    fun `R-B a replay-derived frame passes a SATURATED intake`() {
+        val controller = SimulationController(seed = 13)
+        val journal = InMemoryJournal()
+        val aRef = CellRef(UUID.randomUUID())
+        val bRef = CellRef(UUID.randomUUID())
+        val selector: (CellRef) -> Journal? = { if (it == aRef) journal else null }
+        val bound = IntakeBound(highWater = 2, lowWater = 0, policy = SaturationPolicy.Park)
+
+        val live = Graph(controller.scheduler(), selector, aRef, bRef, bound).also { it.link(::deltas) }
+        controller.runToIdle()
+        (1..5).forEach {
+            ops(live.host, aRef).add("e$it")
+            controller.runToIdle()
+        }
+        val preCrashFold = live.b.membership()
+        preCrashFold shouldBe (1..5).map { "e$it" }.toSet()
+        frameCount(journal) shouldBe 5
+
+        val g = Graph(controller.scheduler(), selector, aRef, bRef, bound).also { it.link(::deltas) }
+        controller.runToIdle()
+        g.host.recoverFrom(journal).replayedFrames shouldBe 5
+        controller.runToIdle()
+
+        g.b.membership() shouldBe preCrashFold
+        frameCount(journal) shouldBe 5
+    }
+
+    interface TriggerApi {
+        suspend fun trigger()
+    }
+
+    /**
+     * Rule R-C, suspension half: `ManagedHost.deliver` re-installs a frame's replay provenance
+     * with `ReplayProvenance.withSuspending`, so a `SuspendingCell` handler that suspends and
+     * resumes on a DIFFERENT worker thread still emits under it — and the intake downstream
+     * inherits it. The emission runs on a dedicated resume thread the host never touched, so a
+     * plain thread-local set on the delivering thread would read null there.
+     */
+    @Test
+    fun `R-C replay provenance survives a suspending handler resuming on another worker thread`() {
+        val resumeOn = Executors.newSingleThreadExecutor { Thread(it, "xy7w4.1-RC-resume") }
+        try {
+            val host = ManagedHost(scheduler = CoroutineScheduler("xy7w4.1-RC"))
+            val cell = object : Cell, SuspendingCell {
+                override val ref = CellRef(UUID.randomUUID())
+                val outlet = registerPort("outlet", FanOutlet.create<Propagate<String>>())
+                val inlet = registerPort("inlet", FanInlet(TriggerApi::class.java))
+
+                init {
+                    inlet.serve(object : TriggerApi {
+                        override suspend fun trigger() {
+                            withContext(resumeOn.asCoroutineDispatcher()) { outlet.call.propagate("emitted") }
+                        }
+                    })
+                }
+            }
+            host.managementInlet.call.spawn(cell)
+
+            val seen = CompletableFuture<Pair<String, Any?>>()
+            cell.outlet.subscribe(
+                Use.fixed(object : Propagate<String> {
+                    override fun propagate(value: String) {
+                        seen.complete(Thread.currentThread().name to ReplayProvenance.get())
+                    }
+                }, PortRef.generate()),
+            )
+
+            val token = InMemoryJournal()
+            host.enqueueHostedInvocation(
+                HostedPortInvocation(
+                    cell.ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                    Invocation("trigger", emptyList(), emptyList()),
+                    replayOf = token,
+                ),
+            )
+
+            val (thread, provenance) = seen.get(15, TimeUnit.SECONDS)
+            thread.startsWith("xy7w4.1-RC-resume").shouldBeTrue()
+            (provenance === token).shouldBeTrue()
+        } finally {
+            resumeOn.shutdown()
+        }
     }
 }
