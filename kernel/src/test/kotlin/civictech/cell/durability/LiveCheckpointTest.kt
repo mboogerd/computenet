@@ -4,6 +4,8 @@ import civictech.cell.CellRef
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
+import civictech.cell.control.AttentionPolicy
+import civictech.cell.control.AttentionSupport
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
@@ -226,5 +228,54 @@ class LiveCheckpointTest {
         }
 
         recover(SimulationController(seed = 1), journal, ref).membership() shouldBe expected
+    }
+
+    @Test
+    fun `(e) attention-parked frames are carried like queued ones`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            journal = journal,
+            attention = AttentionPolicy(suspendAfter = 3),
+        )
+        val cell = SetCell<String>(ref)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        AttentionSupport.of(cell).attend(0f) // band NONE: past the window, traffic parks
+
+        val elements = (1..10).map { "p$it" }
+        elements.forEach { ops(host, ref).add(it) }
+        controller.runToIdle()
+        withClue("the window admitted 3 deliveries; the other 7 are attention-parked, not queued") {
+            cell.membership().size shouldBe 3
+            host.stagedWorkTotal() shouldBe 0
+        }
+
+        host.checkpoint(journal)
+        records(journal).count { it is DecodedJournalRecord.Frame } shouldBe 7
+
+        recover(controller, journal, ref).membership() shouldBe elements.toSet()
+    }
+
+    @Test
+    fun `(f) frames staged for two cells are carried in host-sequence order, not per cell`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val a = CellRef(UUID.randomUUID())
+        val b = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        host.managementInlet.call.spawn(SetCell<String>(a))
+        host.managementInlet.call.spawn(SetCell<String>(b))
+        controller.runToIdle()
+
+        val accepted = listOf(a to "a1", b to "b1", a to "a2", b to "b2")
+        accepted.forEach { (ref, element) -> ops(host, ref).add(element) }
+        host.checkpoint(journal)
+
+        records(journal).filterIsInstance<DecodedJournalRecord.Frame>()
+            .map { civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single() } shouldBe
+            accepted.map { it.second }
     }
 }
