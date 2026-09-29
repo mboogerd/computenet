@@ -114,6 +114,14 @@ files.each do |f|
     errs << "references/#{File.basename(r)} is #{n} lines, over its cap of #{REFERENCE_CAP}" if n > REFERENCE_CAP
   end
 
+  # The Skill tool replaces $ARGUMENTS and $<digit> in SKILL.md with the
+  # invocation's arguments, so a shell positional there runs as something else:
+  # awk '{print $1}' loaded as awk '{print all}' (computenet-23s8s).
+  File.readlines(f, encoding: 'UTF-8').each_with_index do |line, i|
+    m = line.match(/\$(\d|ARGUMENTS)/) or next
+    errs << "SKILL.md:#{i + 1} has #{m[0]}, which the Skill tool replaces with its arguments"
+  end
+
   # Cited script paths must resolve from the repo root, which is where an
   # agent's shell sits. A path is reported once per file that cites it, with
   # the line number, so the fix is a single edit rather than a hunt.
