@@ -326,8 +326,9 @@ class ReplayProvenanceTest {
      * frame is gated (the R-A saturation test). A journals to J; B is a volatile view fed
      * only by A's deltas, so B's post-recovery fold exists only if every derived frame was
      * accepted. Recovering 5 frames under `highWater = 2` leaves the intake SATURATED while
-     * they are delivered; before this feature the time-window flag had reset by then, the
-     * derived frames were refused into A's handler, and B recovered empty.
+     * they are delivered. Gating the derived frames instead (as the time-window flag did once
+     * it had reset) refuses them into A's handler: under that mutation B recovered only `e5`,
+     * the one delivered after the intake drained.
      */
     @Test
     fun `R-B a replay-derived frame passes a SATURATED intake`() {
