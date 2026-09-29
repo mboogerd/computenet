@@ -166,3 +166,47 @@ in `data/deliberate-multiclass/exp/push/`, next to the first study's
 Tuning rules: fit on `split == "tune"`, report `heldout` once. The held-out
 split has been scored once already, for the arms in §2, so any new arm's
 held-out score is a second look at the same 25 questions: report that.
+
+## 6. Addendum: information-ceiling test with a learned combiner (2026-09-29)
+
+**Question.** Could a *learned* rule, rather than a hand-designed semantics, get
+more accuracy out of the same judgments than Opus's immediate answer?
+
+**Method.** `learn.py` (in the push data folder, run with
+`uv run --with numpy --with scipy python learn.py`; output `learn.txt`) fits a
+conditional logit: a softmax over a question's options with shared weights
+and L2 regularisation.
+
+- **Features per (question, option):**
+  - Opus mean-of-5 log-probability and the spread of Opus's 5 samples;
+  - Sol's probability;
+  - Jev's model-A position plausibility;
+  - seven aggregates of the 32 judged arguments: signed, positive and negative
+    relative bearing weighted by plausibility; the strongest claim for and
+    against the option; how many claims favour it; how many count against it.
+- **Validation:** L2 strength chosen by leave-one-question-out on the tune
+  split, then applied once to held-out.
+- **Extra training data:** a second run adds the 1ow0x knowledge set (50
+  questions) to training.
+
+**Result** (Δ Metaculus points vs raw Opus mean-of-5; training set push-tune + 1ow0x):
+
+| Feature set | Tune LOO Δ | Held-out Δ |
+|---|---|---|
+| Opus only (fitted temperature, ×1.6–1.7) | +0.6 [−1.1, +2.1] | +1.7 [−1.0, +3.9] |
+| Opus + arguments | −0.8 [−2.9, +1.1] | −0.4 [−6.1, +4.2] |
+| Arguments only | −32.8* | −20.9* |
+| Opus + Sol | +0.1 | +1.4 |
+| Everything | −1.8 | −1.3 |
+
+- **The only gain is recalibration.** Opus is under-confident here, and
+  sharpening it helps a little (not significant).
+- **Once Opus is in the model, the argument features get weights near zero,**
+  and adding them lowers the held-out score.
+
+The judged arguments carry no information about the right answer that Opus's
+direct distribution lacks. No combination rule, recursive or not, can extract
+signal that is not in its inputs.
+
+Tree ensembles were not tried: at 55–105 labelled questions they would overfit
+before they could find anything the regularised linear model misses.
