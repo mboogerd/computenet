@@ -58,6 +58,35 @@ class LedgerRetentionTest {
     }
 
     @Test
+    fun `(a2) a drained bucket that has refilled back to its bootstrap is swept without being touched`() {
+        val l = ledger()
+        l.drain("P")
+        now += 5_000_000_000 // five refill intervals of 1 token: 0 -> 5 == bootstrap, never charged since
+        l.sweep() shouldBe 1
+        l.snapshot().bucketCount shouldBe 0
+    }
+
+    @Test
+    fun `(e2) drained buckets that have refilled to bootstrap do not pin a full ledger`() {
+        // An idle bound far above the refill time, so the creation-time sweep frees nothing and
+        // only the oldest-eligible eviction can make room.
+        val l = TokenBucketLedger(
+            EconomicPolicy.placeholder().copy(
+                unvouchedBootstrap = mapOf(ClaimClass.Spawn to 5L),
+                retention = EconomicPolicy.Retention(idleNanos = 1_000_000_000_000, maxBuckets = 3, recentKeys = 2),
+            ).applied(),
+            { now },
+            "retention-scope",
+        )
+        l.drain("A")
+        l.drain("B")
+        l.drain("C")
+        now += 5_000_000_000 // each refills 0 -> 5 == bootstrap, so each is eligible again
+        l.spawn("D").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        l.snapshot().bucketCount shouldBe 3
+    }
+
+    @Test
     fun `(b) an idle bucket at its bootstrap is swept`() {
         val l = ledger()
         l.touch("Q")
