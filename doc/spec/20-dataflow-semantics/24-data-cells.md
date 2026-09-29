@@ -1273,10 +1273,14 @@ ever holds its own cells' records, so replaying it restores exactly those
 cells and re-delivers nothing to a co-hosted volatile cell — recover each
 distinct journal once. `[24-DUR-03]` A journal SHALL only ever hold its own
 cells' records, such that replaying it restores exactly those cells and
-re-delivers nothing to a co-hosted volatile cell (Ubiquitous). `checkpoint` is keyed the same way: it snapshots only
-the cells teeing to the passed journal and compacts that journal atomically;
-the compaction carries every frame accepted for that journal and not yet
-delivered, so a checkpoint is safe at any inter-invocation boundary (93 I-7 R7);
+re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
+`checkpoint` is keyed the same way: it snapshots only the cells teeing to the
+passed journal and compacts that journal atomically; the compaction carries
+every frame accepted for that journal and not yet delivered, so a checkpoint is
+safe at any inter-invocation boundary (93 I-7 R7); not covered, and still lost
+by the reset: a frame already dequeued and held elsewhere — a supervision-
+SUSPENDed cell's park queue, a cold inlet's pre-activation tail — and, on a
+suspending scheduler, a delivery suspended mid-handler (computenet-hknt0);
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the
 per-cell scoping; its control shows a constant selector restores every cell).
 Cells stay oblivious — with one honest exception:
