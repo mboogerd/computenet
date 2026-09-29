@@ -148,8 +148,9 @@ fun interface BudgetLedger {
  * Implemented by cells that charge at their own seams (`CompositeCell`). The
  * host attaches its hierarchy-walking ledger at spawn, exactly as it attaches
  * the `BoundaryDenialReporter`; it attaches nothing when its ledger is
- * [BudgetLedger.Unlimited]. Nothing implements this interface yet — F3
- * (`computenet-5o1rf`) is the first adopter.
+ * [BudgetLedger.Unlimited]. `civictech.cell.membrane.CompositeCell` is the
+ * implementer (ECO1 F3, `computenet-5o1rf`): it charges remote [Attention
+ * assertions][ClaimClass.Attention] at its `protocolAuthority` seam.
  */
 interface BudgetCharging {
     fun attachBudget(ledger: BudgetLedger)
