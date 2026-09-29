@@ -236,9 +236,10 @@ Before dispatching, run `breakdown-marker.sh acquire <epic>` (timeout >= 300s;
 it pushes). Exit 0 → dispatch below with the printed `TOKEN`; 11 (FOREIGN) →
 already broken down elsewhere: list children again and continue at step 5, or
 park per "Still no children" below if that listing is empty; 12 (BOTH) → run
-`breakdown-marker.sh survivor <epic>` (exit 1 lists losers, not a failure),
-route its `CLOSE` list per recovery.md "Collisions", then continue as for 11;
-2 → unpublished acquisition, stop and report; 3 from either → treat it as 2.
+`breakdown-marker.sh survivor <epic>` (exit 1: losers listed, not a failure; 0:
+nothing to adjudicate), route its `CLOSE` list per recovery.md "Collisions",
+then continue as for 11; 2 → unpublished acquisition, stop and report; 3 from
+either → treat it as 2.
 
 ```
 Agent({
