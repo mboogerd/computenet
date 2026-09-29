@@ -80,8 +80,7 @@ enum class BoundarySeam {
      * this membrane" — two different questions answered at two different
      * points in a cell's lifecycle. The hosting `ManagedHost`'s own
      * `BoundaryDenialSink` reports it; feature `computenet-5o1rf` (F3) owns
-     * the plumbing that calls [BoundaryDenialSink.deny] with this seam — this
-     * arm is declared here with no caller yet.
+     * the plumbing that calls [BoundaryDenialSink.deny] with this seam.
      */
     HOST_ADMISSION,
 }

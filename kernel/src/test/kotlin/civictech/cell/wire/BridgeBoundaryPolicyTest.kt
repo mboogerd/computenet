@@ -1,8 +1,14 @@
 package civictech.cell.wire
 
+import civictech.cell.BoundarySeam
+import civictech.cell.BudgetLedger
+import civictech.cell.BudgetOutcome
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.ClaimClass
+import civictech.cell.DenialReason
 import civictech.cell.Propagate
+import civictech.cell.RecordingLedger
 import civictech.cell.control.Attention
 import civictech.cell.control.AttentionBand
 import civictech.cell.data.SetCell
@@ -37,7 +43,9 @@ import civictech.cell.proxy.Invocation
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.ints.shouldBeGreaterThan
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -208,11 +216,11 @@ class BridgeBoundaryPolicyTest {
      * P, the collectors on Q, and P's registry reaches Q's cells only through
      * the announcement mirror the peering installs.
      */
-    private class Run(seed: Long = 0) {
+    private class Run(seed: Long = 0, budget: BudgetLedger = BudgetLedger.Unlimited) {
         val controller = SimulationController(seed)
 
         val registryP = LocationRegistry()
-        val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP, budget = budget)
         val bridgeP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
         val registryQ = LocationRegistry()
         val hostQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
@@ -280,6 +288,12 @@ class BridgeBoundaryPolicyTest {
          * through P's host to the exposure's [ProtocolSupport].
          */
         fun assertAttentionFromQ(exposure: String, attention: Attention) {
+            loopback.bToA.deliver(attentionFrame(exposure, attention))
+            controller.runToIdle()
+        }
+
+        /** The `PORT_PROTOCOL` frame [assertAttentionFromQ] hands to the Q→P egress. */
+        fun attentionFrame(exposure: String, attention: Attention): HostedPortInvocation {
             val edge = WireEdgeLink(
                 id = UUID.randomUUID(),
                 from = PortRef.generate(),
@@ -287,18 +301,15 @@ class BridgeBoundaryPolicyTest {
                 fromAddr = PortAddress(CellRef(UUID.randomUUID()), "inlet"),
                 toAddr = PortAddress(membraneRef, exposure),
             )
-            loopback.bToA.deliver(
-                HostedPortInvocation(
-                    cellRef = membraneRef,
-                    portName = exposure,
-                    type = HostedPortInvocation.Type.PORT_PROTOCOL,
-                    invocation = Invocation("", emptyList(), emptyList()),
-                    protocolId = Protocols.Attention,
-                    protocolLink = edge,
-                    protocolMessage = attention,
-                )
+            return HostedPortInvocation(
+                cellRef = membraneRef,
+                portName = exposure,
+                type = HostedPortInvocation.Type.PORT_PROTOCOL,
+                invocation = Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = edge,
+                protocolMessage = attention,
             )
-            controller.runToIdle()
         }
 
     }
@@ -453,5 +464,93 @@ class BridgeBoundaryPolicyTest {
         // BS-14: a denial is never a fault — RESTART is installed on this
         // membrane, so a reclassification would show here.
         run.hostP.supervisionAccounting().restarts shouldBe 0
+    }
+
+    // --- ECO1 F3 (computenet-5o1rf.2): the budget arm over the real wire ---
+    //
+    // `hostP` carries a RecordingLedger, so it attaches its hierarchy ledger
+    // to the membrane at spawn (5o1rf-D6). The membrane spawn itself is local
+    // (no stamp), so the only claims the ledger sees are q's Attention ones.
+
+    @Test
+    fun `BS-04 loopback - an admitted remote assertion is clamped, debited once for (q, Attention), and records nothing`() {
+        val ledger = RecordingLedger("p-host")
+        val run = Run(seed = 5, budget = ledger)
+        val sink = run.membrane.boundaryDenials["deniedOutlet"]!!
+        val observed = mutableListOf<Attention>()
+        ProtocolSupport.of(run.membrane.deniedOutlet).handle(Protocols.Attention) { _, message ->
+            observed += message as Attention
+        }
+
+        run.assertAttentionFromQ("deniedOutlet", Attention(AttentionBand.HIGH.level, version = 7))
+
+        observed shouldContainExactly listOf(Attention(AttentionBand.LOW.level, 7))
+        ledger.balance(PeerId("q"), ClaimClass.Attention) shouldBe 9L
+        val claim = ledger.charges.single()
+        claim.stamp.id shouldBe PeerId("q")
+        claim.key shouldBe (Protocols.Attention to 7L)
+        sink.denialCount shouldBe 0L
+        run.deadLetters.shouldBeEmpty()
+        run.hostP.supervisionAccounting().restarts shouldBe 0
+    }
+
+    @Test
+    fun `BS-04 loopback - a refused remote assertion is dropped with one PROTOCOL_AUTHORITY budget record`() {
+        val ledger = RecordingLedger(
+            "p-host",
+            refuse = { BudgetOutcome.Refused(DenialReason.BUDGET_EXHAUSTED, "p-host", shortfall = 1) },
+        )
+        val run = Run(seed = 6, budget = ledger)
+        val sink = run.membrane.boundaryDenials["deniedOutlet"]!!
+        val observed = mutableListOf<Attention>()
+        ProtocolSupport.of(run.membrane.deniedOutlet).handle(Protocols.Attention) { _, message ->
+            observed += message as Attention
+        }
+
+        run.assertAttentionFromQ("deniedOutlet", Attention(AttentionBand.HIGH.level, version = 7))
+
+        observed.shouldBeEmpty()
+        sink.denialCount shouldBe 1L
+        val denial = run.deadLetters.single().denial!!
+        denial.seam shouldBe BoundarySeam.PROTOCOL_AUTHORITY
+        denial.reason shouldBe DenialReason.BUDGET_EXHAUSTED
+        denial.principal shouldBe PeerId("q")
+        denial.subject shouldBe Protocols.Attention.name
+        denial.detail!! shouldContain "class=Attention"
+        denial.detail!! shouldContain "scope=p-host"
+        denial.detail!! shouldContain "shortfall=1"
+        run.hostP.supervisionAccounting().restarts shouldBe 0
+    }
+
+    /**
+     * BS-21's wire half (`[ECO1-CHG-08]`): a frame q sends while the peering
+     * is partitioned parks in `registryQ` (the membrane's wire-mirrored
+     * `Remote` location was retracted), and replays on heal — and is charged
+     * exactly once, on the one delivery that reached the seam.
+     */
+    @Test
+    fun `BS-21 loopback - a frame parked on a partition and replayed on heal is charged exactly once`() {
+        val ledger = RecordingLedger("p-host", dedupKeys = true)
+        val run = Run(seed = 7, budget = ledger)
+        val observed = mutableListOf<Attention>()
+        ProtocolSupport.of(run.membrane.deniedOutlet).handle(Protocols.Attention) { _, message ->
+            observed += message as Attention
+        }
+
+        run.loopback.partition()
+        run.controller.runToIdle()
+        run.registryQ.deliver(run.attentionFrame("deniedOutlet", Attention(AttentionBand.HIGH.level, version = 7)))
+        run.controller.runToIdle()
+        run.registryQ.parkedFor(run.membraneRef).shouldNotBeEmpty()
+        ledger.charges.shouldBeEmpty()
+
+        run.loopback.heal()
+        run.controller.runToIdle()
+
+        run.registryQ.parkedFor(run.membraneRef).shouldBeEmpty()
+        observed shouldContainExactly listOf(Attention(AttentionBand.LOW.level, 7))
+        ledger.charges.map { it.key } shouldContainExactly listOf(Protocols.Attention to 7L)
+        ledger.balance(PeerId("q"), ClaimClass.Attention) shouldBe 9L
+        run.membrane.boundaryDenials["deniedOutlet"]!!.denialCount shouldBe 0L
     }
 }

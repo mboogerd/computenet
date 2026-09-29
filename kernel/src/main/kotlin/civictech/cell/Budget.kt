@@ -12,7 +12,9 @@ import civictech.cell.link.PeerStamp
  * `:economy` (F2, `computenet-66m` D9); wiring a real ledger onto a host and
  * calling [BudgetLedger.charge] at a site is F3 (`computenet-5o1rf`). Nothing
  * in this file changes any runtime behaviour: [BudgetLedger.Unlimited] is the
- * only implementation here, and nothing calls it yet.
+ * only implementation here, and it is every host's default: the host's G-28
+ * ancestor walk (`civictech.cell.host.ManagedHost`) recognises it by identity
+ * and skips that scope without charging.
  *
  * **`Principal.LocalTrusted` is exempt by construction, not by a check**
  * (`[ECO1-BUD-05]`): [BudgetClaim] carries a [PeerStamp], and a `PeerStamp`
@@ -130,9 +132,10 @@ fun interface BudgetLedger {
         /**
          * Admits every claim with **one shared** [BudgetOutcome.Admitted]
          * instance whose `undo` is a no-op (`[ECO1-BUD-04]`): no allocation
-         * per call, no clock read, no map. This is the ledger a host runs
-         * with until F3 attaches a real one — every runtime behaviour stays
-         * byte-for-byte unchanged while this is in effect.
+         * per call, no clock read, no map. This is a host's default budget
+         * — `ManagedHost(budget = …)` when none is given — and every runtime
+         * behaviour stays byte-for-byte unchanged while it is in effect on
+         * every scope of a chain.
          */
         val Unlimited: BudgetLedger = run {
             val admitted = BudgetOutcome.Admitted {}
@@ -145,8 +148,9 @@ fun interface BudgetLedger {
  * Implemented by cells that charge at their own seams (`CompositeCell`). The
  * host attaches its hierarchy-walking ledger at spawn, exactly as it attaches
  * the `BoundaryDenialReporter`; it attaches nothing when its ledger is
- * [BudgetLedger.Unlimited]. Nothing implements this interface yet — F3
- * (`computenet-5o1rf`) is the first adopter.
+ * [BudgetLedger.Unlimited]. `civictech.cell.membrane.CompositeCell` is the
+ * implementer (ECO1 F3, `computenet-5o1rf`): it charges remote [Attention
+ * assertions][ClaimClass.Attention] at its `protocolAuthority` seam.
  */
 interface BudgetCharging {
     fun attachBudget(ledger: BudgetLedger)

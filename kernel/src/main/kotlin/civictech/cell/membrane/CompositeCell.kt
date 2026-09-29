@@ -4,17 +4,26 @@ import civictech.cell.BoundaryDenialAccounting
 import civictech.cell.BoundaryDenialSink
 import civictech.cell.BoundaryDenials
 import civictech.cell.BoundarySeam
+import civictech.cell.BudgetCharging
+import civictech.cell.BudgetClaim
+import civictech.cell.BudgetLedger
+import civictech.cell.BudgetOutcome
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.ClaimClass
 import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
 import civictech.cell.MessageContext
+import civictech.cell.chargeOrFail
+import civictech.cell.denyBudget
 import civictech.cell.control.Attention
 import civictech.cell.control.StallNotice
 import civictech.cell.control.StallReason
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkPolicy
+import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
@@ -85,7 +94,7 @@ data class Exposure(
  */
 abstract class CompositeCell(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell, BoundaryDenialAccounting {
+) : Cell, BoundaryDenialAccounting, BudgetCharging {
 
     private val exposureMapMutable = linkedMapOf<String, Exposure>()
 
@@ -107,6 +116,24 @@ abstract class CompositeCell(
      * .denialCount` — which is why the sinks are exposed rather than private.
      */
     final override val boundaryDenials: BoundaryDenials = BoundaryDenials()
+
+    /**
+     * The budget this membrane charges remote-driven crossings against (ECO1
+     * F3, `5o1rf-D6`/`D7`): attached by the hosting `ManagedHost` at spawn
+     * exactly as the [boundaryDenials] reporter is — the host's
+     * ancestor-walking ledger, and only when some scope on its chain has a
+     * real (non-[BudgetLedger.Unlimited]) budget. Null means no budget: every
+     * charging arm is then one field read away from its pre-budget bytes and
+     * constructs no claim (`[ECO1-BUD-04]`, `[ECO1-POL-06]`). Read at flow
+     * time, not captured at declaration, because the mediated seams are built
+     * in the subclass constructor — before the host has attached anything.
+     */
+    @Volatile
+    private var budget: BudgetLedger? = null
+
+    final override fun attachBudget(ledger: BudgetLedger) {
+        budget = ledger
+    }
 
     /**
      * Flatten-exposes an existing organelle [port] under [externalName]: the
@@ -145,6 +172,9 @@ abstract class CompositeCell(
      * [MediateProxy] before delivery to [organelleInlet] — e.g. exposing a
      * `deltaInlet` with `BoundaryPolicy(integrity = IntegrityPolicy.RequireSigned)`
      * for untrusting-but-cooperating replica gossip (decided 93 I-28).
+     * Seam-2 budget charging ([ClaimClass.Link], [linkBudgetPolicy]) is
+     * installed here, on mediated inlets only — [flatten] and [mediateOutlet]
+     * charge no link.
      *
      * KSP-generating this proxy from a declarative membrane annotation is
      * G-52's residual (50/51); this is the hand-written realization the
@@ -190,8 +220,56 @@ abstract class CompositeCell(
             ),
         )
         installLinkAuthority(externalName, exposed, policy)
+        exposed.linking.policies += linkBudgetPolicy(denials)
         exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, exposed)
+    }
+
+    /**
+     * Seam 2's budget arm (ECO1 F3, `5o1rf-D8`/`D9`): charges one
+     * [ClaimClass.Link] claim, keyed by the [civictech.cell.link.LinkRequest]
+     * itself, for a **fresh remote handshake** on a mediated inlet — a request
+     * whose `identity` equals the ambient [CurrentPeer.stamp]'s id, which is
+     * the requester's own stamp because a remote link request is invoked under
+     * `CurrentPeer.with(...)` by the host — and on a refusal accounts the
+     * record through [denials] ([denyBudget], seam
+     * [BoundarySeam.LINK_AUTHORITY], `subject = null`) *before* returning
+     * [civictech.cell.link.LinkResult.Rejected] (`[ECO1-DEN-02]`); a local
+     * request (`identity == null`) constructs no claim (`[ECO1-BUD-05]`).
+     * Promotion re-authorization is deliberately **not** charged here:
+     * `Evolution.reauthorizeRebinds` carries only the establishing peer's
+     * `PeerId` (`LinkSupport.establishedBy`), the ambient stamp at that point
+     * is the promoter's, and fabricating a `TransportVouched`/`issuer = null`
+     * stamp would misprice an authenticated peer's rebind into the unvouched
+     * bootstrap class (`66m-D2`) — so a request whose identity does not match
+     * the ambient stamp falls through uncharged until `computenet-8aboz`
+     * retains the establishing `PeerStamp` in `LinkSupport`.
+     * The arm decides link admission only: it is a [LinkPolicy] in this
+     * inlet's `linking.policies`, so only `LinkSupport.reject`/`reauthorize`
+     * reach it and no management operation does (`[ECO1-DEN-08]`), and a held
+     * link is never re-evaluated by the budget (`[ECO1-DEN-09]`).
+     *
+     * Appended after `installLinkAuthority`'s wrappers, so a `linkAuthority`
+     * refusal still wins first with its own string and the ledger is never
+     * asked about a link that is already refused. With no ledger attached the
+     * body is one null field read ([budget]) — no claim, no sink allocation
+     * beyond the exposure's own. A `LinkRequest` carries no exclusive
+     * payload, so the refusal's `deniedArgs` is empty by construction.
+     */
+    private fun linkBudgetPolicy(denials: BoundaryDenialSink): LinkPolicy = LinkPolicy { request ->
+        val ledger = budget ?: return@LinkPolicy null
+        val stamp = CurrentPeer.stamp()?.takeIf { it.id == request.identity } ?: return@LinkPolicy null
+        val claim = BudgetClaim(stamp, ClaimClass.Link, key = request)
+        when (val outcome = ledger.chargeOrFail(claim, scope = "membrane:$ref")) {
+            is BudgetOutcome.Refused -> {
+                denials.denyBudget(outcome, claim, BoundarySeam.LINK_AUTHORITY, subject = null)
+                LinkResult.Rejected(
+                    "budget refused link: class=Link reason=${outcome.reason} " +
+                        "scope=${outcome.scope} shortfall=${outcome.shortfall}",
+                )
+            }
+            is BudgetOutcome.Admitted -> null
+        }
     }
 
     /**
@@ -314,7 +392,8 @@ abstract class CompositeCell(
         // with and nothing a second notice would add.
         organelleOutlet.onRepeatSuppression = policy.disclosure.asRepeatSuppressionHook(denials, subject)
         if (policy.protocolAuthority.isNotEmpty()) {
-            ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter(denials)
+            ProtocolSupport.of(organelleOutlet).inboundFilter =
+                policy.protocolAuthority.asProtocolFilter(denials, budgetScope = "membrane:$ref") { budget }
         }
         exposureMapMutable[externalName] =
             Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
@@ -727,9 +806,41 @@ private fun BoundaryDenialSink.denyDisclosure(
  * it. Verified correct as written: `TransportVouched < Authenticated`, so a
  * transport-vouched principal is refused by a `minAuth = Authenticated` floor
  * and admitted by the default `minAuth = TransportVouched` one.
+ *
+ * **The budget arm (ECO1 F3, `5o1rf-D7`).** When the hosting `ManagedHost`
+ * has attached a ledger ([budget] reads [CompositeCell]'s field at flow time,
+ * so a ledger attached at spawn is seen by a filter built at declaration),
+ * a remote [Attention] assertion on a protocol with a declared authority is
+ * charged one [ClaimClass.Attention] claim against the asserting peer's
+ * stamp, keyed on `(protocol, version)` so a replayed or re-delivered frame
+ * presents the same key to a deduplicating ledger (`66m-D8`, `[ECO1-CHG-08]`).
+ * A refusal is accounted through [denyBudget] — the one budget-denial helper
+ * — and the frame is dropped; a ledger that throws refuses with
+ * `LEDGER_FAILURE` ([chargeOrFail], `[ECO1-CHG-10]`). [budgetScope] is only
+ * that fallback's scope; an answering ledger names its own. The arm runs
+ * after `minAuth` and `ratePerWindow` and before the ceiling clamp
+ * (`66m-D6`), and only for a stamped principal: the `LocalTrusted`
+ * short-circuit above it means a local assertion constructs no claim and
+ * reaches no ledger (`[ECO1-BUD-05]`). With no ledger attached it is one
+ * null read (`[ECO1-POL-06]`).
+ *
+ * The budget arm is additional to and independent of the clamp — a clamp is
+ * not a charge, and a charge is not a clamp (`[ECO1-CHG-05]`/`[ECO1-CHG-06]`,
+ * `[SEC1-15]`): an admitted assertion is still clamped to `ceiling`, a
+ * clamped one is still charged, and neither outcome changes the other.
+ *
+ * `ratePerWindow` and the budget are two mechanisms by scope, not by
+ * accident (`66m-D6`, epic `computenet-66m` §9 risk 4): the first is a
+ * policy-declared per-protocol cap on SEC1's seam, the second a
+ * per-`Principal` economic budget owned by the host's ledger. The rate
+ * block's own defect — its `counts` map never resets or evicts, so it is a
+ * per-lifetime cap over a map unbounded in the number of principals ever
+ * seen — is filed as `computenet-hrp9n`, not fixed here.
  */
 private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
     denials: BoundaryDenialSink,
+    budgetScope: String,
+    budget: () -> BudgetLedger?,
 ): (ProtocolId, Any) -> Any? {
     val counts = java.util.concurrent.ConcurrentHashMap<Pair<ProtocolId, Principal>, Int>()
     return filter@{ id, message ->
@@ -760,6 +871,29 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
                     message = message,
                 )
                 return@filter null
+            }
+        }
+        // ECO1 budget arm (5o1rf-D7, 66m-D6: after ratePerWindow, before the
+        // clamp). The charge decides admission of THIS frame only; it never
+        // touches band assignment or FIFO order, which stay the scheduler's
+        // ([ECO1-DEN-12]).
+        if (id == Protocols.Attention && message is Attention) {
+            budget()?.let { ledger ->
+                // non-null: the LocalTrusted return above already handled an unstamped delivery
+                val claim = BudgetClaim(CurrentPeer.stamp()!!, ClaimClass.Attention, key = id to message.version)
+                when (val outcome = ledger.chargeOrFail(claim, budgetScope)) {
+                    is BudgetOutcome.Refused -> {
+                        denials.denyBudget(
+                            outcome,
+                            claim,
+                            BoundarySeam.PROTOCOL_AUTHORITY,
+                            subject = id.name,
+                            deniedArgs = listOf(message),
+                        )
+                        return@filter null
+                    }
+                    is BudgetOutcome.Admitted -> Unit
+                }
             }
         }
         if (id == Protocols.Attention && authority.ceiling != null && message is Attention) {
