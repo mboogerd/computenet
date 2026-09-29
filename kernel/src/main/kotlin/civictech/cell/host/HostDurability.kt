@@ -515,7 +515,7 @@ internal class HostDurability(
      * staged and no data task has applied yet, a coalesced entry, attention-parked
      * traffic. The compacted journal is the checkpoint records followed by every staged
      * frame whose target port tees to [journal], re-encoded by [journalFrame] in host
-     * sequence order — so a host recovering from it reproduces the fold of every frame
+     * sequence order — so a host that recovers from it reproduces the fold of every frame
      * accepted before this returns, with no quiescence fence and with writers running.
      * The staged-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
      * the monitor the intake's append+stage holds, so a frame accepted concurrently is
