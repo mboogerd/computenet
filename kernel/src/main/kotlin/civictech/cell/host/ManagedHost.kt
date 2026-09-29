@@ -7,6 +7,16 @@ import civictech.cell.port.*
 import civictech.cell.protocol.*
 import civictech.cell.BlockingCell
 import civictech.cell.BoundaryDenialAccounting
+import civictech.cell.BoundaryDenials
+import civictech.cell.BoundarySeam
+import civictech.cell.BudgetCharging
+import civictech.cell.BudgetClaim
+import civictech.cell.BudgetLedger
+import civictech.cell.BudgetOutcome
+import civictech.cell.BudgetRefusedException
+import civictech.cell.ClaimClass
+import civictech.cell.chargeOrFail
+import civictech.cell.denyBudget
 import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellContext
@@ -148,6 +158,20 @@ open class ManagedHost(
      * waits behind a whole batch rather than behind one message.
      */
     private val dispatchBatch: Int = 1,
+    /**
+     * This host's own economic budget (ECO1 F3, `computenet-5o1rf`,
+     * `5o1rf-D5`): the ledger charged, at this scope, for every remote-driven
+     * spawn admitted anywhere in this host's subtree — the per-Principal
+     * quota that "reuses the G-28 host-hierarchy quota walk" (spec 43). The
+     * default, [BudgetLedger.Unlimited], is identity-checked and skipped:
+     * with it on every scope of a chain no claim is constructed, nothing is
+     * attached to a spawned cell, and the host behaves byte-for-byte as it
+     * did before budgets existed (`[ECO1-BUD-04]`, `[ECO1-POL-06]`).
+     *
+     * Appended LAST and defaulted so every existing construction site
+     * compiles unchanged.
+     */
+    private val budget: BudgetLedger = BudgetLedger.Unlimited,
 ) : Host {
 
     init {
@@ -268,6 +292,59 @@ open class ManagedHost(
     }
 
     internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
+
+    /**
+     * Charges [claim] once at every scope of this host's ancestor chain —
+     * this host, then each [parentHost] upward, the same ascent as the G-28
+     * quota walk — against each scope's own [budget] (`5o1rf-D5`). Scopes
+     * whose ledger is [BudgetLedger.Unlimited] are skipped without
+     * allocating. On the first [BudgetOutcome.Refused] every debit already
+     * taken in this ascent is undone, in reverse, and that refusal is
+     * returned (`[ECO1-CHG-03]`); a throwing ledger refuses with
+     * `LEDGER_FAILURE` ([chargeOrFail], `[ECO1-CHG-10]`). When nothing was
+     * charged the shared [BudgetLedger.Unlimited] admission is returned; an
+     * admission's `undo` reverses every scope's debit.
+     *
+     * The caller accounts a refusal — this function never denies.
+     */
+    internal fun chargeThroughAncestors(claim: BudgetClaim): BudgetOutcome {
+        var admitted: ArrayList<BudgetOutcome.Admitted>? = null
+        var scope: ManagedHost? = this
+        while (scope != null) {
+            if (scope.budget !== BudgetLedger.Unlimited) {
+                when (val outcome = scope.budget.chargeOrFail(claim, scope.ref.toString())) {
+                    is BudgetOutcome.Admitted -> (admitted ?: ArrayList<BudgetOutcome.Admitted>().also { admitted = it }) += outcome
+                    is BudgetOutcome.Refused -> {
+                        admitted?.let(::undoInReverse)
+                        return outcome
+                    }
+                }
+            }
+            scope = scope.parentHost
+        }
+        val taken = admitted ?: return BudgetLedger.Unlimited.charge(claim)
+        return taken.singleOrNull() ?: BudgetOutcome.Admitted { undoInReverse(taken) }
+    }
+
+    /**
+     * The ledger this host hands to a spawned [BudgetCharging] cell: every
+     * charge walks [chargeThroughAncestors]. Allocated once per host.
+     */
+    internal val hierarchyLedger: BudgetLedger = BudgetLedger { claim -> chargeThroughAncestors(claim) }
+
+    /** True iff some scope on this host's ancestor chain has a non-[BudgetLedger.Unlimited] budget (`5o1rf-D6`). */
+    private fun anyLedgerOnChain(): Boolean {
+        var scope: ManagedHost? = this
+        while (scope != null) {
+            if (scope.budget !== BudgetLedger.Unlimited) return true
+            scope = scope.parentHost
+        }
+        return false
+    }
+
+    private fun undoInReverse(admitted: List<BudgetOutcome.Admitted>) {
+        for (i in admitted.indices.reversed()) admitted[i].undo()
+    }
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
     override val routerInlet = registerPort("routerInlet", FanInlet.create<HostRoutingApi>())
 
@@ -296,6 +373,20 @@ open class ManagedHost(
         // construction completes, once the member is initialized.
         emit = { dl -> this.scheduler.submit(0) { deadLetterOutlet.call.propagate(dl) } },
     )
+
+    /**
+     * The host's OWN boundary-denial sink (`5o1rf-D4`): the spawn site's
+     * budget refusals are accounted here, reported into this host's
+     * [deadLetters] exactly as a hosted membrane's are, so
+     * [boundaryDenialCount] counts them and the spec-23-R8 sanitizer runs.
+     * The exposure name is the literal `"host"` — exposure is a membrane
+     * concept a host has none of; the record's `cellRef` (this host's [ref])
+     * already says which host refused. Declared after [deadLetters], which
+     * the reporter closes over.
+     */
+    private val hostDenials = BoundaryDenials().also { denials ->
+        denials.attachReporter { denial, deniedArgs -> deadLetters.boundaryDenial(ref, denial, deniedArgs) }
+    }
 
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 
@@ -1586,26 +1677,67 @@ open class ManagedHost(
     init {
         internalApi = object : HostManagementApi {
             override fun spawn(cell: Cell): CellRef {
+                // Idempotency is structural (66m-D8): this require precedes the
+                // charge, so a re-applied spawn of a live ref is refused before any
+                // ledger is touched — a spawn claim needs no key.
                 require(!cells.containsKey(cell.ref)) { "Cell already spawned: ${cell.ref}" }
-                // quota walks every ancestor (G-28): a sandboxed subtree cannot
-                // grow past any enclosing budget
-                var scope: ManagedHost? = this@ManagedHost
-                while (scope != null) {
-                    scope.quota?.let { limit ->
-                        check(scope!!.subtreeCellCount() < limit) {
-                            "quota exceeded: host ${scope!!.ref} allows $limit cells in its subtree (G-28)"
+                // ECO1 (5o1rf-D1/D2): a remote-driven spawn is charged in the SAME
+                // ascent as the G-28 quota walk — per scope, that scope's own budget,
+                // then its quota. A null stamp is a local spawn: no claim is ever
+                // constructed ([ECO1-BUD-05]); an Unlimited scope is skipped, so with
+                // every scope Unlimited nothing is allocated ([ECO1-BUD-04]).
+                //
+                // [ECO1-DEN-08] (structural half): this is the ONE place ManagedHost
+                // constructs a BudgetClaim. Only spawn — and spawnBound, which calls
+                // it — charges; drain, migrate, resume, despawn, supervise and
+                // promotion are management operations below the budget (spec 34
+                // decision 5, §34.5) and never construct a claim.
+                val stamp = CurrentPeer.stamp()
+                var admitted: ArrayList<BudgetOutcome.Admitted>? = null
+                try {
+                    // quota walks every ancestor (G-28): a sandboxed subtree cannot
+                    // grow past any enclosing budget
+                    var scope: ManagedHost? = this@ManagedHost
+                    while (scope != null) {
+                        if (stamp != null && scope.budget !== BudgetLedger.Unlimited) {
+                            val claim = BudgetClaim(stamp, ClaimClass.Spawn)
+                            when (val outcome = scope.budget.chargeOrFail(claim, scope.ref.toString())) {
+                                is BudgetOutcome.Admitted ->
+                                    (admitted ?: ArrayList<BudgetOutcome.Admitted>().also { admitted = it }) += outcome
+                                is BudgetOutcome.Refused -> {
+                                    // the finally below refunds; account once, then refuse
+                                    val denial = hostDenials.sinkFor("host").denyBudget(
+                                        outcome, claim, BoundarySeam.HOST_ADMISSION,
+                                        subject = cell.javaClass.simpleName,
+                                    )
+                                    throw BudgetRefusedException(outcome, denial)
+                                }
+                            }
+                        }
+                        scope.quota?.let { limit ->
+                            check(scope!!.subtreeCellCount() < limit) {
+                                "quota exceeded: host ${scope!!.ref} allows $limit cells in its subtree (G-28)"
+                            }
+                        }
+                        scope = scope.parentHost
+                    }
+                    // color validation (spec 32, G-3): 🔵/🟣 markers must match the host; unmarked = 🟢 pure
+                    when (color) {
+                        HostColor.BLOCKING -> require(cell !is SuspendingCell) {
+                            "SuspendingCell ${cell.ref} cannot spawn on a BLOCKING host"
+                        }
+                        HostColor.SUSPENDING -> require(cell !is BlockingCell) {
+                            "BlockingCell ${cell.ref} cannot spawn on a SUSPENDING host"
                         }
                     }
-                    scope = scope.parentHost
-                }
-                // color validation (spec 32, G-3): 🔵/🟣 markers must match the host; unmarked = 🟢 pure
-                when (color) {
-                    HostColor.BLOCKING -> require(cell !is SuspendingCell) {
-                        "SuspendingCell ${cell.ref} cannot spawn on a BLOCKING host"
-                    }
-                    HostColor.SUSPENDING -> require(cell !is BlockingCell) {
-                        "BlockingCell ${cell.ref} cannot spawn on a SUSPENDING host"
-                    }
+                } catch (t: Throwable) {
+                    // [ECO1-CHG-03]/[ECO1-CHG-04]: a budget refusal, a quota refusal or a
+                    // colour mismatch after an admitted debit leaves no debit behind —
+                    // every admission of this ascent is undone, in reverse, and the
+                    // original failure (its message unchanged) is rethrown. Past this
+                    // point the cell is registered, so the charge stands.
+                    admitted?.let(::undoInReverse)
+                    throw t
                 }
                 if (cell is ManagedHost) {
                     // hosts hosting hosts (31): record the relation for quota
@@ -1628,6 +1760,12 @@ open class ManagedHost(
                         deadLetters.boundaryDenial(cell.ref, denial, deniedArgs)
                     }
                 }
+                // ECO1 attach-at-spawn (5o1rf-D6): a cell that charges at its own
+                // seams gets this host's hierarchy-walking ledger — but only when
+                // some scope on the chain has a real budget, so an all-Unlimited
+                // chain attaches nothing and the cell's flow-time arms stay a
+                // null-check away from their pre-budget bytes ([ECO1-BUD-04]).
+                if (cell is BudgetCharging && anyLedgerOnChain()) cell.attachBudget(hierarchyLedger)
                 PortRegistry.of(cell).names().forEach { name ->
                     PortRegistry.of(cell)[name]?.let { port ->
                         ProtocolSupport.of(port).relay(Protocols.Saturation)
@@ -1858,15 +1996,21 @@ open class ManagedHost(
 
         managementInlet.serve(Proxy.fromClass(HostManagementApi::class.java) { _, method, args ->
             val invocation = Invocation.of(method, args).withTarget(internalApi)
+            // ECO1 (5o1rf-D1): the delivering thread's CurrentPeer stamp — set
+            // around a PORT_MANAGEMENT delivery — is not visible inside a
+            // separately submitted scheduler task on every HostScheduler
+            // (CoroutineScheduler runs it on its own coroutine), so it is captured
+            // here and re-established around the awaited spawn, which charges it.
+            val stamp = CurrentPeer.stamp()
             if (method.name == "spawn") {
-                enqueueAwaiting(0) { internalApi.spawn(args!![0] as Cell) }
+                enqueueAwaiting(0) { CurrentPeer.withStamp(stamp) { internalApi.spawn(args!![0] as Cell) } }
             } else if (method.name == "spawnBound") {
                 // the wire-crossing form (93 I-21 §4.4): awaited here because
                 // there is no real socket boundary to cross in-process, but the
                 // caller-facing degrade-to-async behavior lives in
                 // GraphSpec.applyRemote, which never lets a rejection here
                 // abort the whole apply or surface as a synchronous reply.
-                enqueueAwaiting(0) { invocation.invoke() }
+                enqueueAwaiting(0) { CurrentPeer.withStamp(stamp) { invocation.invoke() } }
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
