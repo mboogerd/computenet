@@ -255,4 +255,63 @@ class PerPortJournalTest {
         a.size shouldBe b.size
         a.zip(b).forEach { (x, y) -> x.toList() shouldBe y.toList() }
     }
+
+    /**
+     * Feature seam R-E x R-D (found in the feature review): C journals `input` on J and
+     * leaves `derived` volatile; U tees to J. U's add is delivered and its derived frame is
+     * STAGED for C's volatile `derived` inlet when a checkpoint runs. The checkpoint folds
+     * U's frame into U's snapshot and truncates it; a restored snapshot re-emits nothing, so
+     * U's replay can no longer re-derive the frame. Unless the compaction carries it, C's
+     * durable snapshot silently lacks "b1" after the next crash. The carry therefore keys on
+     * the target cell's journal as well as the target port's.
+     *
+     * Before the repair: expected ["a1", "b1"] but was ["a1"].
+     */
+    @Test
+    fun `R-E x R-D a mid-cascade checkpoint carries a frame staged for a cell's volatile inlet`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val cRef = CellRef(UUID.randomUUID())
+        val uRef = CellRef(UUID.randomUUID())
+        val selector: (CellRef, String) -> Journal? = { ref, port ->
+            when {
+                ref == cRef && port == "input" -> journal
+                ref == uRef -> journal
+                else -> null
+            }
+        }
+
+        fun build(): Triple<ManagedHost, FoldCell, SetCell<String>> {
+            val host = ManagedHost(scheduler = controller.scheduler(), journalForPort = selector)
+            val c = FoldCell(cRef)
+            val u = SetCell<String>(uRef)
+            host.managementInlet.call.spawn(c)
+            host.managementInlet.call.spawn(u)
+            controller.runToIdle()
+            u.outlet.subscribe(Use.fixed(foldDerived(host, cRef), PortRef.generate()))
+            controller.runToIdle()
+            return Triple(host, c, u)
+        }
+
+        val (host, c, u) = build()
+        foldInput(host, cRef).provide("a1")
+        controller.runToIdle()
+        setOps(host, uRef).add("b1")
+        controller.step() // U delivers b1; the derived frame to C's `derived` is staged
+        u.membership() shouldBe setOf("b1")
+        c.membership() shouldBe setOf("a1")
+        host.stagedWorkTotal() shouldBe 1
+
+        host.checkpoint(journal)
+        decodedFrames(journal).map { it.cellRef to it.portName } shouldBe listOf(cRef to "derived")
+        controller.runToIdle()
+        c.membership() shouldBe setOf("a1", "b1")
+
+        // CRASH: only the compacted journal survives.
+        val (host2, c2, u2) = build()
+        host2.recoverFrom(journal)
+        controller.runToIdle()
+        u2.membership() shouldBe setOf("b1")
+        c2.membership() shouldBe setOf("a1", "b1")
+    }
 }

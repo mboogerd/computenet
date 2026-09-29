@@ -514,7 +514,8 @@ internal class HostDurability(
      * snapshot — or STAGED and not yet delivered: live traffic, frames a [recoverFrom]
      * staged and no data task has applied yet, a coalesced entry, attention-parked
      * traffic. The compacted journal is the checkpoint records followed by every staged
-     * frame whose target port tees to [journal], re-encoded by [journalFrame] in host
+     * frame whose target port tees to [journal] — or whose target cell's snapshot it holds,
+     * a per-port selector's volatile inlet included — re-encoded by [journalFrame] in host
      * sequence order — so a host that recovers from it reproduces the fold of every frame
      * accepted before this returns, with no quiescence fence and with writers running.
      * The staged-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
@@ -619,9 +620,17 @@ internal class HostDurability(
             // computenet-xy7w4 D3: carry every accepted-but-undelivered frame of this
             // journal, read and reset under the intake's own lock. Encoded before the
             // reset, so an unencodable frame fails the checkpoint and truncates nothing.
+            // Also carried: a frame staged for a VOLATILE port of a cell whose snapshot this
+            // journal holds (a per-port selector's `derived` inlet, D4). Its upstream frame
+            // may be folded into a snapshot by this very reset, and a restored snapshot
+            // re-emits nothing, so replay could no longer re-derive it; the cell's own
+            // snapshot would silently lack it (feature review, computenet-xy7w4).
             underIntakeLock { staged ->
                 val carried = staged
-                    .filter { journalSelector(it.cellRef, it.portName) === journal }
+                    .filter {
+                        journalSelector(it.cellRef, it.portName) === journal ||
+                            cellJournalSelector(it.cellRef) === journal
+                    }
                     .map(::journalFrame)
                 journal.reset(compacted + carried)
             }
