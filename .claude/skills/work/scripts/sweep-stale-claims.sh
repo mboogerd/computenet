@@ -113,6 +113,7 @@ fi
 # Record what we released here, with the time, so claim-epic.sh can discount it.
 # Local file, not a bead field: these releases are not published either.
 SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/swept-record-lib.sh"    # record_swept
 
 count=0
 for id in $stale; do
@@ -121,8 +122,7 @@ for id in $stale; do
   else
     bd update "$id" --status=open >/dev/null
     echo "released: $id"
-    echo "$(date +%s) $id" >> "$SWEPT_FILE" 2>/dev/null \
-      || echo "warning: could not record $id in $SWEPT_FILE — claim-epic.sh may read this release as another machine's activity" >&2
+    record_swept "$id"
   fi
   count=$((count + 1))
 done

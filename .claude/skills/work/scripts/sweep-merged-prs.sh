@@ -23,6 +23,9 @@
 # exit 0" against a broken `bd`, which is the exact failure mode it exists to
 # prevent (review of PR #158).
 #
+# Requires BEADS_ACTOR (unique per machine) — used only to name the swept-file
+# each closed id is recorded into (CLAIM_SWEPT_FILE overrides the path).
+#
 # Usage: sweep-merged-prs.sh [--dry-run] [--limit N]
 #   --dry-run  print what would be closed/removed, change nothing
 #   --limit    how many merged PRs to fetch (default 500; the repo passed 150
@@ -30,7 +33,7 @@
 #              every older one). gh returns newest first, so truncation drops
 #              the oldest merges.
 # Exit: 0 = swept cleanly; 1 = an item failed (details on stderr); 2 = bad
-#       usage; 3 = a precondition failed (gh, bd or jq unusable).
+#       usage; 3 = a precondition failed (gh, bd, jq unusable, or BEADS_ACTOR unset).
 set -uo pipefail
 
 DRY_RUN=0
@@ -44,6 +47,18 @@ while [ $# -gt 0 ]; do
 done
 
 die() { echo "sweep-merged-prs: $*" >&2; exit 3; }
+
+# Same swept-file record claim-epic.sh's hot-subtree guard (x3f5a) reads to
+# discount this session's own writes. Without it, a close below bumps the
+# bead's updated_at in the LOCAL Dolt DB and claim-epic.sh reads that as
+# another machine inside the epic's subtree — refusing the very epic this
+# sweep just cleaned (computenet-r2knf). Never written under --dry-run: see
+# swept-record-lib.sh. `die` (exit 3), not the `:?` shorthand, so a missing
+# BEADS_ACTOR reports as the precondition failure this script's own exit-code
+# contract names, not as an unrelated exit 1.
+[ -n "${BEADS_ACTOR:-}" ] || die "BEADS_ACTOR must be set, uniquely, per machine"
+SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/swept-record-lib.sh"    # record_swept
 
 # Which repo's PR numbers are ours. A bead's metadata.pr is a full url, and an
 # unanchored /pull/<n> match will happily join someone else's #106 to our
@@ -158,6 +173,7 @@ while IFS=$'\t' read -r id action worktree why; do
     echo "would close: $id — $why"
   elif err=$(bd close "$id" 2>&1 >/dev/null); then
     echo "closed: $id — $why"
+    record_swept "$id"
     closed=$((closed + 1))
   else
     # A merged bead blocked by open issues is usually blocked by its own review

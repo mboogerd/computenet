@@ -44,7 +44,7 @@ CASE=0
 fixture() {
   CASE=$((CASE+1))
   local d="$ROOT/c$CASE"
-  CO="$d/checkout"; WTS="$d/wt"; STUB="$d/bin"; BD_LOG="$d/bd.log"
+  D="$d"; CO="$d/checkout"; WTS="$d/wt"; STUB="$d/bin"; BD_LOG="$d/bd.log"
   mkdir -p "$WTS" "$STUB"; : > "$BD_LOG"
   git init --quiet "$CO"
   (
@@ -129,7 +129,8 @@ EOF
   chmod +x "$STUB/gh" "$STUB/bd"
 }
 
-run() { ( cd "$CO" && PATH="$STUB:$PATH" BD_LOG="$BD_LOG" "$SCRIPT" "$@" 2>&1 ); }
+run() { ( cd "$CO" && PATH="$STUB:$PATH" BD_LOG="$BD_LOG" BEADS_ACTOR=TestBox \
+            CLAIM_SWEPT_FILE="$D/swept" "$SCRIPT" "$@" 2>&1 ); }
 
 # ------------------------------------------------------------------ dry run --
 echo "dry-run: reports without changing anything"
@@ -141,6 +142,10 @@ has "$out" "would remove worktree: $WTS/clean" "clean worktree would be removed"
 hasnt "$out" "local branch" "says nothing about deleting a branch"
 [ -s "$BD_LOG" ] && bad "dry run called bd close" || ok "dry run called no bd close"
 [ -d "$WTS/clean" ] && ok "dry run left the worktree on disk" || bad "dry run removed a worktree"
+# computenet-r2knf: a dry run must record nothing, or a later real sweep's
+# claim-epic.sh discount window would include a close that never happened.
+[ -s "$D/swept" ] && bad "dry run recorded a close in the swept file" \
+  || ok "dry run records nothing in the swept file"
 
 # ------------------------------------------------------------ the join/gates --
 echo
@@ -152,6 +157,23 @@ out=$(run); rc=$?
 # 1. clean -> closed, worktree removed. Branch MUST survive (see 7).
 has "$out" "closed: t-clean" "clean: bead closed"
 [ -d "$WTS/clean" ] && bad "clean: worktree still on disk" || ok "clean: worktree removed"
+
+# 1b. computenet-r2knf: the close is recorded in the SAME swept file and
+# format claim-epic.sh's x3f5a discount reads ("<epoch> <id>"), so this
+# session's own merged-PR sweep does not make its own epic read hot. Only
+# sweep-stale-claims.sh wrote this file before the fix; sweep-merged-prs.sh
+# closing t-clean (and t-dirty, t-extra, t-spaces below) must write it too.
+grep -q ' t-clean$' "$D/swept" \
+  && ok "closed bead recorded in the swept file for claim-epic.sh" \
+  || bad "close not recorded in swept file: $(cat "$D/swept" 2>/dev/null)"
+awk '{print $1}' "$D/swept" | grep -qE '^[0-9]{10}$' \
+  && ok "the swept record carries an epoch claim-epic.sh can window on" \
+  || bad "no usable timestamp in swept file: $(cat "$D/swept" 2>/dev/null)"
+# A bead that was only reported (deferred, empty-pr) must NOT be recorded —
+# it was never closed, so it never touched the bead's updated_at.
+grep -q ' t-deferred$' "$D/swept" \
+  && bad "a merely-reported bead was recorded as swept" \
+  || ok "a merely-reported bead is not recorded as swept"
 
 # 2. dirty -> closed, worktree LEFT ALONE. The gate that must never yield.
 has "$out" "DIRTY, left in place: $WTS/dirty" "dirty: reported, not removed"
