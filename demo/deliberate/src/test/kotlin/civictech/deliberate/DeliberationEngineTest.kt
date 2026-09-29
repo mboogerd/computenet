@@ -987,6 +987,17 @@ class DeliberationEngineTest {
         val judge = FakeJudge(
             strength = { 0.4 },
             triage = { _, cands -> cands.map { verdicts.getValue(it.text) } },
+            // The engine judges saturation after it has assessed and queued a round's
+            // new arguments and before its worker picks the next task, whose priority
+            // reads each argument's sensitivity cell (model C). Until the host has
+            // propagated it, an argument's sensitivity is null and its priority falls
+            // back to FALLBACK_STRENGTH = 0.5 — a tie with the root's round two, which
+            // P1, queued earlier, wins; it is then explored and no longer REPLACEable
+            // (computenet-dsby8). Fence the host here so the pick reads settled values.
+            saturation = { _, _ ->
+                host.quiescence().await(20_000, "sensitivities settle before the next pick")
+                0.0
+            },
         )
         val e = engine(
             judge = judge,
