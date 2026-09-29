@@ -13,6 +13,8 @@ import java.util.EnumMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.LongAdder
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * The phase-1 [BudgetLedger]: one token bucket per `(PeerId, ClaimClass)`, with price,
@@ -54,8 +56,35 @@ import java.util.concurrent.atomic.LongAdder
  * ([ConcurrentHashMap.compute]) inside that same critical section, so the aggregate never
  * drifts from the holds it accounts. Lock order is always bucket, then the issuer-sum bin.
  *
- * Not yet here (F2 T3, `computenet-kwhw6.3`): the idempotency window, retention/eviction and
- * `maxBuckets`; they amend [admitOrCreate]. Buckets already track `lastAccessNanos` for them.
+ * **Idempotency window** (`kwhw6-D8`, `[ECO1-CHG-08]` ledger half): each bucket remembers the
+ * keys of its last `retention.recentKeys` ADMITTED claims. A claim whose non-null `key` is in
+ * that window is a replay: it returns a fresh `Admitted` with a no-op `undo`, counts as
+ * admitted, and debits, holds and records nothing. `null` keys and refused claims are never
+ * recorded, so they are never deduplicated. `recentKeys == 0` disables the window. The window
+ * lives in the bucket, so it dies with it: a replay arriving after its bucket was evicted is
+ * charged again (eviction needs `held == 0`, so no hold can be replayed twice this way).
+ *
+ * **Bounded state** (`kwhw6-D9`, `[ECO1-BUD-11]`/`[ECO1-BUD-12]`, BS-22): a bucket is
+ * *eligible* for eviction when `held == 0 && balance >= bootstrapLevel` — evicting it and
+ * re-creating it at bootstrap later cannot hand its principal budget it did not already have.
+ * [sweep] removes every eligible bucket idle longer than `retention.idleNanos`. Creation of a
+ * bucket when `retention.maxBuckets` are live sweeps first, then evicts the eligible bucket
+ * with the oldest `lastAccessNanos` whatever its idle age, and if no bucket is eligible
+ * refuses with `Refused(LEDGER_FAILURE, detail = `[LEDGER_FULL_DETAIL]`)`, creating nothing.
+ * A drained or holding bucket is therefore never evicted, and its principal's next claim is
+ * still judged against its real balance. Eligibility is judged after a lazy refill to the
+ * judging instant (refill arithmetic unchanged; see [refill]), so a drained bucket that has
+ * since refilled back to its bootstrap becomes eligible without first being touched.
+ *
+ * **Creation lock:** every bucket creation (and the eviction making room for it) runs under
+ * one ledger-level [ReentrantLock], so two concurrent first charges cannot both pass the size
+ * check; charges on existing buckets take only their bucket's monitor. The creating thread
+ * also performs its first charge under that lock, so a concurrent creator cannot evict a
+ * bucket before its first claim lands. An evicted bucket is flagged under its own monitor; a
+ * charge that finds the flag re-resolves the principal's bucket, so no charge lands on a
+ * bucket that has left the map. Lock order: creation lock, then bucket, then issuer-sum bin.
+ * Cost: a creation on a full ledger scans every bucket (sweep, then oldest-eligible), so it
+ * is O(`maxBuckets`); charges on existing buckets are unaffected.
  *
  * @param policy the validated policy; the sole source of every number this ledger uses.
  * @param clock a monotonic nanosecond source (not wall time). Read once per charge.
@@ -82,9 +111,22 @@ class TokenBucketLedger(
         var held: Long = 0
         var lastRefillNanos: Long = now
         var lastAccessNanos: Long = now
+
+        /** Set, under this monitor, when the bucket leaves the map; a charge seeing it retries. */
+        var evicted: Boolean = false
+
+        /** `kwhw6-D8`: admitted keys, oldest first, and a set over the same keys; lazily built. */
+        var recentOrder: ArrayDeque<Any>? = null
+        var recentSet: HashSet<Any>? = null
+
+        /** Caller holds the monitor and has refilled to the judging instant. */
+        fun eligible(): Boolean = held == 0L && balance >= bootstrapLevel
     }
 
     private val buckets = ConcurrentHashMap<BucketKey, Bucket>()
+
+    /** Held around every bucket creation and the eviction that makes room for it (`kwhw6-D9`). */
+    private val creationLock = ReentrantLock()
     private val heldByIssuer = ConcurrentHashMap<String, Long>()
     private val admittedCounts: Map<ClaimClass, LongAdder> =
         EnumMap<ClaimClass, LongAdder>(ClaimClass::class.java).apply {
@@ -100,22 +142,130 @@ class TokenBucketLedger(
         }
 
     private fun chargeUnguarded(claim: BudgetClaim): BudgetOutcome {
+        val now = clock()
+        val key = BucketKey(claim.stamp.id, claim.claimClass)
+        // An existing bucket is charged under its own monitor only. `null` from chargeBucket
+        // means it was evicted (and unmapped) between lookup and lock: re-resolve by creating.
+        buckets[key]?.let { existing -> chargeBucket(existing, claim, now)?.let { return it } }
+        return createAndCharge(key, claim, now)
+    }
+
+    /**
+     * The first charge for [key]: resolve the bootstrap (`kwhw6-D4`), make room under
+     * `retention.maxBuckets` (`kwhw6-D9`), create the bucket and charge it — all under
+     * [creationLock]. A resolved zero bootstrap is `BUDGET_NOT_GRANTED` and a full ledger with
+     * nothing eligible is `LEDGER_FAILURE` ([LEDGER_FULL_DETAIL]); neither creates a bucket.
+     */
+    private fun createAndCharge(key: BucketKey, claim: BudgetClaim, now: Long): BudgetOutcome =
+        creationLock.withLock {
+            // Another creator may have won the race for this key while we waited; if that bucket
+            // was evicted since, it is already unmapped and a fresh one is created below.
+            buckets[key]?.let { raced -> chargeBucket(raced, claim, now)?.let { return it } }
+            val (bootstrap, issuerName) = resolveBootstrap(claim.stamp, claim.claimClass)
+            if (bootstrap <= 0L) {
+                return refuse(claim.claimClass, DenialReason.BUDGET_NOT_GRANTED, null, "no bootstrap for ${claim.claimClass}")
+            }
+            if (!makeRoom(now)) {
+                return refuse(claim.claimClass, DenialReason.LEDGER_FAILURE, null, LEDGER_FULL_DETAIL)
+            }
+            val bucket = Bucket(
+                capacity = policy.capacity(claim.claimClass),
+                refill = policy.refill(claim.claimClass),
+                bootstrapLevel = bootstrap,
+                issuerName = issuerName,
+                now = now,
+            )
+            buckets[key] = bucket
+            // Only a public [sweep] could have evicted it by now, and a bucket accessed at
+            // `now` is not idle at `now`; a sweep run with a later instant is the one way.
+            chargeBucket(bucket, claim, now)
+                ?: refuse(claim.claimClass, DenialReason.LEDGER_FAILURE, null, "bucket evicted during creation")
+        }
+
+    /**
+     * `kwhw6-D9`: true when a bucket may be created — the ledger holds fewer than
+     * `retention.maxBuckets`, after a sweep and, failing that, after evicting the eligible
+     * bucket with the oldest `lastAccessNanos`. Caller holds [creationLock], so the count
+     * cannot rise concurrently (only creation adds).
+     */
+    private fun makeRoom(now: Long): Boolean {
+        val max = policy.retention.maxBuckets
+        if (buckets.size < max) return true
+        sweep(now)
+        while (buckets.size >= max) {
+            var oldest: Map.Entry<BucketKey, Bucket>? = null
+            var oldestAccess = Long.MAX_VALUE
+            for (entry in buckets.entries) {
+                val b = entry.value
+                synchronized(b) {
+                    if (!b.evicted) {
+                        refill(b, now)
+                        if (b.eligible() && (oldest == null || b.lastAccessNanos < oldestAccess)) {
+                            oldest = entry
+                            oldestAccess = b.lastAccessNanos
+                        }
+                    }
+                }
+            }
+            val victim = oldest ?: return false
+            // Re-checked under the victim's monitor: a charge may have drained it since.
+            evictIf(victim.key, victim.value, now) { true }
+        }
+        return true
+    }
+
+    /**
+     * Removes [bucket] when it is still mapped, eligible and satisfies [idle]; the whole
+     * judgement and the removal happen under its monitor, so no charge interleaves.
+     */
+    private inline fun evictIf(key: BucketKey, bucket: Bucket, now: Long, idle: (Bucket) -> Boolean): Boolean =
+        synchronized(bucket) {
+            if (bucket.evicted) return false
+            refill(bucket, now)
+            if (!bucket.eligible() || !idle(bucket)) return false
+            if (!buckets.remove(key, bucket)) return false
+            bucket.evicted = true
+            true
+        }
+
+    /**
+     * Evicts every eligible bucket (`held == 0 && balance >= bootstrapLevel`, judged after a
+     * lazy refill to [now]) idle for more than `retention.idleNanos` (`kwhw6-D9`,
+     * `[ECO1-BUD-11]`). Nothing is subtracted from the issuer hold sums: an eligible bucket
+     * holds nothing. [snapshot] never sweeps; it is read-only.
+     *
+     * @return the number of buckets evicted.
+     */
+    fun sweep(now: Long = clock()): Int {
+        val idleNanos = policy.retention.idleNanos
+        var evicted = 0
+        for ((key, bucket) in buckets.entries) {
+            if (evictIf(key, bucket, now) { now - it.lastAccessNanos > idleNanos }) evicted++
+        }
+        return evicted
+    }
+
+    /**
+     * Charges [claim] against [bucket]; `null` when the bucket was evicted before its monitor
+     * was taken, so the caller re-resolves. `kwhw6-D8` replays are answered before refill.
+     */
+    private fun chargeBucket(bucket: Bucket, claim: BudgetClaim, now: Long): BudgetOutcome? {
         val claimClass = claim.claimClass
         val price = policy.price(claimClass)
-        val now = clock()
-
-        val bucket = admitOrCreate(claim, now)
-            ?: return refuse(claimClass, DenialReason.BUDGET_NOT_GRANTED, null, "no bootstrap for $claimClass")
-
         synchronized(bucket) {
+            if (bucket.evicted) return null
             bucket.lastAccessNanos = now
+            val idemKey = claim.key
+            if (idemKey != null && bucket.recentSet?.contains(idemKey) == true) {
+                admittedCounts.getValue(claimClass).increment()
+                return BudgetOutcome.Admitted {}
+            }
             refill(bucket, now)
 
             if (price == 0L) {
                 // A zero-price class is a policy choice, not a bypass: bootstrap was still
                 // resolved above (and could refuse); an admitted zero charge mutates nothing.
-                admittedCounts.getValue(claimClass).increment()
-                return BudgetOutcome.Admitted {}
+                return admit(bucket, claim, BudgetOutcome.Admitted {})
             }
 
             if (claim.hold) {
@@ -146,39 +296,34 @@ class TokenBucketLedger(
                 }
                 bucket.balance -= price
                 bucket.held += price
-                admittedCounts.getValue(claimClass).increment()
-                return BudgetOutcome.Admitted(onceOnly { releaseHold(bucket, price) })
+                return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { releaseHold(bucket, price) }))
             }
 
             if (price > bucket.balance) {
                 return refuse(claimClass, DenialReason.BUDGET_EXHAUSTED, price - bucket.balance, null)
             }
             bucket.balance -= price
-            admittedCounts.getValue(claimClass).increment()
-            return BudgetOutcome.Admitted(onceOnly { refundDebit(bucket, price) })
+            return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { refundDebit(bucket, price) }))
         }
     }
 
     /**
-     * The bucket for [claim]'s `(peer, class)`, creating it on first charge from the resolved
-     * bootstrap (`kwhw6-D4`); `null` when the resolved bootstrap is zero, in which case no
-     * bucket is created. The single seam F2 T3 amends for the idempotency window and the
-     * ledger-full path.
+     * Counts a real admission and records its key in the bucket's window (`kwhw6-D8`),
+     * evicting the oldest key beyond `retention.recentKeys`. Caller holds the bucket's monitor.
      */
-    private fun admitOrCreate(claim: BudgetClaim, now: Long): Bucket? {
-        val key = BucketKey(claim.stamp.id, claim.claimClass)
-        buckets[key]?.let { return it }
-        val (bootstrap, issuerName) = resolveBootstrap(claim.stamp, claim.claimClass)
-        if (bootstrap <= 0L) return null
-        return buckets.computeIfAbsent(key) {
-            Bucket(
-                capacity = policy.capacity(claim.claimClass),
-                refill = policy.refill(claim.claimClass),
-                bootstrapLevel = bootstrap,
-                issuerName = issuerName,
-                now = now,
-            )
+    private fun admit(bucket: Bucket, claim: BudgetClaim, admitted: BudgetOutcome.Admitted): BudgetOutcome.Admitted {
+        admittedCounts.getValue(claim.claimClass).increment()
+        val idemKey = claim.key
+        val window = policy.retention.recentKeys
+        if (idemKey != null && window > 0) {
+            val order = bucket.recentOrder ?: ArrayDeque<Any>().also { bucket.recentOrder = it }
+            val set = bucket.recentSet ?: HashSet<Any>().also { bucket.recentSet = it }
+            if (set.add(idemKey)) {
+                order.addLast(idemKey)
+                while (order.size > window) set.remove(order.removeFirst())
+            }
         }
+        return admitted
     }
 
     /** `kwhw6-D4`: the stamp alone decides; nothing else about the principal is consulted. */
@@ -273,5 +418,8 @@ class TokenBucketLedger(
     companion object {
         /** The fixed refusal detail for an issuer-aggregate hold cap (`kwhw6-D5`, `[ECO1-DEN-11]`). */
         const val AGGREGATE_HOLD_CAP_DETAIL: String = "issuer aggregate hold cap"
+
+        /** The fixed refusal detail when `retention.maxBuckets` are live and none is evictable (`kwhw6-D9`). */
+        const val LEDGER_FULL_DETAIL: String = "ledger full"
     }
 }
