@@ -1,7 +1,11 @@
 plugins {
-    // agora defines no @Contract/@CellBase cells (T09 §C) — plain kotlin-jvm,
-    // not ksp-cell. Re-add ksp-cell the day it annotates something.
-    id("buildsrc.convention.kotlin-jvm")
+    // agora defines no @Contract/@CellBase cells, but applies ksp-cell anyway
+    // (computenet-jnkvu R5): :gen's ContractProcessor emits a `<CellName>Ports`
+    // object (typed InletId/OutletId ids) for every non-private Cell subclass
+    // it scans, annotation or not — ClaimCellPorts/EdgeCellPorts are what the
+    // routed hops below resolve against. ksp-cell.gradle.kts applies
+    // kotlin-jvm itself.
+    id("buildsrc.convention.ksp-cell")
     alias(libs.plugins.kotlin.plugin.serialization)
     application
     // First use of this plugin in the repo (computenet-5swa) — verified via
