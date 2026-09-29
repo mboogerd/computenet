@@ -478,6 +478,53 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
         }
     }
 
+    // ── triage seeding (feature computenet-i00bh) ────────────────────────
+
+    /**
+     * Creates the topic with [dims] when it is absent and answers true; a no-op
+     * answering false when it already exists, whatever its dimensions now are —
+     * a facilitator's later edits to a standing round are never undone by a
+     * re-seed.
+     */
+    internal fun ensureTopic(
+        id: TopicId,
+        title: String,
+        creator: String,
+        dims: List<Triple<String, Dimension, DimConfig>>,
+    ): Boolean = synchronized(state) {
+        if (id.value in topics) return@synchronized false
+        createTopic(id, title, creator, IdeaPolicy.FACILITATOR, BoardVisibility.AFTER_RATING)
+        dims.forEach { (dimId, dim, config) -> addDimension(id, dimId, dim, config) }
+        true
+    }
+
+    /**
+     * Upserts an idea under an EXPLICIT [id] — the seeding path, where the id is
+     * the bead id verbatim (`computenet-8x9`, already a valid [slug]) rather
+     * than a slug of the title, which is [postIdea]'s rule. Phase 2 therefore
+     * maps an ordered board back onto `bd` ids with no lookup table.
+     *
+     * Re-seeding an unchanged idea writes no journal line, so a standing round's
+     * journal grows only when the tracker actually changed.
+     */
+    internal fun seedIdea(topic: TopicId, id: String, title: String, description: String, proposer: String) =
+        synchronized(state) {
+            val ideas = topics.getValue(topic.value).ideas
+            val idea = Idea(id, title.take(200), description.take(4000), proposer)
+            if (ideas[id] != idea) addIdea(topic, idea)
+        }
+
+    /**
+     * The seeding path's rating write: [value] on the `[1, 9]` scale, or null to
+     * leave the slot UNRATED (absence, computenet-sigl0-D5) — which is how
+     * [Jev]'s abstention reaches the board, rather than as a middling 5.
+     */
+    internal fun seedRating(topic: TopicId, idea: String, dim: String, participant: String, value: Double?) =
+        synchronized(state) {
+            val key = RatingKey(topic, idea, dim, participant)
+            if (value == null) unrate(key) else rate(key, RatingScale.toMilli(value))
+        }
+
     // ── HTTP ─────────────────────────────────────────────────────────────
 
     private fun serve(ex: HttpExchange, handler: () -> String) {
@@ -490,7 +537,7 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 
     /**
-     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/dots|/judge|/me|/aggregate]]`,
+     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/dots|/judge|/worklist|/me|/aggregate]]`,
      * dispatched here.
      */
     private fun handleTopics(ex: HttpExchange): String {
@@ -524,6 +571,8 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             seg.size == 2 && seg[1] == "judge" && method == "POST" -> postJudge(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "judge" && method == "DELETE" ->
                 deleteJudge(topic, ex.query("participant"), ex.query("dim"))
+            seg.size == 2 && seg[1] == "worklist" && method == "GET" ->
+                return worklistJson(topic, name(ex.query("participant"), "participant"), ex.query("dim"))
             seg.size == 2 && seg[1] == "me" && method == "GET" ->
                 return meJson(topic, name(ex.query("participant"), "participant"))
             seg.size == 2 && seg[1] == "aggregate" && method == "GET" ->
@@ -901,6 +950,55 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             } + "}"
 
     /**
+     * The bias-safe, coverage-ordered worklist for one participant on one
+     * dimension (feature computenet-i00bh), ported from `demo/backlog-triage`'s
+     * `/triage` ([civictech.demo.backlogtriage] `TriageApp.kt:326`) rather than
+     * imported — `:demo:alignment` does not depend on `:demo:backlog-triage`,
+     * the same boundary [PairwiseFit] keeps against its `BradleyTerry`.
+     *
+     * Why this is not [meJson]: `/me` is a read of one participant's own state
+     * in board order, which tells an agent nothing about WHERE to spend its next
+     * judgement. This orders ideas by the caller's own coverage on this
+     * dimension — least-judged first, shuffled within ties so two agents
+     * starting together do not walk the same pairs — and suggests a still
+     * unjudged pair.
+     *
+     * Bias-safety is the same contract as `/triage`'s: no score, no rank, no
+     * aggregate, no other participant's ratings or name, not even an idea's
+     * proposer. `mine` is the caller's own judgement count on the idea and
+     * `rated` its own rating, because a rater may use the slider instead of the
+     * pairwise path and needs to see which it has done.
+     *
+     * `phase1Complete` marks the coverage floor: at least two ideas, and every
+     * idea in at least two of the caller's own judgements.
+     */
+    private fun worklistJson(topic: Topic, participant: String, dim: String?): String = synchronized(state) {
+        if (dim.isNullOrEmpty() || dim !in topic.dims) fail(400, "no such dimension")
+        val mine = judgements[JudgeKey(topic.id, dim, participant)].orEmpty()
+        val cover = mutableMapOf<String, Int>()
+        mine.values.forEach { cover.merge(it.a, 1, Int::plus); cover.merge(it.b, 1, Int::plus) }
+        // shuffle first, then stable-sort by own coverage: random within ties
+        val ordered = topic.ideas.keys.shuffled().sortedBy { cover[it] ?: 0 }
+        val judged = mine.values.mapTo(HashSet()) { setOf(it.a, it.b) }
+        // ponytail: O(n²) first-unjudged-pair scan; fine at backlog scale
+        val next = ordered.asSequence()
+            .flatMapIndexed { i, a -> ordered.drop(i + 1).asSequence().map { b -> a to b } }
+            .firstOrNull { (a, b) -> setOf(a, b) !in judged }
+        val ideas = ordered.joinToString(",", "[", "]") { id ->
+            val idea = topic.ideas.getValue(id)
+            val own = ratings[RatingKey(topic.id, id, dim, participant)]
+            """{"id":${esc(id)},"title":${esc(idea.title)},"description":${esc(idea.description)},""" +
+                """"mine":${cover[id] ?: 0},"rated":${own?.let(RatingScale::format) ?: "null"}}"""
+        }
+        val minePairs = mine.values.sortedWith(compareBy({ it.a }, { it.b }))
+            .joinToString(",", "[", "]") { """{"a":${esc(it.a)},"b":${esc(it.b)},"outcome":${esc(it.outcome.wire)}}""" }
+        val complete = topic.ideas.size >= 2 && topic.ideas.keys.all { (cover[it] ?: 0) >= 2 }
+        """{"topic":${esc(topic.id.value)},"participant":${esc(participant)},"dim":${esc(dim)},""" +
+            """"ideas":$ideas,"next":${next?.let { (a, b) -> """{"a":${esc(a)},"b":${esc(b)}}""" } ?: "null"},""" +
+            """"judgements":$minePairs,"phase1Complete":$complete}"""
+    }
+
+    /**
      * The bias-safe view: only [participant]'s own ratings (null when unrated).
      * Deliberately carries no aggregate key and no other participant's name —
      * not even an idea's proposer or the topic's creator.
@@ -960,9 +1058,16 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
             """${esc(d)}:{"n":${st.n},"mean":${num(st.mean)},"stdev":${num(st.stdev)},""" +
                 """"contribution":${s.contributions[d]?.let(::num) ?: "null"}}"""
         }
-        fun tail(id: String, s: Scored?) =
-            """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
-                """"factor":${s?.factor?.let(::num) ?: "null"},"raters":${ratersOf[id] ?: 0},"dots":${dotsOf[id] ?: 0}}"""
+        // the Eisenhower 2x2 the single score necessarily flattens (feature
+        // computenet-i00bh): derived per read from the same byDim means below,
+        // null while either axis is unrated, and null on a topic configured
+        // with other dimensions than importance/urgency
+        fun tail(id: String, s: Scored?): String {
+            val quadrant = s?.byDim?.let(Eisenhower::quadrantOf)
+            return """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
+                """"factor":${s?.factor?.let(::num) ?: "null"},"raters":${ratersOf[id] ?: 0},""" +
+                """"dots":${dotsOf[id] ?: 0},"quadrant":${quadrant?.let { esc(it.wire) } ?: "null"}}"""
+        }
         val rows = ranked.mapIndexed { i, (id, _) ->
             val s = scored[IdeaKey(topic.id, id)] // present with a score (possibly null), or absent
             """{"rank":${i + 1},"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
@@ -1033,7 +1138,57 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     }
 }
 
+/**
+ * The standing triage round's topic id (feature computenet-i00bh). One round,
+ * re-seeded in place, rather than one per period: ratings accrue against a
+ * moving candidate set, which keeps a fortnight of human judgement alive
+ * instead of throwing it away. The cost is staleness, which Phase 2's
+ * `triage-order.sh` is required to bound before any of this steers `/work`.
+ */
+internal val TRIAGE_TOPIC = TopicId("triage")
+
+/**
+ * Seeds (or re-seeds) the standing triage round from [source] and answers how
+ * many candidates it saw (feature computenet-i00bh).
+ *
+ * Idempotent: the topic is created once, an unchanged idea writes no journal
+ * line, and an unchanged [Jev] rating is [AlignmentApp.rate]'s own no-op. So
+ * this is safe to run on every boot, which is what makes a standing round
+ * survivable — the journal carries the human ratings and the seed only tops up
+ * what the tracker has added.
+ *
+ * ponytail: a candidate that LEAVES `bd ready` (closed, deferred, newly
+ * blocked) is left on the board rather than removed. Removal is not cheap here —
+ * `removeIdea` cascades through every participant's ratings and judgements, and
+ * that is irreversible human input. Phase 2 intersects the order with a live
+ * `bd ready` anyway, so a stale row costs a line on the board and nothing else.
+ * Revisit if a round ever accumulates enough closed rows to be unreadable; the
+ * upgrade path is a `closed` presentation flag, not a delete.
+ */
+internal fun seedBeadsTriage(
+    app: AlignmentApp,
+    source: CandidateSource,
+    facilitator: String = "facilitator",
+): Int {
+    app.ensureTopic(TRIAGE_TOPIC, "Triage", facilitator, Eisenhower.DIMENSIONS)
+    val candidates = source.candidates()
+    for (c in candidates) app.seedIdea(TRIAGE_TOPIC, c.id, c.title, c.description, facilitator)
+    // Jev rates the ROUND, not the item: its terms are rank-normalized across the
+    // whole candidate set, so every axis is one batch call. A candidate it abstains
+    // on is absent from the answer and written as null — which UNRATES it, so an
+    // abstention arriving later clears the rating an earlier round derived.
+    for ((dim, _, _) in Eisenhower.DIMENSIONS) {
+        val rated = Jev.rate(candidates, dim)
+        for (c in candidates) app.seedRating(TRIAGE_TOPIC, c.id, dim, Jev.PARTICIPANT, rated[c.id])
+    }
+    return candidates.size
+}
+
 fun main(args: Array<String>) {
     val app = AlignmentApp(demoPort(args), journalPath = args.flag("--journal")?.let { Path.of(it) }).start()
+    args.flag("--seed-beads")?.let { workspace ->
+        val n = seedBeadsTriage(app, BdCandidateSource(Path.of(workspace)))
+        println("computenet alignment: seeded $n ready epics from $workspace into /t/${TRIAGE_TOPIC.value}")
+    }
     println("computenet alignment: http://localhost:${app.boundPort}")
 }
