@@ -165,6 +165,8 @@ val reportExpectedFailures = tasks.register("reportExpectedFailures") {
 // `settings.gradle.kts` under kernel/src/test when adding one — a new reader is invisible here):
 //   BoundedReadConsumerFenceTest  <every top-level dir>/src/main/kotlin + demo/*/src/main/kotlin
 //   DemoSurfaceAllowlistTest      demo/*/src/main/kotlin, inspect/src/main/kotlin
+//   DemoBypassRatchetTest         demo/*/src/main/kotlin, kernel/src/test/resources/
+//                                 architecture/demo-bypass-allowlist.txt
 //   IdentityDerivationRatchetTest settings.gradle.kts, then <every included project>/src/main/kotlin
 //                                 (loader/fixtures/* included), plus
 //                                 kernel/src/test/resources/architecture/peerid-constructions.txt
