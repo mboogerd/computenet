@@ -102,9 +102,11 @@ open class ManagedHost(
      * captured once per **cell**, not once per port, so two journals for one
      * cell's ports have no coherent meaning. Checked at spawn ([cellJournal])
      * and refused by name (cell ref plus the two disagreeing port names) — a
-     * configuration error, not a dead letter. A selected port must also be an
-     * inlet: outlet-side journaling of spontaneous emissions is undecided
-     * (spec 90 roadmap I-7 §8) and refused the same way.
+     * configuration error, not a dead letter. An outlet may only echo its
+     * cell's inlet journal (a port-blind selector answers for it too); a
+     * journal named for an outlet alone, or one disagreeing with the inlets',
+     * is refused the same way — outlet-side journaling of spontaneous
+     * emissions is undecided (spec 90 roadmap I-7 §8). See [cellJournal].
      */
     private val journalForPort: ((CellRef, String) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
