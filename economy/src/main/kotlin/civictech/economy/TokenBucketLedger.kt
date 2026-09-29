@@ -73,6 +73,13 @@ import kotlin.concurrent.withLock
  * lands in the unmapped `Bucket` and is lost — see [refundDebit] and "Bounded state" below;
  * this cannot grant unearned budget, only lose an already-fail-safe refund.
  *
+ * **Forgetting is admission-specific** (`computenet-chgam`): the window remembers, per key, the
+ * generation token of the admission that currently owns it, and an `undo` forgets the key only
+ * when it still names its own token. Without this, an `undo` that runs after its key aged out of
+ * the window and was reused by a later admission would forget that later admission's entry by
+ * key value alone, making its own replay look like a fresh claim and charge twice — a stale
+ * undo must never touch a newer admission's window entry.
+ *
  * **Bounded state** (`kwhw6-D9`, `[ECO1-BUD-11]`/`[ECO1-BUD-12]`, BS-22): a bucket is
  * *eligible* for eviction when `held == 0 && balance >= bootstrapLevel` — evicting it and
  * re-creating it at bootstrap later cannot hand its principal budget it did not already have.
@@ -124,9 +131,19 @@ class TokenBucketLedger(
         /** Set, under this monitor, when the bucket leaves the map; a charge seeing it retries. */
         var evicted: Boolean = false
 
-        /** `kwhw6-D8`: admitted keys, oldest first, and a set over the same keys; lazily built. */
+        /** `kwhw6-D8`: admitted keys, oldest first, and their generation tokens; lazily built. */
         var recentOrder: ArrayDeque<Any>? = null
-        var recentSet: HashSet<Any>? = null
+
+        /**
+         * `computenet-chgam`: key -> the generation token of the admission that currently owns
+         * that window entry. An `undo` forgets a key only when it still names its own token, so
+         * a stale undo (whose key aged out and was reused by a later admission) cannot forget
+         * that later admission's entry.
+         */
+        var recentTokens: HashMap<Any, Long>? = null
+
+        /** Next generation token to assign; monotonic per bucket, never reused. */
+        var nextToken: Long = 0L
 
         /** Caller holds the monitor and has refilled to the judging instant. */
         fun eligible(): Boolean = held == 0L && balance >= bootstrapLevel
@@ -265,7 +282,7 @@ class TokenBucketLedger(
             if (bucket.evicted) return null
             bucket.lastAccessNanos = now
             val idemKey = claim.key
-            if (idemKey != null && bucket.recentSet?.contains(idemKey) == true) {
+            if (idemKey != null && bucket.recentTokens?.containsKey(idemKey) == true) {
                 admittedCounts.getValue(claimClass).increment()
                 return BudgetOutcome.Admitted {}
             }
@@ -276,7 +293,8 @@ class TokenBucketLedger(
                 // resolved above (and could refuse); an admitted zero charge mutates no
                 // balance, but its `undo` still forgets the idempotency key (below) so a
                 // real admission's retry is never mistaken for the replay's own no-op undo.
-                return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { forgetKey(bucket, claim.key) }))
+                val token = recordAdmission(bucket, claim)
+                return BudgetOutcome.Admitted(onceOnly { forgetKey(bucket, claim.key, token) })
             }
 
             if (claim.hold) {
@@ -307,34 +325,41 @@ class TokenBucketLedger(
                 }
                 bucket.balance -= price
                 bucket.held += price
-                return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { releaseHold(bucket, price, claim.key) }))
+                val token = recordAdmission(bucket, claim)
+                return BudgetOutcome.Admitted(onceOnly { releaseHold(bucket, price, claim.key, token) })
             }
 
             if (price > bucket.balance) {
                 return refuse(claimClass, DenialReason.BUDGET_EXHAUSTED, price - bucket.balance, null)
             }
             bucket.balance -= price
-            return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { refundDebit(bucket, price, claim.key) }))
+            val token = recordAdmission(bucket, claim)
+            return BudgetOutcome.Admitted(onceOnly { refundDebit(bucket, price, claim.key, token) })
         }
     }
 
     /**
      * Counts a real admission and records its key in the bucket's window (`kwhw6-D8`),
-     * evicting the oldest key beyond `retention.recentKeys`. Caller holds the bucket's monitor.
+     * evicting the oldest key beyond `retention.recentKeys`. Caller holds the bucket's monitor
+     * and has already confirmed (via the replay check above) that a non-null key is not
+     * currently in the window, so this always assigns a fresh entry rather than updating one.
+     *
+     * @return the generation token assigned to this admission's window entry, or `null` when
+     * the key is not tracked (no key, or the window is disabled) — [forgetKey] uses the token
+     * so a stale undo cannot forget a newer admission's reused key (`computenet-chgam`).
      */
-    private fun admit(bucket: Bucket, claim: BudgetClaim, admitted: BudgetOutcome.Admitted): BudgetOutcome.Admitted {
+    private fun recordAdmission(bucket: Bucket, claim: BudgetClaim): Long? {
         admittedCounts.getValue(claim.claimClass).increment()
         val idemKey = claim.key
         val window = policy.retention.recentKeys
-        if (idemKey != null && window > 0) {
-            val order = bucket.recentOrder ?: ArrayDeque<Any>().also { bucket.recentOrder = it }
-            val set = bucket.recentSet ?: HashSet<Any>().also { bucket.recentSet = it }
-            if (set.add(idemKey)) {
-                order.addLast(idemKey)
-                while (order.size > window) set.remove(order.removeFirst())
-            }
-        }
-        return admitted
+        if (idemKey == null || window <= 0) return null
+        val order = bucket.recentOrder ?: ArrayDeque<Any>().also { bucket.recentOrder = it }
+        val tokens = bucket.recentTokens ?: HashMap<Any, Long>().also { bucket.recentTokens = it }
+        val token = bucket.nextToken++
+        tokens[idemKey] = token
+        order.addLast(idemKey)
+        while (order.size > window) tokens.remove(order.removeFirst())
+        return token
     }
 
     /** `kwhw6-D4`: the stamp alone decides; nothing else about the principal is consulted. */
@@ -375,29 +400,38 @@ class TokenBucketLedger(
      * most the gap above bootstrap) — see "Bounded state" above — and is accepted rather than
      * fixed, per `computenet-sb9v1`.
      */
-    private fun refundDebit(bucket: Bucket, price: Long, key: Any?) {
+    private fun refundDebit(bucket: Bucket, price: Long, key: Any?, token: Long?) {
         synchronized(bucket) {
             bucket.balance = minOf(bucket.capacity - bucket.held, bucket.balance + price)
-            forgetKey(bucket, key)
+            forgetKey(bucket, key, token)
         }
     }
 
     /** See [refundDebit]: the same idempotency-key and evicted-bucket handling applies to a hold's release. */
-    private fun releaseHold(bucket: Bucket, price: Long, key: Any?) {
+    private fun releaseHold(bucket: Bucket, price: Long, key: Any?, token: Long?) {
         synchronized(bucket) {
             bucket.held -= price
             bucket.balance += price
             bucket.issuerName?.let { issuer ->
                 heldByIssuer.computeIfPresent(issuer) { _, sum -> (sum - price).takeIf { it > 0L } }
             }
-            forgetKey(bucket, key)
+            forgetKey(bucket, key, token)
         }
     }
 
-    /** Removes [key] from the bucket's idempotency window, if present. Caller holds the bucket's monitor. */
-    private fun forgetKey(bucket: Bucket, key: Any?) {
-        if (key == null) return
-        if (bucket.recentSet?.remove(key) == true) {
+    /**
+     * Removes [key] from the bucket's idempotency window, but only when it still names [token]
+     * — the generation token assigned at the admission this `undo` belongs to. If the key aged
+     * out of the window and was reused by a later admission (a new token), this is a no-op: a
+     * stale undo must never forget a newer admission's entry (`computenet-chgam`). Caller holds
+     * the bucket's monitor. `token == null` means this admission was never tracked (no key, or
+     * the window was disabled), so there is nothing to forget.
+     */
+    private fun forgetKey(bucket: Bucket, key: Any?, token: Long?) {
+        if (key == null || token == null) return
+        val tokens = bucket.recentTokens ?: return
+        if (tokens[key] == token) {
+            tokens.remove(key)
             bucket.recentOrder?.remove(key)
         }
     }
