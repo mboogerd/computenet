@@ -203,7 +203,7 @@ and report what they did.
 **Select the epic** from `bd ready --type=epic --json`: `resumable-epics.sh`
 entries first (in-flight work decays, and nothing else surfaces it) unless their
 in-progress feature's holder is LIVE or FOREIGN, then `bv --robot-triage` order
-if `bv` exists and its export is fresh (AGENTS.md), then priority. Skip the SDLC
+if `bv` exists and its export is fresh (CLAUDE.md), then priority. Skip the SDLC
 epic, children of an epic another session holds, and epics with a `needs:<tool>`
 label `have-tool.sh` fails on. Claim with `claim-epic.sh <id>`: exit 0 claimed;
 exit 1 not claimed — read the reason (a body naming open blockers → next

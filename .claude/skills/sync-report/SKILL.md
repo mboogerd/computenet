@@ -68,7 +68,7 @@ bd list --all --limit 0 --json | sed -n '/^[[{]/,/^[]}]/p' \
           | select(.status != "closed")
           | select((.assignee == "human") or ((.labels // []) | index("human")))
           | .id ]'
-bv --robot-triage        # up-next ranking; check the export is FRESH first (AGENTS.md), else bd ready
+bv --robot-triage        # up-next ranking; check the export is FRESH first (CLAUDE.md), else bd ready
 ```
 
 Read every one of these outputs in full; never pipe them through `head`. `bd human
