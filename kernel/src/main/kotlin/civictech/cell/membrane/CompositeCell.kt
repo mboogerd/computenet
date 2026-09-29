@@ -23,6 +23,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkPolicy
+import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
@@ -171,6 +172,9 @@ abstract class CompositeCell(
      * [MediateProxy] before delivery to [organelleInlet] — e.g. exposing a
      * `deltaInlet` with `BoundaryPolicy(integrity = IntegrityPolicy.RequireSigned)`
      * for untrusting-but-cooperating replica gossip (decided 93 I-28).
+     * Seam-2 budget charging ([ClaimClass.Link], [linkBudgetPolicy]) is
+     * installed here, on mediated inlets only — [flatten] and [mediateOutlet]
+     * charge no link.
      *
      * KSP-generating this proxy from a declarative membrane annotation is
      * G-52's residual (50/51); this is the hand-written realization the
@@ -216,8 +220,56 @@ abstract class CompositeCell(
             ),
         )
         installLinkAuthority(externalName, exposed, policy)
+        exposed.linking.policies += linkBudgetPolicy(denials)
         exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, exposed)
+    }
+
+    /**
+     * Seam 2's budget arm (ECO1 F3, `5o1rf-D8`/`D9`): charges one
+     * [ClaimClass.Link] claim, keyed by the [civictech.cell.link.LinkRequest]
+     * itself, for a **fresh remote handshake** on a mediated inlet — a request
+     * whose `identity` equals the ambient [CurrentPeer.stamp]'s id, which is
+     * the requester's own stamp because a remote link request is invoked under
+     * `CurrentPeer.with(...)` by the host — and on a refusal accounts the
+     * record through [denials] ([denyBudget], seam
+     * [BoundarySeam.LINK_AUTHORITY], `subject = null`) *before* returning
+     * [civictech.cell.link.LinkResult.Rejected] (`[ECO1-DEN-02]`); a local
+     * request (`identity == null`) constructs no claim (`[ECO1-BUD-05]`).
+     * Promotion re-authorization is deliberately **not** charged here:
+     * `Evolution.reauthorizeRebinds` carries only the establishing peer's
+     * `PeerId` (`LinkSupport.establishedBy`), the ambient stamp at that point
+     * is the promoter's, and fabricating a `TransportVouched`/`issuer = null`
+     * stamp would misprice an authenticated peer's rebind into the unvouched
+     * bootstrap class (`66m-D2`) — so a request whose identity does not match
+     * the ambient stamp falls through uncharged until `computenet-8aboz`
+     * retains the establishing `PeerStamp` in `LinkSupport`.
+     * The arm decides link admission only: it is a [LinkPolicy] in this
+     * inlet's `linking.policies`, so only `LinkSupport.reject`/`reauthorize`
+     * reach it and no management operation does (`[ECO1-DEN-08]`), and a held
+     * link is never re-evaluated by the budget (`[ECO1-DEN-09]`).
+     *
+     * Appended after `installLinkAuthority`'s wrappers, so a `linkAuthority`
+     * refusal still wins first with its own string and the ledger is never
+     * asked about a link that is already refused. With no ledger attached the
+     * body is one null field read ([budget]) — no claim, no sink allocation
+     * beyond the exposure's own. A `LinkRequest` carries no exclusive
+     * payload, so the refusal's `deniedArgs` is empty by construction.
+     */
+    private fun linkBudgetPolicy(denials: BoundaryDenialSink): LinkPolicy = LinkPolicy { request ->
+        val ledger = budget ?: return@LinkPolicy null
+        val stamp = CurrentPeer.stamp()?.takeIf { it.id == request.identity } ?: return@LinkPolicy null
+        val claim = BudgetClaim(stamp, ClaimClass.Link, key = request)
+        when (val outcome = ledger.chargeOrFail(claim, scope = "membrane:$ref")) {
+            is BudgetOutcome.Refused -> {
+                denials.denyBudget(outcome, claim, BoundarySeam.LINK_AUTHORITY, subject = null)
+                LinkResult.Rejected(
+                    "budget refused link: class=Link reason=${outcome.reason} " +
+                        "scope=${outcome.scope} shortfall=${outcome.shortfall}",
+                )
+            }
+            is BudgetOutcome.Admitted -> null
+        }
     }
 
     /**
