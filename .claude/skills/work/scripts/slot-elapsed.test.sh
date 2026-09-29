@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for slot-elapsed.sh. Fabricates slot-start/slot-seconds so every rung
-# and every gap case runs deterministically. Expect "37 passed, 0 failed".
+# and every gap case runs deterministically. Expect "48 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slot-elapsed.sh"}
@@ -133,6 +133,25 @@ d=$(slot 300 300); says "$d" "rung: EXPIRED" "left == 0 is EXPIRED"
 says "$d" "publish beads FIRST" "EXPIRED names the publication push"
 says "$d" "already certified"   "EXPIRED says what may still ship"
 says "$d" "do not wait on running agents" "EXPIRED says not to wait"
+
+# computenet-9zzsc: a dispatched agent's wall clock is bounded by its
+# dispatched-<id> file (`<epoch> [bound-minutes]`, default 60). The 14h hang
+# looked like ordinary progress from the worktree; only elapsed-vs-bound shows it.
+d=$(slot 100 300); echo $(( $(date -u +%s) - 70 * 60 )) > "$d/dispatched-hung"
+says "$d" "agent hung: 70m since dispatch — OVER its 60m bound" "an agent past the default 60m bound is flagged OVER"
+d=$(slot 100 300); echo "$(( $(date -u +%s) - 40 * 60 )) 30" > "$d/dispatched-fix"
+says "$d" "agent fix: 40m since dispatch — OVER its 30m bound" "a per-unit bound overrides the default"
+d=$(slot 100 300); echo "$(( $(date -u +%s) - 10 * 60 )) 30" > "$d/dispatched-ok"
+says "$d" "agent ok: 10m since dispatch, 20m to its 30m bound" "an agent inside its bound is not OVER"
+says "$d" "wake: 20m" "wake is the earliest bound when it precedes the next rung"
+d=$(slot 100 300)
+says "$d" "wake: 95m" "with no agents, wake is the time to the next rung (T-90m at 195m)"
+d=$(slot 100 300); echo junk > "$d/dispatched-bad"
+says "$d" "100m of 300m elapsed" "an unreadable dispatch file does not suppress the elapsed line"
+says "$d" "agent bad: dispatch time unreadable" "an unreadable dispatch file is reported"
+d=$(slot 305 300)
+out=$("$SCRIPT" "$d" 2>&1)
+case "$out" in *wake:*) bad "EXPIRED has no wake — got: $out" ;; *) ok "EXPIRED prints no wake" ;; esac
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

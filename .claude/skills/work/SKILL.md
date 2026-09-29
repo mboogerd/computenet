@@ -177,12 +177,12 @@ you did not compute that turn.
 | T-45m | dispatch only reviewers for finished work; merge and ship what is in flight |
 | EXPIRED | step 6 now |
 
-A persistent `Monitor` echoing at those points is optional; if armed, `TaskStop`
-it in step 6. Settle once now whether `SendMessage` exists (your tool list, then
-`ToolSearch "select:SendMessage"`); without it, continuing an agent is a fresh
-dispatch framed as a resume ([recovery.md](references/recovery.md), "Stalled
-agents and load"). A `status=stopped` notification from the previous session
-means the host died: read recovery.md, "Resuming after the host died", first.
+With agents live, arm a one-shot `Monitor` sleeping the `wake:` minutes the
+clock printed; `TaskStop` it in step 6. Settle once whether `SendMessage` exists (tool
+list, then `ToolSearch "select:SendMessage"`); without it, continuing an agent
+is a fresh dispatch framed as a resume ([recovery.md](references/recovery.md),
+"Stalled agents and load"). A `status=stopped` notification from the previous
+session means the host died: read recovery.md, "Resuming after the host died", first.
 
 Background jobs you start are supervised by nothing: bound each, record it in
 `<scratch>/jobs`, stop them all in step 6. Wait on PR checks only with
@@ -345,10 +345,10 @@ is finished: confirm it and send it to 5c, not to a second implementer. With
 `comment_count`: non-zero means another machine merged it → 5c. No `model` → use
 `luna` and stamp it.
 
-**Capacity.** Read `next-batch.py --capacity --siblings <N>` before every
-dispatch, reviewers included, and follow its advice. At most one live agent runs
-the repo-wide `./gradlew test`; the others scope their gate to touched modules.
-Go under the cap when results depend on wall-clock waits. Agents dying with no
+**Capacity.** Before every dispatch, reviewers included, read `next-batch.py --capacity --siblings <N>` and follow its advice.
+Then bound the agent: `echo "$(date -u +%s) <minutes>" > <scratch>/dispatched-<id>`, sized to the unit's worst case (default 60; a one-file fix is 30); delete the file on its notification.
+At most one live agent runs the repo-wide `./gradlew test`; the others scope their gate to touched modules.
+Go under the cap when results depend on wall-clock waits. Agents `slot-elapsed.sh` flags OVER, or dying with no
 side effects → [recovery.md](references/recovery.md), "Stalled agents and load".
 
 **Make each bead true before dispatch** — reviewers score its text and the

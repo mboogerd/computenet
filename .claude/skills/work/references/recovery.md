@@ -5,7 +5,7 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 ## Contents
 
 - Resuming after the host died — clock, side effects, reboot, revoked folder access
-- Stalled agents and load — silent agents, watchdog stalls, the reviewer ladder, when to stop dispatching
+- Stalled agents and load — agents past their bound, watchdog stalls, the reviewer ladder, when to stop dispatching
 - A red required check — the four artifacts, re-runs, the infrastructure park
 - Dolt pull conflicts — the one resolvable shape and its exact commands
 - Parks — the bar, how to park, re-triage and unpark
@@ -33,39 +33,36 @@ If a task branch is missing locally, another machine did the work. Task branches
 
 ## Stalled agents and load
 
-Judge a dispatched agent by its durable side effects, never its output file (SKILL.md "Hard constraints"). There are three safe signals: the completion notification, `bd comments <id> --json > <scratch>/<id>-comments.json`, and `git -C <worktree> log --oneline -5` together with `git -C <worktree> status --short`. At dispatch, record the time with `date -u +%s > <scratch>/dispatched-<id>`, and subtract it at each decision point. If nothing else would bring you back, arm one non-persistent Monitor that runs a single `sleep` followed by an `echo`.
+Judge a dispatched agent by its durable side effects, never its output file (SKILL.md "Hard constraints"). There are three safe signals: the completion notification, `bd comments <id> --json > <scratch>/<id>-comments.json`, and `git -C <worktree> log --oneline -5` together with `git -C <worktree> status --short`. Progress is a new commit or bead comment since your last check. "Still running" is not progress, and neither is an uncommitted edit: a hung agent shows both at minute 5 and at hour 13. You learn an agent is overdue from `slot-elapsed.sh`, which flags it OVER against the bound SKILL.md 5b recorded, not from your sense of time.
 
 | Situation | Do | Why |
 |---|---|---|
 | The agent returned without its outcome token (DONE/PARTIAL/BLOCKED, PASS/FAIL, READY/DRAFT) | Continue it and ask for its outcome plus a `NOT VERIFIED` section. Never act on the notification alone | A finished agent and a self-stopped one produce the same notification |
-| The agent is slow, but a signal moved | Wait. At the budget rung that forbids waiting, `TaskStop` it | Nothing useful lies in between |
-| No signal moved at a progress check | Continue it once. With no substantive reply, `TaskStop` it and re-dispatch | It may never have started |
+| OVER, and progress since the last check | Re-record its `dispatched-<id>` with a fresh bound and let it run. At a rung that forbids its kind of unit, `TaskStop` it | It is slow, not stuck |
+| OVER with no progress (a reviewer: use the reviewer ladder below) | Continue it once, asking for its outcome now. With no substantive reply, `TaskStop` it. If the rung still allows the unit, re-dispatch as a resume; otherwise comment its worktree and last sha on its bead and leave it to the next session | It hung or never started, and nothing else would stop it before the slot ends |
 | `status=failed` with "Agent stalled: no progress for 600s" | Follow the watchdog procedure below | The harness watchdog fired, often because of machine load |
-| A reviewer has been quiet for about 60 minutes, with its bead unchanged since the implementer's comment | Follow the reviewer ladder below | A reviewer that neither reports nor stops never wakes you |
 
-To continue an agent, use `SendMessage` if it exists; one `ToolSearch` for `select:SendMessage` tells you. Otherwise, dispatch a fresh agent whose prompt says it is a resume, not a clean start. That prompt carries the prior commit shas, the files touched, the gates that ran and their results, and what remains. It quotes the prior agent's own bead comment rather than paraphrasing it, or its `git log` and `status` when it left none, and tells the new agent to stop any live job in the prior agent's `<scratch>/jobs` first. It also says that your summary is unreviewed orchestrator text, to verify before building on it.
+To continue an agent, use `SendMessage` if it exists (SKILL.md step 2). Otherwise, dispatch a fresh agent whose prompt says it is a resume, not a clean start. That prompt carries the prior commit shas, the files touched, the gates that ran and their results, and what remains. It quotes the prior agent's own bead comment rather than paraphrasing it, or its `git log` and `status` when it left none, and tells the new agent to stop any live job in the prior agent's `<scratch>/jobs` first. It also says that your summary is unreviewed orchestrator text, to verify before building on it.
 
 Watchdog procedure:
 1. Read the machine with `python3 .claude/skills/work/scripts/next-batch.py --capacity` and `ps -eo pid,pcpu,comm | sort -k2 -rn | head`. If the load is external, say so in any new prompt.
-2. Read the three signals.
-3. If all three are empty, the agent never started. Re-dispatch it with: "A previous agent stalled before taking any action. I verified it left no side effects. This is a clean start, not a resume; do not look for prior work." If you release the claim instead, comment that fact on the bead.
-4. If any signal moved, treat it as the slow agent in the table.
+2. Read the three signals. If any moved, treat the agent as OVER with progress.
+3. If all three are empty, the agent never started; it counts toward the stopping rule below. Re-dispatch it with: "A previous agent stalled before taking any action. I verified it left no side effects. This is a clean start, not a resume; do not look for prior work." If you release the claim instead, comment that fact on the bead.
 
-Reviewer ladder:
+Reviewer ladder, for a reviewer OVER with its bead unchanged since the implementer's comment (one that neither reports nor stops never wakes you):
 1. Continue the reviewer and ask for its verdict now, plus `NOT VERIFIED`. Give it a short window.
 2. If it does not answer, `TaskStop` it. A stopped review certifies nothing. Route on what it wrote to the bead.
 3. On the remaining budget, choose between a fresh reviewer and leaving the PR draft.
 
 If the continuation itself stalls, do not resend it: replaying a long transcript is what stalls. Instead, dispatch a fresh reviewer scoped to the open criteria, with the prior findings in its prompt. Tell it that it is the second reviewer, whether there is partial state to reconcile, which blockers you cleared, and that a stated verdict on honestly scoped evidence outranks exhaustive coverage. Clear predictable blockers before dispatching. If `origin/main` has moved and the review needs that merge, you merge, run the affected module suites, and push. If a superseded pass left a review marker, run `bd update <id> --unset-metadata review` and comment what the old marker meant.
 
-Load: the advice string from `next-batch.py --capacity` tells our load apart from host load.
+Load: follow the advice string from `next-batch.py --capacity`; it tells our load apart from host load and carries the stopping rule. What it cannot say:
 
 | Situation | Do | Why |
 |---|---|---|
-| Load is ours (one of our builds is busy) | Dispatch nothing. Wait for the build | A new agent stalls, and the build ends on its own |
-| Load is host load | Do not idle. Choose a unit that needs no Gradle: bead text, reconciliation, or review of an already-green PR. Tell the agent that tool calls will be slow, to take fewer and larger steps, and to comment on its bead early | There is nothing to wait for. `bd` is contended too, so this work is Gradle-free, not load-free |
-| Two consecutive dispatches died with no side effects | Stop dispatching. Hold on a bounded Monitor until load1 is under 2x cores, or go to Finalize if the budget cannot absorb the wait. Keep doing orchestrator-local bookkeeping | At this load any tool call can outlive the watchdog |
-| Your own capacity read times out | Read `uptime`. At or above 5x cores, apply the stop rule without retrying the read | A read that cannot return is itself the measurement |
+| Host load, and you dispatch | Prefer a unit that needs no Gradle: bead text, reconciliation, or review of an already-green PR. Tell the agent that tool calls will be slow, to take fewer and larger steps, and to comment on its bead early | `bd` is contended too, so this work is Gradle-free, not load-free |
+| The stopping rule has fired (two deaths with no side effects, then a dead probe) | Dispatch nothing more this slot. Do orchestrator-local bookkeeping, then Finalize. A probe that reports is the only release; no load1 reading is | Agents have died at 1.4x cores after a green read at dispatch, so load1 predicts neither death nor recovery, and a hold keyed to it has idled a whole slot |
+| Your own capacity read times out | Count it as a death for the stopping rule, without retrying the read | A read that cannot return is itself the measurement |
 | One live agent is the session's most valuable unit | Holding every dispatch is legitimate. Comment the hold on the epic | A marginal dispatch is likelier to kill the live agent than to finish |
 
 ## A red required check

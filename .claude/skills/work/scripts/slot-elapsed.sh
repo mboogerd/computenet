@@ -123,3 +123,33 @@ fi
 { echo "$now" > "$last"; } 2>/dev/null || true
 
 echo "${el}m of ${tot}m elapsed, ${left}m left — rung: ${rung} — ${age}"
+
+# Per-agent bounds (computenet-9zzsc). Nothing else bounds a dispatched agent's
+# wall clock: a hung one looks the same at minute 5 and hour 13 (running, maybe
+# an uncommitted edit), and its notification may never come inside the slot.
+# SKILL.md 5b writes `<epoch> [bound-minutes]` to dispatched-<id> at dispatch;
+# this names each agent past its bound, and `wake` is how long a one-shot
+# Monitor may sleep before the next rung or the earliest bound needs a turn.
+# Printed AFTER the primary line so no bad file can suppress it.
+case "$name" in
+  OPEN)  wake=$(( usable - 90 )) ;;
+  T-90m) wake=$(( usable - 45 )) ;;
+  T-45m) wake=$usable ;;
+  *)     wake="" ;;
+esac
+for f in "$SCRATCH"/dispatched-*; do
+  [ -f "$f" ] || continue
+  id=${f##*/dispatched-}
+  read -r at bound _ < "$f" 2>/dev/null || true
+  case "${at:-}" in (*[!0-9]*|"") echo "agent $id: dispatch time unreadable — read its signals"; continue ;; esac
+  case "${bound:-}" in (*[!0-9]*|"") bound=60 ;; esac
+  aged=$(( (now - at) / 60 ))
+  due=$(( bound - aged ))
+  if [ "$due" -le 0 ]; then
+    echo "agent $id: ${aged}m since dispatch — OVER its ${bound}m bound; running is not progress, read its signals (recovery.md \"Stalled agents and load\")"
+  else
+    echo "agent $id: ${aged}m since dispatch, ${due}m to its ${bound}m bound"
+    if [ -z "$wake" ] || [ "$due" -lt "$wake" ]; then wake=$due; fi
+  fi
+done
+[ -z "$wake" ] || echo "wake: ${wake}m — sleep a one-shot Monitor this long before ending a turn with agents live"
