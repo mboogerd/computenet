@@ -13,7 +13,15 @@ import civictech.demo.shell.value
 import com.sun.net.httpserver.HttpExchange
 import java.io.File
 import java.net.URLDecoder
+import java.time.Duration
 import java.util.*
+
+/**
+ * computenet-4nxe8: the window [AgoraApp]'s `/events` endpoint coalesces
+ * credence-change broadcasts over, per the bead description ("100 ms" per
+ * `computenet-6aj8h`'s adopter list, agora being its heaviest broadcaster).
+ */
+private val COALESCE_WINDOW = Duration.ofMillis(100)
 
 /**
  * The argumentation backend: JDK HttpServer + SSE over an [AgoraService]
@@ -34,7 +42,14 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         host,
         registry,
         structureLog = journalDir?.let { File(it, "graph.jsonl") },
-        onCredence = { _, _ -> broadcast() },
+        // computenet-4nxe8: every credence change used to broadcast the full
+        // graph immediately, so a burst of updates (a hub touching many
+        // claims at once) recomputed and resent the same snapshot once per
+        // change. `invalidate()` coalesces a burst into one broadcast per
+        // COALESCE_WINDOW, computed after the burst's last change (trailing
+        // edge) — see DemoShell.invalidate's KDoc for the "no lost update"
+        // guarantee this relies on.
+        onCredence = { _, _ -> shell.invalidate() },
     )
 
     private val shell = DemoShell(port)
@@ -51,7 +66,7 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         shell.route("/graph") { it.respond(200, graphJson(), "application/json") }
         shell.route("/op") { handleOp(it) }
-        shell.sse("/events") { graphJson() }
+        shell.sse("/events", coalesce = COALESCE_WINDOW) { graphJson() }
     }
 
     // The DTO and its encoder live in NodeDto.kt: `:demo:dialogue` serves the
@@ -116,12 +131,6 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
             exchange.respond(400, e.message ?: "bad request")
         }
     }
-
-    // Behaves identically to the former guarded broadcast (`if (clients.isEmpty())
-    // return`): graphJson() is pure, and forEach over an empty client list is
-    // already a no-op — dropping the guard costs one wasted computation with
-    // no observable difference.
-    private fun broadcast() = shell.broadcast { graphJson() }
 
     fun start(): AgoraApp = apply { shell.start() }
 

@@ -6,8 +6,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.UnknownHostException
+import java.time.Duration
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -110,6 +113,19 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
     // is content to drop silently, matching their original `send`.
     @Volatile private var closeOnSendFailure = false
 
+    // computenet-4nxe8: SSE coalescing. [sse] sets all four together when
+    // called with a non-null `coalesce` window (no demo registers more than
+    // one SSE endpoint, same premise as [closeOnSendFailure]); left at their
+    // defaults, [invalidate] is a no-op and every existing demo's behavior —
+    // including the ordering guarantee above — is exactly what it was before
+    // this field existed.
+    private val coalesceLock = Any()
+    private var coalesceFrame: (() -> String)? = null
+    private var coalesceWindowMs: Long = 0
+    private var coalesceExecutor: ScheduledExecutorService? = null
+    private var coalesceScheduled = false
+    @Volatile private var stopped = false
+
     val boundPort: Int get() = server.address.port
 
     /** Registered SSE clients — tests and diagnostics. */
@@ -137,9 +153,30 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
      * [closeOnFailure] preserves slotfinder's original behavior of closing
      * the exchange on a failed write (see [closeOnSendFailure]); every other
      * demo leaves it at the default `false`.
+     *
+     * [coalesce], when non-null, registers [initialFrame] as this shell's
+     * coalescing frame supplier for [invalidate]: any number of [invalidate]
+     * calls within one [coalesce] window compute and broadcast that frame
+     * once, on the window's trailing edge (see [invalidate]). Left `null` —
+     * the default, and the only mode before computenet-4nxe8 — nothing about
+     * this method's behavior changes; a caller that never calls [invalidate]
+     * is likewise unaffected either way.
      */
-    fun sse(path: String, closeOnFailure: Boolean = false, initialFrame: () -> String) {
+    fun sse(path: String, closeOnFailure: Boolean = false, coalesce: Duration? = null, initialFrame: () -> String) {
         closeOnSendFailure = closeOnFailure
+        // Published under [coalesceLock]: [invalidate] may run on another
+        // thread (agora's `onCredence` runs on its host's scheduler), and these
+        // are plain fields. AgoraApp fences its replay with
+        // `recoverFrom(..).awaitApplied(..)` before calling this
+        // (computenet-q5jzk), so there it is defensive; an adopter without
+        // that fence can have [invalidate] race this registration.
+        if (coalesce != null) synchronized(coalesceLock) {
+            coalesceFrame = initialFrame
+            coalesceWindowMs = coalesce.toMillis().coerceAtLeast(1)
+            coalesceExecutor = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("demo-shell-coalesce").factory(),
+            )
+        }
         server.createContext(path) { exchange ->
             exchange.beginSse()
             synchronized(clientsLock) {
@@ -166,6 +203,43 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
             val json = frame()
             clients.forEach { it.offer(json) }
         }
+    }
+
+    /**
+     * Request a coalesced broadcast of the frame supplier registered by
+     * [sse]'s `coalesce` argument. A no-op when no endpoint registered one,
+     * or after [stop].
+     *
+     * Trailing-edge debounce: the first call in an otherwise-idle window
+     * schedules a broadcast [coalesceWindowMs] later and every further call
+     * inside that same window is folded into it for free (`coalesceScheduled`
+     * short-circuits them) — so a burst of N calls computes and broadcasts
+     * the frame once, not N times. "No lost update": a call that lands after
+     * the scheduled broadcast has already started running ([fireCoalesced]
+     * has cleared `coalesceScheduled` before it calls [broadcast]) finds
+     * nothing scheduled and starts a fresh window of its own, so it is still
+     * followed by a broadcast whose frame is computed after it — including a
+     * call that arrives while that broadcast's frame is being computed or
+     * written. [coalesceLock] serializes every check-and-schedule here
+     * against [fireCoalesced]'s check-and-clear and against [stop]'s
+     * check-and-mark, so no interleaving of those three can drop a call.
+     */
+    fun invalidate() {
+        synchronized(coalesceLock) {
+            val frame = coalesceFrame ?: return
+            if (stopped || coalesceScheduled) return
+            coalesceScheduled = true
+            coalesceExecutor!!.schedule({ fireCoalesced(frame) }, coalesceWindowMs, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    /** The trailing edge of [invalidate]'s debounce window: see its KDoc. */
+    private fun fireCoalesced(frame: () -> String) {
+        val shouldBroadcast = synchronized(coalesceLock) {
+            coalesceScheduled = false
+            !stopped
+        }
+        if (shouldBroadcast) broadcast(frame)
     }
 
     /**
@@ -258,6 +332,16 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
      * changes a *later* snapshot, never the array this sweep already captured.
      */
     fun stop() {
+        // computenet-4nxe8: mark stopped and cancel any pending coalesce
+        // window before the drain wait below — a queued or not-yet-started
+        // [fireCoalesced] must never fire after this call, and `shutdownNow`
+        // cancels it without this method waiting on it (the drain bound
+        // below is unrelated: it is for client queues, not the coalesce
+        // timer). `stopped` is set inside `coalesceLock` so it is seen by
+        // [invalidate] and [fireCoalesced] under the same lock they use.
+        synchronized(coalesceLock) { stopped = true }
+        coalesceExecutor?.shutdownNow()
+
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(STOP_DRAIN_MS)
         clients.forEach { it.awaitDrained(deadline) }
         server.stop(0)
