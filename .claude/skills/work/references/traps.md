@@ -85,7 +85,7 @@ EOF
 
 | Symptom | Cause | Do |
 |---|---|---|
-| `git stash pop` restores someone else's changes | The stash is one stack shared by every worktree of the repository | Get before-and-after without stashing: commit, then compare with `git show <base>:<path> > "<scratch>/before"`. If you must stash: `git stash push -u -m "<unique-tag>"`, note its sha from `git stash list --format='%H %gs'`, and `git stash apply <sha>`, never `pop`. |
+| `git stash pop` restores someone else's changes | The stash is one stack shared by every worktree of the repository | Get before-and-after without stashing: commit, then compare with `git show <base>:<path> > "<scratch>/before"`. Never stash. |
 | A commit in the main checkout contains files you did not stage | Sessions working in the main checkout share one index | Commit by pathspec, `git commit -m "<msg>" -- <paths>`; never `--amend` there; check `git show --stat HEAD`. |
 | `git grep` returns zero, or a revision path resolves wrong | Pathspec, regex and zsh-expansion hazards | See AGENTS.md "Implementation conventions". |
 | `fatal: cannot change to '<path>'` / a missing ref, on something an earlier step created | That step was piped into `head` or another early-exiting reader and died mid-write | The error is about the pipe, not the repository. See Shell, below. |

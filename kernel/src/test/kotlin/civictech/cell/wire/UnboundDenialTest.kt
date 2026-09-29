@@ -39,7 +39,10 @@ class UnboundDenialTest {
     /**
      * The tail grows by one per feature that adds a constant, and the
      * assertion is rewritten each time — `computenet-ktn1l.2` appended
-     * [DenialReason.IDENTITY_MISMATCH] and lengthened it from three to four.
+     * [DenialReason.IDENTITY_MISMATCH] and lengthened it from three to four;
+     * `computenet-tnmwh.1` (ECO1) appended [DenialReason.BUDGET_EXHAUSTED],
+     * [DenialReason.BUDGET_NOT_GRANTED] and [DenialReason.LEDGER_FAILURE] and
+     * lengthened it from four to seven.
      *
      * What it protects, precisely: the constants that were last keep their
      * order and stay last, so a new constant can only be APPENDED — never
@@ -52,15 +55,18 @@ class UnboundDenialTest {
      * drop the only order guarantee in the file.
      */
     @Test
-    fun `DenialReason is append-only and ends with MALFORMED_ANNOUNCEMENT, UNVOUCHED, STATEMENT_EXPIRED, IDENTITY_MISMATCH`() {
+    fun `DenialReason is append-only and ends with MALFORMED_ANNOUNCEMENT, UNVOUCHED, STATEMENT_EXPIRED, IDENTITY_MISMATCH, BUDGET_EXHAUSTED, BUDGET_NOT_GRANTED, LEDGER_FAILURE`() {
         assertEquals(
             listOf(
                 DenialReason.MALFORMED_ANNOUNCEMENT,
                 DenialReason.UNVOUCHED,
                 DenialReason.STATEMENT_EXPIRED,
                 DenialReason.IDENTITY_MISMATCH,
+                DenialReason.BUDGET_EXHAUSTED,
+                DenialReason.BUDGET_NOT_GRANTED,
+                DenialReason.LEDGER_FAILURE,
             ),
-            DenialReason.entries.takeLast(4),
+            DenialReason.entries.takeLast(7),
         )
     }
 

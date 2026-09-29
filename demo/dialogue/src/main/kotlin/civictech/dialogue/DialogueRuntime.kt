@@ -25,8 +25,6 @@ import civictech.dialogue.mint.ProvenanceIndex
 import civictech.dialogue.mint.RelationProvenanceEntry
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /**
  * The AGO1 composition root (epic computenet-2aw §2.5 durability seam,
@@ -74,10 +72,9 @@ import java.util.concurrent.TimeUnit
  *
  * ### No startup checkpoint
  *
- * Deliberately absent, copying `AgoraApp`'s hazard note: `checkpoint` runs on
- * the management band and would jump ahead of the still-staged replay frames,
- * compacting the journal down to its PRE-replay state — data loss on the next
- * restart. Nothing in this class calls [ManagedHost.checkpoint].
+ * A checkpoint after [afterQuiescence] is safe behind the fence; none is
+ * taken (no compaction in dialogue v1). Nothing in this class calls
+ * [ManagedHost.checkpoint].
  *
  * ### Ephemeral mode
  *
@@ -299,18 +296,16 @@ class DialogueRuntime(
      * The live-scheduler quiescence fence: run [block] on the calling thread
      * once this host's queue has actually drained.
      *
-     * Six lines lifted from `civictech.testkit.awaitDrained`, whose KDoc
-     * carries the full argument; `:testkit` is a `testImplementation`
-     * dependency and cannot be imported from a main source set, so it is
-     * re-implemented rather than reused. The essentials: one task submitted at
-     * [Int.MAX_VALUE] priority sorts strictly below every band the host uses
-     * (management 0, data 20, drain 30), and [HostScheduler.submit]'s
-     * `(priority, submission)` ordering over a single-threaded drain means it
-     * reaches the front only when the queue holds nothing else — not the work
-     * queued before it, and not the work that work enqueued, however deep the
-     * cascade. Its completion is a **positive** event, so a starved host makes
-     * this block rather than answer wrongly; [timeoutMs] is a hang backstop,
-     * not a convergence budget.
+     * Delegates to [civictech.cell.host.Quiescence] via [ManagedHost.quiescence]
+     * (computenet-q5jzk): one task submitted at [Int.MAX_VALUE] priority sorts
+     * strictly below every band the host uses (management 0, data 20, drain
+     * 30), and [HostScheduler.submit]'s `(priority, submission)` ordering over
+     * a single-threaded drain means it reaches the front only when the queue
+     * holds nothing else — not the work queued before it, and not the work
+     * that work enqueued, however deep the cascade. Its completion is a
+     * **positive** event, so a starved host makes this block rather than
+     * answer wrongly; [timeoutMs] is a hang backstop, not a convergence
+     * budget.
      *
      * F5 uses this for per-utterance reconciliation (epic §8/R4:
      * quiescence-scoped per utterance, never mid-wave). Tests on a
@@ -320,11 +315,7 @@ class DialogueRuntime(
      * @throws IllegalStateException if the host never drained within [timeoutMs].
      */
     fun afterQuiescence(timeoutMs: Long = 30_000, block: () -> Unit) {
-        val drained = CountDownLatch(1)
-        hostScheduler.submit(Int.MAX_VALUE) { drained.countDown() }
-        check(drained.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-            "DialogueRuntime.afterQuiescence: host queue never drained within ${timeoutMs}ms"
-        }
+        host.quiescence().await(timeoutMs, "DialogueRuntime.afterQuiescence")
         block()
     }
 

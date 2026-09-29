@@ -212,7 +212,8 @@ PR number, date, or epic.
 
 One message, four parts, in this order: **decisions**, **shipped**,
 **in flight**, **up next**. Decisions stay first — they are why the user is
-reading — and everything after them is narrative, not tables.
+reading — and everything after them is narrative, not tables. Name beads by
+what they are, not by id (AGENTS.md, "Talking to the human").
 
 ### Decisions
 

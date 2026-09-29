@@ -238,8 +238,9 @@ bd update <feature-id> --design-file <scratch>/<feature-id>-design.md
   verification command.
 - Size by read-surface (what a fresh agent must read and hold), so a task
   fits one implementer session ([implement.md](implement.md#hand-off)).
-- A test-only task names how its implementer will show the tests are not
-  vacuous without leaving its claim ([evidence.md](evidence.md#mutation-checks)).
+- A prescribed or reserved mutation names the assertion it must redden
+  ([evidence.md](evidence.md#mutation-checks)); a test-only task also says
+  how its implementer shows the tests are not vacuous without leaving its claim.
 - Anchors in code a blocker has not landed yet are `unverified:`.
 - If the feature's `metadata.files` omits a file a task must edit, widen it
   with `bd update <feature-id> --set-metadata files=<list>`, since the feature
