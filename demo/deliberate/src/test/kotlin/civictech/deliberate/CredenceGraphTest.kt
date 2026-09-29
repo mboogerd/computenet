@@ -344,7 +344,7 @@ class CredenceGraphTest {
         val three = List(3) { CellRef(UUID.randomUUID()) }
         val partial = IssueNode(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()), three, layers)
         host.managementInlet.call.spawn(partial)
-        registry.inlet<Credence>(partial.ref, "positionInlet")
+        registry.inlet(partial.ref, IssueNodePorts.positionInlet)
             .propagate(Credence(three[0], listOf(0.8, 0.8), 0.8, 0.8, 0.8, 0.8))
         val want = listOf(4.0 / 6, 1.0 / 6, 1.0 / 6)
         awaitUntil("the heard position holds odds 4 against two unheard halves") {

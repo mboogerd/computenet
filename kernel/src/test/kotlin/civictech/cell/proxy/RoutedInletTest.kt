@@ -4,12 +4,15 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Propagate
+import civictech.cell.graph.InletId
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.inlet
+import civictech.cell.host.routeTo
 import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
@@ -20,6 +23,31 @@ import org.junit.jupiter.api.assertThrows
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+
+/**
+ * Top-level (KSP's `<CellName>Ports` generation skips nested cells —
+ * `ContractProcessor.kt`'s port-ids pass filters `it.parentDeclaration == null`
+ * — so this cannot be nested inside [RoutedInletTest] the way [RoutedInletTest.SinkCell]
+ * is; same precedent as [civictech.cell.EchoCell] in `CellBaseTest.kt`). Drives
+ * the typed `inlet`/`routeTo` overloads (R1, R2, R4): [inlet] and [outlet] are
+ * `Propagate<Int>`-shaped, [consumerInlet] is not, so a typed id over it fails
+ * to unify with `InletId<Propagate<D>>` at compile time.
+ */
+class TypedSinkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    val received = mutableListOf<Int>()
+
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<Int>>())
+    val consumerInlet = registerPort("consumerInlet", FanInlet.create<Consumer<Int>>())
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<Int>>())
+
+    init {
+        inlet.serve(object : Propagate<Int> {
+            override fun propagate(value: Int) {
+                received += value
+            }
+        })
+    }
+}
 
 /**
  * `registry.inlet<D>(ref, "port")` is the reified front door to the routed
@@ -202,5 +230,120 @@ class RoutedInletTest {
         controller.runToIdle()
 
         cell.received shouldBe listOf(1, 2)
+    }
+
+    // --- typed port ids: generated `TypedSinkCellPorts` through the typed `inlet`/`routeTo` overloads (R1, R2, R4) ---
+
+    @Test
+    fun `typed id delivers through the host queue with no explicit type argument`() {
+        val controller = SimulationController()
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val cell = TypedSinkCell()
+        host.managementInlet.call.spawn(cell)
+
+        // D is bound from TypedSinkCellPorts.inlet: InletId<Propagate<Int>> — no <Int> at the call site.
+        val handle = registry.inlet(cell.ref, TypedSinkCellPorts.inlet)
+        handle.propagate(1)
+        handle.propagate(2)
+        handle.propagate(3)
+        controller.runToIdle()
+
+        cell.received shouldBe listOf(1, 2, 3)
+    }
+
+    /**
+     * R1 compile-time negative (TypedLinkTest style, `civictech.cell.graph.TypedLinkTest`):
+     * `D`/the wrapper shape is checked structurally, through the invariant
+     * `InletId<Api>` unifying against the declared `InletId<Propagate<D>>` —
+     * not by a runtime assertion. The lines below would each be rejected by
+     * the Kotlin compiler; kept as commented executable documentation of the
+     * negative (where today's string form `registry.inlet<X>(ref, "port")`
+     * would happily compile and only fail at delivery time):
+     *
+     * ```
+     * // val wrong: Propagate<String> = registry.inlet(cell.ref, TypedSinkCellPorts.inlet)  // D bound to Int, not String
+     * // registry.inlet(cell.ref, TypedSinkCellPorts.consumerInlet)  // InletId<Consumer<Int>> does not unify with InletId<Propagate<D>>
+     * ```
+     */
+    @Test
+    fun `typed id invocation matches the string form byte-for-byte`() {
+        // capture host, same pattern as "the invocation matches the proxy path byte-for-byte"
+        val queue = LinkedBlockingQueue<HostedPortInvocation>()
+        val host = object : ManagedHost() {
+            override fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
+                queue.put(hostedInvocation)
+            }
+        }
+        val cell = TypedSinkCell()
+        host.managementInlet.call.spawn(cell)
+
+        val viaString: Propagate<Int> = host.inlet(cell.ref, "inlet")
+        viaString.propagate(9)
+        val stringMsg = queue.poll(1, TimeUnit.SECONDS)!!
+
+        val viaTypedId = host.inlet(cell.ref, TypedSinkCellPorts.inlet)
+        viaTypedId.propagate(9)
+        val typedMsg = queue.poll(1, TimeUnit.SECONDS)!!
+
+        typedMsg.cellRef shouldBe stringMsg.cellRef
+        typedMsg.portName shouldBe stringMsg.portName
+        typedMsg.type shouldBe stringMsg.type
+        typedMsg.invocation.methodName shouldBe stringMsg.invocation.methodName
+        typedMsg.invocation.parameterTypes shouldBe stringMsg.invocation.parameterTypes
+        typedMsg.invocation.args shouldBe stringMsg.invocation.args
+        typedMsg.invocation.contractId shouldBe stringMsg.invocation.contractId
+        typedMsg.invocation.methodId shouldBe stringMsg.invocation.methodId
+    }
+
+    @Test
+    fun `typed id unknown port is rejected, naming the port and the available ports`() {
+        val controller = SimulationController()
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val cell = TypedSinkCell()
+        host.managementInlet.call.spawn(cell)
+
+        val error = assertThrows<IllegalArgumentException> {
+            registry.inlet(cell.ref, InletId<Propagate<Int>>("stanceInlet"))
+        }
+        error.message!! shouldContain "stanceInlet"
+        error.message!! shouldContain cell.ref.toString()
+        error.message!! shouldContain "inlet" // the available-ports listing
+    }
+
+    @Test
+    fun `typed id unknown cell is rejected, naming the cell`() {
+        val registry = LocationRegistry()
+        val ghost = CellRef(UUID.randomUUID())
+
+        val error = assertThrows<IllegalArgumentException> {
+            registry.inlet(ghost, InletId<Propagate<Int>>("inlet"))
+        }
+        error.message!! shouldContain ghost.toString()
+    }
+
+    @Test
+    fun `routeTo stages delivery and tears down on unlink`() {
+        val controller = SimulationController()
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val source = TypedSinkCell()
+        val sink = TypedSinkCell()
+        host.managementInlet.call.spawn(source)
+        host.managementInlet.call.spawn(sink)
+
+        val link = source.outlet.routeTo(registry, sink.ref, TypedSinkCellPorts.inlet)
+
+        source.outlet.call.propagate(42)
+        // enqueued on the host queue — staged, never a fused synchronous call (R4)
+        sink.received.shouldBeEmpty()
+        controller.runToIdle()
+        sink.received shouldBe listOf(42)
+
+        link.unlink()
+        source.outlet.call.propagate(43)
+        controller.runToIdle()
+        sink.received shouldBe listOf(42) // unlink tore the hop down; no further delivery
     }
 }

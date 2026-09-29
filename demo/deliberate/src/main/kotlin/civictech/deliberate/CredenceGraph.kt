@@ -6,6 +6,7 @@ import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
+import civictech.cell.host.routeTo
 import civictech.cell.observe.ObserveCell
 import civictech.cell.port.streamTo
 import kotlinx.serialization.Serializable
@@ -257,10 +258,10 @@ class CredenceGraph(
         cells[ref] = edge
         wire(ref, "credenceOutlet", hub.ref, "inlet") { edge.credenceOutlet.streamTo(routedHub()) }
         wire(ref, "influenceOutlet", target, "influenceInlet") {
-            edge.influenceOutlet.streamTo(registry.inlet<Influence>(target, "influenceInlet"))
+            edge.influenceOutlet.routeTo(registry, target, ClaimNodePorts.influenceInlet)
         }
         wire(source, "credenceOutlet", ref, "sourceInlet") {
-            cells.getValue(source).credenceOutlet.streamTo(registry.inlet<Credence>(ref, "sourceInlet"))
+            cells.getValue(source).credenceOutlet.routeTo(registry, ref, EdgeNodePorts.sourceInlet)
         }
         if (sensitivity) {
             // Model C: the edge's sensitivity cell hears its target's frame and hands its source its share;
@@ -269,13 +270,13 @@ class CredenceGraph(
             val onTarget = sensCells.getValue(target)
             val ofSource = sensCells.getValue(source)
             wire(ref, "influenceOutlet", onTarget.ref, "influenceInlet") {
-                edge.influenceOutlet.streamTo(registry.inlet<Influence>(onTarget.ref, "influenceInlet"))
+                edge.influenceOutlet.routeTo(registry, onTarget.ref, SensitivityNodePorts.influenceInlet)
             }
             wire(onTarget.ref, "frameOutlet", s.ref, "frameInlet") {
-                onTarget.frameOutlet.streamTo(registry.inlet<SensitivityFrame>(s.ref, "frameInlet"))
+                onTarget.frameOutlet.routeTo(registry, s.ref, SensitivityNodePorts.frameInlet)
             }
             wire(s.ref, "sourceOutlet", ofSource.ref, "shareInlet") {
-                s.sourceOutlet.streamTo(registry.inlet<Sensitivity>(ofSource.ref, "shareInlet"))
+                s.sourceOutlet.routeTo(registry, ofSource.ref, SensitivityNodePorts.shareInlet)
             }
         }
         synchronized(nodesLock) {
@@ -320,7 +321,7 @@ class CredenceGraph(
             issueCells[root] = issue
             refs.forEach { p ->
                 wire(p, "credenceOutlet", issue.ref, "positionInlet") {
-                    cells.getValue(p).credenceOutlet.streamTo(registry.inlet<Credence>(issue.ref, "positionInlet"))
+                    cells.getValue(p).credenceOutlet.routeTo(registry, issue.ref, IssueNodePorts.positionInlet)
                 }
             }
             wire(issue.ref, "sharesOutlet", sharesHub.ref, "inlet") {
@@ -345,8 +346,8 @@ class CredenceGraph(
             if (mine[user] == value) return@mutation
             if (value == null) mine.remove(user) else mine[user] = value
         }
-        registry.inlet<Stance>(id, "stanceInlet").propagate(Stance(user, value))
-        sensCells[id]?.let { registry.inlet<Stance>(it.ref, "stanceInlet").propagate(Stance(user, value)) }
+        registry.inlet(id, ClaimNodePorts.stanceInlet).propagate(Stance(user, value))
+        sensCells[id]?.let { registry.inlet(it.ref, SensitivityNodePorts.stanceInlet).propagate(Stance(user, value)) }
     }
 
     fun graph(): List<Node> {
