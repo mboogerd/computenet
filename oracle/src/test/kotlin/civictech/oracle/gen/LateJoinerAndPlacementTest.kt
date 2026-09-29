@@ -283,7 +283,7 @@ class LateJoinerAndPlacementTest {
                         (result as LinkResult.Rejected).reason
                 }
             } else {
-                val target = registry.inlet(toRef, step.inlet, Any::class.java)
+                val target = registry.inlet<Any>(toRef, step.inlet)
                 fromHost.managementInlet.call.connect(fromRef, step.outlet, Use.fixed(target, PortRef.generate()))
             }
         }
