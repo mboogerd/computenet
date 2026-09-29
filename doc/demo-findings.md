@@ -1036,12 +1036,20 @@ pins it exactly:
 
 **Why it matters**: `[QRY1-API-04]` / BS-11 asks for "same cells, same
 links". Read literally, R1 and R2 fall short of that. Read as "as far as the
-language reaches", the relational core does meet it. This entry records the
-measurement; it does not choose between those readings. That choice is the
-human decision bead `computenet-cab.7.10`, under feature `computenet-cab.7`.
-The two ways to close the gap, wildcards in negation (for R2) and computed
-head columns (for R1), are both language changes, and that bead is where
-either would be decided.
+language reaches", the relational core does meet it. The human decision bead
+`computenet-cab.7.10`, under feature `computenet-cab.7`, was taken on
+2026-09-20: ACCEPT the relational-core reading, with R1 and R2 pinned by
+`SkillMatchQueryStructureTest` as the recorded residual. `[QRY1-API-04]` is
+therefore satisfied on the relational core; the owner's stated rationale was
+that R1 is a language-scope gap rather than a compiler defect — the language
+has no expressions in rule heads at all, and widening it now to close one
+demo's residual would grow both the compiler's and the differential oracle's
+surface in the area hardest to test, when expressions will be needed anyway
+for BB-TPCH, a better test bed for designing them — and that R2 is inherent
+to Datalog safety under `[QRY1-LANG-07]` (the direct form is UNSAFE_RULE, and
+removing the extra projection would mean weakening safety analysis). A
+follow-up for head expressions belongs with BB-TPCH scope, not under
+`computenet-cab`.
 
 **Honest limit of this entry**: the comparison is structural only. It checks
 cell classes and links, not what the factories do: keyFn, predicate and
