@@ -140,7 +140,7 @@ esac
 for f in "$SCRATCH"/dispatched-*; do
   [ -f "$f" ] || continue
   id=${f##*/dispatched-}
-  read -r at bound _ < "$f" 2>/dev/null || true
+  at=; bound=; { read -r at bound _ < "$f"; } 2>/dev/null || true
   case "${at:-}" in (*[!0-9]*|"") echo "agent $id: dispatch time unreadable — read its signals"; continue ;; esac
   case "${bound:-}" in (*[!0-9]*|"") bound=60 ;; esac
   aged=$(( (now - at) / 60 ))

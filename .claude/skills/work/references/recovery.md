@@ -16,7 +16,7 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 | Situation | Do | Why |
 |---|---|---|
 | A `task-notification` with `status=stopped` from the previous session | Recover the clock; stop every job in the previous `<scratch>/jobs`; re-stamp your holders by re-running `claim-epic.sh <epic-id>` (a hot-subtree SKIP on your own subtree → `CLAIM_SKIP_HOT=1`) and `claim-item.sh` on your `in_progress` feature; query side effects; rejoin SKILL.md "5. Work features" | The outcome is unknown, not failed, and your old holder token is dead, so a sibling's step 3 could release your epic |
-| Several budget notifications arrive at once | Run `slot-elapsed.sh` and act on its rung, which is usually Finalize | The host was suspended and the Monitor fired late, so its tiers carry no information |
+| A Monitor wake arrives long after it was due | Run `slot-elapsed.sh` and act on its rung, which is usually Finalize | The host was suspended and the Monitor fired late, so its timing carries no information |
 | The host rebooted | As above, after re-creating the scratch dir. If `claim-epic.sh` exits 1 with a LIVE or FOREIGN holder, another session has the epic: leave it and return to SKILL.md "3. Sync and claim one epic" | A reboot also clears `/private/tmp`, and with it your scratch dir |
 | Every file operation in the repository is refused, sandbox or not | Do not retry. Ship only PRs a reviewer certified whose checks are green, working from outside the repository with `--repo mboogerd/computenet`; end by listing the bead writes that did not happen | The host revoked access and only a person can restore it; local tracker state survives for the next session |
 
@@ -46,7 +46,7 @@ To continue an agent, use `SendMessage` if it exists (SKILL.md step 2). Otherwis
 
 Watchdog procedure:
 1. Read the machine with `python3 .claude/skills/work/scripts/next-batch.py --capacity` and `ps -eo pid,pcpu,comm | sort -k2 -rn | head`. If the load is external, say so in any new prompt.
-2. Read the three signals. If any moved, treat the agent as OVER with progress.
+2. Read the three signals. If any moved, it made progress before it died: continue it as above.
 3. If all three are empty, the agent never started; it counts toward the stopping rule below. Re-dispatch it with: "A previous agent stalled before taking any action. I verified it left no side effects. This is a clean start, not a resume; do not look for prior work." If you release the claim instead, comment that fact on the bead.
 
 Reviewer ladder, for a reviewer OVER with its bead unchanged since the implementer's comment (one that neither reports nor stops never wakes you):
@@ -56,12 +56,12 @@ Reviewer ladder, for a reviewer OVER with its bead unchanged since the implement
 
 If the continuation itself stalls, do not resend it: replaying a long transcript is what stalls. Instead, dispatch a fresh reviewer scoped to the open criteria, with the prior findings in its prompt. Tell it that it is the second reviewer, whether there is partial state to reconcile, which blockers you cleared, and that a stated verdict on honestly scoped evidence outranks exhaustive coverage. Clear predictable blockers before dispatching. If `origin/main` has moved and the review needs that merge, you merge, run the affected module suites, and push. If a superseded pass left a review marker, run `bd update <id> --unset-metadata review` and comment what the old marker meant.
 
-Load: follow the advice string from `next-batch.py --capacity`; it tells our load apart from host load and carries the stopping rule. What it cannot say:
+Load: follow the advice string from `next-batch.py --capacity`; it tells our load apart from host load. What it cannot say:
 
 | Situation | Do | Why |
 |---|---|---|
 | Host load, and you dispatch | Prefer a unit that needs no Gradle: bead text, reconciliation, or review of an already-green PR. Tell the agent that tool calls will be slow, to take fewer and larger steps, and to comment on its bead early | `bd` is contended too, so this work is Gradle-free, not load-free |
-| The stopping rule has fired (two deaths with no side effects, then a dead probe) | Dispatch nothing more this slot. Do orchestrator-local bookkeeping, then Finalize. A probe that reports is the only release; no load1 reading is | Agents have died at 1.4x cores after a green read at dispatch, so load1 predicts neither death nor recovery, and a hold keyed to it has idled a whole slot |
+| Two dispatches died with no side effects, at any load (the stopping rule) | Send one more alone, as a probe. If it dies too, dispatch nothing more this slot: do orchestrator-local bookkeeping, then Finalize. Only a probe that reports releases the hold; no load1 reading does | Agents have died at 1.4x cores after a green read at dispatch, so load1 predicts neither death nor recovery, and a hold keyed to it has idled a whole slot |
 | Your own capacity read times out | Count it as a death for the stopping rule, without retrying the read | A read that cannot return is itself the measurement |
 | One live agent is the session's most valuable unit | Holding every dispatch is legitimate. Comment the hold on the epic | A marginal dispatch is likelier to kill the live agent than to finish |
 

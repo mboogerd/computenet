@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for slot-elapsed.sh. Fabricates slot-start/slot-seconds so every rung
-# and every gap case runs deterministically. Expect "48 passed, 0 failed".
+# and every gap case runs deterministically. Expect "49 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slot-elapsed.sh"}
@@ -149,6 +149,8 @@ says "$d" "wake: 95m" "with no agents, wake is the time to the next rung (T-90m 
 d=$(slot 100 300); echo junk > "$d/dispatched-bad"
 says "$d" "100m of 300m elapsed" "an unreadable dispatch file does not suppress the elapsed line"
 says "$d" "agent bad: dispatch time unreadable" "an unreadable dispatch file is reported"
+d=$(slot 100 300); echo "$(( $(date -u +%s) - 10 * 60 )) 30" > "$d/dispatched-a"; echo 1 > "$d/dispatched-b"; chmod 000 "$d/dispatched-b"
+says "$d" "agent b: dispatch time unreadable" "a mode-000 dispatch file does not inherit the previous agent's time"
 d=$(slot 305 300)
 out=$("$SCRIPT" "$d" 2>&1)
 case "$out" in *wake:*) bad "EXPIRED has no wake — got: $out" ;; *) ok "EXPIRED prints no wake" ;; esac
