@@ -146,6 +146,30 @@ class ChargeIdempotencyTest {
     }
 
     @Test
+    fun `computenet-chgam - a stale undo does not forget a newer admission's reused key`() {
+        val a1 = spawn("t", "k1").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        balance("t") shouldBe 4
+
+        // Age "k1" out of the window (size 2: after these, the window holds "k2", "k3").
+        spawn("t", "k2").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        spawn("t", "k3").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        balance("t") shouldBe 2
+
+        // A2: a genuine fresh admission reusing key "k1", now back in the window.
+        spawn("t", "k1").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        balance("t") shouldBe 1
+
+        // A1's undo is stale: its own window entry is long gone, reused by A2. It must still
+        // refund A1's own debit, but it must NOT forget "k1" out from under A2.
+        a1.undo()
+        balance("t") shouldBe 2
+
+        // A replay of A2's key must still be recognised as a replay, not charged again.
+        spawn("t", "k1").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        balance("t") shouldBe 2
+    }
+
+    @Test
     fun `a zero-size window disables deduplication`() {
         val l = TokenBucketLedger(
             EconomicPolicy.placeholder().copy(

@@ -155,7 +155,7 @@ class LedgerRetentionTest {
         l.snapshot().bucket(PeerId("E"), ClaimClass.Spawn)!!.balance shouldBe 4
 
         // Refill back to bootstrap (eligible) without ever calling undo, then sweep it away.
-        now += 5_000_000_000 // five refill intervals of 1 token: 4 -> 5 == bootstrap
+        now += 5_000_000_000 // five refill intervals of 1 token: 4 -> 9 (>= bootstrap 5, eligible)
         l.sweep() shouldBe 1
         l.snapshot().bucketCount shouldBe 0
 
