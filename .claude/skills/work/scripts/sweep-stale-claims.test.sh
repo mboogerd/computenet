@@ -36,6 +36,8 @@ fixture() {
   CASE=$((CASE+1))
   D="$ROOT/c$CASE"; mkdir -p "$D/bin"
   cp "$SRC" "$D/sweep.sh"; chmod +x "$D/sweep.sh"
+  # sweep.sh sources swept-record-lib.sh from its own directory (computenet-r2knf).
+  cp "$(dirname "$SRC")/swept-record-lib.sh" "$D/swept-record-lib.sh"
   printf '%s' "$1" > "$D/rows.json"
   cat > "$D/session-holder.sh" <<EOS
 #!/usr/bin/env bash
