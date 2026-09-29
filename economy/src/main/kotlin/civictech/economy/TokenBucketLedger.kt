@@ -64,6 +64,15 @@ import kotlin.concurrent.withLock
  * lives in the bucket, so it dies with it: a replay arriving after its bucket was evicted is
  * charged again (eviction needs `held == 0`, so no hold can be replayed twice this way).
  *
+ * **Undo forgets the key** (`[ECO1-CHG-08]`, `computenet-sb9v1`): a real admission's `undo`
+ * removes its own non-null key from the window, so a later claim with the same key is charged
+ * again rather than admitted free — needed for the ancestor-walk rollback (`66m-D8`) to retry
+ * with the same site-derived key after an undo. The replay's own `undo` is a distinct no-op
+ * that never reaches this removal, so undoing a replay leaves the window, and the original
+ * admission's dedup, intact. If the bucket is evicted before a debit's `undo` runs, the refund
+ * lands in the unmapped `Bucket` and is lost — see [refundDebit] and "Bounded state" below;
+ * this cannot grant unearned budget, only lose an already-fail-safe refund.
+ *
  * **Bounded state** (`kwhw6-D9`, `[ECO1-BUD-11]`/`[ECO1-BUD-12]`, BS-22): a bucket is
  * *eligible* for eviction when `held == 0 && balance >= bootstrapLevel` — evicting it and
  * re-creating it at bootstrap later cannot hand its principal budget it did not already have.
@@ -264,8 +273,10 @@ class TokenBucketLedger(
 
             if (price == 0L) {
                 // A zero-price class is a policy choice, not a bypass: bootstrap was still
-                // resolved above (and could refuse); an admitted zero charge mutates nothing.
-                return admit(bucket, claim, BudgetOutcome.Admitted {})
+                // resolved above (and could refuse); an admitted zero charge mutates no
+                // balance, but its `undo` still forgets the idempotency key (below) so a
+                // real admission's retry is never mistaken for the replay's own no-op undo.
+                return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { forgetKey(bucket, claim.key) }))
             }
 
             if (claim.hold) {
@@ -296,14 +307,14 @@ class TokenBucketLedger(
                 }
                 bucket.balance -= price
                 bucket.held += price
-                return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { releaseHold(bucket, price) }))
+                return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { releaseHold(bucket, price, claim.key) }))
             }
 
             if (price > bucket.balance) {
                 return refuse(claimClass, DenialReason.BUDGET_EXHAUSTED, price - bucket.balance, null)
             }
             bucket.balance -= price
-            return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { refundDebit(bucket, price) }))
+            return admit(bucket, claim, BudgetOutcome.Admitted(onceOnly { refundDebit(bucket, price, claim.key) }))
         }
     }
 
@@ -350,19 +361,44 @@ class TokenBucketLedger(
         bucket.lastRefillNanos += intervals * r.intervalNanos
     }
 
-    private fun refundDebit(bucket: Bucket, price: Long) {
+    /**
+     * `kwhw6-D8` fix (`computenet-sb9v1`): a debit's `undo` forgets its own idempotency key so
+     * a later claim with the same key is charged again rather than treated as a replay. Only a
+     * *real* admission's `undo` reaches here — the replay path (above) returns its own no-op
+     * `Admitted {}` directly and never calls this, so undoing a replay leaves the window
+     * untouched, as `kwhw6-D8` requires.
+     *
+     * If [bucket] was evicted between admission and this `undo` running, the refund lands in
+     * the (now unmapped) `Bucket` object and is lost: the principal's next charge resolves a
+     * fresh bucket at bootstrap. This cannot grant budget the principal did not already have
+     * (eviction requires `held == 0 && balance >= bootstrapLevel`, so the lost refund is at
+     * most the gap above bootstrap) — see "Bounded state" above — and is accepted rather than
+     * fixed, per `computenet-sb9v1`.
+     */
+    private fun refundDebit(bucket: Bucket, price: Long, key: Any?) {
         synchronized(bucket) {
             bucket.balance = minOf(bucket.capacity - bucket.held, bucket.balance + price)
+            forgetKey(bucket, key)
         }
     }
 
-    private fun releaseHold(bucket: Bucket, price: Long) {
+    /** See [refundDebit]: the same idempotency-key and evicted-bucket handling applies to a hold's release. */
+    private fun releaseHold(bucket: Bucket, price: Long, key: Any?) {
         synchronized(bucket) {
             bucket.held -= price
             bucket.balance += price
             bucket.issuerName?.let { issuer ->
                 heldByIssuer.computeIfPresent(issuer) { _, sum -> (sum - price).takeIf { it > 0L } }
             }
+            forgetKey(bucket, key)
+        }
+    }
+
+    /** Removes [key] from the bucket's idempotency window, if present. Caller holds the bucket's monitor. */
+    private fun forgetKey(bucket: Bucket, key: Any?) {
+        if (key == null) return
+        if (bucket.recentSet?.remove(key) == true) {
+            bucket.recentOrder?.remove(key)
         }
     }
 
