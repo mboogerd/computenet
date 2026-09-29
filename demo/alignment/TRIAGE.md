@@ -57,6 +57,12 @@ ordered board back onto `bd` ids with no lookup table), and writes Jev's
 ratings. It is idempotent: an unchanged tracker appends nothing to the journal,
 so it is safe on every boot.
 
+**A failed seed writes nothing** (`computenet-1f8b4`). The candidate fetch runs
+before the first write and before the socket opens, so a bad workspace path, a
+missing `bd` or a refused export takes the process down with the error instead
+of leaving a reachable, *empty* board — which an operator cannot tell apart from
+a tracker that genuinely has no ready epics.
+
 A candidate that *leaves* `bd ready` (closed, deferred, newly blocked) keeps its
 row rather than being removed — `removeIdea` cascades through every
 participant's ratings and judgements, and that is irreversible human input.
@@ -69,6 +75,22 @@ a `/work` feature worktree and has no bead of its own:
 ```bash
 git worktree add ../computenet-worktrees/triage origin/main
 ```
+
+**From that worktree, `--seed-beads` must name the main checkout by ABSOLUTE
+path.** The relative `../..` in the quick-start above resolves against `:run`'s
+working directory, which is the *subproject* — correct from the main checkout,
+and from the triage worktree it becomes `<worktree>/computenet`, which does not
+exist. A worktree is also not itself a usable beads workspace. So:
+
+```bash
+cd ../computenet-worktrees/triage
+./gradlew :demo:alignment:run --args="8097 \
+  --seed-beads /absolute/path/to/your/computenet \
+  --journal $HOME/.local/state/computenet-triage/triage.jsonl"
+```
+
+That is the design, not a workaround: the service reads the live `.beads` from
+the main checkout and never writes to it.
 
 Keep the **journal and run-dir outside the tree** (`~/.local/state/computenet-triage/`
 above) so `git status` in the worktree stays clean and rebuilding the worktree

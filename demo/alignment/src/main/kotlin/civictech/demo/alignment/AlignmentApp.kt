@@ -1170,8 +1170,14 @@ internal fun seedBeadsTriage(
     source: CandidateSource,
     facilitator: String = "facilitator",
 ): Int {
-    app.ensureTopic(TRIAGE_TOPIC, "Triage", facilitator, Eisenhower.DIMENSIONS)
+    // The fetch comes BEFORE the first write (computenet-1f8b4): it is the step
+    // that can fail — a bad workspace path, a `bd` that is not on PATH, a
+    // refused export — and a failure after `ensureTopic` would journal a topic
+    // and its dimensions and then leave that half-seeded round on disk for the
+    // next boot to inherit. Fetching first means a failed seed writes nothing
+    // at all.
     val candidates = source.candidates()
+    app.ensureTopic(TRIAGE_TOPIC, "Triage", facilitator, Eisenhower.DIMENSIONS)
     for (c in candidates) app.seedIdea(TRIAGE_TOPIC, c.id, c.title, c.description, facilitator)
     // Jev rates the ROUND, not the item: its terms are rank-normalized across the
     // whole candidate set, so every axis is one batch call. A candidate it abstains
@@ -1185,10 +1191,17 @@ internal fun seedBeadsTriage(
 }
 
 fun main(args: Array<String>) {
-    val app = AlignmentApp(demoPort(args), journalPath = args.flag("--journal")?.let { Path.of(it) }).start()
+    val app = AlignmentApp(demoPort(args), journalPath = args.flag("--journal")?.let { Path.of(it) })
+    // Seed BEFORE the socket opens (computenet-1f8b4), the discipline
+    // :demo:beadsmirror states for itself: "the socket opens after every
+    // workspace's start-time baseline has swapped its projector in". A seed
+    // that throws must take the process down instead of leaving a reachable,
+    // EMPTY triage board — which an operator cannot tell apart from a tracker
+    // that genuinely has no ready epics.
     args.flag("--seed-beads")?.let { workspace ->
         val n = seedBeadsTriage(app, BdCandidateSource(Path.of(workspace)))
         println("computenet alignment: seeded $n ready epics from $workspace into /t/${TRIAGE_TOPIC.value}")
     }
+    app.start()
     println("computenet alignment: http://localhost:${app.boundPort}")
 }

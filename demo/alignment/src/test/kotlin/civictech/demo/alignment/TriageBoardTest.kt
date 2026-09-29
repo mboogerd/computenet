@@ -13,6 +13,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -149,6 +150,25 @@ class TriageBoardTest {
         seedBeadsTriage(app, source(top)) // bottom is gone from the tracker's ready set
         val b = row(probe.get("/topics/triage/aggregate").body(), "computenet-bot")!!
         assertEquals(2, b["raters"]!!.jsonPrimitive.content.toInt(), "ann's rating survived the re-seed: $b")
+    }
+
+    /**
+     * A failed candidate fetch writes NOTHING (computenet-1f8b4): the fetch is
+     * the step that can fail — a bad workspace path, no `bd` on PATH, a refused
+     * export — and a failure after the topic was journaled would leave a
+     * half-seeded round on disk for the next boot to inherit, serving an empty
+     * board an operator cannot tell apart from a genuinely empty ready queue.
+     */
+    @Test
+    fun `a failed candidate fetch leaves no topic and an empty journal`() {
+        val journal = tmpJournal()
+        val boom = CandidateSource { error("bd ready exited 1 against /nope") }
+        withApp(journal) { app, probe ->
+            val thrown = assertFailsWith<IllegalStateException> { seedBeadsTriage(app, boom) }
+            assertTrue("bd ready exited 1" in (thrown.message ?: ""), thrown.message ?: "")
+            assertEquals("[]", probe.get("/topics").body(), "no topic was created")
+        }
+        assertTrue(Files.notExists(journal) || Files.readAllLines(journal).isEmpty(), "the journal must be untouched")
     }
 
     // ── the three rater classes together ─────────────────────────────────
