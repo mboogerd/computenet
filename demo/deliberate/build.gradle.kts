@@ -1,5 +1,6 @@
 plugins {
-    id("buildsrc.convention.kotlin-jvm")
+    // Generated typed port ids for the routed wiring (computenet-jnkvu).
+    id("buildsrc.convention.ksp-cell")
     alias(libs.plugins.kotlin.plugin.serialization)
     application
 }
