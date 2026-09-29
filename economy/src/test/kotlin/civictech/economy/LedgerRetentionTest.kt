@@ -149,6 +149,27 @@ class LedgerRetentionTest {
     }
 
     @Test
+    fun `(g) sb9v1 - a debit undone after its bucket was evicted refunds into the discarded bucket and is lost`() {
+        val l = ledger()
+        val admitted = l.spawn("E").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        l.snapshot().bucket(PeerId("E"), ClaimClass.Spawn)!!.balance shouldBe 4
+
+        // Refill back to bootstrap (eligible) without ever calling undo, then sweep it away.
+        now += 5_000_000_000 // five refill intervals of 1 token: 4 -> 5 == bootstrap
+        l.sweep() shouldBe 1
+        l.snapshot().bucketCount shouldBe 0
+
+        // The original debit's undo now runs against the discarded Bucket object: fail-safe
+        // (no budget is granted), but the refund itself is lost rather than reaching a live
+        // bucket, per the "Undo forgets the key" / "Bounded state" KDoc.
+        admitted.undo()
+
+        // The next charge for "E" creates a fresh bucket at bootstrap, unaffected by the lost refund.
+        l.spawn("E").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        l.snapshot().bucket(PeerId("E"), ClaimClass.Spawn)!!.balance shouldBe 4
+    }
+
+    @Test
     fun `(f) bucket count stays within maxBuckets however many principals are ever charged`() {
         val l = ledger()
         for (i in 0 until 1_000) {

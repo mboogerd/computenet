@@ -42,9 +42,12 @@ class ChargeIdempotencyTest {
         balance("p") shouldBe 4
         ledger.snapshot().admitted[ClaimClass.Spawn] shouldBe 2
 
-        // The replay's undo is a no-op: it must not refund the original debit.
+        // The replay's undo is a no-op: it must not refund the original debit, and (sb9v1) it
+        // must not forget the key either — the original admission's dedup survives it.
         replay.undo()
         replay.undo()
+        balance("p") shouldBe 4
+        spawn("p", "k1").shouldBeInstanceOf<BudgetOutcome.Admitted>()
         balance("p") shouldBe 4
 
         spawn("p", "k2").shouldBeInstanceOf<BudgetOutcome.Admitted>()
@@ -92,6 +95,54 @@ class ChargeIdempotencyTest {
             it.balance shouldBe 4
             it.held shouldBe 1
         }
+    }
+
+    @Test
+    fun `sb9v1 - undoing a real debit forgets its key, so a retry with the same key is charged again`() {
+        val admitted = spawn("s", "k1").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        balance("s") shouldBe 4
+
+        admitted.undo()
+        balance("s") shouldBe 5
+
+        // Without the fix this second charge would hit the replay branch (key "k1" still in the
+        // window) and be admitted free, at balance 5. It must debit again.
+        spawn("s", "k1").shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        balance("s") shouldBe 4
+        ledger.snapshot().admitted[ClaimClass.Spawn] shouldBe 2
+    }
+
+    @Test
+    fun `sb9v1 - undoing a real hold's release forgets its key, so a retry with the same key holds again`() {
+        val l = TokenBucketLedger(
+            EconomicPolicy.placeholder().copy(
+                unvouchedBootstrap = mapOf(ClaimClass.Retention to 5L),
+                retention = EconomicPolicy.Retention(idleNanos = 1_000, maxBuckets = 3, recentKeys = 2),
+            ).applied(),
+            { now },
+            "idem-scope",
+        )
+        val claim = BudgetClaim(PeerStamp(PeerId("h2")), ClaimClass.Retention, key = "hk1", hold = true)
+
+        val admitted = l.charge(claim).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        l.snapshot().bucket(PeerId("h2"), ClaimClass.Retention)!!.let {
+            it.balance shouldBe 4
+            it.held shouldBe 1
+        }
+
+        admitted.undo()
+        l.snapshot().bucket(PeerId("h2"), ClaimClass.Retention)!!.let {
+            it.balance shouldBe 5
+            it.held shouldBe 0
+        }
+
+        // Same key, retried after undo: must hold again, not replay.
+        l.charge(claim).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        l.snapshot().bucket(PeerId("h2"), ClaimClass.Retention)!!.let {
+            it.balance shouldBe 4
+            it.held shouldBe 1
+        }
+        l.snapshot().admitted[ClaimClass.Retention] shouldBe 2
     }
 
     @Test
