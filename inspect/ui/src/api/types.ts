@@ -409,7 +409,18 @@ export interface HeartbeatEvent {
  *  constant — see `BOUNDARY_SEAMS` below, which
  *  `test/boundary-denials-sync.test.ts` (computenet-nu49) checks against
  *  that file in both directions so the two cannot drift apart unnoticed. */
-export const BOUNDARY_SEAMS = ['ADMISSION', 'LINK_AUTHORITY', 'PROTOCOL_AUTHORITY', 'DISCLOSURE', 'INTEGRITY'] as const;
+export const BOUNDARY_SEAMS = [
+  'ADMISSION',
+  'LINK_AUTHORITY',
+  'PROTOCOL_AUTHORITY',
+  'DISCLOSURE',
+  'INTEGRITY',
+  /** The G-28 spawn walk refusing a remote-driven spawn (ECO1, epic
+   *  `computenet-66m`, decision `66m-D10`). A host-level admission predicate,
+   *  not a membrane seam: it runs at `ManagedHost` spawn, before any
+   *  `Exposure`/`BoundaryPolicy` is consulted. */
+  'HOST_ADMISSION',
+] as const;
 
 export type BoundarySeam = (typeof BOUNDARY_SEAMS)[number];
 
@@ -506,6 +517,25 @@ export const DENIAL_REASONS = [
    *  `UNVOUCHED`/`STATEMENT_EXPIRED`, where the presented statements do not
    *  back the key at all. */
   'IDENTITY_MISMATCH',
+  /** A `BudgetLedger` held a bucket for this principal's `ClaimClass` and the
+   *  claim's price exceeded what remains in it (ECO1, epic `computenet-66m`,
+   *  `[ECO1-DEN-01]`). Distinct from `BUDGET_NOT_GRANTED`: this is a
+   *  *decision* against a nonzero bucket; `BUDGET_NOT_GRANTED` means there
+   *  was never a bucket to decide against. */
+  'BUDGET_EXHAUSTED',
+  /** A `BudgetLedger` resolved this principal's bootstrap grant for the
+   *  claimed `ClaimClass` to zero — unvouched, or an issuer row granting zero
+   *  (ECO1, epic `computenet-66m`, `[ECO1-MINT-04r]`). Distinct from
+   *  `UNVOUCHED` (an admission failure — this principal is already on a live
+   *  link) and from `NOT_ADMITTED` (the allowlist seam — this is never about
+   *  whether the peer may connect). */
+  'BUDGET_NOT_GRANTED',
+  /** A `BudgetLedger` threw, or otherwise could not reach a decision, while
+   *  charging a claim (ECO1, epic `computenet-66m`, `[ECO1-CHG-10]`).
+   *  Fail-closed. Distinct from `BUDGET_EXHAUSTED`, a completed decision
+   *  against a known balance: this reason means no decision was ever
+   *  reached. */
+  'LEDGER_FAILURE',
 ] as const;
 
 export type DenialReason = (typeof DENIAL_REASONS)[number];

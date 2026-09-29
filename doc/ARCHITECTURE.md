@@ -89,7 +89,9 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `MessageContext` (waves, `Timestamp`, `TagFrontier`, `ReBaselineNotice`),
   `Ownership` (`Owned`/`Leased`/`Borrowed`/`Frozen`/`Redacted`),
   `Propagate<T>`, `Consumer<T>`, `Stateful`, `MergeablePayload`, color markers
-  (`BlockingCell`/`SuspendingCell`), serializers.
+  (`BlockingCell`/`SuspendingCell`), serializers, `Budget`
+  (`ClaimClass`/`BudgetClaim`/`BudgetOutcome`/`BudgetLedger` — an inert seam,
+  ECO1, epic `computenet-66m`).
 - `.nature` — runtime twin of the KSP scan: `manifestOf(Class)` derives
   `Manifest` tags from marker interfaces; `NatureNegotiation`/`Reconciliation`.
 - `.port` — port ADT and mechanism: `Port`, `PortRef`, `PortRegistry`,
