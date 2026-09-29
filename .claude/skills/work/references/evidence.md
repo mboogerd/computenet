@@ -95,60 +95,60 @@ checks on it prove the build is not broken, and nothing about content.
 ## Mutation checks
 
 A mutation counts when it lands where you aimed, compiles, reddens the
-criterion's own assertion, and is provably reverted. **Who mutates:** A file inside your `metadata.files` claim is yours; outside
-it, the reviewer's, whose dispatch grants it. Bash editing (`perl -pi`,
-`sed -i ''`) is for a file you may edit when the Edit tool refuses, never a
-way to change a file you may not.
+criterion's own assertion at class scope, and is provably reverted. Mutate
+inside your `metadata.files` claim; outside it, the reviewer mutates, as its
+dispatch grants. Bash editing (`perl -pi`, `sed -i ''`) is for a file you may
+edit when the Edit tool refuses, never for one you may not.
 
-The order is the safety:
-
-1. Commit your deliverable.
-2. Leave the marker, for test mutations too. Never commit while it exists;
-   SKILL.md 5a treats a worktree holding it as a half-applied mutation.
-   ```bash
-   echo "<file and call site, what you removed>" > <your-worktree>/.mutation-in-progress
-   ```
-3. Copy each file aside before touching it:
-   `cp <file> "<scratch>/pre-mutation-<basename>"`.
-4. Mutate by editing the working tree, never with a git command. The mutation
-   must not overlap the original under any matcher the code might use: rename
-   `DenialReason` to `Foo`, not `DenialReasonRenamed`. A scripted edit's anchor
-   must count once under `grep -cF '<anchor>' <file>`.
-5. Prove it landed where you aimed: `git diff HEAD -- <file>` is non-empty and
-   its hunk is in the declaration you meant. Read the whole output rather than
-   grepping it. For an untracked file, grep the file for the mutated text.
-6. Run with `--rerun --no-build-cache` into `"<scratch>/mut.log"`, then:
-   ```bash
-   grep -aE '^e:|BUILD' "<scratch>/mut.log"
-   ```
-   An `e:` line means it never compiled: no test ran, the XML on disk is old,
-   and nothing was caught.
-7. Name the assertion that went red and its message. A red from an earlier
-   assertion, a throwing helper, a fixture, or another test is not the
-   criterion discriminating; narrow the mutation until the criterion's own
-   assertion fails.
-8. Revert and prove it; `diff` must print nothing. If the mutation created the
-   file, `rm` it instead. Never `git stash` ([traps.md](traps.md#git-and-worktrees)).
-   ```bash
-   cp "<scratch>/pre-mutation-<basename>" <file> && diff "<scratch>/pre-mutation-<basename>" <file>
-   ```
-9. Remove the marker, then confirm `ls <your-worktree>/.mutation-in-progress`
-   reports no such file; it is gitignored, so `git status` cannot show it.
+1. Commit your deliverable; `git checkout -- <file>` would take it with the
+   mutation, and `git stash` is one stack shared by every session here.
+2. Leave the marker, for test mutations too, and never commit while it exists
+   (SKILL.md 5a reads it as a half-applied mutation):
+   `echo "<file and call site, what you removed>" > <your-worktree>/.mutation-in-progress`
+3. Copy each file aside: `cp <file> "<scratch>/pre-mutation-<basename>"`.
+4. Edit the file where it lives, never through git's index or stash and never
+   as a relocated copy: a script resolving siblings from its own directory
+   fails wholesale when moved, and that red reads as discrimination. An old
+   revision is written over it: `git show <rev>:<path> > <path>`. Don't overlap
+   the original under any matcher: rename `DenialReason` to `Foo`, not
+   `DenialReasonRenamed`; a scripted anchor's `grep -cF '<anchor>' <file>` is 1.
+5. Prove it landed: `git diff HEAD -- <file>` is non-empty and its hunk is in
+   the declaration you meant; read the whole output, not a grep of it. For an
+   untracked file, grep it for the mutated text.
+6. Run the test's whole class, never the one test alone (an async or
+   order-dependent false pass shows only beside its siblings), with
+   `--rerun --no-build-cache` into `"<scratch>/mut.log"`, then
+   `grep -aE '^e:|BUILD' "<scratch>/mut.log"`. An `e:` line means it never
+   compiled: no test ran, the XML on disk is stale, and nothing was caught.
+7. Name the assertion that went red and its message. A red at setup, a
+   fixture await, a throwing helper, an earlier assertion or another test is
+   not the criterion discriminating: narrow the mutation until the criterion's
+   own assertion fails. A mutant that passes at class scope does not count.
+8. Revert from your copy, never with `git stash` or `git checkout`, and prove
+   it: the `diff` prints nothing. If the mutation created the file, `rm` it.
+   `cp "<scratch>/pre-mutation-<basename>" <file> && diff "<scratch>/pre-mutation-<basename>" <file>`
+9. Remove the marker; `ls <your-worktree>/.mutation-in-progress` must say no
+   such file (`git status` cannot: it is gitignored).
 10. Run the confirming test green against the restored file.
 
 Report the file and call site, the test, the assertion and its message. If the
 strongest mutation was unavailable, name it rather than silently substituting.
 
-**Concord scenarios:** mutate the scenario twice — flip the asserted value, then
-move the observation window until it reddens with a non-zero observed count,
-which shows a count assertion reads a live counter.
+**A test that SKIPs on this host** (multicast-gated, on macOS) is mutated in a
+local Linux container, not by pushing a mutated commit to CI. Copy the worktree
+in, or mount it `:ro` with build output on a container path; mount other host
+paths `:ro` or not at all; install toolchains inside it. If a host path was
+written, report it rather than repairing it.
+
+**Concord scenarios:** mutate twice — flip the asserted value, then move the
+observation window until it reddens with a non-zero observed count, which
+shows a count assertion reads a live counter.
 
 **Normative prose** (a `doc/spec/` requirement, a `covers:` line, a regenerated
-`CONCORDANCE.md`) has no test to redden. Perturb the binding it creates — point
-a `covers:` at a nonexistent id, show
-`./gradlew :concord:concordanceGate --rerun --no-build-cache` fail, revert.
-Whether the sentence is true of the code is still a clause-by-clause reading
-against the implementation.
+`CONCORDANCE.md`) has no test to redden: point a `covers:` at a nonexistent id,
+show `./gradlew :concord:concordanceGate --rerun --no-build-cache` fail,
+revert. Whether the sentence is true of the code is still a clause-by-clause
+reading against the implementation.
 
 **Test-only tasks,** whose production file is outside the claim: cite a
 sibling's mutation evidence on the same branches, labelled corroborating, or
