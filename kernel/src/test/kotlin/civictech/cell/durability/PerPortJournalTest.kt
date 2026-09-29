@@ -314,4 +314,43 @@ class PerPortJournalTest {
         u2.membership() shouldBe setOf("b1")
         c2.membership() shouldBe setOf("a1", "b1")
     }
+
+    /**
+     * Degenerate-case fidelity (R-E "the per-cell `journalFor` and whole-host `journal` forms
+     * SHALL remain byte-identical degenerate cases"), found in the feature review: a host
+     * given BOTH `journal` and a `journalFor` that answers `null` for a cell (the shape
+     * timetravel's reconstruction tests use) must keep that cell volatile everywhere — pre-D4
+     * the explicit selector's `null` won outright. The cell-level journal must not fall back
+     * to the whole-host `journal`, or `checkpoint` snapshots a volatile cell into J and a
+     * later recovery restores state that was never durable.
+     *
+     * Before the repair: expected [] but was ["x"].
+     */
+    @Test
+    fun `degenerate - journalFor answering null keeps a cell volatile even beside a whole-host journal`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val vRef = CellRef(UUID.randomUUID())
+        val selector: (CellRef) -> Journal? = { ref -> if (ref == vRef) null else journal }
+
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal, journalFor = selector)
+        val v = SetCell<String>(vRef)
+        host.managementInlet.call.spawn(v)
+        controller.runToIdle()
+        setOps(host, vRef).add("x")
+        controller.runToIdle()
+        v.membership() shouldBe setOf("x")
+        decodedFrames(journal).size shouldBe 0
+
+        host.checkpoint(journal)
+        controller.runToIdle()
+
+        val host2 = ManagedHost(scheduler = controller.scheduler(), journal = journal, journalFor = selector)
+        val v2 = SetCell<String>(vRef)
+        host2.managementInlet.call.spawn(v2)
+        controller.runToIdle()
+        host2.recoverFrom(journal)
+        controller.runToIdle()
+        v2.membership() shouldBe emptySet()
+    }
 }

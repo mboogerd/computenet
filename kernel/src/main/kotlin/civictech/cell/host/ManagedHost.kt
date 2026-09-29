@@ -208,7 +208,7 @@ open class ManagedHost(
      * The unique [Journal] instance ONE cell's journaled ports all name (D4).
      *
      * When no explicit [journalForPort] was given, this is exactly today's per-cell
-     * answer — `journalFor(cellRef) ?: journal` — with no port enumeration and no new
+     * answer — `journalFor(cellRef)` if given (its null wins), else `journal` — with no port enumeration and no new
      * refusal: a whole-cell selector was never port-aware, so applying the new
      * per-port rules to it retroactively would refuse a cell's ordinary `outlet` port
      * (which every existing selector "answers" the same way it answers every other
@@ -234,7 +234,9 @@ open class ManagedHost(
      * spawn; the result is cached in [cellJournals].
      */
     private fun cellJournal(cellRef: CellRef, cell: Cell): Journal? {
-        val explicit = journalForPort ?: return journalFor?.invoke(cellRef) ?: journal
+        // An explicit journalFor's null wins outright (volatile), exactly as pre-D4's
+        // `journalFor ?: { journal }` — never a fallback to the whole-host journal.
+        val explicit = journalForPort ?: return if (journalFor != null) journalFor.invoke(cellRef) else journal
         val registry = PortRegistry.of(cell)
         var chosen: Journal? = null
         var chosenPort: String? = null
