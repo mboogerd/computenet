@@ -133,19 +133,25 @@ reading it is cheaper *and* more accurate. So the judge is arithmetic over the
 fields `bd ready --json` already returns — deterministic, free, offline, and
 unit-testable against stated numbers rather than a recorded fixture.
 
-With `p = (3 − priority) / 3` (P0 → 1.0, P3 → 0.0),
-`d = min(dependent_count, 5) / 5`, and `a = min(age_days, 60) / 60`:
+### The two axes
 
-| axis | formula | dominated by |
+With `p = (3 − priority) / 3` (P0 → 1.0, P3 → 0.0), and `d` and `a` the
+candidate's `dependent_count` and age in days each scaled by **the round's own
+maximum**:
+
+| axis | raw term | dominated by |
 |---|---|---|
-| `importance` | `1 + 8·(0.35·p + 0.65·d)` | `d` — structural consequence |
-| `urgency` | `1 + 8·(0.65·p + 0.35·a)` | `p` — declared priority |
+| `importance` | `0.35·p + 0.65·d` | `d` — structural consequence |
+| `urgency` | `0.65·p + 0.35·a` | `p` — declared priority |
 
-Each term is in `[0, 1]` and each axis' weights sum to 1, so both outputs are in
-`[1, 9]` by construction with no clamping. The two axes are deliberately **not**
-both driven by `priority`: that would collapse the 2×2 onto its diagonal and
-make the matrix decorative. `TriageTest` asserts that two candidates with equal
-priority and opposite dependent/age profiles land in *opposite* quadrants.
+Each raw term is then **rank-normalized within the round** onto `[1, 9]`: the
+round's lowest becomes 1.0, its highest 9.0, and ties share the midpoint of the
+positions they span.
+
+The two axes are deliberately **not** both driven by `priority`: that would
+collapse the 2×2 onto its diagonal and make the matrix decorative. `TriageTest`
+asserts that two candidates with equal priority and opposite dependent/age
+profiles land in *opposite* quadrants.
 
 Reading of each term, so a human who disagrees knows what they are arguing with:
 `d` is *how much this unblocks* — an epic five others wait on is important
@@ -153,17 +159,41 @@ whatever its label says. `a` is *cost of delay accrued* — an item untouched fo
 two months is treated as **more** urgent, because neglect is the failure this
 board exists to surface.
 
-**Abstention is a real answer.** With no usable priority, `Jev.rate` returns
-null and the seeding path writes no rating, leaving the slot *absent* — which is
-alignment's honest unrated state, never a middling 5. That mirrors the real
-`JevJudge`'s `knowledge` gate returning `OUTSIDE_KNOWLEDGE` whatever the score
-said: a judge that cannot see the input should decline, not average.
+### Jev rates the round, not the item
 
-**The calibration knob** is `Jev.DEPENDENT_CAP` and `Jev.AGE_CAP_DAYS`, exposed
-rather than inlined. They are judgements about *this* backlog's shape — how many
-dependents count as "a lot", how long is "stale" — and the first real round is
-expected to move them. Changing one re-rates Jev on the next seed and leaves
-every human rating untouched.
+The rank normalization is not a flourish, and it was measured rather than
+reasoned. An earlier version mapped the raw terms onto `[1, 9]` with absolute
+caps (`min(dependent_count, 5) / 5`, `min(age_days, 60) / 60`). Run against the
+real ready-epic queue on 2026-09-29 it put **16 of 18 epics in `drop` and none
+in `do`**: epic-level `dependent_count` is almost always 0 in this tracker — the
+dependency edges live on features — so the importance term could not
+structurally cross the midpoint and the 2×2 collapsed onto one corner.
+
+Rank-normalizing spreads any distribution, so the quadrants populate whatever
+the corpus looks like (`delegate=6 do=3 drop=4 schedule=5` on that same queue).
+It also makes Jev's claim an honest one — "these are the important ones *of this
+set*" — and matches how a human uses the Compare view, placing every idea on one
+axis relative to the others rather than against an absolute anchor.
+
+**The consequence to know about:** Jev's ratings are relative, so a re-seed whose
+candidate set changed re-rates Jev. Human ratings are untouched, and an
+unchanged set re-derives identical values, so the seed stays journal-silent.
+
+**Abstention is a real answer.** A candidate with no usable priority is absent
+from `Jev.rate`'s answer entirely and the seeding path writes no rating for it,
+leaving the slot *absent* — which is alignment's honest unrated state, never a
+middling 5. That mirrors the real `JevJudge`'s `knowledge` gate returning
+`OUTSIDE_KNOWLEDGE` whatever the score said: a judge that cannot see the input
+should decline, not average. Abstainers are left out of the normalization too,
+so one unrateable row does not distort the rest of the round.
+
+**Where to calibrate.** There are no cap constants any more — the scaling is the
+round's own. The tuning surface is the two weight literals `Jev.rate` passes to
+`rawTerms`: `dependentWeight = 0.65` for importance and `ageWeight = 0.35` for
+urgency, with `priority` taking the remainder in both cases. They set which
+signal dominates each axis, and the first real round is expected to move them.
+Changing one re-rates Jev on the next seed and leaves every human rating
+untouched.
 
 ## Deliberately not in this phase
 
