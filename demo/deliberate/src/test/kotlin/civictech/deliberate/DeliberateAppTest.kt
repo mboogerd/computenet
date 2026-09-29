@@ -1,7 +1,7 @@
 package civictech.deliberate
 
+import civictech.cell.host.ManagedHost
 import civictech.testkit.HttpProbe
-import civictech.testkit.awaitUntil
 import civictech.testkit.awaitSseData
 import civictech.testkit.boundedHttpClient
 import kotlinx.serialization.json.Json
@@ -23,6 +23,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /** The HTTP surface (SPEC §6) over real sockets, with a fake judge and fake proposers. */
 class DeliberateAppTest {
@@ -503,13 +504,8 @@ class DeliberateAppTest {
                 val claims = g.nodes.filter { it.kind == "CLAIM" }
                 claims.size == 1 + 4 + 3 * 4 && claims.count { it.status in active } == 1
             }
-            // Credence propagation settles asynchronously: take the graph once two reads agree.
-            var before = probe1.graph()
-            awaitUntil("credences settle before the restart") {
-                Thread.sleep(100)
-                val next = probe1.graph()
-                (next == before).also { before = next }
-            }
+            // Credence propagation settles asynchronously: take the graph behind the host's fence.
+            val before = settled(first, probe1, idle = false)
             first.stop() // persists, then interrupts the blocked round; a kill at this instant
             apps.remove(first)
 
@@ -555,15 +551,35 @@ class DeliberateAppTest {
         override fun saturation(ctx: ClaimContext, side: Side) = 0.0
     }
 
-    /** The graph once two reads 100 ms apart agree (propagation settles asynchronously). */
-    private fun HttpProbe.settled(): GraphDto {
-        var before = graph()
-        awaitUntil("credences settle") {
-            Thread.sleep(100)
-            val next = graph()
-            (next == before).also { before = next }
-        }
-        return before
+    /**
+     * [app]'s host, for [settled]'s fence. DeliberateApp keeps it private and has no
+     * internal accessor, so the test reads the field; a rename fails here, loudly.
+     */
+    private fun hostOf(app: DeliberateApp): ManagedHost =
+        DeliberateApp::class.java.getDeclaredField("host").apply { isAccessible = true }.get(app) as ManagedHost
+
+    /**
+     * The graph once credence propagation has finished: the engine has no round in
+     * flight (so it submits no more graph mutations), then the host's own quiescence
+     * fence has run (every queued delivery and its whole same-host cascade applied).
+     *
+     * This replaced "two /graph reads 100 ms apart agree" (computenet-sykeu,
+     * computenet-p6tv3). Equal reads mean only that nothing changed during the window,
+     * which a CPU-starved host produces mid-propagation as readily as a settled one.
+     * With the host held off in 150 ms slices (a management-band task sleeping, 30 ms
+     * free in between) that heuristic returned an unsettled graph in every run, and
+     * both CI signatures followed 5/5: the sixty-claim restart's dfquad mismatch, and
+     * the repeated-restart await timing out against a `before` no restart converges
+     * to. The fenced read is exact under the same starvation, and a restart lands on it
+     * to the bit. Evidence: $HOME/computenet-runs/computenet-sykeu/.
+     *
+     * [idle] = false skips the engine wait, for a test holding a round blocked on
+     * purpose; the blocked round submits nothing while it waits.
+     */
+    private fun settled(app: DeliberateApp, probe: HttpProbe, idle: Boolean = true): GraphDto {
+        if (idle) assertTrue(app.engine.awaitIdle(60.seconds), "the engine did not go idle")
+        hostOf(app).quiescence().await(60_000, "deliberate credences settle")
+        return probe.graph()
     }
 
     private fun dirBytes(dir: File) = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
@@ -593,7 +609,7 @@ class DeliberateAppTest {
             val (first, probe1) = app(config = config, judge = VariedJudge(), dataDir = dir)
             val root = probe1.ask("Restart twice?")
             probe1.awaitGraph { it.idle(root) }
-            val before = probe1.settled()
+            val before = settled(first, probe1)
             assertTrue(before.nodes.size > 20, "a tree with depth: ${before.nodes.size} nodes")
             assertTrue(before.nodes.any { it.spreadHigh - it.spreadLow > 1e-3 }, "the layers disagree somewhere")
             first.stop()
@@ -607,7 +623,7 @@ class DeliberateAppTest {
                     }
                 }
                 assertSameCredences(before, after)
-                assertSameCredences(before, probe.settled())
+                assertSameCredences(before, settled(app, probe))
                 app.stop()
                 apps.remove(app)
                 sizes += dirBytes(dir)
@@ -635,7 +651,7 @@ class DeliberateAppTest {
             val (first, probe1) = app(config = config, judge = VariedJudge(), dataDir = dir)
             val root = probe1.ask("How big is a deliberation on disk?")
             probe1.awaitGraph { it.idle(root) }
-            val before = probe1.settled()
+            val before = settled(first, probe1)
             val claims = before.nodes.count { it.kind == "CLAIM" }
             assertTrue(claims in 55..60, "claims: $claims")
             // While it runs, the journal holds metadata frames and nothing derived.
@@ -647,8 +663,18 @@ class DeliberateAppTest {
             }
             // What a kill -9 at this instant leaves behind: the structure log and a journal of
             // uncompacted frames (both written through, the journal synced per frame).
+            // The copy must not interleave with a write: the engine's persister appends the
+            // metadata diff every 100 ms, and copyRecursively throws "Source file wasn't
+            // copied completely" when host.journal grows under it (computenet-sykeu). So hold
+            // the persister off (persistNow and its schedule share the engine's monitor),
+            // flush what it owes, fence until every staged frame is journaled, then copy
+            // an instant at which a kill would leave exactly these bytes.
             val crashed = Files.createTempDirectory("deliberate-space-crash").toFile()
-            dir.copyRecursively(crashed, overwrite = true)
+            synchronized(first.engine) {
+                first.engine.persistNow()
+                hostOf(first).quiescence().await(60_000, "deliberate journal writes land before the crash copy")
+                dir.copyRecursively(crashed, overwrite = true)
+            }
             // A quiescent checkpoint compacts it while the app keeps running.
             val uncompacted = live.length()
             first.checkpointNow()
@@ -662,7 +688,7 @@ class DeliberateAppTest {
             repeat(3) {
                 val (app, probe) = app(config = config, judge = VariedJudge(), dataDir = dir)
                 probe.awaitGraph { g -> g.nodes.size == before.nodes.size && g.idle(root) }
-                assertSameCredences(before, probe.settled())
+                assertSameCredences(before, settled(app, probe))
                 app.stop()
                 apps.remove(app)
                 sizes += dirBytes(dir)
@@ -679,7 +705,7 @@ class DeliberateAppTest {
             try {
                 val (app, probe) = app(config = config, judge = VariedJudge(), dataDir = crashed)
                 probe.awaitGraph { g -> g.nodes.size == before.nodes.size && g.idle(root) }
-                assertSameCredences(before, probe.settled())
+                assertSameCredences(before, settled(app, probe))
                 assertTrue(File(crashed, "host.journal").length() < uncompacted, "boot compacts the replayed journal")
                 app.stop()
                 apps.remove(app)
