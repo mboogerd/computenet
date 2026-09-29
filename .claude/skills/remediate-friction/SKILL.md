@@ -30,7 +30,7 @@ The lane works in two modes, and the nightly scheduled run does both:
 
 ```bash
 echo "${BEADS_ACTOR:?}"
-M=$(git worktree list | head -1 | awk '{print $1}')      # the main checkout
+M=$(git worktree list --porcelain | sed -n '1s/^worktree //p')   # the main checkout
 [ "$(bd where | head -1)" = "$M/.beads" ] || { echo "bd resolves to $(bd where | head -1), not $M/.beads — cd $M and run every bd call there"; exit 1; }
 git fetch origin main; bd dolt pull
 .claude/skills/remediate-friction/scripts/recurrence-audit.py   # landed fixes that did not take

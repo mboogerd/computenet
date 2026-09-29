@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for validate-skills.rb's line caps, cited-path and missing-SKILL.md
+# Tests for validate-skills.rb's line caps, cited-path, argument-placeholder and missing-SKILL.md
 # checks. Self-contained:
 # builds throwaway skill trees in a temp dir, never reads .claude/skills/.
 #
@@ -84,6 +84,15 @@ r=$(skill empty 10); mkdir -p "$r/orphan"
 out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
 { [ $rc -eq 1 ] && grep -q 'orphan: FAIL directory has no SKILL.md' <<<"$out"; } \
   && ok "exit 1" || bad "exit $rc -- $out"
+
+echo "case 8: a positional \$N in SKILL.md FAILS; \${N} and references pass"
+r=$(skill argsub 10); printf '%s\n' "awk '{print \$1}'" >> "$r/demo/SKILL.md"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+{ [ $rc -eq 1 ] && grep -q 'SKILL.md:11 has \$1' <<<"$out"; } && ok "names line and placeholder" || bad "exit $rc -- $out"
+r=$(skill argok 10); printf '%s\n' 'id=${1:?usage}' >> "$r/demo/SKILL.md"
+printf '%s\n' "awk '{print \$1}'" > "$r/demo/references/x.md"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "braced form and references pass" || bad "exit $rc -- $out"
 
 echo
 echo "$pass passed, $fail failed"
