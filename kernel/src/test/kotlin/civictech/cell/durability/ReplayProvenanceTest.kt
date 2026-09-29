@@ -372,8 +372,9 @@ class ReplayProvenanceTest {
     @Test
     fun `R-C replay provenance survives a suspending handler resuming on another worker thread`() {
         val resumeOn = Executors.newSingleThreadExecutor { Thread(it, "xy7w4.1-RC-resume") }
+        val scheduler = CoroutineScheduler("xy7w4.1-RC")
         try {
-            val host = ManagedHost(scheduler = CoroutineScheduler("xy7w4.1-RC"))
+            val host = ManagedHost(scheduler = scheduler)
             val cell = object : Cell, SuspendingCell {
                 override val ref = CellRef(UUID.randomUUID())
                 val outlet = registerPort("outlet", FanOutlet.create<Propagate<String>>())
@@ -412,6 +413,7 @@ class ReplayProvenanceTest {
             (provenance === token).shouldBeTrue()
         } finally {
             resumeOn.shutdown()
+            scheduler.shutdown()
         }
     }
 }
