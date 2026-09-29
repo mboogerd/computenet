@@ -159,6 +159,29 @@ object ReplayScope {
 }
 
 /**
+ * Thread-local **replay provenance** (computenet-xy7w4 D1): while a host delivers a frame
+ * that `recoverFrom(J)` replayed — or any frame derived from delivering one — this holds an
+ * opaque token naming the journal being replayed (the `Journal` instance itself; typed
+ * [Any] so this package does not depend on `civictech.cell.durability`). A host's intake
+ * copies it onto every frame it accepts while it is installed
+ * ([civictech.cell.proxy.HostedPortInvocation.replayOf]), so a same-host cascade of any
+ * depth inherits it, and the journal append is skipped exactly when the target's journal is
+ * `===` that token. Per frame, never per time window: a live frame accepted from another
+ * thread during recovery carries none and is journaled as outside recovery.
+ *
+ * Same shape as [ReplayScope]; [withSuspending] survives a `SuspendingCell` resuming on a
+ * different worker thread.
+ */
+object ReplayProvenance {
+    private val local = ThreadLocal<Any?>()
+
+    fun get(): Any? = local.get()
+
+    suspend fun <R> withSuspending(token: Any?, block: suspend () -> R): R =
+        withContext(local.asContextElement(token)) { block() }
+}
+
+/**
  * Host-/thread-local current context. All writes go through [with] (set /
  * try / finally-restore) — a missed restore silently welds waves together,
  * especially under the single-threaded SimulationController.

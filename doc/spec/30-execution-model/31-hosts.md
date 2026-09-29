@@ -118,7 +118,9 @@ replayed from topology entries in a preserve-refs GraphSpec mode.
 *Emission*: I-7's linchpin is replay with outlets NoOp-served (the G-32
 suppression) so recovery never re-transmits; the landed `recoverFrom`
 replays frames through the ordinary decode path with un-suppressed emission
-(the recovering flag only prevents re-journaling), made safe for *state* by
+(replay identity is per frame: a replayed frame and its same-journal
+derivations are not re-appended, while live traffic accepted during recovery
+is journaled), made safe for *state* by
 replay-stable identity (ref-derived tags/PN slots, tag counter in
 snapshots) + idempotent merges + anti-entropy/catch-up dedup. `Effectful`
 sinks *(G-59 resolved in part, W2.6, closes C-9)* are the one case
