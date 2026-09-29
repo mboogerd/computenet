@@ -117,6 +117,8 @@ Also: `slot-elapsed.sh <scratch-dir>`, `verify-ready.sh <id>...`,
 | [review.md](references/review.md) | task and feature reviewers, second readers |
 | [evidence.md](references/evidence.md) | implementers and reviewers: tests ran, mutation checks, CI evidence |
 | [recovery.md](references/recovery.md) | you: resume, stalls, red checks, Dolt conflicts, parks, collisions |
+| [pre-dispatch.md](references/pre-dispatch.md) | you, step 5b: making each bead true before dispatch |
+| [friction.md](references/friction.md) | you, step 7: searching, commenting and filing friction |
 
 ## 1. Identity
 
@@ -201,7 +203,7 @@ and report what they did.
 **Select the epic** from `bd ready --type=epic --json`: `resumable-epics.sh`
 entries first (in-flight work decays, and nothing else surfaces it) unless their
 in-progress feature's holder is LIVE or FOREIGN, then `bv --robot-triage` order
-if `bv` exists and its export is fresh (AGENTS.md), then priority. Skip the SDLC
+if `bv` exists and its export is fresh (CLAUDE.md), then priority. Skip the SDLC
 epic, children of an epic another session holds, and epics with a `needs:<tool>`
 label `have-tool.sh` fails on. Claim with `claim-epic.sh <id>`: exit 0 claimed;
 exit 1 not claimed — read the reason (a body naming open blockers → next
@@ -335,44 +337,8 @@ Go under the cap when results depend on wall-clock waits. Agents dying with no
 side effects → [recovery.md](references/recovery.md), "Stalled agents and load".
 
 **Make each bead true before dispatch** — reviewers score its text and the
-implementer builds on it literally:
-
-- `acceptance-placement.sh`: MISPLACED → move criteria into the field; ABSENT →
-  check the description, then write criteria to [breakdown.md](references/breakdown.md)'s
-  standard and say so in the prompt.
-- Test **every load-bearing claim the bead makes about state outside itself** —
-  one the implementer or the review would act on or build against — for the cost of a grep or
-  a file read, against the artifact that would show it, not a commit subject: a
-  blocker, a precondition, a prescribed repro, a handoff instruction, a cited
-  baseline or prior measurement, an assertion about what earlier work did or
-  did not establish. That list is illustrative, and deliberately so —
-  enumerating kinds is what let a superseded baseline and a false "prior work
-  never tested this" through (computenet-d5y5); neither is a blocker, a
-  precondition or a repro. Background prose nobody will act on is not
-  load-bearing. Stale → correct the bead. Only checkable by doing the work, or
-  dearer than a grep → mark it `unverified:` in the prompt
-  ([breakdown.md](references/breakdown.md)); disproving it is a result.
-- A cited record needs two answers, not one: does it still say what the bead
-  says it says, **and is it still the current version of itself?** A superseded
-  record usually sits exactly where it was with its original numbers intact,
-  and is corrected by a LATER entry elsewhere in the record — so search the
-  whole record for a later entry that corrects it, not only the lines cited.
-  Where that record is a bead the correction is a later comment, and where it
-  is a findings journal it is a later entry in the same file.
-- A measurement also carries its host and configuration: figures from another
-  machine, JVM or config are not a baseline for this one, and dispersion is the
-  quantity most sensitive of all. Say so in the prompt as a limit on what the
-  comparison can support, and where a same-host control arm is available
-  authorize that instead — a control arm defeats confounds a single arm cannot
-  even detect.
-- Files claim: run `check-files-claim.sh`, then reason about what else must
-  change ([breakdown.md](references/breakdown.md), "The files claim"); widen and
-  comment why, then amend any acceptance clause the widening contradicts (old
-  wording in a comment). An unexplained empty claim gets fixed now. Tasks whose
-  acceptance reaches into another's claim go in separate batches.
-- A disproved prediction, or an obligation a review added to a later task, is
-  written on each affected unstarted bead as an `AMENDS <id>` comment before it
-  is dispatched; `propagate-correction.py` finds the siblings repeating a claim.
+implementer builds on it literally. Run [pre-dispatch.md](references/pre-dispatch.md)'s
+checklist (acceptance placement, load-bearing claims, files claim, `AMENDS`) on each.
 
 Claim, record, attach — one command per call, timeout at least 300s:
 
@@ -619,25 +585,6 @@ wait; the next session resumes them. Report the main checkout's HEAD against
 ## 7. Log friction
 
 Nobody watched this run. Record process problems that cost real time or produced
-a wrong result and that another session could plausibly hit: a step that
-misled, a command that failed as written, a gap where you had to guess —
-including your own misreadings, and agents' friction lines. Not one-off
-hiccups you handled, not preferences.
-
-The SDLC epic is shared, so pull first. Search one distinctive word at a time
-(`bd search` matches title substrings only): `bd search "<word>" --status all --json`.
-
-- **Open match** → comment your instance (what you did, what happened, what it
-  cost) with `bd comment <id> --file <file>`. If labelled `needs-evidence`,
-  answer its last comment and `bd update <id> --remove-label=needs-evidence`.
-- **Closed match** → file anew, citing it.
-- **No match** → write description (what the skill says, what happened, what it
-  cost) and acceptance (what would prevent it) to files, then:
-
-```bash
-.claude/skills/work/scripts/file-friction.sh --type <bug|feature> --title "<one line>" --desc-file <desc> --accept-file <accept> --skill-version <the epic's metadata.skill_version>
-```
-
-`bd comment` refused → `bd update <id> --append-notes "<plain text>"` (never
-`--notes`, which overwrites) and name the refused command in the summary. Step 6
-pushes.
+a wrong result and that another session could plausibly hit, including your own
+misreadings and agents' friction lines — per [friction.md](references/friction.md)
+(search first, then comment or `file-friction.sh`). Step 6 pushes.
