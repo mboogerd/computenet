@@ -110,12 +110,25 @@ import java.util.concurrent.atomic.AtomicBoolean
  * "Mutation checks"; `CompositeCell.kt` is outside this task's claim, so each
  * mutation was applied, run, and restored, never committed):
  *
- * - (a) `linkBudgetPolicy`'s body replaced with `LinkPolicy { null }` — the
- *   second-connect assertion (`Rejected`) and the LINK_AUTHORITY counts
- *   redden.
+ * - (a) `linkBudgetPolicy`'s body replaced with `LinkPolicy { null }` (the
+ *   prescribed form) reddens at SETUP — the funded link's `[Link]` charge
+ *   assertion (`expected:<[Link]> but was:<[]>`) — because it also removes the
+ *   admitted charge. Narrowed to the refusal alone (the `Refused` branch's
+ *   `denyBudget(...)` call replaced by `return@LinkPolicy null`, so the claim
+ *   is still charged but the refusal is ignored), it reddens THE criterion's
+ *   own assertion: the second connect is `Connected`, not `Rejected`.
  * - (b) `asProtocolFilter`'s Attention `Refused` branch `return@filter null`
- *   replaced with `throw IllegalStateException("mutated")` — see the
- *   `MUTATION (b)` note in the test body for which assertion reddens.
+ *   replaced with `throw IllegalStateException("mutated")` reddens only
+ *   because the exception escapes this fixture's synchronous in-process
+ *   `ProtocolSupport.deliver` call — not at `restarts`, `violations` or the
+ *   PROTOCOL_AUTHORITY count. With that throw swallowed at the call, every
+ *   assertion passes: the record is accounted before the throw, the frame is
+ *   metadata-plane, and nothing supervised runs it. So the semantic
+ *   assertions here are **NOT DISCRIMINATED** against a throwing (rather than
+ *   dropping) refusal; the in-process fixture's red is incidental. The guard
+ *   for that half is structural — `BudgetDenialRoutingRatchetTest` pins that
+ *   no budget claim sits on a delta path — plus `BudgetProtocolSeamTest`'s
+ *   "BS-04 refused" at the filter itself.
  *
  * SimulationController caution (`computenet-2zasa` AMENDS comment): a
  * `CurrentPeer` stamp set on the stepping thread is visible to every task
@@ -313,8 +326,8 @@ class BudgetDenialWaveCompletenessTest {
         // THE assertions: the poisoned wave completes with BOTH contributions —
         // no rescue was needed, so none fired.
         f.byWave()[2L] shouldBe setOf("B:2", "M:2")
-        // MUTATION (b) — see the report on computenet-2zasa.1 for which of
-        // these reddened when the Attention refusal threw instead of dropping.
+        // Not a discriminator for a THROWING Attention refusal — see the
+        // header's mutation (b): only a dropped or starved M contribution reddens these.
         f.violations.shouldBeEmpty()
         f.host.supervisionAccounting().restarts shouldBe 0L
         (wave2Steps < 200_000).shouldBeTrue()
