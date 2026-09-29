@@ -83,8 +83,24 @@ bd_dir=()
 # sed slices to the first JSON token: bd prefixes advisory lines on stderr AND
 # stdout (bd-traps.md's "malformed mid-document" note is about the tail, which
 # jq surfaces as a parse error rather than silence).
-out=$(bd ${bd_dir[@]+"${bd_dir[@]}"} show "$id" --json 2>/dev/null \
-  | sed -n '/^[[{]/,/^[]}]/p' \
+#
+# Captured once, as a variable: both the normal projection below AND the
+# spill's field-split (further down) read this same document, so a bead that
+# changes between two `bd` calls cannot make them disagree, and `bd` only
+# runs once regardless of how large the bead turns out to be.
+#
+# `set -o pipefail` is in effect, and it propagates through a command
+# substitution's own subshell, so `$?` right after this assignment is still
+# `bd`'s exit status (or `sed`'s) even though it is no longer the last stage
+# of the pipeline that also runs jq. Captured explicitly because splitting
+# the old single `bd | sed | jq` pipeline in two would otherwise silently
+# drop bd's failure: an unknown id would stop being reported as a nonzero
+# exit (caught by bead.test.sh case 5 when this was first split).
+raw_json=$(bd ${bd_dir[@]+"${bd_dir[@]}"} show "$id" --json 2>/dev/null \
+  | sed -n '/^[[{]/,/^[]}]/p')
+bd_rc=$?
+
+out=$(printf '%s' "$raw_json" \
   | jq $raw '(if type=="array" then .[0] else . end)
              | { id, title, issue_type, status, priority, assignee, parent,
                  labels, metadata, description, acceptance_criteria, design,
@@ -92,7 +108,9 @@ out=$(bd ${bd_dir[@]+"${bd_dir[@]}"} show "$id" --json 2>/dev/null \
                  dependency_ids: [ (.dependencies // [])[]
                                    | if type=="object" then (.id // .issue_id) else . end ] }
              | '"$filter")
-rc=$?
+jq_rc=$?
+# Reproduce pipefail's "rightmost nonzero wins" over the now-split stages.
+if [ "$jq_rc" -ne 0 ]; then rc=$jq_rc; else rc=$bd_rc; fi
 
 # SPILL. The projection is small for a normal bead and still too big for one
 # tool result on a large epic: computenet-9sm's own description is ~36KB, its
@@ -116,7 +134,53 @@ if [ "${#out}" -gt "${BEAD_SPILL_BYTES:-25000}" ]; then
   # path: the output would be gone and the exit code still 0. Fall back to
   # printing it, which is at worst the old truncation.
   f=$(mktemp "${spill_dir%/}/bead-$id.XXXXXX") || { printf '%s\n' "$out"; exit $rc; }
-  printf '%s\n' "$out" > "$f"
+  if [ "$filter" = "." ] && [ -z "$raw" ]; then
+    # DEFAULT WHOLE-BEAD SPILL (computenet-gcojq). jq's normal (non -r) view
+    # renders a long text field's newlines as literal `\n` escapes inside a
+    # quoted JSON string, so the ENTIRE field — description, design,
+    # acceptance_criteria, notes — lands as one line. For a multi-paragraph
+    # description that line alone can be tens of thousands of characters, and
+    # the Read tool pages by line: it hits its per-read cap on line 1 and
+    # returns a truncated line, making the very file this message sends an
+    # agent to unreadable (the bug this fixes). Write the long fields as raw
+    # text with their REAL newlines instead, one per header, so the file
+    # pages like any other text file; short/scalar fields keep a JSON-style
+    # `"key": value` line each, so a field grep still works the way it did
+    # against the old single-line JSON blob.
+    printf '%s' "$raw_json" | jq -r '
+      (if type=="array" then .[0] else . end) as $b
+      | ($b.dependencies // []) as $deps
+      | ($deps | map(if type=="object" then (.id // .issue_id) else . end)) as $depids
+      | [ "\"id\": "                + ($b.id // null | tojson),
+          "\"title\": "             + ($b.title // null | tojson),
+          "\"issue_type\": "        + ($b.issue_type // null | tojson),
+          "\"status\": "            + ($b.status // null | tojson),
+          "\"priority\": "          + ($b.priority // null | tojson),
+          "\"assignee\": "          + ($b.assignee // null | tojson),
+          "\"parent\": "            + ($b.parent // null | tojson),
+          "\"labels\": "            + ($b.labels // [] | tojson),
+          "\"comment_count\": "     + ($b.comment_count // 0 | tojson),
+          "\"dependency_count\": "  + ($b.dependency_count // 0 | tojson),
+          "\"dependency_ids\": "    + ($depids | tojson),
+          "\"created_at\": "        + ($b.created_at // null | tojson),
+          "\"updated_at\": "        + ($b.updated_at // null | tojson),
+          "\"metadata\": "          + ($b.metadata // {} | tojson),
+          "",
+          "=== description ===",
+          ($b.description // ""),
+          "",
+          "=== acceptance_criteria ===",
+          ($b.acceptance_criteria // ""),
+          "",
+          "=== design ===",
+          ($b.design // ""),
+          "",
+          "=== notes ===",
+          ($b.notes // "")
+        ] | join("\n")' > "$f"
+  else
+    printf '%s\n' "$out" > "$f"
+  fi
   # STDERR AND EXIT 3, NOT STDOUT AND 0. The notice used to go to stdout, where
   # it is PROSE THAT GREPS CLEANLY: an orchestrator ran
   # `bead.sh <epic> .description > f` and then four greps over `f`, and every
@@ -131,7 +195,11 @@ if [ "${#out}" -gt "${BEAD_SPILL_BYTES:-25000}" ]; then
   # On stderr the redirect captures an EMPTY file, which fails loudly; the
   # nonzero exit short-circuits `bead.sh ... > f && grep ...` for any caller
   # that chains. A human at a terminal still sees the notice.
-  echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)." >&2
+  if [ "$filter" = "." ] && [ -z "$raw" ]; then
+    echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool, in pages (long fields — description, acceptance_criteria, design, notes — are raw text with real newlines under '=== field ===' headers, so it pages instead of truncating at line 1)." >&2
+  else
+    echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)." >&2
+  fi
   echo "bead.sh: NOTHING was written to stdout — this exit 3 is the spill, not a failed read." >&2
   exit 3
 elif [ -n "$out" ]; then
