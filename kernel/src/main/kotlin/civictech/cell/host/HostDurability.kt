@@ -300,9 +300,12 @@ object JournalRecords {
  * [deadLetter] reporter, [submit] (`enqueueHostedInvocation`, for replayed
  * frames re-entering the intake), and [awaitOnManagementBand]
  * (`enqueueAwaiting(0, ...)`, so [checkpoint] keeps running on the management
- * band, unable to interleave with a dispatching cell, exactly as before). None
- * of these paths touch `dataLock` — durability runs on the management band /
- * synchronous replay, never under the data-plane lock.
+ * band, unable to interleave with a dispatching cell, exactly as before), and
+ * [underIntakeLock] — the one path that takes the host's `dataLock`: it runs
+ * [checkpoint]'s staged-set read and `Journal.reset` under that monitor so the
+ * compaction is atomic with respect to the intake (computenet-xy7w4 D3). Its
+ * lock order is `dataLock` -> journal monitor, the same order the intake's
+ * append+stage takes; nothing here takes them the other way round.
  */
 internal class HostDurability(
     private val journalSelector: (CellRef, String) -> Journal?,
@@ -311,6 +314,14 @@ internal class HostDurability(
     private val deadLetter: (String) -> Unit,
     private val submit: (HostedPortInvocation) -> Unit,
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
+    /**
+     * Runs its argument while holding the host's `dataLock`, handing it every staged
+     * (queued or attention-parked) invocation in host-sequence order
+     * ([civictech.cell.control.AttentionScheduler.stagedInSequence]). The default — nothing
+     * staged, no lock — is for a delegate built without a host (`JournalRecordsTest`);
+     * `ManagedHost` always passes its own.
+     */
+    private val underIntakeLock: ((staged: List<HostedPortInvocation>) -> Unit) -> Unit = { it(emptyList()) },
 ) {
 
     /**
@@ -496,6 +507,41 @@ internal class HostDurability(
      * volatile cell). For the degenerate whole-host constant selector every
      * cell maps here, byte-identical to pre-CP-C1. Runs on the management band
      * so it can't interleave with a dispatching cell.
+     *
+     * **Safe at any inter-invocation boundary** (93 I-7 R7, computenet-xy7w4 D3). The
+     * management band runs between two deliveries of the single-consumer host, so at that
+     * point every frame accepted for [journal] is either DELIVERED — its effect is in the
+     * snapshot — or STAGED and not yet delivered: live traffic, frames a [recoverFrom]
+     * staged and no data task has applied yet, a coalesced entry, attention-parked
+     * traffic. The compacted journal is the checkpoint records followed by every staged
+     * frame whose target port tees to [journal], re-encoded by [journalFrame] in host
+     * sequence order — so a host recovering from it reproduces the fold of every frame
+     * accepted before this returns, with no quiescence fence and with writers running.
+     * The staged-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
+     * the monitor the intake's append+stage holds, so a frame accepted concurrently is
+     * either staged before the read (carried) or appended after the reset (tail) — never
+     * truncated unseen. The snapshot describes the host's staging sequence number
+     * (`AttentionScheduler`'s `dataSequence`, I-7 R7's host sequence) at that instant — the
+     * *anchor*: every carried frame was staged at or below it, every later append above
+     * it, and everything delivered before it is in the snapshot. The anchor is not persisted
+     * — the compacted journal is byte-compatible, checkpoint records followed by ordinary
+     * `RECORD_FRAME`s, no new record type and no `JOURNAL_FORMAT_VERSION` bump.
+     *
+     * The STAGED invocation is re-encoded, not the bytes originally appended: under
+     * `SaturationPolicy.Coalesce` the staged entry is the merge of the coalesced originals,
+     * so carrying it is carrying all of them. `WireCodec` does serialize
+     * [civictech.cell.MessageContext.baseline], so a replayed mid-graph frame carried here
+     * keeps the PN-2 stamp [recoverFrom] gave it — the stamp its next replay would have
+     * given it anyway (`baselined` keeps an existing one), so this changes no behaviour;
+     * `replayFrontier`/`replayOf` are never serialized and are re-stamped by that replay.
+     *
+     * `Recovery.awaitApplied` then `checkpoint` stays the recommended order after a
+     * restart: it compacts the whole replayed tail instead of carrying it. It is no longer
+     * a safety precondition.
+     *
+     * Not covered, and still lost by the reset: a frame already dequeued and held
+     * elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-activation
+     * tail — and, on a suspending (🟢) scheduler, a delivery suspended mid-handler.
      */
     fun checkpoint(journal: Journal) {
         awaitOnManagementBand {
@@ -569,7 +615,16 @@ internal class HostDurability(
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
-            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + baselines)
+            val compacted = listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + baselines
+            // computenet-xy7w4 D3: carry every accepted-but-undelivered frame of this
+            // journal, read and reset under the intake's own lock. Encoded before the
+            // reset, so an unencodable frame fails the checkpoint and truncates nothing.
+            underIntakeLock { staged ->
+                val carried = staged
+                    .filter { journalSelector(it.cellRef, it.portName) === journal }
+                    .map(::journalFrame)
+                journal.reset(compacted + carried)
+            }
         }
     }
 

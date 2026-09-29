@@ -703,8 +703,11 @@ open class ManagedHost(
      * host and this delegate; reads a live view of [cells] and delegates
      * dead-letter reporting and replayed-frame re-intake back to the host.
      * [checkpoint] still runs via [enqueueAwaiting] at management priority 0,
-     * unable to interleave with a dispatching cell — nothing here touches
-     * [dataLock].
+     * unable to interleave with a dispatching cell; its staged-set read and
+     * journal reset run under [dataLock] (computenet-xy7w4 D3) so the
+     * compaction carries every accepted-but-undelivered frame atomically with
+     * respect to the intake — lock order `dataLock` -> journal monitor, as on
+     * the intake path.
      */
     private val hostDurability = HostDurability(
         journalSelector = portJournalSelector,
@@ -713,6 +716,11 @@ open class ManagedHost(
         deadLetter = { message -> deadLetter(null, message) },
         submit = ::enqueueHostedInvocation,
         awaitOnManagementBand = { action -> enqueueAwaiting(0, action) },
+        underIntakeLock = { action ->
+            synchronized(dataLock) {
+                action(attentionScheduler.stagedInSequence())
+            }
+        },
     )
 
     /**
@@ -740,9 +748,9 @@ open class ManagedHost(
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
-        synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach {
+        synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
             parkedDrainedOnTeardownCount.incrementAndGet()
-            deadLetter(null, "cell $cellRef left the host while attention-parked", it)
+            deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
         }
         // T05 finding 5: a FanInlet's ACTIVATE-tier cold tail (invocations
         // that arrived before a handler was installed, spec 10/15 §Admission
@@ -783,7 +791,8 @@ open class ManagedHost(
             // attention-parked traffic is accepted work: flush it before
             // deactivation, same guarantee as the ordinary queue (spec 33/34)
             val parked = synchronized(dataLock) {
-                attentionScheduler.attentionParked.values.flatten().also { attentionScheduler.attentionParked.clear() }
+                attentionScheduler.attentionParked.values.flatten().map { it.second }
+                    .also { attentionScheduler.attentionParked.clear() }
             }
             parked.forEach { deliver(it) }
             snapshots.clear()
@@ -1073,7 +1082,10 @@ open class ManagedHost(
 
     /**
      * Checkpoint (M10.2, extended G-59). See [HostDurability.checkpoint] for
-     * the full behavior; delegates there (RS-8.2).
+     * the full behavior; delegates there (RS-8.2). Callable on a live host at
+     * any time: frames accepted and not yet delivered are carried into the
+     * compacted journal (93 I-7 R7, computenet-xy7w4 D3), so no quiescence
+     * fence is needed for safety.
      */
     fun checkpoint(journal: Journal) = hostDurability.checkpoint(journal)
 
