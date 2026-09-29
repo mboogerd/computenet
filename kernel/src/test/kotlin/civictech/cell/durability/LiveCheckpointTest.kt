@@ -278,4 +278,47 @@ class LiveCheckpointTest {
             .map { civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single() } shouldBe
             accepted.map { it.second }
     }
+
+    /** Holds the first [reset] at a gate, so a test can act while a compaction is in progress. */
+    private class GatedResetJournal(val inner: InMemoryJournal = InMemoryJournal()) : Journal by inner {
+        val resetEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseReset = java.util.concurrent.CountDownLatch(1)
+
+        override fun reset(records: List<ByteArray>) {
+            if (resetEntered.count > 0) {
+                resetEntered.countDown()
+                check(releaseReset.await(30, TimeUnit.SECONDS)) { "reset gate never released" }
+            }
+            inner.reset(records)
+        }
+    }
+
+    @Test
+    fun `(g) a frame accepted while the compaction is in progress is not truncated by it`() {
+        val journal = GatedResetJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val scheduler = VirtualThreadScheduler("xy7w4.2-RD-atomic")
+        val host = ManagedHost(scheduler = scheduler, journal = journal)
+        host.managementInlet.call.spawn(SetCell<String>(ref))
+        try {
+            ops(host, ref).add("before")
+            val checkpointer = CompletableFuture.runAsync { host.checkpoint(journal) }
+            check(journal.resetEntered.await(30, TimeUnit.SECONDS)) { "checkpoint never reached reset" }
+            // The reset holds the intake's lock, so this add cannot be appended until the
+            // reset is done — it lands after the compacted records. Were the staged-set read
+            // and the reset not atomic w.r.t. the intake, the add would append now and the
+            // reset below would truncate it: staged and delivered, but gone from the journal.
+            val late = CompletableFuture.runAsync { ops(host, ref).add("late") }
+            runCatching { late.get(500, TimeUnit.MILLISECONDS) } // give a non-atomic reset its chance
+            journal.releaseReset.countDown()
+            checkpointer.get(30, TimeUnit.SECONDS)
+            late.get(30, TimeUnit.SECONDS)
+            host.quiescence().await(30_000)
+        } finally {
+            journal.releaseReset.countDown()
+            scheduler.shutdown()
+        }
+
+        recover(SimulationController(seed = 1), journal.inner, ref).membership() shouldBe setOf("before", "late")
+    }
 }
