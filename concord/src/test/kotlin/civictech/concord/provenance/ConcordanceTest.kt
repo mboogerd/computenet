@@ -257,6 +257,9 @@ class ConcordanceTest {
 
         provenance.idsWithNoDeclaration shouldHaveSize 0
         provenance.idsWithMultipleNormativeDeclarations.size shouldBe 0
+        // computenet-x3hqg: a normative declaration exists, so the roadmap
+        // ticket's extra declaration does not make the id roadmap-owned.
+        provenance.idsWithOnlyNonNormativeDeclaration.size shouldBe 0
     }
 
     // --- buildConcordance: the two new ownership lints (computenet-7ei34) --
