@@ -371,4 +371,39 @@ class JournalFormatVersionTest {
 
         FileJournal(file).replay().map { String(it) } shouldBe listOf("first")
     }
+
+    /**
+     * The guard the torn-header rewrite must never cross: a pre-versioning file of 4-7
+     * bytes CAN hold an acknowledged record — a single empty record is exactly its
+     * 4-byte zero length prefix — so only a sub-4-byte file, or one whose first four
+     * bytes are exactly [FileJournal.MAGIC], is torn. Truncating on length alone
+     * (`< 8`) would silently delete this record on the next append.
+     */
+    @Test
+    fun `append never rewrites a short pre-versioning file that holds an acknowledged record`(
+        @TempDir dir: File,
+    ) {
+        val file = File(dir, "legacy.journal")
+        file.writeBytes(ByteArray(Int.SIZE_BYTES)) // one acknowledged empty record, no header
+
+        FileJournal(file).append("second".toByteArray())
+
+        FileJournal(file).replay().map { String(it) } shouldBe listOf("", "second")
+    }
+
+    /** MAGIC plus a PARTIAL version int (5-7 bytes) is the same torn header, through both classes. */
+    @Test
+    fun `append rewrites MAGIC followed by a partial version int, through both journal classes`(
+        @TempDir dir: File,
+    ) {
+        for (extra in 1..3) {
+            val plain = File(dir, "plain-$extra.journal").also { it.writeBytes(FileJournal.MAGIC + ByteArray(extra)) }
+            FileJournal(plain).append("first".toByteArray())
+            FileJournal(plain).replay().map { String(it) } shouldBe listOf("first")
+
+            val batched = File(dir, "batched-$extra.journal").also { it.writeBytes(FileJournal.MAGIC.copyOfRange(0, extra)) }
+            BatchedFileJournal(batched, syncEvery = 1).append("first".toByteArray())
+            FileJournal(batched).replay().map { String(it) } shouldBe listOf("first")
+        }
+    }
 }
