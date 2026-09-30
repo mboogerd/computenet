@@ -4,10 +4,12 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.IdentityStatement
 import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.wire.HelloCredentialLimits
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.PeerConnection
@@ -69,12 +71,19 @@ abstract class PeerTransportContract {
         fun seesRemote(ref: CellRef): Boolean = registry.location(ref) is LocationRegistry.Remote
     }
 
-    /** Build one side named [name], optionally holding [credentials]. */
+    /**
+     * Build one side named [name] (a label for messages), optionally holding
+     * [credentials]. The side is anonymous unless it holds credentials, and
+     * then asserts their identity: the contract is about carrying refs, not
+     * about identity, and a configured-name `PeerId` constructed here would be
+     * a new site for `IdentityDerivationRatchetTest` to judge.
+     */
     protected open fun stack(name: String, credentials: PeerCredentials? = null): Stack {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
-        return Stack(name, registry, host, bridgeHost, Peering.Side(registry, bridgeHost, peer = PeerId(name), credentials = credentials))
+        val side = Peering.Side(registry, bridgeHost, peer = credentials?.peerId, credentials = credentials)
+        return Stack(name, registry, host, bridgeHost, side)
     }
 
     protected lateinit var transport: PeerTransport
@@ -212,11 +221,14 @@ abstract class PeerTransportContract {
 
     /**
      * Credentials carrying [statements] placeholder statements. Never signs
-     * anything real: case (f) needs only to be refused on the count.
+     * anything real: case (f) needs only to be refused on the count. Its
+     * [peerId] is resolved from its key through the interim binding, as
+     * [PeerCredentials.peerId]'s KDoc requires of an implementation.
      */
     protected class FakeCredentials(name: String, statements: Int) : PeerCredentials {
         override val keyId: KeyId = KeyId(name)
-        override val peerId: PeerId = PeerId(name)
+        override val peerId: PeerId =
+            (PeerIdentityBinding.Interim.resolve(keyId, emptyList()) as IdentityResolution.Bound).peer
         override val publicKey: ByteArray = ByteArray(0)
 
         override fun sign(message: ByteArray): ByteArray = ByteArray(0)
