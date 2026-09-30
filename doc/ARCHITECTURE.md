@@ -324,7 +324,7 @@ Schema contracts live in `concord/schema/*.md` (single-writer,
 schema-change-gated). Cross-process driver (W5) is deferred until a second
 implementation exists.
 
-**Architecture ratchets (T10).** Three of this document's boundary claims are
+**Architecture ratchets (T10).** Four of this document's boundary claims are
 executable, not just prose, each wired into the normal test task so it gates
 `./gradlew test`/`check` the same way `concordanceGate` and `docLints` do:
 `NeutralityGateTest` (`concord/src/test/kotlin/civictech/concord/provenance/`)
@@ -340,9 +340,16 @@ set against a checked-in baseline
 `90/91` gap `G-63` (all 20 non-leaf `civictech.cell.*` packages form one SCC;
 this is a ratchet, not a claim of acyclicity) — and fails on any *new* edge, while a baseline
 edge no longer present in code is warn-only (delete the stale line by hand;
-the ratchet only ever tightens). To widen any of the three deliberately,
-change the allowlist/baseline in the same PR that adds the edge/import,
-citing why.
+the ratchet only ever tightens); `DemoBypassRatchetTest` (same directory) fails
+if any demo `src/main` file calls raw `.subscribe(`/`.streamTo(`/`.routeTo(`
+(outside comments) and is not on the checked-in allowlist
+(`kernel/src/test/resources/architecture/demo-bypass-allowlist.txt`) — unlike
+the other three, *both* directions fail here: an unlisted offender fails, and
+so does a listed path with no such call any more (stale) or that is not a
+file, so the allowlist can only shrink as each demo migrates onto the routed,
+glitch-free-admitted path (INT1 1.1) — its own allowlist has no widen path.
+To widen any of the other three deliberately, change the allowlist/baseline
+in the same PR that adds the edge/import, citing why.
 
 ## 6. Demos
 

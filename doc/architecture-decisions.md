@@ -85,6 +85,14 @@ say which part changed.
   `inspect/src/test/kotlin/civictech/inspect/ObservationsCompletenessTest.kt`,
   from finding B3. Green. Empirically found 2 blind cells beyond the audit's 1;
   `knownBlind` emptied by T20 (verified 2026-07-28: `emptySet<String>()`).
+- **G4** — no demo `src/main` file adds a new raw `.subscribe(`/`.streamTo(`/
+  `.routeTo(` call, and the checked-in allowlist of today's offenders
+  (`kernel/src/test/resources/architecture/demo-bypass-allowlist.txt`) can
+  only ever shrink as each is migrated onto the routed, glitch-free-admitted
+  path (INT1 1.1) —
+  `kernel/src/test/kotlin/civictech/cell/architecture/DemoBypassRatchetTest.kt`,
+  from `doc/integration/2026-09-29/01-programming-model.md` findings F1-F4.
+  Seeded with the seven offenders observed at `bb75294e`. Green.
 
 **Considered, not encoded:**
 
