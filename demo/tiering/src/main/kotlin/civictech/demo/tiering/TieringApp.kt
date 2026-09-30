@@ -27,6 +27,9 @@ import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
@@ -292,11 +295,16 @@ object TierPipeline {
  * So a restart over the same `--journal <dir>` now replays the full
  * `/state` payload — items, valuations, preferences and the manual pins —
  * not only the manual OR-map.
+ *
+ * [inspector] (`--inspect-port`, computenet-3iv0w rule R4) is this demo's
+ * opt-in into the shared [InspectorFlag] wiring: absent, this app is
+ * byte-identical to what it was before the flag existed.
  */
 class TieringApp(
     port: Int = 8080,
     private val wire: Wire? = null,
     journalDir: java.io.File? = null,
+    inspector: InspectorFlag.Options? = null,
 ) {
     /** Peer mode: symmetric peers — one listens, the other dials. */
     sealed interface Wire {
@@ -386,6 +394,19 @@ class TieringApp(
     private val livePrefs = mutableSetOf<Pref>()
 
     private val shell = DemoShell(port)
+
+    private val inspectorOptions: InspectorFlag.Options? = inspector
+
+    /**
+     * Opt-in inspector (`--inspect-port`): serves this JVM's live dataflow
+     * graph on its own port; non-null after [start] iff [inspectorOptions]
+     * was given. Hosts: `tiering` (the app host) and `tiering-bridge` when
+     * peered. Declaring the manual-replica mesh as a link is shopping's
+     * M5-NET pilot precedent, not this task — follow-up territory (feature
+     * design 3iv0w-D2, D3 non-goals).
+     */
+    var inspector: InspectorServer? = null
+        private set
 
     val boundPort: Int get() = shell.boundPort
 
@@ -567,22 +588,47 @@ class TieringApp(
                 """"valuations":$vals,"prefs":$prefList,"manual":$manualJson}"""
     }
 
-    fun start(): TieringApp = apply { shell.start() }
+    private fun inspectorHosts(): Map<String, ManagedHost> = buildMap {
+        put("tiering", host)
+        bridgeHost?.let { put("tiering-bridge", it) }
+    }
 
-    fun stop() = shell.stop()
+    private fun inspectorCellNames(): Map<CellRef, String> = buildMap {
+        put(refs.items.ref, "items")
+        put(refs.vals.ref, "vals")
+        put(refs.prefs.ref, "prefs")
+        put(refs.tierAvg.ref, "tierAvg")
+        put(refs.prefAvg.ref, "prefAvg")
+        put(refs.fused.ref, "fused")
+        put(refs.manual.ref, "manual")
+        put(refs.manualEffective.ref, "manualEffective")
+        put(refs.board.ref, "board")
+    }
+
+    fun start(): TieringApp = apply {
+        shell.start()
+        inspectorOptions?.let { inspector = it.serve(registry, inspectorHosts(), inspectorCellNames()) }
+    }
+
+    fun stop() {
+        inspector?.stop()
+        shell.stop()
+    }
 }
 
 fun main(args: Array<String>) {
-    // `demoPort` reads the first non-`--` token as this demo's port, so every
-    // `--flag value` pair has to be stripped before it or one of their values
-    // is mistaken for the port (demo/shopping's `main`, verbatim).
-    val demoArgs = stripPairs(args, "--listen", "--peer", "--journal")
+    // InspectorFlag.parse first (3iv0w-D2): it strips its own tokens, then
+    // `demoArgs` drops this demo's own `--flag value` pairs, so `demoPort`
+    // reading the first non-`--` token never mistakes either flag's value for
+    // this demo's port (demo/shopping's `main`, verbatim, plus the inspector).
+    val parsed = InspectorFlag.parse(args)
+    val demoArgs = stripPairs(parsed.rest, "--listen", "--peer", "--journal")
     val port = demoPort(demoArgs)
-    val wire = args.value("--listen")?.let { TieringApp.Wire.Listen(it.toInt()) }
-        ?: args.value("--peer")?.let { TieringApp.Wire.Dial(it) }
-    val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+    val wire = parsed.rest.value("--listen")?.let { TieringApp.Wire.Listen(it.toInt()) }
+        ?: parsed.rest.value("--peer")?.let { TieringApp.Wire.Dial(it) }
+    val journalDir = parsed.rest.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
 
-    val app = TieringApp(port, wire, journalDir).start()
+    val app = TieringApp(port, wire, journalDir, parsed.options).start()
     println("computenet tiering: http://localhost:${app.boundPort}")
     // every announcePort here reports a port this process HOLDS, so a
     // supervising test never has to pick one for it (computenet-dqy.25)
@@ -599,6 +645,7 @@ fun main(args: Array<String>) {
         null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
     }
     println("  manual re-tier replica ${TierPipeline.MANUAL_ID}, this JVM's instance ${app.manualInstanceId}")
+    parsed.options?.let { InspectorFlag.announce(app.inspector!!, it) }
 }
 
 /** Drop each `--flag value` pair from [args] — see [main]'s use. */
