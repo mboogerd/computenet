@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "43 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "51 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -19,12 +19,14 @@ cat > "$ROOT/bin/bd" <<'EOF'
 echo "$*" >> "$BD_LOG"
 case "$1" in
   update)
+    [ -f "$CTRL/update-fail" ] && { echo "Error: write refused" >&2; exit 1; }
     for a in "$@"; do
       [ "$a" = --claim ] && [ -f "$CTRL/refuse-claim" ] \
         && { echo "Error claiming $2: issue already claimed by Other@Machine" >&2; exit 1; }
     done
     exit 0 ;;
-  show) cat "$CTRL/show.json" ;;
+  show) [ -f "$CTRL/show-fail" ] && { echo "Error: database locked" >&2; exit 1; }
+        cat "$CTRL/show.json" ;;
   list) [ -f "$CTRL/list-fail" ] && { echo "Error: database locked" >&2; exit 1; }
         cat "$CTRL/list.json" 2>/dev/null || echo '[]' ;;
   dolt)
@@ -49,7 +51,9 @@ ok()  { pass=$((pass+1)); echo "  PASS $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL $*"; }
 CASE=0
 fixture() { CASE=$((CASE+1)); export CTRL="$ROOT/c$CASE" BD_LOG="$ROOT/c$CASE/bd.log"
-            mkdir -p "$CTRL"; : > "$BD_LOG"; }
+            mkdir -p "$CTRL"; : > "$BD_LOG"
+            # a readable epic by default: an unreadable one is NOT CHECKED
+            printf '[{"id":"computenet-e","status":"open","assignee":"","updated_at":"2020-01-01T00:00:00Z"}]' > "$CTRL/show.json"; }
 old_show() { printf '[{"id":"computenet-e","status":"%s","assignee":"%s","updated_at":"2020-01-01T00:00:00Z"}]' "$1" "$2" > "$CTRL/show.json"; }
 
 # 1. the SDLC epic is refused before any bd call
@@ -417,6 +421,65 @@ out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
 { [ "$rc" = 3 ] && ! grep -q -- "--status=open" "$BD_LOG"; } \
   && ok "--release with an unlistable subtree checks and writes nothing (exit 3)" \
   || bad "release list-fail: rc=$rc out=$out"
+
+# --- fail closed, and the bounds on FOREIGN ----------------------------------
+# An unlistable subtree is NOT CHECKED: the live-descendant refusal could not
+# run, so the claim does not proceed.
+fixture; touch "$CTRL/list-fail"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^NOT CHECKED" <<<"$out" && ! grep -qE -- "--claim|dolt push" "$BD_LOG"; } \
+  && ok "an unlistable subtree fails the claim closed" \
+  || bad "list-fail claim: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+fixture; touch "$CTRL/show-fail"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^NOT CHECKED" <<<"$out" && ! grep -qE -- "--claim|dolt push" "$BD_LOG"; } \
+  && ok "an unreadable epic fails the claim closed" \
+  || bad "show-fail claim: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# The umbrella refusal reads only the epic: it runs before the subtree listing.
+fixture; touch "$CTRL/list-fail"
+printf '[{"id":"computenet-e","status":"open","assignee":"","updated_at":"2020-01-01T00:00:00Z","labels":["tracking-umbrella"]}]' > "$CTRL/show.json"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "tracking umbrella" <<<"$out" && ! grep -q "^list " "$BD_LOG"; } \
+  && ok "the umbrella refusal precedes the subtree listing" \
+  || bad "umbrella order: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+desc_one() { # holder updated_at
+  printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"in_progress","updated_at":"%s","metadata":{"holder":"%s"}}]' \
+    "$2" "$1" > "$CTRL/list.json"
+}
+FOREIGN_TOK="other-box/testbox:99999:Tue Jan  1 00:00:00 2020"
+fixture; desc_one "$FOREIGN_TOK" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+out=$(CLAIM_SKIP_HOT=1 "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "FOREIGN" <<<"$out" && ! grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "a FOREIGN descendant written recently refuses the claim" \
+  || bad "foreign fresh: rc=$rc out=$out"
+
+fixture; desc_one "$FOREIGN_TOK" "2020-01-01T00:00:00Z"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "a FOREIGN descendant older than any slot does not block" \
+  || bad "foreign old: rc=$rc out=$out"
+
+fixture; desc_one "$("$HOLDER_SH")" "2020-01-01T00:00:00Z"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "a descendant this session holds (MINE) does not block" \
+  || bad "mine: rc=$rc out=$out"
+
+# The epic's OWN foreign holder on a released epic is residue, as for LIVE.
+fixture
+holder_show open "" "$FOREIGN_TOK"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "residue on a released epic" <<<"$out"; } \
+  && ok "a foreign holder on a released epic is residue, claim proceeds" \
+  || bad "foreign residue: rc=$rc out=$out"
+
+# --release: a failed write is exit 4, distinct from KEPT (1) and NOT CHECKED (3).
+fixture; touch "$CTRL/update-fail"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+[ "$rc" = 4 ] && ok "--release with a failed write exits 4" || bad "release write-fail: rc=$rc out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

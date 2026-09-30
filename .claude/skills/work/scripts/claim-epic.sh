@@ -52,14 +52,21 @@
 #        claim-epic.sh --release <epic-id>
 # Exit 0: claimed and pushed (took over or fresh — output says which).
 # Exit 1: not claimed (reason on stderr) — select another epic, or stop.
+#         Includes NOT CHECKED: the epic or its descendants could not be read,
+#         so the refusals below could not run — the claim fails closed.
 # Exit 2: claimed LOCALLY but not published — stop the session and report;
 #         an unpushed epic claim is exactly the race this script closes.
 #
 # --release reopens a dead run's epic (status open, no assignee, no holder;
 # local, not pushed) — step 3's startup release. It applies the live-descendant
-# test first: exit 0 released; exit 1 KEPT, a LIVE or FOREIGN session works
+# test first. Exit 0 released; exit 1 KEPT, a LIVE or FOREIGN session works
 # beneath it (named on stderr) — leave it claimed and do not select it; exit 3
-# the descendants could not be listed, so nothing was checked or written.
+# NOT CHECKED, the descendants could not be listed, nothing written; exit 4
+# the release write itself failed.
+#
+# A FOREIGN descendant holder cannot be pid-tested from here, so it blocks
+# only while its bead was written within HOLDER_MAX_AGE_S (session-holder.sh's
+# slot bound, default 21600s): older than any slot, it is residue.
 set -uo pipefail
 
 : "${BEADS_ACTOR:?BEADS_ACTOR must be set, uniquely, per machine}"
@@ -89,13 +96,22 @@ live_descendants() {
       | "\(.id)\t\(.metadata.holder)\t\(.updated_at // "")"' <<<"$all_rows" 2>/dev/null \
   | while IFS=$'\t' read -r d h u; do
       v=$("$SCRIPT_DIR/session-holder.sh" --check "$h" "$u" 2>/dev/null)
-      case "$v" in LIVE|FOREIGN) echo "$d held by $h ($v)" ;; esac
+      case "$v" in
+        LIVE) echo "$d held by $h (LIVE)" ;;
+        FOREIGN)
+          ue=$(jq -rn --arg u "$u" '$u | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch empty')
+          if [ -z "$ue" ] || [ $(( $(date +%s) - ue )) -le "${HOLDER_MAX_AGE_S:-21600}" ]; then
+            echo "$d held by $h (FOREIGN, written $u)"
+          fi ;;
+      esac
     done
 }
 
+rows_ok() { [ "$list_rc" = 0 ] && jq -e 'type == "array" or type == "object"' >/dev/null 2>&1 <<<"$all_rows"; }
+
 if [ "$mode" = release ]; then
   load_rows
-  if [ "$list_rc" != 0 ] || ! jq -e . >/dev/null 2>&1 <<<"$all_rows"; then
+  if ! rows_ok; then
     echo "NOT CHECKED: could not list $id's descendants — nothing released" >&2
     exit 3
   fi
@@ -106,7 +122,7 @@ if [ "$mode" = release ]; then
     exit 1
   fi
   bd update "$id" --status=open --assignee="" --unset-metadata holder >/dev/null \
-    || { echo "release write failed on $id" >&2; exit 1; }
+    || { echo "release write failed on $id" >&2; exit 4; }
   echo "released $id"
   exit 0
 fi
@@ -116,10 +132,20 @@ if [ "$id" = computenet-wpvy ]; then
   exit 1
 fi
 
-load_rows
-show_json=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p')
+show_json=$(bd show "$id" --json 2>/dev/null); show_rc=$?
+show_json=$(printf '%s\n' "$show_json" | sed -n '/^[[{]/,/^[]}]/p')
+if [ "$show_rc" != 0 ] || ! jq -e '.[0].id' >/dev/null 2>&1 <<<"$show_json"; then
+  echo "NOT CHECKED: could not read $id — not claimed; select another epic" >&2
+  exit 1
+fi
 if jq -e '(.[0].labels // []) | index("tracking-umbrella")' >/dev/null 2>&1 <<<"$show_json"; then
   echo "REFUSED: $id is a tracking umbrella — never claimed or broken down; its sub-epics are candidates in their own right" >&2
+  exit 1
+fi
+
+load_rows
+if ! rows_ok; then
+  echo "NOT CHECKED: could not list $id's descendants — not claimed; select another epic" >&2
   exit 1
 fi
 
@@ -234,8 +260,14 @@ if [ -n "$held" ]; then
     DEAD) echo "note: $id's previous holder ($held) is dead — taking it over" ;;
     STALE) echo "note: $id's holder ($held) is a host process older than any slot — residue, taking over" ;;
     FOREIGN)
+      if [ "$(jq -r '.[0].status // ""' <<<"$recheck")" = open ] \
+         && [ -z "$(jq -r '.[0].assignee // ""' <<<"$recheck")" ]; then
+        # Same residue test as the LIVE arm: a released epic's stale holder.
+        echo "note: $id's foreign holder ($held) is residue on a released epic — proceeding"
+      else
       echo "REFUSED: $id is held by a session on ANOTHER machine ($held) — liveness cannot be tested here; it is not this box's leftover (computenet-bz5c)" >&2
-      exit 1 ;;
+      exit 1
+      fi ;;
     *)    echo "note: $id's holder ($held) could not be evaluated (rc=$hrc) — proceeding on the recency test above" ;;
   esac
 fi
