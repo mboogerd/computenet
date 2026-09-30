@@ -135,12 +135,13 @@ class JournaledMetaStore(private val host: ManagedHost, registry: LocationRegist
 
     /**
      * Compacts [journal] (which must be the journal this cell tees to) down to
-     * one checkpoint of the fold. Safe only when *quiescent*: the kernel's
-     * checkpoint runs on the management band and would jump ahead of frames
-     * still staged (AgoraApp's reason for never checkpointing), so writes are
-     * held off and [host]'s own fence is awaited first — every frame the
-     * journal holds has then been applied, and the snapshot covers all of
-     * them. `checkpoint` itself does not fence (kernel design), so callers on
+     * one checkpoint of the fold. The kernel checkpoint itself carries every
+     * frame still staged, so it needs no fence (safe at any inter-invocation
+     * boundary — AgoraApp checkpoints on this basis). What still needs a
+     * fence is this cell's own fold: the snapshot must reflect the journal's
+     * frames, so writes are held off and [host]'s own quiescence is awaited
+     * first — only then has every frame this cell holds been applied to its
+     * fold. `checkpoint` itself does not fence (kernel design), so callers on
      * a live host must take this hold-off themselves.
      */
     fun checkpoint(journal: Journal, timeout: Duration = Duration.parse("30s")) = synchronized(writeLock) {
