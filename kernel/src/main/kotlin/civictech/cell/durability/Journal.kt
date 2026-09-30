@@ -114,6 +114,13 @@ enum class DurabilityClass {
  * durable state is expected to survive a deployment, THAT is the decision to
  * revisit — and it will be revisitable, because by then the version needed to
  * dispatch a migration will already be on disk.
+ *
+ * **The append side refuses too** (computenet-o2aj): [FileJournal.append] runs the
+ * same check [replay] does before it appends a single byte to a file that already
+ * has content, so a journal whose header declares one version can never receive a
+ * record from an instance opened at another — the mixed-version file [replay]'s
+ * check was written to police is unconstructible in the first place, not merely
+ * caught after the fact.
  */
 interface Journal {
     /**
@@ -186,6 +193,14 @@ class InMemoryJournal : Journal {
  * header is written by whichever of [append] / [reset] first puts bytes in the
  * file, so an empty or absent file has no header and acquires one on its first
  * write.
+ *
+ * **Append-side refusal (computenet-o2aj):** a non-empty file gets no header
+ * check bypassed just because one is already there — [append] runs the same
+ * declared-version check [replay] does before adding a single byte, and throws
+ * [JournalFormatMismatch] rather than writing. A journal can therefore never end
+ * up with a header declaring one version and trailing records appended by an
+ * instance at another: the state [replay]'s check exists to police cannot be
+ * constructed to begin with.
  *
  * A file that does **not** begin with [MAGIC] is a journal written before
  * versioning existed and is read as [PRE_VERSIONING_FORMAT_VERSION] — the
@@ -378,11 +393,24 @@ internal class JournalFile(
     private fun sink(): FileOutputStream {
         sink?.let { return it }
         val opened = FileOutputStream(file, true)
-        synchronized(headerLocks.computeIfAbsent(canonicalPathOf(file)) { Any() }) {
-            if (file.length() == 0L) {
-                opened.write(header())
-                opened.fd.sync()
+        try {
+            synchronized(headerLocks.computeIfAbsent(canonicalPathOf(file)) { Any() }) {
+                if (file.length() == 0L) {
+                    opened.write(header())
+                    opened.fd.sync()
+                } else {
+                    // Refuse to APPEND to a file whose declared version is not this instance's
+                    // formatVersion — the append-side half of the refuse-don't-migrate policy
+                    // (computenet-o2aj). Without this, a mismatched declared version could only
+                    // ever be discovered later, by whichever build next replayed the file; this
+                    // makes the mixed-version file unconstructible in the first place, on the
+                    // same check [readAndCheckHeader] already runs for replay.
+                    readAndCheckHeader()
+                }
             }
+        } catch (e: JournalFormatMismatch) {
+            opened.close() // nothing was written; don't leak the handle on a refused append
+            throw e
         }
         sink = opened
         return opened

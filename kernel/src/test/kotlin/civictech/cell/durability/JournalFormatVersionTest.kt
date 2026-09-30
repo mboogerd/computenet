@@ -235,4 +235,71 @@ class JournalFormatVersionTest {
         journal.replay().single().toList() shouldBe listOf<Byte>(9, 9)
         assertThrows<JournalFormatMismatch> { FileJournal(empty).replay() }
     }
+
+    /**
+     * **computenet-o2aj — the resolution chosen: refuse on the append side too, so the
+     * mixed-version file the bead describes can never be constructed.**
+     *
+     * The bead allowed two resolutions: pin the mixed file's replay behaviour by test
+     * (leaving it constructible), or make [FileJournal.append] refuse a mismatched
+     * declared version (making it unconstructible). The reviewer's "benign" argument for
+     * the first was that replay at the file's OWN declared version still reads every
+     * record correctly and replay at any OTHER version already refuses before decoding —
+     * true today because the frame encoding [JournalFile.write] uses is unchanged across
+     * generations, but that is a fact about the current encoding, not a property the
+     * header enforces. It would silently stop holding the day a version bump changed
+     * what a length-prefixed frame's bytes are read as EITHER: a record appended by a
+     * newer build, sitting after an older build's header. Refusing at append removes the
+     * dependency on that fact entirely: this test's `mismatched.append(...)` call throws
+     * before a single byte reaches the file, so no such record is ever on disk to matter.
+     */
+    @Test
+    fun `append refuses a file whose header declares another version, before writing a byte`(
+        @TempDir dir: File,
+    ) {
+        val file = File(dir, "host.journal")
+        FileJournal(file).append("first".toByteArray())
+
+        val mismatched = FileJournal(file, formatVersion = NEXT_VERSION)
+        val refusal = assertThrows<JournalFormatMismatch> { mismatched.append("second".toByteArray()) }
+        refusal.found shouldBe JOURNAL_FORMAT_VERSION
+        refusal.expected shouldBe NEXT_VERSION
+        refusal.message!! shouldContain "journal format version mismatch"
+
+        // nothing was written: the file holds exactly the one record from before,
+        // and a second append at the file's own version still works afterwards
+        FileJournal(file).replay().map { String(it) } shouldBe listOf("first")
+        FileJournal(file).append("third".toByteArray())
+        FileJournal(file).replay().map { String(it) } shouldBe listOf("first", "third")
+    }
+
+    /**
+     * The pre-versioning generation is not exempt from the append-side check either —
+     * the same asymmetry [an unversioned journal is read as the pre-versioning generation]
+     * pins for replay, pinned here for append: appending at the pre-versioning generation
+     * itself succeeds, appending at any OTHER generation is refused.
+     */
+    @Test
+    fun `append refuses an unversioned file too, at any version other than the pre-versioning generation`(
+        @TempDir dir: File,
+    ) {
+        val versioned = File(dir, "host.journal")
+        FileJournal(versioned).append("first".toByteArray())
+        val headerless = versioned.readBytes().copyOfRange(8, versioned.length().toInt())
+
+        val legacy = File(dir, "legacy.journal").also { it.writeBytes(headerless) }
+        legacy.readBytes().copyOfRange(0, 4).contentEquals(FileJournal.MAGIC) shouldBe false
+        // pre-versioning generation == this build's default: append proceeds normally
+        FileJournal(legacy).append("second".toByteArray())
+        FileJournal(legacy).replay().map { String(it) } shouldBe listOf("first", "second")
+
+        val legacy2 = File(dir, "legacy2.journal").also { it.writeBytes(headerless) }
+        val refusal = assertThrows<JournalFormatMismatch> {
+            FileJournal(legacy2, NEXT_VERSION).append("nope".toByteArray())
+        }
+        refusal.found shouldBe PRE_VERSIONING_FORMAT_VERSION
+        refusal.expected shouldBe NEXT_VERSION
+        // nothing was written: byte-identical to the untouched headerless copy
+        legacy2.readBytes().toList() shouldBe headerless.toList()
+    }
 }
