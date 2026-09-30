@@ -70,6 +70,41 @@ class ConcordanceTest {
     }
 
     @Test
+    fun `scanRequirements attributes an id to the chapter that declares it, not an earlier-sorting chapter that only cites it`() {
+        // Regression for computenet-nta1: a requirement declared in a
+        // later-sorting chapter (40-fake.md) but cited from an earlier-sorting
+        // one (20-fake.md) must be attributed to the declaring chapter, not to
+        // whichever chapter the path sort visits first. Mirrors the bug's own
+        // observed shape: 42-WM-01 declared in 42-replication.md, cited as
+        // `[42-WM-01]` inline in 22-consistency.md, which sorts first.
+        val spec = specDir()
+        writeSpecChapter(
+            File(spec, "20-earlier").apply { mkdirs() },
+            "20-fake.md",
+            """
+            # 20 — Fake earlier-sorting chapter
+
+            This chapter only cites the requirement declared elsewhere: a
+            `[40-FAKE-01]` frontier read over the delivered-prefix rows.
+            """.trimIndent(),
+        )
+        writeSpecChapter(
+            File(spec, "40-later").apply { mkdirs() },
+            "40-fake.md",
+            """
+            # 40 — Fake later-sorting chapter, the true owner
+
+            [40-FAKE-01] The fake state SHALL carry the requirement this test
+            declares.
+            """.trimIndent(),
+        )
+
+        val requirements = ConcordanceScanner.scanRequirements(spec)
+
+        requirements.single { it.id == "40-FAKE-01" }.sourceFile shouldBe "40-later/40-fake.md"
+    }
+
+    @Test
     fun `scanRequirements deduplicates an id referenced more than once`() {
         val spec = specDir()
         writeSpecChapter(
@@ -82,6 +117,32 @@ class ConcordanceTest {
         )
 
         ConcordanceScanner.scanRequirements(spec) shouldHaveSize 1
+    }
+
+    @Test
+    fun `buildConcordance's ConcordanceRow sourceFile names the declaring chapter end to end`() {
+        // Same fixture shape as the scanRequirements regression above, run
+        // through the full scan-plus-build pipeline so the assertion is on
+        // ConcordanceRow.sourceFile itself, per the acceptance criteria.
+        val spec = specDir()
+        writeSpecChapter(
+            File(spec, "20-earlier").apply { mkdirs() },
+            "20-fake.md",
+            """
+            Cites it inline: a `[40-FAKE-02]` read over the rows.
+            """.trimIndent(),
+        )
+        writeSpecChapter(
+            File(spec, "40-later").apply { mkdirs() },
+            "40-fake.md",
+            """
+            [40-FAKE-02] The fake state SHALL carry the requirement.
+            """.trimIndent(),
+        )
+
+        val report = buildConcordance(ConcordanceScanner.scanRequirements(spec), emptyList())
+
+        report.rows.single { it.requirement == "40-FAKE-02" }.sourceFile shouldBe "40-later/40-fake.md"
     }
 
     // --- scanScenarios ----------------------------------------------------
