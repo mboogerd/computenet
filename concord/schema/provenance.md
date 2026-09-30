@@ -28,6 +28,44 @@ where a statement is vague, tightens it into one of the five EARS templates.
 | Unwanted behavior | *IF «condition», THEN the X SHALL …* | `[13-LINK-05]` IF a connect violates the inlet's admission policy, THEN the link SHALL be rejected with a stated reason and the existing topology SHALL be unaffected. |
 | Optional feature | *WHERE «capability», the X SHALL …* | `[42-REPL-04]` WHERE replication is supported, replicas of one logical cell SHALL converge to equal folds regardless of which replica accepted each write. |
 
+### Declaration vs citation (the scanner's rule)
+
+An id is textually indistinguishable from itself wherever it appears — the
+scanner (`ConcordanceScanner.scanRequirements`) has to tell a chapter's own
+**declaration** of an id apart from another chapter's **citation** of it, so
+that the concordance attributes the id to the chapter that owns it rather
+than to whichever chapter happens to sort first by path.
+
+The rule the scanner applies: an occurrence **declares** the id when the text
+immediately following the closing `]` — skipping over any wrapping backtick
+or markdown bold marker (`` ` `` / `**`) — starts with an **uppercase
+letter**, opening a new EARS sentence per the five templates above (`The …`,
+`WHEN …`, `WHILE …`, `IF …`, `WHERE …`) or an equivalent normative opener
+(`A …`, `Migration and RESTART preserve …`). An occurrence **cites** the id
+when it continues an existing sentence in lowercase, or is followed by
+punctuation:
+
+- Declaration: `[42-WM-01] The delivered-watermark state SHALL carry …`
+- Declaration (house style wraps the id itself): `` `[24-WL-01]` A lateness
+  declaration SHALL be … ``
+- Citation: `a `[42-WM-01]` delivered-prefix row`, `(`[24-WL-04]`)`, ``
+  `[21-REBASE-01]` is covered by … ``
+
+When more than one chapter's occurrence of an id reads as a declaration by
+this rule (for example a `90-roadmap/` ticket quoting a chapter's EARS
+sentence verbatim), the first one by path sort order wins, same as the
+general first-sighting rule — which is why a normative chapter (`00`–`50`)
+still wins over a roadmap ticket (`90-roadmap/`) discussing it, without
+needing a separate normative-first exception. When **no** occurrence of an id
+reads as a declaration (a prose shape this rule cannot read), the scanner
+falls back to the plain first sighting by path order, exactly as before this
+rule existed.
+
+A spec author who wants an id attributed to the chapter that owns it should
+therefore let the id open the requirement sentence there, and cite it
+elsewhere only mid-sentence (in backticks, by house style, but backticks are
+not themselves the signal — sentence position is).
+
 ### The "checkable through the SPI" rule (the L0 gate)
 
 A statement enters L0 (gets an id) **only when it is checkable through the driver

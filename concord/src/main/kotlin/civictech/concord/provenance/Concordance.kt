@@ -34,25 +34,59 @@ object ConcordanceScanner {
     private val idPattern = Regex("""\[(\d{2}-[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-\d{2})]""")
 
     /**
+     * Distinguishes a genuine declaration from a citation of an
+     * already-declared id (`concord/schema/provenance.md` §1, "Declaration
+     * vs citation"). An id opens a declaration when the requirement text
+     * immediately following it starts a new sentence — the first letter,
+     * after skipping any wrapping backtick or markdown bold marker, is
+     * uppercase: `[42-WM-01] The delivered-watermark state SHALL carry…` or
+     * `` `[24-WL-01]` A lateness declaration SHALL be… ``. A citation
+     * continues an existing sentence in lowercase, or is followed by
+     * punctuation: `a `[42-WM-01]` delivered-prefix row`, `(`[24-WL-04]`)`.
+     */
+    private fun isDeclaration(text: String, afterIndex: Int): Boolean {
+        var i = afterIndex
+        while (i < text.length) {
+            when {
+                text[i].isWhitespace() -> i++
+                text[i] == '`' -> i++
+                text.startsWith("**", i) -> i += 2
+                else -> return text[i].isUpperCase()
+            }
+        }
+        return false
+    }
+
+    /**
      * Scans every `.md` file under [specRoot] for inline `[NN-SLUG-nn]` tags.
-     * A given id may be declared (and re-referenced) in more than one place in
-     * a chapter; only the first sighting is kept as the id's [Requirement]
-     * record, but duplicates never produce a second requirement row.
+     * A given id may be declared (and re-referenced, or cited from another
+     * chapter) in more than one place; the [Requirement] record's
+     * [Requirement.sourceFile] is the chapter that DECLARES the id — the
+     * first-by-path-order sighting classified by [isDeclaration] — falling
+     * back to the first sighting of any kind when no occurrence of an id
+     * looks like a declaration (a corpus shape this heuristic cannot read,
+     * kept working exactly as before rather than guessing). Duplicates never
+     * produce a second requirement row.
      */
     fun scanRequirements(specRoot: File): List<Requirement> {
         if (!specRoot.exists()) return emptyList()
-        val seen = LinkedHashMap<String, Requirement>()
+        val firstSeen = LinkedHashMap<String, Requirement>()
+        val firstDeclaration = LinkedHashMap<String, Requirement>()
         specRoot.walkTopDown()
             .filter { it.isFile && it.extension == "md" }
             .sortedBy { it.path }
             .forEach { file ->
                 val relative = file.relativeTo(specRoot).path
-                idPattern.findAll(file.readText()).forEach { m ->
+                val text = file.readText()
+                idPattern.findAll(text).forEach { m ->
                     val id = m.groupValues[1]
-                    seen.putIfAbsent(id, Requirement(id, relative))
+                    firstSeen.putIfAbsent(id, Requirement(id, relative))
+                    if (isDeclaration(text, m.range.last + 1)) {
+                        firstDeclaration.putIfAbsent(id, Requirement(id, relative))
+                    }
                 }
             }
-        return seen.values.toList()
+        return firstSeen.keys.map { id -> firstDeclaration[id] ?: firstSeen.getValue(id) }
     }
 
     /** The six normative chapter directory prefixes (00 foundations .. 50 process); 90-roadmap is not normative text. */
