@@ -132,9 +132,13 @@ for documentation maintenance.
     `computenet-07k`).
 - `inspect/` (`:inspect`): the Inspector backend — a read-only HTTP/SSE view
   of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`);
-  consumes `:kernel` and `:demo:shell`, opt-in via `--inspect-port` on
-  `demo/shopping` and `demo/skillmatch`. Its SolidJS/Vite frontend lives in
-  `inspect/ui/` (npm, not Gradle), same as `demo/agora/ui`.
+  consumes `:kernel` and `:demo:shell`, opt-in via the shared `--inspect-port`
+  flag (`civictech.inspect.InspectorFlag`) wired into ten demos: agora,
+  alignment, backlog-triage, deliberate, dialogue, exchange, shopping,
+  skillmatch, slotfinder, tiering. Not wired: `allocator-observe` (no hosted
+  graph yet), `beadsmirror` (hosts only in its two-node `--rig` mode) and
+  `social` (excluded by its own module gate, `[SOC1-MOD-01]`). Its SolidJS/Vite
+  frontend lives in `inspect/ui/` (npm, not Gradle), same as `demo/agora/ui`.
 - `doc/spec/`: the normative design — foundations (`00`), programming model
   (`10`), dataflow semantics (`20`), execution (`30`), distribution (`40`),
   development/evolution (`50`), roadmap (`90`). Entry: `doc/spec/README.md`.
