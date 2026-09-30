@@ -9,6 +9,9 @@ import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.flag
 import civictech.demo.shell.respond
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -120,7 +123,13 @@ private fun fail(status: Int, error: String): Nothing = throw Fail(status, error
  * app-side (computenet-sigl0-D6), and every emitted list is sorted by its ids
  * so two instances over one journal serve byte-identical `/state`.
  */
-class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
+class AlignmentApp(
+    port: Int = 8080,
+    private val journalPath: Path? = null,
+    inspector: InspectorFlag.Options? = null,
+) {
+    private val inspectorOptions = inspector
+
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
     private val manage = host.managementInlet.call
@@ -146,6 +155,10 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private val shell = DemoShell(port)
 
     val boundPort: Int get() = shell.boundPort
+
+    /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
+    var inspector: InspectorServer? = null
+        private set
 
     init {
         // one hub suffices: Scored carries the per-dimension n/mean/stdev
@@ -1117,9 +1130,13 @@ class AlignmentApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun Map<String, JsonElement>.str(key: String): String? =
         (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content?.trim()?.takeIf { it.isNotEmpty() }
 
-    fun start(): AlignmentApp = apply { shell.start() }
+    fun start(): AlignmentApp = apply {
+        shell.start()
+        inspectorOptions?.let { inspector = it.serve(registry, mapOf("alignment" to host)) }
+    }
 
     fun stop() {
+        inspector?.stop()
         shell.stop()
         journal?.close()
     }
@@ -1191,17 +1208,26 @@ internal fun seedBeadsTriage(
 }
 
 fun main(args: Array<String>) {
-    val app = AlignmentApp(demoPort(args), journalPath = args.flag("--journal")?.let { Path.of(it) })
+    // InspectorFlag.parse first (3iv0w-D2): it strips its own tokens, then
+    // this demo's own flag/positional reading runs over parsed.rest, so an
+    // inspector flag's value is never mistaken for this demo's own.
+    val parsed = InspectorFlag.parse(args)
+    val app = AlignmentApp(
+        demoPort(parsed.rest),
+        journalPath = parsed.rest.flag("--journal")?.let { Path.of(it) },
+        inspector = parsed.options,
+    )
     // Seed BEFORE the socket opens (computenet-1f8b4), the discipline
     // :demo:beadsmirror states for itself: "the socket opens after every
     // workspace's start-time baseline has swapped its projector in". A seed
     // that throws must take the process down instead of leaving a reachable,
     // EMPTY triage board — which an operator cannot tell apart from a tracker
     // that genuinely has no ready epics.
-    args.flag("--seed-beads")?.let { workspace ->
+    parsed.rest.flag("--seed-beads")?.let { workspace ->
         val n = seedBeadsTriage(app, BdCandidateSource(Path.of(workspace)))
         println("computenet alignment: seeded $n ready epics from $workspace into /t/${TRIAGE_TOPIC.value}")
     }
     app.start()
     println("computenet alignment: http://localhost:${app.boundPort}")
+    parsed.options?.let { InspectorFlag.announce(app.inspector!!, it) }
 }
