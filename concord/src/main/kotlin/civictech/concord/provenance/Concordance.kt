@@ -7,7 +7,7 @@ import kotlin.system.exitProcess
  * L4 provenance (Concord §1.5, `concord/schema/provenance.md`): scans the L0
  * requirement ids declared inline in `doc/spec` chapters (recursively) and the
  * L2 `covers:` tags declared in `concord/corpus` scenarios (recursively), and derives the
- * concordance table plus the three lints (§3 of provenance.md).
+ * concordance table plus the four lints (§3 of provenance.md).
  *
  * Deliberately textual, not schema-based: this is a Gradle task (not a JUnit
  * harness), and `concord/build.gradle.kts` keeps the YAML front end (kaml) and
@@ -110,6 +110,91 @@ object ConcordanceScanner {
                 ?.map { it.relativeTo(specRoot).path }
                 .orEmpty()
         }
+    }
+
+    /**
+     * Provenance data for the three ownership-visibility lints (computenet-7ei34
+     * and computenet-x3hqg, residuals of computenet-nta1; provenance.md §3,
+     * "Unestablished ownership" / "Contested ownership" / "Roadmap-owned
+     * declaration"). [scanRequirements] silently resolves all three shapes
+     * below — this is the same-cost second scan that makes the resolution
+     * visible instead.
+     *
+     * - [idsWithNoDeclaration]: ids where [isDeclaration] returned false for
+     *   *every* occurrence anywhere under `specRoot` (not just normative
+     *   chapters) — [scanRequirements] falls back to first-sighting-by-path
+     *   for these. An id with a declaration-classified occurrence *somewhere*
+     *   (normative or not) is never in this set; see
+     *   [idsWithOnlyNonNormativeDeclaration] for that shape instead.
+     * - [idsWithMultipleNormativeDeclarations]: ids with a declaration-classified
+     *   occurrence in more than one *normative chapter file* (a `.md` file
+     *   directly under a `00-`..`50-` directory — the same file granularity
+     *   `scanNormativeChapterFiles` reports, and the granularity the id scheme
+     *   itself uses: "«chapter»" in `«chapter»-«slug»-«nn»` names one such
+     *   file, e.g. `22`, `24`), mapped to the sorted list of those files'
+     *   relative paths. A normative chapter's declaration alongside a
+     *   `90-roadmap/` ticket's citation that misreads as a declaration
+     *   (ticket clause 2/3) does not count here — that shape resolves
+     *   correctly today by path order, and roadmap prose is not itself an
+     *   owner. Two normative chapter files both reading as the declarer is
+     *   the genuine ambiguity this set exists to surface.
+     * - [idsWithOnlyNonNormativeDeclaration] (computenet-x3hqg): ids with at
+     *   least one declaration-classified occurrence, but *none* of them in a
+     *   normative chapter file (00-50) — every declaration-classified
+     *   occurrence is in a `90-roadmap/` ticket or another spec-root file
+     *   (e.g. `README.md`). This is a distinct shape from
+     *   [idsWithNoDeclaration]: there the id has no declaration anywhere and
+     *   [scanRequirements] falls back to plain first-sighting; here
+     *   [scanRequirements]'s `firstDeclaration` map *does* have a genuine
+     *   declaration-classified entry — it is just outside 00-50, most often
+     *   the "Known blind spot" in provenance.md §1 (a roadmap citation
+     *   immediately followed by an uppercase acronym like `EARS-GAP`) rather
+     *   than a spec author actually declaring the requirement in a ticket. A
+     *   chapter occurrence that only *cites* the id (lowercase continuation,
+     *   e.g. inside backticks mid-sentence) does not count as a normative
+     *   declaration and does not remove the id from this set — mapped to the
+     *   sorted list of the non-normative files' relative paths.
+     */
+    data class DeclarationProvenance(
+        val idsWithNoDeclaration: Set<String>,
+        val idsWithMultipleNormativeDeclarations: Map<String, List<String>>,
+        val idsWithOnlyNonNormativeDeclaration: Map<String, List<String>> = emptyMap(),
+    )
+
+    fun scanDeclarationProvenance(specRoot: File): DeclarationProvenance {
+        if (!specRoot.exists()) return DeclarationProvenance(emptySet(), emptyMap())
+        val everSeen = mutableSetOf<String>()
+        val everDeclared = mutableSetOf<String>()
+        val normativeDeclarationChapters = LinkedHashMap<String, MutableSet<String>>()
+        val nonNormativeDeclarationFiles = LinkedHashMap<String, MutableSet<String>>()
+        specRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "md" }
+            .sortedBy { it.path }
+            .forEach { file ->
+                val relative = file.relativeTo(specRoot).path
+                val topDir = relative.substringBefore('/')
+                val isNormative = normativeChapterPrefixes.any { topDir.startsWith(it) }
+                val text = file.readText()
+                idPattern.findAll(text).forEach { m ->
+                    val id = m.groupValues[1]
+                    everSeen += id
+                    if (isDeclaration(text, m.range.last + 1)) {
+                        everDeclared += id
+                        if (isNormative) {
+                            normativeDeclarationChapters.getOrPut(id) { linkedSetOf() }.add(relative)
+                        } else {
+                            nonNormativeDeclarationFiles.getOrPut(id) { linkedSetOf() }.add(relative)
+                        }
+                    }
+                }
+            }
+        val idsWithMultiple = normativeDeclarationChapters
+            .filterValues { it.size > 1 }
+            .mapValues { it.value.sorted() }
+        val idsWithOnlyNonNormative = nonNormativeDeclarationFiles
+            .filterKeys { it !in normativeDeclarationChapters }
+            .mapValues { it.value.sorted() }
+        return DeclarationProvenance(everSeen - everDeclared, idsWithMultiple, idsWithOnlyNonNormative)
     }
 
     private val idLine = Regex("""^id:\s*['"]?([^'"#]+?)['"]?\s*(#.*)?$""")
@@ -220,10 +305,18 @@ fun computeChapterDenominator(
  * specified, checkable requirement by construction. So every scanned
  * requirement id is eligible for the coverage-gap check; no separate status
  * filter is applied.
+ *
+ * [declarationProvenance] (computenet-7ei34 and computenet-x3hqg; provenance.md
+ * §3, "Unestablished ownership" / "Contested ownership" / "Roadmap-owned
+ * declaration") is optional and defaults to empty so every existing caller
+ * and fixture-only test keeps working unchanged; the `:concordance` CLI task
+ * below is the only caller that supplies a real scan.
  */
 fun buildConcordance(
     requirements: List<ConcordanceScanner.Requirement>,
     scenarios: List<ConcordanceScanner.CorpusScenario>,
+    declarationProvenance: ConcordanceScanner.DeclarationProvenance =
+        ConcordanceScanner.DeclarationProvenance(emptySet(), emptyMap()),
 ): ConcordanceReport {
     val requirementIds = requirements.map { it.id }.toSet()
     val coverageOf = mutableMapOf<String, MutableList<String>>()
@@ -257,6 +350,29 @@ fun buildConcordance(
             findings += LintFinding(
                 Severity.NOTE,
                 "Coverage gap: requirement '${req.id}' (${req.sourceFile}) has no covering scenario",
+            )
+        }
+        if (req.id in declarationProvenance.idsWithNoDeclaration) {
+            findings += LintFinding(
+                Severity.NOTE,
+                "Unestablished ownership: requirement '${req.id}' (${req.sourceFile}) has no " +
+                    "declaration-classified occurrence anywhere in doc/spec/**; attributed to " +
+                    "its chapter by the first-sighting-by-path fallback only",
+            )
+        }
+        declarationProvenance.idsWithMultipleNormativeDeclarations[req.id]?.let { chapters ->
+            findings += LintFinding(
+                Severity.NOTE,
+                "Contested ownership: requirement '${req.id}' has declaration-classified " +
+                    "occurrences in more than one normative chapter: ${chapters.joinToString(", ")}",
+            )
+        }
+        declarationProvenance.idsWithOnlyNonNormativeDeclaration[req.id]?.let { files ->
+            findings += LintFinding(
+                Severity.NOTE,
+                "Roadmap-owned declaration: requirement '${req.id}' (${req.sourceFile}) has no " +
+                    "declaration-classified occurrence in a normative chapter (00-50); its only " +
+                    "declaration-classified occurrence is in ${files.joinToString(", ")}",
             )
         }
         ConcordanceRow(req.id, req.sourceFile, covering)
@@ -338,7 +454,7 @@ fun renderConcordanceMarkdown(report: ConcordanceReport, denominator: ChapterDen
         fatal.forEach { appendLine("- ${it.message}") }
     }
     appendLine()
-    appendLine("### Notes (coverage gaps — the testing agent's worklist)")
+    appendLine("### Notes (coverage gaps, unestablished/contested/roadmap-owned ownership — the testing agent's worklist)")
     appendLine()
     if (notes.isEmpty()) {
         appendLine("None.")
@@ -364,7 +480,8 @@ fun main(args: Array<String>) {
     val specRoot = File(specRootArg)
     val requirements = ConcordanceScanner.scanRequirements(specRoot)
     val scenarios = ConcordanceScanner.scanScenarios(File(corpusRootArg))
-    val report = buildConcordance(requirements, scenarios)
+    val declarationProvenance = ConcordanceScanner.scanDeclarationProvenance(specRoot)
+    val report = buildConcordance(requirements, scenarios, declarationProvenance)
     val denominator = computeChapterDenominator(ConcordanceScanner.scanNormativeChapterFiles(specRoot), requirements)
 
     val outputFile = File(outputArg)
@@ -381,7 +498,7 @@ fun main(args: Array<String>) {
     report.findings.forEach { println("[${it.severity}] ${it.message}") }
     println(
         "${report.fatalFindings.size} fatal finding(s), " +
-            "${report.noteFindings.size} coverage-gap note(s).",
+            "${report.noteFindings.size} note(s) (coverage gaps, unestablished/contested/roadmap-owned ownership).",
     )
 
     if (report.fatalFindings.isNotEmpty() && fatalMode) {
