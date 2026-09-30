@@ -85,14 +85,39 @@ for documentation maintenance.
   machine-distinguishable refusal reasons, and key-derived `PeerId`
   fingerprints implementing the kernel's `SignatureVerifier` seam (DSC1, epic
   `computenet-ssa`). Depends on `:kernel`; `:kernel` must not depend on it.
-- `demograph/` (`:demograph`): data structures for capturing subjective
-  stances and personal preferences per actor, and consolidating them into
-  aggregate views (DGR, epic `computenet-drz8`). Same dependency shape as
-  `:identity` — depends on `:kernel` (and, transitively, `:nature`); `:kernel`
-  must not depend on it. `civictech.demograph.Vocabulary` KDocs the six-term
-  charter vocabulary (actor, stance, preference, weight, contestation,
-  aggregation) and its boundary line (no need, credit, subsidy, or
-  vote-as-civic-act).
+- `demograph/` (`:demograph`): charter vocabulary module (`Vocabulary.kt`); no
+  data structures yet — DGR.2/DGR.3 build them (DGR, epic `computenet-drz8`).
+  Same dependency shape as `:identity` — depends on `:kernel` (and,
+  transitively, `:nature`); `:kernel` must not depend on it.
+  `civictech.demograph.Vocabulary` KDocs the six-term charter vocabulary
+  (actor, stance, preference, weight, contestation, aggregation) and its
+  boundary line (no need, credit, subsidy, or vote-as-civic-act).
+- `query/` (`:query`): compiles non-recursive Datalog/relational queries to a
+  kernel `GraphSpec` (QRY1, epic `computenet-cab`) — schema catalog, AST,
+  parser (`civictech.query.parse`), planner (`.plan`), lowering (`.lower`).
+  Depends on `:kernel`; its only consumers are the **test** source sets of
+  four demos (`:demo:skillmatch`, `:demo:tiering`, `:demo:slotfinder`,
+  `:demo:backlog-triage`). Must not depend on `:concord`, `:wire`, `:inspect`
+  or any `:demo:*` module.
+- `loader/` (`:loader`): dynamic jar loading (JAR1, epic `computenet-051`) —
+  one `ModuleClassLoader` per jar, an enumerable shared-prefix set delegated
+  parent-first and everything else child-first, rejecting a jar that smuggles
+  a class under a shared prefix. Sits above the runtime: `:kernel` and
+  `:concord` must not depend on it.
+- `iroh/` (`:iroh`): wraps the iroh sidecar crate (`iroh/sidecar/`) for
+  dial/accept by NodeId over QUIC, length-prefixed frames on one bi-directional
+  stream per peer link (DSC0, epic `computenet-egl`); Cargo tasks are opt-in
+  behind `-Piroh.enabled=true`, so the default build and CI stay pure-JVM.
+  Depends on `:kernel`, `:identity`; `:kernel` must not depend on it.
+- `economy/` (`:economy`): validated, serializable economic policy
+  (`EconomicPolicy`) for `BudgetLedger` implementations, plus a token-bucket
+  ledger built on it (ECO1, epic `computenet-66m`). Same dependency shape as
+  `:identity`/`:demograph` — depends on `:kernel`; `:kernel` must not depend
+  on it.
+- `timetravel/` (`:timetravel`): offline, headless time-travel tooling over
+  durability journals — reader, reconstruction, diff, and a CLI (TTD1, epic
+  `computenet-ocv`). A leaf on `:kernel`; nothing depends on it in main scope
+  yet (`:demo:agora`'s test source set is its only consumer today).
 - `concord/`: the executable specification — implementation-neutral conformance
   suite. YAML scenarios in `concord/corpus/` cover EARS requirement ids in
   `doc/spec/`; `concord/schema/*.md` are the authoring contracts (single-writer,
@@ -116,6 +141,10 @@ for documentation maintenance.
     vector-valued cells, and durability journals inputs only (judgements are
     recomputed). Depends on `:kernel`, `:demo:shell` and `:demo:agora`. Its
     SolidJS/Vite frontend lives in `demo/deliberate/ui/` (npm, not Gradle).
+  - `demo/dialogue/` (`:demo:dialogue`): argumentation extraction from
+    recorded dialogue transcripts (AGO1, epic `computenet-2aw`); depends on
+    `:kernel`, `:demo:shell` and `:demo:agora` (reuses agora's claim/edge
+    vocabulary rather than minting a parallel one).
   - `demo/beadsmirror/` (`:demo:beadsmirror`): mirrors a bd/Dolt-backed beads
     workspace — polls the Dolt commit feed, projects it through kernel cells
     into a materialized OR-map fold, and serves the fold over `:demo:shell`'s
@@ -130,6 +159,14 @@ for documentation maintenance.
   - `demo/social/` (`:demo:social`): LDBC-SNB social graph as four per-key
     `KeyedCells<Long>` families behind one ingress API (SOC1, epic
     `computenet-07k`).
+  - `demo/alignment/` (`:demo:alignment`): team alignment — ideas rated 1-9
+    per creator-defined dimension, aggregated by a demo-local
+    `WeightedFusionCell` (ALN1, epic `computenet-6brvy`); one of only two
+    demos that define their own KSP cell.
+  - `demo/allocator-observe/` (`:demo:allocator-observe`): spend-log
+    observability for the socaity allocator MVP (ALOB, epic
+    `computenet-fpml`) — ingests a JSONL spend log via a total per-line
+    classifier; no hosted graph yet, so not wired to `:inspect`.
 - `inspect/` (`:inspect`): the Inspector backend — a read-only HTTP/SSE view
   of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`);
   consumes `:kernel` and `:demo:shell`, opt-in via the shared `--inspect-port`
