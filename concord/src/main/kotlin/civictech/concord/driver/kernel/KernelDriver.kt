@@ -14,12 +14,18 @@ import civictech.cell.observe.ObservationSink
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.LocationRegistry
+import civictech.cell.link.PeerId
 import civictech.cell.Propagate
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
+import civictech.cell.wire.PeerConnection
+import civictech.cell.wire.PeerListener
+import civictech.cell.wire.PeerTransport
+import civictech.cell.wire.PeerTransports
+import civictech.cell.wire.Peering
 import civictech.concord.driver.Blob
 import civictech.concord.driver.CellId
 import civictech.concord.driver.DeadLetter
@@ -38,6 +44,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
+import java.util.IdentityHashMap
 import java.util.UUID
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -54,11 +61,42 @@ import kotlin.time.Duration.Companion.seconds
  * being awaited); `apply` routes an op through the host router; `quiesce` runs
  * the controller to idle within a step budget; `readView` reads an
  * [ObservationSink]. Views are bound as hosted `ObserveCell`s (see [KernelCatalog]).
+ *
+ * With [transportScheme], every named driver host owns a separate
+ * [LocationRegistry], a bridge host on this driver's scheduler, and a
+ * [Peering.Side]. The sides are connected in a deterministic full mesh through
+ * the selected [PeerTransport]. Socket delivery order is not seeded, so a `ws`
+ * run is evidence for [41-LOC-01]'s boundary-observable half (equal folds over
+ * a real socket), not for the deterministic schedule sweep; omitting the scheme
+ * preserves the original single-registry seeded mode exactly.
  */
-class KernelDriver(seed: Long? = null) : Driver {
+class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver {
 
     internal val controller = SimulationController(seed)
+    /** The original registry, retained verbatim for the default single-registry mode. */
     internal val registry = LocationRegistry()
+    internal val transportScheme: String? = transportScheme?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    private val transport: PeerTransport? = this.transportScheme?.let(PeerTransports::forScheme)
+
+    /** Separate registries exist only in transport mode; the default always returns [registry]. */
+    private val registriesByHost = LinkedHashMap<HostId, LocationRegistry>()
+    private val registriesByManagedHost = IdentityHashMap<ManagedHost, LocationRegistry>()
+
+    /**
+     * One listener per host that is the lower endpoint of at least one mesh
+     * edge. A listener aggregates all accepted sessions, so quiescence compares
+     * its counters with the sum of the dialled endpoints recorded here.
+     */
+    private class TransportHost(
+        val id: HostId,
+        val side: Peering.Side,
+    ) {
+        var listener: PeerListener? = null
+        val dialers = LinkedHashMap<HostId, PeerConnection>()
+    }
+
+    private val transportHosts = LinkedHashMap<HostId, TransportHost>()
+    private var closed = false
 
     private val hosts = LinkedHashMap<HostId, ManagedHost>()
     internal val cells = LinkedHashMap<CellId, Bound>()
@@ -93,7 +131,7 @@ class KernelDriver(seed: Long? = null) : Driver {
      * target cell lives there. For a non-`dur` scenario nothing is spawned onto
      * the durable host, so it stays inert.
      */
-    private val dur = KernelDriverDur(controller, registry) { deadLetters += it }
+    private val dur = KernelDriverDur(controller, ::registryFor) { deadLetters += it }
 
     /** Cell ids delegated to [dur] (durable-host members + `journal` controllers). */
     private val durCells = mutableSetOf<CellId>()
@@ -148,7 +186,9 @@ class KernelDriver(seed: Long? = null) : Driver {
     internal fun hostFor(hostId: HostId?): ManagedHost {
         val key = hostId ?: defaultHostId
         return hosts.getOrPut(key) {
-            ManagedHost(scheduler = controller.scheduler(), registry = registry).also { host ->
+            val hostRegistry = registryFor(key)
+            ManagedHost(scheduler = controller.scheduler(), registry = hostRegistry).also { host ->
+                registriesByManagedHost[host] = hostRegistry
                 host.deadLetterOutlet.subscribe(
                     Use.fixed(
                         Propagate<civictech.cell.host.DeadLetter> { dl ->
@@ -157,8 +197,45 @@ class KernelDriver(seed: Long? = null) : Driver {
                         PortRef.generate(),
                     ),
                 )
+                if (transport != null) transportHostFor(key)
             }
         }
+    }
+
+    /** The registry that routes traffic originating on [host]. */
+    internal fun registryOf(host: ManagedHost): LocationRegistry =
+        checkNotNull(registriesByManagedHost[host]) { "managed host does not belong to this Concord driver" }
+
+    /** Host-id resolver shared with the durability capability. */
+    private fun registryFor(hostId: HostId): LocationRegistry =
+        if (transport == null) registry else registriesByHost.getOrPut(hostId) { LocationRegistry() }
+
+    /** Build one side and peer it with every side already present. */
+    private fun transportHostFor(hostId: HostId): TransportHost =
+        transportHosts[hostId] ?: run {
+            val binding = checkNotNull(transport)
+            check(binding.scheme == "ws") {
+                "Concord real-transport mode currently binds ws only; '${binding.scheme}' is not supported"
+            }
+            val hostRegistry = registryFor(hostId)
+            val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = hostRegistry)
+            registriesByManagedHost[bridgeHost] = hostRegistry
+            val peerName = if (hostId == defaultHostId) "concord-default" else hostId
+            val created = TransportHost(hostId, Peering.Side(hostRegistry, bridgeHost, peer = PeerId(peerName)))
+            transportHosts.values.toList().forEach { existing -> peer(existing, created, binding) }
+            transportHosts[hostId] = created
+            created
+        }
+
+    /** One edge of the full mesh: lower id listens once, higher id dials once. */
+    private fun peer(a: TransportHost, b: TransportHost, binding: PeerTransport) {
+        val (lower, higher) = if (a.id < b.id) a to b else b to a
+        val listener = lower.listener ?: binding.listen(
+            binding.parseAddress("ws://127.0.0.1:0"),
+            lower.side,
+        ).also { lower.listener = it }
+        check(higher.id !in lower.dialers) { "duplicate Concord transport edge ${lower.id}<-${higher.id}" }
+        lower.dialers[higher.id] = binding.dial(listener.boundAddress, higher.side)
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
@@ -297,20 +374,77 @@ class KernelDriver(seed: Long? = null) : Driver {
     internal var compositeDrainTimeout: Duration = 60.seconds
 
     override fun quiesce(budget: Int): QuiesceReport {
+        if (transport == null) {
+            val drained = drainController(budget)
+            drainComposites()
+            return QuiesceReport(settled = drained.settled, steps = drained.steps)
+        }
+
+        val deadline = System.nanoTime() + TRANSPORT_QUIESCE_TIMEOUT_NANOS
         var steps = 0
-        var settled = false
-        while (steps < budget) {
-            if (!controller.step()) {
-                settled = true
-                break
+        while (true) {
+            val drained = drainController((budget - steps).coerceAtLeast(0))
+            steps += drained.steps
+            if (!drained.settled) {
+                drainComposites()
+                return QuiesceReport(settled = false, steps = steps)
             }
+
+            if (transportFramesBalanced()) {
+                // framesReceived is incremented immediately before the IO thread
+                // enqueues bridge work. Give that enqueue its turn, then require
+                // the controller to remain empty and the counters to stay equal.
+                Thread.sleep(TRANSPORT_POLL_MILLIS)
+                val confirming = drainController((budget - steps).coerceAtLeast(0))
+                steps += confirming.steps
+                if (!confirming.settled) {
+                    drainComposites()
+                    return QuiesceReport(settled = false, steps = steps)
+                }
+                if (confirming.steps == 0 && transportFramesBalanced()) {
+                    drainComposites()
+                    return QuiesceReport(settled = true, steps = steps)
+                }
+            }
+
+            check(System.nanoTime() < deadline) {
+                "transport quiesce did not settle within 10 s; counters: ${transportCounterSummary()}"
+            }
+            Thread.sleep(TRANSPORT_POLL_MILLIS)
+        }
+    }
+
+    private data class Drain(val settled: Boolean, val steps: Int)
+
+    private fun drainController(budget: Int): Drain {
+        var steps = 0
+        while (steps < budget) {
+            if (!controller.step()) return Drain(settled = true, steps = steps)
             steps++
         }
-        // Settled or not (budget exhausted is a diagnostic, never a golden — P1),
-        // every composite published so far must be in its log before a check reads it.
-        drainComposites()
-        return QuiesceReport(settled = settled, steps = steps)
+        return Drain(settled = false, steps = steps)
     }
+
+    /** Listener counters aggregate sessions; compare them with the sum of their diallers. */
+    private fun transportFramesBalanced(): Boolean = transportHosts.values.all { host ->
+        val listener = host.listener ?: return@all true
+        val listening = listener.stats
+        val dialled = host.dialers.values
+        dialled.all { it.isCarrying } &&
+            listening.framesSent == dialled.sumOf { it.stats.framesReceived } &&
+            listening.framesReceived == dialled.sumOf { it.stats.framesSent }
+    }
+
+    private fun transportCounterSummary(): String = transportHosts.values
+        .filter { it.listener != null }
+        .joinToString(separator = "; ") { host ->
+            val listening = checkNotNull(host.listener).stats
+            val dialled = host.dialers.entries.joinToString(prefix = "[", postfix = "]") { (peer, endpoint) ->
+                val stats = endpoint.stats
+                "$peer(sent=${stats.framesSent},received=${stats.framesReceived},carrying=${endpoint.isCarrying})"
+            }
+            "${host.id}-listener(sent=${listening.framesSent},received=${listening.framesReceived}) dialers=$dialled"
+        }
 
     /**
      * The drain barrier for every aligned view (5ubdv-D1): each composite
@@ -327,7 +461,27 @@ class KernelDriver(seed: Long? = null) : Driver {
      * after its checks have read the logs.
      */
     fun close() {
+        if (closed) return
+        closed = true
+        var failure: Throwable? = null
+        transportHosts.values.toList().asReversed().forEach { host ->
+            host.dialers.values.toList().asReversed().forEach { endpoint ->
+                try {
+                    endpoint.close()
+                } catch (e: Throwable) {
+                    if (failure == null) failure = e
+                }
+            }
+        }
+        transportHosts.values.toList().asReversed().forEach { host ->
+            try {
+                host.listener?.close()
+            } catch (e: Throwable) {
+                if (failure == null) failure = e
+            }
+        }
         cells.values.mapNotNull { it.sink as? RecordedComposite }.forEach { it.close() }
+        failure?.let { throw it }
     }
 
     override fun readView(cellId: CellId): Value {
@@ -644,5 +798,7 @@ class KernelDriver(seed: Long? = null) : Driver {
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */
         const val READ_STEP_BUDGET = 100_000
+        const val TRANSPORT_POLL_MILLIS = 2L
+        const val TRANSPORT_QUIESCE_TIMEOUT_NANOS = 10_000_000_000L
     }
 }

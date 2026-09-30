@@ -155,7 +155,7 @@ import java.util.UUID
  */
 internal class KernelDriverDur(
     private val controller: SimulationController,
-    private val registry: LocationRegistry,
+    private val registryOf: (HostId) -> LocationRegistry,
     /** Dead letters observed on the durable host flow into the driver's shared list. */
     private val onDeadLetter: (DeadLetter) -> Unit,
 ) {
@@ -280,7 +280,7 @@ internal class KernelDriverDur(
     private fun newHost(): ManagedHost =
         ManagedHost(
             scheduler = controller.scheduler(),
-            registry = registry,
+            registry = registryOf(DUR_HOST),
             journalFor = { ref -> if (ref in journaledRefs) journal else null },
         ).also { h ->
             h.deadLetterOutlet.subscribe(

@@ -25,6 +25,9 @@ import civictech.concord.value.Value
 import java.util.IdentityHashMap
 import java.util.UUID
 
+/** The one capability refusal the transport corpus maps to a named skipped node. */
+internal const val CROSS_REGISTRY_MIGRATE_UNBUILT = "cross-registry migrate is unbuilt (gyvli-D6)"
+
 /**
  * The `dist`-profile capability of the kernel driver (CONCORD-PLAN §3
  * "41/42/33 — Distribution", W4-A). It is **composed into** [KernelDriver]
@@ -37,11 +40,10 @@ import java.util.UUID
  * The binding leans on facts established by the kernel's own distribution tests
  * (`DistributedCollaborativeAppTest`, `ReplicationTest`, `BridgedGraphTest`):
  *
- * - **One controller, N hosts.** [KernelDriver] already spawns each named host
- *   on its own `SimulationController.scheduler()`, all sharing one
- *   `LocationRegistry`. Cells on different hosts are therefore genuine peers —
- *   a cross-host send is a real scheduler-queue hop (spec 33/41 P2 "queue hop"
- *   tier), not a same-thread call.
+ * - **One controller, N hosts.** [KernelDriver] spawns each named host on its
+ *   own `SimulationController.scheduler()`. In the default mode they share one
+ *   registry; in transport mode each has its own registry joined through the
+ *   selected peer transport.
  * - **Replication is dataflow, not a second protocol** (spec 42): two
  *   `SetCell`s sharing a logical id, each handed to `Replication.replicate`,
  *   gossip their effective deltas over registry-routed links and converge to
@@ -55,8 +57,8 @@ import java.util.UUID
 internal class KernelDriverDist(private val driver: KernelDriver) {
 
     /**
-     * One [Replication] **per driver host**, all over the driver's single shared
-     * registry (computenet-cthi, resolving DISPUTES.md `KE3-GC-RECLAIM-FRONTIER`).
+     * One [Replication] **per driver host**, over that host's registry
+     * (computenet-cthi, resolving DISPUTES.md `KE3-GC-RECLAIM-FRONTIER`).
      *
      * A `Replication` is one peer's view of the mesh: it memoises ONE
      * delivered-watermark companion per logical id (`Replication.trackDeliveries`,
@@ -70,11 +72,11 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * uses (`CheckpointReclaimTest`, `StableFrontierMeshTest`: one `Replication`
      * per peer).
      *
-     * Unlike those fixtures, the hosts keep sharing ONE registry rather than one
-     * registry each bridged by `Peering.Loopback`: [connectCrossHost], [migrate],
-     * [retransmit] and `interest:` staging all route through `driver.registry`,
-     * and a shared registry already carries gossip between hosts as a
-     * scheduler-queue hop. Each `Replication` subscribes to that registry's
+     * In the default mode the hosts keep sharing one registry, preserving the
+     * seeded in-process sweep. In transport mode [connectCrossHost], [retransmit]
+     * and `interest:` staging use the registry belonging to the relevant host,
+     * and the peer transport mirrors them across the boundary. Each
+     * [Replication] subscribes to its host registry's
      * publish events but links only its OWN local replicas (`localReplicas`) to
      * their peers, so N instances over one registry wire the mesh the way N peers
      * would. The eight `42-replication/` scenarios are the evidence this
@@ -95,7 +97,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     private val replications = IdentityHashMap<ManagedHost, Replication>()
 
     private fun replicationFor(host: ManagedHost): Replication =
-        replications.getOrPut(host) { Replication(driver.registry) }
+        replications.getOrPut(host) { Replication(driver.registryOf(host)) }
 
     /** Stable logical id per `replica-of` group; instance ids counted within a group. */
     private val logicalIds = LinkedHashMap<String, UUID>()
@@ -223,7 +225,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
 
         // 42-INTEREST-01: stage the interest assignment BEFORE replicate — the
         // linker reads it at link time, so it must be recorded first.
-        parseInterest(interest)?.let { driver.registry.setInterest(replica.ref, it) }
+        parseInterest(interest)?.let { driver.registryOf(host).setInterest(replica.ref, it) }
         // `replicate` spawns the replica on the host and wires the gossip mesh to
         // every peer already published under this logical id (and, via onPublish,
         // every peer that joins later).
@@ -291,7 +293,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
             ?: throw UnsupportedCatalogBinding("source '$from' (type ${src.type}) has no outlet port '$outletName'"))
             as FanOutlet<Propagate<SetDelta<Any?>>>
 
-        val routed = (HostedCellProxy.create(dst.ref, driver.registry, DeltaInletProxy::class.java)
+        val routed = (HostedCellProxy.create(dst.ref, driver.registryOf(src.host), DeltaInletProxy::class.java)
             as DeltaInletProxy).inlet.call
 
         val link = srcOutlet.streamTo(routed)
@@ -319,6 +321,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * one-cell-per-host arrangement. The broader claim is filed in DISPUTES.md.
      */
     fun migrate(cellId: CellId, targetHostId: HostId) {
+        if (driver.transportScheme != null) throw UnsupportedCatalogBinding(CROSS_REGISTRY_MIGRATE_UNBUILT)
         val bound = driver.cells.getValue(cellId)
         val source = bound.host
         val target = driver.hostFor(targetHostId)
@@ -432,7 +435,8 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
                     "payload fields must name the delivery being duplicated",
             )
         }
-        val routed = HostedCellProxy.create(target.ref, driver.registry, GossipInletProxy::class.java)
+        val sourceHost = driver.cells.getValue(source).host
+        val routed = HostedCellProxy.create(target.ref, driver.registryOf(sourceHost), GossipInletProxy::class.java)
             as GossipInletProxy
         // Ride the target host's intake under the ORIGINAL wave coordinates, the way
         // the dur binding rides it: HostedCellProxy stamps CurrentContext into the

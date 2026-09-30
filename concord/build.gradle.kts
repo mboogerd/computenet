@@ -17,6 +17,10 @@ dependencies {
     // 0.77.1 is built against kotlinx-serialization 1.9.0 (the version this repo
     // pins) and resolves cleanly under Kotlin 2.1.21.
     testImplementation(libs.kaml)
+    // gyvli-D6: the kernel driver resolves the selected transport through the
+    // kernel ServiceLoader seam. Keep the concrete ws binding test-runtime-only
+    // so :concord main remains :kernel-only.
+    testImplementation(project(":wire"))
 }
 
 // Default profile: `core,dist,dur` — the full corpus, including the 6 `dist` + 2
@@ -24,6 +28,7 @@ dependencies {
 // loops opt *out* with `-Pconcord.profiles=core`.
 tasks.withType<Test>().configureEach {
     systemProperty("concord.profiles", (project.findProperty("concord.profiles") as String?) ?: "core,dist,dur")
+    (project.findProperty("concord.transport") as String?)?.let { systemProperty("concord.transport", it) }
     // W4-C: the generative sweep (24-GEN-01) defaults to its `generator: instances:`
     // count; `-Pconcord.gen.instances=N` overrides it for a deeper local sweep.
     (project.findProperty("concord.gen.instances") as String?)?.let { systemProperty("concord.gen.instances", it) }
