@@ -283,17 +283,17 @@ reply decides what happens next, and acting before it arrives is exactly the
 failure this skill exists to prevent. The council pass is the one exception,
 because it only works on parks, which are already stuck on a person.
 
-The other exception: when the user answers a parked question here in the
-conversation, record and unpark in the same step — comment
-`MAINTAINER DECISION (<date>, <maintainer>, recorded by /sync-report): <answer>`,
-then `bd update <id> --status=open --assignee="" --remove-label=human`. A
-comment alone leaves the bead on the next report's human list. If the answer
-does not end the park (it still needs an attended session, say), keep the
-label and say so in the comment.
-
 Then — and only then — write `.claude/last-sync.json` with the current
 `origin/main` SHA, the timestamp, the PR numbers seen, and the parked-question
 ids reported, so the next report starts where this one ended.
+
+When the user answers a parked question here, record and unpark in one step:
+comment `MAINTAINER DECISION (<date>, <maintainer>, recorded by /sync-report): <answer>`,
+then `bd update <id> --status=open --assignee="" --remove-label=human`. A
+comment alone leaves the bead on the next report's human list. If the answer
+does not end the park (it still needs an attended session, say), keep the
+label and say why in the comment. Once the reply's answers are recorded,
+`bd dolt pull && bd dolt push`.
 
 ## 8. Council pass
 
