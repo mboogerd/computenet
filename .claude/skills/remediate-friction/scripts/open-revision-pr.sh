@@ -19,7 +19,7 @@
 #
 # Usage: open-revision-pr.sh <pr-number|pr-url> [--section '<file>#<heading>'] [<id>...]
 #   --section  link every non-closed item labelled `revise` whose
-#              metadata.section equals it exactly
+#              metadata.section equals it, a `.claude/skills/` prefix ignored
 #   <id>...    further items to link, e.g. the park item that asks a human
 #              to approve the PR; at least one of --section or an id
 # Run where `bd` resolves the main checkout's database.
@@ -51,8 +51,13 @@ url=$(gh pr view "$pr" --json url --jq .url) && [ -n "$url" ] \
   || die "gh returned something that is not a PR url: $url"
 
 if [ -n "$section" ]; then
-  queued=$(bd list --label revise --metadata-field "section=$section" --limit 0 --json \
-          | bdjson | jq -r '(if type=="array" then . else (.issues // []) end)[].id') \
+  # Match on a normalised key, not bd's exact --metadata-field: items are
+  # queued both as `.claude/skills/work/...` and as `work/...`, and an exact
+  # match silently skipped the other spelling.
+  queued=$(bd list --label revise --limit 0 --json | bdjson | jq -r --arg s "$section" '
+             def n: sub("^\\./"; "") | sub("^\\.claude/skills/"; "");
+             (if type=="array" then . else (.issues // []) end)[]
+             | select(((.metadata.section // "") | n) == ($s | n)) | .id') \
     || die "bd list failed — cannot resolve the items of $section"
   [ -n "$queued" ] || die "no open item labelled revise has section=$section"
   ids="$queued"$'\n'"$ids"

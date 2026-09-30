@@ -30,9 +30,12 @@ fixture() {                 # fresh stubs + store; sets D, STUB
 #!/usr/bin/env bash
 [ "\${GH_MODE:-ok}" = fail ] && { echo "gh: HTTP 502" >&2; exit 1; }
 [ "\$1 \$2" = "pr view" ] || exit 9
+[ "\${GH_MODE:-ok}" = notpr ] && { echo "#1131"; exit 0; }
 echo "$URL"
 EOF
-  # BD_DROP: ids whose update exits 0 but stores nothing.
+  # BD_DROP: ids whose update exits 0 but stores nothing. BD_MODE=listfail:
+  # `bd list` fails. The list stub filters on the label only and returns the
+  # sections in the JSON, both spellings, so the script's own match is tested.
   cat > "$STUB/bd" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$D/bd.log"
@@ -43,11 +46,20 @@ case "\$1" in
   show)   v=\$(cat "$D/pr/\$2" 2>/dev/null)
           echo "warning: noise before json"
           printf '[{"id":"%s","metadata":{"pr":"%s"}}]\n' "\$2" "\$v" ;;
-  list)   case "\$*" in
-            *"--label revise"*"section=work/SKILL.md#Five"*)
-              echo '[{"id":"t-a"},{"id":"t-b"},{"id":"t-c"}]' ;;
-            *) echo '[]' ;;
-          esac ;;
+  list)   [ "\${BD_MODE:-ok}" = listfail ] && { echo "dolt: connection refused" >&2; exit 1; }
+          case "\$*" in *"--label revise"*) ;; *) echo '[]'; exit 0 ;; esac
+          # Honour --metadata-field as real bd does, exactly, so a script
+          # that leans on it is tested against bd's real (exact) behaviour.
+          exact=""; prev=""
+          for a in "\$@"; do
+            [ "\$prev" = "--metadata-field" ] && exact=\${a#section=}; prev=\$a
+          done
+          echo '[{"id":"t-a","metadata":{"section":"work/SKILL.md#Five"}},
+                 {"id":"t-b","metadata":{"section":".claude/skills/work/SKILL.md#Five"}},
+                 {"id":"t-c","metadata":{"section":"work/SKILL.md#Five"}},
+                 {"id":"t-six","metadata":{"section":"work/SKILL.md#Six"}},
+                 {"id":"t-none","metadata":{}}]' \
+            | jq --arg e "\$exact" '[.[] | select(\$e == "" or .metadata.section == \$e)]' ;;
 esac
 EOF
   chmod +x "$STUB/gh" "$STUB/bd"
@@ -77,6 +89,21 @@ out=$(run 1131 --section 'work/SKILL.md#Five'); rc=$?
 for id in t-a t-b t-c; do
   [ "$(stamped $id)" = "$URL" ] && ok "$id stamped" || bad "$id not stamped"
 done
+[ -z "$(stamped t-six)" ] && ok "another section's item is not stamped" || bad "t-six stamped"
+# Items are queued under both spellings of a section; an exact match skipped
+# the other one silently (review of #1207, F1).
+fixture
+out=$(run 1131 --section '.claude/skills/work/SKILL.md#Five'); rc=$?
+[ "$rc" -eq 0 ] && ok "prefixed spelling: exits 0" || bad "prefixed spelling: exits $rc -- $out"
+for id in t-a t-b t-c; do
+  [ "$(stamped $id)" = "$URL" ] && ok "prefixed spelling: $id stamped" \
+    || bad "prefixed spelling: $id skipped"
+done
+fixture
+out=$(BD_MODE=listfail run 1131 --section 'work/SKILL.md#Five'); rc=$?
+[ "$rc" -eq 3 ] && ok "failing bd list: exits 3" || bad "failing bd list: exits $rc, wanted 3"
+grep -q '^update' "$D/bd.log" && bad "failing bd list: still wrote to bd" \
+  || ok "failing bd list: no bd write"
 fixture
 out=$(run 1131 --section 'work/SKILL.md#Five' t-park t-a); rc=$?
 [ "$rc" -eq 0 ] && ok "section + park id: exits 0" || bad "section + park id: exits $rc -- $out"
@@ -105,6 +132,11 @@ out=$(GH_MODE=fail run 1131 t-a); rc=$?
 [ "$rc" -eq 3 ] && ok "gh failure: exits 3" || bad "gh failure: exits $rc, wanted 3"
 grep -q '^update' "$D/bd.log" && bad "gh failure: still wrote to bd" \
   || ok "gh failure: no bd write"
+fixture
+out=$(GH_MODE=notpr run 1131 t-a); rc=$?
+[ "$rc" -eq 3 ] && ok "non-url from gh: exits 3" || bad "non-url from gh: exits $rc, wanted 3"
+grep -q '^update' "$D/bd.log" && bad "non-url from gh: stamped anyway" \
+  || ok "non-url from gh: no bd write"
 fixture
 out=$(run 1131); rc=$?
 [ "$rc" -eq 2 ] && ok "no ids: exits 2" || bad "no ids: exits $rc, wanted 2"

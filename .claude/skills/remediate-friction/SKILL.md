@@ -106,8 +106,7 @@ Run a revision when one section has **5 queued items**, or **2 queued items
 that each have a second instance** (`comment_count` ≥ 1). Run at most one per night, and keep at most
 one revision PR open at a time.
 
-1. **Pin** `origin/main`'s sha. Read the whole section and every queued item
-   for it, against the error classes.
+1. **Pin** `origin/main`'s sha. Read the whole section and every queued item for it, against the error classes.
 2. **Rewrite the section** instead of inserting into it. Each rule keeps one
    owning file and one statement, placed in the file of the role that acts
    on it (`reachability.py --for <role> <file>`). The section must be **no
@@ -119,8 +118,9 @@ one revision PR open at a time.
      through the new text and reports where it gets stuck.
 
    Fix what they find.
-4. **One draft PR** listing each queued item and its outcome, left a draft for
-   a human (park per `recovery.md` "Parks"). Link items and park item, exit 0: `.claude/skills/remediate-friction/scripts/open-revision-pr.sh <pr> --section '<file>#<heading>' <park-id>`.
+4. **One draft PR** listing each queued item and its outcome, left a draft for a human (park per
+   `recovery.md` "Parks"). Then link every queued item and the park item to it; the script must exit 0:
+   `.claude/skills/remediate-friction/scripts/open-revision-pr.sh <pr> --section '<file>#<heading>' <park-id>`.
 
 ## 5. Gates
 
