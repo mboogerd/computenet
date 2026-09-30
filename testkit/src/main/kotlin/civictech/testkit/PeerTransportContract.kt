@@ -200,13 +200,51 @@ abstract class PeerTransportContract {
     }
 
     /**
-     * Ten partition/heal cycles leave each side's refs flat (gyvli-D3). A
-     * named hook, reported SKIPPED until the connection-instance retirement
-     * task of feature computenet-gyvli turns it into a case.
+     * (g) Ten partition/heal cycles leave each side's refs flat (gyvli-D3,
+     * computenet-vzb): after every cycle has carried again, each side's
+     * `localRefs()` and `remoteRefs()` sizes equal their sizes after the first
+     * hello. A binding that leaves a superseded connection instance's cells
+     * spawned grows by one local and one mirrored remote per side per heal
+     * (vzb's loopback probe: 2/2 before the first heal, 12/12 after ten), and
+     * fails here with both numbers in the message.
      */
     @Test
-    open fun `ten partition-heal cycles leave refs flat`() {
-        Assumptions.abort<Unit>("owned by feature computenet-gyvli's connection-instance retirement task (gyvli-D3)")
+    fun `(g) ten partition-heal cycles leave refs flat`() {
+        val p = peered()
+        val carried = p.listening.spawnCell()
+        p.awaitCarried(carried)
+        // the dialler's cells cross the other way: wait for the listener's
+        // mirrored count to settle too, so the baseline is a post-hello one
+        val dialled = p.dialling.spawnCell()
+        awaitUntil("${dialled.id} spawned on the dialler becomes Remote on the listener", CARRY_MS) {
+            p.listening.seesRemote(dialled)
+        }
+        fun counts() = listOf(
+            p.listening.registry.localRefs().size,
+            p.listening.registry.remoteRefs().size,
+            p.dialling.registry.localRefs().size,
+            p.dialling.registry.remoteRefs().size,
+        )
+        val baseline = counts()
+
+        repeat(CYCLES) { cycle ->
+            p.connection.partition()
+            p.connection.heal()
+            p.awaitCarried(carried)
+            awaitUntil("cycle $cycle: ${dialled.id} is Remote on the listener again", CARRY_MS) {
+                p.listening.seesRemote(dialled)
+            }
+        }
+
+        // a heal's catch-up lands asynchronously: give it the carry bound to
+        // settle, then report the numbers whatever they are
+        runCatching { awaitUntil("refs back at their post-hello counts", CARRY_MS) { counts() == baseline } }
+        assertEquals(
+            baseline,
+            counts(),
+            "[listener local, listener remote, dialler local, dialler remote] after $CYCLES partition/heal " +
+                "cycles vs after the first hello",
+        )
     }
 
     /**
@@ -214,7 +252,7 @@ abstract class PeerTransportContract {
      * named hook: a loopback cannot be refused, so the socket bindings
      * (ws, iroh) override it.
      *
-     * An override of either hook must repeat `@Test`: JUnit 5 does not carry
+     * An override of this hook must repeat `@Test`: JUnit 5 does not carry
      * the annotation onto an overriding method, so an unannotated override
      * silently removes the case — one test fewer, and the run stays green.
      */
@@ -248,5 +286,8 @@ abstract class PeerTransportContract {
 
         /** How long a severed or closed link must hold. */
         const val HOLD_MS: Long = 2_000
+
+        /** Partition/heal cycles case (g) runs (gyvli-D3's "ten"). */
+        const val CYCLES: Int = 10
     }
 }

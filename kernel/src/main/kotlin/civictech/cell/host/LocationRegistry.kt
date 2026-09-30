@@ -71,6 +71,34 @@ class LocationRegistry {
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
 
     /**
+     * Refs deliberately [retire]d: [deliver] refuses an invocation addressed to
+     * one of these instead of parking it (computenet-vzb, gyvli-D3). Written
+     * under the ref's park-queue monitor — the one [deliver]'s slow path holds —
+     * so no invocation can slip between a retirement and its drain.
+     */
+    private val tombstones = ConcurrentHashMap.newKeySet<CellRef>()
+
+    /**
+     * How many invocations this registry has refused because their target ref
+     * was [retire]d — whether they arrived after the retirement ([deliver]) or
+     * were already parked against the ref when it was retired ([retire]'s
+     * drain). Diagnostics only, following [localOverwrittenByRemote] and
+     * `RegistryMirrorCell.refusedAnnouncements`: nothing reads it to decide
+     * anything, and it is what makes the refusal observable rather than silent.
+     */
+    val retiredRefusals: Long get() = retiredRefusalCount.get()
+
+    private val retiredRefusalCount = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * The refs currently tombstoned by [retire] and not since [unretire]d — a
+     * read-only snapshot for tests and the inspector. Its size is the whole
+     * residue a retired-but-not-superseded connection instance leaves here: no
+     * cell, no location, no parked invocation — one [CellRef] per retired ref.
+     */
+    fun retiredRefs(): Set<CellRef> = tombstones.toSet()
+
+    /**
      * How many times [install] has replaced this registry's own [Local]
      * binding for a ref with a peer-announced [Remote] one (computenet-rfbt),
      * following the `RegistryMirrorCell.refusedAnnouncements` precedent
@@ -422,13 +450,24 @@ class LocationRegistry {
     /**
      * Optimistic send with lazy re-resolution: enqueue on the located host or
      * hand to the remote sink; on closed intake or no location, park in order.
-     * Never blocks the sender, never drops (O(rare-event) cost lands here,
-     * not on the fast path).
+     * Never blocks the sender (O(rare-event) cost lands here, not on the fast
+     * path).
+     *
+     * Never drops — with one deliberate exception: an invocation addressed to
+     * a [retire]d ref is **refused**, not parked (computenet-vzb, gyvli-D3).
+     * A retired ref will never be published again, so parking would retain
+     * the invocation forever; see [retire] for the accounting. The check is
+     * on the slow path only — the fast path's one map read is unchanged, and a
+     * retired ref has no location, so it always reaches the slow path.
      */
     fun deliver(invocation: HostedPortInvocation) {
         if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { ParkQueue() }
         synchronized(queue) {
+            if (invocation.cellRef in tombstones) {
+                refuseRetired(invocation)
+                return
+            }
             // re-check under the per-ref lock so a concurrent publish can't strand this invocation
             if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
             queue.park(invocation)
@@ -726,6 +765,65 @@ class LocationRegistry {
     }
 
     /**
+     * Retire [refs] for good: tombstone each, refuse and count
+     * ([retiredRefusals]) every invocation already parked against it, and
+     * remove its location through [unpublish] (so every hook a despawn would
+     * fire, fires). From then on [deliver] refuses an invocation addressed to
+     * any of them instead of parking it — "dropped at the gate, however late it
+     * decodes" (computenet-vzb, gyvli-D3), kept by a tombstone rather than by a
+     * live, detached cell.
+     *
+     * Built for one caller: `civictech.cell.wire.Peering.ConnectionInstance`,
+     * whose mirror and ingress refs are addressed only by the connection
+     * instance that minted them, so a late invocation for one of them is stale
+     * by construction. The ordinary contract — a ref with no location parks
+     * until it is published — is unchanged for every ref not passed here.
+     *
+     * **`Owned`/`Leased` accounting.** A refusal is a drop, so it discharges
+     * the refused invocation's exclusives (consume `Owned`, release `Leased`)
+     * exactly as the host's own refusal paths do (spec 23 §Ownership) and
+     * counts it. In practice nothing exclusive ever reaches a retired
+     * connection ref — a mirror serves `RegistryAnnounce` (refs and ids) and an
+     * ingress takes frame bytes — but the drop path is general, so it
+     * discharges rather than assuming.
+     *
+     * Idempotent per ref. A retired ref that a host later despawns is not
+     * announced a second time ([unpublish] is a no-op for a tombstoned ref with
+     * no location). [unretire] removes the tombstones.
+     */
+    fun retire(refs: Collection<CellRef>) {
+        refs.forEach { ref ->
+            val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+            synchronized(queue) {
+                tombstones += ref
+                queue.drain().forEach(::refuseRetired)
+            }
+            if (locations.containsKey(ref)) unpublish(ref)
+        }
+    }
+
+    /**
+     * Lift [refs]' tombstones (gyvli-D3): once no delivery can still be in
+     * flight for them, a retired connection instance's refs need not be
+     * remembered. Afterwards an invocation addressed to one of them takes the
+     * ordinary path — it parks — so a caller lifts a tombstone only when it
+     * can show nothing will ever address the ref again. The ref's (empty)
+     * park queue stays registered, as every published ref's does — removing it
+     * would race a concurrent [deliver] onto an orphaned queue (see [unpark]).
+     */
+    fun unretire(refs: Collection<CellRef>) {
+        refs.forEach { ref ->
+            val queue = parked[ref]
+            if (queue == null) tombstones -= ref else synchronized(queue) { tombstones -= ref }
+        }
+    }
+
+    private fun refuseRetired(invocation: HostedPortInvocation) {
+        invocation.invocation.args.forEach(civictech.cell.proxy.Proxy::discharge)
+        retiredRefusalCount.incrementAndGet()
+    }
+
+    /**
      * Remove [ref]'s location; subsequent deliveries park until the next
      * [publish]. Always called on the ref's own host (a despawn/migrate is a
      * local event), so a removed [Local] location also announces — the
@@ -734,6 +832,9 @@ class LocationRegistry {
      * drop their stale mirror too ([mirrorUnpublish]).
      */
     fun unpublish(ref: CellRef) {
+        // A retired ref's unpublish was already announced by [retire]; the
+        // host's own despawn of it must not announce it twice.
+        if (ref in tombstones && !locations.containsKey(ref)) return
         val wasLocal = locations[ref] is Local
         locations.remove(ref)
         instances.remove(ref)

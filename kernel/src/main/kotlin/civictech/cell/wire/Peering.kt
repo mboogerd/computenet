@@ -672,6 +672,170 @@ object Peering {
     }
 
     /**
+     * One connection instance's cells and announcer (computenet-vzb, gyvli-D3):
+     * the [RegistryMirrorCell] the peer addresses its announcements to, the
+     * [BridgeIngressCell] that decodes the peer's frames (when this instance
+     * owns one), and the announcement closure that tells the peer about
+     * [side]'s local refs. Minted by [openInstance]; a transport replaces
+     * the separate [spawnMirror] + [hostIngress] + [announceTo] calls with
+     * [openInstance] + [hostIngress] + [announceTo] on this object, which
+     * compose those same three functions.
+     *
+     * **Retirement.** [retire] closes the announcer, shuts the mirror's gate
+     * ([RegistryMirrorCell.detach]), tombstones the instance's refs in
+     * [side]'s registry ([LocationRegistry.retire]) and only then despawns the
+     * cells — so a late invocation addressed to either ref, however late it
+     * decodes, is refused at [LocationRegistry.deliver] and counted in
+     * [LocationRegistry.retiredRefusals], never parked. That is the property
+     * the spawned-but-detached mirror used to provide, now kept without
+     * keeping the cell: a retired instance no longer sits in
+     * [LocationRegistry.localRefs], so the next catch-up does not announce it
+     * and the peer does not mirror it.
+     *
+     * **Supersession.** [supersededBy] lifts the tombstones once a *next*
+     * instance is admitted. That is safe only when nothing can still decode
+     * for this one — true for a socket binding that retires an instance after
+     * its reader exited and despawned this instance's own ingress (whatever
+     * that ingress still had queued on the bridge host is dead-lettered there,
+     * "unknown cell", not decoded). It is **not** true for [Loopback], whose
+     * ingresses are the persistent frame links and can still decode an old
+     * instance's frame after a heal; a loopback therefore never lifts its
+     * tombstones (see [Loopback]).
+     *
+     * Thread-safe: [retire] is idempotent and callable from any thread (a
+     * binding calls it from its reader's exit).
+     */
+    class ConnectionInstance internal constructor(
+        val side: Side,
+        /** The mirror the peer addresses this instance's announcements to. */
+        val mirror: RegistryMirrorCell,
+    ) {
+        private val lock = Any()
+        private var ingress: CellRef? = null
+        private var announcer: AutoCloseable? = null
+        private var retired = false
+        private var superseded = false
+
+        /** The address the peer is handed for this instance's announcements. */
+        val mirrorRef: CellRef get() = mirror.ref
+
+        /** This instance's own ingress, or null when it has none (a [Loopback]'s frame links outlive instances). */
+        val ingressRef: CellRef? get() = synchronized(lock) { ingress }
+
+        /** Every ref this instance minted: what [retire] tombstones and despawns. */
+        val refs: List<CellRef> get() = synchronized(lock) { listOfNotNull(mirror.ref, ingress) }
+
+        val isRetired: Boolean get() = synchronized(lock) { retired }
+
+        /**
+         * Mint this instance's [BridgeIngressCell] on [side]'s bridge host —
+         * [Peering.hostIngress] with [side], recorded so [retire] reaches it.
+         * At most once per instance; refused on a retired instance.
+         */
+        fun hostIngress(
+            fromPeer: PeerId? = null,
+            fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
+            fromPeerIssuer: IssuerId? = null,
+            fromKey: KeyId? = null,
+            announcementAdmission: AnnouncementAdmission? = side.announcementAdmission,
+            onSpawn: (BridgeIngressCell) -> Unit = {},
+        ): Propagate<ByteArray> = synchronized(lock) {
+            check(!retired) { "connection instance ${mirror.ref} is retired" }
+            check(ingress == null) { "connection instance ${mirror.ref} already has an ingress" }
+            Peering.hostIngress(side, fromPeer, fromPeerAuth, fromPeerIssuer, fromKey, announcementAdmission) {
+                ingress = it.ref
+                onSpawn(it)
+            }
+        }
+
+        /**
+         * Announce [side]'s local refs to the peer's [peerMirror] through [via]
+         * — [Peering.announceTo], with the closure held so [retire] closes it.
+         * At most once per instance; refused on a retired instance.
+         */
+        fun announceTo(peerMirror: CellRef, via: InvocationSink) = synchronized(lock) {
+            check(!retired) { "connection instance ${mirror.ref} is retired" }
+            check(announcer == null) { "connection instance ${mirror.ref} is already announcing" }
+            announcer = Peering.announceTo(side, peerMirror, via)
+        }
+
+        /**
+         * Stop announcing without retiring — the first half of [retire], split
+         * out so a peering that owns two instances ([Loopback]) can silence both
+         * before it retires either. Idempotent.
+         */
+        fun stopAnnouncing() {
+            val closing = synchronized(lock) { announcer.also { announcer = null } }
+            closing?.close()
+        }
+
+        /**
+         * Retire this instance: stop announcing, shut the mirror's gate (which
+         * also retracts every location it installed), tombstone the instance's
+         * refs, then despawn its cells. Idempotent and thread-safe; the second
+         * call is a no-op.
+         *
+         * The tombstone precedes the despawn on purpose: the other order leaves
+         * a window in which a ref has no location and no tombstone, and an
+         * invocation delivered in it would park for good — the leak
+         * computenet-vzb's "obvious fix" had. The despawn itself is a
+         * management call, enqueued on the bridge host: the refs leave the
+         * registry (and [LocationRegistry.localRefs]) synchronously here, the
+         * cells leave the host when it runs the despawn, and anything the host
+         * still had queued for them by then is dead-lettered there as an
+         * unknown cell rather than served.
+         */
+        fun retire() {
+            val minted = synchronized(lock) {
+                if (retired) return
+                retired = true
+                refs
+            }
+            stopAnnouncing()
+            mirror.detach()
+            side.registry.retire(minted)
+            minted.forEach { ref ->
+                try {
+                    side.bridgeHost.managementInlet.call.despawn(ref)
+                } catch (e: Exception) {
+                    // A host that cannot take the despawn (shut down) has nothing
+                    // left to serve these refs; the tombstone above is what counts.
+                    System.err.println("[Peering] retiring connection instance: despawn of $ref failed: $e")
+                }
+            }
+        }
+
+        /**
+         * [next] was admitted in this retired instance's place: lift this
+         * instance's tombstones ([LocationRegistry.unretire]). Only for a caller
+         * that can show nothing still decodes for this instance — see the class
+         * KDoc. Idempotent.
+         */
+        fun supersededBy(next: ConnectionInstance) {
+            require(next !== this) { "a connection instance cannot supersede itself" }
+            require(next.side === side) { "a connection instance is superseded by one on the same side" }
+            val minted = synchronized(lock) {
+                check(retired) { "connection instance ${mirror.ref} must be retired before it is superseded" }
+                if (superseded) return
+                superseded = true
+                refs
+            }
+            side.registry.unretire(minted)
+        }
+    }
+
+    /**
+     * Open a connection instance on [side]: spawn its [RegistryMirrorCell]
+     * (routing the peer's announced locations through [toPeer], [spawnMirror])
+     * and return the instance. Its ingress and announcer follow through
+     * [ConnectionInstance.hostIngress] and [ConnectionInstance.announceTo],
+     * because a socket binding learns what each needs at different moments of
+     * its hello.
+     */
+    fun openInstance(side: Side, toPeer: InvocationSink, peer: PeerId? = null): ConnectionInstance =
+        ConnectionInstance(side, spawnMirror(side, toPeer, peer))
+
+    /**
      * Handle on an established loopback peering — enough to sever it
      * ([partition]) and re-establish it ([heal]): the partition/anti-entropy
      * seam of M7.4. Disconnect drops Remote locations (senders park, spec 33);
@@ -698,35 +862,27 @@ object Peering {
      * window is not exotic: it is whatever is left unrun between [partition] and
      * [heal].
      *
-     * The superseded mirrors stay *spawned*, deliberately, for the reason
-     * `WsTransport.Session.mirror` records: despawning turns the fence's drop
-     * into a park, since [LocationRegistry.deliver] parks an invocation whose
-     * target ref has no location — so the stale announcement would sit in
-     * [LocationRegistry.parkedFor] forever instead of being refused, which is
-     * both a worse leak and a weaker fence.
+     * **The superseded instance is retired, not left spawned** (computenet-vzb,
+     * gyvli-D3). Each partition — and each heal, which supersedes whatever
+     * instance is current — goes through [ConnectionInstance.retire]: the
+     * mirror's gate shuts, its ref is tombstoned in the registry, and then the
+     * mirror is despawned. Despawning alone would have been wrong — a stale
+     * announcement addressed to a ref with no location *parks* in
+     * [LocationRegistry.deliver], retained forever — which is why dqy.20 kept
+     * the retired mirrors spawned and each side grew by one cell, one announced
+     * local ref and one mirrored remote per heal (2/2 refs per side before the
+     * first heal, 12/12 after ten). The tombstone refuses that announcement
+     * instead ([LocationRegistry.retiredRefusals]), so the counts stay flat.
      *
-     * **The price of that, stated in full.** A retired mirror stays published as
-     * [LocationRegistry.Local], so it also stays in [LocationRegistry.localRefs]
-     * — which is what the next [heal]'s catch-up announces. Measured over ten
-     * partition/heal cycles on one loopback: each side grows by exactly one cell,
-     * one announced local ref, and one *mirrored* [LocationRegistry.Remote] per
-     * heal (2/2 refs per side before the first heal, 12/12 after ten). So the
-     * bead's "cell counts and announced localRefs stay flat across a heal" is
-     * **not** met here, and an observer of either registry — an inspector, say —
-     * sees the graveyard as peer cells.
-     *
-     * That is knowingly accepted rather than overlooked: it is the *same*
-     * mechanism, with the same reason the obvious despawn is wrong, that
-     * computenet-vzb already measures and owns for the socket path, and closing
-     * it needs either a quiescence bound before retiring an instance's cells or
-     * a "refuse, do not park" tombstone in [LocationRegistry] — a kernel
-     * semantics decision (an unconditional drop path in
-     * [LocationRegistry.deliver] owes an `Owned`/`Leased` accounting story),
-     * not a repair inside this fix. The trade this item does make is a
-     * monotonic, inert residue in place of a *silently wrong* registry, and a
-     * loopback is the in-process peering shape: the unbounded-reconnect hazard
-     * lives on the socket path, where `WsReconnectLoopBoundTest` and
-     * computenet-vzb watch it.
+     * **What is left behind, stated in full.** One tombstoned [CellRef] per
+     * side per retired instance ([LocationRegistry.retiredRefs]) — no cell, no
+     * location, no parked invocation, and nothing announced. They are never
+     * lifted, because this peering's ingresses are its persistent frame links:
+     * a frame the peer staged on the bridge host before a partition can decode
+     * after any number of heals, and it must meet the tombstone rather than
+     * park against an untombstoned ref (see [ConnectionInstance]'s
+     * "Supersession"). A socket binding, whose ingress is per instance, can
+     * lift them ([ConnectionInstance.supersededBy]).
      */
     class Loopback(
         private val a: Side,
@@ -746,10 +902,8 @@ object Peering {
         /** [ingressOnA]'s counterpart: the ingress receiving `a`'s frames on `b`'s bridge host. */
         val ingressOnB: BridgeIngressCell? = null,
     ) {
-        private lateinit var mirrorOnA: RegistryMirrorCell
-        private lateinit var mirrorOnB: RegistryMirrorCell
-        private var announcerFromA: AutoCloseable? = null
-        private var announcerFromB: AutoCloseable? = null
+        private lateinit var instanceOnA: ConnectionInstance
+        private lateinit var instanceOnB: ConnectionInstance
 
         init {
             open()
@@ -765,10 +919,10 @@ object Peering {
          * became mutable here, so "which instance is current" is only a
          * well-defined question against that lock.
          */
-        val mirrorRefOnA: CellRef get() = synchronized(this) { mirrorOnA.ref }
+        val mirrorRefOnA: CellRef get() = synchronized(this) { instanceOnA.mirrorRef }
 
         /** [mirrorRefOnA]'s counterpart on [a]'s side. */
-        val mirrorRefOnB: CellRef get() = synchronized(this) { mirrorOnB.ref }
+        val mirrorRefOnB: CellRef get() = synchronized(this) { instanceOnB.mirrorRef }
 
         /**
          * Sever the peering. Routed through each mirror's
@@ -805,27 +959,32 @@ object Peering {
             // V4-PEERID: the mirror on B serves A's announcements, so its peer
             // is A's name (and symmetrically). Both names are known here, so the
             // loopback path is a pure constructor value — it never uses the setter.
-            mirrorOnB = spawnMirror(b, toPeer = bToA, peer = a.peer)
-            mirrorOnA = spawnMirror(a, toPeer = aToB, peer = b.peer)
-            announcerFromA = announceTo(a, peerMirror = mirrorOnB.ref, via = aToB)
-            announcerFromB = announceTo(b, peerMirror = mirrorOnA.ref, via = bToA)
+            instanceOnB = openInstance(b, toPeer = bToA, peer = a.peer)
+            instanceOnA = openInstance(a, toPeer = aToB, peer = b.peer)
+            instanceOnA.announceTo(peerMirror = instanceOnB.mirrorRef, via = aToB)
+            instanceOnB.announceTo(peerMirror = instanceOnA.mirrorRef, via = bToA)
         }
 
         /**
-         * Retire the current connection instance: stop announcing, then shut
-         * both gates (each [RegistryMirrorCell.detach] also retracts what its
-         * side installed). Idempotent — [partition] twice, or [heal] on a
-         * severed peering, is a no-op the second time.
+         * Retire the current connection instance on both sides: stop both
+         * announcers, then [ConnectionInstance.retire] each — shut the gate
+         * (each [RegistryMirrorCell.detach] also retracts what its side
+         * installed), tombstone the mirror ref, despawn the mirror.
+         * Idempotent — [partition] twice, or [heal] on a severed peering, is a
+         * no-op the second time.
+         *
+         * The retired instances are never [ConnectionInstance.supersededBy]'d:
+         * this peering's ingresses persist across heals, so one of them can
+         * still decode a frame the retired instance's peer staged before the
+         * partition, addressed to the retired mirror — and that frame must meet
+         * the tombstone, not an untombstoned ref it would park against.
          */
         private fun closeInstance() {
-            announcerFromA?.close()
-            announcerFromA = null
-            announcerFromB?.close()
-            announcerFromB = null
-            if (::mirrorOnA.isInitialized) {
-                mirrorOnA.detach()
-                mirrorOnB.detach()
-            }
+            if (!::instanceOnA.isInitialized) return
+            instanceOnA.stopAnnouncing()
+            instanceOnB.stopAnnouncing()
+            instanceOnA.retire()
+            instanceOnB.retire()
         }
     }
 
@@ -1146,7 +1305,8 @@ object Peering {
      * serves locally, with no replication filter of any kind** (computenet-mx6p,
      * asserted by `LocationRegistryLocationPrecedenceTest`'s "announceTo's
      * catch-up announces every Local ref"). Plain cells, replicas, shards and
-     * the bridge's own retired mirror cells are announced alike, because an
+     * the bridge's own cells are announced alike (a [ConnectionInstance.retire]d
+     * instance's cells have no location, so they are not), because an
      * announcement says "ref X lives here", which is true of every local ref;
      * replication is a property of the *cell*, not of whether its location is
      * worth knowing. What keeps two hosts from announcing the same X is the
