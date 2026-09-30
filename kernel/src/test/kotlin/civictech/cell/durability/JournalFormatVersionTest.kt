@@ -391,19 +391,35 @@ class JournalFormatVersionTest {
         FileJournal(file).replay().map { String(it) } shouldBe listOf("", "second")
     }
 
-    /** MAGIC plus a PARTIAL version int (5-7 bytes) is the same torn header, through both classes. */
+    /**
+     * Both torn shapes — MAGIC plus a PARTIAL version int (5-7 bytes), and a partial
+     * MAGIC (1-3 bytes) — through both journal classes. Every arm runs and each failure
+     * is reported by name, so a red run says which shape and which class broke.
+     */
     @Test
-    fun `append rewrites MAGIC followed by a partial version int, through both journal classes`(
+    fun `append rewrites MAGIC followed by a partial version int, and a partial MAGIC, through both journal classes`(
         @TempDir dir: File,
     ) {
-        for (extra in 1..3) {
-            val plain = File(dir, "plain-$extra.journal").also { it.writeBytes(FileJournal.MAGIC + ByteArray(extra)) }
-            FileJournal(plain).append("first".toByteArray())
-            FileJournal(plain).replay().map { String(it) } shouldBe listOf("first")
-
-            val batched = File(dir, "batched-$extra.journal").also { it.writeBytes(FileJournal.MAGIC.copyOfRange(0, extra)) }
-            BatchedFileJournal(batched, syncEvery = 1).append("first".toByteArray())
-            FileJournal(batched).replay().map { String(it) } shouldBe listOf("first")
+        val shapes = (1..3).flatMap { extra ->
+            listOf(
+                "magic+$extra-version-bytes" to (FileJournal.MAGIC + ByteArray(extra)),
+                "$extra-magic-bytes" to FileJournal.MAGIC.copyOfRange(0, extra),
+            )
         }
+        val appenders = listOf<Pair<String, (File) -> Unit>>(
+            "FileJournal" to { f -> FileJournal(f).append("first".toByteArray()) },
+            "BatchedFileJournal" to { f -> BatchedFileJournal(f, syncEvery = 1).append("first".toByteArray()) },
+        )
+        val failures = mutableListOf<String>()
+        for ((shape, bytes) in shapes) {
+            for ((cls, append) in appenders) {
+                val file = File(dir, "$cls-$shape.journal").also { it.writeBytes(bytes) }
+                runCatching {
+                    append(file)
+                    FileJournal(file).replay().map { String(it) } shouldBe listOf("first")
+                }.onFailure { failures += "$cls/$shape: ${it::class.simpleName}" }
+            }
+        }
+        failures shouldBe emptyList()
     }
 }
