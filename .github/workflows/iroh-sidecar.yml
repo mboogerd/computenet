@@ -394,6 +394,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # computenet-gyvli.4: IrohPeerTransportContractTest is the transport
+      # seam's contract (cases (a)-(h) plus case (c) x20, the computenet-g1aua
+      # evidence) over a REAL sidecar, and every case takes SidecarBinary's
+      # assumption — so a lost `-Piroh.enabled` would turn it into a green
+      # run of skips. `:iroh:check` above runs the module unfiltered; this
+      # asserts by name that the class produced XML with tests>0 and
+      # skipped=0. The composite action is beadsmirror's by name only: its
+      # `report-dir` input points it at :iroh's report, and its bd/dolt
+      # check (2) is inert here (no iroh test skips for a missing PATH tool).
+      # Same caveat as the action's header: a build-cache replay of a good
+      # report would still read "ok".
+      - name: Assert the iroh transport contract actually ran (non-vacuous)
+        uses: ./.github/actions/assert-beadsmirror-e2e
+        with:
+          report-dir: iroh/build/test-results/test
+          required-classes: >-
+            civictech.iroh.IrohPeerTransportContractTest
+
       # computenet-cqde: the only place IrohConvergenceSuiteTest's four cases
       # and IrohMirrorTransportTest's sidecar-backed case execute anywhere
       # besides a developer's darwin/arm64 machine — and, since
