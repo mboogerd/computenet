@@ -3,6 +3,7 @@ package civictech.cell.wire
 import civictech.cell.CellRef
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
+import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.link.ProtocolBridge
 import civictech.cell.link.handshake
@@ -18,6 +19,7 @@ import civictech.cell.proxy.InvocationSink
 import civictech.nature.NatureVector
 import civictech.nature.ProtocolRegistry
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A port's addressable identity for routing (spec 41 point 4): `PortRef`
@@ -101,6 +103,74 @@ fun defaultProtocolCapabilities(): Set<ProtocolId> =
     ProtocolRegistry.protocols.mapTo(mutableSetOf()) { ProtocolId(it.protocolId) }
 
 /**
+ * Which half of a bridged edge a [BridgeSlot] names. Establishing ONE
+ * logical bridged edge is ordinarily one [bridgeTo] call (the producer's
+ * outlet, on one host) and one [bridgeFrom] call (the consumer's inlet, on
+ * the other) — both against the SAME `(fromAddr, toAddr)` pair, since they
+ * describe the same edge from either end. Without this discriminant a
+ * [BridgeSlot] keyed on the address pair alone cannot tell that ordinary
+ * establishment apart from an actual reconnect: the [bridgeFrom] call would
+ * read as "superseding" the [bridgeTo] call's own record and close the
+ * producer half it had just opened, on every first-time bridge — measured as
+ * `GlitchFreeBridgedDiamondTest`/`InletFrontierPolicyTest` regressions before
+ * this was added. Supersession is therefore scoped to repeats of the SAME
+ * call ([bridgeTo] superseding an earlier [bridgeTo] over the same pair,
+ * [bridgeFrom] likewise), never across the two.
+ */
+private enum class BridgeSide { PRODUCER, CONSUMER }
+
+/**
+ * computenet-1mbp: the identity under which two bridged [WireEdgeLink]s
+ * describe ONE logical half-edge — the `PortAddress` pair, role and
+ * [BridgeSide], stable across repeated calls to the SAME side, unlike the
+ * `(from, to, role)` triple [handshake]'s bridged overload keys the generic
+ * `Link` bookkeeping on (a per-call nonce here, per computenet-5nw9's KDoc on
+ * that overload: `bridgeTo`/`bridgeFrom` each mint a fresh surrogate
+ * `PortRef` for the counterpart every call).
+ */
+private data class BridgeSlot(val fromAddr: PortAddress, val toAddr: PortAddress, val role: LinkRole, val side: BridgeSide)
+
+/**
+ * computenet-1mbp: the address-keyed registry of currently-live bridged
+ * half-links, one entry per [BridgeSlot]. This is what lets [bridgeTo]/
+ * [bridgeFrom] notice that a new bridge over an address pair they have
+ * already bridged SUPERSEDES the earlier record, the address-keyed
+ * counterpart to `evictSuperseded` in `civictech.cell.link.Handshake.kt`
+ * (which cannot see this case: its key is the per-call nonce above).
+ */
+private val activeBridgedLinks = ConcurrentHashMap<BridgeSlot, WireEdgeLink>()
+
+/**
+ * Registers [link] as the live half-link for [slot], and arranges for its
+ * own eventual teardown — however it happens, superseded or ordinary — to
+ * clear the entry. `remove(slot, link)` only clears the mapping while it is
+ * still THIS link (a later supersession may already have replaced it), so an
+ * ordinary close of an already-superseded record cannot evict its successor.
+ */
+private fun registerBridgedLink(slot: BridgeSlot, link: WireEdgeLink) {
+    activeBridgedLinks[slot] = link
+    link.onUnlink { activeBridgedLinks.remove(slot, link) }
+}
+
+/**
+ * computenet-1mbp: closes and evicts whatever bridged half-link is currently
+ * registered for [slot], if any — called only once a *new* bridge over the
+ * same address pair has itself been admitted (`LinkResult.Connected`), so a
+ * refusal of the new bridge never disturbs the incumbent (the same ordering
+ * principle `evictSuperseded`'s caller states for the generic path). Closing
+ * runs [unlinkBridge] (fires `EdgeClose`, then [Link.unlink]s), so the
+ * superseded record's relay stops and its teardown is observable exactly as
+ * an ordinary bridged close is. [downstream] picks the direction that reaches
+ * the *other* endpoint of the closed half-link: `true` for a producer-side
+ * record ([bridgeTo] superseding [bridgeTo], mirroring `ProtocolBridgeTest`'s
+ * own `unlinkBridge(producerSide, downstream = true)`), `false` for a
+ * consumer-side record ([bridgeFrom] superseding [bridgeFrom]).
+ */
+private fun supersedeBridgedLink(slot: BridgeSlot, downstream: Boolean) {
+    activeBridgedLinks.remove(slot)?.let { previous -> unlinkBridge(previous, downstream = downstream) }
+}
+
+/**
  * Establishes the producer-side half of a bridged link from [outlet] (at
  * [selfAddr]) to a remote inlet at [toAddr] (spec 41 point 4): registers a
  * real [WireEdgeLink] on the outlet's own link bookkeeping (so generic
@@ -137,7 +207,16 @@ fun <T> T.bridgeTo(
     // Route through the shared handshake (C-13): source-side onLink admission
     // + onLinked catch-up hooks run, and EdgeOpen is fired downstream over the
     // negotiated protocol path (crossing the wire) rather than raw.
-    return handshake(link, from = ref, targetRef = link.to, local = this, fireEdgeOpen = true, counterpart = counterpart)
+    val result = handshake(link, from = ref, targetRef = link.to, local = this, fireEdgeOpen = true, counterpart = counterpart)
+    if (result is LinkResult.Connected) {
+        // computenet-1mbp: a second bridgeTo over the same (selfAddr, toAddr)
+        // pair supersedes the first — closed only now that this one is
+        // admitted, so a refusal above never disturbs the incumbent.
+        val slot = BridgeSlot(selfAddr, toAddr, LinkRole.Consume, BridgeSide.PRODUCER)
+        supersedeBridgedLink(slot, downstream = true)
+        registerBridgedLink(slot, link)
+    }
+    return result
 }
 
 /**
@@ -181,7 +260,16 @@ fun <T> T.bridgeFrom(
     // bridged edge exactly as on a local one. EdgeOpen is NOT fired here — it
     // crosses the wire once from the producer's bridgeTo and lands on this
     // inlet's real port via the ordinary PORT_PROTOCOL delivery path.
-    return handshake(link, from = link.from, targetRef = ref, local = this, fireEdgeOpen = false, counterpart = counterpart)
+    val result = handshake(link, from = link.from, targetRef = ref, local = this, fireEdgeOpen = false, counterpart = counterpart)
+    if (result is LinkResult.Connected) {
+        // computenet-1mbp: a second bridgeFrom over the same (fromAddr, selfAddr)
+        // pair supersedes the first — closed only now that this one is
+        // admitted, so a refusal above never disturbs the incumbent.
+        val slot = BridgeSlot(fromAddr, selfAddr, LinkRole.Consume, BridgeSide.CONSUMER)
+        supersedeBridgedLink(slot, downstream = false)
+        registerBridgedLink(slot, link)
+    }
+    return result
 }
 
 /** Tears down a bridged half-link: fires `EdgeClose` (crossing the bridge when the peer is remote) and detaches. */

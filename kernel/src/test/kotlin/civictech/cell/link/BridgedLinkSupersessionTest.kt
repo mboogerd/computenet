@@ -27,13 +27,22 @@ import java.util.UUID
  * eviction keyed on it structurally unreachable — not a wrong fix, an
  * unreachable one.
  *
- * The multiplicity that results is fan-out, not corpses: each record carries its
- * own surrogate endpoint and its own `sink`, so N records relay to N distinct
- * destinations. `civictech.cell.wire.ProtocolBridgeTest` pins the live case (one
- * outlet bridged to two remote consumers, both delivering); collapsing those is
- * the failure this predicate exists to avoid. See `Handshake.kt`'s bridged
- * overload doc for the residual (a reconnect over one `PortAddress` pair) that
- * is deliberately left unguarded.
+ * That per-call nonce is why two bridges to two DIFFERENT remote addresses
+ * remain fan-out, not corpses: each record carries its own surrogate
+ * endpoint and its own `sink`, so N records relay to N distinct
+ * destinations. `civictech.cell.wire.ProtocolBridgeTest` pins that live
+ * case (one outlet bridged to two remote consumers, both delivering);
+ * collapsing those would be a bug.
+ *
+ * The identity that IS stable across calls is the `PortAddress` pair
+ * itself, and computenet-gyvli.5 (closing computenet-1mbp) wired
+ * supersession on exactly that: bridging the SAME address pair twice now
+ * closes the first record (`EdgeClose` observed) before the second
+ * registers, so a re-bridge over one pair relays to that destination once,
+ * not twice. `civictech.cell.wire.BridgedReconnectSupersessionTest` pins
+ * that behavior directly; the two address-pair cases below now assert its
+ * outcome (only the SECOND record survives) rather than the pre-gyvli.5
+ * "both survive" reading.
  */
 class BridgedLinkSupersessionTest {
 
@@ -65,9 +74,11 @@ class BridgedLinkSupersessionTest {
         // select nothing here, for either record.
         outlet.linking.links.count { it.from == b.from && it.to == b.to && it.role == b.role } shouldBe 1
 
-        // Both survive, deliberately: two bridged links over one address pair are
-        // two distinct remote destinations, not one attachment and a corpse.
-        outlet.linking.links shouldContainExactly listOf(a, b)
+        // The (from, to, role) triple can't supersede — but computenet-gyvli.5
+        // wired supersession on the PortAddress pair itself (computenet-1mbp):
+        // the second bridgeTo over the SAME (selfAddr, toAddr) closes `a`
+        // (EdgeClose observed) before `b` registers, so only `b` survives.
+        outlet.linking.links shouldContainExactly listOf(b)
     }
 
     @Test
@@ -85,7 +96,10 @@ class BridgedLinkSupersessionTest {
         a.from.cell shouldBe b.from.cell // same remote cell
         a.from shouldNotBe b.from        // surrogate, minted per call
 
-        inlet.linking.links shouldContainExactly listOf(a, b)
+        // Same address-pair supersession as the bridgeTo case above: the
+        // second bridgeFrom over the SAME (fromAddr, selfAddr) closes `a`
+        // before `b` registers, so only `b` survives.
+        inlet.linking.links shouldContainExactly listOf(b)
     }
 
     /**
