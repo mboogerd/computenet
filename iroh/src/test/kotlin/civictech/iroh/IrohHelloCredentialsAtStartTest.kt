@@ -107,13 +107,15 @@ class IrohHelloCredentialsAtStartTest {
             listen(named("alice", IrohTransport.MAX_HELLO_STATEMENTS + 1))
         }
         refused.message!! shouldContain "at most ${IrohTransport.MAX_HELLO_STATEMENTS}"
+        // The iroh name extends the kernel's (gyvli-D2): a seam caller catches either.
+        (refused is civictech.cell.wire.UnsendableHelloCredentialsException) shouldBe true
         spawnedMarker.exists() shouldBe false
     }
 
     @Test
     fun `a listener whose credentials name holds a space is refused at listen, before any sidecar exists`() {
         val refused = shouldThrow<UnsendableHelloCredentialsException> { listen(named("al ice", 1)) }
-        refused.message!! shouldContain "empty or contains a space"
+        refused.message!! shouldContain "cannot be a IROH-HELLO2 name token"
         spawnedMarker.exists() shouldBe false
     }
 
@@ -123,7 +125,7 @@ class IrohHelloCredentialsAtStartTest {
             connect(named("alice", IrohTransport.MAX_HELLO_STATEMENTS + 1))
         }.message!! shouldContain "at most ${IrohTransport.MAX_HELLO_STATEMENTS}"
         shouldThrow<UnsendableHelloCredentialsException> { connect(named("al ice", 1)) }
-            .message!! shouldContain "empty or contains a space"
+            .message!! shouldContain "cannot be a IROH-HELLO2 name token"
         spawnedMarker.exists() shouldBe false
     }
 
