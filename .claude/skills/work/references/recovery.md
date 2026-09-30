@@ -6,6 +6,7 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 
 - Resuming after the host died — clock, side effects, reboot, revoked folder access
 - Stalled agents and load — agents past their bound, watchdog stalls, the reviewer ladder, when to stop dispatching
+- Continuation across ticket boundaries — context headroom, relatedness, when to ask Jev
 - A red required check — the four artifacts, re-runs, the infrastructure park
 - Dolt pull conflicts — the one resolvable shape and its exact commands
 - Parks — the bar, how to park, re-triage and unpark
@@ -63,6 +64,50 @@ Load: follow the advice string from `next-batch.py --capacity`; it tells our loa
 | Host load, and you dispatch | Prefer a unit that needs no Gradle: bead text, reconciliation, or review of an already-green PR. Tell the agent that tool calls will be slow, to take fewer and larger steps, and to comment on its bead early | `bd` is contended too, so this work is Gradle-free, not load-free |
 | The stopping rule, at any load. A death is an agent that ended with no side effects (watchdog or `TaskStop`), or your own capacity read passing a 120 s Bash timeout: do not retry that read, and do not make the dispatch it gated this turn | After the second death this slot, dispatch exactly one unit, as the probe: nothing beside it, bounded as a probe (SKILL.md 5b). Only its outcome releases the hold, never a load1 reading. It reports → the count resets. It dies or is stopped with no side effects → dispatch nothing more this slot: do orchestrator-local bookkeeping, then Finalize | Agents have died at 1.4x cores after a green read at dispatch, so load1 predicts neither death nor recovery, and a hold keyed to it has idled a whole slot |
 | One live agent is the session's most valuable unit | Holding every dispatch is legitimate. Comment the hold on the epic | A marginal dispatch is likelier to kill the live agent than to finish |
+
+## Continuation across ticket boundaries
+
+At SKILL.md 5f, after a unit finishes, this decides whether YOU keep working
+the next ticket in this same session or Finalize and let a fresh session pick
+it up — a different question from the per-agent bound above, which covers a
+DISPATCHED unit's own wall clock, not whether the orchestrator starts the
+next one itself. The old rule was a flat 300-minute slot; the real cost is a
+fresh session's context-rebuild, not the clock, so this reads two cheap
+signals first and only asks Jev for the genuinely ambiguous corner.
+
+```bash
+python3 .claude/skills/work/scripts/next-batch.py --continuation \
+  --headroom-pct <N> --relatedness same-feature|same-epic|different-epic|unclear \
+  [--ask-jev [--current-context "<epic/feature loaded>"] [--candidate-context "<next ticket>"]]
+```
+
+`headroom-pct` is `autoCompactsAtPercent - percentUsed` from
+`get_usage(session_id="self")` (the auto-compact floor is the real ceiling,
+not 100%). `relatedness` is the next 5f candidate's relation to what is
+loaded: `same-feature` (still finishing it), `same-epic` (a sibling feature
+under the held epic), `different-epic` (an unparented or foreign-epic
+continuation pickup), `unclear` (relatedness could not be classified —
+`ready-in-epic.sh`'s own "could not resolve the epic" case).
+
+| Decision | When |
+|---|---|
+| CONTINUE | headroom >=40%, any relatedness; or mid-band (15-40%) with `same-feature` |
+| HANDOFF | headroom <=15%, any relatedness; or mid-band with `different-epic` |
+| ESCALATE | mid-band AND relatedness in `same-epic`/`unclear` — ask Jev, `--ask-jev` |
+
+`--ask-jev` only spends the round trip on ESCALATE; a clean-band call ignores
+it. Jev sees one line each of current and candidate context and answers
+CONTINUE/HANDOFF, the same `systemone` integration
+`.claude/skills/deliberate/scripts/deliberate.py`'s `jev_vote` uses, scaled to
+one yes/no rather than a whole council — this is a routing call on the hot
+path, not a high-stakes decision.
+
+HANDOFF means Finalize now, same as EXPIRED (SKILL.md 6), except step 2's
+`slot-elapsed.sh` rung is still the hard backstop: EXPIRED always means
+Finalize even when this reads CONTINUE, because the auto-compact floor is a
+soft signal on an estimate and the wall clock is not. CONTINUE means treat
+5f's chosen route as OPEN and proceed, whatever rung `slot-elapsed.sh` names,
+short of EXPIRED.
 
 ## A red required check
 

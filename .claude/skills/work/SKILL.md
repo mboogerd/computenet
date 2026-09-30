@@ -177,6 +177,11 @@ you did not compute that turn.
 | T-45m | dispatch only reviewers for finished work; merge and ship what is in flight |
 | EXPIRED | step 6 now |
 
+EXPIRED always means step 6, but short of it, whether to keep going after a
+unit finishes is decided at 5f by context headroom and ticket relatedness, not
+by the rung alone ([recovery.md](references/recovery.md), "Continuation across
+ticket boundaries").
+
 With agents live, arm the one-shot `Monitor` (`sleep <s>; echo wake`) the clock's
 `wake:` line prints; `TaskStop` it in step 6. Settle once whether `SendMessage` exists
 (tool list, then `ToolSearch "select:SendMessage"`); without it, continuing an agent is

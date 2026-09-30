@@ -1068,11 +1068,87 @@ for ok_, what in unmerged_cases:
         failed += 1
         print(f"FAIL: {what}")
 
+# --- continuation_advice(): headroom bands, relatedness, the ambiguous corner
+continuation_cases = [
+    # (headroom_pct, relatedness, expect_decision, what)
+    (60.0, "different-epic", "CONTINUE", "high headroom continues even for an unrelated pickup"),
+    (80.0, "unclear", "CONTINUE", "high headroom continues even when relatedness is unclear"),
+    (10.0, "same-feature", "HANDOFF", "low headroom hands off even for the same feature"),
+    (5.0, "same-epic", "HANDOFF", "low headroom hands off regardless of relatedness"),
+    (25.0, "same-feature", "CONTINUE", "mid-band headroom + same-feature relatedness continues"),
+    (30.0, "different-epic", "HANDOFF", "mid-band headroom + different-epic relatedness hands off"),
+    (25.0, "same-epic", "ESCALATE", "mid-band headroom + same-epic relatedness is the ambiguous corner"),
+    (25.0, "unclear", "ESCALATE", "mid-band headroom + unclear relatedness is the ambiguous corner"),
+    (25.0, "bogus-value", "ESCALATE", "an unrecognised relatedness value reads as unclear, not as a crash"),
+    (nb.HEADROOM_LOW, "same-feature", "HANDOFF", "the boundary itself reads as low (<=), not mid-band"),
+    (nb.HEADROOM_HIGH, "different-epic", "CONTINUE", "the boundary itself reads as high (>=), not mid-band"),
+]
+for headroom, relatedness, expect, what in continuation_cases:
+    decision, reason = nb.continuation_advice(headroom, relatedness)
+    if decision != expect:
+        failed += 1
+        print(f"FAIL: {what} — expected {expect}, got {decision} ({reason!r})")
+
+# A resolved jev_verdict is relayed through the same corner rather than a
+# second return path, and only when the corner is actually ambiguous.
+jev_relay_decision, jev_relay_reason = nb.continuation_advice(25.0, "same-epic", jev_verdict="HANDOFF")
+if jev_relay_decision != "HANDOFF" or "Jev" not in jev_relay_reason:
+    failed += 1
+    print(f"FAIL: a supplied jev_verdict is relayed as the decision with Jev named in the reason, got {jev_relay_decision!r} {jev_relay_reason!r}")
+jev_ignored_decision, _ = nb.continuation_advice(60.0, "different-epic", jev_verdict="HANDOFF")
+if jev_ignored_decision != "CONTINUE":
+    failed += 1
+    print("FAIL: a jev_verdict must not override a clean-band decision that never escalated")
+continuation_extra_cases = 2
+
+# --- jev_continuation(): dry-run routing only, never a live network call ----
+dry_verdict = nb.jev_continuation(25.0, "same-epic", "epic X, feature Y", "task Z",
+                                  dry_run=True, dry_reply="HANDOFF")
+jev_dry_cases = [
+    (dry_verdict == "HANDOFF", "dry_run returns dry_reply verbatim, no network call"),
+]
+for ok_, what in jev_dry_cases:
+    if not ok_:
+        failed += 1
+        print(f"FAIL: {what}")
+
+# --- CLI --continuation: the ambiguous corner reports ESCALATE without
+# reaching the network unless --ask-jev is given, and --ask-jev with
+# --dry-run-jev routes through the stub, never live (no TYPESAFE_API_KEY set
+# in this test process, so a real call would raise KeyError and fail loudly).
+import subprocess as _sp
+script = pathlib.Path(__file__).with_name("next-batch.py")
+cli_no_jev = _sp.run([sys.executable, str(script), "--continuation",
+                      "--headroom-pct", "25", "--relatedness", "same-epic"],
+                     capture_output=True, text=True)
+cli_ask_jev = _sp.run([sys.executable, str(script), "--continuation",
+                       "--headroom-pct", "25", "--relatedness", "same-epic",
+                       "--ask-jev", "--dry-run-jev", "HANDOFF"],
+                      capture_output=True, text=True)
+cli_clean_band = _sp.run([sys.executable, str(script), "--continuation",
+                          "--headroom-pct", "60", "--relatedness", "different-epic",
+                          "--ask-jev"],
+                         capture_output=True, text=True)
+import json as _json
+cli_cases = [
+    (cli_no_jev.returncode == 0 and _json.loads(cli_no_jev.stdout)["continuation"]["decision"] == "ESCALATE",
+     "--continuation alone reports ESCALATE for the ambiguous corner, no --ask-jev needed to see it"),
+    (cli_ask_jev.returncode == 0 and _json.loads(cli_ask_jev.stdout)["continuation"]["decision"] == "HANDOFF",
+     "--ask-jev with --dry-run-jev routes the ambiguous corner through the stubbed verdict"),
+    (cli_clean_band.returncode == 0 and _json.loads(cli_clean_band.stdout)["continuation"]["decision"] == "CONTINUE",
+     "--ask-jev is a no-op on a clean-band decision (never spends the round trip needlessly)"),
+]
+for ok_, what in cli_cases:
+    if not ok_:
+        failed += 1
+        print(f"FAIL: {what}")
+
 total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n
          + lag_cases
-         + elsewhere_cases + len(unmerged_cases))
+         + elsewhere_cases + len(unmerged_cases)
+         + len(continuation_cases) + continuation_extra_cases + len(jev_dry_cases) + len(cli_cases))
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
