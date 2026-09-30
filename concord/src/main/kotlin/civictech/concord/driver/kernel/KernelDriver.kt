@@ -15,7 +15,6 @@ import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.link.Interest
-import civictech.cell.link.PeerId
 import civictech.cell.Propagate
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
@@ -47,6 +46,8 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.util.IdentityHashMap
 import java.util.UUID
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -97,6 +98,13 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
         var listener: PeerListener? = null
         val dialers = LinkedHashMap<HostId, PeerConnection>()
     }
+
+    /**
+     * An inert local ref that makes an otherwise-empty simulated bridge prove
+     * admission with a real registry announcement. [PeerTransport.dial] defines
+     * carrying as receipt of a binary bridge frame, not merely the text hello.
+     */
+    private class TransportAnchor(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell
 
     private val transportHosts = LinkedHashMap<HostId, TransportHost>()
     private var closed = false
@@ -183,7 +191,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     override fun createHost(hostId: HostId) {
         // The reserved durable host is owned by the dur capability, never a core host.
         if (hostId == KernelDriverDur.DUR_HOST) return
-        hostFor(hostId)
+        hostFor(if (hostId.isEmpty()) defaultHostId else hostId)
     }
 
     internal fun hostFor(hostId: HostId?): ManagedHost {
@@ -247,8 +255,12 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
             val hostRegistry = registryFor(hostId)
             val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = hostRegistry)
             registriesByManagedHost[bridgeHost] = hostRegistry
-            val peerName = if (hostId == defaultHostId) "concord-default" else hostId
-            val created = TransportHost(hostId, Peering.Side(hostRegistry, bridgeHost, peer = PeerId(peerName)))
+            // Concord scenarios configure no transport identity or credentials;
+            // use the seam's anonymous/open pairing rather than asserting a
+            // host label as an unproved peer identity.
+            val side = Peering.Side(hostRegistry, bridgeHost)
+            bridgeHost.managementInlet.call.spawn(TransportAnchor())
+            val created = TransportHost(hostId, side)
             transportHosts.values.toList().forEach { existing -> peer(existing, created, binding) }
             transportHosts[hostId] = created
             created
@@ -264,7 +276,45 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
             lower.side,
         ).also { lower.listener = it }
         check(higher.id !in lower.dialers) { "duplicate Concord transport edge ${lower.id}<-${higher.id}" }
-        lower.dialers[higher.id] = binding.dial(listener.boundAddress, higher.side)
+        lower.dialers[higher.id] = dialWhileDrivingController(binding, listener, lower, higher)
+    }
+
+    /**
+     * [PeerTransport.dial] returns only after a peer frame proves the listener
+     * admitted the connection. Both bridge hosts run on this driver's manual
+     * scheduler, so blocking this thread inside `dial` would also prevent the
+     * admission/announcement work it is awaiting from running. Keep the socket
+     * wait off-scheduler and drive the one shared controller until it completes.
+     */
+    private fun dialWhileDrivingController(
+        binding: PeerTransport,
+        listener: PeerListener,
+        lower: TransportHost,
+        higher: TransportHost,
+    ): PeerConnection {
+        val dial = FutureTask { binding.dial(listener.boundAddress, higher.side) }
+        Thread(dial, "concord-peer-dial-${lower.id}-${higher.id}").apply {
+            isDaemon = true
+            start()
+        }
+        val deadline = System.nanoTime() + TRANSPORT_DIAL_TIMEOUT_NANOS
+        while (!dial.isDone) {
+            if (!controller.step()) Thread.sleep(TRANSPORT_POLL_MILLIS)
+            if (System.nanoTime() >= deadline) {
+                dial.cancel(true)
+                error("transport dial ${higher.id}->${lower.id} did not complete within 20 s")
+            }
+        }
+        return try {
+            dial.get()
+        } catch (e: ExecutionException) {
+            val cause = e.cause ?: e
+            when (cause) {
+                is RuntimeException -> throw cause
+                is Error -> throw cause
+                else -> throw IllegalStateException("transport dial ${higher.id}->${lower.id} failed", cause)
+            }
+        }
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
@@ -827,6 +877,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */
         const val READ_STEP_BUDGET = 100_000
+        const val TRANSPORT_DIAL_TIMEOUT_NANOS = 20_000_000_000L
         const val TRANSPORT_POLL_MILLIS = 2L
         const val TRANSPORT_QUIESCE_TIMEOUT_NANOS = 10_000_000_000L
     }

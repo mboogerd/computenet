@@ -310,7 +310,7 @@ class CorpusRunner {
         for (run in 0 until runs) {
             val driver = KernelDriver(run.toLong(), transport)
             try {
-                buildGraph(driver, scenario)
+                buildGraph(driver, scenario, transport != null)
                 val record = runScript(driver, scenario)
                 driver.quiesce(QUIESCE_BUDGET)
                 val failures = evaluateChecks(
@@ -621,7 +621,7 @@ class CorpusRunner {
             val concrete = ScenarioGenerator.generate(scenario, i)
             val driver = KernelDriver(i.toLong(), transport)
             try {
-                buildGraph(driver, concrete)
+                buildGraph(driver, concrete, transport != null)
                 val record = runScript(driver, concrete)
                 driver.quiesce(QUIESCE_BUDGET)
                 val failures = evaluateChecks(
@@ -640,8 +640,14 @@ class CorpusRunner {
         }
     }
 
-    private fun buildGraph(driver: Driver, scenario: Scenario) {
+    private fun buildGraph(driver: Driver, scenario: Scenario, precreateImplicitHost: Boolean) {
         val graph = scenario.graph ?: return
+        // A real transport must establish the complete host mesh before any
+        // application ref is published. Otherwise a late-created implicit host
+        // joins after the named hosts already hold cells, turning its handshake
+        // into an avoidable catch-up burst; the WebSocket counters correctly
+        // keep quiescence open until every one of those frames arrives.
+        if (precreateImplicitHost && graph.cells.any { it.host == null }) driver.createHost("")
         graph.hosts?.forEach { driver.createHost(it) }
         graph.cells.forEach { cell ->
             driver.spawn(cell.host ?: "", cell.id, cell.type, params(cell))
