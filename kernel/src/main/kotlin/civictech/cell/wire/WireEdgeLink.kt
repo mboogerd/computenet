@@ -103,14 +103,32 @@ fun defaultProtocolCapabilities(): Set<ProtocolId> =
     ProtocolRegistry.protocols.mapTo(mutableSetOf()) { ProtocolId(it.protocolId) }
 
 /**
- * computenet-1mbp: the identity under which two bridged [WireEdgeLink]s
- * describe ONE logical edge — the `PortAddress` pair plus role, stable
- * across calls, unlike the `(from, to, role)` triple [handshake]'s bridged
- * overload keys the generic `Link` bookkeeping on (a per-call nonce here,
- * per computenet-5nw9's KDoc on that overload: `bridgeTo`/`bridgeFrom` each
- * mint a fresh surrogate `PortRef` for the counterpart every call).
+ * Which half of a bridged edge a [BridgeSlot] names. Establishing ONE
+ * logical bridged edge is ordinarily one [bridgeTo] call (the producer's
+ * outlet, on one host) and one [bridgeFrom] call (the consumer's inlet, on
+ * the other) — both against the SAME `(fromAddr, toAddr)` pair, since they
+ * describe the same edge from either end. Without this discriminant a
+ * [BridgeSlot] keyed on the address pair alone cannot tell that ordinary
+ * establishment apart from an actual reconnect: the [bridgeFrom] call would
+ * read as "superseding" the [bridgeTo] call's own record and close the
+ * producer half it had just opened, on every first-time bridge — measured as
+ * `GlitchFreeBridgedDiamondTest`/`InletFrontierPolicyTest` regressions before
+ * this was added. Supersession is therefore scoped to repeats of the SAME
+ * call ([bridgeTo] superseding an earlier [bridgeTo] over the same pair,
+ * [bridgeFrom] likewise), never across the two.
  */
-private data class BridgeSlot(val fromAddr: PortAddress, val toAddr: PortAddress, val role: LinkRole)
+private enum class BridgeSide { PRODUCER, CONSUMER }
+
+/**
+ * computenet-1mbp: the identity under which two bridged [WireEdgeLink]s
+ * describe ONE logical half-edge — the `PortAddress` pair, role and
+ * [BridgeSide], stable across repeated calls to the SAME side, unlike the
+ * `(from, to, role)` triple [handshake]'s bridged overload keys the generic
+ * `Link` bookkeeping on (a per-call nonce here, per computenet-5nw9's KDoc on
+ * that overload: `bridgeTo`/`bridgeFrom` each mint a fresh surrogate
+ * `PortRef` for the counterpart every call).
+ */
+private data class BridgeSlot(val fromAddr: PortAddress, val toAddr: PortAddress, val role: LinkRole, val side: BridgeSide)
 
 /**
  * computenet-1mbp: the address-keyed registry of currently-live bridged
@@ -194,7 +212,7 @@ fun <T> T.bridgeTo(
         // computenet-1mbp: a second bridgeTo over the same (selfAddr, toAddr)
         // pair supersedes the first — closed only now that this one is
         // admitted, so a refusal above never disturbs the incumbent.
-        val slot = BridgeSlot(selfAddr, toAddr, LinkRole.Consume)
+        val slot = BridgeSlot(selfAddr, toAddr, LinkRole.Consume, BridgeSide.PRODUCER)
         supersedeBridgedLink(slot, downstream = true)
         registerBridgedLink(slot, link)
     }
@@ -247,7 +265,7 @@ fun <T> T.bridgeFrom(
         // computenet-1mbp: a second bridgeFrom over the same (fromAddr, selfAddr)
         // pair supersedes the first — closed only now that this one is
         // admitted, so a refusal above never disturbs the incumbent.
-        val slot = BridgeSlot(fromAddr, selfAddr, LinkRole.Consume)
+        val slot = BridgeSlot(fromAddr, selfAddr, LinkRole.Consume, BridgeSide.CONSUMER)
         supersedeBridgedLink(slot, downstream = false)
         registerBridgedLink(slot, link)
     }
