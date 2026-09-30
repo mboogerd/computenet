@@ -540,6 +540,12 @@ internal class HostDurability(
      * restart: it compacts the whole replayed tail instead of carrying it. It is no longer
      * a safety precondition.
      *
+     * Selection is by reference identity (`===`) against the instances the host's
+     * selectors return, not by path. A [journal] no cell or port of this host is bound to
+     * — e.g. a fresh `FileJournal` opened on the host's own file — is refused with
+     * [IllegalArgumentException] if it holds any record, and is a no-op that writes
+     * nothing if it is empty (computenet-s4n8y).
+     *
      * Not covered, and still lost by the reset: a frame already dequeued and held
      * elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-activation
      * tail — and, on a suspending (🟢) scheduler, a delivery suspended mid-handler.
