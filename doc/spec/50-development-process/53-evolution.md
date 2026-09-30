@@ -25,43 +25,43 @@ Versioning is evolutionary selection:
 **Shadow isolation** (decided in 93 I-17, amending the landed rule). The
 shipped G-32 mechanism (52) NoOp-serves *every* fan-in inlet of an
 `Effectful` cell as the only suppression mode — which deletes the derived
-emissions a judge needs for any mid-graph effectful cell. Decided: effect
+emissions a judge needs for any mid-graph effectful cell. [53-SHADOW-01] Decided: effect
 suppression MUST cut at `@Contract(effect = true)` *boundary contracts*
 (flagged by the same KSP scan that emits `management`); the shadow membrane
 NoOp-serves exactly the shadow inlets whose contract is effectful, interior
 data inlets run fully so the judge sees every derived delta, and the shadow
 owns fresh instances of its effect-boundary cells (the tap from production
-is the only inbound edge). The `Effectful` *cell* marker is demoted to a
+is the only inbound edge). [53-SHADOW-02] The `Effectful` *cell* marker is demoted to a
 coarse fallback for opaque, non-portable I/O: such a cell is NoOp-replaced
-wholesale and terminates judgeability downstream of itself. A shadow cut
+wholesale and terminates judgeability downstream of itself. [53-SHADOW-03] A shadow cut
 MUST be SCC-closed — feedback cycles close inside the membrane as
 shadow→shadow links, or the shadow is flagged open-loop-only (judged as a
 transfer function; closed-loop claims need a canary promotion instead).
 
 **Judgment is declarative policy** (decided in 93 I-17).
-`PromotionPolicy(gates, window, threshold, judge, baseline?)` is the decided
+[53-JUDGE-01] `PromotionPolicy(gates, window, threshold, judge, baseline?)` is the decided
 shape: gate invariants (glitch-free where their inlets share an upstream
 fork; convergence-at-quiescence across independent sources), an observation
 window measured in observed production waves and/or coverage stabilization —
 never wall-clock, never a barrier — a satisfaction criterion (strict
 default: zero gate violations over the window), the judge cell, and an
-optional differential baseline. The **differential shadow** runs incumbent
+optional differential baseline. [53-JUDGE-02] The **differential shadow** runs incumbent
 and candidate as parallel effect-suppressed shadows tapped from the same
 production outlets and judged by the same gates: promote iff the candidate
-meets the threshold and is no worse than the incumbent. **Cycle promotion
+meets the threshold and is no worse than the incumbent. [53-JUDGE-03] **Cycle promotion
 gates on quiescence**: a cell on a live cycle MAY be relinked only once the
 cycle's delta magnitude sits below the G-19 threshold; without G-19
 throttling, cycle promotion is deferred, not attempted.
 
-**Attention across evolution** (decided in 93 I-9). A shadow subscription
+**Attention across evolution** (decided in 93 I-9). [53-ATTN-01] A shadow subscription
 mints no upstream interest — it emits NONE `setSelf`, so observing
 production never inflates production's upstream resourcing (34). The
 candidate subgraph is held awake by the promotion judge, an active invariant
 pinned at LOW (never HIGH — it yields to real work under the stride floor).
-Promotion copies no attention number: the swap relinks downstream
+[53-ATTN-02] Promotion copies no attention number: the swap relinks downstream
 subscribers onto the candidate's full ref, each relink fires `onLinked`, and
 each subscriber re-announces its current level, so the candidate re-derives
-real attention from real downstream interest. The swap window MUST carry the
+real attention from real downstream interest. [53-ATTN-03] The swap window MUST carry the
 management-activity veto against automatic suspension.
 
 ## Mechanical decomposition (all future, but all named elsewhere)
@@ -112,7 +112,7 @@ events, with peer announcements mirroring remote edges. The coordinator reads
 the incumbent's complete incident set from `TopologyIndex.swapSet(ref)`; this
 enumeration is proportional to that swap set rather than to all cells or links.
 
-1. **PRECHECK** — no side effects, freely abortable. The candidate MUST
+1. [53-SWAP-01] **PRECHECK** — no side effects, freely abortable. The candidate MUST
    present, for every rebindable link, a port with the same
    `(portName, contractId)` (structural port sameness, 93 I-2); link
    policies dry-run against each inbound `LinkRequest` (identity slot and
@@ -120,18 +120,18 @@ enumeration is proportional to that swap set rather than to all cells or links.
    the swap (§Trust boundary). Any failure aborts with the incumbent
    untouched and zero traffic buffered — admission is decided strictly
    before the window, so mid-swap rejection cannot occur.
-2. **PREPARE** — the membrane goes red: inbound faces serve a `Buffering`
+2. [53-SWAP-02] **PREPARE** — the membrane goes red: inbound faces serve a `Buffering`
    proxy (33), all coupled inlets parking together in one window. The
    incumbent drains its accepted invocations, flushes all its sourced waves
    downstream, then quiesces **hot** (no deactivation). After PREPARE no
    incumbent wave is in flight.
-3. **COMMIT** — non-vetoing: the state handoff (§G-33) runs inside the
+3. [53-SWAP-03] **COMMIT** — non-vetoing: the state handoff (§G-33) runs inside the
    window, then each link rebinds; `onLink` runs as setup only and MUST NOT
    newly reject (the admission decision was PRECHECK's). Serving the
    candidate anew invalidates downstream leases (14). Green: replay the
    buffered inbound in order, then the membrane delegates itself off the
    per-message path.
-4. **RETIRE** — `despawn` the incumbent (15). Only now is it gone.
+4. [53-SWAP-04] **RETIRE** — `despawn` the incumbent (15). Only now is it gone.
 
 ⚠ GAP (G-53): cross-port couplings (Symport/Antiport) can wait forever when
 one coupled port never fires for a wave, and the fate of a half-completed
@@ -141,7 +141,7 @@ that composes with no-message-loss and the drain protocol, plus ordering
 semantics for coupled transactions across a buffered swap window (93
 I-10/I-11).
 
-**Rollback** makes "same swap, reversed" concrete: the incumbent is retained
+[53-ROLLBACK-01] **Rollback** makes "same swap, reversed" concrete: the incumbent is retained
 hot with its links until COMMIT fully succeeds, so a commit-time failure
 reverses any partial relinks, re-greens the membrane onto the incumbent, and
 replays the buffered inbound to it — buffered traffic always has a home, and
@@ -149,7 +149,7 @@ the in-window case needs no journal. Rollback *after* a successful promotion
 is a fresh swap in the reverse direction, identical protocol (see §G-33 for
 the post-retire checkpoint).
 
-The swap is atomic per membrane at the membrane's host
+[53-SWAP-05] The swap is atomic per membrane at the membrane's host
 (management-preempts-data single-consumer serialization; no global lock, no
 coordinator) and emits no topology event: an instance swap leaves the
 logical edge set intact, so downstream wave completeness never observes it.
@@ -186,10 +186,10 @@ quiescent boundary, strictly before deactivation (the incumbent stays hot
 until RETIRE); import runs on the already-hot candidate, never through
 `onActivate`.
 
-**The invariance line**: a promotion swap holds the port contracts invariant
+[53-STATE-01] **The invariance line**: a promotion swap holds the port contracts invariant
 — the inbound command contract (`contractId` plus every `methodId` that
 could be in flight), the outbound delta `contractId`, and the delta's
-declared merge semantics. PRECHECK therefore requires the candidate's
+declared merge semantics. [53-STATE-02] PRECHECK therefore requires the candidate's
 rebindable ports to be a methodId-superset of the incumbent's, with
 merge-semantics equality on any replicated outlet; parked and buffered
 invocations then replay into the candidate unchanged (ids key on the shared
@@ -198,7 +198,7 @@ private representation, cell logic, snapshot schema. A contract or
 merge-semantics change is not a promotion — it is ordinary topology surgery
 (an adapter cell, or a new logical cell).
 
-**Three handoff tiers, typed by continuation class**:
+[53-STATE-03] **Three handoff tiers, typed by continuation class**:
 
 - **T0 (restore)** — snapshot schemas match: `restore(snapshot)` directly
   (the migration path, no `StateMigrating` needed).
@@ -214,20 +214,20 @@ merge-semantics change is not a promotion — it is ordinary topology surgery
   T2 re-baseline under a fresh source double-counts the incumbent's
   already-delivered contribution.
 
-On T0/T1 the snapshot carries each outlet's `OutletWaveState(sourceId,
+[53-EPOCH-01] On T0/T1 the snapshot carries each outlet's `OutletWaveState(sourceId,
 highWater)` and the candidate adopts it (decided in 93 I-11) — same source
 lane, counter continued from the high-water mark — so downstream glitch-free
 consumers see one monotone source and need no re-baseline (the PREPARE flush
-guarantees no wave straddles the handoff). T2 mints a fresh `sourceId`, and
+guarantees no wave straddles the handoff). [53-EPOCH-02] T2 mints a fresh `sourceId`, and
 the fresh epoch MUST NOT be silent: the candidate MUST emit the `ReBaseline`
 supersession notice naming the superseded sourceIds (93 I-22), making the
 succession wave-observable rather than a silent fresh-source reset — this
 obligation is decided, not built.
 
-The export snapshot doubles as the rollback checkpoint: one capture serves
+[53-ROLLBACK-02] The export snapshot doubles as the rollback checkpoint: one capture serves
 both `importFrom` and post-retire rollback (a bad candidate found live after
 RETIRE re-spawns the incumbent from the retained snapshot as the reverse
-candidate). For a `PartitionedCell` the swap membrane and the export/import
+candidate). [53-STATE-04] For a `PartitionedCell` the swap membrane and the export/import
 unit are per organelle — per partition, never the whole composite (a
 whole-composite atomic transaction would be the distributed barrier P4
 forbids); mixed-version partitions coexist safely under the invariance line.
@@ -261,7 +261,7 @@ I-11/I-27/I-21). Coupled-flow windows during a buffered swap remain G-53.
 
 ## Trust boundary
 
-Promotion authority is a membrane/policy concern (43): who may inject cells,
+[53-AUTH-01] Promotion authority is a membrane/policy concern (43): who may inject cells,
 approve privileged links, or trigger promotion in a runtime — per-runtime
 policy, from single-developer (today) to federated governance (vision).
 
@@ -307,7 +307,7 @@ scope**. What is decided and built is the **rolling** form:
 
 **Rolling, by constraint — one instance at a time, the swap IS crash-recovery.**
 `Promotion.promoteReplica` promotes a single replica; the caller rolls the set
-peer by peer. The candidate **reuses the incumbent's `CellRef`**. Because every
+peer by peer. [53-REPL-01] The candidate **reuses the incumbent's `CellRef`**. Because every
 mesh identity derives from the ref — the ref-derived tag lane, the
 delivered-watermark row, and every port ref (PN-1) — reusing it makes the swap
 **indistinguishable from crash-recovery, and that is the mechanism**:
@@ -327,7 +327,7 @@ delivered-watermark row, and every port ref (PN-1) — reusing it makes the swap
 `Promotion.promoteReplica` is PRECHECK-then-COMMIT like `promote`, and
 `Replication.rebind` is **additive** — single-instance `promote` is byte-for-byte
 unchanged, and a graph that never opts into replicated promotion is unaffected.
-PRECHECK (no side effects, freely abortable):
+[53-REPL-02] PRECHECK (no side effects, freely abortable):
 
 - consults the `PromotionJudge` (the same declarative policy as `promote`);
 - **refuses a candidate with a different ref** — a fresh ref breaks
@@ -338,7 +338,7 @@ PRECHECK (no side effects, freely abortable):
   sound (a `NonIdempotentCatchUp` candidate is refused outright);
 - checks structural port sameness (93 I-2) on the delta outlet.
 
-COMMIT is the rebind (reuse-ref crash-recovery). Inbound gossip arriving during
+COMMIT is the rebind (reuse-ref crash-recovery). [53-REPL-03] Inbound gossip arriving during
 the object swap parks at the registry on the despawn's unpublish and replays on
 the candidate's republish, so no peer delta is lost.
 
