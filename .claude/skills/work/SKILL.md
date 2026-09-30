@@ -177,11 +177,11 @@ you did not compute that turn.
 | T-45m | dispatch only reviewers for finished work; merge and ship what is in flight |
 | EXPIRED | step 6 now |
 
-A persistent `Monitor` echoing at those points is optional; if armed, `TaskStop`
-it in step 6. Settle once now whether `SendMessage` exists (your tool list, then
-`ToolSearch "select:SendMessage"`); without it, continuing an agent is a fresh
-dispatch framed as a resume ([recovery.md](references/recovery.md), "Stalled
-agents and load"). A `status=stopped` notification from the previous session
+With agents live, arm the one-shot `Monitor` (`sleep <s>; echo wake`) the clock's
+`wake:` line prints; `TaskStop` it in step 6. Settle once whether `SendMessage` exists
+(tool list, then `ToolSearch "select:SendMessage"`); without it, continuing an agent is
+a stop plus a fresh dispatch framed as a resume ([recovery.md](references/recovery.md),
+"Stalled agents and load"). A `status=stopped` notification from the previous session
 means the host died: read recovery.md, "Resuming after the host died", first.
 
 Background jobs you start are supervised by nothing: bound each, record it in
@@ -252,13 +252,13 @@ filed twice: one twin closed soon after creation with no comments → trust the
 survivor; otherwise treat it as a collision ([recovery.md](references/recovery.md), "Collisions").
 
 Before dispatching, run `breakdown-marker.sh acquire <epic>` (timeout >= 300s;
-it pushes). Exit 0 → dispatch below with the printed `TOKEN`; 11 (FOREIGN) →
-already broken down elsewhere: list children again and continue at step 5, or
-park per "Still no children" below if that listing is empty; 12 (BOTH) → run
-`breakdown-marker.sh survivor <epic>` (exit 1: losers listed, not a failure; 0:
-nothing to adjudicate), route its `CLOSE` list per recovery.md "Collisions",
-then continue as for 11; 2 → unpublished acquisition, stop and report; 3 from
-either → treat it as 2.
+it pushes). Exit 0 → read capacity, bound the agent (5b) and dispatch below with
+the printed `TOKEN`; 11 (FOREIGN) → already broken down elsewhere: list children
+again and continue at step 5, or park per "Still no children" below if that
+listing is empty; 12 (BOTH) → run `breakdown-marker.sh survivor <epic>` (exit 1:
+losers listed, not a failure; 0: nothing to adjudicate), route its `CLOSE` list
+per recovery.md "Collisions", then continue as for 11; 2 → unpublished
+acquisition, stop and report; 3 from either → treat it as 2.
 
 ```
 Agent({
@@ -345,11 +345,14 @@ is finished: confirm it and send it to 5c, not to a second implementer. With
 `comment_count`: non-zero means another machine merged it → 5c. No `model` → use
 `luna` and stamp it.
 
-**Capacity.** Read `next-batch.py --capacity --siblings <N>` before every
-dispatch, reviewers included, and follow its advice. At most one live agent runs
-the repo-wide `./gradlew test`; the others scope their gate to touched modules.
-Go under the cap when results depend on wall-clock waits. Agents dying with no
-side effects → [recovery.md](references/recovery.md), "Stalled agents and load".
+**Capacity.** Before every `Agent` dispatch in this skill, breakdowns and reviewers
+included, read `next-batch.py --capacity --siblings <N>` and follow its advice. Then
+bound the agent with `echo "$(date -u +%s) <minutes>" > <scratch>/dispatched-<id>`,
+deleted on its notification: 30 for a one-file fix or a task review, 20 for a probe,
+else 60. At most one live agent runs the repo-wide `./gradlew test`; the others scope
+their gate to touched modules. Go under the cap when results depend on wall-clock
+waits. Agents `slot-elapsed.sh` flags OVER, or dying with no side effects →
+[recovery.md](references/recovery.md), "Stalled agents and load".
 
 **Make each bead true before dispatch** — reviewers score its text and the
 implementer builds on it literally. Run [pre-dispatch.md](references/pre-dispatch.md)'s
@@ -420,8 +423,8 @@ feature; DONE → 5c.
 ### 5c. Review and merge each task
 
 One reviewer per completed task, per "Models", never its author; they count
-against capacity. Stamp `reviewer_model=<model>` on the task first — the
-retrospective compares pairings.
+against capacity and are bounded (5b). Stamp `reviewer_model=<model>` on the
+task first — the retrospective compares pairings.
 
 ```
 Agent({
@@ -485,7 +488,7 @@ git -C <feature-worktree> log --oneline $(git -C <feature-worktree> merge-base H
 gh pr list --state open --json number,headRefName,isDraft
 ```
 
-Read capacity, then:
+Read capacity and bound the agent (5b), then:
 
 ```
 Agent({
@@ -597,8 +600,9 @@ Never work an item whose effective epic is `computenet-wpvy` or that carries the
 Ending abnormally: release the epic if work remains (item 1), then
 `publish-beads.sh`, then what time allows. Certified and green → ship.
 Uncertified → leave in draft; push what is committed. Running agents → do not
-wait; the next session resumes them. Report the main checkout's HEAD against
-`<scratch>/step1-head` if it moved.
+wait: `TaskStop` each that `slot-elapsed.sh` flags OVER, commenting "hung past bound",
+its worktree and last sha on its bead; the next session resumes the rest. Report
+the main checkout's HEAD against `<scratch>/step1-head` if it moved.
 
 1. **Epic:** closed by someone else → leave it. All children closed (at least
    one) → 5g if time allows, else release it for the next session's gate. Keep
