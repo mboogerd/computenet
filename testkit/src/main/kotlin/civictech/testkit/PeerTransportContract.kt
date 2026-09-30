@@ -213,6 +213,10 @@ abstract class PeerTransportContract {
      * A refused dial abandons after the policy's limit of unadmitted opens. A
      * named hook: a loopback cannot be refused, so the socket bindings
      * (ws, iroh) override it.
+     *
+     * An override of either hook must repeat `@Test`: JUnit 5 does not carry
+     * the annotation onto an overriding method, so an unannotated override
+     * silently removes the case — one test fewer, and the run stays green.
      */
     @Test
     open fun `a refused dial abandons after the refused-dial limit`() {
