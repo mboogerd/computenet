@@ -11,6 +11,7 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.ObservationSink
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.LocationRegistry
@@ -46,8 +47,7 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.util.IdentityHashMap
 import java.util.UUID
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.FutureTask
+import java.util.concurrent.CompletableFuture
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -79,6 +79,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     internal val registry = LocationRegistry()
     internal val transportScheme: String? = transportScheme?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
     private val transport: PeerTransport? = this.transportScheme?.let(PeerTransports::forScheme)
+    private val controllerDrive = Any()
 
     /** Separate registries exist only in transport mode; the default always returns [registry]. */
     private val registriesByHost = LinkedHashMap<HostId, LocationRegistry>()
@@ -142,7 +143,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
      * target cell lives there. For a non-`dur` scenario nothing is spawned onto
      * the durable host, so it stays inert.
      */
-    private val dur = KernelDriverDur(controller, ::registryFor) { deadLetters += it }
+    private val dur = KernelDriverDur(::newScheduler, ::registryFor, ::drainDurController) { deadLetters += it }
 
     /** Cell ids delegated to [dur] (durable-host members + `journal` controllers). */
     private val durCells = mutableSetOf<CellId>()
@@ -198,7 +199,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
         val key = hostId ?: defaultHostId
         return hosts.getOrPut(key) {
             val hostRegistry = registryFor(key)
-            ManagedHost(scheduler = controller.scheduler(), registry = hostRegistry).also { host ->
+            ManagedHost(scheduler = newScheduler(), registry = hostRegistry).also { host ->
                 registriesByManagedHost[host] = hostRegistry
                 host.deadLetterOutlet.subscribe(
                     Use.fixed(
@@ -245,6 +246,36 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
         }
     }
 
+    /**
+     * The simulator's scheduler permits cross-thread submission but requires a
+     * single thread to step/await it. A real transport enters host calls from
+     * multiple socket threads, so transport-mode schedulers share this drive
+     * lock. The default path returns the raw scheduler and is unchanged.
+     */
+    private fun newScheduler(): HostScheduler {
+        if (transport == null) return controller.scheduler()
+        val delegate = synchronized(controllerDrive) { controller.scheduler() }
+        return object : HostScheduler {
+            override val color get() = delegate.color
+
+            override fun submit(priority: Int, action: suspend () -> Unit) = delegate.submit(priority, action)
+
+            override fun <T> await(future: CompletableFuture<T>): T =
+                synchronized(controllerDrive) { delegate.await(future) }
+
+            override fun shutdown() = synchronized(controllerDrive) { delegate.shutdown() }
+        }
+    }
+
+    private fun stepController(): Boolean =
+        if (transport == null) controller.step() else synchronized(controllerDrive) { controller.step() }
+
+    /** Preserve durability's original bounded drain while serializing transport entry. */
+    private fun drainDurController() {
+        if (transport == null) controller.runToIdle()
+        else synchronized(controllerDrive) { controller.runToIdle() }
+    }
+
     /** Build one side and peer it with every side already present. */
     private fun transportHostFor(hostId: HostId): TransportHost =
         transportHosts[hostId] ?: run {
@@ -253,7 +284,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
                 "Concord real-transport mode currently binds ws only; '${binding.scheme}' is not supported"
             }
             val hostRegistry = registryFor(hostId)
-            val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = hostRegistry)
+            val bridgeHost = ManagedHost(scheduler = newScheduler(), registry = hostRegistry)
             registriesByManagedHost[bridgeHost] = hostRegistry
             // Concord scenarios configure no transport identity or credentials;
             // use the seam's anonymous/open pairing rather than asserting a
@@ -276,45 +307,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
             lower.side,
         ).also { lower.listener = it }
         check(higher.id !in lower.dialers) { "duplicate Concord transport edge ${lower.id}<-${higher.id}" }
-        lower.dialers[higher.id] = dialWhileDrivingController(binding, listener, lower, higher)
-    }
-
-    /**
-     * [PeerTransport.dial] returns only after a peer frame proves the listener
-     * admitted the connection. Both bridge hosts run on this driver's manual
-     * scheduler, so blocking this thread inside `dial` would also prevent the
-     * admission/announcement work it is awaiting from running. Keep the socket
-     * wait off-scheduler and drive the one shared controller until it completes.
-     */
-    private fun dialWhileDrivingController(
-        binding: PeerTransport,
-        listener: PeerListener,
-        lower: TransportHost,
-        higher: TransportHost,
-    ): PeerConnection {
-        val dial = FutureTask { binding.dial(listener.boundAddress, higher.side) }
-        Thread(dial, "concord-peer-dial-${lower.id}-${higher.id}").apply {
-            isDaemon = true
-            start()
-        }
-        val deadline = System.nanoTime() + TRANSPORT_DIAL_TIMEOUT_NANOS
-        while (!dial.isDone) {
-            if (!controller.step()) Thread.sleep(TRANSPORT_POLL_MILLIS)
-            if (System.nanoTime() >= deadline) {
-                dial.cancel(true)
-                error("transport dial ${higher.id}->${lower.id} did not complete within 20 s")
-            }
-        }
-        return try {
-            dial.get()
-        } catch (e: ExecutionException) {
-            val cause = e.cause ?: e
-            when (cause) {
-                is RuntimeException -> throw cause
-                is Error -> throw cause
-                else -> throw IllegalStateException("transport dial ${higher.id}->${lower.id} failed", cause)
-            }
-        }
+        lower.dialers[higher.id] = binding.dial(listener.boundAddress, higher.side)
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
@@ -498,7 +491,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private fun drainController(budget: Int): Drain {
         var steps = 0
         while (steps < budget) {
-            if (!controller.step()) return Drain(settled = true, steps = steps)
+            if (!stepController()) return Drain(settled = true, steps = steps)
             steps++
         }
         return Drain(settled = false, steps = steps)
@@ -604,7 +597,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
         val pending = bound.host.readState(bound.ref, StateRead(cursor = cursor as Cursor?, limit = limit))
         var steps = 0
         while (!pending.isDone && steps < READ_STEP_BUDGET) {
-            if (!controller.step()) break
+            if (!stepController()) break
             steps++
         }
         val result = pending.getNow(null)
@@ -877,7 +870,6 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */
         const val READ_STEP_BUDGET = 100_000
-        const val TRANSPORT_DIAL_TIMEOUT_NANOS = 20_000_000_000L
         const val TRANSPORT_POLL_MILLIS = 2L
         const val TRANSPORT_QUIESCE_TIMEOUT_NANOS = 10_000_000_000L
     }
