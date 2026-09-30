@@ -46,7 +46,7 @@ untrusting contributors participate safely.
 Landed (phase 1): `PeerId` as transport identity — the WebSocket hello carries the peer
 name, the bridge ingress stamps every delivery, and handshakes running during
 a bridged delivery see it on `LinkRequest.identity` (`CurrentPeer`); local
-links carry null. Deny-by-default is a boundary control in both layers:
+links carry null. [43-ADMIT-01] Deny-by-default is a boundary control in both layers:
 `allowPeers(...)` as a link policy, and the ingress admission gate
 (`Peering.Side.allow` / `WsTransport` refusing unlisted peers at hello time)
 — refusals surface as ordinary dead letters. Verified: `TrustBoundaryTest`
@@ -55,11 +55,11 @@ links carry null. Deny-by-default is a boundary control in both layers:
 Landed (phase 2, DSC1 — `computenet-ssa`): per-peer Ed25519 keypairs
 (`:identity`), a `PeerId` that today resolves 1:1 from the key's fingerprint
 (via the interim `PeerIdentityBinding`, `computenet-376c`), and a signed-nonce
-challenge/response added to the hello. A hello whose signature verifies under
+challenge/response added to the hello. [43-HELLO-01] A hello whose signature verifies under
 the presented key — or, for an in-process `Peering.loopback` direction, both
 sides holding credentials — promotes the crossing from `AuthLevel.TransportVouched`
 to `AuthLevel.Authenticated`; `currentPrincipal()` reflects the achieved level.
-Every refusal (name/key mismatch, forged signature, downgrade under a
+[43-HELLO-02] Every refusal (name/key mismatch, forged signature, downgrade under a
 `RequireAuthenticated` policy, replayed hello) is observable, never a silent
 drop. `PeerAuthPolicy.Open` keeps today's behaviour byte-for-byte **on an
 Interim-bound side** (`PeerIdentityBinding.Interim`); only
@@ -140,7 +140,7 @@ exposure proxy (93 I-10's membrane exposure modes) and the G-29 ingress
 gate, now consulting policy keyed on the `PeerId` ingress already stamps.
 Nothing new lives at the boundary.
 
-**Identity.** Every crossing MUST carry a `Principal`: `LocalTrusted` for
+**Identity.** [43-PRIN-01] Every crossing MUST carry a `Principal`: `LocalTrusted` for
 in-host/same-registry crossings (today's null identity), or `Peer(id, auth)`
 for bridge crossings — `id` the stamped `PeerId`, `auth` an `AuthLevel` of
 `TransportVouched` (phase 1, landed: the transport connection vouches for
@@ -171,27 +171,27 @@ redaction/scoping transform — never a lambda on the wire (P9).
 **The three seams.** Enforcement is native to the crossing's dispatch class;
 there is no fourth subsystem:
 
-1. **Admission** (`PORT_MANAGEMENT` peering): the transport hello / bridge
+1. [43-ADMIT-02] **Admission** (`PORT_MANAGEMENT` peering): the transport hello / bridge
    ingress MUST evaluate an admission predicate; a failing `Principal` is
    refused at hello time and its traffic dead-lettered — the landed G-29
    gate, enforced today at `Peering.Allowlist`/`allowPeers(...)`, not by a
    `BoundaryPolicy` predicate (`BoundaryPolicy.admission` had zero read sites
    and was deleted, remediation T03 — see `91-gap-analysis.md`).
-2. **Link-time** (`PORT_MANAGEMENT` link): every new full-ref link runs
+2. [43-LINK-01] **Link-time** (`PORT_MANAGEMENT` link): every new full-ref link runs
    `linkAuthority` first-rejection-wins with `CurrentPeer` = the crossing's
-   `Principal` (landed). Privileged ports SHOULD deny by default;
+   `Principal` (landed). [43-LINK-02] Privileged ports SHOULD deny by default;
    migration/RESTART preserve `instanceId` and are not rebinds; promotion
    *is* a rebind and MUST re-authorize.
-3. **Flow-time** (the Mediate proxy): declaring any of `protocolAuthority`,
+3. [43-FLOW-01] **Flow-time** (the Mediate proxy): declaring any of `protocolAuthority`,
    `disclosure`, or `integrity` forces the exposure to Mediate, and that
-   proxy is the sole flow-time enforcement point. `PORT_PROTOCOL` frames
+   proxy is the sole flow-time enforcement point. [43-FLOW-02] `PORT_PROTOCOL` frames
    check `protocolAuthority[protocolId]` — below `minAuth` or over
    `ratePerWindow` → dead letter; an asserted attention level is clamped,
    `slot.level = min(asserted, ceiling)`, leaving the fold and band-gating
-   untouched. `PORT_API` outbound passes `disclosure`: one filter covers
+   untouched. [43-FLOW-03] `PORT_API` outbound passes `disclosure`: one filter covers
    both the `onLinked` catch-up and the live stream (a snapshot IS a delta);
    `Deny` suppresses catch-up entirely, for attention- or management-only
-   peerings. `PORT_API` inbound passes `integrity`: `RequireSigned` verifies
+   peerings. [43-FLOW-04] `PORT_API` inbound passes `integrity`: `RequireSigned` verifies
    a signature over (contractId, methodId, payload, minting `PeerId`,
    per-source counter) before `deltaInlet` delivery — failure dead-letters,
    and because Replicable merges are idempotent, drop-and-reconverge is the
