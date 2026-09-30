@@ -10,6 +10,9 @@ import civictech.cell.host.VirtualThreadScheduler
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.respond
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -49,7 +52,10 @@ class DeliberateApp(
     private val compactEveryMs: Long = 30_000,
     /** SPEC §12: how each backend's usage is priced. */
     pricing: Pricing = Pricing(),
+    inspector: InspectorFlag.Options? = null,
 ) {
+    private val inspectorOptions = inspector
+
     /**
      * SPEC §2 "Credence layers and consensus". [layers] always includes
      * `dfquad` (agora's own semantics, the reference layer); [headline] picks
@@ -129,6 +135,10 @@ class DeliberateApp(
 
     val boundPort: Int get() = shell.boundPort
 
+    /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
+    var inspector: InspectorServer? = null
+        private set
+
     private val flusher = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "deliberate-sse-flush").apply { isDaemon = true }
     }
@@ -149,6 +159,7 @@ class DeliberateApp(
 
     fun start(): DeliberateApp = apply {
         shell.start()
+        inspectorOptions?.let { inspector = it.serve(registry, mapOf("deliberate" to host)) }
         flusher.scheduleWithFixedDelay({
             try {
                 if (dirty.getAndSet(false)) shell.broadcast { graphJson() }
@@ -211,6 +222,7 @@ class DeliberateApp(
         } catch (e: Exception) {
             System.err.println("deliberate: final metadata checkpoint failed: $e")
         }
+        inspector?.stop()
         shell.stop()
         scheduler.shutdown()
     }
@@ -471,14 +483,16 @@ internal class Options(args: Array<String>) {
                                           (default ${Pricing.DEFAULT_CODEX_MODEL}: 4.00 / 0.40 / 20.00; another
                                           --codex-model without them is shown as tokens only, rate unknown)
               --ui <dir>                  built UI directory (default ui/dist)
+              --inspect-port <p>          serve this process's live graph on p (opt-in, see InspectorFlag)
             requires TYPESAFE_API_KEY and logged-in `claude` / `codex` CLIs.
         """.trimIndent()
     }
 }
 
 fun main(args: Array<String>) {
+    val parsed = InspectorFlag.parse(args)
     val opts = try {
-        Options(args)
+        Options(parsed.rest)
     } catch (e: IllegalArgumentException) {
         System.err.println("deliberate: ${e.message}\n\n${Options.USAGE}")
         exitProcess(2)
@@ -505,10 +519,11 @@ fun main(args: Array<String>) {
     val merger = CliMerger(claude)
     val app = DeliberateApp(
         opts.port, SlowCallLog.judge(JevJudge()), proposers, opts.config, uiDir, merger, CliFramer(claude),
-        dataDir = opts.data, semantics = opts.semantics, pricing = opts.pricing,
+        dataDir = opts.data, semantics = opts.semantics, pricing = opts.pricing, inspector = parsed.options,
     ).start()
     Runtime.getRuntime().addShutdownHook(Thread { app.stop() })
     announcePort("http", app.boundPort)
+    app.inspector?.let { InspectorFlag.announce(it, parsed.options!!) }
     println("deliberate: http://localhost:${app.boundPort}  (proposers: ${proposers.joinToString { it.id }}, framing: claude, ${opts.config})")
     println(if (uiDir != null && File(uiDir, "index.html").isFile) "  serving UI from $uiDir" else "  UI not built — see demo/deliberate/README.md")
     println("  layers: ${opts.semantics.running.joinToString()}  (headline ${opts.semantics.headline}, consensus ${opts.semantics.consensus.joinToString()})")
