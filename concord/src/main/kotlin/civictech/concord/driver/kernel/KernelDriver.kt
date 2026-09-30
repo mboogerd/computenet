@@ -258,36 +258,13 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private fun peer(a: TransportHost, b: TransportHost, binding: PeerTransport) {
         val (lower, higher) = if (a.id < b.id) a to b else b to a
         val listener = lower.listener ?: binding.listen(
-            binding.parseAddress("ws://127.0.0.1:0"),
+            // `localhost:0` selects WsPeerTransport's hardened ephemeral
+            // loopback path (the same endpoint its transport contract covers).
+            binding.parseAddress("ws://localhost:0"),
             lower.side,
         ).also { lower.listener = it }
         check(higher.id !in lower.dialers) { "duplicate Concord transport edge ${lower.id}<-${higher.id}" }
-        lower.dialers[higher.id] = dialWithCarryTimeoutRetry(binding, listener, higher)
-    }
-
-    /**
-     * A loopback WebSocket listener is already bound when [PeerTransport.listen]
-     * returns, but the asynchronous handshake can still lose a scheduling race
-     * under repeated multi-host corpus meshes. Retry only that bounded carry
-     * timeout; parsing, protocol, and other transport failures remain immediate.
-     */
-    private fun dialWithCarryTimeoutRetry(
-        binding: PeerTransport,
-        listener: PeerListener,
-        higher: TransportHost,
-    ): PeerConnection {
-        try {
-            return binding.dial(listener.boundAddress, higher.side)
-        } catch (first: IllegalStateException) {
-            if (first.message?.contains("did not carry within") != true) throw first
-            Thread.sleep(TRANSPORT_DIAL_RETRY_MILLIS)
-            return try {
-                binding.dial(listener.boundAddress, higher.side)
-            } catch (second: IllegalStateException) {
-                second.addSuppressed(first)
-                throw second
-            }
-        }
+        lower.dialers[higher.id] = binding.dial(listener.boundAddress, higher.side)
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
@@ -850,7 +827,6 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */
         const val READ_STEP_BUDGET = 100_000
-        const val TRANSPORT_DIAL_RETRY_MILLIS = 10L
         const val TRANSPORT_POLL_MILLIS = 2L
         const val TRANSPORT_QUIESCE_TIMEOUT_NANOS = 10_000_000_000L
     }
