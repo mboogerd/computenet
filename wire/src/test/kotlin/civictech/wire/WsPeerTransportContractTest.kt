@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.PeerTransport
@@ -100,31 +101,38 @@ class WsPeerTransportContractTest : PeerTransportContract() {
      * admitted. Before gyvli-D3 each cycle left a `BridgeIngressCell` and a
      * `RegistryMirrorCell` spawned and published, so `localRefs()` grew by two
      * per cycle; now the tenth admission leaves the side where the first did,
-     * no retired instance's cell is still hosted on the bridge, and every
-     * retired instance but the most recent has had its tombstones lifted.
+     * no retired instance's cell is still hosted on the bridge, each retired
+     * ref was unpublished exactly once, and every retired instance but the
+     * most recent has had its tombstones lifted.
+     *
+     * Deterministic: the hosts run on a [SimulationController] drained once
+     * per cycle, so each close's despawns are provably still queued when the
+     * next hello and admission run — the window in which lifting a tombstone
+     * early would let the despawn unpublish its ref a second time.
      */
     @Test
     fun `ten hello-close cycles on one Session leave the side's refs flat`() {
+        val controller = SimulationController(3)
         val registry = LocationRegistry()
-        val host = ManagedHost(registry = registry)
-        val bridgeHost = ManagedHost(registry = registry)
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
         val side = Peering.Side(registry, bridgeHost, peer = PeerId("jvm-a"))
-        val app = SetCell<String>().also { host.managementInlet.call.spawn(it) }.ref
-        awaitUntil("the application cell is published", CARRY_MS) { app in registry.localRefs() }
+        SetCell<String>().also { host.managementInlet.call.spawn(it) }
+        controller.runToIdle()
         val appRefs = registry.localRefs()
+
+        val unpublished = mutableMapOf<CellRef, Int>()
+        registry.onUnpublish { ref -> unpublished.merge(ref, 1, Int::plus) }
 
         val session = WsTransport.Session(side, send = {}, refuse = {})
         val instances = mutableListOf<Set<CellRef>>()
         fun cycle() {
             session.hello()
             session.onText("HELLO ${UUID.randomUUID()} jvm-b")
-            // the bridge host runs its management calls in order: once this
-            // instance's two spawns are published, the previous close's
-            // despawns have run too
-            awaitUntil("cycle ${instances.size}'s instance is spawned", CARRY_MS) {
-                registry.localRefs().size == appRefs.size + 2
-            }
-            instances += registry.localRefs() - appRefs
+            controller.runToIdle() // the previous close's despawns, then this instance's spawns
+            val minted = registry.localRefs() - appRefs - instances.flatten().toSet()
+            assertEquals(2, minted.size, "cycle ${instances.size} minted $minted, expected a mirror and an ingress")
+            instances += minted
         }
 
         cycle()
@@ -135,15 +143,21 @@ class WsPeerTransportContractTest : PeerTransportContract() {
         }
 
         assertEquals(afterFirst, registry.localRefs().size, "localRefs after $CYCLES hello/close cycles vs after the first")
-        assertTrue(instances.zipWithNext().all { (a, b) -> a.intersect(b).isEmpty() }, "a cycle reused an instance's refs")
         val retired = instances.dropLast(1)
-        awaitUntil("no retired instance's cell is still hosted on the bridge", CARRY_MS) {
-            retired.flatten().none { bridgeHost.portAt(it, "inlet") != null }
-        }
-        val lifted = retired.dropLast(1).flatten()
+        val stillHosted = retired.flatten().filter { bridgeHost.portAt(it, "inlet") != null }
+        assertTrue(stillHosted.isEmpty(), "retired instances' cells still hosted on the bridge: $stillHosted")
+        // computenet-gyvli.2's review: lifting a tombstone before the bridge
+        // host ran the despawn would let that despawn fire onUnpublish a second
+        // time for a ref with no location. Lifting waits for the despawn, so
+        // each retired ref is unpublished exactly once.
+        val notOnce = retired.flatten().filter { unpublished[it] != 1 }
+        assertTrue(notOnce.isEmpty(), "retired refs not unpublished exactly once: ${notOnce.associateWith { unpublished[it] }}")
+        // the last retired instance was despawned after the last lift chance;
+        // every earlier one has been superseded
+        val lifted = retired.dropLast(1).flatten().toSet()
         assertTrue(
             registry.retiredRefs().none { it in lifted },
-            "tombstones of superseded, despawned instances were never lifted: ${registry.retiredRefs().intersect(lifted.toSet())}",
+            "tombstones of superseded, despawned instances were never lifted: ${registry.retiredRefs().intersect(lifted)}",
         )
     }
 
