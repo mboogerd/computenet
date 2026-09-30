@@ -8,7 +8,9 @@ import civictech.concord.check.ReadWalk
 import civictech.concord.driver.Driver
 import civictech.concord.driver.ReadCursor
 import civictech.concord.driver.ReadPage
+import civictech.concord.driver.kernel.CROSS_REGISTRY_MIGRATE_UNBUILT
 import civictech.concord.driver.kernel.KernelDriver
+import civictech.concord.driver.kernel.UnsupportedCatalogBinding
 import civictech.concord.generator.ScenarioGenerator
 import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.CellSpec
@@ -144,6 +146,7 @@ class CorpusRunner {
      * state (see `ProfileFilterVisibilityTest`).
      */
     internal fun corpusTests(active: Set<String>): List<DynamicTest> {
+        val transport = activeTransport()
         val files = CORPUS.walkTopDown().filter { it.isFile && it.extension == "yaml" }.sorted().toList()
         assertTrue(files.isNotEmpty()) { "no corpus scenarios discovered under ${CORPUS.absolutePath}" }
         val excluded = mutableListOf<ExcludedScenario>()
@@ -158,7 +161,19 @@ class CorpusRunner {
             assertExpectFailureMatchesKind(scenario)
             val profile = scenario.profile.slug()
             if (profile in active) {
-                DynamicTest.dynamicTest("${scenario.id} (${file.parentFile.name})") { runScenario(scenario) }
+                DynamicTest.dynamicTest("${scenario.id} (${file.parentFile.name})") {
+                    try {
+                        runScenario(scenario, transport)
+                    } catch (e: UnsupportedCatalogBinding) {
+                        if (transport != null && e.message == CROSS_REGISTRY_MIGRATE_UNBUILT) {
+                            throw TestAbortedException(
+                                "${scenario.id} SKIPPED under concord.transport=$transport: " +
+                                    CROSS_REGISTRY_MIGRATE_UNBUILT,
+                            )
+                        }
+                        throw e
+                    }
+                }
             } else {
                 val entry = ExcludedScenario(scenario.id, file.parentFile.name, profile)
                 excluded += entry
@@ -167,7 +182,7 @@ class CorpusRunner {
         }
         // Prepended, not appended: the summary is the line an agent should meet
         // first when it reads this run as evidence.
-        return listOf(profileFilterSummary(active, excluded)) + perScenario
+        return listOf(profileFilterSummary(active, excluded, transport)) + perScenario
     }
 
     /**
@@ -201,19 +216,29 @@ class CorpusRunner {
      * filtered". It passes; the exclusion lives in its *name*, which is what
      * `TestLogEvent.PASSED` prints and what `CorpusRunner.xml` records.
      */
-    internal fun profileFilterSummary(active: Set<String>, excluded: List<ExcludedScenario>): DynamicTest =
-        DynamicTest.dynamicTest(profileFilterSummaryName(active, excluded)) {}
+    internal fun profileFilterSummary(
+        active: Set<String>,
+        excluded: List<ExcludedScenario>,
+        transport: String? = activeTransport(),
+    ): DynamicTest = DynamicTest.dynamicTest(profileFilterSummaryName(active, excluded, transport)) {}
 
     /** The summary node's display name — the whole payload, hence its own function. */
-    internal fun profileFilterSummaryName(active: Set<String>, excluded: List<ExcludedScenario>): String {
+    internal fun profileFilterSummaryName(
+        active: Set<String>,
+        excluded: List<ExcludedScenario>,
+        transport: String? = activeTransport(),
+    ): String {
+        val mode = transport ?: "shared-registry"
         if (excluded.isEmpty()) {
-            return "profile filter: active=${active.sorted()}, 0 scenarios excluded — this run covers the whole corpus"
+            return "profile filter: active=${active.sorted()}, transport=$mode, 0 scenarios excluded — " +
+                "this run covers the whole corpus"
         }
         val byProfile = excluded.groupBy { it.profile }.toSortedMap()
         val detail = byProfile.entries.joinToString("; ") { (profile, entries) ->
             "$profile x${entries.size} in ${entries.map { it.directory }.distinct().sorted().joinToString(",")}"
         }
-        return "profile filter: active=${active.sorted()}, ${excluded.size} scenarios EXCLUDED and NOT run " +
+        return "profile filter: active=${active.sorted()}, transport=$mode, " +
+            "${excluded.size} scenarios EXCLUDED and NOT run " +
             "($detail) — this run is NOT evidence for them"
     }
 
@@ -244,6 +269,10 @@ class CorpusRunner {
         (System.getProperty("concord.profiles") ?: "core")
             .split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
 
+    /** The optional real-transport binding selected beside [activeProfiles]. */
+    private fun activeTransport(): String? =
+        System.getProperty("concord.transport")?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+
     private fun Profile.slug(): String = when (this) {
         Profile.CORE -> "core"
         Profile.DIST -> "dist"
@@ -257,7 +286,7 @@ class CorpusRunner {
      */
     internal data class CheckFailure(val checkId: String, val message: String)
 
-    private fun runScenario(scenario: Scenario) {
+    private fun runScenario(scenario: Scenario, transport: String?) {
         // The `expect-failure:`/`kind:` pairing is asserted by the test factory, for
         // every corpus file rather than only the profile-selected ones.
 
@@ -267,7 +296,7 @@ class CorpusRunner {
         // example. The generation lives in `civictech.concord.generator`; the driver,
         // checks, and batch oracle are the same shared machinery used below.
         if (scenario.kind == Kind.GENERATIVE) {
-            runGenerative(scenario)
+            runGenerative(scenario, transport)
             return
         }
         val runs = scenario.runs ?: DEFAULT_RUNS
@@ -279,9 +308,9 @@ class CorpusRunner {
         // oracle inside Checks.incrementalEqualsBatch.
         val failuresByRun = LinkedHashMap<Int, List<CheckFailure>>()
         for (run in 0 until runs) {
-            val driver = KernelDriver(run.toLong())
+            val driver = KernelDriver(run.toLong(), transport)
             try {
-                buildGraph(driver, scenario)
+                buildGraph(driver, scenario, transport != null)
                 val record = runScript(driver, scenario)
                 driver.quiesce(QUIESCE_BUDGET)
                 val failures = evaluateChecks(
@@ -580,7 +609,7 @@ class CorpusRunner {
      * graph that only passes by being trivial is worthless (honesty rule), so the
      * generator builds real depth from the vocabulary.
      */
-    private fun runGenerative(scenario: Scenario) {
+    private fun runGenerative(scenario: Scenario, transport: String?) {
         val gen = scenario.generator
             ?: error("${scenario.id}: kind is generative but no generator: block is present")
         val instances = System.getProperty("concord.gen.instances")?.toIntOrNull()
@@ -590,9 +619,9 @@ class CorpusRunner {
         val failuresByInstance = LinkedHashMap<Int, List<CheckFailure>>()
         for (i in 0 until instances) {
             val concrete = ScenarioGenerator.generate(scenario, i)
-            val driver = KernelDriver(i.toLong())
+            val driver = KernelDriver(i.toLong(), transport)
             try {
-                buildGraph(driver, concrete)
+                buildGraph(driver, concrete, transport != null)
                 val record = runScript(driver, concrete)
                 driver.quiesce(QUIESCE_BUDGET)
                 val failures = evaluateChecks(
@@ -611,8 +640,14 @@ class CorpusRunner {
         }
     }
 
-    private fun buildGraph(driver: Driver, scenario: Scenario) {
+    private fun buildGraph(driver: Driver, scenario: Scenario, precreateImplicitHost: Boolean) {
         val graph = scenario.graph ?: return
+        // A real transport must establish the complete host mesh before any
+        // application ref is published. Otherwise a late-created implicit host
+        // joins after the named hosts already hold cells, turning its handshake
+        // into an avoidable catch-up burst; the WebSocket counters correctly
+        // keep quiescence open until every one of those frames arrives.
+        if (precreateImplicitHost && graph.cells.any { it.host == null }) driver.createHost("")
         graph.hosts?.forEach { driver.createHost(it) }
         graph.cells.forEach { cell ->
             driver.spawn(cell.host ?: "", cell.id, cell.type, params(cell))
