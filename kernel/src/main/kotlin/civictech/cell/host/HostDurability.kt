@@ -540,6 +540,12 @@ internal class HostDurability(
      * restart: it compacts the whole replayed tail instead of carrying it. It is no longer
      * a safety precondition.
      *
+     * Selection is by reference identity (`===`) against the instances the host's
+     * selectors return, not by path. A [journal] no cell or port of this host is bound to
+     * — e.g. a fresh `FileJournal` opened on the host's own file — is refused with
+     * [IllegalArgumentException] if it holds any record, and is a no-op that writes
+     * nothing if it is empty (computenet-s4n8y).
+     *
      * Not covered, and still lost by the reset: a frame already dequeued and held
      * elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-activation
      * tail — and, on a suspending (🟢) scheduler, a delivery suspended mid-handler.
@@ -598,6 +604,46 @@ internal class HostDurability(
                     baselines += journalRecord(RECORD_BASELINE, BaselineDischargeRecord(key.first, key.second, it))
                 }
             }
+            // computenet-s4n8y: `checkpoint` used to treat "no cell of the host is bound
+            // to this journal instance" as the degenerate, harmless case — the guard below
+            // was written only for a journal WITH bound cells that happen to contribute no
+            // recoverable content. But an unbound journal falls through that guard (its
+            // disjunct is trivially true) and still runs `journal.reset(compacted + carried)`
+            // below, writing an all-but-empty checkpoint blob and truncating whatever frames
+            // were already on that journal. A caller that passes a FRESH Journal instance for
+            // the same underlying file the host was actually constructed with — a distinct
+            // `FileJournal(path)`, `===`-unequal to every selector's target — hits exactly
+            // this: silent, complete data loss with no exception. Fail closed instead: a
+            // journal no cell or port selector resolves to `===` is a caller/selector
+            // mismatch, never a legitimate empty checkpoint, so refuse before touching the
+            // journal at all.
+            val boundToJournal = cells.keys.any { cellJournalSelector(it) === journal } ||
+                cells.any { (cellRef, cell) ->
+                    PortRegistry.of(cell).names().any { portName -> journalSelector(cellRef, portName) === journal }
+                }
+            if (!boundToJournal) {
+                // `PerPortJournalTest`'s degenerate case (a whole-host `journal` beside a
+                // per-cell `journalFor` that answers null for every current cell) legitimately
+                // calls checkpoint(journal) on an unbound journal that has never had anything
+                // written to it — a true no-op, nothing to lose. That is NOT the same shape as
+                // computenet-s4n8y's report: a fresh `FileJournal(path)` opened on the same file
+                // the host was actually constructed with is likewise unbound (`===`-unequal to
+                // every selector's target), but that file already holds real frames on disk.
+                // Reading the journal's own existing content — not just this host's live
+                // selector state — is what tells the two apart: a journal nothing selects is
+                // safe to leave untouched only if there is nothing on it to discard.
+                val existing = journal.replay()
+                require(existing.isEmpty()) {
+                    "checkpoint(journal) called with a journal no cell or port of this host is " +
+                        "bound to (no cellJournalSelector or journalSelector resolves === to this " +
+                        "journal instance), and it already holds ${existing.size} record(s) on " +
+                        "disk — refusing to compact, which would discard them with nothing " +
+                        "recoverable to show for it (a fresh Journal instance opened on the same " +
+                        "file/path as the host's own journal is `===`-unequal to it and hits " +
+                        "exactly this)"
+                }
+                return@awaitOnManagementBand
+            }
             // PN-0b: reset() truncates the WAL down to this checkpoint blob. If
             // the journal serves cells (frames on disk) but the blob captures
             // NOTHING recoverable — no `Stateful` snapshot, no `Effectful`
@@ -607,8 +653,7 @@ internal class HostDurability(
             // content on the same footing as a frontier entry (`[24-DUR-08]`): for a
             // sink whose whole durable contribution is "this catch-up already fired",
             // it is exactly what the truncated frames would otherwise be replayed for.
-            require(state.isNotEmpty() || frontier.isNotEmpty() || baselines.isNotEmpty() ||
-                cells.keys.none { cellJournalSelector(it) === journal }) {
+            require(state.isNotEmpty() || frontier.isNotEmpty() || baselines.isNotEmpty()) {
                 "checkpoint would truncate a journal whose selected cells contribute " +
                     "no snapshot, no processed-frontier and no discharged baseline — frame " +
                     "replay is their only recovery, so resetting the WAL would destroy their state"
