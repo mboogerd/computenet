@@ -22,7 +22,7 @@ Techniques the process ADR commits to:
 - long-running randomized execution;
 - stopping criteria: coverage stabilization, heuristic saturation.
 
-*(G-31 machinery, implemented M4.4)*: an invariant is a **cell** —
+*(G-31 machinery, implemented M4.4)*: [52-INV-01] An invariant is a **cell** —
 `cell.verify.InvariantCell(name, initial, fold, check)` subscribes to the
 flows it constrains and emits `Violation`s on its `violations` outlet. One
 mechanism serves tests, live monitoring, and promotion gates; invariants
@@ -37,7 +37,7 @@ straight into an invariant cell.
 *(Replica convergence — decided in
 [93 I-3](../90-roadmap/93-feature-interactions.md), **built W3.3**:
 `cell.verify.ReplicaConvergence`)*: a convergence invariant over a
-replicated cell attaches by the same rule. It links to **each replica's**
+replicated cell attaches by the same rule. [52-CONV-01] It links to **each replica's**
 delta outlet — replicas enumerated via `replicasOf(id)` (42) — folds the
 per-replica streams independently, and asserts the folds agree at
 quiescence. An in-process harness attaches straight to a local replica's own
@@ -48,7 +48,7 @@ state. Each link fires the ordinary idempotent catch-up, so the anti-entropy
 catch-up doubles as the invariant's late-join feed; no merged global view is
 needed. Replicas of one `logicalId` are the special case of the harness's
 cross-view convergence assertion where the views share a `logicalId`.
-**Departed-stream rule** (G-45): a replica evicted mid-run (42's gated
+[52-CONV-02] **Departed-stream rule** (G-45): a replica evicted mid-run (42's gated
 despawn) drops out of `replicasOf(id)` — `ReplicaConvergence.converged()`
 only requires agreement among replicas still counted as live membership, so
 an orderly departure no longer false-positives a divergence against the
@@ -171,11 +171,11 @@ sources.
 
 *(Exclusive payloads in shadow mode — decided in 93 I-20; the discharging-sink
 half implemented, tap observation still unbuilt, G-47 below)*:
-NoOp-serving an inlet whose contract carries an exclusive payload MUST
+[52-DISCH-01] NoOp-serving an inlet whose contract carries an exclusive payload MUST
 install a **discharging** sink, not a plain drop: `Owned` →
 `take()`-and-drop (consume-once satisfied), `Leased` → `release()` (buffer
 returned to its pool) — generated from the same exclusive bit (20/23).
-Observation of exclusive flows is the decided province of **taps**: an
+[52-TAP-01] Observation of exclusive flows is the decided province of **taps**: an
 Observe-role link receives a `Borrowed` projection of the outlet contract,
 fired before the sole consumer and uncounted by the SPSC rule, so
 invariants, shadows, and judges watch an exclusive pipeline without
@@ -204,14 +204,14 @@ stated failure mode for uncloneable payloads and unspecified Leased forks
 
 *(Monitor attention — decided in 93 I-9, unimplemented)*: a live invariant
 monitor holds its subgraph awake through `setSelf` attention only, never a
-bespoke exception. A *passive* monitor emits NONE — it observes while the
+bespoke exception. [52-MON-01] A *passive* monitor emits NONE — it observes while the
 subgraph is independently awake and catches up on resume via late-join (21),
 tolerating observation gaps; an *active* monitor (liveness, security) emits
-LOW, yielding to real HIGH work under the stride floor (30/34). A monitor
+LOW, yielding to real HIGH work under the stride floor (30/34). [52-MON-02] A monitor
 MUST NOT pin HIGH.
 
 *(Effectful recovery — decided in 93 I-7; processed-frontier implemented,
-W2.6, closes C-9)*: the `Effectful` marker connects to durability. An
+W2.6, closes C-9)*: the `Effectful` marker connects to durability. [52-EFF-01] An
 `Effectful` sink journals a **processed-frontier** — per inlet, the last
 applied `(sourceId, counter)` — so both journal replay and post-recovery
 live re-delivery are *deduped* (dropped as already-processed) rather than
