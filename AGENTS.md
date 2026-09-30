@@ -85,10 +85,13 @@ for documentation maintenance.
   machine-distinguishable refusal reasons, and key-derived `PeerId`
   fingerprints implementing the kernel's `SignatureVerifier` seam (DSC1, epic
   `computenet-ssa`). Depends on `:kernel`; `:kernel` must not depend on it.
-- `demograph/` (`:demograph`): charter vocabulary module (`Vocabulary.kt`); no
-  data structures yet — DGR.2/DGR.3 build them (DGR, epic `computenet-drz8`).
-  Same dependency shape as `:identity` — depends on `:kernel` (and,
-  transitively, `:nature`); `:kernel` must not depend on it.
+- `demograph/` (`:demograph`): charter/vocabulary module for subjective stances
+  and personal preferences per actor, and their consolidation into aggregate
+  views — insights over the participating actors (DGR, epic `computenet-drz8`);
+  today the module holds exactly one file, `civictech.demograph.Vocabulary`
+  (KDoc-only), and no data structures yet. Same dependency shape as
+  `:identity` — depends on `:kernel` (and, transitively, `:nature`); `:kernel`
+  must not depend on it.
   `civictech.demograph.Vocabulary` KDocs the six-term charter vocabulary
   (actor, stance, preference, weight, contestation, aggregation) and its
   boundary line (no need, credit, subsidy, or vote-as-civic-act).
