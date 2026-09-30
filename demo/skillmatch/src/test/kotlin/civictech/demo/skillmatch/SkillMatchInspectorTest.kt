@@ -1,6 +1,7 @@
 package civictech.demo.skillmatch
 
 import civictech.inspect.CatalogueDto
+import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorServer
 import civictech.inspect.edit.Capability
 import civictech.inspect.edit.KernelEntries
@@ -23,7 +24,7 @@ class SkillMatchInspectorTest {
     fun `the opt-in inspector serves the pipeline's topology`() {
         val app = SkillMatchApp(port = 0).start()
         try {
-            val probe = HttpProbe("http://localhost:${app.startInspector(port = 0).boundPort}")
+            val probe = HttpProbe("http://localhost:${app.startInspector(InspectorFlag.Options(port = 0)).boundPort}")
 
             val json = probe.state("/api/inspect/topology")
 
@@ -57,7 +58,7 @@ class SkillMatchInspectorTest {
     fun `the pilot's two graphs list as one named and one unnamed component`() {
         val app = SkillMatchApp(port = 0).start()
         try {
-            val port = app.startInspector(port = 0, withSideGraph = true).boundPort
+            val port = app.startInspector(InspectorFlag.Options(port = 0), withSideGraph = true).boundPort
             val probe = HttpProbe("http://localhost:$port")
 
             val graphs = probe.state("/api/inspect/graphs")
@@ -106,10 +107,9 @@ class SkillMatchInspectorTest {
         val disabledApp = SkillMatchApp(port = 0).start()
         val enabledApp = SkillMatchApp(port = 0).start()
         try {
-            val disabledPort = disabledApp.startInspector(port = 0).boundPort
+            val disabledPort = disabledApp.startInspector(InspectorFlag.Options(port = 0)).boundPort
             val enabledPort = enabledApp.startInspector(
-                port = 0,
-                writePlane = WritePlane.Enabled(Capability("t")),
+                InspectorFlag.Options(port = 0, writePlane = WritePlane.Enabled(Capability("t"))),
             ).boundPort
 
             val disabledBody = HttpProbe("http://localhost:$disabledPort").state(InspectorServer.CAPABILITIES_PATH)
@@ -135,7 +135,7 @@ class SkillMatchInspectorTest {
     fun `an enabled write plane registers the kernel entries in the catalogue`() {
         val app = SkillMatchApp(port = 0).start()
         try {
-            val port = app.startInspector(port = 0, writePlane = WritePlane.Enabled(Capability("t"))).boundPort
+            val port = app.startInspector(InspectorFlag.Options(port = 0, writePlane = WritePlane.Enabled(Capability("t")))).boundPort
 
             val body = HttpProbe("http://localhost:$port").state(InspectorServer.CATALOGUE_PATH)
             val dto = Json.decodeFromString(CatalogueDto.serializer(), body)

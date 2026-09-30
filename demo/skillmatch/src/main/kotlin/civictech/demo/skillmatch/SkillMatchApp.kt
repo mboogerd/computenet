@@ -19,10 +19,9 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.respond
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
-import civictech.inspect.edit.Capability
-import civictech.inspect.edit.Catalogue
-import civictech.inspect.edit.KernelEntries
 import civictech.inspect.edit.WritePlane
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
@@ -288,49 +287,43 @@ class SkillMatchApp(port: Int = 8080) {
      * difference. Suspension is a management call, so this waits for it to take
      * effect rather than racing the inspector's first read.
      *
-     * [writePlane] is [WritePlane.Disabled] by default (`[WKB2-06]`): the write
-     * plane is a per-process opt-in, decided by `main`'s `--inspect-write` flag,
-     * never by this method's own defaults changing. WKB2 F12 (va0c4-D10): an
-     * [WritePlane.Enabled] plane also populates the named-factory catalogue
-     * ([KernelEntries.register]) before the server starts — the palette is
-     * part of the opt-in, not of the read-only instrument, so a disabled
-     * plane leaves the catalogue exactly as it found it.
+     * [options].[writePlane][InspectorFlag.Options.writePlane] is [WritePlane.Disabled]
+     * by default (`[WKB2-06]`): the write plane is a per-process opt-in, decided by
+     * `main`'s `--inspect-write` flag via [InspectorFlag.parse], never by this
+     * method's own defaults changing. WKB2 F12 (va0c4-D10): an [WritePlane.Enabled]
+     * plane also populates the named-factory catalogue before the server starts
+     * (`InspectorFlag.Options.serve`) — the palette is part of the opt-in, not of
+     * the read-only instrument, so a disabled plane leaves the catalogue exactly
+     * as it found it.
      */
     fun startInspector(
-        port: Int = InspectorServer.DEFAULT_PORT,
+        options: InspectorFlag.Options = InspectorFlag.Options(port = InspectorServer.DEFAULT_PORT),
         withSideGraph: Boolean = false,
         coldSideGraph: Boolean = false,
-        writePlane: WritePlane = WritePlane.Disabled,
     ): InspectorServer {
-        if (writePlane is WritePlane.Enabled) KernelEntries.register()
         val side = if (withSideGraph) SideGraph.build(host) else null
         if (coldSideGraph) side?.let { refs ->
             listOf(refs.saved, refs.mirror).forEach { host.managementInlet.call.suspend(it) }
             awaitSuspended(listOf(refs.saved, refs.mirror))
         }
-        return InspectorServer(
-            registry = registry,
-            hosts = mapOf("skillmatch" to host),
-            port = port,
-            writePlane = writePlane,
-            cellNames = mapOf(
-                refs.candSkills.ref to "candSkills",
-                refs.jobSkills.ref to "jobSkills",
-                refs.matches.ref to "matches",
-                refs.matchCounts.ref to "matchCounts",
-                refs.required.ref to "required",
-                refs.qualification.ref to "qualification",
-                refs.gap.ref to "gap",
-                refs.supply.ref to "supply",
-                refs.demand.ref to "demand",
-                refs.market.ref to "market",
-            ) + side?.names.orEmpty(),
-        )
+        val cellNames = mapOf(
+            refs.candSkills.ref to "candSkills",
+            refs.jobSkills.ref to "jobSkills",
+            refs.matches.ref to "matches",
+            refs.matchCounts.ref to "matchCounts",
+            refs.required.ref to "required",
+            refs.qualification.ref to "qualification",
+            refs.gap.ref to "gap",
+            refs.supply.ref to "supply",
+            refs.demand.ref to "demand",
+            refs.market.ref to "market",
+        ) + side?.names.orEmpty()
+        return options.serve(registry, mapOf("skillmatch" to host), cellNames) {
             // M4: the pipeline's component is the one this process can name.
             // The anchor is a cell, not the component id, because ids change
             // whenever components merge or split (97-inspector-plan M4-BE §2).
-            .nameGraph(refs.candSkills.ref, "skillmatch")
-            .start().also { inspector = it }
+            nameGraph(refs.candSkills.ref, "skillmatch")
+        }.also { inspector = it }
     }
 
     init {
@@ -438,35 +431,18 @@ class SkillMatchApp(port: Int = 8080) {
 }
 
 fun main(args: Array<String>) {
-    val (inspectPort, afterPort) = splitInspectorPort(args)
-    val (capabilityValue, demoArgs) = splitCapabilityFlag(afterPort)
-    val cold = COLD_FLAG in args
-    // WKB2-06: presence of the bare flag is the ONLY opt-in — a capability
-    // given without it is ignored and the plane stays Disabled.
-    val writeEnabled = WRITE_FLAG in args
-    val app = SkillMatchApp(demoPort(demoArgs.filterNot { it == COLD_FLAG }.toTypedArray())).start()
+    val parsed = InspectorFlag.parse(args)
+    val cold = COLD_FLAG in parsed.rest
+    val app = SkillMatchApp(demoPort(parsed.rest.filterNot { it == COLD_FLAG }.toTypedArray())).start()
     println("computenet skillmatch: http://localhost:${app.boundPort}")
-    inspectPort?.let { port ->
-        val writePlane = if (writeEnabled) {
-            WritePlane.Enabled(capabilityValue?.let(::Capability) ?: Capability.mint())
-        } else {
-            WritePlane.Disabled
-        }
+    parsed.options?.let { options ->
         // the pilot runs two graphs (see [SideGraph]) so the M4 navigator has
         // something to navigate: the named pipeline and one unnamed component
-        val inspector = app.startInspector(port, withSideGraph = true, coldSideGraph = cold, writePlane = writePlane)
-        println("computenet inspector: http://localhost:${inspector.boundPort}${InspectorServer.TOPOLOGY_PATH}")
+        val inspector = app.startInspector(options, withSideGraph = true, coldSideGraph = cold)
+        InspectorFlag.announce(inspector, options)
         if (cold) println("  side graph started cold ($COLD_FLAG) — wake it from the navigator")
-        if (writePlane is WritePlane.Enabled) {
-            println(
-                "inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}; " +
-                    "catalogue entries: ${Catalogue.entries().size}",
-            )
-        }
     }
 }
-
-private const val INSPECT_FLAG = "--inspect-port"
 
 /**
  * M5-COLD pilot flag: start the side graph suspended, so the navigator has a
@@ -475,69 +451,6 @@ private const val INSPECT_FLAG = "--inspect-port"
  * at without an inspector).
  */
 private const val COLD_FLAG = "--cold-graph"
-
-/**
- * WKB2 F5 (`[WKB2-06]`): opts this process's inspector into the write plane. A
- * **bare** flag, presence-tested like [COLD_FLAG] — an optional positional
- * value would collide with [demoPort]'s "first non-`--` argument is the port"
- * convention, which is why the capability is a separate `--flag value` pair
- * below rather than `--inspect-write <capability>`. Only meaningful together
- * with `--inspect-port`; ignored otherwise.
- */
-private const val WRITE_FLAG = "--inspect-write"
-
-/**
- * WKB2 F5: the write-plane capability, supplied rather than minted —
- * `--inspect-write-capability <v>` or `INSPECT_WRITE_CAPABILITY`. Read even
- * when [WRITE_FLAG] is absent so it can be stripped before [demoPort] either
- * way, but a value with no `--inspect-write` is ignored by `main`: the bare
- * flag is the only opt-in (`[WKB2-06]`).
- */
-private const val WRITE_CAPABILITY_FLAG = "--inspect-write-capability"
-
-/**
- * The inspector port — `--inspect-port <p>`, `--inspect-port=<p>`, or the
- * `INSPECT_PORT` environment variable — and the remaining args. The flag is
- * stripped because [demoPort] reads the first non-`--` argument as the demo's
- * own port and would otherwise take the inspector's.
- */
-private fun splitInspectorPort(args: Array<String>): Pair<Int?, Array<String>> {
-    val rest = mutableListOf<String>()
-    var value: String? = null
-    var i = 0
-    while (i < args.size) {
-        val arg = args[i]
-        when {
-            arg == INSPECT_FLAG -> { value = args.getOrNull(i + 1); i++ }
-            arg.startsWith("$INSPECT_FLAG=") -> value = arg.substringAfter('=')
-            else -> rest += arg
-        }
-        i++
-    }
-    return (value ?: System.getenv("INSPECT_PORT"))?.trim()?.toIntOrNull() to rest.toTypedArray()
-}
-
-/**
- * The write-plane capability — `--inspect-write-capability <v>`,
- * `--inspect-write-capability=<v>`, or `INSPECT_WRITE_CAPABILITY` — and the
- * remaining args, stripped the same way [splitInspectorPort] strips its pair
- * so [demoPort] never mistakes the capability value for the demo's port.
- */
-private fun splitCapabilityFlag(args: Array<String>): Pair<String?, Array<String>> {
-    val rest = mutableListOf<String>()
-    var value: String? = null
-    var i = 0
-    while (i < args.size) {
-        val arg = args[i]
-        when {
-            arg == WRITE_CAPABILITY_FLAG -> { value = args.getOrNull(i + 1); i++ }
-            arg.startsWith("$WRITE_CAPABILITY_FLAG=") -> value = arg.substringAfter('=')
-            else -> rest += arg
-        }
-        i++
-    }
-    return (value ?: System.getenv("INSPECT_WRITE_CAPABILITY"))?.trim()?.takeUnless { it.isEmpty() } to rest.toTypedArray()
-}
 
 private val PAGE = """
 <!DOCTYPE html>
