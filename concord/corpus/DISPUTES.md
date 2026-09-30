@@ -1390,6 +1390,17 @@ Zero-id chapters as of `742f7ca` (13):
 - `50-development-process/52-verification.md`
 - `50-development-process/53-evolution.md`
 
+**Addendum (2026-09-30, `computenet-xn0ox`, feature-branch sha `d0584563`)**:
+as of this sha, `40-distribution/43-security.md` (11 ids), `50-development-process/52-verification.md`
+(8 ids) and `50-development-process/53-evolution.md` (26 ids) mint `[NN-SLUG-nn]`
+ids and are no longer zero-id chapters. The pinned 13-item list above is left
+as the `742f7ca` record; the remaining zero-id count is now 10 —
+`00-foundations/01-vision.md`, `00-foundations/02-design-principles.md`,
+`00-foundations/03-glossary.md`, `10-programming-model/11-cells.md`,
+`10-programming-model/14-invocations.md`, `20-dataflow-semantics/23-ownership.md`,
+`30-execution-model/31-hosts.md`, `30-execution-model/32-concurrency-colors.md`,
+`30-execution-model/34-scheduling.md`, `50-development-process/51-construction.md`.
+
 Several of these hold invariants `AGENTS.md` calls core (ownership, scheduling,
 concurrency colors, construction, evolution) — the id gap is not concentrated
 in peripheral chapters. `00-foundations` is vision/principles/glossary prose
@@ -1629,6 +1640,13 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
      :concord:check`) or carry none and appear as an orphan. Minting `[43-*]`
      ids is documentation maintenance and is explicitly **not** authorized by
      the epic that produced this behaviour.
+
+     **Addendum (2026-09-30, `computenet-xn0ox`, feature-branch sha
+     `d0584563`)**: `43-security.md` now mints ids (`computenet-xn0ox.1`),
+     including `43-FLOW-03`, the disclosure rule this entry describes
+     ("`PORT_API` outbound passes `disclosure`... `Deny` suppresses catch-up
+     entirely"). Reason 1 no longer applies as stated. Reason 2 — no corpus
+     surface for a membrane — still stands, so this entry remains open.
   2. **No corpus surface for a membrane.** The scenario schema has no
      vocabulary for a `CompositeCell` exposure, a `BoundaryPolicy`, a
      `ProjectionId`, or a per-boundary denial counter: there is no cell-catalog
@@ -2250,6 +2268,15 @@ traced from source rather than assumed.
   a kernel/loader test —
   `loader/src/test/kotlin/civictech/loader/B14ModulePromotionTest.kt`, alongside
   the host-classpath twin `kernel/src/test/kotlin/civictech/cell/evolve/ShadowPromotionTest.kt`.
+
+  **Addendum (2026-09-30, `computenet-xn0ox`, feature-branch sha
+  `d0584563`)**: chapter 53 now carries `53-SWAP-01..05` and `53-ROLLBACK-01`
+  (`computenet-xn0ox.3`); `53-SWAP-05` is the no-torn/dup/missing sentence this
+  entry cites ("the swap is atomic per membrane... an instance swap leaves the
+  logical edge set intact, so downstream wave completeness never observes
+  it"). The `provenance-gap` half no longer applies as stated. The
+  `schema-gap` half — no swap step verb, no gate/candidate catalog cell —
+  still stands, so this entry remains open.
 
 - **The clause in dispute**: `doc/spec/50-development-process/53-evolution.md`
   §"The promotion swap" — PRECHECK → PREPARE → COMMIT → RETIRE, with the buffered
