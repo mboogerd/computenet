@@ -240,6 +240,28 @@ jobs:
       - name: Fail on unexpected untracked files
         run: test -z "$(git status --porcelain -uall -- doc '*/src')"
 
+      # Feature x demo adoption matrix (computenet-a7ukn): the committed
+      # doc/FEATURE-STATUS.md is generated output and must match the demos'
+      # main source sets on this commit — same shape as concord-full's
+      # "regeneration is a no-op" gate for CONCORDANCE.md. The regenerated
+      # copy is uploaded even when the check fails, so a stale PR can take the
+      # artifact as the fix.
+      - name: "Adoption matrix: unit tests, regenerate, confirm doc/FEATURE-STATUS.md is current"
+        run: |
+          python3 -m unittest discover -s scripts/adoption-matrix -p 'test_*.py'
+          mkdir -p build/adoption-matrix
+          python3 scripts/adoption-matrix/adoption_matrix.py --out build/adoption-matrix/FEATURE-STATUS.md
+          python3 scripts/adoption-matrix/adoption_matrix.py --check doc/FEATURE-STATUS.md
+
+      - name: Upload the adoption matrix
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-status-matrix
+          path: build/adoption-matrix/FEATURE-STATUS.md
+          if-no-files-found: warn
+          retention-days: 90
+
       # THE `:wire:` ROSTER, PUBLISHED ON GREEN TOO (computenet-dqy.55).
       #
       # The announcement-loss chain (computenet-dqy.40 / .52 / .53) now has
