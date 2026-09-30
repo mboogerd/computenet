@@ -31,9 +31,9 @@
 | Invariants / verify | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Evolution / promotion | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Inspector | - | - | - | - | - | - | - | - | USED | USED | - | - | - | 2 |
+| Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| **headline count** | 3 | 2 | 2 | 2 | 4 | 3 | 4 | 6 | 7 | 4 | 3 | 5 | 6 |  |
+| **headline count** | 4 | 3 | 2 | 3 | 4 | 4 | 5 | 7 | 7 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
@@ -106,8 +106,16 @@
 - wire / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - wire / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - wire / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
+- inspector / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt
+- inspector / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
+- inspector / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
+- inspector / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt
+- inspector / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueApp.kt
+- inspector / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - inspector / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - inspector / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
+- inspector / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
+- inspector / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - gen-cells / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - gen-cells / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/RankingCells.kt
 - hosts / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt, demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
