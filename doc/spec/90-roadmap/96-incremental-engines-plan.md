@@ -5,7 +5,8 @@
 Timely/Differential/Materialize, LASP/CRDT-lattice; per-fact provenance in docs 01-05);
 backlog `06-or-map-tagged-map-delta.md` and `consistent-multiview-snapshot.md` (absorbed
 here); 95 §R8 (promoted by E1).
-**Implementation**: none — this document is the work list. Baseline pinned at commit
+**Implementation**: E1-E3 are landed (marked below, per item); E4 is landed (marked
+below); E5-E6 remain proposed. Baseline pinned at commit
 `125b9e0`; re-verify named seams if the pin drifts (parallel sessions land milestones
 mid-run).
 
@@ -41,7 +42,7 @@ E1 ∥ E2 ∥ E5 are disjoint code paths and can run as concurrent waves.
 
 ---
 
-## Milestone E1 — Convergent keyed structures (OR-map) ⚠ PROPOSED
+## Milestone E1 — Convergent keyed structures (OR-map) ✅ LANDED (E1.1-E1.6)
 
 Closes **G-23** (promotes 95 §R8 direction 1 to decided). `MapDelta` carries no causal
 tags, so every map-shaped edge (`MapCell`, `CombineLatestCell` — F-1, `LookupJoinCell`,
@@ -59,7 +60,7 @@ tombstone-free (context-only) wire form is deliberately *not* in this milestone 
 requires the causal-merging condition (research 03 §2) whose delivered-watermark
 prerequisite is E3 (→ R10).
 
-### E1.1 — Spec: the OR-map and the tagged-map convergence class (G-23, R8) — P1 · High · `spec`
+### E1.1 — Spec: the OR-map and the tagged-map convergence class (G-23, R8) — P1 · High · `spec` ✅ LANDED (24-data-cells.md:378)
 **Spec**: 20/24 §Required next steps + a new §Tagged maps subsection; 40/42 §Design as
 implemented (mergeable-class roster); 91 (G-23 row gains the planned-realization pointer);
 95 (R8 annotated as promoted).
@@ -79,7 +80,7 @@ tag-precise removes are what keep value-keyed derivation deterministic.
 **Implement**: spec text only; cite `doc/research/incremental-engines/03` §2, §4 and 05
 §Gap 2. **Unblocks** E1.2-E1.6.
 
-### E1.2 — `TaggedMapDelta` + `OrMapCell` core (G-23) — P1 · High · `data`
+### E1.2 — `TaggedMapDelta` + `OrMapCell` core (G-23) — P1 · High · `data` ✅ LANDED (OrMapCell.kt)
 **Spec**: 20/24 §Tagged maps (E1.1).
 **Implement**: `kernel/.../cell/data/OrMapCell.kt`: `@Serializable
 @SerialName("TaggedMapDelta")` data class implementing `MergeablePayload` — additive wire
@@ -101,7 +102,7 @@ per-key values (mirror `SetCellTest`); concurrent put/remove → add-wins; re-pu
 `MapDelta`/`MapView` order-flips.
 **Depends**: E1.1.
 
-### E1.3 — `OrMapCell` replication: gossip, baseline, re-origination (G-23; C-10 rule) — P1 · High · `repl`
+### E1.3 — `OrMapCell` replication: gossip, baseline, re-origination (G-23; C-10 rule) — P1 · High · `repl` ✅ LANDED (OrMapCell.kt:91)
 **Spec**: 20/24 §Tagged maps; 40/42 §Design as implemented (the cell joins the mergeable
 class); 20/21 §Pull.
 **Implement**: make `OrMapCell` `Replicable<TaggedMapDelta<K, V>>`: `deltaInlet` +
@@ -117,7 +118,7 @@ idle`, duplicate delivery across a diamond dedups, replica wave-id assertion
 without the new-dots filter loops; untagged application diverges.
 **Depends**: E1.2. **Unblocks** E1.4, E1.5, E1.6, E3.3.
 
-### E1.4 — Embedded mergeable values (G-23 residual; Riak counter-anomaly guard) — P2 · Medium · `data`
+### E1.4 — Embedded mergeable values (G-23 residual; Riak counter-anomaly guard) — P2 · Medium · `data` ✅ LANDED (#541)
 **Spec**: 20/24 §Tagged maps (embedded-value paragraph, E1.1).
 **Implement**: when `V : MergeablePayload`, concurrent live dots for one key expose the
 `mergeWith`-folded value instead of the LWW pick (the Riak "embedded CRDT" mode,
@@ -129,7 +130,7 @@ resolve concurrency themselves. Test: two replicas concurrently `put(k, PnCounte
 increment.
 **Depends**: E1.3 (needs the gossip path to exercise concurrency).
 
-### E1.5 — Adoption seams: `TaggedMapView` + `UntagCell` + join family (F-1) — P2 · High · `data`
+### E1.5 — Adoption seams: `TaggedMapView` + `UntagCell` + join family (F-1) — P2 · High · `data` ✅ LANDED (#540, #544)
 **Spec**: 20/24 §Tagged maps (adapter paragraph) + §Operator library rows.
 **Implement**: `TaggedMapView` fold (dots → current `Map<K, V>`) + `View.taggedMap()` in
 `host/Observe.kt`; an `UntagCell<K, V>` adapter (inlet
@@ -144,7 +145,7 @@ converged state on every seed; control: raw `MapCell` inputs under the same sche
 diverge.
 **Depends**: E1.3.
 
-### E1.6 — Replicated `:demo:tiering` proof (G-23 acceptance; backlog 06) — P2 · High · `demo`
+### E1.6 — Replicated `:demo:tiering` proof (G-23 acceptance; backlog 06) — P2 · High · `demo` ✅ LANDED (#552)
 **Spec**: none new (realizes 20/24 §Tagged maps acceptance bullet).
 **Implement**: a two-host bridged tiering variant where the manual re-tier edge is a
 replicated `OrMapCell<String, Tier>` fused with the computed board through `UntagCell`;
@@ -159,7 +160,7 @@ concurrent-write case asserting one deterministic winner).
 
 ---
 
-## Milestone E2 — Vector-frontier observation edge ⚠ PROPOSED
+## Milestone E2 — Vector-frontier observation edge ✅ LANDED (E2.1-E2.6)
 
 Realizes backlog `consistent-multiview-snapshot.md` (**F-5**) and the gap-4 borrow;
 advances **G-13**'s frontier residual and **G-40**. Target guarantee (research 04 §3,
@@ -174,7 +175,7 @@ non-monotone (absence-asserting) emission on the same frontier — CALM says som
 is unavoidable there (research 03 §5), and per-wave sealing is the cheapest ComputeNet
 has — and lands the balanced-transfer benchmark as the acceptance suite.
 
-### E2.1 — Spec: the observation frontier and internal consistency (F-5, G-13 partial, G-40) — P1 · High · `spec`
+### E2.1 — Spec: the observation frontier and internal consistency (F-5, G-13 partial, G-40) — P1 · High · `spec` ✅ LANDED (22-consistency.md:201)
 **Spec**: 20/22 new §The observation frontier (after §Local glitch-freedom); 20/22
 §Completeness over silent or stuck edges (absorb-ack rule made normative for operator
 cells); 20/24 §Operator library (SemiJoin/CombineLatest emission-gating paragraphs);
@@ -194,7 +195,7 @@ named acceptance benchmark.
 **Implement**: spec text only; cite research 04 §3-4, 02 §7, 01 §6, 03 §5.
 **Unblocks** E2.2-E2.6.
 
-### E2.2 — Absorb-acks from absorbing operator cells (G-40 residual) — P1 · High · `data`
+### E2.2 — Absorb-acks from absorbing operator cells (G-40 residual) — P1 · High · `data` ✅ LANDED (AbsorbAck.kt)
 **Spec**: 20/22 §Completeness over silent or stuck edges (E2.1 rule 3).
 **Implement**: a small shared helper (`data/AbsorbAck.kt`) invoked at the end of each
 operator cell's waved handler: if the wave produced no outlet emission, send
@@ -208,7 +209,7 @@ waiting for the next write; control: helper disabled, the last wave stalls (the
 documented slotfinder failure).
 **Depends**: E2.1. **Unblocks** E2.3, E2.4.
 
-### E2.3 — `WaveFrontier` extraction + the aligned multi-view sink (F-5 core) — P1 · Medium · `glitchfree`+`host`
+### E2.3 — `WaveFrontier` extraction + the aligned multi-view sink (F-5 core) — P1 · Medium · `glitchfree`+`host` ✅ LANDED (WaveFrontier.kt:71)
 **Spec**: 20/22 §The observation frontier (E2.1 rule 2).
 **Implement**: extract `GlitchFreeCell`'s frontier fold (edges/floors,
 `EdgeOpen`/`EdgeClose` handling, per-edge per-source watermarks, suspended-edge set,
@@ -228,7 +229,7 @@ control: `CompositeSink` under the same seeds trips; plus a two-JVM bridged vari
 (EdgeOpen/EdgeClose and `Progress` already cross as frames) or a documented limitation.
 **Depends**: E2.1, E2.2. **Unblocks** E2.4, E2.5, E2.6, E3.4 (shares `WaveFrontier`).
 
-### E2.4 — Frontier-gated antijoin / outer-join emission (gap-3 borrow; SemiJoin flicker) — P1 · Medium · `data`
+### E2.4 — Frontier-gated antijoin / outer-join emission (gap-3 borrow; SemiJoin flicker) — P1 · Medium · `data` ✅ LANDED (#1089)
 **Spec**: 20/24 §Operator library (E2.1 rule 4).
 **Implement**: an opt-in `emitOnFrontier` mode on `SemiJoinCell` (and the null-extension
 path of `CombineLatestCell`) built on `WaveFrontier`: buffer the wave's input deltas
@@ -244,7 +245,7 @@ and no null-extended row is later retracted by the same wave; control: ungated m
 flickers.
 **Depends**: E2.3.
 
-### E2.5 — Balanced-transfer internal-consistency acceptance suite (gap-4 benchmark) — P1 · High · `data` (test-only)
+### E2.5 — Balanced-transfer internal-consistency acceptance suite (gap-4 benchmark) — P1 · High · `data` (test-only) ✅ LANDED (InternalConsistencyTest.kt:45)
 **Spec**: 20/22 §The observation frontier (names this suite as acceptance).
 **Implement**: `kernel/src/test/.../InternalConsistencyTest.kt`, transcribing the
 balanced-transfer experiment (research 04 §3): a generative stream of balanced transfers
@@ -256,7 +257,7 @@ total == 0 / no output corresponds to no input prefix. Controls: point-consisten
 teeth).
 **Depends**: E2.3, E2.4.
 
-### E2.6 — `demo/shopping` adoption (F-5 acceptance) — P2 · High · `demo`
+### E2.6 — `demo/shopping` adoption (F-5 acceptance) — P2 · High · `demo` ✅ LANDED (#1100)
 **Spec**: none new.
 **Implement**: replace shopping's four-hub `broadcast()` with one `observeAligned` sink
 pushing one SSE frame per settled wave; delete the documented skew. Test: exactly one
@@ -270,7 +271,7 @@ one wave.
 
 ---
 
-## Milestone E3 — Delivered-watermark substrate (one primitive, two consumers) ⚠ PROPOSED
+## Milestone E3 — Delivered-watermark substrate (one primitive, two consumers) ✅ LANDED (E3.1-E3.7)
 
 The layering insight of the research (05, gap 7 note): cross-replica frontier
 coordination (**G-39/G-40** residuals) and causal stability for tag/tombstone GC
@@ -285,7 +286,7 @@ front (research 03 §3): membership completeness (`replicasOf` is eventually con
 gated, R13), idle-replica liveness (heartbeat — Bauwens' fix), and frozen stability on
 unclean departure (R13, relates R1/G-45).
 
-### E3.1 — Spec: delivered watermarks, replica frontiers, causal stability (G-39/G-40 residuals, G-42) — P1 · High · `spec`
+### E3.1 — Spec: delivered watermarks, replica frontiers, causal stability (G-39/G-40 residuals, G-42) — P1 · High · `spec` ✅ LANDED (#705)
 **Spec**: 40/42 new §Delivered watermarks and causal stability; 20/22 §Completeness…
 (cross-replica extension paragraph); 20/24 §Tag continuity (compaction-trigger note,
 E3.7 forward-pointer); 95 (new R13/R14; cross-link R1).
@@ -306,7 +307,7 @@ source's watermark column is fenced with the source (R14).
 **Implement**: spec text only; cite research 02 §2-3, 03 §3, 05 gaps 6-7.
 **Unblocks** E3.2-E3.7.
 
-### E3.2 — `WatermarkDelta` + `WatermarkCell` (the gossiped lattice) — P1 · High · `repl` ✅ LANDED (CP-B1)
+### E3.2 — `WatermarkDelta` + `WatermarkCell` (the gossiped lattice) — P1 · High · `repl` ✅ LANDED (CP-B1, Watermark.kt:62)
 **Status**: the pointwise-max lattice + `Replicable` cell landed via composition
 ticket CP-B1 (`kernel/.../cell/data/Watermark.kt`), with the merge-law harness
 (commutative / idempotent / monotone / associative / gossip-no-regression). The
@@ -328,7 +329,7 @@ convergence under duplication/reorder/partition-heal; control: a signed-delta
 reject).
 **Depends**: E3.1. **Unblocks** E3.3-E3.7.
 
-### E3.3 — Delivered-tracking seams + idle heartbeat (Bauwens liveness) — P2 · Medium · `data`+`repl`
+### E3.3 — Delivered-tracking seams + idle heartbeat (Bauwens liveness) — P2 · Medium · `data`+`repl` ✅ LANDED (Watermark.kt:126)
 **Spec**: 40/42 §Delivered watermarks (E3.1 points 1, 3).
 **Implement**: (a) contiguity tracking where remote deltas fold: a `DeliveredFrontier`
 helper (per-source max-contiguous prefix + out-of-order holdback set) updated in
@@ -344,7 +345,7 @@ prefix (safety) and reaches it at idle (liveness); an idle-but-heartbeating repl
 not block stability; control: heartbeat off → stability provably frozen.
 **Depends**: E3.2 (+ E1.3 for the OrMap seam).
 
-### E3.4 — Consumer (a): wave-granularity replica frontier — the JoinBarrier read (G-39/G-40 residuals) — P2 · Medium · `glitchfree`+`repl`
+### E3.4 — Consumer (a): wave-granularity replica frontier — the JoinBarrier read (G-39/G-40 residuals) — P2 · Medium · `glitchfree`+`repl` ✅ LANDED (87ec8b96)
 **Spec**: 20/22 §Completeness… cross-replica extension (E3.1 point 2).
 **Implement**: a `ReplicaFrontier` read-view over the local `WatermarkCell`
 (`completeAt(s, t): Boolean` = every open, non-closed membership row ≥ t) and an opt-in
@@ -379,7 +380,7 @@ or stub the hook behind an interface); coordinate with E3.3 (wave-source rows).
 > releases, (b) trivial frontier tears the board, (c) fence off releases early for
 > a joining covering member.
 
-### E3.5 — Consumer (b): the causal-stability read + GC proof harness (G-42 trigger) — P1 · Medium · `repl`
+### E3.5 — Consumer (b): the causal-stability read + GC proof harness (G-42 trigger) — P1 · Medium · `repl` ✅ LANDED (CausalStability.kt:63)
 **Spec**: 40/42 §Delivered watermarks (E3.1 point 2); 20/24 compaction-trigger note.
 **Implement**: `stableFrontier(logicalId): TagFrontier` on the
 `Replication`/`WatermarkCell` surface = pointwise min over all open membership rows
@@ -394,7 +395,7 @@ not delivery, is the correct trigger — research 02 §4, 03 §3). No actual com
 — that is E3.7; this item delivers the read plus the proof harness.
 **Depends**: E3.2, E3.3.
 
-### E3.6 — Membership and departure gates (G-45 seam) — P2 · Medium · `repl`
+### E3.6 — Membership and departure gates (G-45 seam) — P2 · Medium · `repl` ✅ LANDED (MemberDepartureFrontierTest.kt:52)
 **Spec**: 40/42 §Delivered watermarks (E3.1 point 3).
 **Implement**: (a) membership for both reads = the `replicasOf` fold with its
 announcement seams, snapshotted per read with the documented eventual-consistency caveat;
@@ -408,7 +409,7 @@ stability advances past the closed row; kill without evict → stability frozen 
 notice observed (control asserts no silent unfreeze).
 **Depends**: E3.2, E3.5.
 
-### E3.7 — Stability-scoped tag/tombstone reclamation (G-42; G-25 rider) — P2 · Medium · `data`+`repl`
+### E3.7 — Stability-scoped tag/tombstone reclamation (G-42; G-25 rider) — P2 · Medium · `data`+`repl` ✅ LANDED (StabilityReclaim.kt:56)
 **Spec**: 20/24 §Tag continuity (compaction paragraph, E3.1 forward-pointer); 40/42
 §Delivered watermarks.
 **Implement**: consume E3.5: `SetCell`/`OrMapCell` compact `dels` (and fully-covered
