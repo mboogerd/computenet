@@ -34,7 +34,7 @@ checks the implementation against requirement ids embedded in the spec.
 
                 :kernel ◄── :timetravel ◄── test ── :demo:agora  (offline journal reader / reconstruction / diff; TTD1)
 
-                :kernel ◄── :demograph  (subjective-stance/preference structures + aggregate views; DGR, epic computenet-drz8)
+                :kernel ◄── :demograph  (DGR, epic computenet-drz8)
 
                 :kernel ◄── :economy  (validated, serializable EconomicPolicy + token-bucket budget ledger; ECO1, epic computenet-66m)
 ```
@@ -504,7 +504,7 @@ Authoritative:
   (I-1..I-28); cited as "decided in 93" throughout the spec.
 - `doc/spec/90-roadmap/95-research-plan.md` — research-gated scope.
 - `doc/spec/90-roadmap/96-incremental-engines-plan.md` — proposed forward queue
-  (E1–E6, unstarted).
+  (E1–E6).
 - `doc/spec/CONCORDANCE.md` — generated; regenerate, never hand-edit.
 - `doc/FEATURE-STATUS.md` — generated feature × demo adoption matrix;
   regenerate with `scripts/adoption-matrix/adoption_matrix.py`, never
