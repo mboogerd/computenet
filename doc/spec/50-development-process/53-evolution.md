@@ -1,6 +1,6 @@
 # 53 — Deployment as Evolution
 
-> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`; the full four-phase swap transaction and `PromotionPolicy` are also implemented (`Evolution.kt:128-140`, `PromotionPolicy.kt`). Contract-granular effect suppression, state-transform tiers, and the state-transform contract are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-17/I-21/I-27), unimplemented.
+> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`; the full four-phase swap transaction, `PromotionPolicy`, and contract-granular effect suppression (`Shadow.suppressEffectContracts` NoOp-serves every `@Contract(effect = true)` fan-in inlet) are also implemented (`Evolution.kt:78,90-95`, `PromotionPolicy.kt`). State-transform tiers and the state-transform contract are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-21/I-27), unimplemented; I-17's remaining residue — protocol-capability-gated downstream taps, SCC-closed cuts, glitch-consistent judgment, and a shadow-specific promotion policy — is still open (93 §I-17, landed-state PARTIAL).
 > **Sources**: ADR — Cellular Software Development Process (deployment model, versioning), ADR 0 (§7)
 > **Implementation**: `civictech.cell.evolve` (`Shadow`, `Promotion`, `StateMigrating`, `Effectful`); `ShadowPromotionTest`
 
