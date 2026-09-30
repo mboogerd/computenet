@@ -302,4 +302,73 @@ class JournalFormatVersionTest {
         // nothing was written: byte-identical to the untouched headerless copy
         legacy2.readBytes().toList() shouldBe headerless.toList()
     }
+
+    /**
+     * computenet-s710r — **a torn header is rewritten on append, not left to
+     * corrupt the record after it.**
+     *
+     * `readAndCheckHeader`'s own comment names what a file holding [FileJournal.MAGIC]
+     * with no version int means: "a crash inside the very first append, which
+     * acknowledged nothing" — the same disposition as an absent file. Before this fix,
+     * `sink()` treated that state as an ordinary non-empty file, ran the o2aj version
+     * check, found nothing to compare (the check returns `null`, harmlessly, for this
+     * exact shape) and let the append through with no header rewritten — so the append
+     * landed directly after the torn `MAGIC` bytes. Replay then read `MAGIC`, tried to
+     * read a version int from what was actually the appended record's length prefix,
+     * and refused the file by a garbage "version" derived from the first few bytes of
+     * the caller's own record.
+     *
+     * The choice recorded beside [Journal]'s append-side KDoc: rewrite rather than
+     * refuse, because nothing here was ever acknowledged — the same disposition
+     * `readAndCheckHeader` already gives an actually-empty file (fresh header on first
+     * write) and [replay] already gives a torn TRAILING record (silently dropped, never
+     * refused).
+     */
+    @Test
+    fun `append rewrites a file holding only a torn header (MAGIC, no version)`(@TempDir dir: File) {
+        val file = File(dir, "host.journal")
+        file.writeBytes(FileJournal.MAGIC) // MAGIC written, crash before the version int landed
+
+        FileJournal(file).append("first".toByteArray())
+
+        FileJournal(file).replay().map { String(it) } shouldBe listOf("first")
+        val head = file.readBytes().copyOfRange(0, 8)
+        head.copyOfRange(0, 4).contentEquals(FileJournal.MAGIC).shouldBeTrue()
+        java.io.DataInputStream(head.copyOfRange(4, 8).inputStream()).readInt() shouldBe JOURNAL_FORMAT_VERSION
+    }
+
+    /**
+     * The other torn shape the bead names: a prefix shorter than [FileJournal.MAGIC]
+     * itself, from a crash before even the magic bytes finished landing. Too short to
+     * be any legitimate acknowledged record either (the smallest record needs a full
+     * 4-byte length prefix first), so it gets the same rewrite.
+     */
+    @Test
+    fun `append rewrites a file holding only a 1-3 byte prefix`(@TempDir dir: File) {
+        val file = File(dir, "host.journal")
+        file.writeBytes(FileJournal.MAGIC.copyOfRange(0, 2)) // crash before MAGIC itself finished landing
+
+        FileJournal(file).append("first".toByteArray())
+
+        FileJournal(file).replay().map { String(it) } shouldBe listOf("first")
+    }
+
+    /**
+     * The acceptance criteria names [BatchedFileJournal] explicitly (o2aj's reviewer
+     * noted the shared-check behavior was undocumented and untested for it): both
+     * classes delegate every byte decision to the one [JournalFile] encoding, so the
+     * torn-header rewrite applies here too, not just through [FileJournal].
+     */
+    @Test
+    fun `BatchedFileJournal also rewrites a torn header rather than corrupting the append after it`(
+        @TempDir dir: File,
+    ) {
+        val file = File(dir, "host.journal")
+        file.writeBytes(FileJournal.MAGIC)
+
+        val batched = BatchedFileJournal(file, syncEvery = 1)
+        batched.append("first".toByteArray())
+
+        FileJournal(file).replay().map { String(it) } shouldBe listOf("first")
+    }
 }

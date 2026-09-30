@@ -120,7 +120,24 @@ enum class DurabilityClass {
  * has content, so a journal whose header declares one version can never receive a
  * record from an instance opened at another — the mixed-version file [replay]'s
  * check was written to police is unconstructible in the first place, not merely
- * caught after the fact.
+ * caught after the fact. Both this check and the torn-header handling immediately
+ * below live in the shared [JournalFile], so [BatchedFileJournal] gets them too —
+ * not just [FileJournal].
+ *
+ * **A torn header is rewritten, not refused** (computenet-s710r): a file holding
+ * [FileJournal.MAGIC] with no version int after it, or fewer bytes than any header
+ * or record could ever complete with, is not a foreign-version journal for the
+ * check above to police — it is what `readAndCheckHeader`'s own comment already
+ * names it, "a crash inside the very first append, which acknowledged nothing".
+ * The choice, between rewriting that state on the next append and refusing the
+ * append loudly instead: **rewrite**. Refusing would treat a state where nothing
+ * was ever acknowledged as if it protected a record, which it does not — the same
+ * reasoning that already lets [replay] silently drop a torn TRAILING record rather
+ * than refuse the file over it, and that already lets an actually-empty file
+ * acquire a fresh header on its first write rather than being flagged. A torn
+ * header is that same "nothing acknowledged yet" state, just caught one write
+ * earlier; treating it identically — rewrite, not refuse — keeps one rule instead
+ * of two for what is one underlying condition.
  */
 interface Journal {
     /**
@@ -200,7 +217,10 @@ class InMemoryJournal : Journal {
  * [JournalFormatMismatch] rather than writing. A journal can therefore never end
  * up with a header declaring one version and trailing records appended by an
  * instance at another: the state [replay]'s check exists to police cannot be
- * constructed to begin with.
+ * constructed to begin with. This check, and the torn-header handling below, are
+ * both in [JournalFile] — shared with [BatchedFileJournal], which therefore
+ * refuses a mismatched version and rewrites a torn header exactly as [FileJournal]
+ * does, not just the class this section is named for.
  *
  * A file that does **not** begin with [MAGIC] is a journal written before
  * versioning existed and is read as [PRE_VERSIONING_FORMAT_VERSION] — the
@@ -209,6 +229,20 @@ class InMemoryJournal : Journal {
  * practice rather than by construction: a pre-versioning journal's first four
  * bytes are a record length, and to be mistaken for [MAGIC] that length would
  * have to be exactly `0x434E4A4C` — a single 1.1 GB record.
+ *
+ * **Torn-header rewrite (computenet-s710r):** a crash between writing [MAGIC] and
+ * writing the version int behind it — or between opening the file and finishing
+ * [MAGIC] itself — leaves a prefix too short to be a complete header, and too
+ * short to be any legitimately acknowledged record either (the smallest record
+ * still needs a whole 4-byte length prefix first). Nothing in that prefix was ever
+ * acknowledged, so [append] rewrites it in place before writing — the same
+ * disposition an actually-empty file already gets on its first write, chosen over
+ * refusing because refusing would treat a state that protects no record as if it
+ * did (see [Journal]'s KDoc for the full reasoning). Without the rewrite, the
+ * append would land directly after the torn bytes with no real header ever
+ * written, and the next [replay] would misread the appended record's own length
+ * prefix as the declared version — refusing the file by a version number that is
+ * really just the first bytes of someone's payload.
  *
  * ## One handle, not one open per append (computenet-sh8z)
  *
@@ -392,9 +426,20 @@ internal class JournalFile(
      */
     private fun sink(): FileOutputStream {
         sink?.let { return it }
-        val opened = FileOutputStream(file, true)
-        try {
-            synchronized(headerLocks.computeIfAbsent(canonicalPathOf(file)) { Any() }) {
+        synchronized(headerLocks.computeIfAbsent(canonicalPathOf(file)) { Any() }) {
+            if (tornPrefix()) {
+                // Nothing here was ever acknowledged (computenet-s710r): readAndCheckHeader's
+                // own comment names this exact shape — MAGIC with no version int, or fewer
+                // bytes than any record's length prefix could ever complete — as "a crash
+                // inside the very first append, which acknowledged nothing". Rewrite it
+                // exactly as an absent file would be on its first write, rather than either
+                // misreading the leftover bytes as real content (the 1-3 byte case) or
+                // refusing an append that protects no acknowledged record (see Journal's
+                // and FileJournal's KDoc for the choice between rewrite and refuse here).
+                FileOutputStream(file, false).close()
+            }
+            val opened = FileOutputStream(file, true)
+            try {
                 if (file.length() == 0L) {
                     opened.write(header())
                     opened.fd.sync()
@@ -407,13 +452,32 @@ internal class JournalFile(
                     // same check [readAndCheckHeader] already runs for replay.
                     readAndCheckHeader()
                 }
+            } catch (e: JournalFormatMismatch) {
+                opened.close() // nothing was written; don't leak the handle on a refused append
+                throw e
             }
-        } catch (e: JournalFormatMismatch) {
-            opened.close() // nothing was written; don't leak the handle on a refused append
-            throw e
+            sink = opened
         }
-        sink = opened
-        return opened
+        return sink!!
+    }
+
+    /**
+     * True when [file] holds a prefix too short to be either a complete header or any
+     * legitimately acknowledged pre-versioning record — the torn-header state
+     * (computenet-s710r) [sink] rewrites rather than appending into. Two shapes:
+     * [FileJournal.MAGIC] present but the version int missing or truncated (4-7 bytes,
+     * the 4 magic bytes matching exactly), or fewer than [Int.SIZE_BYTES] bytes total (a
+     * crash before even a length prefix — versioned or not — could have landed whole). A
+     * non-empty file of [Int.SIZE_BYTES] or more bytes whose first four do NOT match
+     * [FileJournal.MAGIC] is left alone: that is the pre-versioning shape
+     * [readAndCheckHeader] already reads correctly, unrelated to this torn state.
+     */
+    private fun tornPrefix(): Boolean {
+        val length = file.length()
+        if (length == 0L || length >= HEADER_BYTES) return false
+        if (length < Int.SIZE_BYTES) return true
+        val prefix = file.inputStream().buffered().use { it.readNBytes(Int.SIZE_BYTES) }
+        return prefix.contentEquals(FileJournal.MAGIC)
     }
 
     /**
