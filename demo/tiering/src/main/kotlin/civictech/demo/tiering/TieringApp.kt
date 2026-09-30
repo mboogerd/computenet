@@ -20,6 +20,9 @@ import civictech.cell.host.link
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.cell.replication.Replication
+import civictech.cell.wire.PeerConnection
+import civictech.cell.wire.PeerListener
+import civictech.cell.wire.PeerTransports
 import civictech.cell.wire.Peering
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
@@ -30,7 +33,6 @@ import civictech.demo.shell.value
 import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
-import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
 import java.net.URI
@@ -362,7 +364,10 @@ class TieringApp(
     private val manualOps = host.lookup(refs.manual)!!.inlet.call
 
     /** The `--listen` listener, kept so [boundWsPort] can report what it bound. */
-    private var wsListener: WsTransport.WsListener? = null
+    private var wsListener: PeerListener? = null
+
+    /** The `--peer` dial connection, kept for the lifetime of the app. */
+    private var wsConnection: PeerConnection? = null
 
     private val state = Object()
     // Read model: each derived outlet materialized by a kernel observation sink,
@@ -417,7 +422,7 @@ class TieringApp(
      * it got (computenet-dqy.25), so this — not the requested value — is what
      * `main` announces.
      */
-    val boundWsPort: Int? get() = wsListener?.port
+    val boundWsPort: Int? get() = wsListener?.let { URI(it.boundAddress.text).port }
 
     /** This host's manual-replica instance id — 0 listener/solo, 1 dialer. */
     val manualInstanceId: Long get() = manualCell.ref.instanceId
@@ -436,9 +441,10 @@ class TieringApp(
 
         if (wire != null) {
             val side = Peering.Side(registry, bridgeHost!!)
+            val ws = PeerTransports.forScheme("ws")
             when (wire) {
-                is Wire.Listen -> wsListener = WsTransport.listen(wire.wsPort, side)
-                is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
+                is Wire.Listen -> wsListener = ws.listen(ws.parseAddress("ws://0.0.0.0:${wire.wsPort}"), side)
+                is Wire.Dial -> wsConnection = ws.dial(ws.parseAddress(wire.uri), side)
             }
         }
 
