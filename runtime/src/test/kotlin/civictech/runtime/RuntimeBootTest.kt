@@ -1,11 +1,16 @@
 package civictech.runtime
 
 import civictech.cell.BudgetLedger
+import civictech.cell.BudgetRefusedException
+import civictech.cell.ClaimClass
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
+import civictech.cell.link.AuthLevel
+import civictech.cell.link.CurrentPeer
+import civictech.cell.link.PeerId
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
 import civictech.inspect.InspectorFlag
@@ -81,6 +86,39 @@ class RuntimeBootTest {
         try {
             assertTrue(node.budget is TokenBucketLedger, "budget file did not build a TokenBucketLedger")
             assertEquals("budgeted", (node.budget as TokenBucketLedger).scope)
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `every manifest host charges the one node ledger`() {
+        // An unvouched principal starts with 3 Spawn tokens at price 1, and a refill
+        // interval of one hour returns none during the test: the bucket admits exactly
+        // three stamped spawns.
+        val policy = EconomicPolicy.placeholder().let { base ->
+            base.copy(
+                refill = base.refill.mapValues { EconomicPolicy.Refill(tokensPerInterval = 1, intervalNanos = 3_600_000_000_000) },
+                unvouchedBootstrap = mapOf(ClaimClass.Spawn to 3L),
+            )
+        }
+        val policyFile = tempDir.resolve("policy.json")
+        Files.writeString(policyFile, Json.encodeToString(policy))
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(hosts = listOf("main", "worker"), budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+        )
+        val principal = PeerId("principal-q")
+        fun spawnOn(host: String) = CurrentPeer.with(principal, AuthLevel.Authenticated) {
+            node.hosts.getValue(host).managementInlet.call.spawn(SetCell<String>())
+        }
+
+        try {
+            repeat(3) { spawnOn("main") }
+            // The worker's first stamped spawn is refused only if it charges the SAME
+            // bucket main just drained: an unbudgeted or separately-budgeted worker admits it.
+            assertThrows<BudgetRefusedException> { spawnOn("worker") }
         } finally {
             node.close()
         }
