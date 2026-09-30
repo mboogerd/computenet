@@ -188,7 +188,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 
 None.
 
-### Notes (coverage gaps, unestablished/contested ownership — the testing agent's worklist)
+### Notes (coverage gaps, unestablished/contested/roadmap-owned ownership — the testing agent's worklist)
 
 - Coverage gap: requirement '12-CARD-02' (10-programming-model/12-ports.md) has no covering scenario
 - Unestablished ownership: requirement '12-CARD-02' (10-programming-model/12-ports.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
