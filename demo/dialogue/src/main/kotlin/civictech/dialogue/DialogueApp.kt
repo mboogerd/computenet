@@ -15,6 +15,9 @@ import civictech.dialogue.extract.CassetteExtractor
 import civictech.dialogue.extract.Extractor
 import civictech.dialogue.extract.RuleExtractor
 import civictech.dialogue.extract.SegmentStatus
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -143,7 +146,10 @@ class DialogueApp(
     extractor: Extractor,
     transcriptFile: File? = null,
     journalDir: File? = null,
+    inspector: InspectorFlag.Options? = null,
 ) {
+
+    private val inspectorOptions = inspector
 
     /**
      * The single thread every runtime call runs on (2aw.5-D4). Daemon, so a
@@ -166,6 +172,10 @@ class DialogueApp(
     private val shell = DemoShell(port)
 
     val boundPort: Int get() = shell.boundPort
+
+    /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
+    var inspector: InspectorServer? = null
+        private set
 
     /**
      * What the boot [settle] reconciled. `structureOps == 0` on a recovery
@@ -710,7 +720,10 @@ class DialogueApp(
     // Lifecycle
     // ------------------------------------------------------------------
 
-    fun start(): DialogueApp = apply { shell.start() }
+    fun start(): DialogueApp = apply {
+        shell.start()
+        inspectorOptions?.let { inspector = it.serve(runtime.registry, mapOf("dialogue" to runtime.host)) }
+    }
 
     /**
      * Graceful first, interrupting only as a backstop (computenet-t3sp).
@@ -726,6 +739,7 @@ class DialogueApp(
      * genuinely wedged driver still cannot hold a `stop()` open.
      */
     fun stop() {
+        inspector?.stop()
         shell.stop()
         driver.shutdown()
         if (!driver.awaitTermination(STOP_DRAIN_MS, TimeUnit.MILLISECONDS)) driver.shutdownNow()
@@ -846,14 +860,16 @@ private data class TranscriptResponse(
  * (`demoPort`), so it has to come before the flags.
  */
 fun main(args: Array<String>) {
-    val port = demoPort(args)
-    val transcript = args.value("--transcript")?.let { File(it) }
-    val journalDir = args.value("--journal")?.let { File(it).apply { mkdirs() } }
-    val extractor: Extractor = when (val kind = args.value("--extractor") ?: "rule") {
+    val parsed = InspectorFlag.parse(args)
+    val rest = parsed.rest
+    val port = demoPort(rest)
+    val transcript = rest.value("--transcript")?.let { File(it) }
+    val journalDir = rest.value("--journal")?.let { File(it).apply { mkdirs() } }
+    val extractor: Extractor = when (val kind = rest.value("--extractor") ?: "rule") {
         "rule" -> RuleExtractor
         "cassette" -> CassetteExtractor.load(
             File(
-                args.value("--cassette")
+                rest.value("--cassette")
                     ?: error("--extractor cassette requires --cassette <file>"),
             ),
         )
@@ -862,7 +878,7 @@ fun main(args: Array<String>) {
         else -> error("--extractor must be 'rule' or 'cassette', was '$kind'")
     }
 
-    val app = DialogueApp(port, extractor, transcript, journalDir).start()
+    val app = DialogueApp(port, extractor, transcript, journalDir, parsed.options).start()
     println("dialogue: http://localhost:${app.boundPort}")
     app.bootLoad?.let { println("  transcript: ${it.parsedCount} utterances loaded, ${it.rejectedCount} rejected") }
     println(
@@ -870,4 +886,5 @@ fun main(args: Array<String>) {
         else "  volatile mode; add --journal <dir> to survive restarts",
     )
     announcePort("http", app.boundPort)
+    app.inspector?.let { InspectorFlag.announce(it, parsed.options!!) }
 }
