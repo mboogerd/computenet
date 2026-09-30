@@ -161,6 +161,45 @@ class WsPeerTransportContractTest : PeerTransportContract() {
         )
     }
 
+    /**
+     * The gate [WsTransport.Supersession] puts on lifting a tombstone: a
+     * retired instance whose despawns the bridge host has NOT yet run keeps
+     * its tombstones, however many successors open, and is lifted at the
+     * first successor event after the despawn ran. Lifting early would let
+     * that despawn's `unpublish` fire `onUnpublish` a second time for a ref
+     * with no location (computenet-gyvli.2's review); a frame the retired
+     * ingress still had queued would park instead of meeting the tombstone.
+     *
+     * Driven directly, because on the Session path the successor's own spawn
+     * usually lets the queued despawns run first, which hides the gate.
+     */
+    @Test
+    fun `a retired instance keeps its tombstones until the bridge host has despawned it`() {
+        val controller = SimulationController(5)
+        val registry = LocationRegistry()
+        val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val side = Peering.Side(registry, bridgeHost, peer = PeerId("jvm-a"))
+        val egress = civictech.cell.wire.BridgeEgressCell()
+        val retired = Peering.openInstance(side, toPeer = egress)
+        val successor = Peering.openInstance(side, toPeer = egress)
+        controller.runToIdle()
+        val unpublished = mutableMapOf<CellRef, Int>()
+        registry.onUnpublish { ref -> unpublished.merge(ref, 1, Int::plus) }
+
+        val supersession = WsTransport.Supersession()
+        retired.retire() // tombstones now; the despawn is queued on the bridge host
+        assertTrue(bridgeHost.portAt(retired.mirrorRef, "inlet") != null, "the premise: the despawn is still queued")
+        supersession.retired(retired)
+        supersession.opened(successor)
+        assertTrue(retired.mirrorRef in registry.retiredRefs(), "a tombstone was lifted while its cell was still hosted")
+
+        controller.runToIdle() // the despawn runs against the tombstone
+        assertEquals(1, unpublished[retired.mirrorRef], "the retired mirror was not unpublished exactly once")
+        supersession.opened(successor)
+        assertFalse(retired.mirrorRef in registry.retiredRefs(), "a despawned instance's tombstone was not lifted")
+        assertEquals(0, supersession.waiting)
+    }
+
     @Test
     fun `the ws binding is discoverable by its scheme`() {
         assertTrue(PeerTransports.forScheme(WsPeerTransport.SCHEME) is WsPeerTransport)
