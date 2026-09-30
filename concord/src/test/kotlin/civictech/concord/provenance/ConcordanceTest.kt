@@ -145,6 +145,134 @@ class ConcordanceTest {
         report.rows.single { it.requirement == "40-FAKE-02" }.sourceFile shouldBe "40-later/40-fake.md"
     }
 
+    // --- scanDeclarationProvenance (computenet-7ei34) ---------------------
+
+    @Test
+    fun `scanDeclarationProvenance flags an id with no declaration-classified occurrence anywhere`() {
+        // Mirrors the ticket's clause 1 shape: the id is declared mid-sentence
+        // (lowercase continuation, per isDeclaration), so no occurrence reads
+        // as a declaration and scanRequirements' firstDeclaration map has no
+        // entry for it — the fallback path this lint exists to surface.
+        val spec = specDir()
+        writeSpecChapter(
+            File(spec, "13-linking").apply { mkdirs() },
+            "13-fake.md",
+            """
+            A `[13-FAKE-01]` `link.unlink()` call is idempotent under retry.
+            """.trimIndent(),
+        )
+
+        val provenance = ConcordanceScanner.scanDeclarationProvenance(spec)
+
+        provenance.idsWithNoDeclaration shouldContainExactly setOf("13-FAKE-01")
+        provenance.idsWithMultipleNormativeDeclarations.size shouldBe 0
+    }
+
+    @Test
+    fun `scanDeclarationProvenance flags an id declared in more than one normative chapter file`() {
+        val spec = specDir()
+        val dataflow = File(spec, "20-dataflow-semantics").apply { mkdirs() }
+        writeSpecChapter(
+            dataflow,
+            "22-fake.md",
+            """
+            [22-FAKE-01] The observed state SHALL carry the requirement this chapter declares.
+            """.trimIndent(),
+        )
+        writeSpecChapter(
+            dataflow,
+            "24-fake.md",
+            """
+            [22-FAKE-01] The same id, wrongly re-declared here too.
+            """.trimIndent(),
+        )
+
+        val provenance = ConcordanceScanner.scanDeclarationProvenance(spec)
+
+        provenance.idsWithNoDeclaration shouldHaveSize 0
+        provenance.idsWithMultipleNormativeDeclarations shouldBe
+            mapOf("22-FAKE-01" to listOf("20-dataflow-semantics/22-fake.md", "20-dataflow-semantics/24-fake.md"))
+    }
+
+    @Test
+    fun `scanDeclarationProvenance does not count a roadmap ticket's declaration towards multiplicity`() {
+        // Ticket clause 3's shape: one normative chapter declares the id, and
+        // a 90-roadmap ticket ALSO reads as a declaration (e.g. a
+        // block-quoted EARS sentence). This resolves correctly today by path
+        // order and is not the ownership hazard the multiplicity lint
+        // targets — a roadmap ticket is never itself a normative owner.
+        val spec = specDir()
+        writeSpecChapter(
+            File(spec, "20-dataflow-semantics").apply { mkdirs() },
+            "22-fake.md",
+            """
+            [22-FAKE-02] The observed state SHALL carry the requirement this chapter declares.
+            """.trimIndent(),
+        )
+        writeSpecChapter(
+            File(spec, "90-roadmap").apply { mkdirs() },
+            "99-ticket.md",
+            """
+            > [22-FAKE-02] The observed state SHALL carry the requirement this chapter declares.
+            """.trimIndent(),
+        )
+
+        val provenance = ConcordanceScanner.scanDeclarationProvenance(spec)
+
+        provenance.idsWithNoDeclaration shouldHaveSize 0
+        provenance.idsWithMultipleNormativeDeclarations.size shouldBe 0
+    }
+
+    // --- buildConcordance: the two new ownership lints (computenet-7ei34) --
+
+    @Test
+    fun `buildConcordance reports an unestablished-ownership note for an id with no declaration anywhere`() {
+        val requirements = listOf(ConcordanceScanner.Requirement("13-FAKE-01", "13-linking/13-fake.md"))
+        val provenance = ConcordanceScanner.DeclarationProvenance(
+            idsWithNoDeclaration = setOf("13-FAKE-01"),
+            idsWithMultipleNormativeDeclarations = emptyMap(),
+        )
+
+        val report = buildConcordance(requirements, emptyList(), provenance)
+
+        val ownershipNotes = report.noteFindings.filter { it.message.contains("Unestablished ownership") }
+        ownershipNotes shouldHaveSize 1
+        ownershipNotes.single().message shouldContain "13-FAKE-01"
+    }
+
+    @Test
+    fun `buildConcordance reports a contested-ownership note for an id declared in more than one normative chapter`() {
+        val requirements = listOf(
+            ConcordanceScanner.Requirement("22-FAKE-01", "20-dataflow-semantics/22-fake.md"),
+        )
+        val provenance = ConcordanceScanner.DeclarationProvenance(
+            idsWithNoDeclaration = emptySet(),
+            idsWithMultipleNormativeDeclarations = mapOf(
+                "22-FAKE-01" to listOf("20-dataflow-semantics/22-fake.md", "20-dataflow-semantics/24-fake.md"),
+            ),
+        )
+
+        val report = buildConcordance(requirements, emptyList(), provenance)
+
+        val ownershipNotes = report.noteFindings.filter { it.message.contains("Contested ownership") }
+        ownershipNotes shouldHaveSize 1
+        ownershipNotes.single().message shouldContain "22-FAKE-01"
+        ownershipNotes.single().message shouldContain "20-dataflow-semantics/22-fake.md"
+        ownershipNotes.single().message shouldContain "20-dataflow-semantics/24-fake.md"
+    }
+
+    @Test
+    fun `buildConcordance emits no ownership notes when declarationProvenance is left at its default`() {
+        val requirements = listOf(ConcordanceScanner.Requirement("90-FAKE-01", "90-fake.md"))
+        val scenarios = listOf(
+            ConcordanceScanner.CorpusScenario("FAKE-01", listOf("90-FAKE-01"), "fake-01.yaml"),
+        )
+
+        val report = buildConcordance(requirements, scenarios)
+
+        report.findings shouldHaveSize 0
+    }
+
     // --- scanScenarios ----------------------------------------------------
 
     @Test
