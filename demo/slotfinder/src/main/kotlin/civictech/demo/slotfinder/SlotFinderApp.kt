@@ -17,6 +17,9 @@ import civictech.cell.observe.observeAll
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
 import java.net.URLDecoder
@@ -188,7 +191,9 @@ object SlotPipeline {
     }
 }
 
-class SlotFinderApp(port: Int = 8080) {
+class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) {
+    private val inspectorOptions = inspector
+
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
     private val refs = SlotPipeline.build(host)
@@ -215,6 +220,10 @@ class SlotFinderApp(port: Int = 8080) {
     private val shell = DemoShell(port)
 
     val boundPort: Int get() = shell.boundPort
+
+    /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
+    var inspector: InspectorServer? = null
+        private set
 
     init {
         view.onChange { broadcast() }
@@ -272,9 +281,13 @@ class SlotFinderApp(port: Int = 8080) {
         return """{$sets,"byDay":$counts}"""
     }
 
-    fun start(): SlotFinderApp = apply { shell.start() }
+    fun start(): SlotFinderApp = apply {
+        shell.start()
+        inspectorOptions?.let { inspector = it.serve(registry, mapOf("slotfinder" to host)) }
+    }
 
     fun stop() {
+        inspector?.stop()
         shell.stop()
         // T08 finding 4: stop this composite's listener-dispatch thread — the
         // per-outlet ObserveCells close themselves via onDeactivate on despawn,
@@ -285,8 +298,13 @@ class SlotFinderApp(port: Int = 8080) {
 }
 
 fun main(args: Array<String>) {
-    val app = SlotFinderApp(demoPort(args)).start()
+    // InspectorFlag.parse first (3iv0w-D2): it strips its own tokens, then
+    // demoPort reads the remaining positional port, so an inspector flag's
+    // value is never mistaken for this demo's own port.
+    val parsed = InspectorFlag.parse(args)
+    val app = SlotFinderApp(demoPort(parsed.rest), inspector = parsed.options).start()
     println("computenet slotfinder: http://localhost:${app.boundPort}")
+    parsed.options?.let { InspectorFlag.announce(app.inspector!!, it) }
 }
 
 private val PAGE = """

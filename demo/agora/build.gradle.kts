@@ -25,6 +25,8 @@ dependencies {
     implementation(project(":kernel"))
     implementation(libs.kotlinx.serialization)
     implementation(project(":demo:shell"))
+    // opt-in `--inspect-port`, see `InspectorFlag` (computenet-3iv0w)
+    implementation(project(":inspect"))
 
     testImplementation(project(":testkit"))
     // Test-scope consumer only (TimeTravelWalkthroughTest, computenet-3qkx1.3) — the same shape

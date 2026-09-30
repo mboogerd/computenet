@@ -10,6 +10,9 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import java.io.File
 import java.net.URLDecoder
@@ -29,7 +32,9 @@ private val COALESCE_WINDOW = Duration.ofMillis(100)
  * is kill -9 safe: the structure log rebuilds the graph under its recorded
  * refs, the host journal replays the data, and a checkpoint compacts.
  */
-class AgoraApp(port: Int = 8080, journalDir: File? = null) {
+class AgoraApp(port: Int = 8080, journalDir: File? = null, inspector: InspectorFlag.Options? = null) {
+
+    private val inspectorOptions = inspector
 
     private val registry = LocationRegistry()
     private val journal = journalDir?.let { FileJournal(File(it, "host.journal")) }
@@ -54,6 +59,10 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
 
     private val shell = DemoShell(port)
     val boundPort: Int get() = shell.boundPort
+
+    /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
+    var inspector: InspectorServer? = null
+        private set
 
     init {
         // Replay is fenced by the recovery handle: routes are registered only
@@ -134,7 +143,10 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         }
     }
 
-    fun start(): AgoraApp = apply { shell.start() }
+    fun start(): AgoraApp = apply {
+        shell.start()
+        inspectorOptions?.let { inspector = it.serve(registry, mapOf("agora" to host)) }
+    }
 
     /**
      * `shell.stop()` alone — deliberately no host drain and no journal fence
@@ -152,16 +164,21 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
      * `fd.sync()`. If `DemoShell` ever acquires an executor, that premise dies
      * and `AgoraStopWindowTest`'s first arm goes red.
      */
-    fun stop() = shell.stop()
+    fun stop() {
+        inspector?.stop()
+        shell.stop()
+    }
 }
 
 fun main(args: Array<String>) {
-    val port = demoPort(args)
-    val journalDir = args.value("--journal")?.let { File(it).apply { mkdirs() } }
+    val parsed = InspectorFlag.parse(args)
+    val port = demoPort(parsed.rest)
+    val journalDir = parsed.rest.value("--journal")?.let { File(it).apply { mkdirs() } }
 
-    val app = AgoraApp(port, journalDir).start()
+    val app = AgoraApp(port, journalDir, parsed.options).start()
     println("agora: http://localhost:${app.boundPort}")
     println(if (journalDir != null) "  journaling to $journalDir (kill -9 safe)" else "  volatile mode; add --journal <dir> to survive restarts")
+    app.inspector?.let { InspectorFlag.announce(it, parsed.options!!) }
 }
 
 private val PAGE = """

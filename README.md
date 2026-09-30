@@ -106,11 +106,16 @@ so only the manual map survives a `kill -9` restart. See computenet-3san.
 ## Inspect a running graph
 
 `:inspect` is a read-only HTTP/SSE view of a host process's live dataflow
-graph. It's opt-in on `demo/skillmatch` and `demo/shopping` via
-`--inspect-port`:
+graph. It's opt-in via the shared `--inspect-port <p>` flag (`InspectorFlag`
+in `:inspect`) on ten demos — agora, alignment, backlog-triage, deliberate,
+dialogue, exchange, shopping, skillmatch, slotfinder, tiering. Not wired:
+`allocator-observe` (no hosted graph yet), `beadsmirror` (hosts only in its
+two-node `--rig` mode) and `social` (excluded by its own module gate,
+`[SOC1-MOD-01]`):
 
 ```bash
 ./gradlew :demo:skillmatch:run --args="8080 --inspect-port 7071"
+./gradlew :demo:agora:run --args="8080 --inspect-port 7072"
 cd inspect/ui && npm install && npm run dev   # UI on :5173, proxies to :7071
 ```
 

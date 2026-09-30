@@ -25,6 +25,9 @@ import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
+import civictech.inspect.InspectorServer
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.net.URI
@@ -62,15 +65,19 @@ private fun amountOf(order: String): Long = order.substringAfterLast(SEP).toLong
  * `:demo:shopping`'s flag of the same name (V4-PEERID): it becomes the [PeerId]
  * in this JVM's hello, so the counterpart's registry records *which peer*
  * announced a ref rather than only which (per-connection, reconnect-fresh)
- * bridge egress it arrived through. This demo has no inspector, so nothing
- * renders it; it exists so the composition probe exercises a named peering.
- * Absent ⇒ anonymous, byte-identical to the pre-V4-PEERID hello.
+ * bridge egress it arrived through. Absent ⇒ anonymous, byte-identical to the
+ * pre-V4-PEERID hello.
+ *
+ * [inspector] (`--inspect-port`, computenet-3iv0w rule R4) is this demo's
+ * opt-in into the shared [InspectorFlag] wiring: absent, this app is
+ * byte-identical to what it was before the flag existed.
  */
 class ExchangeApp(
     port: Int = 8080,
     private val wire: Wire? = null,
     journalDir: java.io.File? = null,
     private val netName: String? = null,
+    inspector: InspectorFlag.Options? = null,
 ) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
@@ -173,6 +180,29 @@ class ExchangeApp(
 
     private val shell = DemoShell(port)
 
+    /**
+     * The peering bridge's own host, hoisted out of [init] (`demo/tiering`'s
+     * exact shape) so the inspector's hosts map can name it: its cells (the
+     * bridge egress/ingress and the registry mirror) are published on this
+     * registry like any other, and an unrecognised host would otherwise show
+     * up under a generated name.
+     */
+    private val bridgeHost: ManagedHost? = wire?.let { ManagedHost(registry = registry) }
+
+    private val inspectorOptions: InspectorFlag.Options? = inspector
+
+    /**
+     * Opt-in inspector (`--inspect-port`): serves this JVM's live dataflow
+     * graph on its own port; non-null after [start] iff [inspectorOptions]
+     * was given. Hosts: `exchange` (the app host), `exchange-shard-0`/
+     * `exchange-shard-1` (the region-partitioned aggregation shards, CP-E2),
+     * and `exchange-bridge` when peered. Declaring the cross-JVM order-union
+     * chain as a link is shopping's M5-NET pilot precedent, not this task —
+     * follow-up territory (feature design 3iv0w-D2, D3 non-goals).
+     */
+    var inspector: InspectorServer? = null
+        private set
+
     /** The `--listen` listener, kept so [boundWsPort] can report what it actually bound. */
     private var wsListener: WsTransport.WsListener? = null
 
@@ -218,8 +248,7 @@ class ExchangeApp(
         }
 
         if (wire != null) {
-            val bridgeHost = ManagedHost(registry = registry)
-            val side = Peering.Side(registry, bridgeHost, peer = netName?.let { PeerId(it) })
+            val side = Peering.Side(registry, bridgeHost!!, peer = netName?.let { PeerId(it) })
             when (wire) {
                 is Wire.Listen -> wsListener = WsTransport.listen(wire.wsPort, side)
                 is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
@@ -298,23 +327,41 @@ class ExchangeApp(
         """{"board":{$body},"total":$total}"""
     }
 
-    fun start(): ExchangeApp = apply { shell.start() }
+    private fun inspectorHosts(): Map<String, ManagedHost> = buildMap {
+        put("exchange", host)
+        shardHosts.forEachIndexed { i, shardHost -> put("exchange-shard-$i", shardHost) }
+        bridgeHost?.let { put("exchange-bridge", it) }
+    }
 
-    fun stop() = shell.stop()
+    private fun inspectorCellNames(): Map<CellRef, String> = buildMap {
+        put(orderUnion.ref, "orders")
+        shards.forEachIndexed { i, shard -> put(shard.ref, "shard-$i") }
+        put(boardMerge.ref, "board-merge")
+        put(boardCell.ref, "board")
+    }
+
+    fun start(): ExchangeApp = apply {
+        shell.start()
+        inspectorOptions?.let { inspector = it.serve(registry, inspectorHosts(), inspectorCellNames()) }
+    }
+
+    fun stop() {
+        inspector?.stop()
+        shell.stop()
+    }
 }
 
 fun main(args: Array<String>) {
-    val port = demoPort(args)
-    val wire = args.value("--listen")?.let { ExchangeApp.Wire.Listen(it.toInt()) }
-        ?: args.value("--peer")?.let { ExchangeApp.Wire.Dial(it) }
-    val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
-    // V4-PEERID: same flag name and same "absent ⇒ anonymous" rule as
-    // :demo:shopping. Not stripped before [demoPort] — this demo has always
-    // read its port from the first non-`--` argument and documents it first,
-    // exactly as it already does with `--journal`'s value.
-    val netName = args.value("--net-name")?.trim()?.takeUnless { it.isEmpty() }
+    // InspectorFlag.parse first (3iv0w-D2): `rest` has every inspector token
+    // (and, since V4-PEERID, `--net-name`'s pair) already stripped, so demoPort
+    // and the flag reads below never see one of their values.
+    val parsed = InspectorFlag.parse(args)
+    val port = demoPort(parsed.rest)
+    val wire = parsed.rest.value("--listen")?.let { ExchangeApp.Wire.Listen(it.toInt()) }
+        ?: parsed.rest.value("--peer")?.let { ExchangeApp.Wire.Dial(it) }
+    val journalDir = parsed.rest.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
 
-    val app = ExchangeApp(port, wire, journalDir, netName).start()
+    val app = ExchangeApp(port, wire, journalDir, parsed.netName, parsed.options).start()
     println("computenet exchange: http://localhost:${app.boundPort} — region→sum board across two JVM peers")
     // a port this process HOLDS, so a supervising test never has to pick one for it
     // — see [announcePort] (computenet-dqy.25)
@@ -329,6 +376,7 @@ fun main(args: Array<String>) {
         is ExchangeApp.Wire.Dial -> println("  peered with ${wire.uri}")
         null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
     }
+    parsed.options?.let { InspectorFlag.announce(app.inspector!!, it) }
 }
 
 private val PAGE = """
