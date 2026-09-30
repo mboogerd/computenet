@@ -112,6 +112,11 @@ class SeveredDialClosesQuietlyTest {
                         neverWithin(200) { fake.pollHostMessage(50) is HostMessage.Data },
                         "the connection wrote a frame while partitioned",
                     )
+                    // Re-read after the holds: the gated link's LINK_DOWN, sent
+                    // above, has been dispatched by now, so a charge made when it
+                    // was retired shows here (the read before the holds can win
+                    // the race against that dispatch).
+                    assertEquals(0, connection.unadmittedOpens, "the quietly closed dial's LINK_DOWN was charged")
 
                     // ---- heal: one fresh link, admitted ----------------------
                     val healing = Thread({ connection.heal() }, "g1aua-heal").apply { isDaemon = true; start() }
