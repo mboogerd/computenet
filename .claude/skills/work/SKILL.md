@@ -80,7 +80,8 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — removes worktrees of closed beads, when provably safe |
 | `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 15min reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
-| `claim-epic.sh` | `<epic-id>` — claims or takes over an epic and pushes the acquisition |
+| `undefer-unblocked.sh` | `[--dry-run]` — reopens deferred epics whose `undefers:<epic>` blockers all closed |
+| `claim-epic.sh` | `<epic-id>` — claims or takes over an epic and pushes the acquisition; `--release <epic-id>` reopens a dead run's epic unless a live session works beneath it |
 | `claim-item.sh` | `<id>` — claims an item with the session holder token |
 | `ready-in-epic.sh` | `<epic-id> [--ids-only]` — ready work at any depth beneath an epic |
 | `epic-of.sh` | `<bead-id>` — a bead's effective epic, or `(unparented)` |
@@ -190,58 +191,54 @@ Background jobs you start are supervised by nothing: bound each, record it in
 
 ## 3. Sync and claim one epic
 
-```bash
-bd dolt pull   # timeout >= 300s
-```
+`bd dolt pull` (timeout >= 300s). A failed pull stops the session, except the
+conflicts [recovery.md](references/recovery.md) "Dolt pull conflicts" covers. If
+`git hash-object .claude/skills/work/SKILL.md` differs from `git rev-parse
+origin/main:.claude/skills/work/SKILL.md`, read the skill from `origin/main`.
 
-A failed pull stops the session, except the conflicts [recovery.md](references/recovery.md)
-"Dolt pull conflicts" covers. If `git hash-object .claude/skills/work/SKILL.md`
-differs from `git rev-parse origin/main:.claude/skills/work/SKILL.md`, read the
-skill from `origin/main`.
-
-**Release what dead runs left.** Run `sweep-stale-claims.sh`, then list
-`bd list --status=in_progress --assignee="$BEADS_ACTOR" --limit 0 --json` to a
-file and check each non-`skill-friction` row's `metadata.holder` with
-`session-holder.sh --check <token> <updated_at>` (the `updated_at` is what keeps a long-running session off the STALE path):
+**Release what dead runs left.** Run `sweep-stale-claims.sh` and
+`undefer-unblocked.sh`, then list `bd list --status=in_progress
+--assignee="$BEADS_ACTOR" --limit 0 --json` to a file and check each
+non-`skill-friction` row's holder with `session-holder.sh --check <token> <updated_at>`:
 
 | Answer | Do |
 |---|---|
 | MINE / LIVE | leave it |
 | FOREIGN | another machine's run; leave it, report it |
-| DEAD / STALE | an epic → `bd update <id> --status=open --assignee="" --unset-metadata holder`; anything else → leave (tasks are swept; an `in_progress` feature is a resume marker) |
+| DEAD / STALE | an epic → `claim-epic.sh --release <id>`; anything else → leave (tasks are swept; an `in_progress` feature is a resume marker) |
 | UNKNOWN / none | touched within 15 minutes → LIVE, else DEAD; say you fell back |
 
 `<N>`, the sibling count used for capacity, is the number of distinct LIVE
-holder tokens. Then run `reclaim-worktrees.sh` (its SKIPs for LIVE holders are
-expected) and `sweep-merged-prs.sh` — with `--dry-run` first when `<N>` > 0,
-since it does not check holders — each captured to a file with its exit code,
-and report what they did.
+holder tokens. Then run `reclaim-worktrees.sh` (SKIPs for LIVE holders are
+expected) and `sweep-merged-prs.sh` (`--dry-run` first when `<N>` > 0: it does
+not check holders), each captured to a file with its exit code; report both.
 
 **Select the epic** from `bd ready --type=epic --json`: `resumable-epics.sh`
-entries first (in-flight work decays, and nothing else surfaces it) unless their
-in-progress feature's holder is LIVE or FOREIGN, then `bv --robot-triage` order
-if `bv` exists and its export is fresh (CLAUDE.md), then priority. Skip the SDLC
-epic, children of an epic another session holds, and epics with a `needs:<tool>`
-label `have-tool.sh` fails on. Claim with `claim-epic.sh <id>`: exit 0 claimed;
-exit 1 not claimed — read the reason (a body naming open blockers → next
-candidate; all closed → add the missing edges and re-run with
-`CLAIM_BLOCKERS_CHECKED=1`); exit 2 claimed but unpublished → stop and report.
+entries first unless their in-progress feature's holder is LIVE or FOREIGN, then
+`bv --robot-triage` order if `bv` exists and its export is fresh (CLAUDE.md),
+then priority. Skip children of an epic another session holds, and epics with a
+`needs:<tool>` label `have-tool.sh` fails on. `claim-epic.sh <id>` also refuses
+the SDLC epic, a `tracking-umbrella` epic (never claimed or broken down; its
+sub-epics are candidates of their own) and an epic a live session works
+beneath. Exit 0 claimed; 1 not claimed — act on the reason it prints; 2
+claimed but unpublished → stop and report.
 
-**Check workable surface** with `ready-in-epic.sh <epic>`. A `could not resolve
-the epic of <id>` line on stderr means that row was not classified: resolve it
-with `epic-of.sh` first. Empty and nothing resumable:
+**Check workable surface** with `ready-in-epic.sh <epic>`, resolving any row it
+could not classify with `epic-of.sh`. Empty and nothing resumable:
 
-- Every child closed (at least one) → the epic-close gate (5g). Keep its
+- Every child closed (at least one) → the epic-close gate (5g). Keep the
   `owner:` label; `check-dotted-ids.sh` reads it.
-- Children open, none ready → the blocked flag goes stale, so run
-  `verify-ready.sh` on them. Any READY → work it. None → comment why, `bd defer <epic>`.
+- Children open, none ready → `verify-ready.sh` them (the blocked flag goes
+  stale); any READY → work it. None → comment why and `bd defer <epic>`, first
+  labelling each open blocker in another epic `undefers:<epic>` so
+  `undefer-unblocked.sh` reopens it when they close. Human-gated needs no label.
 
 Closing or deferring does not spend your one claim; select again. No children →
-step 4. Nothing claimable → report and stop. A machine missing an epic's
-toolchain labels it `needs:<tool>` and skips it; never a human park, which
-would hide it from machines that can run it. A sub-epic under your epic is
-covered by your claim: break it down (step 4) without claiming it, and push a
-comment saying which session is working it.
+step 4. Nothing claimable → report and stop. A machine lacking an epic's
+toolchain labels it `needs:<tool>` and skips it — never a human park, which
+hides it from machines that can run it. A sub-epic under your epic is covered
+by your claim: break it down (step 4) unclaimed, and push a comment naming the
+session working it.
 
 ## 4. Ensure the epic has features
 
@@ -561,7 +558,7 @@ compute demand fits (else scope it and set `metadata.compute=dedicated`), and
 its 45–60 minute estimate fits the time left. Write acceptance onto a directly
 filed item that lacks it, before dispatch. Acquire like route 3; work a
 non-feature item as in "Direct children". An epic dry only because the rest is
-human-gated or blocked elsewhere → `bd defer` it.
+human-gated or blocked elsewhere → defer it as step 3 does.
 
 ### 5g. Epic-close gate
 

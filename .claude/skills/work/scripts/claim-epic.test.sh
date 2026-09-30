@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "35 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "43 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -25,7 +25,8 @@ case "$1" in
     done
     exit 0 ;;
   show) cat "$CTRL/show.json" ;;
-  list) cat "$CTRL/list.json" 2>/dev/null || echo '[]' ;;
+  list) [ -f "$CTRL/list-fail" ] && { echo "Error: database locked" >&2; exit 1; }
+        cat "$CTRL/list.json" 2>/dev/null || echo '[]' ;;
   dolt)
     case "$2" in
       push)
@@ -363,6 +364,59 @@ out=$("$SCRIPT" computenet-e 2>&1); rc=$?
 { [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
   && ok "a body saying only 'depends on'/'prerequisite'/'only after' still claims" \
   || bad "narrowness: rc=$rc out=$out"
+
+# --- tracking umbrellas and live sessions beneath the epic -------------------
+# An umbrella is never claimed: a claim would serialize its sub-epics.
+fixture
+printf '[{"id":"computenet-e","status":"open","assignee":"","updated_at":"2020-01-01T00:00:00Z","labels":["tracking-umbrella"]}]' > "$CTRL/show.json"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "tracking umbrella" <<<"$out" \
+  && ! grep -qE -- "--claim|dolt push" "$BD_LOG"; } \
+  && ok "a tracking-umbrella epic is refused before any write" \
+  || bad "umbrella: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# A LIVE session holding an in_progress grandchild, however quiet (old
+# updated_at, so the hot-subtree guard cannot see it), refuses the claim.
+desc_rows() { # holder-of-grandchild
+  printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"in_progress","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}},{"id":"computenet-e.3.2","parent":"computenet-e.3","status":"in_progress","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}}]' \
+    "someone-else:99999:Tue Jan  1 00:00:00 2020" "$1" > "$CTRL/list.json"
+}
+fixture; old_show in_progress testbox
+desc_rows "someone-else:$live_pid:$live_start"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "live session works beneath" <<<"$out" && grep -q "computenet-e.3.2" <<<"$out" \
+  && ! grep -qE -- "--claim|dolt push" "$BD_LOG"; } \
+  && ok "a live holder on a quiet descendant refuses the claim, write-free" \
+  || bad "live descendant: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# ...and descendants whose holders are all dead do not.
+fixture; old_show open ""
+desc_rows "someone-else:99999:Tue Jan  1 00:00:00 2020"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "dead descendant holders do not block the claim" \
+  || bad "dead descendants: rc=$rc out=$out"
+
+# --release: step 3's startup release of a dead run's epic.
+fixture; desc_rows "someone-else:$live_pid:$live_start"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^KEPT" <<<"$out" && grep -q "computenet-e.3.2" <<<"$out" \
+  && ! grep -q -- "--status=open" "$BD_LOG"; } \
+  && ok "--release keeps an epic a live session works beneath" \
+  || bad "release kept: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+fixture; desc_rows "someone-else:99999:Tue Jan  1 00:00:00 2020"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "update computenet-e --status=open --assignee= --unset-metadata holder" "$BD_LOG" \
+  && ! grep -qE -- "--claim|dolt push" "$BD_LOG"; } \
+  && ok "--release reopens a dead run's epic, locally" \
+  || bad "release: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+fixture; touch "$CTRL/list-fail"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 3 ] && ! grep -q -- "--status=open" "$BD_LOG"; } \
+  && ok "--release with an unlistable subtree checks and writes nothing (exit 3)" \
+  || bad "release list-fail: rc=$rc out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
