@@ -301,9 +301,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private fun peer(a: TransportHost, b: TransportHost, binding: PeerTransport) {
         val (lower, higher) = if (a.id < b.id) a to b else b to a
         val listener = lower.listener ?: binding.listen(
-            // `localhost:0` selects WsPeerTransport's hardened ephemeral
-            // loopback path (the same endpoint its transport contract covers).
-            binding.parseAddress("ws://localhost:0"),
+            binding.parseAddress("ws://127.0.0.1:0"),
             lower.side,
         ).also { lower.listener = it }
         check(higher.id !in lower.dialers) { "duplicate Concord transport edge ${lower.id}<-${higher.id}" }
