@@ -195,6 +195,42 @@ class ConcordanceTest {
     }
 
     @Test
+    fun `scanDeclarationProvenance flags an id whose only declaration-classified occurrence is a roadmap ticket, not a normative chapter`() {
+        // computenet-x3hqg (residual of computenet-7ei34, clause 1): the
+        // normative chapter only CITES the id mid-sentence (lowercase
+        // continuation, backticked house style) — a citation, not a
+        // declaration — while a 90-roadmap ticket's own citation happens to
+        // be followed by an uppercase acronym (`EARS-GAP`), which the "Known
+        // blind spot" (provenance.md §1) reads as a declaration purely on
+        // case. scanRequirements then attributes the id to the roadmap file
+        // via firstDeclaration, and neither idsWithNoDeclaration (an id IS
+        // declared, just not normatively) nor idsWithMultipleNormativeDeclarations
+        // (no normative chapter declares it at all) caught this before.
+        val spec = specDir()
+        writeSpecChapter(
+            File(spec, "10-programming-model").apply { mkdirs() },
+            "13-fake.md",
+            """
+            A `[13-FAKE-09]` link admission check runs before the topology mutates.
+            """.trimIndent(),
+        )
+        writeSpecChapter(
+            File(spec, "90-roadmap").apply { mkdirs() },
+            "91-ticket.md",
+            """
+            Still open: the `[13-FAKE-09]` EARS-GAP self-doubt about admission ordering.
+            """.trimIndent(),
+        )
+
+        val provenance = ConcordanceScanner.scanDeclarationProvenance(spec)
+
+        provenance.idsWithNoDeclaration shouldHaveSize 0
+        provenance.idsWithMultipleNormativeDeclarations.size shouldBe 0
+        provenance.idsWithOnlyNonNormativeDeclaration shouldBe
+            mapOf("13-FAKE-09" to listOf("90-roadmap/91-ticket.md"))
+    }
+
+    @Test
     fun `scanDeclarationProvenance does not count a roadmap ticket's declaration towards multiplicity`() {
         // Ticket clause 3's shape: one normative chapter declares the id, and
         // a 90-roadmap ticket ALSO reads as a declaration (e.g. a
@@ -259,6 +295,25 @@ class ConcordanceTest {
         ownershipNotes.single().message shouldContain "22-FAKE-01"
         ownershipNotes.single().message shouldContain "20-dataflow-semantics/22-fake.md"
         ownershipNotes.single().message shouldContain "20-dataflow-semantics/24-fake.md"
+    }
+
+    @Test
+    fun `buildConcordance reports a roadmap-owned-declaration note for an id declared only outside a normative chapter`() {
+        val requirements = listOf(ConcordanceScanner.Requirement("13-FAKE-09", "90-roadmap/91-ticket.md"))
+        val provenance = ConcordanceScanner.DeclarationProvenance(
+            idsWithNoDeclaration = emptySet(),
+            idsWithMultipleNormativeDeclarations = emptyMap(),
+            idsWithOnlyNonNormativeDeclaration = mapOf("13-FAKE-09" to listOf("90-roadmap/91-ticket.md")),
+        )
+
+        val report = buildConcordance(requirements, emptyList(), provenance)
+
+        val ownershipNotes = report.noteFindings.filter { it.message.contains("Roadmap-owned declaration") }
+        ownershipNotes shouldHaveSize 1
+        ownershipNotes.single().message shouldContain "13-FAKE-09"
+        ownershipNotes.single().message shouldContain "90-roadmap/91-ticket.md"
+        // Distinct from Unestablished ownership: this id IS declared somewhere.
+        report.noteFindings.none { it.message.contains("Unestablished ownership") } shouldBe true
     }
 
     @Test
