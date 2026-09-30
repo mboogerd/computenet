@@ -26,6 +26,9 @@ dependencies {
     // (SerializersModule) contribution; kernel's own kotlinx-serialization
     // dependency is `implementation`-scoped and not exposed transitively.
     testImplementation(libs.kotlinx.serialization)
+    // computenet-gyvli.3: WsPeerTransportContractTest subclasses the seam's
+    // executable contract, civictech.testkit.PeerTransportContract.
+    testImplementation(project(":testkit"))
 }
 
 // The burst/stress probes read `wire.burst.*` and `wire.stress.*` from the JVM
