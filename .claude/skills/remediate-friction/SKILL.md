@@ -33,6 +33,7 @@ echo "${BEADS_ACTOR:?}"
 M=$(git worktree list --porcelain | sed -n '1s/^worktree //p')   # the main checkout
 [ "$(bd where | head -1)" = "$M/.beads" ] || { echo "bd resolves to $(bd where | head -1), not $M/.beads — cd $M and run every bd call there"; exit 1; }
 git fetch origin main; bd dolt pull
+.claude/skills/work/scripts/sweep-merged-prs.sh   # closes items whose metadata.pr merged
 .claude/skills/remediate-friction/scripts/recurrence-audit.py   # landed fixes that did not take
 bd list --parent=computenet-wpvy --all --json | sed -n '/^[[{]/,/^[]}]/p' \
   | jq '[(if type=="array" then . else (.issues // []) end)[] | select(.status != "closed")]'
@@ -118,9 +119,8 @@ one revision PR open at a time.
      through the new text and reports where it gets stuck.
 
    Fix what they find.
-4. **One draft PR.** Its description lists each queued item and its outcome.
-   It stays a draft for a human to approve: park that question per
-   `recovery.md` "Parks" so a person sees it. Close the items when it merges.
+4. **One draft PR** listing each queued item and its outcome, left a draft for
+   a human (park per `recovery.md` "Parks"). Link items and park item, exit 0: `.claude/skills/remediate-friction/scripts/open-revision-pr.sh <pr> --section '<file>#<heading>' <park-id>`.
 
 ## 5. Gates
 
