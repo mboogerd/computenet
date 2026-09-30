@@ -8,5 +8,6 @@ command -v "$t" >/dev/null 2>&1 || exit 1
 case "$t" in
   docker)  docker info >/dev/null 2>&1 ;;
   gh)      gh auth status >/dev/null 2>&1 ;;
+  codex)   codex login status >/dev/null 2>&1 ;;
   *)       exit 0 ;;
 esac
