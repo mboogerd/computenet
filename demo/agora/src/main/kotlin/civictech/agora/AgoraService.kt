@@ -40,7 +40,8 @@ class AgoraService(
      * ops append here; on construction an existing log replays, rebuilding
      * every cell under its recorded CellRef — replay-stable identity, so the
      * host journal's data frames land on the same cells afterwards
-     * (rebuild → `host.recoverFrom(journal)` → `host.checkpoint(journal)`).
+     * (rebuild → `host.recoverFrom(journal).awaitApplied(…)` →
+     * `host.checkpoint(journal)`).
      */
     private val structureLog: java.io.File? = null,
     onCredence: (CellRef, Double) -> Unit = { _, _ -> },

@@ -1,6 +1,6 @@
 # 53 — Deployment as Evolution
 
-> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`. The full swap transaction, contract-granular effect suppression, state-transform tiers, and `PromotionPolicy` are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-11/I-17/I-21/I-27), unimplemented.
+> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`; the full four-phase swap transaction, `PromotionPolicy`, and contract-granular effect suppression (`Shadow.suppressEffectContracts` NoOp-serves every `@Contract(effect = true)` fan-in inlet) are also implemented (`Evolution.kt:78,90-95`, `PromotionPolicy.kt`). State-transform tiers and the state-transform contract are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-21/I-27), unimplemented; I-17's remaining residue — protocol-capability-gated downstream taps, SCC-closed cuts, glitch-consistent judgment, and a shadow-specific promotion policy — is still open (93 §I-17, landed-state PARTIAL).
 > **Sources**: ADR — Cellular Software Development Process (deployment model, versioning), ADR 0 (§7)
 > **Implementation**: `civictech.cell.evolve` (`Shadow`, `Promotion`, `StateMigrating`, `Effectful`); `ShadowPromotionTest`
 
@@ -96,7 +96,7 @@ is only known at runtime — and rollback is journal reversal. Two
 graphs-as-data forms, two jobs: GraphSpec = what topology; the journal =
 what was done.
 
-## The promotion swap (decided in 93 I-11, unimplemented)
+## The promotion swap (decided in 93 I-11, implemented)
 
 Promotion/rollback is a **local, membrane-scoped, pre-validated two-phase
 swap transaction with a non-vetoing commit and a retained incumbent** — pure

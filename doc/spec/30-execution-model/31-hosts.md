@@ -86,8 +86,10 @@ handler (computenet-hknt0); `recoverFrom` (after the graph is rebuilt) restores
 the checkpoint and replays the tail through the ordinary decode path. Replay
 only stages frames, so `recoverFrom` returns a `Recovery` handle whose
 `awaitApplied` fences on delivery of the replayed tail and of every same-host
-frame that delivery cascades into. Durability is a hosting decision, not a cell
-concern (24).
+frame that delivery cascades into, for a host with no attention parking
+(`AttentionPolicy.suspendAfter == null`, the default); parked traffic waits
+off-queue, outside this fence — see the `cell.host.Quiescence` KDoc for its
+limits. Durability is a hosting decision, not a cell concern (24).
 
 *Cross-build replay* is a supported path — a journal on disk outlives the
 process that wrote it, so crash-restart across a build upgrade is a real
