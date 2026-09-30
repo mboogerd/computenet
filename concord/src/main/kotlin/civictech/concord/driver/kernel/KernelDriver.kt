@@ -14,6 +14,7 @@ import civictech.cell.observe.ObservationSink
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.LocationRegistry
+import civictech.cell.link.Interest
 import civictech.cell.link.PeerId
 import civictech.cell.Propagate
 import civictech.cell.port.FanOutlet
@@ -81,6 +82,8 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     /** Separate registries exist only in transport mode; the default always returns [registry]. */
     private val registriesByHost = LinkedHashMap<HostId, LocationRegistry>()
     private val registriesByManagedHost = IdentityHashMap<ManagedHost, LocationRegistry>()
+    /** Scenario-declared routing policy is control-plane configuration shared by every peer. */
+    private val interestsByRef = LinkedHashMap<CellRef, Interest>()
 
     /**
      * One listener per host that is the lower endpoint of at least one mesh
@@ -208,7 +211,31 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
 
     /** Host-id resolver shared with the durability capability. */
     private fun registryFor(hostId: HostId): LocationRegistry =
-        if (transport == null) registry else registriesByHost.getOrPut(hostId) { LocationRegistry() }
+        if (transport == null) {
+            registry
+        } else {
+            registriesByHost.getOrPut(hostId) {
+                LocationRegistry().also { created ->
+                    interestsByRef.forEach(created::setInterest)
+                }
+            }
+        }
+
+    /**
+     * Publish scenario configuration to every peer registry before replication
+     * links are evaluated. Interest is not cell traffic: it is the harness's
+     * shared control-plane declaration, equivalent to configuring every process
+     * before a distributed run starts. Remembering it also initializes a host
+     * that is introduced later in the scenario.
+     */
+    internal fun setInterest(ref: CellRef, interest: Interest) {
+        interestsByRef[ref] = interest
+        if (transport == null) {
+            registry.setInterest(ref, interest)
+        } else {
+            registriesByHost.values.forEach { it.setInterest(ref, interest) }
+        }
+    }
 
     /** Build one side and peer it with every side already present. */
     private fun transportHostFor(hostId: HostId): TransportHost =
@@ -235,7 +262,32 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
             lower.side,
         ).also { lower.listener = it }
         check(higher.id !in lower.dialers) { "duplicate Concord transport edge ${lower.id}<-${higher.id}" }
-        lower.dialers[higher.id] = binding.dial(listener.boundAddress, higher.side)
+        lower.dialers[higher.id] = dialWithCarryTimeoutRetry(binding, listener, higher)
+    }
+
+    /**
+     * A loopback WebSocket listener is already bound when [PeerTransport.listen]
+     * returns, but the asynchronous handshake can still lose a scheduling race
+     * under repeated multi-host corpus meshes. Retry only that bounded carry
+     * timeout; parsing, protocol, and other transport failures remain immediate.
+     */
+    private fun dialWithCarryTimeoutRetry(
+        binding: PeerTransport,
+        listener: PeerListener,
+        higher: TransportHost,
+    ): PeerConnection {
+        try {
+            return binding.dial(listener.boundAddress, higher.side)
+        } catch (first: IllegalStateException) {
+            if (first.message?.contains("did not carry within") != true) throw first
+            Thread.sleep(TRANSPORT_DIAL_RETRY_MILLIS)
+            return try {
+                binding.dial(listener.boundAddress, higher.side)
+            } catch (second: IllegalStateException) {
+                second.addSuppressed(first)
+                throw second
+            }
+        }
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
@@ -798,6 +850,7 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */
         const val READ_STEP_BUDGET = 100_000
+        const val TRANSPORT_DIAL_RETRY_MILLIS = 10L
         const val TRANSPORT_POLL_MILLIS = 2L
         const val TRANSPORT_QUIESCE_TIMEOUT_NANOS = 10_000_000_000L
     }

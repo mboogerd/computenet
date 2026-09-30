@@ -185,8 +185,9 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      *
      * [interest] (42-INTEREST-01, resolving the schema-gap in DISPUTES.md) is the
      * scenario's `interest:` descriptor, still in its neutral [Value] form; parsed
-     * by [parseInterest] and staged on the shared [LocationRegistry][civictech.cell.host.LocationRegistry]
-     * via `setInterest` **before** [Replication.replicate] — the gossip linker
+     * by [parseInterest] and staged on every peer's
+     * [LocationRegistry][civictech.cell.host.LocationRegistry] via
+     * [KernelDriver.setInterest] **before** [Replication.replicate] — the gossip linker
      * ([civictech.cell.replication.Replication.maybeLink]) consults the interest
      * at link time, so it must already be recorded when `replicate` wires this
      * replica to its peers (`InterestScopedGossipTest`'s own `Mesh.start` does the
@@ -225,7 +226,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
 
         // 42-INTEREST-01: stage the interest assignment BEFORE replicate — the
         // linker reads it at link time, so it must be recorded first.
-        parseInterest(interest)?.let { driver.registryOf(host).setInterest(replica.ref, it) }
+        parseInterest(interest)?.let { driver.setInterest(replica.ref, it) }
         // `replicate` spawns the replica on the host and wires the gossip mesh to
         // every peer already published under this logical id (and, via onPublish,
         // every peer that joins later).
