@@ -506,6 +506,9 @@ Authoritative:
 - `doc/spec/90-roadmap/96-incremental-engines-plan.md` — proposed forward queue
   (E1–E6, unstarted).
 - `doc/spec/CONCORDANCE.md` — generated; regenerate, never hand-edit.
+- `doc/FEATURE-STATUS.md` — generated feature × demo adoption matrix;
+  regenerate with `scripts/adoption-matrix/adoption_matrix.py`, never
+  hand-edit (CI fails on a stale copy).
 - `concord/schema/*.md` + `concord/corpus/DISPUTES.md` — scenario-authoring
   contracts and the dispute ledger.
 - `doc/demo-findings.md` — living register of demo-discovered kernel gaps.
@@ -515,7 +518,6 @@ Authoritative:
 - `backlog/` — idea inbox (some files marked IMPLEMENTED/absorbed).
 
 Snapshots and partly-executed plans (read with their dates in mind):
-`doc/FEATURE-STATUS.md` (shipped-vs-claimed survey, 2026-07-25),
 `doc/CONCORD-PLAN.md` (§1–§2 still the concord reference; milestones are
 history; W5 deferred), `doc/ksp-dx-catalog.md` (per-phase annotations
 authoritative; phase 5 not landed).
