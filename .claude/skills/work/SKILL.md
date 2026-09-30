@@ -120,6 +120,23 @@ Also: `slot-elapsed.sh <scratch-dir>`, `verify-ready.sh <id>...`,
 | [pre-dispatch.md](references/pre-dispatch.md) | you, step 5b: making each bead true before dispatch |
 | [friction.md](references/friction.md) | you, step 7: searching, commenting and filing friction |
 
+## Models
+
+Implementation runs on Codex, and every review runs on the other provider at
+least as strong as the author. You are `sonnet`, set by the routine that
+starts you.
+
+| Role | Model |
+|---|---|
+| Breakdown, epic and feature | `fable` |
+| Implementer | the task's `metadata.model`: `luna` or `sol` (Codex, 5b); `sonnet` when Codex is unavailable. A legacy `opus` stamp → `sol` |
+| Task reviewer | `luna`/`sol` task → `opus`; `sonnet` task → `sol` |
+| Second reader | `sol` for an Opus reviewer's repairs, `opus` for a Sol reviewer's |
+| Feature reviewer, epic-close gate | `opus` |
+
+Codex is unavailable when `have-tool.sh codex` fails or a run exits on quota:
+restamp the task `sonnet`, comment why, dispatch through `Agent`.
+
 ## 1. Identity
 
 ```bash
@@ -160,11 +177,11 @@ you did not compute that turn.
 | T-45m | dispatch only reviewers for finished work; merge and ship what is in flight |
 | EXPIRED | step 6 now |
 
-A persistent `Monitor` echoing at those points is optional; if armed, `TaskStop`
-it in step 6. Settle once now whether `SendMessage` exists (your tool list, then
-`ToolSearch "select:SendMessage"`); without it, continuing an agent is a fresh
-dispatch framed as a resume ([recovery.md](references/recovery.md), "Stalled
-agents and load"). A `status=stopped` notification from the previous session
+With agents live, arm the one-shot `Monitor` (`sleep <s>; echo wake`) the clock's
+`wake:` line prints; `TaskStop` it in step 6. Settle once whether `SendMessage` exists
+(tool list, then `ToolSearch "select:SendMessage"`); without it, continuing an agent is
+a stop plus a fresh dispatch framed as a resume ([recovery.md](references/recovery.md),
+"Stalled agents and load"). A `status=stopped` notification from the previous session
 means the host died: read recovery.md, "Resuming after the host died", first.
 
 Background jobs you start are supervised by nothing: bound each, record it in
@@ -214,8 +231,8 @@ candidate; all closed → add the missing edges and re-run with
 the epic of <id>` line on stderr means that row was not classified: resolve it
 with `epic-of.sh` first. Empty and nothing resumable:
 
-- Every child closed (at least one) → `bd close <epic>`. Keep its `owner:`
-  label; `check-dotted-ids.sh` reads it.
+- Every child closed (at least one) → the epic-close gate (5g). Keep its
+  `owner:` label; `check-dotted-ids.sh` reads it.
 - Children open, none ready → the blocked flag goes stale, so run
   `verify-ready.sh` on them. Any READY → work it. None → comment why, `bd defer <epic>`.
 
@@ -235,13 +252,13 @@ filed twice: one twin closed soon after creation with no comments → trust the
 survivor; otherwise treat it as a collision ([recovery.md](references/recovery.md), "Collisions").
 
 Before dispatching, run `breakdown-marker.sh acquire <epic>` (timeout >= 300s;
-it pushes). Exit 0 → dispatch below with the printed `TOKEN`; 11 (FOREIGN) →
-already broken down elsewhere: list children again and continue at step 5, or
-park per "Still no children" below if that listing is empty; 12 (BOTH) → run
-`breakdown-marker.sh survivor <epic>` (exit 1: losers listed, not a failure; 0:
-nothing to adjudicate), route its `CLOSE` list per recovery.md "Collisions",
-then continue as for 11; 2 → unpublished acquisition, stop and report; 3 from
-either → treat it as 2.
+it pushes). Exit 0 → read capacity, bound the agent (5b) and dispatch below with
+the printed `TOKEN`; 11 (FOREIGN) → already broken down elsewhere: list children
+again and continue at step 5, or park per "Still no children" below if that
+listing is empty; 12 (BOTH) → run `breakdown-marker.sh survivor <epic>` (exit 1:
+losers listed, not a failure; 0: nothing to adjudicate), route its `CLOSE` list
+per recovery.md "Collisions", then continue as for 11; 2 → unpublished
+acquisition, stop and report; 3 from either → treat it as 2.
 
 ```
 Agent({
@@ -291,14 +308,11 @@ the branch and worktree it prints for everything below:
 .claude/skills/work/scripts/verify-branch-sync.sh <worktree> <branch>
 ```
 
-With `metadata.base_branch` set, base on `origin/<that branch>`; the PR targets
-it too — but **validate the field before you use it**, from `verify-ready.sh`'s
-`STALE-BASE`/`LIVE-BASE` note or by hand. It is a timestamped snapshot, not
-standing metadata: a review-filed residual names the branch under review, which
-is normally about to merge, so the field is routinely stale within minutes. A
-merged branch's ref still exists on origin, so trusting it fails silently —
-you get a plausible worktree cut from spent code — rather than loudly. `STALE-BASE`
-→ clear the field, cut from `origin/main`, say so on the bead. Verdicts: `OK-*` → proceed; `SQUASH-LEFTOVER` → use a new branch name
+With `metadata.base_branch` set, base on `origin/<that branch>` and target the
+PR at it — after `verify-ready.sh`'s `STALE-BASE`/`LIVE-BASE` note: the field is
+a snapshot, usually stale within minutes, and a merged branch's ref survives on
+origin, so trusting it silently cuts from spent code. `STALE-BASE` → clear the
+field, cut from `origin/main`, say so on the bead. Verdicts: `OK-*` → proceed; `SQUASH-LEFTOVER` → use a new branch name
 recorded in `metadata.branch`, or delete the dead remote ref, and say which;
 `STOP-UNMERGED` → stop; `STOP-UNREACHABLE` → nothing was checked.
 
@@ -329,13 +343,16 @@ unit holds. An entry whose work is already committed or merged into the feature
 is finished: confirm it and send it to 5c, not to a second implementer. With
 `merged_into_feature_suppressed` true, `bd dolt pull` and re-read its
 `comment_count`: non-zero means another machine merged it → 5c. No `model` → use
-`sonnet` and stamp it.
+`luna` and stamp it.
 
-**Capacity.** Read `next-batch.py --capacity --siblings <N>` before every
-dispatch, reviewers included, and follow its advice. At most one live agent runs
-the repo-wide `./gradlew test`; the others scope their gate to touched modules.
-Go under the cap when results depend on wall-clock waits. Agents dying with no
-side effects → [recovery.md](references/recovery.md), "Stalled agents and load".
+**Capacity.** Before every `Agent` dispatch in this skill, breakdowns and reviewers
+included, read `next-batch.py --capacity --siblings <N>` and follow its advice. Then
+bound the agent with `echo "$(date -u +%s) <minutes>" > <scratch>/dispatched-<id>`,
+deleted on its notification: 30 for a one-file fix or a task review, 20 for a probe,
+else 60. At most one live agent runs the repo-wide `./gradlew test`; the others scope
+their gate to touched modules. Go under the cap when results depend on wall-clock
+waits. Agents `slot-elapsed.sh` flags OVER, or dying with no side effects →
+[recovery.md](references/recovery.md), "Stalled agents and load".
 
 **Make each bead true before dispatch** — reviewers score its text and the
 implementer builds on it literally. Run [pre-dispatch.md](references/pre-dispatch.md)'s
@@ -378,6 +395,21 @@ You may commit on your task branch; do not push, merge, rebase or switch branche
 })
 ```
 
+`sonnet` goes through that `Agent` call. `luna`/`sol` — and any Sol reviewer —
+run the same prompt, plus "You run under Codex: read agent.md "Under Codex";
+your scratch root is <scratch>", written to `<scratch>/<id>.prompt`, as a Bash
+call with `run_in_background: true` (its exit is the completion notification).
+It must start with `codex exec`, which the permission rule allows:
+
+```bash
+codex exec -C <task-worktree> --ephemeral -s workspace-write -c sandbox_workspace_write.network_access=true --add-dir <main-checkout>/.git --add-dir <main-checkout>/.beads --add-dir ~/.gradle --add-dir <scratch> -m gpt-5.6-<luna|sol> -c 'model_reasoning_effort="xhigh"' -o <scratch>/<id>.last.md - < <scratch>/<id>.prompt > <scratch>/<id>.log 2>&1
+```
+
+Its report is `<scratch>/<id>.last.md`; `<id>.log` is the transcript and stays
+unread. Proven 2026-09-29 under that sandbox: commits in a worktree, `bd` reads,
+network, and a KSP build with tests. Continuing a Codex agent is a fresh
+dispatch framed as a resume.
+
 **While agents run**, read progress only from notifications, bead comments, and
 `git log`/`status` in their worktrees. At each notification, read the comments of
 every live implementer: a report that its claim is too narrow → widen it if the
@@ -390,13 +422,14 @@ feature; DONE → 5c.
 
 ### 5c. Review and merge each task
 
-One reviewer per completed task, at the task's model, never its author; they
-count against capacity.
+One reviewer per completed task, per "Models", never its author; they count
+against capacity and are bounded (5b). Stamp `reviewer_model=<model>` on the
+task first — the retrospective compares pairings.
 
 ```
 Agent({
   description: "Review task <task-id>",
-  model: "<metadata.model>",
+  model: "<per Models>",
   run_in_background: true,
   prompt: `You are the task reviewer for beads task <task-id>.
 Worktree <task-worktree>, branch task/<task-id>, feature branch <feature-branch> (on origin).
@@ -455,7 +488,7 @@ git -C <feature-worktree> log --oneline $(git -C <feature-worktree> merge-base H
 gh pr list --state open --json number,headRefName,isDraft
 ```
 
-Read capacity, then:
+Read capacity and bound the agent (5b), then:
 
 ```
 Agent({
@@ -530,6 +563,17 @@ filed item that lacks it, before dispatch. Acquire like route 3; work a
 non-feature item as in "Direct children". An epic dry only because the rest is
 human-gated or blocked elsewhere → `bd defer` it.
 
+### 5g. Epic-close gate
+
+Every child closed is not the epic done: a clause no feature owned was never
+built. Dispatch at `opus`, from the main checkout, with the step 4 template's
+worktree and Read-tool lines, and this prompt: "You are the epic-close gate for
+<epic-id>; it is claimed for you, do not claim or close it. Judge against
+origin/main at <sha>. Read agent.md, then review.md "Epic-close gate". Prior
+gate: <metadata.epic_gate, or none>." CLOSE → `bd close <epic>`. GAPS → work
+the children it filed (step 5). A park under `REQUIRED ORCHESTRATOR ACTION` →
+park the epic per recovery.md "Parks". No token → continue the agent.
+
 ### Direct children (no feature layer)
 
 When the epic's ready rows are bugs, tasks or chores, work each as its own unit:
@@ -556,11 +600,13 @@ Never work an item whose effective epic is `computenet-wpvy` or that carries the
 Ending abnormally: release the epic if work remains (item 1), then
 `publish-beads.sh`, then what time allows. Certified and green → ship.
 Uncertified → leave in draft; push what is committed. Running agents → do not
-wait; the next session resumes them. Report the main checkout's HEAD against
-`<scratch>/step1-head` if it moved.
+wait: `TaskStop` each that `slot-elapsed.sh` flags OVER, commenting "hung past bound",
+its worktree and last sha on its bead; the next session resumes the rest. Report
+the main checkout's HEAD against `<scratch>/step1-head` if it moved.
 
 1. **Epic:** closed by someone else → leave it. All children closed (at least
-   one) → close it. Either way keep the `owner:` label. Work remains →
+   one) → 5g if time allows, else release it for the next session's gate. Keep
+   the `owner:` label. Work remains →
    `bd update <epic> --status=open --assignee="" --unset-metadata holder`.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
 3. **Friction:** step 7. Then the **retro record**, always, even for an empty

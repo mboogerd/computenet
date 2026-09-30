@@ -124,6 +124,37 @@ class StampedWireCompatTest {
         decoded.delta shouldBe 42L
     }
 
+    /**
+     * computenet-7zssw (MEM1-52) adds `Stamped.writer` by the identical
+     * argument: fourth positional parameter, `null` default, `encodeDefaults`
+     * off. The SAME two pre-`baseline` golden fixtures therefore still decode,
+     * and today's encoding of a `writer = null` unit still reproduces them
+     * byte-for-byte — so `writer` is additive against a payload minted before
+     * either field existed, not merely against the previous release.
+     */
+    @Test
+    fun `a null writer adds zero bytes and a pre-writer Stamped decodes with writer null`() {
+        decodeStamped(goldenLong).writer shouldBe null
+        decodeStamped(goldenSetDelta).writer shouldBe null
+
+        WireCodec.encode(frame(Stamped(3L, 42L, baseline = false, writer = null))).decodeToString() shouldBe
+            goldenLong.decodeToString()
+        WireCodec.encode(frame(Stamped(0L, setDeltaPayload, baseline = false, writer = null))).decodeToString() shouldBe
+            goldenSetDelta.decodeToString()
+    }
+
+    @Test
+    fun `a writer round-trips and is distinguishable from the golden`() {
+        val encoded = WireCodec.encode(frame(Stamped(3L, 42L, writer = 7L)))
+        encoded.decodeToString() shouldNotBe goldenLong.decodeToString()
+
+        val decoded = decodeStamped(encoded)
+        decoded shouldBe Stamped(3L, 42L, writer = 7L)
+        decoded.writer shouldBe 7L
+        decoded.baseline shouldBe false
+        decoded.epoch shouldBe 3L
+    }
+
     @Test
     fun `the wire version is unchanged by this additive field`() {
         WireCodec.VERSION shouldBe 2

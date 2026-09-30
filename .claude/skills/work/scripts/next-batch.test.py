@@ -653,6 +653,14 @@ if ("HOST load" not in (host or "")
     failed += 1
     print(f"FAIL: 5x load with no build of ours must say do-not-idle plus the "
           f"two-deaths stopping rule, got {host!r}")
+# ...and nothing in it may release the hold on a load1 threshold: agents died
+# of the watchdog at 1.4x cores, below the old "until load1 < 2x cores" release,
+# so that number was satisfied at the moment of death (computenet-g27uz).
+if "load1 <" in (host or "") or "PROBE" not in (host or "") \
+   or "never a load1 reading" not in (host or ""):
+    failed += 1
+    print(f"FAIL: the host-load stopping rule must release on a probe that "
+          f"reports, not a load1 threshold, got {host!r}")
 # ...and the stop must stay CONDITIONAL: an unconditional hold here is the
 # indefinite idle 91xn measured. The word "NOTHING" must not appear before the
 # rule that gates it.

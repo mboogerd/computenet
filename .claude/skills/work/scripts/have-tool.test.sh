@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for have-tool.sh. Stubs the probed tools on PATH so the cases run the
-# same on a box with or without docker/gh. Expect "6 passed, 0 failed".
+# same on a box with or without docker/gh/codex. Expect "8 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/have-tool.sh"}
@@ -39,6 +39,12 @@ stub gh '[ "$1 $2" = "auth status" ] && exit 1; exit 0'
 check gh 1 "gh binary without auth fails"
 stub gh '[ "$1 $2" = "auth status" ] && exit 0; exit 1'
 check gh 0 "authenticated gh passes"
+
+# 7-8. codex: login is the probe — /work routes implementers away from it without one
+stub codex '[ "$1 $2" = "login status" ] && exit 1; exit 0'
+check codex 1 "codex binary without a login fails"
+stub codex '[ "$1 $2" = "login status" ] && exit 0; exit 1'
+check codex 0 "logged-in codex passes"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
