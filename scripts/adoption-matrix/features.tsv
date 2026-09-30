@@ -1,0 +1,46 @@
+# Feature table for scripts/adoption-matrix/adoption_matrix.py.
+#
+# Columns (tab-separated): id  label  headline  patterns
+#   id        stable slug, used in evidence lines and as the row key.
+#   label     human-readable feature name for the Markdown table.
+#   headline  "yes" for the 15 features named in the umbrella epic
+#             computenet-81ocs's acceptance criteria; "no" for extras
+#             pulled from doc/integration/2026-09-29/06-demo-matrix.md
+#             ("report 06") that are useful context but not part of the
+#             umbrella's own acceptance.
+#   patterns  '|'-separated list of pattern tokens, each either:
+#               import:<prefix>   matches a stripped-comment line
+#                                 "^import <prefix>" (prefix with a
+#                                 trailing '.' means "this package or
+#                                 below"; no trailing dot means an exact
+#                                 symbol or a longer name with that prefix)
+#               regex:<python re> re.search against each stripped line
+#
+# Detection runs over demo/<name>/src/main/**/*.kt only (never src/test),
+# after stripping // line comments and /* */ block comments. A cell is
+# USED when any pattern of the row matches any main file of the demo.
+#
+# Not measured here (no import-detectable surface / postponed by the
+# umbrella): mobility, membranes. See adoption_matrix.py's generated
+# header for the full imprecision note.
+id	label	headline	patterns
+typed-links	Typed ports / explicit links	yes	import:civictech.cell.port.|import:civictech.cell.link.|import:civictech.cell.graph.
+delta-operators	Deltas & data-cell operators	yes	import:civictech.cell.data.
+glitch-free-observe	Glitch-free observation	yes	import:civictech.cell.observe.|import:civictech.cell.consistency.
+interest	Interest-driven execution	yes	import:civictech.cell.link.Interest
+owned-leased	Owned / Leased payloads	yes	import:civictech.cell.Owned|import:civictech.cell.Leased|regex:\bOwned<|regex:\bLeased<
+partitioning	Partitioning	yes	import:civictech.cell.partition.
+durability	Durability / recovery	yes	import:civictech.cell.durability.|regex:\bhostJournal\b
+replication	Replication	yes	import:civictech.cell.replication.
+wire	Wire transport (ws / iroh)	yes	import:civictech.wire.|import:civictech.iroh.|import:civictech.cell.wire.Peering
+identity	Identity / authority	yes	import:civictech.identity.|import:civictech.cell.membrane.BoundaryPolicy
+invariants	Invariants / verify	yes	import:civictech.cell.verify.
+evolution	Evolution / promotion	yes	import:civictech.cell.evolve.
+budgets	Budgets	yes	import:civictech.economy.|import:civictech.cell.Budget
+inspector	Inspector	yes	import:civictech.inspect.
+demograph	Demograph	yes	import:civictech.demograph.
+gen-cells	Generated @Contract/@CellBase cells	no	import:civictech.gen.wire.CellBase|regex:@Contract\b|regex:@CellBase\b
+hosts	Hosted execution (ManagedHost)	no	import:civictech.cell.host.ManagedHost
+colors	Colors (Blocking/Suspending)	no	regex:\bBlockingCell\b|regex:\bSuspendingCell\b
+time-travel	Time-travel	no	import:civictech.timetravel.
+query	Query / Datalog	no	import:civictech.query.
