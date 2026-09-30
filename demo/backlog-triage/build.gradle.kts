@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":kernel"))
     implementation(libs.kotlinx.serialization)
     implementation(project(":demo:shell"))
+    implementation(project(":inspect")) // computenet-3iv0w.5: the shared `--inspect-port` opt-in (InspectorFlag)
 
     testImplementation(project(":testkit"))
     // computenet-cab.7.9 ([QRY1-ORA-10]): backlog-triage's mean-lane relational core expressed

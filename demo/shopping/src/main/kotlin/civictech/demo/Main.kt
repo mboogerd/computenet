@@ -27,8 +27,8 @@ import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
-import civictech.inspect.edit.Capability
-import civictech.inspect.edit.KernelEntries
+import civictech.inspect.InspectorFlag
+import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.edit.WritePlane
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
@@ -446,20 +446,18 @@ class DemoApp(
      * discovery protocol), so they can be both named and declared here before
      * the peer has ever connected.
      *
-     * [writePlane] is [WritePlane.Disabled] by default (`[WKB2-06]`): the write
-     * plane is a per-process opt-in, decided by `main`'s `--inspect-write`
-     * flag, never by this method's own defaults changing. WKB2 F12 (va0c4-D10):
-     * an [WritePlane.Enabled] plane also populates the named-factory catalogue
-     * ([KernelEntries.register]) before the server starts — the palette is
-     * part of the opt-in, not of the read-only instrument, so a disabled
-     * plane leaves the catalogue exactly as it found it.
+     * [options].[writePlane][InspectorFlag.Options.writePlane] is [WritePlane.Disabled]
+     * by default (`[WKB2-06]`): the write plane is a per-process opt-in, decided by
+     * `main`'s `--inspect-write` flag via [InspectorFlag.parse], never by this
+     * method's own defaults changing. WKB2 F12 (va0c4-D10): an [WritePlane.Enabled]
+     * plane also populates the named-factory catalogue before the server starts
+     * (`InspectorFlag.Options.serve`) — the palette is part of the opt-in, not of
+     * the read-only instrument, so a disabled plane leaves the catalogue exactly
+     * as it found it.
      */
     fun startInspector(
-        inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
-        netName: String = this.netName ?: "local",
-        writePlane: WritePlane = WritePlane.Disabled,
+        options: InspectorFlag.Options = InspectorFlag.Options(port = civictech.inspect.InspectorServer.DEFAULT_PORT),
     ): civictech.inspect.InspectorServer {
-        if (writePlane is WritePlane.Enabled) KernelEntries.register()
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
         val peerShared = CellRef(SHARED_ID, sharedInstance(peerRole))
@@ -490,14 +488,7 @@ class DemoApp(
             put("shopping", host)
             bridgeHost?.let { put("shopping-bridge", it) }
         }
-        val started = civictech.inspect.InspectorServer(
-            registry = registry,
-            hosts = hosts,
-            port = inspectPort,
-            cellNames = names,
-            netName = netName,
-            writePlane = writePlane,
-        ).nameGraph(itemsUnion.ref, "shopping").start()
+        val started = options.serve(registry, hosts, names) { nameGraph(itemsUnion.ref, "shopping") }
         if (wire != null) {
             started.declareLink(itemsUnion.ref, "outlet", peerItems, "inlet")
             started.declareLink(votesUnion.ref, "outlet", peerVotes, "inlet")
@@ -553,30 +544,18 @@ class DemoApp(
 }
 
 fun main(args: Array<String>) {
-    val inspectPort = args.value("--inspect-port")?.trim()?.toIntOrNull()
-        ?: System.getenv("INSPECT_PORT")?.trim()?.toIntOrNull()
-    val netName = args.value("--net-name")?.trim()?.takeUnless { it.isEmpty() }
-    val writeCapabilityValue = args.value("--inspect-write-capability")?.trim()?.takeUnless { it.isEmpty() }
-        ?: System.getenv("INSPECT_WRITE_CAPABILITY")?.trim()?.takeUnless { it.isEmpty() }
-    // strip the inspector's own `--flag value` pairs before [demoPort], which
-    // reads the first non-`--` argument as this demo's port and would
-    // otherwise take one of their values (the skillmatch pilot's precedent)
-    val demoArgs = stripPairs(args, "--inspect-port", "--net-name", "--inspect-write-capability")
+    val parsed = InspectorFlag.parse(args)
+    val netName = parsed.netName
 
-    val port = demoPort(demoArgs)
-    val wire = args.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
-        ?: args.value("--peer")?.let { DemoApp.Wire.Dial(it) }
-    val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+    val port = demoPort(parsed.rest)
+    val wire = parsed.rest.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
+        ?: parsed.rest.value("--peer")?.let { DemoApp.Wire.Dial(it) }
+    val journalDir = parsed.rest.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
     // V4-PILOT: a BARE boolean flag, so it is presence-tested rather than read
     // through `args.value`, and — unlike every `--flag value` pair above — it
-    // needs NO stripPairs entry: `demoPort` skips any token starting with `--`
+    // needs no stripping: `demoPort` skips any token starting with `--`
     // (DemoShell.kt:128-130), so it can never be mistaken for the demo's port.
-    val replicate = "--replicate" in args
-    // WKB2-06: presence of the bare flag is the ONLY opt-in — a capability
-    // given without it is ignored and the plane stays Disabled. Same
-    // bare-flag posture as `--replicate` above, for the same reason: an
-    // optional positional value would collide with `demoPort`'s convention.
-    val writeEnabled = "--inspect-write" in args
+    val replicate = "--replicate" in parsed.rest
 
     val app = DemoApp(port, wire, journalDir, netName, replicate).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
@@ -598,33 +577,10 @@ fun main(args: Array<String>) {
         // a lone replica is a legal replica — the mesh simply has one member
         if (wire == null) println("  (no --listen/--peer: the replica mesh has no peer to gossip with)")
     }
-    inspectPort?.let { p ->
-        val writePlane = if (writeEnabled) {
-            WritePlane.Enabled(writeCapabilityValue?.let(::Capability) ?: Capability.mint())
-        } else {
-            WritePlane.Disabled
-        }
-        val inspector = app.startInspector(p, netName ?: "local", writePlane)
-        println("computenet inspector: http://localhost:${inspector.boundPort}/api/inspect/topology")
-        announcePort("inspect", inspector.boundPort)
-        println("  this JVM's network host: ${netName ?: "local"}")
-        if (writePlane is WritePlane.Enabled) {
-            println(
-                "inspector write plane ENABLED on loopback; capability: ${writePlane.capability.value}; " +
-                    "catalogue entries: ${civictech.inspect.edit.Catalogue.entries().size}",
-            )
-        }
+    parsed.options?.let { options ->
+        val inspector = app.startInspector(options)
+        InspectorFlag.announce(inspector, options)
     }
-}
-
-/** Drop each `--flag value` pair from [args] — see [main]'s use. */
-private fun stripPairs(args: Array<String>, vararg flags: String): Array<String> {
-    val rest = mutableListOf<String>()
-    var i = 0
-    while (i < args.size) {
-        if (args[i] in flags) i += 2 else rest += args[i++]
-    }
-    return rest.toTypedArray()
 }
 
 private val PAGE = """

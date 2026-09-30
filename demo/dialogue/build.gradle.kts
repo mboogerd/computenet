@@ -21,6 +21,8 @@ dependencies {
     implementation(project(":demo:shell"))
     implementation(project(":demo:agora"))
     implementation(libs.kotlinx.serialization)
+    // opt-in `--inspect-port`, see `InspectorFlag` (computenet-3iv0w)
+    implementation(project(":inspect"))
 
     testImplementation(project(":testkit"))
     // BatchReference, the batch fixpoint solver differential tests pin credence

@@ -20,6 +20,7 @@ dependencies {
     implementation(libs.java.websocket)
     implementation(libs.kotlinx.serialization)
     implementation(project(":demo:shell"))
+    implementation(project(":inspect")) // computenet-3iv0w.4: the shared `--inspect-port` opt-in (InspectorFlag)
 
     testImplementation(project(":testkit"))
     // computenet-cab.7.8 ([QRY1-ORA-10]): tiering's relational core expressed as a query
