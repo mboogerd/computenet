@@ -188,27 +188,38 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 
 None.
 
-### Notes (coverage gaps — the testing agent's worklist)
+### Notes (coverage gaps, unestablished/contested ownership — the testing agent's worklist)
 
 - Coverage gap: requirement '12-CARD-02' (10-programming-model/12-ports.md) has no covering scenario
+- Unestablished ownership: requirement '12-CARD-02' (10-programming-model/12-ports.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
+- Unestablished ownership: requirement '12-FANOUT-01' (10-programming-model/12-ports.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '13-EDGE-01' (10-programming-model/13-links.md) has no covering scenario
+- Unestablished ownership: requirement '13-EDGE-01' (10-programming-model/13-links.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
+- Unestablished ownership: requirement '13-LINK-01' (10-programming-model/13-links.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '13-LINK-02' (10-programming-model/13-links.md) has no covering scenario
 - Coverage gap: requirement '13-LINK-03' (10-programming-model/13-links.md) has no covering scenario
+- Unestablished ownership: requirement '13-LINK-03' (10-programming-model/13-links.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '13-LINK-04' (10-programming-model/13-links.md) has no covering scenario
 - Coverage gap: requirement '13-LINK-06' (10-programming-model/13-links.md) has no covering scenario
+- Unestablished ownership: requirement '13-LINK-06' (10-programming-model/13-links.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '13-NOLOSS-01' (10-programming-model/13-links.md) has no covering scenario
 - Coverage gap: requirement '13-NOLOSS-02' (10-programming-model/13-links.md) has no covering scenario
 - Coverage gap: requirement '13-REBIND-01' (10-programming-model/13-links.md) has no covering scenario
 - Coverage gap: requirement '13-REBIND-02' (10-programming-model/13-links.md) has no covering scenario
+- Unestablished ownership: requirement '13-REBIND-02' (10-programming-model/13-links.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '15-ACTIVATE-01' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '15-APPLY-01' (10-programming-model/15-lifecycle.md) has no covering scenario
+- Unestablished ownership: requirement '15-DESPAWN-01' (10-programming-model/15-lifecycle.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '15-EAGER-01' (10-programming-model/15-lifecycle.md) has no covering scenario
+- Unestablished ownership: requirement '15-EAGER-01' (10-programming-model/15-lifecycle.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '15-HOT-01' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '15-PARK-01' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '15-PROMOTE-01' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '15-RULE-01' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '15-RULE-02' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '15-RULE-03' (10-programming-model/15-lifecycle.md) has no covering scenario
+- Unestablished ownership: requirement '15-SNAPSHOT-01' (10-programming-model/15-lifecycle.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
+- Unestablished ownership: requirement '21-CYCLE-02' (20-dataflow-semantics/21-propagation.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '21-CYCLE-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '21-PULL-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '22-GF-03' (20-dataflow-semantics/22-consistency.md) has no covering scenario
@@ -217,7 +228,9 @@ None.
 - Coverage gap: requirement '24-OP-GROUPBY-05' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-06' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-JOIN-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
+- Unestablished ownership: requirement '24-OP-MAP-01' (20-dataflow-semantics/24-data-cells.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '24-OP-OUTERJOIN-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
+- Unestablished ownership: requirement '24-OP-OUTERJOIN-01' (20-dataflow-semantics/24-data-cells.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '24-OP-OUTERJOIN-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-SEMIJOIN-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-PART-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario

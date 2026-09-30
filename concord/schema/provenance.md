@@ -59,12 +59,25 @@ still wins over a roadmap ticket (`90-roadmap/`) discussing it, without
 needing a separate normative-first exception. When **no** occurrence of an id
 reads as a declaration (a prose shape this rule cannot read), the scanner
 falls back to the plain first sighting by path order, exactly as before this
-rule existed.
+rule existed. Both shapes are silent resolutions, not verified ones — §3's
+"Unestablished ownership" and "Contested ownership" lints report them instead
+of leaving them implicit.
 
 A spec author who wants an id attributed to the chapter that owns it should
 therefore let the id open the requirement sentence there, and cite it
 elsewhere only mid-sentence (in backticks, by house style, but backticks are
 not themselves the signal — sentence position is).
+
+**Known blind spot:** the rule only inspects the *case* of the first
+non-whitespace/backtick/bold character after the closing `]` — it does not
+check whether what follows actually opens a normative sentence. A citation
+immediately followed by an uppercase token — an acronym (`EARS-GAP`) or a
+capitalised code identifier (`MapDelta`) — reads as a declaration for this
+reason alone: `` the `[24-TAG-02]` EARS-GAP self-doubt `` classifies as a
+declaration even though it continues a citation, not a new sentence. This is
+why an id can carry more than one declaration-classified occurrence across
+chapters (§3, "Contested ownership") without any chapter having actually
+mis-declared it.
 
 ### The "checkable through the SPI" rule (the L0 gate)
 
@@ -104,6 +117,15 @@ Reported but non-fatal:
 
 - **Coverage gap** — a `Specified`-status requirement with no covering scenario.
   This is the testing agent's standing worklist (P6/P10), not a failure.
+- **Unestablished ownership** (computenet-7ei34) — a requirement id with no
+  declaration-classified occurrence anywhere in `doc/spec/**` (§1, "Declaration
+  vs citation"); the concordance falls back to first-sighting-by-path for it,
+  and this lint says so instead of leaving that fallback silent.
+- **Contested ownership** (computenet-7ei34) — a requirement id with
+  declaration-classified occurrences in more than one normative chapter
+  (`00`–`50`). First-sighting-by-path still picks a winner, but more than one
+  chapter genuinely reads as declaring the id, which is an ownership question
+  a spec author should resolve, not a scanner bug.
 
 ## 4. Exclusions are recorded (P10)
 
