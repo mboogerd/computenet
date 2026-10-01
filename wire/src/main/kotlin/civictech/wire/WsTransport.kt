@@ -18,10 +18,14 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.wire.BridgeEgressCell
+import civictech.cell.wire.BridgeIngressCell
+import civictech.cell.wire.HelloCredentialLimits
 import civictech.cell.wire.PeerAuthPolicy
 import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
+import civictech.cell.wire.ReconnectPolicy
 import civictech.cell.wire.RegistryMirrorCell
+import civictech.cell.wire.UnsendableHelloCredentialsException as KernelUnsendableHelloCredentialsException
 import civictech.cell.wire.denialReasonFor
 import civictech.identity.Ed25519
 import civictech.identity.fingerprint
@@ -73,160 +77,105 @@ import java.util.concurrent.atomic.AtomicReference
 object WsTransport {
 
     /**
-     * The production reconnect backoff (M10.3): fixed doubling from 1s, capped at 30s,
-     * retries forever. `attempt` is 0-based (the delay *before* the (attempt+1)-th
-     * reconnect try). T12: pulled out to a default so tests can inject a near-zero
-     * schedule instead of paying the real wall-clock delay.
+     * The production reconnect backoff: the kernel's
+     * [ReconnectPolicy.DEFAULT_BACKOFF] (1 s doubling, capped at 30 s), which
+     * is where the schedule is defined (feature `computenet-gyvli`, gyvli-D2).
+     * Kept as a name here because callers and tests pass it explicitly.
      */
+    val DEFAULT_RECONNECT_BACKOFF = ReconnectPolicy.DEFAULT_BACKOFF
+
     /**
      * How many consecutive connection instances may **open** and then close
-     * **without ever being admitted** before a [WsConnection] stops
-     * reconnecting (computenet-4gzr).
+     * **without the peer admitting this side** before a [WsConnection] stops
+     * reconnecting (computenet-4gzr) — the kernel's
+     * [ReconnectPolicy.REFUSED_DIAL_LIMIT], which defines it and documents the
+     * cost ceiling it is. Kept as a name here for the callers and tests that
+     * read it.
      *
-     * ## The case it bounds
+     * **What this transport counts.** A hello refused at the listener's
+     * allowlist is not a failed dial: the TCP connect, the upgrade and `onOpen`
+     * all succeed, the hello goes out, and only then does the listener close.
+     * Nothing on this wire says "refused" (`[SEC1-06]` requires the refusal
+     * before anything crosses, and a close code or a text line sent just before
+     * the close is lost with it — 264 of 318 refusals measured as a bare
+     * `1006`; making that reliable is `computenet-egl.7`). So the dialler
+     * concludes it locally, and [WsConnection] feeds the policy two facts:
      *
-     * A hello refused at the listener's allowlist is not a failed dial: the TCP
-     * connect succeeds, the upgrade succeeds, `onOpen` fires and the hello goes
-     * out — and only then does the listener refuse it and close.
-     * [WsConnection.onClose] could not see the difference and called
-     * `scheduleReconnect()` unconditionally; and because the retry loop
-     * terminates the moment `reconnectBlocking()` returns true, every refusal
-     * started a **fresh** loop at `attempt = 0`. The schedule therefore never
-     * escalated past its first delay: a refused peer redialled at a fixed ~1s
-     * forever, charging the refusing listener one accept plus one hello parse
-     * per second from a peer it had already decided it would not talk to.
+     * - **an open**, charged in `onOpen` before the hello goes out, because
+     *   the open is what costs the listener an accept and a hello parse
+     *   ([ReconnectPolicy.admitDial]);
+     * - **the first binary frame the peer sends on that open**
+     *   ([ReconnectPolicy.onAdmitted]). A listener sends frames only from
+     *   `bindAndAnnounce`, i.e. after it admitted this side's hello, and its
+     *   catch-up always carries at least its own bridge cells — so a frame is
+     *   proof of admission, and a refused dialler never receives one.
+     *   `Session.peered` is *not* that signal: it says this side admitted the
+     *   PEER's hello, which a refused dialler routinely does, because
+     *   [WsListener] sends its hello from `onOpen` (a bound built on it
+     *   measurably failed to bound — 9 accepts at a limit of 5).
      *
-     * Nothing on this wire tells the dialler it was refused — the refusal is a
-     * close, and `[SEC1-06]` requires it to happen before anything crosses — so
-     * the dialler has to conclude it locally, from a run of opens that never
-     * reached an admitted hello ([Session.peered]).
+     * An open that outlives [REFUSAL_WINDOW_MS] also clears the run (the
+     * policy's window, kept from before the frame signal existed).
      *
-     * ## Why five, and what it does not bound
-     *
-     * The number is a cost ceiling rather than a semantic threshold: it is the
-     * total accept-plus-hello-parse work one refused peer may charge a listener
-     * per [WsConnection]. Five leaves room for the handful of unadmitted opens a
-     * *transient* fault produces — a socket torn down mid-handshake, a listener
-     * restarting between the upgrade and the hello — before the client concludes
-     * it is being refused rather than unlucky. An **admitted** connection resets
-     * the run to zero ([WsConnection.unadmittedOpens]).
-     *
-     * ## What the bound is, exactly, and where it is soft
-     *
-     * A refused peer costs a listener a handful of accepts rather than one per
-     * second forever. It is **not** exactly `limit`, and the softness is worth
-     * stating precisely because it is structural, not an oversight:
-     *
-     * **What is counted is an open that did not last.** `Session.peered` looks
-     * like the signal and is not: it means "this side admitted the PEER's
-     * hello", not "the peer admitted mine", and on `:wire` a refused dialler
-     * routinely admits the listener's hello anyway, because [WsListener] sends
-     * its hello from `onOpen`, before it has seen the peer's. A bound built on
-     * it reset its own run on connections that had in fact been refused, and
-     * measurably failed to bound: at `refusedDialLimit = 5` a listener still
-     * paid 9 accepts and climbing. `:iroh` has no such gap — its accepting side
-     * sends nothing until it has admitted the dialler's hello — which is why
-     * `IrohTransport.REFUSED_DIAL_LIMIT` keys on `peered` and this does not.
-     *
-     * So this side keys on the one difference that is real and local: **a
-     * refusal is decided inside one round trip, and an admitted peering
-     * persists.** An open that closes within [REFUSAL_WINDOW_MS] counts; an open
-     * that outlives it clears the run. A refused connection closes in single
-     * -digit milliseconds, so the two are three orders of magnitude apart.
-     *
-     * **Its failure mode, stated rather than hidden:** a peering that genuinely
-     * cannot stay up — five reconnects in a row each dying inside the window —
-     * is abandoned as though it were refused. That is a judgement, not an
-     * accident: a dialler that has opened five connections in a row and held
-     * none of them for two seconds is not going to be helped by a sixth, and
-     * the failure is announced ([WsConnection.abandonedAfterRefusals]) rather
-     * than silent.
-     *
-     * **An exact signal would need the listener to say it was a refusal, and
-     * neither available channel delivers reliably.** Measured over 318 refusals
-     * driven at a 20ms schedule: an RFC 6455 application close code reached the
-     * dialler 54 times and an abnormal `1006` the other 264, and a text line
-     * sent immediately before the close was lost with it — the server's close
-     * handshake does not complete before the connection drops. Making that
-     * reliable is `computenet-egl.7`, and it is what would replace the window
-     * below with a fact.
-     *
-     * It does **not** bound a dial that never opens at all. java-websocket
-     * reports a failed connect as a close too, but that close is not preceded by
-     * `onOpen`, costs the peer nothing, and still retries forever on purpose — a
-     * listener that is down is expected back (`WsReconnectRefusedTest`,
-     * computenet-dqy.27). The same distinction is drawn on the iroh transport,
-     * where an unestablished dial throws inside the re-dial loop and produces no
-     * link at all (`IrohTransport.REFUSED_DIAL_LIMIT`).
+     * It does **not** bound a dial that never opens at all: java-websocket
+     * reports a failed connect as a close with no preceding `onOpen`, which
+     * costs the peer nothing and retries forever on purpose — a listener that
+     * is down is expected back (`WsReconnectRefusedTest`, computenet-dqy.27).
      */
-    const val REFUSED_DIAL_LIMIT: Int = 5
+    val REFUSED_DIAL_LIMIT: Int = ReconnectPolicy.REFUSED_DIAL_LIMIT
+
+    /**
+     * How long an opened connection must last to clear the refused-dial run —
+     * the kernel's [ReconnectPolicy.REFUSAL_WINDOW_MS]. See [REFUSED_DIAL_LIMIT].
+     */
+    val REFUSAL_WINDOW_MS: Long = ReconnectPolicy.REFUSAL_WINDOW_MS
 
     /**
      * A [Peering.Side] whose credentials no `HELLO3` line can carry: more than
-     * [MAX_HELLO_STATEMENTS] statements, a name that is empty or holds a
-     * space, or anything else [encodeHello3] refuses for them (an unsigned
-     * statement, a name with an unpaired surrogate). Thrown by [listen] and
-     * [connect] **before any socket is bound, accepted or dialled**
-     * (computenet-5y8t.6).
+     * [MAX_HELLO_STATEMENTS] statements, a name that is not a token (empty or
+     * holding a space), or anything else [encodeHello3] refuses for them (an
+     * unsigned statement, a name with an unpaired surrogate). Thrown by
+     * [listen] and [connect] **before any socket is bound, accepted or
+     * dialled** (computenet-5y8t.6).
+     *
+     * The kernel's [KernelUnsendableHelloCredentialsException] is the seam's
+     * type (gyvli-D2) and this extends it, so a catch of either name works.
+     * The limits themselves are [HELLO3_LIMITS], a kernel
+     * [HelloCredentialLimits]; only the line encoder they consult is `:wire`'s.
      *
      * `Session.hello` refuses the same credentials and still does, as defence
-     * in depth; but it runs per open — on a listener's socket thread for
-     * every accepted peer, and inside a client's reconnect loop — so a
-     * configuration fault would surface there once per connection, far from
-     * the call that configured it. Credentials with **no** statements are
-     * never refused here: they send `HELLO2`, which carries no statements.
-     *
-     * `IrohTransport.UnsendableHelloCredentialsException` is the same refusal
-     * on `:iroh`; the two modules do not depend on each other, so the name is
-     * declared once per transport.
+     * in depth; but it runs per open, so a configuration fault would surface
+     * there once per connection, far from the call that configured it.
+     * Credentials with **no** statements are never refused here: they send
+     * `HELLO2`, which carries no statements.
      */
     class UnsendableHelloCredentialsException internal constructor(message: String, cause: Throwable? = null) :
-        IllegalArgumentException(message, cause)
-
-    /** Refuses [side] with [UnsendableHelloCredentialsException] when `Session.hello` could not send its credentials. */
-    private fun requireSendableHelloCredentials(side: Peering.Side) {
-        val credentials = side.credentials ?: return
-        val statements = credentials.statements
-        if (statements.isEmpty()) return
-        val name = credentials.peerId.name
-        if (statements.size > MAX_HELLO_STATEMENTS) {
-            throw UnsendableHelloCredentialsException(
-                "credentials for $name hold ${statements.size} statements; a HELLO3 line carries at most " +
-                    "$MAX_HELLO_STATEMENTS",
-            )
-        }
-        if (name.isEmpty() || ' ' in name) {
-            throw UnsendableHelloCredentialsException(
-                "credentials name '$name' cannot be a HELLO3 claimed id (empty or contains a space)",
-            )
-        }
-        // The rest of what the encoder refuses, by asking the encoder: a
-        // placeholder mirror ref and nonce, since neither can make it refuse.
-        try {
-            encodeHello3(Hello3(UUID(0L, 0L), credentials.peerId, credentials.publicKey, ByteArray(HELLO_NONCE_BYTES), statements))
-        } catch (e: IllegalArgumentException) {
-            throw UnsendableHelloCredentialsException("credentials for $name cannot be sent in a HELLO3: ${e.message}", e)
-        }
-    }
+        KernelUnsendableHelloCredentialsException(message, cause)
 
     /**
-     * How long an opened connection must last to clear the refused-dial run
-     * (computenet-4gzr) — see [REFUSED_DIAL_LIMIT] for why a duration is the
-     * discriminator here and not on `:iroh`.
-     *
-     * Two seconds is three orders of magnitude above what it separates: a hello
-     * refused at the allowlist is closed within one round trip of being sent,
-     * single-digit milliseconds on loopback and bounded by the peer's RTT
-     * anywhere else. It is not a timeout anyone waits on — nothing sleeps for
-     * it, it is only subtracted at close — so a loaded machine cannot turn it
-     * into a delay, only into a *longer* apparent lifetime, which errs towards
-     * clearing the run rather than towards abandoning a live peer.
+     * What a `HELLO3` line carries (gyvli-D2): [MAX_HELLO_STATEMENTS]
+     * statements, the kernel's name-token rule, and whatever else
+     * [encodeHello3] refuses — asked of the encoder itself with a placeholder
+     * mirror ref and nonce, since neither can make it refuse.
      */
-    const val REFUSAL_WINDOW_MS: Long = 2_000
+    internal val HELLO3_LIMITS = HelloCredentialLimits(
+        maxStatements = MAX_HELLO_STATEMENTS,
+        tokenOk = HelloCredentialLimits.NAME_TOKEN,
+        lineName = "HELLO3",
+        encodeLine = { credentials ->
+            encodeHello3(
+                Hello3(UUID(0L, 0L), credentials.peerId, credentials.publicKey, ByteArray(HELLO_NONCE_BYTES), credentials.statements),
+            )
+        },
+    )
 
-    val DEFAULT_RECONNECT_BACKOFF: (attempt: Int) -> Long = { attempt ->
-        // guard overflow on a long-lived failing connection: cap the shift itself
-        (1_000L shl attempt.coerceAtMost(20)).coerceAtMost(30_000L)
+    /** [HELLO3_LIMITS], refusing with this transport's own [UnsendableHelloCredentialsException]. */
+    internal fun refuseUnsendable(side: Peering.Side) {
+        try {
+            HELLO3_LIMITS.requireSendable(side)
+        } catch (e: KernelUnsendableHelloCredentialsException) {
+            throw UnsendableHelloCredentialsException(e.message ?: "unsendable credentials", e.cause)
+        }
     }
 
     /**
@@ -257,7 +206,7 @@ object WsTransport {
      */
     fun listen(channel: ServerSocketChannel, side: Peering.Side): WsListener {
         require(channel.localAddress != null) { "listen(channel) needs an already-bound channel" }
-        requireSendableHelloCredentials(side)
+        refuseUnsendable(side)
         val listener = WsListener(channel, side)
         listener.start()
         check(listener.awaitStart(10, TimeUnit.SECONDS)) {
@@ -339,7 +288,7 @@ object WsTransport {
      *   when [side]'s credentials cannot be sent in a hello.
      */
     fun listen(port: Int, side: Peering.Side): WsListener {
-        requireSendableHelloCredentials(side)
+        refuseUnsendable(side)
         val listener = WsListener(if (port == 0) loopback(0) else InetSocketAddress(port), side)
         listener.isReuseAddr = port != 0
         listener.start()
@@ -399,7 +348,7 @@ object WsTransport {
         backoff: (attempt: Int) -> Long,
         refusedDialLimit: Int,
     ): WsConnection {
-        requireSendableHelloCredentials(side)
+        refuseUnsendable(side)
         awaitReachable(uri, backoff)
         val connection = WsConnection(uri, side, backoff, refusedDialLimit)
         // `connectBlocking` is `connectLatch.await(timeout) && isOpen()`, and BOTH
@@ -636,6 +585,14 @@ object WsTransport {
          * own.
          */
         private val replayGuard: HelloReplayGuard = replayGuardFor(side),
+        /**
+         * Where this Session's retired connection instances wait to have their
+         * tombstones lifted (gyvli-D3). A [WsListener] shares one across every
+         * Session it opens — a listener's successor instance lives in a *new*
+         * Session — while a [WsConnection] keeps one Session, so the default
+         * private one serves it.
+         */
+        private val supersession: Supersession = Supersession(),
     ) {
         init {
             // The :wire enforcement point for "RequireAuthenticated implies
@@ -674,14 +631,21 @@ object WsTransport {
          * for good, and both scheduler hops behind the socket — the ingress
          * decode and the mirror delivery — are covered by that one fact.
          *
-         * **A retired mirror stays spawned, deliberately.** Despawning it would
-         * turn the fence's *drop* into a *park*: `LocationRegistry.deliver`
-         * parks an invocation whose target ref has no location, so a stale
-         * announcement addressed to a despawned mirror would sit in the park
-         * queue instead of being refused at the gate. The cost is one detached
-         * cell per reconnect — measured, alongside the `BridgeIngressCell` that
-         * every re-hello already leaves behind, in computenet-vzb, which owns
-         * retiring a whole connection instance's cells safely.
+         * **A retired instance is despawned, and its refs tombstoned**
+         * (computenet-vzb, gyvli-D3). The mirror is minted as part of a
+         * [Peering.ConnectionInstance], which also owns the instance's ingress
+         * and announcer; [onClose] — the socket's reader has exited by then —
+         * calls [Peering.ConnectionInstance.retire], which shuts the mirror's
+         * gate, tombstones both refs in the registry and only then despawns
+         * both cells. A stale announcement addressed to the retired mirror,
+         * however late it decodes, is refused at `LocationRegistry.deliver`
+         * (counted in `retiredRefusals`) rather than parked — the drop the
+         * spawned-but-detached mirror used to provide, without the cell. The
+         * tombstones are lifted once a later instance on the same side opens
+         * or is admitted **and** the bridge host no longer holds the retired
+         * cells ([Supersession]); before this, every re-hello left one
+         * `BridgeIngressCell` and one detached `RegistryMirrorCell` behind for
+         * good, announced to the peer on every later catch-up.
          *
          * `@Volatile` because [hello]/[onText]/[onClose] all run on the
          * socket's IO thread while `RegistryMirrorCell.peer` is read on the
@@ -689,10 +653,38 @@ object WsTransport {
          * to whichever IO thread java-websocket hands the next callback to.
          */
         @Volatile
-        private var mirror: RegistryMirrorCell? = null
+        private var instance: Peering.ConnectionInstance? = null
 
+        /**
+         * Whether [instance] was retired by [onClose] — its socket's reader has
+         * exited — rather than only superseded by a [hello] on a socket that is
+         * still open. Only the former is safe to lift ([Supersession]).
+         */
+        @Volatile
+        private var closedByReader = false
+
+        /** The current instance's mirror, if one is open. */
+        private val mirror: RegistryMirrorCell? get() = instance?.mirror
+
+        /**
+         * The ingress frames route to — the current instance's once admitted.
+         * Left in place by [onClose] (a frame after the close reaches the
+         * retired ingress's tombstone and is refused there), cleared by [hello].
+         */
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
+
+        /** The current instance's ingress cell, for its announcement-admission count. */
+        @Volatile
+        private var ingressCell: BridgeIngressCell? = null
+
+        /**
+         * Announcements the current instance's ingress refused at its
+         * admission gate (`announcement-admission`) — what
+         * `civictech.cell.wire.PeerStats.refusedAnnouncements` reports.
+         */
+        val announcementAdmissionDenials: Long
+            get() = ingressCell?.boundaryDenials?.get("announcement-admission")?.denialCount ?: 0L
 
         /**
          * Whether the **current connection instance** admitted a peer
@@ -884,10 +876,6 @@ object WsTransport {
          */
         val admissionDenialCount: Long get() = admissionSink.denialCount
 
-        /** The current announcement hook — replaced on every (re)hello so reconnects don't leak stale announcers (M10.3). */
-        @Volatile
-        private var announcement: AutoCloseable? = null
-
         /**
          * computenet-dqy.68's fifth instrument: the announcement channel's two
          * ends, counted where the previous four could not see.
@@ -1077,9 +1065,20 @@ object WsTransport {
                     "credentials name '$name' cannot be a HELLO3 claimed id (empty or contains a space)"
                 }
             }
-            mirror?.detach() // this open supersedes whatever instance came before it
-            val fresh = Peering.spawnMirror(side, toPeer = egress)
-            mirror = fresh
+            // This open supersedes whatever instance came before it. Normally
+            // [onClose] already retired it; retiring here too keeps the fence
+            // independent of the close callback (idempotent). An instance
+            // superseded while its socket is still open is NOT handed to
+            // [supersession]: its reader may still decode for it, so its
+            // tombstones stay. One [onClose] retired was handed over there.
+            instance?.retire()
+            val opened = Peering.openInstance(side, toPeer = egress)
+            instance = opened
+            closedByReader = false
+            ingress = null
+            ingressCell = null
+            supersession.opened(opened)
+            val fresh = opened.mirror
             pending = null
             achieved = null
             admitted = false
@@ -1691,8 +1690,8 @@ object WsTransport {
             // egress-plus-mirror per connection instance (a listener a whole
             // fresh Session, a client a fresh mirror in `hello`), so the name
             // is the only part of a peer's identity that survives a reconnect.
-            val instance = checkNotNull(mirror) { "onText before hello opened a connection instance" }
-            instance.peer = peer
+            val current = checkNotNull(instance) { "onText before hello opened a connection instance" }
+            current.mirror.peer = peer
             // No re-attach: this mirror was minted by *this* connection's
             // `hello` and starts attached. That is the whole disconnect fence
             // (computenet-dqy.14). A frame the PREVIOUS connection staged on
@@ -1713,16 +1712,20 @@ object WsTransport {
                 if (boundKey != null && peer != null) ledger.withVerifier(connectionBoundVerifier(peer, boundKey))
                 else ledger
             }
-            ingress = Peering.hostIngress(
-                side,
+            // Both through the connection instance, so [onClose]'s retire
+            // reaches the ingress and the announcer as well as the mirror. A
+            // re-hello (reconnect) opened a fresh instance in [hello], whose
+            // retire of the previous one already closed its announcer.
+            ingress = current.hostIngress(
                 fromPeer = peer,
                 fromPeerAuth = achieved,
                 fromPeerIssuer = issuer,
                 fromKey = key,
                 announcementAdmission = admission,
+                onSpawn = { ingressCell = it },
             )
-            announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
-            announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
+            current.announceTo(CellRef(peerMirrorRef), via = egress)
+            supersession.opened(current)
             // Last, so it is never true for an instance whose ingress and
             // announcer are not both installed: this is what a refused-dial run
             // is counted against (computenet-4gzr, [admitted]).
@@ -1746,25 +1749,81 @@ object WsTransport {
             }
         }
 
+        /**
+         * The socket closed, and — java-websocket delivers one connection's
+         * callbacks in order — its reader has exited: retire the current
+         * connection instance (gyvli-D3, computenet-vzb).
+         *
+         * [Peering.ConnectionInstance.retire] closes the announcer (a stale
+         * hook would try the dead socket on every future local publish), shuts
+         * the mirror's gate and retracts what it installed in one step (this
+         * runs on the socket's IO thread while announcements are applied two
+         * scheduler hops later on the bridge host, so a bare
+         * `unpublishRemotes` could be overtaken by one decoded before the
+         * close), tombstones the mirror and ingress refs, then despawns both
+         * cells. The next [hello] mints a new instance rather than re-opening
+         * this one, so this instance is fenced off permanently on the client
+         * path exactly as it is on a listener; its tombstones are lifted by
+         * [supersession] once a successor opens and the cells are gone.
+         *
+         * [ingress] is left pointing at the retired ingress: a frame that
+         * still arrives is refused at its tombstone, not counted as a
+         * pre-hello drop (`WsAnnouncementSilenceInventoryTest`).
+         */
         fun onClose() {
-            // the announcer dies with the session — a stale hook would try the
-            // dead socket on every future local publish (listener sessions are
-            // per-connection, so replace-on-rehello never fires for them)
-            announcement?.close()
-            announcement = null
-            // The peer's refs go through the mirror's own fence rather than a
-            // bare `registry.unpublishRemotes(via = egress)`: this runs on the
-            // socket's IO thread, while the announcements it is retracting are
-            // applied two scheduler hops later on the bridge host, so an
-            // announcement decoded before this close can be applied after it.
-            // `detach` shuts the gate and retracts in one step, so a late
-            // announcement can no longer resurrect a departed peer's locations
-            // behind a dead egress (`RegistryMirrorCell.detach`). The gate
-            // stays shut: the next `hello` mints a new mirror rather than
-            // re-opening this one, so this connection instance is fenced off
-            // permanently on the client path exactly as it is on a listener.
-            mirror?.detach()
+            val closing = instance ?: return
+            closing.retire()
+            if (!closedByReader) {
+                closedByReader = true
+                supersession.retired(closing)
+            }
         }
+    }
+
+    /**
+     * Retired connection instances waiting for their tombstones to be lifted
+     * ([Peering.ConnectionInstance.supersededBy], gyvli-D3).
+     *
+     * Lifting is safe only when nothing can still deliver to a retired ref.
+     * Two things could: a frame the retired ingress still had queued on the
+     * bridge host, and a delivery its decode already queued for the retired
+     * mirror. Both are gone once the bridge host has run the retire's
+     * despawns — anything left for those cells is then dead-lettered there as
+     * an unknown cell — so an instance is lifted only when the bridge host no
+     * longer hosts either cell, checked each time a later instance on the same
+     * side opens or is admitted. One not yet despawned simply waits for the
+     * next such event, tombstoned (no cell, no location, nothing announced).
+     *
+     * Lifting also keeps the host's own despawn from re-firing
+     * `LocationRegistry.onUnpublish` for a ref with no location
+     * (computenet-gyvli.2's review): `unpublish` skips a tombstoned ref, and
+     * by the time the tombstone goes the despawn has already run.
+     *
+     * Only instances retired by a closed socket are handed here; see
+     * [Session.hello]. Thread-safe.
+     */
+    internal class Supersession {
+        private val pending = ArrayList<Peering.ConnectionInstance>()
+
+        /** [instance] was retired after its socket's reader exited. */
+        fun retired(instance: Peering.ConnectionInstance) {
+            synchronized(pending) { pending += instance }
+        }
+
+        /** [next] opened or was admitted on the same side: lift every retired instance the bridge host has let go of. */
+        fun opened(next: Peering.ConnectionInstance) {
+            val ready = synchronized(pending) {
+                pending.filter { it.side === next.side && it !== next && !it.stillHosted() }
+                    .also { pending.removeAll(it.toSet()) }
+            }
+            ready.forEach { it.supersededBy(next) }
+        }
+
+        /** Retired instances still tombstoned here. */
+        val waiting: Int get() = synchronized(pending) { pending.size }
+
+        private fun Peering.ConnectionInstance.stillHosted(): Boolean =
+            refs.any { side.bridgeHost.portAt(it, "inlet") != null }
     }
 
     /**
@@ -1864,6 +1923,18 @@ object WsTransport {
         }
 
         private val sessions = ConcurrentHashMap<WebSocket, Session>()
+
+        /** Retired connection instances of this listener's closed Sessions, awaiting supersession (gyvli-D3). */
+        private val supersession = Supersession()
+
+        /** How many retired instances still wait to have their tombstones lifted — see [Supersession]. */
+        internal val retiredAwaitingSupersession: Int get() = supersession.waiting
+
+        /** Live sessions' announcement-admission refusals — `PeerStats.refusedAnnouncements`. */
+        internal val announcementAdmissionDenials: Long get() = sessions.values.sumOf { it.announcementAdmissionDenials }
+
+        /** How many sockets this listener has open right now. */
+        internal val liveSessions: Int get() = sessions.size
         private val started = CountDownLatch(1)
 
         /**
@@ -2510,6 +2581,9 @@ object WsTransport {
                 { text: String -> conn.send(text) },
                 // this listener's shared guard, not a per-Session one (see its KDoc)
                 replayGuard,
+                // a successor instance on a listener lives in a NEW Session, so
+                // retired instances wait in one listener-wide place (gyvli-D3)
+                supersession,
             )
             sessions[conn] = session
             conn.send(session.hello())
@@ -2622,9 +2696,40 @@ object WsTransport {
     class WsConnection internal constructor(
         uri: URI,
         side: Peering.Side,
-        private val backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
-        private val refusedDialLimit: Int = REFUSED_DIAL_LIMIT,
+        backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
+        refusedDialLimit: Int = REFUSED_DIAL_LIMIT,
     ) : WebSocketClient(uri, Draft_6455(), null, DIAL_TIMEOUT_MS) {
+
+        /**
+         * Every reconnect decision this client makes (gyvli-D2): the kernel's
+         * [ReconnectPolicy] — backoff schedule, refused-dial bound, and the two
+         * intent flags. The loop in [scheduleReconnect] asks
+         * [ReconnectPolicy.shouldRedial] before every attempt; [onOpen],
+         * the peer's first frame and [onClose] report the events.
+         *
+         * **Intent is recorded, never inferred** (gyvli-D4, computenet-8uv6):
+         * [shutdown] sets [ReconnectPolicy.closeDeliberately] before the socket
+         * closes and [sever] sets [ReconnectPolicy.sever], so neither re-arms.
+         * A plain [close] records nothing and so still re-arms — the raw API's
+         * semantics, kept for `:wire`'s own tests; `WsPeerTransport`'s
+         * `PeerConnection.close` is the deliberate one.
+         */
+        internal val policy = ReconnectPolicy(backoff, refusedDialLimit)
+
+        /**
+         * Whether the peer has sent a binary frame on the current open — proof
+         * it admitted this side's hello (see [WsTransport.REFUSED_DIAL_LIMIT]).
+         * Reset by [onOpen].
+         */
+        private val peerAdmitted = AtomicBoolean(false)
+
+        /**
+         * True while this client is open, the peer has admitted it on this
+         * open, and neither a sever nor a deliberate close is recorded — the
+         * link carries. `WsPeerTransport`'s `isCarrying`.
+         */
+        internal val carrying: Boolean
+            get() = isOpen && peerAdmitted.get() && !policy.severed && !policy.deliberateClose
 
         private val session = Session(
             side,
@@ -2645,6 +2750,9 @@ object WsTransport {
 
         /** @see preHelloDrops */
         val refusedAnnouncements: Long get() = session.refusedAnnouncements
+
+        /** The current instance's announcement-admission refusals — `PeerStats.refusedAnnouncements`. */
+        internal val announcementAdmissionDenials: Long get() = session.announcementAdmissionDenials
 
         /**
          * Hellos this dialer refused at its own allowlist (spec 40/43 seam 1,
@@ -2678,14 +2786,6 @@ object WsTransport {
         val socketHasBufferedData: Boolean get() = session.socketHasBufferedData
 
         /**
-         * False once [shutdown] is called (M10.3). Together with an interrupt of the
-         * retry thread — which nothing actually delivers, see [scheduleReconnect] — this
-         * is what keeps a client down.
-         */
-        @Volatile
-        private var reconnect = true
-
-        /**
          * Single-flight guard on the retry loop below (computenet-8ru).
          *
          * java-websocket reports a *failed* connect as a close: `WebSocketClient.run`
@@ -2712,46 +2812,14 @@ object WsTransport {
         private val reconnecting = AtomicBoolean(false)
 
         /**
-         * Consecutive connection instances that **opened** without this side's
-         * peering surviving — the refusal signal this wire does not carry, read
-         * off the local connection lifecycle instead
-         * ([WsTransport.REFUSED_DIAL_LIMIT]).
-         *
-         * **Incremented in [onOpen], not in [onClose]**, and that is the whole
-         * reliability of it. An open is exactly what costs the listener an
-         * accept plus a hello parse, and it happens once per socket; a *close*
-         * is neither — java-websocket reports a failed connect as a close, can
-         * report two for one socket (`reset()` closes, and the read thread's
-         * end-of-transmission closes again), and under load can leave an open
-         * socket's close unreported. Counting closes under-counted opens exactly
-         * when the machine was busiest: a full-suite run measured 9 refusals
-         * charged to a listener by a dialler that believed it had opened 2.
-         *
-         * Counting opens also makes the failed-connect case fall out for free
-         * rather than needing a flag: a connect that never opened never
-         * increments, so it still retries forever
-         * (`WsReconnectRefusedTest`'s unbound port).
+         * The current refused-dial run — [ReconnectPolicy.unadmittedOpens]: opens
+         * charged in [onOpen] (once per socket, which is what costs the
+         * listener an accept and a hello parse) and not yet cleared by the
+         * peer's first frame or by outliving the refusal window. A connect that
+         * never opened is never charged, so it still retries forever
+         * (`WsReconnectRefusedTest`'s unbound port). @see WsTransport.REFUSED_DIAL_LIMIT
          */
-        private val unadmitted = AtomicInteger()
-
-        /**
-         * `System.nanoTime()` at this instance's [onOpen], or 0 when no socket
-         * is open — consumed by the close it belongs to. @see unadmitted
-         */
-        private val openedAt = java.util.concurrent.atomic.AtomicLong()
-
-        /**
-         * True once [refusedDialLimit] consecutive unadmitted opens have ended
-         * the reconnecting. Distinct from [reconnect], which is `shutdown()`'s
-         * flag: a client that gave up on a refusing listener is not the same
-         * state as one the application closed, and conflating them would make
-         * the give-up unreadable.
-         */
-        @Volatile
-        private var abandoned = false
-
-        /** @see WsTransport.REFUSED_DIAL_LIMIT */
-        val unadmittedOpens: Int get() = unadmitted.get()
+        val unadmittedOpens: Int get() = policy.unadmittedOpens
 
         /**
          * True once this client's socket has **ever** opened (computenet-ulgy) —
@@ -2794,7 +2862,7 @@ object WsTransport {
          * owe the same observable semantics, and a quiet give-up would break
          * that quietly."
          */
-        val abandonedAfterRefusals: Boolean get() = abandoned
+        val abandonedAfterRefusals: Boolean get() = policy.abandoned
 
         /**
          * The first close this client saw, already rendered (computenet-dqy.41), and
@@ -2839,9 +2907,19 @@ object WsTransport {
             return "readyState=$state, first close seen by the client: $close$more"
         }
 
-        /** Deliberate close: stop reconnecting, then close the socket. */
+        /** Deliberate close: record the intent ([ReconnectPolicy.closeDeliberately]), then close the socket. */
         fun shutdown() {
-            reconnect = false
+            policy.closeDeliberately()
+            close()
+        }
+
+        /**
+         * Sever: hold this client down until [heal] ([ReconnectPolicy.sever]),
+         * then close the socket. A dial already in flight that opens after
+         * this is closed quietly by [onOpen] (computenet-g1aua's shape).
+         */
+        internal fun sever() {
+            policy.sever()
             close()
         }
 
@@ -2851,22 +2929,19 @@ object WsTransport {
          * found: `:wire`'s give-up otherwise had no way back short of building a
          * new [WsConnection].
          *
-         * [scheduleReconnect] treats [abandoned] and a maxed-out [unadmitted] run
-         * as terminal, so healing must clear both — not just flip [abandoned] —
-         * before it can ask for the reconnect it now permits again. An operator's
-         * decision to retry a peer that may since have been allowlisted (or whose
-         * peering was abandoned on a false-positive refusal read, see
-         * [WsTransport.REFUSAL_WINDOW_MS]), not a schedule's: nothing else calls
-         * this.
+         * [ReconnectPolicy.heal] clears the abandonment, a maxed-out run and a
+         * sever, and then this asks for the reconnect the policy now permits
+         * again. An operator's decision to retry a peer that may since have
+         * been allowlisted (or whose peering was abandoned on a false-positive
+         * refusal read), not a schedule's.
          *
-         * A no-op after [shutdown] — [reconnect] stays false, so the
-         * [scheduleReconnect] this calls declines to start a loop. Healing
-         * resumes a client that gave up on a refusing peer; it does not undo an
-         * application's own decision to stop.
+         * A no-op after [shutdown]: [ReconnectPolicy.deliberateClose] survives
+         * a heal, so [scheduleReconnect] declines to start a loop. Healing
+         * resumes a client that gave up on a refusing peer or was severed; it
+         * does not undo an application's own decision to stop.
          */
         fun heal() {
-            unadmitted.set(0)
-            abandoned = false
+            policy.heal()
             scheduleReconnect()
         }
 
@@ -2874,15 +2949,24 @@ object WsTransport {
             everOpened = true
             // Charged before the hello goes out, because the hello is the cost:
             // this open has already committed the listener to one accept and one
-            // hello parse whatever happens next (computenet-4gzr).
-            openedAt.set(System.nanoTime())
-            unadmitted.incrementAndGet()
+            // hello parse whatever happens next (computenet-4gzr). An open the
+            // policy no longer wants — it raced a sever, a deliberate close or
+            // an abandonment — is closed quietly, uncharged and with no hello.
+            if (!policy.admitDial(System.nanoTime())) {
+                close()
+                return
+            }
+            peerAdmitted.set(false)
             send(session.hello())
         }
 
         override fun onMessage(message: String) = session.onText(message)
 
-        override fun onMessage(bytes: ByteBuffer) = session.onFrame(bytes)
+        override fun onMessage(bytes: ByteBuffer) {
+            // the peer's first frame on this open proves it admitted our hello
+            if (peerAdmitted.compareAndSet(false, true)) policy.onAdmitted()
+            session.onFrame(bytes)
+        }
 
         override fun onClose(code: Int, reason: String?, remote: Boolean) {
             closes.incrementAndGet()
@@ -2892,21 +2976,15 @@ object WsTransport {
                     "closed by ${if (remote) "the peer" else "this side"}",
             )
             // The opens were counted as they happened; this is only where the run
-            // is cleared or acted on. An open that outlived the refusal window
-            // was not a refusal — see [WsTransport.REFUSED_DIAL_LIMIT] for why
-            // this and not `session.peered`. `openedAt == 0` is a close for a
-            // connect that never opened: not a refusal either, and not counted,
-            // so it leaves the run alone.
-            val opened = openedAt.getAndSet(0L)
-            if (opened != 0L && System.nanoTime() - opened >= REFUSAL_WINDOW_MS * 1_000_000L) {
-                unadmitted.set(0)
-            }
-            session.onClose() // unpublish: senders park until the re-hello re-announces
-            if (unadmitted.get() >= refusedDialLimit) {
-                abandoned = true
+            // is cleared (an open that outlived the refusal window) or acted on
+            // (a run at the limit abandons) — [ReconnectPolicy.onClosed]. A close
+            // for a connect that never opened neither counts nor clears.
+            policy.onClosed(System.nanoTime())
+            session.onClose() // retire the instance: senders park until the re-hello re-announces
+            if (policy.abandoned) {
                 System.err.println(
-                    "[WsConnection] ${getURI()} closed after $refusedDialLimit consecutive connections that " +
-                        "never produced a surviving peering; this listener is refusing us and will not be " +
+                    "[WsConnection] ${getURI()} closed after ${policy.refusedDialLimit} consecutive connections " +
+                        "that never produced a surviving peering; this listener is refusing us and will not be " +
                         "reconnected to",
                 )
                 return
@@ -2915,7 +2993,7 @@ object WsTransport {
         }
 
         /**
-         * Reconnect on [backoff] (M10.3, injectable since T12): the re-hello
+         * Reconnect on the policy's backoff (M10.3, injectable since T12): the re-hello
          * re-runs the announcement catch-up on both sides, parked traffic
          * replays, and replicas anti-entropy through the ordinary catch-up
          * path. ponytail: retries forever — jitter and liveness probing when
@@ -2936,21 +3014,23 @@ object WsTransport {
             // `WebSocketClient.reset()`, only ever runs on a retry thread that already
             // holds the guard, so its close is covered by that loop's own re-arm.
             // Re-check this against java-websocket's close ordering on any upgrade.
-            // The refusal bound is re-checked HERE and not only in `onClose`,
-            // because this method is also reached from the retry loop's own
-            // re-arm, which can win the race against the close that would have
-            // set `abandoned` (computenet-4gzr).
-            if (!reconnect || abandoned || unadmitted.get() >= refusedDialLimit || isOpen) return
+            // The policy is asked HERE and not only in `onClose`, because this
+            // method is also reached from the retry loop's own re-arm, which can
+            // win the race against the close that would have set `abandoned`
+            // (computenet-4gzr); `shouldRedial` also refuses a run at the limit.
+            if (!policy.shouldRedial() || isOpen) return
             if (!reconnecting.compareAndSet(false, true)) return // a loop is already retrying
             Thread {
                 var interrupted = false
                 try {
                     var attempt = 0
-                    while (reconnect && !abandoned && unadmitted.get() < refusedDialLimit && !isOpen) {
+                    while (policy.shouldRedial() && !isOpen) {
                         try {
-                            Thread.sleep(backoff(attempt))
+                            Thread.sleep(policy.nextDelayMs(attempt))
                             attempt++
-                            if (reconnect && reconnectBlocking()) break
+                            // asked again before EVERY attempt: a sever or a
+                            // deliberate close during the sleep wins
+                            if (policy.shouldRedial() && reconnectBlocking()) break
                         } catch (_: InterruptedException) {
                             interrupted = true
                             break

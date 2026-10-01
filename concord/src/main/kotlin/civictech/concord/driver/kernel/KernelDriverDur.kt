@@ -24,10 +24,10 @@ import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.host.ActorIngress
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.host.SimulationController
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
@@ -154,8 +154,9 @@ import java.util.UUID
  * ordinary raw [Stateful] round-trip (the checkpoint half of a view's recovery).
  */
 internal class KernelDriverDur(
-    private val controller: SimulationController,
-    private val registry: LocationRegistry,
+    private val scheduler: () -> HostScheduler,
+    private val registryOf: (HostId) -> LocationRegistry,
+    private val drainController: () -> Unit,
     /** Dead letters observed on the durable host flow into the driver's shared list. */
     private val onDeadLetter: (DeadLetter) -> Unit,
 ) {
@@ -279,8 +280,8 @@ internal class KernelDriverDur(
 
     private fun newHost(): ManagedHost =
         ManagedHost(
-            scheduler = controller.scheduler(),
-            registry = registry,
+            scheduler = scheduler(),
+            registry = registryOf(DUR_HOST),
             journalFor = { ref -> if (ref in journaledRefs) journal else null },
         ).also { h ->
             h.deadLetterOutlet.subscribe(
@@ -1028,7 +1029,7 @@ internal class KernelDriverDur(
 
     /** Drive the shared controller to quiescence (checkpoint tasks / replayed frames settle). */
     private fun drain() {
-        controller.runToIdle()
+        drainController()
     }
 }
 

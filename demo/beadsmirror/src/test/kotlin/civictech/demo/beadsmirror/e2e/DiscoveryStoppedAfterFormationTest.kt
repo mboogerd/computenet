@@ -4,7 +4,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
-import civictech.demo.beadsmirror.DiscoveredIrohMirrorTransport
+import civictech.demo.beadsmirror.DiscoveredIrohPeerTransport
 import civictech.demo.beadsmirror.IrohSidecarGate
 import civictech.demo.beadsmirror.MulticastGate
 import civictech.iroh.IrohTransport
@@ -25,7 +25,7 @@ import java.nio.file.StandardOpenOption
  * 63um5-D4): "discovery killed after formation does not disconnect the
  * mesh" — SOC3 E1's precondition.
  *
- * [DiscoveredIrohMirrorTransport.stopDiscovery] detaches the discovery
+ * [DiscoveredIrohPeerTransport.stopDiscovery] detaches the discovery
  * policy but keeps the formed link (63um5-D1). There is no `UNWATCH` in the
  * sidecar protocol, so after the stop the sidecar keeps emitting
  * `PEER_DISCOVERED` for anything it still sees on the segment — this test
@@ -35,7 +35,7 @@ import java.nio.file.StandardOpenOption
  * no new link.
  *
  * **A red run means:** a rig timeout naming the dialer, or non-convergence,
- * means [DiscoveredIrohMirrorTransport.stopDiscovery] did not actually keep
+ * means [DiscoveredIrohPeerTransport.stopDiscovery] did not actually keep
  * the link up (or closed it outright — the shape mutation (a) of this task's
  * bead produces); a `dialsAttempted`/link-count assertion failing without a
  * convergence failure means the detached policy re-dialled the stranger it
@@ -86,7 +86,7 @@ class DiscoveryStoppedAfterFormationTest {
 
     @Test
     fun `BS-09 mutations converge over the links that outlived a stopped discovery policy`() {
-        val transport = DiscoveredIrohMirrorTransport(binary = IrohSidecarGate.orSkip(), reconnectBackoff = { 10L })
+        val transport = DiscoveredIrohPeerTransport(binary = IrohSidecarGate.orSkip(), reconnectBackoff = { 10L })
         val theRig = TwoNodeRig.create("bds2-discovery-stopped", transport = transport)
         rig = theRig
         theRig.startListener()
@@ -176,7 +176,7 @@ class DiscoveryStoppedAfterFormationTest {
  * **Why.** This module's tests run on parallel forks (`maxParallelForks` in
  * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`: 2 on a 4-vCPU CI
  * runner), and every `--offline --mdns` sidecar on the host is discovered by
- * every other. [DiscoveredIrohMirrorTransport]'s dialling end admits any
+ * every other. [DiscoveredIrohPeerTransport]'s dialling end admits any
  * advertiser — the rig's side has `allow = null`, and the one allowlist that
  * would narrow it names the listener's key, which [DSC2-NEU-02] forbids
  * handing over — so two rigs running at once cross-peer. The rig names

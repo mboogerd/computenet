@@ -58,7 +58,7 @@ class WsHelloCredentialsAtStartTest {
         try {
             shouldThrow<UnsendableHelloCredentialsException> {
                 WsTransport.listen(channel, side(named("al ice", 1)))
-            }.message!! shouldContain "empty or contains a space"
+            }.message!! shouldContain "cannot be a HELLO3 name token"
             channel.isOpen shouldBe true
         } finally {
             channel.close()
@@ -74,7 +74,7 @@ class WsHelloCredentialsAtStartTest {
             }.message!! shouldContain "at most $MAX_HELLO_STATEMENTS"
             shouldThrow<UnsendableHelloCredentialsException> {
                 WsTransport.connect(uri, side(named("al ice", 1))) { 0L }
-            }.message!! shouldContain "empty or contains a space"
+            }.message!! shouldContain "cannot be a HELLO3 name token"
 
             // Nothing reached the port: not the reachability probe, not the handshake.
             server.soTimeout = 300

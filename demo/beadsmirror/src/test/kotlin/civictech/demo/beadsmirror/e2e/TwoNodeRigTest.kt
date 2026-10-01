@@ -44,7 +44,7 @@ import java.util.Collections
  *
  * **Since task computenet-7em.2.1** it also carries the transport seam's smoke
  * case: the rig's wiring is injected ([TwoNodeRig]'s single
- * [civictech.demo.beadsmirror.MirrorTransport], shared by both nodes), and a
+ * [civictech.cell.wire.PeerTransport], shared by both nodes), and a
  * delta minted while [TwoNodeRig.partition] holds arrives once
  * [TwoNodeRig.heal] runs. Nothing in this file names a socket type.
  *

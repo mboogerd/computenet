@@ -64,6 +64,7 @@ include(":economy")
 include(":inspect")
 include(":timetravel")
 include(":iroh")
+include(":runtime")
 include(":demo:shell")
 include(":demo:shopping")
 include(":demo:exchange")
@@ -80,4 +81,3 @@ include(":demo:alignment")
 include(":demo:social")
 
 rootProject.name = "computenet"
-

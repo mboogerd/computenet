@@ -578,6 +578,9 @@ jobs:
       - name: Run full concord corpus (core, dist, dur)
         run: ./gradlew :concord:test -Pconcord.profiles=core,dist,dur
 
+      - name: Run Concord dist profile over WebSocket transport
+        run: ./gradlew :concord:test -Pconcord.profiles=dist -Pconcord.transport=ws
+
       - name: Regenerate concordance matrix
         run: ./gradlew :concord:concordance
 

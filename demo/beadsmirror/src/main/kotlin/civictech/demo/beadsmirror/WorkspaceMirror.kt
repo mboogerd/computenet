@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror
 
+import civictech.cell.wire.PeerTransport
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.baseline.PollLoopDied
@@ -265,7 +266,7 @@ class WorkspaceMirror private constructor(
             pollInterval: Duration,
             onEvent: (MirrorEvent) -> Unit,
             peeringSettings: MirrorPeeringSettings? = null,
-            peeringTransport: MirrorTransport? = null,
+            peeringTransport: PeerTransport? = null,
             /**
              * Opt-in (task computenet-6wc.1.5): when true, this workspace runs
              * a [WriteBackApplier] over its own `bd export`/`bd import`, one
@@ -292,10 +293,12 @@ class WorkspaceMirror private constructor(
             // Two-node mode, and NOTHING of it in solo mode: with no peering
             // settings this stays null, `refs` stays null, the projector keeps
             // its random-ref default, MirrorState keeps its no-op swap hook,
-            // and no `:wire`/replication class is loaded. Constructed before
+            // and no transport/replication class is loaded. Constructed before
             // the projector because Replication's registry hooks must precede
             // every announcement (see [MirrorPeering]).
-            val peering = peeringSettings?.let { MirrorPeering(it, peeringTransport ?: WsMirrorTransport()) }
+            val peering = peeringSettings?.let {
+                peeringTransport?.let { transport -> MirrorPeering(it, transport) } ?: MirrorPeering(it)
+            }
             val refs = peering?.refs
 
             val minter = DotMinter(identity)
