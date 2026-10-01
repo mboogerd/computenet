@@ -31,8 +31,9 @@ import java.util.LinkedHashMap
  * [intakeLowWaterCheck] runs the host's intake-saturation bookkeeping from
  * *inside* the same critical section a dequeue happens in (preserving the
  * original atomicity), returning any low-water listeners to fire once the lock
- * is released; [deliver] performs the actual per-invocation dispatch; [submit]
- * re-enters the host's intake for parked-then-unparked replay.
+ * is released; [deliver] performs the actual per-invocation dispatch; [resume]
+ * re-enters the host's intake for parked-then-unparked replay without repeating
+ * the write-ahead append already performed when the host first accepted the frame.
  */
 class AttentionScheduler(
     /** Attention → resources mapping (spec 34, M6.3); null = pre-M6 FIFO scheduling. */
@@ -46,8 +47,8 @@ class AttentionScheduler(
     /** Runs while [dataLock] is held, right after a dequeue; returns listeners to fire post-unlock. */
     private val intakeLowWaterCheck: () -> List<() -> Unit>,
     private val deliver: suspend (HostedPortInvocation) -> Unit,
-    /** Re-enters the host's intake (`enqueueHostedInvocation`) for unparked replay. */
-    private val submit: (HostedPortInvocation) -> Unit,
+    /** Re-enters the host's intake gates, but not its journal tee, for unparked replay. */
+    private val resume: (HostedPortInvocation) -> Unit,
 ) {
 
     /** Callers hold [dataLock]. Visible to the host for the not-yet-moved `coalesce`/teardown paths. */
@@ -230,6 +231,6 @@ class AttentionScheduler(
             attentionParked.remove(cellRef)?.also { lastAttended[cellRef] = dispatchStep }
         } ?: return
         notifyResumed(cellRef)
-        parked.forEach { submit(it.second) }
+        parked.forEach { resume(it.second) }
     }
 }
