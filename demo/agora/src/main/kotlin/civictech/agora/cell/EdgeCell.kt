@@ -32,29 +32,36 @@ interface EdgeApi : ClaimApi {
  *
  * [quiescence] > 0 designates this edge a **cycle head**. The source feed has
  * both an ordinary inlet and a kernel [PropagateFeedbackInlet]; the service
- * lands the admitted cycle-closing link on the latter. The kernel then absorbs
- * sub-threshold returning [CredenceUpdate] deltas without re-origination while
- * keeping the edge's outbound broadcast untouched. The service sets the
- * threshold only on edges that close a cycle.
+ * lands the admitted cycle-closing link on the latter. The kernel inlet keeps
+ * the cycle's admission and fresh-wave boundary with quiescence `0.0`, while
+ * this cell applies [quiescence] to drift from its last accepted source value.
+ * That split is deliberate: [CredenceUpdate.size] measures only the source's
+ * latest emission, so using it as the app threshold would discard consecutive
+ * small updates whose accumulated drift is significant. The service sets the
+ * app threshold only on edges that close a cycle.
  */
 class EdgeCell(
     val polarity: Polarity,
     ref: CellRef = CellRef(UUID.randomUUID()),
     semantics: GradualSemantics = DfQuad,
     val quiescence: Double = 0.0,
+    initialSourceCredence: Double? = null,
 ) : ClaimCell(ref, semantics), EdgeApi {
 
     override val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<CredenceUpdate>>())
     val feedbackInlet = registerPort(
         "feedbackInlet",
         PropagateFeedbackInlet<CredenceUpdate>(
-            quiescence = quiescence,
+            quiescence = 0.0,
             payloadType = CredenceUpdate::class.java,
         ) { value -> onSource(value) },
     )
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<InfluenceDelta>>())
 
-    private var sourceCredence: Double = credence // neutral until the source's catch-up arrives
+    // A feedback inlet absorbs size-zero updates, including FanOutlet's
+    // state-as-delta catch-up. Agora therefore primes a new head from its
+    // source's current state; ordinary edges still learn it through catch-up.
+    private var sourceCredence: Double = initialSourceCredence ?: credence
     private var lastInfluence: Double = credence * sourceCredence
 
     init {
@@ -68,6 +75,11 @@ class EdgeCell(
     override fun onCredence(value: Double) = emitInfluence()
 
     private fun onSource(value: CredenceUpdate) {
+        val drift = abs(value.credence - sourceCredence)
+        // CredenceUpdate.size is relative to the source's last emission, not
+        // this edge's last accepted source value. Accumulate sub-threshold
+        // laps against the stored value so their total drift stays bounded.
+        if (quiescence > 0 && drift < quiescence) return
         sourceCredence = value.credence
         emitInfluence()
     }

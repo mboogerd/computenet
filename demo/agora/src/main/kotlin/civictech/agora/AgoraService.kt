@@ -172,7 +172,13 @@ class AgoraService(
         // through the future), so it must not sit between publication into
         // [nodes] and this append (computenet-f7y8).
         log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
-        val edge = EdgeCell(polarity, ref, semantics, quiescence = if (head) quiescence else 0.0)
+        val edge = EdgeCell(
+            polarity,
+            ref,
+            semantics,
+            quiescence = if (head) quiescence else 0.0,
+            initialSourceCredence = if (head) cells.getValue(source).credence else null,
+        )
             .also { it.catchUp = !replaying }
         manage.spawn(edge)
         cells[ref] = edge
