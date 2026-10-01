@@ -1,14 +1,19 @@
 package civictech.cell.durability
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Consumer
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
+import civictech.cell.Stateful
+import civictech.cell.SuspendingCell
 import civictech.cell.Timestamp
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionSupport
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.CoroutineScheduler
 import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.IntakeBound
@@ -17,18 +22,27 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SaturationPolicy
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.assertions.withClue
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.jupiter.api.Test
+import java.io.Serializable
+import java.util.ArrayList
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * computenet-xy7w4 R-D (design D3; 93 I-7 R7, spec 24 `[24-DUR-02]`): `checkpoint(J)` is safe at
@@ -47,6 +61,86 @@ class LiveCheckpointTest {
 
     interface SetInletProxy {
         val inlet: Use<SetOps<String>>
+    }
+
+    interface IntInletProxy {
+        val inlet: Use<Consumer<Int>>
+    }
+
+    interface StringInletProxy {
+        val inlet: Use<Consumer<String>>
+    }
+
+    interface SuspendingInlet {
+        suspend fun trigger()
+    }
+
+    private class SupervisedFoldCell(override val ref: CellRef) : Cell, Stateful {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        val received = mutableListOf<Int>()
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    if (input < 0) throw IllegalStateException("poison: $input")
+                    received += input
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = ArrayList(received)
+
+        @Suppress("UNCHECKED_CAST")
+        override fun restore(state: Serializable) {
+            received.clear()
+            received += state as List<Int>
+        }
+    }
+
+    private class ColdFoldCell(override val ref: CellRef) : Cell, Stateful {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
+        val received = mutableListOf<String>()
+
+        fun activate() {
+            inlet.serve(object : Consumer<String> {
+                override fun provide(input: String) {
+                    received += input
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = ArrayList(received)
+
+        @Suppress("UNCHECKED_CAST")
+        override fun restore(state: Serializable) {
+            received.clear()
+            received += state as List<String>
+        }
+    }
+
+    private class SuspendingFoldCell(
+        override val ref: CellRef,
+        private val entered: CountDownLatch,
+        private val release: CompletableDeferred<Unit>,
+    ) : Cell, Stateful, SuspendingCell {
+        val inlet = registerPort("inlet", FanInlet(SuspendingInlet::class.java))
+        var applied = false
+
+        init {
+            inlet.serve(object : SuspendingInlet {
+                override suspend fun trigger() {
+                    entered.countDown()
+                    release.await()
+                    applied = true
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = applied
+
+        override fun restore(state: Serializable) {
+            applied = state as Boolean
+        }
     }
 
     private fun ops(host: ManagedHost, ref: CellRef): SetOps<String> =
@@ -320,5 +414,160 @@ class LiveCheckpointTest {
         }
 
         recover(SimulationController(seed = 1), journal.inner, ref).membership() shouldBe setOf("before", "late")
+    }
+
+    @Test
+    fun `(h) a checkpoint carries frames parked by supervision SUSPEND`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = SupervisedFoldCell(ref)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        host.managementInlet.call.supervise(ref, SupervisionPolicy.SUSPEND)
+
+        val inlet = (HostedCellProxy.create(ref, host, IntInletProxy::class.java) as IntInletProxy).inlet.call
+        listOf(-1, 1, 2).forEach(inlet::provide)
+        controller.runToIdle()
+        withClue("the poison suspended the cell and the later frames are parked, not applied") {
+            host.isSuspended(ref) shouldBe true
+            cell.received shouldBe emptyList()
+        }
+
+        host.checkpoint(journal)
+        records(journal).filterIsInstance<DecodedJournalRecord.Frame>()
+            .map { civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single() } shouldBe listOf(1, 2)
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = SupervisedFoldCell(ref)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        recovered.received shouldBe listOf(1, 2)
+    }
+
+    @Test
+    fun `(i) a checkpoint carries a cold inlet pre-activation tail`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = ColdFoldCell(ref)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+
+        val inlet = (HostedCellProxy.create(ref, host, StringInletProxy::class.java) as StringInletProxy).inlet.call
+        val accepted = listOf("first", "second", "third")
+        accepted.forEach(inlet::provide)
+        controller.runToIdle()
+        cell.received shouldBe emptyList()
+
+        host.checkpoint(journal)
+        records(journal).filterIsInstance<DecodedJournalRecord.Frame>()
+            .map { civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single() } shouldBe accepted
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = ColdFoldCell(ref)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        recovered.received shouldBe emptyList()
+        recovered.activate()
+        recovered.received shouldBe accepted
+    }
+
+    @Test
+    fun `(j) a suspending handler completes before a checkpoint can run`() {
+        val journal = InMemoryJournal()
+        val scheduler = CoroutineScheduler("hknt0-mid-handler")
+        val entered = CountDownLatch(1)
+        val release = CompletableDeferred<Unit>()
+        val ref = CellRef(UUID.randomUUID())
+        val durableRef = CellRef(UUID.randomUUID())
+        val host = ManagedHost(
+            scheduler = scheduler,
+            journalFor = { if (it == durableRef) journal else null },
+        )
+        host.managementInlet.call.spawn(SetCell<String>(durableRef))
+        val cell = SuspendingFoldCell(ref, entered, release)
+        host.managementInlet.call.spawn(cell)
+        host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_API,
+                Invocation("trigger", emptyList(), emptyList()),
+            ),
+        )
+        check(entered.await(15, TimeUnit.SECONDS)) { "suspending handler never started" }
+
+        val checkpointRequested = CountDownLatch(1)
+        val checkpointer = CompletableFuture.runAsync {
+            checkpointRequested.countDown()
+            host.checkpoint(journal)
+        }
+        check(checkpointRequested.await(15, TimeUnit.SECONDS)) { "checkpoint caller never started" }
+
+        try {
+            shouldThrow<TimeoutException> {
+                checkpointer.get(300, TimeUnit.MILLISECONDS)
+            }
+            cell.applied shouldBe false
+
+            release.complete(Unit)
+            checkpointer.get(15, TimeUnit.SECONDS)
+            cell.applied shouldBe true
+            records(journal).count { it is DecodedJournalRecord.Frame } shouldBe 0
+        } finally {
+            release.complete(Unit)
+            runCatching { checkpointer.get(15, TimeUnit.SECONDS) }
+            scheduler.shutdown()
+        }
+    }
+
+
+    /**
+     * Crash-recovers a SUSPEND-supervised cell whose parked frames were resumed and delivered
+     * live, with or without a checkpoint taken while they were parked. Recovery must deliver
+     * each accepted frame exactly once: a resume that re-tees parked frames leaves a second
+     * WAL copy (beside the intake's, or beside the copy the checkpoint carried).
+     */
+    private fun resumedThenRecovered(checkpointWhileParked: Boolean): List<Int> {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = SupervisedFoldCell(ref)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        host.managementInlet.call.supervise(ref, SupervisionPolicy.SUSPEND)
+        val inlet = (HostedCellProxy.create(ref, host, IntInletProxy::class.java) as IntInletProxy).inlet.call
+        listOf(-1, 1, 2).forEach(inlet::provide)
+        controller.runToIdle()
+        if (checkpointWhileParked) host.checkpoint(journal)
+        host.managementInlet.call.resume(ref)
+        controller.runToIdle()
+        withClue("resume delivers the parked frames live") { cell.received shouldBe listOf(1, 2) }
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = SupervisedFoldCell(ref)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        return recovered.received
+    }
+
+    @Test
+    fun `(k) resumed SUSPEND-parked frames are not re-journaled, so recovery delivers them once`() {
+        withClue("checkpoint taken while parked, then resume, then crash") {
+            resumedThenRecovered(checkpointWhileParked = true) shouldBe listOf(1, 2)
+        }
+        withClue("no checkpoint: intake copy only") {
+            resumedThenRecovered(checkpointWhileParked = false) shouldBe listOf(1, 2)
+        }
     }
 }
