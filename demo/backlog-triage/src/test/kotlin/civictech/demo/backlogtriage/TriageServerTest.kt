@@ -1,7 +1,12 @@
 package civictech.demo.backlogtriage
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.JvmPeer
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -14,6 +19,11 @@ class TriageServerTest {
     /** Order of ids as they appear in the /features array. */
     private fun order(json: String): List<String> =
         Regex(""""id":"([^"]+)"""").findAll(json).map { it.groupValues[1] }.toList()
+
+    private fun assertOnlyHostJournal(dir: Path) {
+        val files = Files.list(dir).use { paths -> paths.map { it.fileName.toString() }.sorted().toList() }
+        assertEquals(listOf(TRIAGE_JOURNAL_FILE), files)
+    }
 
     @Test
     fun `preferences fold into a collective ranking that reorders live`() {
@@ -120,58 +130,86 @@ class TriageServerTest {
         }
     }
 
+    @Tag("multi-jvm")
     @Test
-    fun `journalled features and preferences survive a restart`() {
-        val journal = kotlin.io.path.createTempDirectory("triage").resolve("triage.jsonl")
-
-        val first = TriageApp(port = 0, journalPath = journal).start()
+    fun `a kill -9 restart rebuilds edited features preferences and ranking from host journal`() {
+        val journal = kotlin.io.path.createTempDirectory("triage")
+        val peers = mutableListOf<JvmPeer.Peer>()
+        var peer = JvmPeer.launch(
+            "civictech.demo.backlogtriage.TriageAppKt",
+            "0",
+            "--journal",
+            journal.toString(),
+        ).also(peers::add)
         try {
-            val probe = HttpProbe("http://localhost:${first.boundPort}")
-            probe.postJson("""{"id":"alpha","title":"Alpha","body":"# Alpha"}""", "/features")
-            probe.postJson("""{"id":"beta","title":"Beta"}""", "/features")
-            probe.postJson("""{"id":"gamma","title":"Gamma"}""", "/features")
-            probe.postJson("""{"agent":"ada","winner":"alpha","loser":"beta"}""", "/prefer")
-            probe.postJson("""{"agent":"bo","winner":"alpha","loser":"gamma"}""", "/prefer")
-            probe.awaitFeatures { order(it).firstOrNull() == "alpha" }
-        } finally {
-            first.stop()
-        }
+            val firstPort = peer.port("http")
+            lateinit var before: String
+            lateinit var alphaBefore: String
+            HttpProbe("http://localhost:$firstPort").use { probe ->
+                assertEquals(200, probe.postJson("""{"id":"alpha","title":"Alpha","body":"# Alpha"}""", "/features").statusCode())
+                assertEquals(
+                    200,
+                    probe.postJson(
+                        """{"id":"alpha","title":"Alpha revised","body":"# Alpha revised\nDurable body"}""",
+                        "/features",
+                    ).statusCode(),
+                )
+                assertEquals(200, probe.postJson("""{"id":"beta","title":"Beta"}""", "/features").statusCode())
+                assertEquals(200, probe.postJson("""{"id":"gamma","title":"Gamma"}""", "/features").statusCode())
+                assertEquals(
+                    200,
+                    probe.postJson("""{"agent":"ada","winner":"alpha","loser":"beta"}""", "/prefer").statusCode(),
+                )
+                assertEquals(
+                    200,
+                    probe.postJson("""{"agent":"bo","winner":"alpha","loser":"gamma"}""", "/prefer").statusCode(),
+                )
+                assertEquals(200, probe.delete("/features/beta").statusCode())
 
-        val second = TriageApp(port = 0, journalPath = journal).start()
-        try {
-            val probe = HttpProbe("http://localhost:${second.boundPort}")
-            // features, meta, prefs, and the derived ranking all recover
-            // (poll on the full condition — the independent hub folds can be
-            // momentarily torn across views, the F-5 observation-edge glitch)
-            var json = probe.awaitFeatures {
-                order(it) == listOf("alpha", "beta", "gamma") &&
-                        """"rank":1,"id":"alpha","title":"Alpha","score":1.0000,"wins":2""" in it
+                before = probe.await(path = "/state") { state ->
+                    order(state) == listOf("alpha", "gamma") &&
+                        """"id":"alpha","title":"Alpha revised","score":1.0000,"wins":1""" in state &&
+                        """"prefs":[{"agent":"bo","winner":"alpha","loser":"gamma"}]""" in state
+                }
+                alphaBefore = probe.get("/features/alpha").body()
+                assertTrue("Durable body" in alphaBefore, alphaBefore)
+                assertEquals(404, probe.get("/features/beta").statusCode())
             }
-            assertTrue(""""rank":1,"id":"alpha","title":"Alpha","score":1.0000,"wins":2""" in json, json)
-            assertTrue("# Alpha" in probe.get("/features/alpha").body())
-            // the rating cells were rebuilt by journal replay through the prefs cell
-            val bt = probe.awaitFeatures(path = "/features?algo=bt") { order(it).firstOrNull() == "alpha" }
-            assertEquals("alpha", order(bt).first(), bt)
 
-            // the write-side pref index recovered too: ada's reverse vote
-            // still replaces her journalled original instead of stacking
-            probe.postJson("""{"agent":"ada","winner":"beta","loser":"alpha"}""", "/prefer")
-            // poll the full condition (as above): score and the wins/losses
-            // stats are independent folds and can be momentarily torn (F-5)
-            json = probe.awaitFeatures { """"id":"alpha","title":"Alpha","score":0.0000,"wins":1,"losses":1""" in it }
-            assertTrue(""""id":"alpha","title":"Alpha","score":0.0000,"wins":1,"losses":1""" in json, json)
-        } finally {
-            second.stop()
-        }
+            peer.kill()
+            assertTrue(peer.process.waitFor(10, TimeUnit.SECONDS), "the first backlog-triage JVM did not die")
 
-        // and the flip itself was journalled: a third boot sees the final state
-        val third = TriageApp(port = 0, journalPath = journal).start()
-        try {
-            val probe = HttpProbe("http://localhost:${third.boundPort}")
-            val json = probe.awaitFeatures { """"id":"alpha","title":"Alpha","score":0.0000,"wins":1,"losses":1""" in it }
-            assertTrue(""""id":"alpha","title":"Alpha","score":0.0000,"wins":1,"losses":1""" in json, json)
+            peer = JvmPeer.launch(
+                "civictech.demo.backlogtriage.TriageAppKt",
+                "0",
+                "--journal",
+                journal.toString(),
+            ).also(peers::add)
+            val secondPort = peer.port("http")
+            HttpProbe("http://localhost:$secondPort").use { probe ->
+                val after = probe.await(path = "/state") { it == before }
+                assertEquals(before, after)
+                assertEquals(alphaBefore, probe.get("/features/alpha").body())
+                assertEquals(404, probe.get("/features/beta").statusCode())
+
+                // The recovered synchronous preference mirror still enforces one direction per pair.
+                assertEquals(
+                    200,
+                    probe.postJson("""{"agent":"bo","winner":"gamma","loser":"alpha"}""", "/prefer").statusCode(),
+                )
+                val flipped = probe.await(path = "/state") {
+                    """"prefs":[{"agent":"bo","winner":"gamma","loser":"alpha"}]""" in it
+                }
+                assertTrue(""""winner":"alpha","loser":"gamma""" !in flipped, flipped)
+            }
+            assertOnlyHostJournal(journal)
+        } catch (failure: Throwable) {
+            throw AssertionError(
+                "${failure.message}\n\n${peers.joinToString("\n\n") { it.report() }}",
+                failure,
+            )
         } finally {
-            third.stop()
+            JvmPeer.destroy(peers)
         }
     }
 }
