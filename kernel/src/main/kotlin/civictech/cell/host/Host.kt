@@ -105,14 +105,13 @@ interface HostManagementApi {
 
     /**
      * Connects an outlet of one hosted cell to an inlet of another hosted cell.
+     * Equivalent to calling the five-argument overload with
+     * `options = LinkOptions.DEFAULT`.
      *
      * @param from The reference to the source cell.
      * @param outletName The name or identifier of the outlet on the source cell.
      * @param to The reference to the target cell.
      * @param inletName The name or identifier of the inlet on the target cell.
-     * Equivalent to calling the five-argument overload with
-     * `options = LinkOptions.DEFAULT`.
-     *
      * @return the handshake outcome ([LinkResult.Rejected] is returned, not thrown)
      */
     fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult
