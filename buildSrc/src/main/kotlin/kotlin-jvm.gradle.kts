@@ -247,8 +247,8 @@ tasks.withType<Test>().configureEach {
     //    `MirrorRoutesTest` uses `DemoShell(0)` and reads `boundPort`;
     //    `BeadsMirrorAppTest` takes `BeadsMirrorConfig.port`'s default of `0` and
     //    reads `app.boundPort`; `TwoNodeRig` starts its listener with
-    //    `MirrorWire.Listen(0)` and hands the DIALER `app.boundWsPort`, the port the
-    //    listener actually bound; `MirrorPeeringTest.BoundPort` binds `Listen(0)`
+    //    `MirrorWire.Listen(0)` and hands the DIALER `app.boundAddress.text`, the
+    //    address the listener actually bound; `MirrorPeeringTest.BoundPort` binds `Listen(0)`
     //    in-process and asserts the announced port is the bound one, while its other
     //    cases only PARSE flags (`"--listen", "0"`, `ws://localhost:9001`) and open
     //    nothing; `TwoJvmMirrorTest` passes `0` for every port and reads each child's

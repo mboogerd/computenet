@@ -12,10 +12,11 @@ import java.util.concurrent.atomic.AtomicLong
  * behind the seam, so kernel tests and `civictech.testkit.PeerTransportContract`
  * have a binding without `:wire` or `:iroh` on the classpath (gyvli-D1).
  *
- * **Rig-scoped, like `:demo:beadsmirror`'s `MirrorTransport`.** Both ends of a
- * loopback peering live in one process, so one instance is shared by the two
- * sides: [listen] records a side under a name, and [dial] pairs with the
- * recorded listener through `Peering.loopback(listener side, dialling side)`.
+ * **Rig-scoped, like `:demo:beadsmirror`'s `TwoNodeRig` shared `PeerTransport`
+ * instance.** Both ends of a loopback peering live in one process, so one
+ * instance is shared by the two sides: [listen] records a side under a name,
+ * and [dial] pairs with the recorded listener through
+ * `Peering.loopback(listener side, dialling side)`.
  * An address is `loopback://<name>`; an empty name asks for a fresh one (the
  * loopback's "port 0"), which [PeerListener.boundAddress] then reports.
  *
