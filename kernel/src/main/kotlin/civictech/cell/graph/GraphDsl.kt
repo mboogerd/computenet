@@ -30,17 +30,21 @@ fun interface CellFactory : Serializable {
     fun create(ref: CellRef): Cell
 }
 
-/** The key encoding and decoding used by a [KeyedFamily]'s durable key log. */
+/**
+ * The key encoding and decoding used by a [KeyedFamily]'s durable key log.
+ * A [GraphSpec] is serialized whole, so a custom codec's lambdas must be
+ * `@JvmSerializableLambda` (as the built-in codecs' are).
+ */
 class KeyCodec(
     val render: (Any) -> String,
     val parse: (String) -> Any,
 ) : Serializable {
     companion object {
         /** The default codec for string keys. */
-        val Strings = KeyCodec({ it as String }, { it })
+        val Strings = KeyCodec(@JvmSerializableLambda { it as String }, @JvmSerializableLambda { it })
 
         /** A decimal codec for long keys. */
-        val Longs = KeyCodec({ (it as Long).toString() }, { it.toLong() })
+        val Longs = KeyCodec(@JvmSerializableLambda { (it as Long).toString() }, @JvmSerializableLambda { it.toLong() })
     }
 }
 

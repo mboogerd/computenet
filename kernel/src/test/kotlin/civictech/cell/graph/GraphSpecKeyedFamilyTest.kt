@@ -156,6 +156,36 @@ class GraphSpecKeyedFamilyTest {
     }
 
     @Test
+    fun `a family spec survives Java serialization with both built-in codecs`(@TempDir dir: File) {
+        listOf(KeyCodec.Strings to "alice", KeyCodec.Longs to 42L).forEachIndexed { i, (codec, key) ->
+            val spec = GraphSpec(
+                listOf(
+                    SpawnStep(
+                        handle = "writers",
+                        factory = KeyedCellFactory { _, ref -> SetCell<String>(ref) },
+                        family = KeyedFamily("ser-writer", codec, "d"),
+                    ),
+                ),
+            )
+            val bytes = java.io.ByteArrayOutputStream()
+                .also { java.io.ObjectOutputStream(it).use { out -> out.writeObject(spec) } }
+                .toByteArray()
+            val revived = java.io.ObjectInputStream(java.io.ByteArrayInputStream(bytes)).readObject() as GraphSpec
+
+            val journal = dir.resolve("j$i")
+            val family = anyFamily(
+                revived.apply(ApplyContext(ManagedHost(), journalDirs = mapOf("d" to journal))).families.getValue("writers"),
+            )
+            family.getOrSpawn(key).ref shouldBe
+                CellRef(java.util.UUID.nameUUIDFromBytes("ser-writer:$key".toByteArray()))
+            File(journal, KeyedCells.KEYS_FILE).readLines() shouldBe listOf("$key")
+            anyFamily(
+                revived.apply(ApplyContext(ManagedHost(), journalDirs = mapOf("d" to journal))).families.getValue("writers"),
+            ).keys() shouldBe setOf(key)
+        }
+    }
+
+    @Test
     fun `family parameter refuses unsupported paths and missing journal directories`(@TempDir dir: File) {
         val spec = familySpec()
 
