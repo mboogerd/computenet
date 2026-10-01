@@ -733,6 +733,14 @@ open class ManagedHost(
     private val dataLock = Any()
 
     /**
+     * Exact in-process frames created by [stageBehindData]. Identity, rather
+     * than the protocol payload alone, keeps an independently received
+     * topology marker on the ordinary dead-letter path. Guarded by [dataLock].
+     */
+    private val stagedLinkCloseMarkers =
+        Collections.newSetFromMap(IdentityHashMap<HostedPortInvocation, Boolean>())
+
+    /**
      * Batched dispatch only ([dispatchBatch] `> 1`): true while a [drainBatch]
      * task is submitted-and-not-yet-finished. Guarded by [dataLock]; never read
      * or written on the `dispatchBatch == 1` path.
@@ -847,6 +855,7 @@ open class ManagedHost(
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
+            if (consumeStagedLinkCloseMarker(parked)) return@forEach
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
         }
@@ -999,7 +1008,7 @@ open class ManagedHost(
             protocolLink = link,
             protocolMessage = EdgeClose,
         )
-        stageForDataDispatch(close)
+        stageForDataDispatch(close, stagedLinkCloseMarker = true)
     }
 
     /**
@@ -1016,10 +1025,19 @@ open class ManagedHost(
         }
     }
 
-    private fun stageForDataDispatch(hostedInvocation: HostedPortInvocation) {
-        synchronized(dataLock) { attentionScheduler.stage(hostedInvocation) }
+    private fun stageForDataDispatch(
+        hostedInvocation: HostedPortInvocation,
+        stagedLinkCloseMarker: Boolean = false,
+    ) {
+        synchronized(dataLock) {
+            if (stagedLinkCloseMarker) stagedLinkCloseMarkers += hostedInvocation
+            attentionScheduler.stage(hostedInvocation)
+        }
         if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
     }
+
+    private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
+        synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
 
     private fun accept(hostedInvocation: HostedPortInvocation) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
@@ -1285,9 +1303,16 @@ open class ManagedHost(
                 return
             }
         }
-        val cell = cells[cellRef] ?: return deadLetter(
-            null, "unknown cell $cellRef", hostedInvocation
-        )
+        val cell = cells[cellRef]
+        if (cell == null) {
+            // A staged EdgeClose is terminal bookkeeping with no payload. If
+            // despawn removed its target before this deferred marker reached
+            // the head of the FIFO, the edge is already gone and delivery is
+            // complete; queued data remains on the dead-letter path below.
+            if (consumeStagedLinkCloseMarker(hostedInvocation)) return
+            return deadLetter(null, "unknown cell $cellRef", hostedInvocation)
+        }
+        consumeStagedLinkCloseMarker(hostedInvocation)
         val port = findPort(cell, hostedInvocation.portName) ?: return deadLetter(
             null, "unknown port '${hostedInvocation.portName}' on $cellRef", hostedInvocation
         )
