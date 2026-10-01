@@ -244,6 +244,35 @@ class CredenceGraphTest {
     }
 
     @Test
+    fun `a new head edge learns its source's current credence despite the absorbed size-0 catch-up`() {
+        // b's credence is fixed by its stance before the head edge exists; the a -> b edge has
+        // strength 0, so no later lap ever re-emits b. The head edge (b -> a) therefore learns
+        // b's credence ONLY from the catch-up its feedback inlet receives at link time.
+        fun build(withCycle: Boolean): Pair<CredenceGraph, CellRef> {
+            val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+            val g = CredenceGraph(world.host, world.registry, LayerSet.of(listOf("dfquad")), quiescence = 1e-3)
+            val a = g.createClaim("a")
+            val b = g.createClaim("b")
+            g.setStance(a, "u", 0.6)
+            g.setStance(b, "u", 0.95)
+            if (withCycle) {
+                val e1 = g.createEdge(a, b, Polarity.SUPPORT)
+                g.setStance(e1, "u", 0.0)
+            }
+            world.runToIdle()
+            val head = g.createEdge(b, a, Polarity.ATTACK)
+            assertEquals(withCycle, g.nodeInfo(head)!!.head)
+            world.runToIdle()
+            return g to a
+        }
+        val (cyclic, a1) = build(withCycle = true)
+        val (acyclic, a2) = build(withCycle = false)
+        // The a -> b edge's residual strength lets a sub-threshold lap through the weak tier
+        // (accepted, wakkv-D12), so compare within 10q; the un-primed head missed by 0.135.
+        assertEquals(acyclic.credenceOf(a2)!!.values.single(), cyclic.credenceOf(a1)!!.values.single(), absoluteTolerance = 1e-2)
+    }
+
+    @Test
     fun `plain frame inlet cannot close the sensitivity cycle of a head`() {
         val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
         val g = CredenceGraph(world.host, world.registry, LayerSet.of(listOf("dfquad")), quiescence = 1e-3)

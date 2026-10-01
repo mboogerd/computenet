@@ -254,7 +254,14 @@ class CredenceGraph(
             reaches(from = target, to = source)
         }
         log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
-        val edge = EdgeNode(polarity, ref, layers, quiescence = if (head) quiescence else 0.0)
+        val edge = EdgeNode(
+            polarity,
+            ref,
+            layers,
+            quiescence = if (head) quiescence else 0.0,
+            // A head's feedback inlet absorbs the size-0 catch-up, so prime it (as AgoraService does).
+            initialSourceCredence = if (head) cells.getValue(source).credence.values else null,
+        )
         manage.spawn(edge)
         cells[ref] = edge
         wire(ref, "credenceOutlet", hub.ref, "inlet")

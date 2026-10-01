@@ -168,6 +168,7 @@ class EdgeNode(
     ref: CellRef,
     layers: LayerSet,
     val quiescence: Double = 0.0,
+    initialSourceCredence: List<Double>? = null,
 ) : ClaimNode(ref, layers) {
     val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<Credence>>())
     val feedbackInlet = registerPort(
@@ -179,8 +180,12 @@ class EdgeNode(
     )
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<Influence>>())
 
-    /** Neutral until the source's catch-up arrives. */
-    private var sourceCredence: List<Double> = credence.values
+    /**
+     * Neutral until the source's catch-up arrives — except on a head: its
+     * [feedbackInlet] absorbs that size-0 catch-up, so the graph primes it
+     * with [initialSourceCredence] (wakkv-D12 amendment).
+     */
+    private var sourceCredence: List<Double> = initialSourceCredence ?: credence.values
     private var last = Influence(ref, polarity, credence.values, sourceCredence, size = 0.0)
 
     init {
