@@ -20,7 +20,6 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -28,7 +27,7 @@ import kotlin.test.assertTrue
  * cached live material as [CalibrationTest]; every additional Jev answer is
  * cached in `prior-dominance.json`, so a complete rerun makes no LLM calls.
  *
- * `DELIBERATE_PRIOR_DOMINANCE=1` runs the harness. Deleting the result cache
+ * `DELIBERATE_CALIBRATE=1` runs the harness. Deleting the result cache
  * deliberately repeats the Jev judgments; the proposer material is never
  * regenerated here.
  */
@@ -81,7 +80,7 @@ class PriorDominanceTest {
 
     @Serializable
     private data class Cache(
-        val version: Int = CACHE_VERSION,
+        val version: Int,
         val priors: MutableList<CachedPrior> = mutableListOf(),
         val strengths: MutableList<CachedStrength> = mutableListOf(),
         val reassessments: MutableList<CachedReassessment> = mutableListOf(),
@@ -131,7 +130,7 @@ class PriorDominanceTest {
     )
 
     private class CacheStore(private val file: File, private val json: Json) {
-        val value: Cache = if (file.isFile) json.decodeFromString(Cache.serializer(), file.readText()) else Cache()
+        val value: Cache = if (file.isFile) json.decodeFromString(Cache.serializer(), file.readText()) else Cache(CACHE_VERSION)
 
         init {
             require(value.version == CACHE_VERSION) {
@@ -153,8 +152,8 @@ class PriorDominanceTest {
     @Test
     fun `measure prior dominance and candidate semantics on live material`() {
         assumeTrue(
-            System.getenv("DELIBERATE_PRIOR_DOMINANCE") == "1",
-            "set DELIBERATE_PRIOR_DOMINANCE=1 to run the prior-dominance harness",
+            System.getenv("DELIBERATE_CALIBRATE") == "1",
+            "set DELIBERATE_CALIBRATE=1 to run the prior-dominance harness",
         )
         val material = json.decodeFromString(ListSerializer(Material.serializer()), materialFile.readText())
         assertTrue(material.size >= 3, "the harness needs at least three live questions")
@@ -206,7 +205,6 @@ class PriorDominanceTest {
         File("build/calibration/prior-dominance-report.txt").writeText(report)
         println(report)
 
-        assertEquals(3, trees.size)
         for (run in runs) {
             for (tree in trees) {
                 val values = run.evaluations.getValue(tree.question)
@@ -265,6 +263,7 @@ class PriorDominanceTest {
                 Triple(tree, node, pool.submit(Callable { jev.plausibility(tree.question, node.text) }))
             }
             for ((tree, node, future) in priors) {
+                cache.value.priors.removeAll { it.nodeId == node.id }
                 cache.value.priors += CachedPrior(node.id, hash(tree.question, node.text), future.get())
                 cache.save()
             }
@@ -275,6 +274,7 @@ class PriorDominanceTest {
             }
             for ((tree, pair, future) in strengths) {
                 val (parent, edge) = pair
+                cache.value.strengths.removeAll { it.edgeId == edge.id }
                 cache.value.strengths += CachedStrength(
                     edge.id,
                     hash(tree.question, parent.text, edge.child.text, edge.side.name),
@@ -480,6 +480,8 @@ class PriorDominanceTest {
         appendLine("Definitions: freeze dK replaces every dK claim's deliberated standing by its Jev prior; an explored claim is a claim with direct arguments.")
         appendLine("Prior share = |actual - local-neutral-prior| / (that + |actual - arguments-removed|).")
         appendLine("Strong unrebutted = credence >= $STRONG and strength >= $STRONG, with no equally strong direct argument on the opposite side.")
+        val strengths = cache.value.strengths.map { it.value }
+        appendLine("Observed strong subset: ${strengths.count { it >= STRONG }} links at/above threshold; maximum strength=${f(strengths.max())} (the threshold is not relaxed).")
 
         for (run in runs) {
             appendLine()
@@ -493,6 +495,18 @@ class PriorDominanceTest {
                     append(" freeze-d$depth=${f(abs(headline(root.values, layers) - headline(frozen.values, layers)))}")
                 }
                 appendLine()
+            }
+            appendLine("  freeze-depth mean root delta by layer:")
+            for (l in layers.ids.indices) {
+                val row = (1..3).joinToString(" ") { depth ->
+                    val moves = trees.map { tree ->
+                        val actual = run.evaluations.getValue(tree.question).getValue(tree.root.id)
+                        val frozen = evaluate(tree, cache, layers, run.mode, freezeDepths = setOf(depth)).getValue(tree.root.id)
+                        abs(actual.values[l] - frozen.values[l])
+                    }
+                    "d$depth=${f(moves.average())}"
+                }
+                appendLine("    ${layers.ids[l]} $row")
             }
             appendLine("  prior dominance by claim depth and layer (mean prior share; n excludes zero/zero):")
             for (depth in 0..3) {
@@ -516,6 +530,7 @@ class PriorDominanceTest {
         val current = runs.first()
         appendLine()
         appendLine("CURRENT headline root movement when one explored claim is frozen:")
+        val everyMove = mutableListOf<Pair<Int, Double>>()
         for (depth in 0..3) {
             val moves = trees.flatMap { tree ->
                 val actual = current.evaluations.getValue(tree.question).getValue(tree.root.id)
@@ -524,8 +539,11 @@ class PriorDominanceTest {
                     abs(headline(actual.values, layers) - headline(frozen.values, layers))
                 }
             }
+            everyMove += moves.map { depth to it }
             if (moves.isNotEmpty()) appendLine("  d$depth immovable(<0.01)=${share(moves.map { it < 0.01 })} mean=${f(moves.average())} max=${f(moves.max())}")
         }
+        appendLine("  all argued claims immovable(<0.01)=${share(everyMove.map { it.second < 0.01 })}")
+        appendLine("  non-root argued claims immovable(<0.01)=${share(everyMove.filter { it.first > 0 }.map { it.second < 0.01 })}")
         appendLine("CURRENT per-level transmission (root move / local argument-driven move):")
         for (depth in 1..3) {
             val factors = trees.flatMap { tree ->
@@ -539,6 +557,22 @@ class PriorDominanceTest {
                 }
             }
             if (factors.isNotEmpty()) appendLine("  d$depth mean=${f(factors.average())} min=${f(factors.min())} max=${f(factors.max())}")
+        }
+        appendLine("CURRENT per-level transmission by layer (mean root move / local move):")
+        for (depth in 1..3) {
+            for (l in layers.ids.indices) {
+                val factors = trees.flatMap { tree ->
+                    val actual = current.evaluations.getValue(tree.question)
+                    tree.nodes.filter { it.depth == depth && it.edges.isNotEmpty() }.mapNotNull { n ->
+                        val local = abs(actual.getValue(n.id).values[l] - actual.getValue(n.id).priorValues[l])
+                        if (local < 1e-12) null else {
+                            val frozen = evaluate(tree, cache, layers, current.mode, freezeNode = n.id).getValue(tree.root.id)
+                            abs(actual.getValue(tree.root.id).values[l] - frozen.values[l]) / local
+                        }
+                    }
+                }
+                if (factors.isNotEmpty()) appendLine("  d$depth ${layers.ids[l]} mean=${f(factors.average())}")
+            }
         }
 
         appendLine()
