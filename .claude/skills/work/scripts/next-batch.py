@@ -412,8 +412,33 @@ HEADROOM_HIGH = 40.0     # >= this: continue is cheap regardless of relatedness
 HEADROOM_LOW = 15.0      # <= this: not enough room left to risk a rebuild mid-unit
 RELATEDNESS = frozenset({"same-feature", "same-epic", "different-epic", "unclear"})
 
+# 5f routes that pick a genuinely new epic-level unit, mapped to what that
+# choice means for continuation (computenet-f3i26 design note, 2026-10-01):
+# staying under the held epic (1, a sibling feature; 2b, your own blocker) is
+# same-epic; leaving it (3, an item blocked-elsewhere; 4, continuation-work
+# pickup once the epic is dry) is different-epic. Route 0 (a second unit
+# dispatched in parallel while one runs) is a concurrency question, not a
+# continuation one, and route 2 (waiting on a shipped feature's merge) never
+# dispatches a new unit — neither ever calls this. "same-feature" is not
+# reachable from a route at all: it means the next unit is still part of the
+# feature already in flight, i.e. more of 5b/5c's own task loop, which never
+# reaches 5f's route table — pass it explicitly when that is the situation.
+ROUTE_RELATEDNESS = {"1": "same-epic", "2b": "same-epic",
+                     "3": "different-epic", "4": "different-epic"}
 
-def continuation_advice(headroom_pct, relatedness, jev_verdict=None):
+
+def relatedness_for_route(route):
+    """Derive continuation relatedness mechanically from a 5f route instead
+    of asking the orchestrator to self-report it — the route already encodes
+    the relationship, and self-report risks a session rounding toward
+    CONTINUE-favoring categories because it wants to keep working. Unknown or
+    unmapped routes (including None) read "unclear", which still resolves
+    correctly through continuation_advice (ESCALATE in the mid-band, same as
+    a genuinely unsure self-report)."""
+    return ROUTE_RELATEDNESS.get(str(route), "unclear")
+
+
+def continuation_advice(headroom_pct, relatedness, jev_verdict=None, epic_closed=False):
     """Continue the orchestrator's OWN session into the next ticket, or hand
     off to a fresh one — the happy-path twin of the failure-side per-agent
     bound (computenet-9zzsc / PR #1191's dispatched-<id> bounds, which cover
@@ -422,6 +447,19 @@ def continuation_advice(headroom_pct, relatedness, jev_verdict=None):
     signals, not a judgment call, because a Jev round-trip on every ticket
     boundary would tax the hot path for a question that is rarely ambiguous
     (design constraint agreed 2026-09-30, see the PR description).
+
+    `epic_closed` is True exactly when the epic-close gate (5g) just ran and
+    returned CLOSE for the epic this session was working: its acceptance
+    criteria are verified actually met, not merely its children all closed
+    (design refinement 2026-10-01). That is a genuine completion boundary —
+    it bypasses headroom and relatedness entirely and always reads HANDOFF,
+    even at 40%+ headroom, because continuing into unrelated pickup work
+    right after a verified close spends a clean stopping point (the retro, a
+    fresh session's full context budget on the next epic) for marginal
+    benefit. A 5g GAPS outcome is the opposite of this case: new children were
+    filed under the SAME epic, so the orchestrator falls through to the
+    ordinary route table (now route 1, against the fresh children) rather
+    than calling this function at all — GAPS is not a continuation decision.
 
     `headroom_pct` is the orchestrator's OWN context-window headroom, i.e.
     `autoCompactsAtPercent - percentUsed` from a `get_usage(session_id="self")`
@@ -459,6 +497,12 @@ def continuation_advice(headroom_pct, relatedness, jev_verdict=None):
     of "CONTINUE", "HANDOFF", "ESCALATE" (only when `jev_verdict` is None and
     the ambiguous corner is hit).
     """
+    if epic_closed:
+        return "HANDOFF", ("the epic-close gate (5g) verified this epic's intent is "
+                           "actually met, not just its children closed: a genuine "
+                           "completion boundary, independent of headroom — hand off "
+                           "so the retro and a fresh session's full budget land "
+                           "cleanly on the next epic")
     if relatedness not in RELATEDNESS:
         relatedness = "unclear"
     if headroom_pct <= HEADROOM_LOW:
@@ -965,18 +1009,28 @@ def _flag_val(name):
 def main():
     if "--continuation" in sys.argv:
         # Advisory alone, like --capacity: no feature id, no bd calls. The
-        # orchestrator computes headroom_pct and relatedness itself (5f
-        # already has the epic/feature ids in hand) and passes them in.
+        # orchestrator computes headroom_pct itself (a get_usage read) and
+        # either names the 5f route that fired (relatedness derives
+        # mechanically, relatedness_for_route) or passes --relatedness
+        # directly for the same-feature case, which no route reaches. 5g's
+        # CLOSE outcome bypasses both via --epic-closed alone.
+        epic_closed = "--epic-closed" in sys.argv
         headroom = _flag_val("--headroom-pct")
+        route = _flag_val("--route")
         relatedness = _flag_val("--relatedness")
-        if headroom is None or relatedness is None:
-            sys.exit("next-batch.py --continuation needs --headroom-pct N "
-                     "--relatedness same-feature|same-epic|different-epic|unclear")
+        if relatedness is None and route is not None:
+            relatedness = relatedness_for_route(route)
+        if headroom is None or (relatedness is None and not epic_closed):
+            sys.exit("next-batch.py --continuation needs --headroom-pct N, plus one "
+                     "of: --route 1|2b|3|4, --relatedness "
+                     "same-feature|same-epic|different-epic|unclear, or "
+                     "--epic-closed (5g's CLOSE outcome; bypasses both)")
         try:
             headroom = float(headroom)
         except ValueError:
             sys.exit("next-batch: --headroom-pct takes a number")
-        decision, reason = continuation_advice(headroom, relatedness)
+        relatedness = relatedness or "unclear"
+        decision, reason = continuation_advice(headroom, relatedness, epic_closed=epic_closed)
         if decision == "ESCALATE" and "--ask-jev" in sys.argv:
             dry_reply = _flag_val("--dry-run-jev")
             verdict = jev_continuation(
@@ -986,7 +1040,9 @@ def main():
             decision, reason = continuation_advice(headroom, relatedness, jev_verdict=verdict)
         print(json.dumps({"continuation": {"decision": decision, "reason": reason,
                                            "headroom_pct": headroom,
-                                           "relatedness": relatedness}}, indent=2))
+                                           "relatedness": relatedness,
+                                           "route": route,
+                                           "epic_closed": epic_closed}}, indent=2))
         return
     if "--capacity" in sys.argv:
         # Capacity alone, no feature id: for a dispatch that has no batch call

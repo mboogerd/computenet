@@ -68,26 +68,39 @@ Load: follow the advice string from `next-batch.py --capacity`; it tells our loa
 ## Continuation across ticket boundaries
 
 At SKILL.md 5f, after a unit finishes, this decides whether YOU keep working
-the next ticket in this same session or Finalize and let a fresh session pick
-it up — a different question from the per-agent bound above, which covers a
-DISPATCHED unit's own wall clock, not whether the orchestrator starts the
-next one itself. The old rule was a flat 300-minute slot; the real cost is a
-fresh session's context-rebuild, not the clock, so this reads two cheap
-signals first and only asks Jev for the genuinely ambiguous corner.
+the next ticket or Finalize and let a fresh session pick it up — unlike the
+per-agent bound above, which covers a DISPATCHED unit's own wall clock, not
+whether the orchestrator starts the next one itself. The real cost is a
+fresh session's context-rebuild, not a flat 300-minute clock, so this reads
+two cheap signals, asking Jev only for the ambiguous corner — except one case
+that skips the signals entirely:
+
+**The epic-close gate (5g) always comes first.** All the epic's children
+closed → run 5g inline, before any route. CLOSE (acceptance criteria
+genuinely met, not just the stories) → `next-batch.py --continuation
+--headroom-pct <N> --epic-closed` always reads HANDOFF, whatever the
+headroom: a verified close is worth a fresh session's full budget on
+whatever's next, not an unrelated pickup. GAPS → new children under the SAME
+epic, route 1 not continuation — fall through to the table below. Short of
+that, before routes 1, 2b, 3 or 4 dispatch:
 
 ```bash
 python3 .claude/skills/work/scripts/next-batch.py --continuation \
-  --headroom-pct <N> --relatedness same-feature|same-epic|different-epic|unclear \
+  --headroom-pct <N> --route 1|2b|3|4 \
   [--ask-jev [--current-context "<epic/feature loaded>"] [--candidate-context "<next ticket>"]]
 ```
 
 `headroom-pct` is `autoCompactsAtPercent - percentUsed` from
-`get_usage(session_id="self")` (the auto-compact floor is the real ceiling,
-not 100%). `relatedness` is the next 5f candidate's relation to what is
-loaded: `same-feature` (still finishing it), `same-epic` (a sibling feature
-under the held epic), `different-epic` (an unparented or foreign-epic
-continuation pickup), `unclear` (relatedness could not be classified —
-`ready-in-epic.sh`'s own "could not resolve the epic" case).
+`get_usage(session_id="self")` (the compact floor is the real ceiling, not
+100%). `--route` derives relatedness mechanically rather than self-report,
+which risks rounding toward CONTINUE: routes 1/2b stay under the held epic
+(`same-epic`), 3/4 leave it (`different-epic`) — so 3/4 resolve to CONTINUE
+or HANDOFF outright, never the ambiguous corner, which only fires for route 1
+(a sibling feature) at mid-band headroom; `--ask-jev` spends the round trip
+only there, via the same `systemone` integration `deliberate.py`'s `jev_vote`
+uses, scaled to one yes/no. `--relatedness same-feature|same-epic|
+different-epic|unclear` overrides `--route` — `same-feature` is unreachable
+from any route (5b/5c's own task loop); routes 0 and 2 never call this (5f).
 
 | Decision | When |
 |---|---|
@@ -95,12 +108,9 @@ continuation pickup), `unclear` (relatedness could not be classified —
 | HANDOFF | headroom <=15%, any relatedness; or mid-band with `different-epic` |
 | ESCALATE | mid-band AND relatedness in `same-epic`/`unclear` — ask Jev, `--ask-jev` |
 
-`--ask-jev` only spends the round trip on ESCALATE; a clean-band call ignores
-it. Jev sees one line each of current and candidate context and answers
-CONTINUE/HANDOFF, the same `systemone` integration
-`.claude/skills/deliberate/scripts/deliberate.py`'s `jev_vote` uses, scaled to
-one yes/no rather than a whole council — this is a routing call on the hot
-path, not a high-stakes decision.
+**HANDOFF lands before routes 3/4 acquire, not after**: they claim and push a
+cross-epic item while selecting it, so checking headroom only once acquired
+risks a stale claim abandoned to Finalize.
 
 HANDOFF means Finalize now, same as EXPIRED (SKILL.md 6), except step 2's
 `slot-elapsed.sh` rung is still the hard backstop: EXPIRED always means

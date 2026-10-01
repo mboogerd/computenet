@@ -544,17 +544,38 @@ red → recovery.md; `CLEAN` → arm again, then push a fresh commit. Cannot lan
 
 ### 5f. Next unit
 
-Take the first route that applies. After T-90m no route starts a new unit;
-routes 2b, 3 and 4 may still dispatch a breakdown.
+**First, before any route: are all the epic's children closed?** If so, run
+5g now, inline — do not wait for step 6. A child count that merely went dry
+(nothing ready) is not this; check closed, not ready. CLOSE → the epic is
+genuinely done, not just out of scheduled stories: `bd close <epic>`, then
+treat it as a HANDOFF (`next-batch.py --continuation --headroom-pct <N>
+--epic-closed`, which returns HANDOFF regardless of headroom) straight to
+step 6 — a verified close is a clean boundary, worth a fresh session's full
+context budget on whatever comes next ([recovery.md](references/recovery.md),
+"Continuation across ticket boundaries"). GAPS → new children were filed
+under THIS epic for the part of the intent the stories missed; they are not
+continuation work, they are route 1 — fall through to the table below, which
+will find them. A park under `REQUIRED ORCHESTRATOR ACTION` → park the epic
+(recovery.md "Parks"), then step 6.
+
+Otherwise, take the first route that applies. After T-90m no route starts a
+new unit; routes 2b, 3 and 4 may still dispatch a breakdown. Before routes
+1, 2b, 3 or 4 actually dispatch, read headroom (`next-batch.py --continuation
+--headroom-pct <N> --route <1|2b|3|4>`, which derives relatedness from the
+route itself rather than asking you to judge it) and follow CONTINUE/HANDOFF;
+ESCALATE (only reachable from route 1) → `--ask-jev`. HANDOFF → step 6
+*before* routes 3/4's acquire step, not after — acquiring then handing off
+leaves a stale claim for the next session. Routes 0 and 2 never read this (see
+their own rows below).
 
 | Route | Situation | Do |
 |---|---|---|
-| 0 | a capacity lane frees while a unit runs | start a second unit if capacity allows, its claim is disjoint from running units, build contention is handled (scoped gate or no Gradle), and it gets its own branch and PR; candidate from route 3 or 4. Else leave the lane idle and note it on the epic |
+| 0 | a capacity lane frees while a unit runs | start a second unit if capacity allows, its claim is disjoint from running units, build contention is handled (scoped gate or no Gradle), and it gets its own branch and PR; candidate from route 3 or 4. Else leave the lane idle and note it on the epic. A concurrency question, not a continuation one — does not read headroom |
 | 2b | your feature is blocked by a sibling feature (check before 1) | park it naming the blocker; work the blocker if it fits the budget (5a), else break it down unclaimed |
 | 1 | another feature under the epic is ready or in progress | 5a (sub-epic → step 4) |
-| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY` → resolve; merged → fetch, start; else park |
-| 3 | remaining work is blocked only by an item in another epic | acquire the item: pull; `epic-of.sh` — skip if its epic is held by someone or touched within 15 minutes (an `(unparented)` item skips this test); `claim-item.sh`; push |
-| 4 | the epic is dry, budget remains | continuation work, below |
+| 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY` → resolve; merged → fetch, start; else park. No new unit dispatches — does not read headroom |
+| 3 | remaining work is blocked only by an item in another epic | read headroom first (above); CONTINUE → acquire the item: pull; `epic-of.sh` — skip if its epic is held by someone or touched within 15 minutes (an `(unparented)` item skips this test); `claim-item.sh`; push |
+| 4 | the epic is dry of READY work (children may remain, blocked elsewhere) and not closeable yet, budget remains | read headroom first (above); CONTINUE → continuation work, below |
 | 5 | nothing can progress | step 6 |
 
 **Continuation work:** `bd ready --json --exclude-type=retro` items with no epic ancestor (`epic-of.sh`
@@ -609,9 +630,10 @@ wait: `TaskStop` each that `slot-elapsed.sh` flags OVER, commenting "hung past b
 its worktree and last sha on its bead; the next session resumes the rest. Report
 the main checkout's HEAD against `<scratch>/step1-head` if it moved.
 
-1. **Epic:** closed by someone else → leave it. All children closed (at least
-   one) → 5g if time allows, else release it for the next session's gate. Keep
-   the `owner:` label. Work remains →
+1. **Epic:** closed by someone else, or already closed by 5f's own inline 5g
+   run above → leave it. All children closed but 5g was not reached inline
+   (EXPIRED or similar cut 5f short) → run it now if time allows, else release
+   it for the next session's gate. Keep the `owner:` label. Work remains →
    `bd update <epic> --status=open --assignee="" --unset-metadata holder`.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
 3. **Friction:** step 7. Then the **retro record**, always, even for an empty

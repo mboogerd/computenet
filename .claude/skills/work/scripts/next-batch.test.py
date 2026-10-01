@@ -1101,6 +1101,47 @@ if jev_ignored_decision != "CONTINUE":
     print("FAIL: a jev_verdict must not override a clean-band decision that never escalated")
 continuation_extra_cases = 2
 
+# --- epic_closed: the 5g CLOSE short-circuit bypasses headroom/relatedness
+epic_closed_cases = [
+    (99.0, "same-feature", "epic_closed overrides even max headroom and same-feature relatedness"),
+    (0.0, "different-epic", "epic_closed overrides even zero headroom"),
+    (25.0, "same-epic", "epic_closed overrides the ambiguous corner too — never ESCALATEs"),
+]
+for headroom, relatedness, what in epic_closed_cases:
+    decision, reason = nb.continuation_advice(headroom, relatedness, epic_closed=True)
+    if decision != "HANDOFF" or "5g" not in reason:
+        failed += 1
+        print(f"FAIL: {what} — got {decision!r} ({reason!r})")
+# A supplied jev_verdict must not resurrect a decision epic_closed already made.
+epic_closed_vs_jev, _ = nb.continuation_advice(25.0, "same-epic", jev_verdict="CONTINUE", epic_closed=True)
+if epic_closed_vs_jev != "HANDOFF":
+    failed += 1
+    print("FAIL: epic_closed must win over a supplied jev_verdict, not just over relatedness")
+
+# --- relatedness_for_route(): mechanical mapping, not self-report
+route_cases = [
+    ("1", "same-epic", "route 1 (a sibling feature under the held epic) is same-epic"),
+    ("2b", "same-epic", "route 2b (your own blocker, under the held epic) is same-epic"),
+    ("3", "different-epic", "route 3 (acquired from another epic) is different-epic"),
+    ("4", "different-epic", "route 4 (continuation-work pickup once dry) is different-epic"),
+    ("0", "unclear", "route 0 (parallel capacity) is not mapped — it never calls this"),
+    ("2", "unclear", "route 2 (waiting on a merge) is not mapped — it never calls this"),
+    (None, "unclear", "no route at all reads unclear, not a crash"),
+    ("5", "unclear", "an unmapped route reads unclear"),
+]
+for route, expect, what in route_cases:
+    got = nb.relatedness_for_route(route)
+    if got != expect:
+        failed += 1
+        print(f"FAIL: {what} — expected {expect!r}, got {got!r}")
+# relatedness_for_route's "unclear" for an ambiguous-corner route composes
+# correctly with continuation_advice — route 0/2 never reach this call in
+# practice, but the composition itself must still be safe if they did.
+route_unclear_decision, _ = nb.continuation_advice(25.0, nb.relatedness_for_route("0"))
+if route_unclear_decision != "ESCALATE":
+    failed += 1
+    print("FAIL: an unmapped route's 'unclear' relatedness must still land in the ambiguous corner at mid-band, not silently pick a side")
+
 # --- jev_continuation(): dry-run routing only, never a live network call ----
 dry_verdict = nb.jev_continuation(25.0, "same-epic", "epic X, feature Y", "task Z",
                                   dry_run=True, dry_reply="HANDOFF")
@@ -1143,12 +1184,53 @@ for ok_, what in cli_cases:
         failed += 1
         print(f"FAIL: {what}")
 
+# --- CLI --continuation: --route derives relatedness, --epic-closed bypasses
+# both, and the two are independently wired (not just the Python functions).
+cli_route = _sp.run([sys.executable, str(script), "--continuation",
+                     "--headroom-pct", "25", "--route", "3"],
+                    capture_output=True, text=True)
+cli_route_ambiguous = _sp.run([sys.executable, str(script), "--continuation",
+                               "--headroom-pct", "25", "--route", "1"],
+                              capture_output=True, text=True)
+cli_relatedness_overrides_route = _sp.run([sys.executable, str(script), "--continuation",
+                                           "--headroom-pct", "25", "--route", "3",
+                                           "--relatedness", "same-feature"],
+                                          capture_output=True, text=True)
+cli_epic_closed = _sp.run([sys.executable, str(script), "--continuation",
+                           "--headroom-pct", "99", "--epic-closed"],
+                          capture_output=True, text=True)
+cli_epic_closed_needs_no_relatedness = _sp.run([sys.executable, str(script), "--continuation",
+                                                "--headroom-pct", "50", "--epic-closed"],
+                                               capture_output=True, text=True)
+cli_missing_all = _sp.run([sys.executable, str(script), "--continuation", "--headroom-pct", "25"],
+                          capture_output=True, text=True)
+cli_route_cases = [
+    (cli_route.returncode == 0 and _json.loads(cli_route.stdout)["continuation"]["decision"] == "HANDOFF",
+     "--route 3 at mid-band headroom derives different-epic and hands off, no --relatedness given"),
+    (cli_route_ambiguous.returncode == 0 and _json.loads(cli_route_ambiguous.stdout)["continuation"]["decision"] == "ESCALATE",
+     "--route 1 at mid-band headroom derives same-epic and lands in the ambiguous corner"),
+    (cli_relatedness_overrides_route.returncode == 0
+     and _json.loads(cli_relatedness_overrides_route.stdout)["continuation"]["decision"] == "CONTINUE",
+     "an explicit --relatedness overrides what --route would have derived"),
+    (cli_epic_closed.returncode == 0 and _json.loads(cli_epic_closed.stdout)["continuation"]["decision"] == "HANDOFF",
+     "--epic-closed alone (no --route, no --relatedness) hands off even at 99% headroom"),
+    (cli_epic_closed_needs_no_relatedness.returncode == 0,
+     "--epic-closed does not require --route or --relatedness to be supplied"),
+    (cli_missing_all.returncode != 0,
+     "--continuation with none of --route/--relatedness/--epic-closed is a usage error, not a silent default"),
+]
+for ok_, what in cli_route_cases:
+    if not ok_:
+        failed += 1
+        print(f"FAIL: {what}")
+
 total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n
          + lag_cases
          + elsewhere_cases + len(unmerged_cases)
-         + len(continuation_cases) + continuation_extra_cases + len(jev_dry_cases) + len(cli_cases))
+         + len(continuation_cases) + continuation_extra_cases + len(jev_dry_cases) + len(cli_cases)
+         + len(epic_closed_cases) + 1 + len(route_cases) + 1 + len(cli_route_cases))
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
