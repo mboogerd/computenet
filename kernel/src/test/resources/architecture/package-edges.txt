@@ -163,10 +163,12 @@ evolve -> proxy
 evolve -> verify
 graph -> cell
 graph -> data
+graph -> durability
 graph -> host
 graph -> link
 graph -> nature
 graph -> port
+graph -> replication
 host -> cell
 host -> control
 host -> durability
