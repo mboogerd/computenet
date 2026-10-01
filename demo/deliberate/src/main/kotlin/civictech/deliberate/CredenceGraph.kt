@@ -2,13 +2,12 @@ package civictech.deliberate
 
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
-import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
-import civictech.cell.host.routeTo
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
-import civictech.cell.port.streamTo
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -20,9 +19,9 @@ import java.util.UUID
  * claim, an [EdgeNode] per edge, every credence a vector over [layers], and a
  * hub fold ([CredenceHubView]) the snapshot reads. Graph management — the
  * index, cycle-head designation, wiring — is modelled on agora's
- * `AgoraService`: all wiring is **routed** through the host queue
- * (`streamTo` + registry inlets), so every hop is staged and magnitude
- * scheduling (`size`) orders it.
+ * `AgoraService`: all wiring is admitted through the host's staged link
+ * primitive, so cycle admission, topology bookkeeping, EdgeClose ordering,
+ * and magnitude scheduling apply uniformly to every hop.
  *
  * Durability (SPEC DUR-01): the only durable parts are the inputs.
  * [structureLog] records claims and edges (append-only, one line each,
@@ -234,8 +233,10 @@ class CredenceGraph(
         log(StructureOp("claim", ref.id.toString(), text = text, question = question))
         manage.spawn(cell)
         cells[ref] = cell
-        wire(ref, "credenceOutlet", hub.ref, "inlet") { cell.credenceOutlet.streamTo(routedHub()) }
-        if (sensitivity) spawnSensitivity(SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, question = question))
+        wire(ref, "credenceOutlet", hub.ref, "inlet")
+        if (sensitivity) {
+            spawnSensitivity(SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, question = question, quiescence = quiescence))
+        }
         synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text, question = question) }
         ref
     }
@@ -256,28 +257,20 @@ class CredenceGraph(
         val edge = EdgeNode(polarity, ref, layers, quiescence = if (head) quiescence else 0.0)
         manage.spawn(edge)
         cells[ref] = edge
-        wire(ref, "credenceOutlet", hub.ref, "inlet") { edge.credenceOutlet.streamTo(routedHub()) }
-        wire(ref, "influenceOutlet", target, "influenceInlet") {
-            edge.influenceOutlet.routeTo(registry, target, ClaimNodePorts.influenceInlet)
-        }
-        wire(source, "credenceOutlet", ref, "sourceInlet") {
-            cells.getValue(source).credenceOutlet.routeTo(registry, ref, EdgeNodePorts.sourceInlet)
-        }
+        wire(ref, "credenceOutlet", hub.ref, "inlet")
+        wire(ref, "influenceOutlet", target, "influenceInlet")
+        wire(source, "credenceOutlet", ref, if (head) "feedbackInlet" else "sourceInlet")
         if (sensitivity) {
             // Model C: the edge's sensitivity cell hears its target's frame and hands its source its share;
             // the target's sensitivity cell folds the same influence the target's credence cell does.
-            val s = spawnSensitivity(SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, isEdge = true))
+            val s = spawnSensitivity(
+                SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, isEdge = true, quiescence = quiescence),
+            )
             val onTarget = sensCells.getValue(target)
             val ofSource = sensCells.getValue(source)
-            wire(ref, "influenceOutlet", onTarget.ref, "influenceInlet") {
-                edge.influenceOutlet.routeTo(registry, onTarget.ref, SensitivityNodePorts.influenceInlet)
-            }
-            wire(onTarget.ref, "frameOutlet", s.ref, "frameInlet") {
-                onTarget.frameOutlet.routeTo(registry, s.ref, SensitivityNodePorts.frameInlet)
-            }
-            wire(s.ref, "sourceOutlet", ofSource.ref, "shareInlet") {
-                s.sourceOutlet.routeTo(registry, ofSource.ref, SensitivityNodePorts.shareInlet)
-            }
+            wire(s.ref, "sourceOutlet", ofSource.ref, "shareInlet")
+            wire(ref, "influenceOutlet", onTarget.ref, "influenceInlet")
+            wire(onTarget.ref, "frameOutlet", s.ref, if (head) "feedbackFrameInlet" else "frameInlet")
         }
         synchronized(nodesLock) {
             nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = head)
@@ -320,13 +313,9 @@ class CredenceGraph(
             manage.spawn(issue)
             issueCells[root] = issue
             refs.forEach { p ->
-                wire(p, "credenceOutlet", issue.ref, "positionInlet") {
-                    cells.getValue(p).credenceOutlet.routeTo(registry, issue.ref, IssueNodePorts.positionInlet)
+                    wire(p, "credenceOutlet", issue.ref, "positionInlet")
                 }
-            }
-            wire(issue.ref, "sharesOutlet", sharesHub.ref, "inlet") {
-                issue.sharesOutlet.streamTo(registry.inlet<Shares>(sharesHub.ref, "inlet"))
-            }
+            wire(issue.ref, "sharesOutlet", sharesHub.ref, "inlet")
         }
         refs
     }
@@ -394,10 +383,12 @@ class CredenceGraph(
         return false
     }
 
-    private fun routedHub(): Propagate<Credence> = registry.inlet(hub.ref, "inlet")
-
-    private inline fun wire(from: CellRef, outlet: String, to: CellRef, inlet: String, link: () -> Unit) {
-        link()
+    private fun wire(from: CellRef, outlet: String, to: CellRef, inlet: String) {
+        val result = manage.connect(from, outlet, to, inlet, STAGED)
+        check(result is LinkResult.Connected) {
+            val reason = (result as? LinkResult.Rejected)?.reason ?: result.toString()
+            "CredenceGraph: admitted link $from.$outlet -> $to.$inlet rejected: $reason"
+        }
         wires += Wire(from, outlet, to, inlet)
     }
 
@@ -405,13 +396,12 @@ class CredenceGraph(
     private fun spawnSensitivity(s: SensitivityNode): SensitivityNode {
         manage.spawn(s)
         sensCells[s.subject] = s
-        wire(s.ref, "hubOutlet", sensitivityHub.ref, "inlet") {
-            s.hubOutlet.streamTo(registry.inlet<Sensitivity>(sensitivityHub.ref, "inlet"))
-        }
+        wire(s.ref, "hubOutlet", sensitivityHub.ref, "inlet")
         return s
     }
 
     private companion object {
         val JSON = Json { explicitNulls = false }
+        val STAGED = LinkOptions(staged = true)
     }
 }

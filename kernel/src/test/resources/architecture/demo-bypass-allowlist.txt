@@ -12,7 +12,6 @@
 demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt
 demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
-demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt
 demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
