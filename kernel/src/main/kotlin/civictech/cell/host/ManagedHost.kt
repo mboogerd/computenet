@@ -733,6 +733,14 @@ open class ManagedHost(
     private val dataLock = Any()
 
     /**
+     * Exact in-process frames created by [stageBehindData]. Identity, rather
+     * than the protocol payload alone, keeps an independently received
+     * topology marker on the ordinary dead-letter path. Guarded by [dataLock].
+     */
+    private val stagedLinkCloseMarkers =
+        Collections.newSetFromMap(IdentityHashMap<HostedPortInvocation, Boolean>())
+
+    /**
      * Batched dispatch only ([dispatchBatch] `> 1`): true while a [drainBatch]
      * task is submitted-and-not-yet-finished. Guarded by [dataLock]; never read
      * or written on the `dispatchBatch == 1` path.
@@ -760,7 +768,7 @@ open class ManagedHost(
         notifyResumed = ::notifyResumed,
         intakeLowWaterCheck = ::intakeLowWaterCheck,
         deliver = ::deliver,
-        submit = ::enqueueHostedInvocation,
+        submit = ::resumeAttentionParked,
     )
 
     /**
@@ -813,7 +821,10 @@ open class ManagedHost(
         awaitOnManagementBand = { action -> enqueueAwaiting(0, action) },
         underIntakeLock = { action ->
             synchronized(dataLock) {
-                action(attentionScheduler.stagedInSequence())
+                // A staged link's EdgeClose marker ([stageBehindData]) shares the data
+                // FIFO but is a protocol frame: it is never journaled, so a checkpoint
+                // does not carry it either (and could not encode its in-process link).
+                action(attentionScheduler.stagedInSequence().filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL })
             }
         },
     )
@@ -844,6 +855,7 @@ open class ManagedHost(
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
+            if (consumeStagedLinkCloseMarker(parked)) return@forEach
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
         }
@@ -978,6 +990,54 @@ open class ManagedHost(
         val ambient = civictech.cell.ReplayProvenance.get()
         accept(if (ambient == null || hostedInvocation.replayOf != null) hostedInvocation else hostedInvocation.copy(replayOf = ambient))
     }
+
+    /**
+     * Places a staged link's terminal marker in the target cell's data FIFO.
+     * The link's stand-in has already been removed, so every frame this marker
+     * follows was accepted before unlink. This intentionally bypasses [accept]:
+     * protocol-band submission would overtake data, while intake gates, hop
+     * accounting and journaling do not apply to an in-band topology marker.
+     */
+    internal fun stageBehindData(to: CellRef, inletName: String, link: Link) {
+        val close = HostedPortInvocation(
+            cellRef = to,
+            portName = inletName,
+            type = HostedPortInvocation.Type.PORT_PROTOCOL,
+            invocation = Invocation.of(null, null, null),
+            protocolId = Protocols.TopologyOrder,
+            protocolLink = link,
+            protocolMessage = EdgeClose,
+        )
+        stageForDataDispatch(close, stagedLinkCloseMarker = true)
+    }
+
+    /**
+     * Attention parking contains accepted work in FIFO order. Ordinary data
+     * keeps its existing intake replay, but a protocol marker placed there by
+     * [stageBehindData] must rejoin the data FIFO: sending it through [accept]
+     * would submit it at protocol band 0 and overtake the data before it.
+     */
+    private fun resumeAttentionParked(hostedInvocation: HostedPortInvocation) {
+        if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
+            stageForDataDispatch(hostedInvocation)
+        } else {
+            enqueueHostedInvocation(hostedInvocation)
+        }
+    }
+
+    private fun stageForDataDispatch(
+        hostedInvocation: HostedPortInvocation,
+        stagedLinkCloseMarker: Boolean = false,
+    ) {
+        synchronized(dataLock) {
+            if (stagedLinkCloseMarker) stagedLinkCloseMarkers += hostedInvocation
+            attentionScheduler.stage(hostedInvocation)
+        }
+        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+    }
+
+    private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
+        synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
 
     private fun accept(hostedInvocation: HostedPortInvocation) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
@@ -1243,9 +1303,16 @@ open class ManagedHost(
                 return
             }
         }
-        val cell = cells[cellRef] ?: return deadLetter(
-            null, "unknown cell $cellRef", hostedInvocation
-        )
+        val cell = cells[cellRef]
+        if (cell == null) {
+            // A staged EdgeClose is terminal bookkeeping with no payload. If
+            // despawn removed its target before this deferred marker reached
+            // the head of the FIFO, the edge is already gone and delivery is
+            // complete; queued data remains on the dead-letter path below.
+            if (consumeStagedLinkCloseMarker(hostedInvocation)) return
+            return deadLetter(null, "unknown cell $cellRef", hostedInvocation)
+        }
+        consumeStagedLinkCloseMarker(hostedInvocation)
         val port = findPort(cell, hostedInvocation.portName) ?: return deadLetter(
             null, "unknown port '${hostedInvocation.portName}' on $cellRef", hostedInvocation
         )
@@ -1770,10 +1837,10 @@ open class ManagedHost(
                     PortRegistry.of(cell)[name]?.let { port ->
                         ProtocolSupport.of(port).relay(Protocols.Saturation)
                         // CycleHead fusion barrier (spec 21 §Fusion, 93 I-6):
-                        // route every FeedbackInlet's re-origination through
+                        // route every FeedbackPort's re-origination through
                         // this host's real queue, port-generic, no cell-
                         // specific wiring needed (mirrors AttentionSupport).
-                        if (port is FeedbackInlet<*>) port.barrier = { ctx.enqueueBarrier(it) }
+                        if (port is FeedbackPort<*>) port.barrier = { ctx.enqueueBarrier(it) }
                     }
                 }
                 // generated descriptors are authoritative: if the processor saw
@@ -1943,7 +2010,16 @@ open class ManagedHost(
             // no dataLock interaction anywhere in that path, so the
             // extraction is a pure delegation — no lock-order change.
             override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult =
-                LinkAdmission.connect(cells, registry, from, outletName, to, inletName)
+                connect(from, outletName, to, inletName, LinkOptions.DEFAULT)
+
+            override fun connect(
+                from: CellRef,
+                outletName: String,
+                to: CellRef,
+                inletName: String,
+                options: LinkOptions,
+            ): LinkResult =
+                LinkAdmission.connect(this@ManagedHost, cells, registry, from, outletName, to, inletName, options)
 
             override fun connect(from: CellRef, outletName: String, to: Use<*>) {
                 val fromCell = cells[from] ?: throw IllegalArgumentException("Source cell not found: $from")
@@ -2091,7 +2167,7 @@ open class ManagedHost(
         if (port !is Use<*>) return RoutedInletResolution.NotUsable
         val apiClass = when (port) {
             is FanInlet<*> -> port.clazz
-            else -> null // e.g. FeedbackInlet carries no erased api class — skip the wrapper check
+            else -> null // e.g. a FeedbackPort: its apiClass is not consulted here — skip the wrapper check
         }
         return RoutedInletResolution.Usable(apiClass)
     }

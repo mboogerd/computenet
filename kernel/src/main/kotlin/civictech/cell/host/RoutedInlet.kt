@@ -33,6 +33,15 @@ import java.lang.reflect.Method
  * exactly as the proxy does; every hop stays staged for attention/magnitude
  * scheduling (`agora-scheduler-staged-links`) — this is a front door to the
  * routed path, never a fused synchronous call.
+ *
+ * For demo/application wiring between hosted cells, the replacement for the
+ * routed link path is the unified admitted primitive
+ * `HostManagementApi.connect(from, outlet, to, inlet, LinkOptions(staged = true))`.
+ * The old path has no cycle admission, topology record, or in-band
+ * `EdgeOpen`/`EdgeClose`. This distinction does not apply to an app-driven
+ * write: `registry.inlet(id, port).propagate(...)` (for example, a stance or
+ * retraction) is not a link and is not deprecated; it remains a direct routed
+ * write handle.
  */
 class RoutedPropagate<D>(
     private val cellRef: CellRef,
@@ -132,6 +141,14 @@ inline fun <reified D : Any> LocationRegistry.inlet(cell: CellRef, port: String)
  * (jnkvu-D1/D2/R1). Lowers to the exact same [RoutedPropagate] over the same
  * name; nothing about validation, staging or delivery changes from the string
  * form — only the type-checking moves earlier.
+ *
+ * This inlet handle is for an app-driven write, not for creating a graph link.
+ * For outlet-to-inlet demo/application wiring, use
+ * `HostManagementApi.connect(from, outlet, to, inlet, LinkOptions(staged = true))`,
+ * whose admission supplies cycle admission, topology recording, and in-band
+ * `EdgeOpen`/`EdgeClose`. `registry.inlet(id, port).propagate(...)` remains
+ * valid for writes such as stances and retractions and is neither a link nor
+ * deprecated.
  */
 fun <D : Any> LocationRegistry.inlet(cell: CellRef, port: InletId<Propagate<D>>): Propagate<D> =
     routedInlet(cell, port.name)
@@ -157,6 +174,12 @@ internal fun <D : Any> LocationRegistry.routedInlet(cell: CellRef, port: String)
  * [civictech.cell.host.IntakeClosedException] at the send site (spec 33), not a
  * park — use the [LocationRegistry] overload for a re-resolving, relocation-safe
  * handle. The cell must live on [this] host at resolve time.
+ *
+ * This is an app-driven write handle, not a graph link. For wiring hosted
+ * outlet and inlet cells, use
+ * `HostManagementApi.connect(from, outlet, to, inlet, LinkOptions(staged = true))`
+ * so cycle admission, topology recording, and in-band `EdgeOpen`/`EdgeClose`
+ * are present; `propagate(...)` itself remains valid and is not deprecated.
  */
 inline fun <reified D : Any> ManagedHost.inlet(cell: CellRef, port: String): Propagate<D> =
     routedInlet(cell, port)
@@ -183,6 +206,12 @@ internal fun <D : Any> ManagedHost.routedInlet(cell: CellRef, port: String): Pro
  * because an outlet holds no registry of its own; there is no
  * [ManagedHost]-bound form (a fixed-host handle from [ManagedHost.inlet] can
  * still be wired with `streamTo` directly).
+ *
+ * For demo/application wiring, use the unified admitted primitive
+ * `HostManagementApi.connect(from, outlet, to, inlet, LinkOptions(staged = true))`
+ * instead. Unlike this routed bypass, it performs cycle admission, records
+ * topology, and carries in-band `EdgeOpen`/`EdgeClose`; `routeTo` remains for
+ * the kernel's existing routed callers.
  */
 fun <D : Any> FanOutlet<Propagate<D>>.routeTo(
     registry: LocationRegistry,
