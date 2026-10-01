@@ -345,6 +345,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
 
                 is ConnectStep -> {
+                    // TODO(computenet-x0oag.1): retain LinkOptions/UnlinkStep handles after that sibling lands.
                     val key = stepKey(step)
                     if (step.from in familyHandles) {
                         throw familyLinkRefusal(step.from, key)
