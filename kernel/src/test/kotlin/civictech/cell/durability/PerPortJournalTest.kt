@@ -317,13 +317,13 @@ class PerPortJournalTest {
     }
 
     /**
-     * A volatile derived frame belongs in J1's carry only when the upstream cell is also
-     * folded into J1's checkpoint. Here U tees to J2, so its frame survives in J2 and its
-     * replay re-derives the pending delivery after J1 restores C. Carrying the same frame in
-     * J1 as well would make the non-idempotent fold observe `b1` twice.
+     * A volatile derived frame for C is carried by J1 because J1 checkpoints C, even when
+     * the deriving U tees to J2. Recovering J1 delivers that carried frame, then recovering
+     * J2 replays U and derives it again. The non-idempotent fold deliberately observes `b1`
+     * twice: this is the loud, bounded duplicate preferred to silently omitting a delivery.
      */
     @Test
-    fun `cross-journal volatile-port frame is re-derived once rather than carried twice`() {
+    fun `cross-journal volatile-port frame is deliberately delivered twice after both journals recover`() {
         val controller = SimulationController(seed = 1)
         val j1 = InMemoryJournal()
         val j2 = InMemoryJournal()
@@ -362,14 +362,14 @@ class PerPortJournalTest {
         controller.runToIdle()
         c.deliveryLog() shouldBe listOf("a1", "b1")
 
-        // CRASH: J1 restores C; J2's surviving U frame then re-derives b1 exactly once.
+        // CRASH: J1 carries b1; J2's surviving U frame then deliberately re-derives it.
         val (host2, c2, u2) = build()
         host2.recoverFrom(j1)
         host2.recoverFrom(j2)
         controller.runToIdle()
         u2.membership() shouldBe setOf("b1")
-        c2.deliveryLog() shouldBe listOf("a1", "b1")
-        decodedFrames(j1).map { it.cellRef to it.portName } shouldBe emptyList()
+        c2.deliveryLog() shouldBe listOf("a1", "b1", "b1")
+        decodedFrames(j1).map { it.cellRef to it.portName } shouldBe listOf(cRef to "derived")
     }
 
     /**

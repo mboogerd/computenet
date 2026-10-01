@@ -1276,13 +1276,19 @@ cells' records, such that replaying it restores exactly those cells and
 re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
 `checkpoint` is keyed the same way: it snapshots only the cells teeing to the
 passed journal and compacts that journal atomically; the compaction carries
-every frame accepted for that journal and not yet delivered. It also carries a
-not-yet-delivered frame for a volatile inlet when both the target cell and the
-deriving upstream cell are folded into that checkpoint: compaction removes the
-upstream replay that could otherwise re-derive it. A frame derived from a cell
-on another journal is not carried — that journal's replay re-derives it, and a
-second copy in this checkpoint would duplicate the delivery. Thus a checkpoint
-is safe at any inter-invocation boundary (93 I-7 R7);
+every frame accepted for that journal and not yet delivered, plus a pending
+frame whose target cell's snapshot it holds, a per-port selector's volatile
+inlet included. This cell-level carry is deliberately conservative: a
+cross-journal volatile-port frame staged at `checkpoint(J)` may be delivered
+twice after recovering J and the other journal — once from J's carry and once
+when the other journal re-derives it. That is a bounded, loud duplicate rather
+than a silent omission (computenet-4fpyy; the computenet-xy7w4 D2 direction).
+Conversely, a journal-less intermediate cell between two cells of J is not
+loss-free across a checkpoint: a frame staged at that intermediate cell's
+volatile inlet is not selected for J's carry and may no longer be derivable
+after compaction (computenet-dshry). A checkpoint is therefore not
+unconditionally safe at every inter-invocation boundary for those topologies
+(93 I-7 R7);
 not yet covered are frames retained in an inlet policy tier or released into a
 cold inlet outside that inlet's hosted offer (computenet-amgre);
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the

@@ -516,22 +516,26 @@ internal class HostDurability(
      * cell maps here, byte-identical to pre-CP-C1. Runs on the management band
      * so it can't interleave with a dispatching cell.
      *
-     * **Safe at any inter-invocation boundary** (93 I-7 R7, computenet-xy7w4 D3). The
-     * management band runs between two deliveries of the single-consumer host, so at that
-     * point every frame accepted for [journal] is either DELIVERED — its effect is in the
-     * snapshot — or pending and not yet delivered: live/recovery staging, a coalesced entry,
-     * attention parking, supervision-SUSPEND parking, or a cold inlet's pre-activation tail.
-     * The compacted journal is the checkpoint records followed by every pending frame whose
-     * target port tees to [journal]. It also carries a frame for a per-port selector's
-     * volatile inlet when both that target cell and the deriving upstream cell are folded
-     * into this checkpoint: resetting [journal] removes the upstream replay that could
-     * otherwise re-derive it. An upstream cell folded into another journal is excluded;
-     * its own replay re-derives the frame, and carrying it here as well would duplicate the
-     * delivery. The already-present [civictech.cell.MessageContext.sourcePort] identifies
-     * that upstream cell, so this needs no additional per-frame provenance. Carried frames
-     * are re-encoded by [journalFrame] in host sequence order. A host that recovers from it
-     * therefore reproduces the fold of every frame accepted before this returns, with no
-     * quiescence fence and with writers running.
+     * **Inter-invocation checkpoint boundary, with topology limits** (93 I-7 R7,
+     * computenet-xy7w4 D3). The management band runs between two deliveries of the
+     * single-consumer host, so at that point every frame accepted for [journal] is either
+     * DELIVERED — its effect is in the snapshot — or pending and not yet delivered:
+     * live/recovery staging, a coalesced entry, attention parking, supervision-SUSPEND
+     * parking, or a cold inlet's pre-activation tail. The compacted journal is the
+     * checkpoint records followed by every pending frame whose target port tees to
+     * [journal] — or whose target cell's snapshot it holds, a per-port selector's volatile
+     * inlet included — re-encoded by [journalFrame] in host sequence order.
+     *
+     * That cell-level carry is deliberately conservative. A cross-journal volatile-port
+     * frame can be delivered twice after both journals recover: once from this carry and
+     * once when the other journal re-derives it. This is a bounded, loud duplicate rather
+     * than a silent omission (computenet-4fpyy; the computenet-xy7w4 D2 direction). In the
+     * other direction, a journal-less intermediate cell between two cells of [journal] is
+     * not loss-free across a checkpoint: a frame staged at that intermediate cell's
+     * volatile inlet is not selected for this carry and may no longer be derivable after
+     * compaction (computenet-dshry). Thus this does not claim unconditional safety at every
+     * inter-invocation boundary for those topologies. The selected pending frames remain in
+     * the compacted journal with no quiescence fence and with writers running.
      * The pending-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
      * the monitor the intake's append+stage holds, so a frame accepted concurrently is
      * either staged before the read (carried) or appended after the reset (tail) — never
@@ -680,23 +684,19 @@ internal class HostDurability(
             // computenet-xy7w4 D3: carry every accepted-but-undelivered frame of this
             // journal, read and reset under the intake's own lock. Encoded before the
             // reset, so an unencodable frame fails the checkpoint and truncates nothing.
-            // Also carried: a frame staged for a VOLATILE port when this journal holds both
-            // its target cell's snapshot and its deriving upstream cell's snapshot (a
-            // per-port selector's `derived` inlet, D4). The reset removes that upstream
-            // replay and a restored snapshot re-emits nothing, so without the carry the
-            // target's snapshot would silently lack the frame (computenet-xy7w4). When the
-            // upstream cell belongs to a different journal, that journal still replays and
-            // re-derives the frame; carrying it here too would deliver it twice
+            // Also carried: a frame staged for a VOLATILE port of a cell whose snapshot this
+            // journal holds (a per-port selector's `derived` inlet, D4). Its upstream frame
+            // may be folded into a snapshot by this very reset, and a restored snapshot
+            // re-emits nothing, so replay could no longer re-derive it; the cell's own
+            // snapshot would silently lack it (feature review, computenet-xy7w4). When the
+            // upstream cell belongs to a different journal, that journal can still replay
+            // and re-derive the frame; the deliberate carry here then delivers it twice
             // (computenet-4fpyy).
             underIntakeLock { pending ->
                 val carried = pending
                     .filter {
-                        val upstreamCell = it.invocation.invocation.context?.sourcePort?.cell
                         journalSelector(it.invocation.cellRef, it.invocation.portName) === journal ||
-                            (
-                                cellJournalSelector(it.invocation.cellRef) === journal &&
-                                    upstreamCell != null && cellJournalSelector(upstreamCell) === journal
-                                )
+                            cellJournalSelector(it.invocation.cellRef) === journal
                     }
                     .sortedBy(CheckpointFrame::sequence)
                     .map { journalFrame(it.invocation) }
