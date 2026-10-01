@@ -1,5 +1,6 @@
 package civictech.demo.alignment
 
+import civictech.cell.durability.FileJournal
 import civictech.testkit.HttpProbe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -9,7 +10,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
-import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.assertEquals
@@ -63,7 +63,10 @@ class TriageBoardTest {
         }
     }
 
-    private fun tmpJournal(): Path = createTempDirectory("triage").resolve("journal.jsonl")
+    private fun tmpJournal(): Path = createTempDirectory("triage")
+
+    private fun journalRecords(dir: Path): Int =
+        FileJournal(dir.resolve(ALIGNMENT_JOURNAL_FILE).toFile()).replay().size
 
     private fun worklist(probe: HttpProbe, who: String, dim: String = Eisenhower.IMPORTANCE): JsonObject =
         parse(probe.get("/topics/triage/worklist?participant=$who&dim=$dim").body())
@@ -129,12 +132,12 @@ class TriageBoardTest {
         withApp(journal) { app, _ ->
             seedBeadsTriage(app, source(top, bottom))
         }
-        val afterFirst = Files.readAllLines(journal)
         withApp(journal) { app, _ ->
+            val beforeReseed = journalRecords(journal)
             seedBeadsTriage(app, source(top, bottom))
             seedBeadsTriage(app, source(top, bottom))
+            assertEquals(beforeReseed, journalRecords(journal), "an unchanged re-seed appended frames")
         }
-        assertEquals(afterFirst, Files.readAllLines(journal), "an unchanged re-seed appended lines")
     }
 
     /** A candidate that has left `bd ready` keeps its row and its human ratings (removal would cascade them away). */
@@ -160,15 +163,16 @@ class TriageBoardTest {
      * board an operator cannot tell apart from a genuinely empty ready queue.
      */
     @Test
-    fun `a failed candidate fetch leaves no topic and an empty journal`() {
+    fun `a failed candidate fetch leaves no topic and writes no application frames`() {
         val journal = tmpJournal()
         val boom = CandidateSource { error("bd ready exited 1 against /nope") }
         withApp(journal) { app, probe ->
+            val recordsBeforeFetch = journalRecords(journal)
             val thrown = assertFailsWith<IllegalStateException> { seedBeadsTriage(app, boom) }
             assertTrue("bd ready exited 1" in (thrown.message ?: ""), thrown.message ?: "")
             assertEquals("[]", probe.get("/topics").body(), "no topic was created")
+            assertEquals(recordsBeforeFetch, journalRecords(journal), "the failed fetch must not write an application frame")
         }
-        assertTrue(Files.notExists(journal) || Files.readAllLines(journal).isEmpty(), "the journal must be untouched")
     }
 
     // ── the three rater classes together ─────────────────────────────────

@@ -1,10 +1,14 @@
 package civictech.demo.alignment
 
 import civictech.cell.data.view.MapHubCell
+import civictech.cell.data.OrMapCell
+import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.lookup
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell
+import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.flag
@@ -20,12 +24,12 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
-import java.io.OutputStream
+import java.io.Serializable
 import java.net.URLDecoder
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 /**
  * A topic's creator-defined dimension (presentation-only; its weight and direction live in the
@@ -45,8 +49,8 @@ internal enum class IdeaPolicy(val wire: String) { EVERYONE("everyone"), FACILIT
 internal enum class BoardVisibility(val wire: String) { AFTER_RATING("after-rating"), AFTER_REVEAL("after-reveal") }
 
 /**
- * A topic: write-side index, journaled, never in the dataflow. Dims and ideas are keyed by their slug
- * ids. The facilitator settings are mutable; a v1 topic line (none of them) replays to the defaults.
+ * A topic's synchronous write-side mirror. Its durable [TopicRecord] lives in the graph's `topics`
+ * cell; dimensions and ideas are keyed here by their slug ids.
  */
 internal class Topic(
     val id: TopicId,
@@ -63,8 +67,7 @@ internal class Topic(
 
     /**
      * The gut-check round (teu97-D2, experimental, epic computenet-9y79n R14): off and a 3-dot
-     * budget until the facilitator switches it on through `PUT /policy`; a topic line never carries
-     * these, so a v1/ALN2.1 journal always replays to these defaults.
+     * budget until the facilitator switches it on through `PUT /policy`.
      */
     var gutCheck: Boolean = false
     var dotBudget: Int = 3
@@ -72,23 +75,22 @@ internal class Topic(
 
 private val Direction.wire: String get() = name.lowercase()
 
-/** An idea's presentation fields (write-side index, never in the dataflow). */
+/** An idea's presentation fields, mirrored synchronously from the durable topic record. */
 internal data class Idea(val id: String, val title: String, val description: String, val proposer: String)
 
 /**
  * A per-idea discussion note ("what the team decided", computenet-w0i5h-D2). Kept on [Topic.notes]
- * keyed by idea id rather than as an [Idea] field: the `idea` journal op replaces `topic.ideas[id]`
- * wholesale (it is also the edit path, [AlignmentApp]'s `putIdea`), so a note on [Idea] would be
- * dropped by replaying an edit recorded after the note.
+ * keyed by idea id rather than as an [Idea] field: [AlignmentApp]'s `putIdea` replaces
+ * `topic.ideas[id]` wholesale, so keeping the note separate avoids dropping it on an edit.
  */
 internal data class Note(val text: String, val author: String)
 
 /**
  * A participant's ABSOLUTE dot count on an idea within a topic's gut-check round (teu97-D1/D3).
- * Kept on [AlignmentApp.dots], a write-side index beside `ratings`, journaled and replayed the same
- * way; never put on the dataflow — the score is computed with no knowledge dots exist.
+ * Mirrored on [AlignmentApp.dots] from its durable graph cell. It is not linked into score
+ * derivation: the score is computed with no knowledge dots exist.
  */
-internal data class DotKey(val topic: TopicId, val idea: String, val participant: String)
+internal data class DotKey(val topic: TopicId, val idea: String, val participant: String) : Serializable
 
 /**
  * Whose pairwise judgements on which dimension (k6rrk-D2): one participant's set on one dimension of
@@ -96,7 +98,7 @@ internal data class DotKey(val topic: TopicId, val idea: String, val participant
  */
 internal data class JudgeKey(val topic: TopicId, val dim: String, val participant: String)
 
-/** A judgement outcome's wire string, on the API and in the journal: "a", "b", "equal". */
+/** A judgement outcome's wire string, on the API and in durable records: "a", "b", "equal". */
 private val Outcome.wire: String get() = name.lowercase()
 
 /** An HTTP failure: answered as `{"error": error}` with [status]. */
@@ -104,20 +106,62 @@ private class Fail(val status: Int, val error: String) : RuntimeException(error,
 
 private fun fail(status: Int, error: String): Nothing = throw Fail(status, error)
 
+private const val HOST_JOURNAL_ID = "host"
+internal const val ALIGNMENT_JOURNAL_FILE = "host.journal"
+
+/** The one host/context pair that owns an optional alignment journal. */
+private data class AlignmentRuntime(
+    val registry: LocationRegistry,
+    val host: ManagedHost,
+    val context: ApplyContext,
+    val journal: FileJournal?,
+    val refs: AlignmentPipeline.Refs,
+    val recovered: Boolean,
+) {
+    companion object {
+        fun create(journalDir: Path?): AlignmentRuntime {
+            if (journalDir != null && Files.exists(journalDir) && !Files.isDirectory(journalDir)) {
+                throw IllegalArgumentException("--journal must name a directory; legacy JSONL files are not migrated: $journalDir")
+            }
+            journalDir?.let(Files::createDirectories)
+            val journal = journalDir?.resolve(ALIGNMENT_JOURNAL_FILE)?.toFile()?.let(::FileJournal)
+            val registry = LocationRegistry()
+            lateinit var context: ApplyContext
+            val host = ManagedHost(
+                registry = registry,
+                journalFor = { ref -> context.journalFor(ref) },
+            )
+            context = ApplyContext(
+                host = host,
+                journals = journal?.let { mapOf(HOST_JOURNAL_ID to it) }.orEmpty(),
+                topology = journal,
+            )
+            val recovered = journal?.replay()?.isNotEmpty() == true
+            val refs = if (recovered) {
+                context.recover(checkNotNull(journal)).awaitApplied()
+                AlignmentPipeline.recovered(context)
+            } else {
+                AlignmentPipeline.build(context, journalId = journal?.let { HOST_JOURNAL_ID })
+            }
+            return AlignmentRuntime(registry, host, context, journal, refs, recovered)
+        }
+    }
+}
+
 /**
  * alignment: participants rate ideas on a topic's creator-defined dimensions
  * (continuous [1, 9] sliders, held as thousandths — [RatingScale]); the dataflow of [AlignmentPipeline] folds the ratings into
  * per-dimension statistics and a weighted per-idea score, and this app serves
  * the result as JSON + `/events` SSE (feature computenet-sigl0).
  *
- * Only ratings and weights enter the dataflow (`Refs.ratings`, `Refs.weights`).
- * Topics, dimensions and ideas are app-level write-side indices, as are the
- * synchronous mirrors [ratings]/[weights]: validation and cascades read THOSE,
- * never the async read model folded off the fusion hub ([scored]).
+ * Ratings and weights feed the derived scoring pipeline. Topics, dots and
+ * judgements also live in graph cells but have no derived links. The app keeps
+ * synchronous mirrors for validation and cascades; those paths never read the
+ * async model folded off the fusion hub ([scored]).
  *
- * Persistence is backlog-triage's app-level op journal: one JSON object per
- * line, DSYNC appends, replayed on boot through the same op functions the
- * handlers call with [journal] still null (so replay records nothing).
+ * With `--journal <dir>`, durable inputs and write-side indices are journaled
+ * kernel cells declared by [AlignmentPipeline]. Recovery first rebuilds their
+ * topology, then restores their state and rebuilds these synchronous mirrors.
  *
  * Ranking and its tie-break (score desc, rating count desc, id asc) are
  * app-side (computenet-sigl0-D6), and every emitted list is sorted by its ids
@@ -125,17 +169,23 @@ private fun fail(status: Int, error: String): Nothing = throw Fail(status, error
  */
 class AlignmentApp(
     port: Int = 8080,
-    private val journalPath: Path? = null,
+    journalPath: Path? = null,
     inspector: InspectorFlag.Options? = null,
 ) {
     private val inspectorOptions = inspector
 
-    private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+    private val runtime = AlignmentRuntime.create(journalPath)
+    private val registry = runtime.registry
+    private val host = runtime.host
+    private val context = runtime.context
+    private val journal = runtime.journal
     private val manage = host.managementInlet.call
-    private val refs = AlignmentPipeline.build(host)
+    private val refs = runtime.refs
     private val ratingOps = host.lookup(refs.ratings)!!.inlet.call
     private val weightOps = host.lookup(refs.weights)!!.inlet.call
+    private val topicOps = host.lookup(refs.topics)!!.inlet.call
+    private val dotOps = host.lookup(refs.dots)!!.inlet.call
+    private val judgementOps = host.lookup(refs.judgements)!!.inlet.call
 
     private val state = Object()
 
@@ -150,8 +200,6 @@ class AlignmentApp(
     // async read model, folded off the fusion outlet
     private var scored: Map<IdeaKey, Scored> = emptyMap()
 
-    private var journal: OutputStream? = null // null while replaying → record() no-ops
-
     private val shell = DemoShell(port)
 
     val boundPort: Int get() = shell.boundPort
@@ -161,18 +209,15 @@ class AlignmentApp(
         private set
 
     init {
+        if (runtime.recovered) {
+            rebuildMirrors()
+            host.checkpoint(checkNotNull(journal))
+        }
+
         // one hub suffices: Scored carries the per-dimension n/mean/stdev
         val hub = MapHubCell<IdeaKey, Scored>({ m -> synchronized(state) { scored = m }; broadcast() })
         manage.spawn(hub)
         manage.connect(refs.fusion, "outlet", hub.ref, "inlet")
-
-        journalPath?.let { p ->
-            if (Files.exists(p)) Files.readAllLines(p).forEach { if (it.isNotBlank()) applyJournalLine(it) }
-            Files.createDirectories(p.toAbsolutePath().parent)
-            journal = Files.newOutputStream(
-                p, StandardOpenOption.CREATE, StandardOpenOption.APPEND, StandardOpenOption.DSYNC,
-            )
-        }
 
         shell.route("/") { ex ->
             // `/t/{id}` is the per-topic page URL (computenet-k1d4g-D8): same page, any id
@@ -185,56 +230,81 @@ class AlignmentApp(
         shell.sse("/events") { stateJson() }
     }
 
-    // ── ops (shared by HTTP handlers and journal replay) ────────────────
+    private fun snapshot(ref: civictech.cell.CellRef): Serializable =
+        checkNotNull(host.snapshotOf(ref).get(30, TimeUnit.SECONDS)) { "missing state snapshot for $ref" }
 
-    private fun record(line: String) {
-        journal?.write((line + "\n").toByteArray())
+    private fun <K, V> recoveredMap(ref: civictech.cell.CellRef): Map<K, V> {
+        val restored = OrMapCell<K, V>(ref)
+        restored.restore(snapshot(ref))
+        return restored.membership().associateWith { key -> checkNotNull(restored.value(key)) }
     }
 
-    private fun applyJournalLine(line: String) {
-        val j = Json.parseToJsonElement(line).jsonObject
-        fun s(k: String) = (j[k] as? JsonPrimitive)?.content ?: ""
-        fun t() = TopicId(s("topic"))
-        fun rk() = RatingKey(t(), s("idea"), s("dim"), s("participant"))
-        // every field added after v1 is optional on replay: absent → the v1 meaning (k1d4g-D5)
-        fun direction() = if (s("direction").isEmpty()) Direction.VALUE else parseDirection(s("direction"))
-        when (s("op")) {
-            "topic" -> createTopic(
-                TopicId(s("id")), s("title"), s("creator"),
-                if (s("ideas").isEmpty()) IdeaPolicy.EVERYONE else parseWire(s("ideas"), IdeaPolicy.entries) { it.wire },
-                if (s("boardVisibility").isEmpty()) BoardVisibility.AFTER_RATING
-                else parseWire(s("boardVisibility"), BoardVisibility.entries) { it.wire },
-            )
-            "dimension" -> addDimension(
-                t(), s("id"), Dimension(s("name"), s("lowLabel"), s("highLabel")),
-                DimConfig(s("weight").toDouble(), direction()),
-            )
-            "undimension" -> removeDimension(t(), s("id"))
-            "weight" -> setWeight(t(), s("dim"), s("weight").toDouble())
-            "direction" -> setDirection(t(), s("dim"), direction())
-            "labels" -> setLabels(t(), s("dim"), s("lowLabel"), s("highLabel"))
-            "policy" -> setPolicy(t(), parseWire(s("ideas"), IdeaPolicy.entries) { it.wire })
-            "visibility" -> setVisibility(t(), parseWire(s("boardVisibility"), BoardVisibility.entries) { it.wire })
-            "reveal" -> reveal(t())
-            "idea" -> addIdea(t(), Idea(s("id"), s("title"), s("description"), s("proposer")))
-            "unidea" -> removeIdea(t(), s("id"))
-            "note" -> setNote(t(), s("idea"), s("text"), s("author"))
-            "override" -> setOverride(t(), s("idea"), s("score").toDouble())
-            "unoverride" -> clearOverride(t(), s("idea"))
-            "rate" -> rate(rk(), RatingScale.toMilli(s("value").toDouble())) // v1 integer lines parse too
-            "unrate" -> unrate(rk())
-            "gutcheck" -> setGutCheck(t(), s("enabled") == "true", s("budget").toInt())
-            "dots" -> setDots(DotKey(t(), s("idea"), s("participant")), s("count").toInt())
-            "judge" -> judge(
-                JudgeKey(t(), s("dim"), s("participant")),
-                Judgement(s("a"), s("b"), parseWire(s("outcome"), Outcome.entries) { it.wire }),
-            )
-            "unjudge" -> unjudge(JudgeKey(t(), s("dim"), s("participant")))
-            else -> error("unknown journal op in line: $line")
+    /** The cells are authoritative after recovery; mirrors exist only for synchronous validation/read paths. */
+    @Suppress("UNCHECKED_CAST")
+    private fun rebuildMirrors() = synchronized(state) {
+        val ratingSnapshot = snapshot(refs.ratings.ref) as Map<String, Any>
+        val current = ratingSnapshot.getValue("current") as Map<RatingKey, List<Any>>
+        current.forEach { (key, entry) -> ratings[key] = (entry[0] as Rating).milli }
+
+        weights.putAll(snapshot(refs.weights.ref) as Map<DimKey, DimConfig>)
+
+        recoveredMap<String, TopicRecord>(refs.topics.ref).values.forEach { record ->
+            topics[record.id] = record.toTopic()
+        }
+        dots.putAll(recoveredMap(refs.dots.ref))
+        recoveredMap<JudgementRecordKey, JudgementRecord>(refs.judgements.ref).forEach { (key, value) ->
+            val judgeKey = JudgeKey(TopicId(key.topic), key.dim, key.participant)
+            judgements.getOrPut(judgeKey) { TreeMap() }[key.pair] = value.toJudgement()
         }
     }
 
-    /** The topic line carries its initial facilitator settings (additive keys; a v1 line has none). */
+    private fun TopicRecord.toTopic(): Topic = Topic(
+        id = TopicId(id),
+        title = title,
+        creator = creator,
+        ideaPolicy = parseWire(ideaPolicy, IdeaPolicy.entries) { it.wire },
+        boardVisibility = parseWire(boardVisibility, BoardVisibility.entries) { it.wire },
+    ).also { topic ->
+        dimensions.forEach { (id, record) ->
+            topic.dims[id] = Dimension(record.name, record.lowLabel, record.highLabel)
+        }
+        ideas.forEach { (id, record) -> topic.ideas[id] = Idea(record.id, record.title, record.description, record.proposer) }
+        notes.forEach { (id, record) -> topic.notes[id] = Note(record.text, record.author) }
+        topic.overrides.putAll(overrides)
+        topic.revealed = revealed
+        topic.gutCheck = gutCheck
+        topic.dotBudget = dotBudget
+    }
+
+    private fun Topic.toRecord(): TopicRecord = TopicRecord(
+        id = id.value,
+        title = title,
+        creator = creator,
+        ideaPolicy = ideaPolicy.wire,
+        boardVisibility = boardVisibility.wire,
+        dimensions = dims.mapValues { (dimId, dim) ->
+            val config = weights.getValue(DimKey(id, dimId))
+            DimensionRecord(dim.name, dim.lowLabel, dim.highLabel, config.weight, config.direction.wire)
+        },
+        ideas = ideas.mapValues { (_, idea) -> IdeaRecord(idea.id, idea.title, idea.description, idea.proposer) },
+        notes = notes.mapValues { (_, note) -> NoteRecord(note.text, note.author) },
+        overrides = overrides.toMap(),
+        revealed = revealed,
+        gutCheck = gutCheck,
+        dotBudget = dotBudget,
+    )
+
+    private fun persistTopic(topic: Topic) = topicOps.put(topic.id.value, topic.toRecord())
+
+    private fun JudgementRecord.toJudgement(): Judgement =
+        Judgement(a, b, parseWire(outcome, Outcome.entries) { it.wire })
+
+    private fun judgementRecordKey(key: JudgeKey, pair: String) =
+        JudgementRecordKey(key.topic.value, key.dim, key.participant, pair)
+
+    // ── ops (HTTP handlers write cells, then update synchronous mirrors) ──
+
+    /** Creates the durable topic record with its initial facilitator settings. */
     private fun createTopic(
         id: TopicId,
         title: String,
@@ -242,56 +312,45 @@ class AlignmentApp(
         policy: IdeaPolicy,
         visibility: BoardVisibility,
     ) = synchronized(state) {
-        topics[id.value] = Topic(id, title, creator, policy, visibility)
-        record(
-            """{"op":"topic","id":${esc(id.value)},"title":${esc(title)},"creator":${esc(creator)},""" +
-                """"ideas":${esc(policy.wire)},"boardVisibility":${esc(visibility.wire)}}""",
-        )
+        val topic = Topic(id, title, creator, policy, visibility)
+        topicOps.put(id.value, topic.toRecord())
+        topics[id.value] = topic
     }
 
     /**
-     * A dimension's creation line carries its initial weight, direction and anchor labels, so replay
-     * restores all of them from one line (a v1 line has neither direction nor labels → value, empty).
+     * A dimension's durable state spans the weights cell and its enclosing topic record.
      */
     private fun addDimension(topic: TopicId, id: String, dim: Dimension, config: DimConfig) = synchronized(state) {
-        topics.getValue(topic.value).dims[id] = dim
-        weights[DimKey(topic, id)] = config
-        record(
-            """{"op":"dimension","topic":${esc(topic.value)},"id":${esc(id)},"name":${esc(dim.name)},""" +
-                """"weight":${config.weight},"direction":${esc(config.direction.wire)},""" +
-                """"lowLabel":${esc(dim.lowLabel)},"highLabel":${esc(dim.highLabel)}}""",
-        )
         weightOps.put(DimKey(topic, id), config)
+        weights[DimKey(topic, id)] = config
+        topics.getValue(topic.value).let { it.dims[id] = dim; persistTopic(it) }
     }
 
-    /** Cascades: unrates every rating on the dimension (journaled as `unrate`), then drops its weight row. */
+    /** Cascades: removes every rating and judgement on the dimension, then drops its weight row. */
     private fun removeDimension(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.dim == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
-        topics.getValue(topic.value).dims.remove(id)
-        judgements.keys.removeIf { it.topic == topic && it.dim == id } // no line, no refit (k6rrk-D3)
-        weights.remove(DimKey(topic, id))
-        record("""{"op":"undimension","topic":${esc(topic.value)},"id":${esc(id)}}""")
+        judgements.keys.filter { it.topic == topic && it.dim == id }.forEach(::removeJudgementSet)
         weightOps.remove(DimKey(topic, id))
+        weights.remove(DimKey(topic, id))
+        topics.getValue(topic.value).let { it.dims.remove(id); persistTopic(it) }
     }
 
     private fun setWeight(topic: TopicId, dim: String, weight: Double) = synchronized(state) {
         val old = weights[DimKey(topic, dim)]
         if (old?.weight == weight) return@synchronized
         val config = DimConfig(weight, old?.direction ?: Direction.VALUE)
-        weights[DimKey(topic, dim)] = config
-        record("""{"op":"weight","topic":${esc(topic.value)},"dim":${esc(dim)},"weight":$weight}""")
         weightOps.put(DimKey(topic, dim), config)
+        weights[DimKey(topic, dim)] = config
+        persistTopic(topics.getValue(topic.value))
     }
 
     private fun setDirection(topic: TopicId, dim: String, direction: Direction) = synchronized(state) {
         val old = weights.getValue(DimKey(topic, dim))
         if (old.direction == direction) return@synchronized
         val config = old.copy(direction = direction)
-        weights[DimKey(topic, dim)] = config
-        record(
-            """{"op":"direction","topic":${esc(topic.value)},"dim":${esc(dim)},"direction":${esc(direction.wire)}}""",
-        )
         weightOps.put(DimKey(topic, dim), config)
+        weights[DimKey(topic, dim)] = config
+        persistTopic(topics.getValue(topic.value))
     }
 
     /** Anchor labels are presentation-only: the write-side index changes, the dataflow does not. */
@@ -300,36 +359,33 @@ class AlignmentApp(
         val old = dims.getValue(dim)
         if (old.lowLabel == low && old.highLabel == high) return@synchronized
         dims[dim] = old.copy(lowLabel = low, highLabel = high)
-        record(
-            """{"op":"labels","topic":${esc(topic.value)},"dim":${esc(dim)},""" +
-                """"lowLabel":${esc(low)},"highLabel":${esc(high)}}""",
-        )
+        persistTopic(topics.getValue(topic.value))
     }
 
     private fun setPolicy(topic: TopicId, policy: IdeaPolicy) = synchronized(state) {
         val t = topics.getValue(topic.value)
         if (t.ideaPolicy == policy) return@synchronized
         t.ideaPolicy = policy
-        record("""{"op":"policy","topic":${esc(topic.value)},"ideas":${esc(policy.wire)}}""")
+        persistTopic(t)
     }
 
     private fun setVisibility(topic: TopicId, visibility: BoardVisibility) = synchronized(state) {
         val t = topics.getValue(topic.value)
         if (t.boardVisibility == visibility) return@synchronized
         t.boardVisibility = visibility
-        record("""{"op":"visibility","topic":${esc(topic.value)},"boardVisibility":${esc(visibility.wire)}}""")
+        persistTopic(t)
     }
 
     /**
      * The gut-check round's settings (teu97-D2): idempotent — the same (enabled, budget) pair writes
-     * no line, so a `PUT /policy` that only changes `ideas`/`boardVisibility` never touches this op.
+     * no frame, so a `PUT /policy` that only changes `ideas`/`boardVisibility` never touches this state.
      */
     private fun setGutCheck(topic: TopicId, enabled: Boolean, budget: Int) = synchronized(state) {
         val t = topics.getValue(topic.value)
         if (t.gutCheck == enabled && t.dotBudget == budget) return@synchronized
         t.gutCheck = enabled
         t.dotBudget = budget
-        record("""{"op":"gutcheck","topic":${esc(topic.value)},"enabled":$enabled,"budget":$budget}""")
+        persistTopic(t)
     }
 
     /** The facilitator's reveal: one-way topic state in the shared frame; the page decides what it unlocks. */
@@ -337,31 +393,31 @@ class AlignmentApp(
         val t = topics.getValue(topic.value)
         if (t.revealed) return@synchronized
         t.revealed = true
-        record("""{"op":"reveal","topic":${esc(topic.value)}}""")
+        persistTopic(t)
     }
 
-    /** Also the edit: re-recording an `idea` line under the same id replaces its title/description (D5). */
+    /** Also the edit: replacing an idea under the same id updates its title/description (D5). */
     private fun addIdea(topic: TopicId, idea: Idea) = synchronized(state) {
-        topics.getValue(topic.value).ideas[idea.id] = idea
-        record(
-            """{"op":"idea","topic":${esc(topic.value)},"id":${esc(idea.id)},"title":${esc(idea.title)},""" +
-                """"description":${esc(idea.description)},"proposer":${esc(idea.proposer)}}""",
-        )
+        topics.getValue(topic.value).let { it.ideas[idea.id] = idea; persistTopic(it) }
     }
 
     /**
-     * Cascades: unrates every rating on the idea (journaled as `unrate`), drops its dots (no extra
-     * line: replaying `unidea` drops them the same way, teu97-D4), then drops it, its note, its
-     * override and its judgements (no extra line either, w0i5h-D2/w61az-D1/k6rrk-D3).
+     * Cascades: removes every rating, dot and judgement on the idea, then drops the idea, its note
+     * and its override from the durable topic record (teu97-D4, w0i5h-D2, w61az-D1, k6rrk-D3).
      */
     private fun removeIdea(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.idea == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
-        dots.keys.filter { it.topic == topic && it.idea == id }.toList().forEach { dots.remove(it) }
-        topics.getValue(topic.value).ideas.remove(id)
-        topics.getValue(topic.value).notes.remove(id)
-        topics.getValue(topic.value).overrides.remove(id)
+        dots.keys.filter { it.topic == topic && it.idea == id }.toList().forEach { key ->
+            dotOps.remove(key)
+            dots.remove(key)
+        }
         dropJudgementsOn(topic, id) // no line, no refit of the survivors (k6rrk-D3)
-        record("""{"op":"unidea","topic":${esc(topic.value)},"id":${esc(id)}}""")
+        topics.getValue(topic.value).let {
+            it.ideas.remove(id)
+            it.notes.remove(id)
+            it.overrides.remove(id)
+            persistTopic(it)
+        }
     }
 
     /**
@@ -377,10 +433,7 @@ class AlignmentApp(
             if (notes[idea] == Note(text, author)) return@synchronized
             notes[idea] = Note(text, author)
         }
-        record(
-            """{"op":"note","topic":${esc(topic.value)},"idea":${esc(idea)},"text":${esc(text)},""" +
-                """"author":${esc(author)}}""",
-        )
+        persistTopic(topics.getValue(topic.value))
     }
 
     /**
@@ -388,68 +441,59 @@ class AlignmentApp(
      * kept on [Topic.overrides] keyed by idea id, like [Topic.notes], never as an [Idea] field — an
      * idea edit ([addIdea]) replaces `topic.ideas[id]` wholesale and would otherwise drop it. Never
      * enters the dataflow: it is a write-side ranking key read only by [aggregateJson]. Idempotent
-     * (like [rate]): setting the same score twice journals no line.
+     * (like [rate]): setting the same score twice journals no frame.
      */
     private fun setOverride(topic: TopicId, idea: String, score: Double) = synchronized(state) {
         val overrides = topics.getValue(topic.value).overrides
         if (overrides[idea] == score) return@synchronized
         overrides[idea] = score
-        record("""{"op":"override","topic":${esc(topic.value)},"idea":${esc(idea)},"score":$score}""")
+        persistTopic(topics.getValue(topic.value))
     }
 
-    /** Clearing an absent override journals no line (idempotent, like [unrate]). */
+    /** Clearing an absent override journals no frame (idempotent, like [unrate]). */
     private fun clearOverride(topic: TopicId, idea: String) = synchronized(state) {
         val overrides = topics.getValue(topic.value).overrides
         if (overrides.remove(idea) == null) return@synchronized
-        record("""{"op":"unoverride","topic":${esc(topic.value)},"idea":${esc(idea)}}""")
+        persistTopic(topics.getValue(topic.value))
     }
 
-    /** [milli] is thousandths; journaled via [RatingScale.format], so an integer rating writes the v1 line. */
+    /** [milli] is thousandths and is stored verbatim in the journaled ratings cell. */
     private fun rate(key: RatingKey, milli: Int) = synchronized(state) {
         if (ratings[key] == milli) return@synchronized // idempotent: no journal line, no delta
-        ratings[key] = milli
-        record(
-            """{"op":"rate","topic":${esc(key.topic.value)},"idea":${esc(key.idea)},"dim":${esc(key.dim)},""" +
-                """"participant":${esc(key.participant)},"value":${RatingScale.format(milli)}}""",
-        )
         ratingOps.put(key, Rating(key, milli))
+        ratings[key] = milli
     }
 
     /** Unrated is absence (computenet-sigl0-D5): the key leaves the KeyedSetCell. */
     private fun unrate(key: RatingKey) = synchronized(state) {
-        if (ratings.remove(key) == null) return@synchronized
-        record(
-            """{"op":"unrate","topic":${esc(key.topic.value)},"idea":${esc(key.idea)},"dim":${esc(key.dim)},""" +
-                """"participant":${esc(key.participant)}}""",
-        )
+        if (key !in ratings) return@synchronized
         ratingOps.remove(key)
+        ratings.remove(key)
     }
 
     /**
      * [count] is the participant's ABSOLUTE dot count on the idea (teu97-D3); `count == 0` removes
-     * the entry. Idempotent: the same count writes no line. Replay bypasses the enabled/budget checks
-     * in [postDots] — the journal is the truth.
+     * the entry. Idempotent: the same count writes no frame. Recovery bypasses the enabled/budget
+     * checks in [postDots] because the durable cell is authoritative.
      */
     private fun setDots(key: DotKey, count: Int) = synchronized(state) {
         if (count == 0) {
-            if (dots.remove(key) == null) return@synchronized
+            if (key !in dots) return@synchronized
+            dotOps.remove(key)
+            dots.remove(key)
         } else {
             if (dots[key] == count) return@synchronized
+            dotOps.put(key, count)
             dots[key] = count
         }
-        record(
-            """{"op":"dots","topic":${esc(key.topic.value)},"idea":${esc(key.idea)},""" +
-                """"participant":${esc(key.participant)},"count":$count}""",
-        )
     }
 
     /**
      * Stores one pairwise judgement (k6rrk-D2/D3), normalized so `a < b` by id with the outcome
      * re-expressed, replacing any earlier judgement of the same unordered pair; an identical judgement
-     * is a no-op (no line, no refit). Otherwise it journals a `judge` line, re-fits the participant's
-     * whole set on the dimension with [PairwiseFit] and writes every derived rating through [rate] — the
-     * slider's own op — so the ratings follow as ordinary `rate` lines, which replay as no-ops after the
-     * `judge` line has re-derived the same values (the fit is deterministic over the set).
+     * is a no-op (no frame, no refit). Otherwise it updates the durable judgement row, re-fits the
+     * participant's whole set on the dimension with [PairwiseFit], and writes every derived rating
+     * through [rate], the slider's own operation.
      */
     private fun judge(key: JudgeKey, judgement: Judgement) = synchronized(state) {
         val j = if (judgement.a <= judgement.b) judgement else Judgement(
@@ -459,25 +503,24 @@ class AlignmentApp(
         val set = judgements.getOrPut(key) { TreeMap() }
         val pair = j.a + "|" + j.b
         if (set[pair] == j) return@synchronized
+        judgementOps.put(judgementRecordKey(key, pair), JudgementRecord(j.a, j.b, j.outcome.wire))
         set[pair] = j
-        record(
-            """{"op":"judge","topic":${esc(key.topic.value)},"dim":${esc(key.dim)},""" +
-                """"participant":${esc(key.participant)},"a":${esc(j.a)},"b":${esc(j.b)},"outcome":${esc(j.outcome.wire)}}""",
-        )
         PairwiseFit.ratings(set.values).forEach { (idea, milli) ->
             rate(RatingKey(key.topic, idea, key.dim, key.participant), milli)
         }
     }
 
-    /** Clears the participant's judgements on the dimension (no line when none); the derived ratings stay (k6rrk-D3). */
+    /** Clears the participant's judgements on the dimension; the derived ratings stay (k6rrk-D3). */
     private fun unjudge(key: JudgeKey): Int = synchronized(state) {
-        val cleared = judgements.remove(key)?.size ?: 0
+        val cleared = judgements[key]?.size ?: 0
         if (cleared == 0) return@synchronized 0
-        record(
-            """{"op":"unjudge","topic":${esc(key.topic.value)},"dim":${esc(key.dim)},""" +
-                """"participant":${esc(key.participant)}}""",
-        )
+        removeJudgementSet(key)
         cleared
+    }
+
+    private fun removeJudgementSet(key: JudgeKey) {
+        judgements[key]?.keys?.forEach { pair -> judgementOps.remove(judgementRecordKey(key, pair)) }
+        judgements.remove(key)
     }
 
     /** The idea-removal cascade: every participant's judgements mentioning [idea], on every dimension. */
@@ -486,7 +529,11 @@ class AlignmentApp(
         while (it.hasNext()) {
             val (key, set) = it.next()
             if (key.topic != topic) continue
-            set.values.removeIf { j -> j.a == idea || j.b == idea }
+            set.entries.removeIf { (pair, judgement) ->
+                val remove = judgement.a == idea || judgement.b == idea
+                if (remove) judgementOps.remove(judgementRecordKey(key, pair))
+                remove
+            }
             if (set.isEmpty()) it.remove()
         }
     }
@@ -517,7 +564,7 @@ class AlignmentApp(
      * than a slug of the title, which is [postIdea]'s rule. Phase 2 therefore
      * maps an ordered board back onto `bd` ids with no lookup table.
      *
-     * Re-seeding an unchanged idea writes no journal line, so a standing round's
+     * Re-seeding an unchanged idea writes no journal frame, so a standing round's
      * journal grows only when the tracker actually changed.
      */
     internal fun seedIdea(topic: TopicId, id: String, title: String, description: String, proposer: String) =
@@ -1138,15 +1185,14 @@ class AlignmentApp(
     fun stop() {
         inspector?.stop()
         shell.stop()
-        journal?.close()
     }
 
     private fun parseDirection(v: String): Direction = parseWire(v, Direction.entries) { it.wire }
 
     private companion object {
-        /** A journal line's enum value; an unknown one is a corrupt journal, not a request error. */
+        /** A recovered record's enum value; an unknown one is corrupt durable state, not a request error. */
         fun <E> parseWire(v: String, values: List<E>, wire: (E) -> String): E =
-            values.firstOrNull { wire(it) == v } ?: error("unknown value in journal: $v")
+            values.firstOrNull { wire(it) == v } ?: error("unknown durable value: $v")
 
         val RATING_ORDER: Comparator<RatingKey> =
             compareBy({ it.topic.value }, { it.idea }, { it.dim }, { it.participant })
@@ -1169,7 +1215,7 @@ internal val TRIAGE_TOPIC = TopicId("triage")
  * many candidates it saw (feature computenet-i00bh).
  *
  * Idempotent: the topic is created once, an unchanged idea writes no journal
- * line, and an unchanged [Jev] rating is [AlignmentApp.rate]'s own no-op. So
+ * frame, and an unchanged [Jev] rating is [AlignmentApp.rate]'s own no-op. So
  * this is safe to run on every boot, which is what makes a standing round
  * survivable — the journal carries the human ratings and the seed only tops up
  * what the tracker has added.
@@ -1228,6 +1274,7 @@ fun main(args: Array<String>) {
         println("computenet alignment: seeded $n ready epics from $workspace into /t/${TRIAGE_TOPIC.value}")
     }
     app.start()
+    announcePort("http", app.boundPort)
     println("computenet alignment: http://localhost:${app.boundPort}")
     parsed.options?.let { InspectorFlag.announce(app.inspector!!, it) }
 }
