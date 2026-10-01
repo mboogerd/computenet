@@ -2,8 +2,12 @@ package civictech.demo.backlogtriage
 
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
+import civictech.cell.data.OrMapApi
+import civictech.cell.data.OrMapCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
@@ -11,6 +15,7 @@ import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell
+import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.flag
@@ -23,13 +28,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.io.OutputStream
 import java.io.Serializable
 import java.net.URLDecoder
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import java.util.*
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.extension
 import kotlin.io.path.nameWithoutExtension
 import civictech.cell.data.op.FlatMapSetCell
@@ -66,22 +70,28 @@ object TriagePipeline {
     data class Refs(
         val features: TypedRef<SetApi<String>>,
         val prefs: TypedRef<SetApi<Pref>>,
+        val meta: TypedRef<OrMapApi<String, FeatureMeta>>,
         val score: CellRef,
         val votes: CellRef,
         val ratings: Map<String, CellRef>,   // algo name → rating-cell ref ("elo", "bt", "trueskill", "meta")
     )
 
-    fun build(host: ManagedHost): Refs {
+    fun build(host: ManagedHost): Refs = build(ApplyContext(host))
+
+    internal fun build(context: ApplyContext, journalId: String? = null): Refs {
         val refs = mutableMapOf<String, CellRef>()
         lateinit var featuresRef: TypedRef<SetApi<String>>
         lateinit var prefsRef: TypedRef<SetApi<Pref>>
-        graph(host.managementInlet) {
-            val features = spawn("features") { SetCell<String>() }
-            val prefs = spawn("prefs") { SetCell<Pref>() }
+        lateinit var featureMetaRef: TypedRef<OrMapApi<String, FeatureMeta>>
+        graph(context) {
+            val features = spawn("features", journalId = journalId) { SetCell<String>(it) }
+            val prefs = spawn("prefs", journalId = journalId) { SetCell<Pref>(it) }
+            val featureMeta = spawn("meta", journalId = journalId) { OrMapCell<String, FeatureMeta>(it) }
             featuresRef = features.refAs()
             prefsRef = prefs.refAs()
+            featureMetaRef = featureMeta.refAs()
             val contribs = spawn("contribs") {
-                FlatMapSetCell(f = { p: Pref ->
+                FlatMapSetCell(ref = it, f = { p: Pref ->
                     listOf(
                         Contribution(p.winner, p.agent, p.loser, +1),
                         Contribution(p.loser, p.agent, p.winner, -1),
@@ -89,21 +99,29 @@ object TriagePipeline {
                 })
             }
             val score = spawn("score") {
-                GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.avgOf { c: Contribution -> c.sign })
+                GroupByCell(
+                    ref = it,
+                    keyFn = { c: Contribution -> c.item },
+                    aggregator = Aggregators.avgOf { c: Contribution -> c.sign },
+                )
             }
             val votes = spawn("votes") {
-                GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.count<Contribution>())
+                GroupByCell(
+                    ref = it,
+                    keyFn = { c: Contribution -> c.item },
+                    aggregator = Aggregators.count<Contribution>(),
+                )
             }
-            val elo = spawn("elo") { RatingCell(Elo()) }
-            val bt = spawn("bt") { RatingCell(BradleyTerry()) }
-            val trueskill = spawn("trueskill") { RatingCell(TrueSkill()) }
-            val glicko = spawn("glicko") { RatingCell(Glicko()) }
-            val wenglin = spawn("wenglin") { RatingCell(WengLin()) }
+            val elo = spawn("elo") { RatingCell(Elo(), ref = it) }
+            val bt = spawn("bt") { RatingCell(BradleyTerry(), ref = it) }
+            val trueskill = spawn("trueskill") { RatingCell(TrueSkill(), ref = it) }
+            val glicko = spawn("glicko") { RatingCell(Glicko(), ref = it) }
+            val wenglin = spawn("wenglin") { RatingCell(WengLin(), ref = it) }
             // wilson is per-key independent — a plain kernel GroupBy aggregator
             val wilson = spawn("wilson") {
-                GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = WilsonAggregator())
+                GroupByCell(ref = it, keyFn = { c: Contribution -> c.item }, aggregator = WilsonAggregator())
             }
-            val meta = spawn("meta") { MetaRankCell() }
+            val metaRank = spawn("meta-rank") { MetaRankCell(ref = it) }
             connect(prefs, "outlet", contribs, "inlet")
             connect(contribs, "outlet", score, "inlet")
             connect(contribs, "outlet", votes, "inlet")
@@ -111,41 +129,97 @@ object TriagePipeline {
             for (rating in listOf(elo, bt, trueskill, wenglin, glicko)) {
                 connect(prefs, "outlet", rating, "inlet")
             }
-            connect(score, "outlet", meta, "mean")
+            connect(score, "outlet", metaRank, "mean")
             for (rating in listOf(elo, bt, trueskill, glicko, wenglin, wilson)) {
-                connect(rating, "outlet", meta, rating.name)
+                connect(rating, "outlet", metaRank, rating.name)
             }
-            listOf(features, prefs, score, votes, elo, bt, trueskill, glicko, wenglin, wilson, meta)
+            listOf(features, prefs, featureMeta, score, votes, elo, bt, trueskill, glicko, wenglin, wilson, metaRank)
                 .forEach { refs[it.name] = it.ref }
         }
         return Refs(
             features = featuresRef,
             prefs = prefsRef,
+            meta = featureMetaRef,
             score = refs.getValue("score"),
             votes = refs.getValue("votes"),
-            ratings = listOf("elo", "bt", "trueskill", "glicko", "wenglin", "wilson", "meta")
-                .associateWith { refs.getValue(it) },
+            ratings = listOf("elo", "bt", "trueskill", "glicko", "wenglin", "wilson")
+                .associateWith { refs.getValue(it) } + ("meta" to refs.getValue("meta-rank")),
         )
     }
+
+    /** Recovered graphs preserve these handles; no app-side respawn is needed. */
+    internal fun recovered(context: ApplyContext): Refs = Refs(
+        features = TypedRef(context.handles.getValue("features")),
+        prefs = TypedRef(context.handles.getValue("prefs")),
+        meta = TypedRef(context.handles.getValue("meta")),
+        score = context.handles.getValue("score"),
+        votes = context.handles.getValue("votes"),
+        ratings = listOf("elo", "bt", "trueskill", "glicko", "wenglin", "wilson")
+            .associateWith { context.handles.getValue(it) } + ("meta" to context.handles.getValue("meta-rank")),
+    )
 }
 
-data class FeatureMeta(val title: String, val body: String)
+data class FeatureMeta(val title: String, val body: String) : Serializable
 
 val ALGOS = listOf("mean", "elo", "bt", "trueskill", "glicko", "wenglin", "wilson", "meta")
 
+private const val HOST_JOURNAL_ID = "host"
+internal const val TRIAGE_JOURNAL_FILE = "host.journal"
+
+/** The one host/context pair that owns an optional backlog-triage journal. */
+private data class TriageRuntime(
+    val registry: LocationRegistry,
+    val host: ManagedHost,
+    val context: ApplyContext,
+    val journal: FileJournal?,
+    val refs: TriagePipeline.Refs,
+    val recovered: Boolean,
+) {
+    companion object {
+        fun create(journalDir: Path?): TriageRuntime {
+            if (journalDir != null && Files.exists(journalDir) && !Files.isDirectory(journalDir)) {
+                throw IllegalArgumentException("--journal must name a directory; legacy JSONL files are not migrated: $journalDir")
+            }
+            journalDir?.let(Files::createDirectories)
+            val journal = journalDir?.resolve(TRIAGE_JOURNAL_FILE)?.toFile()?.let(::FileJournal)
+            val registry = LocationRegistry()
+            lateinit var context: ApplyContext
+            val host = ManagedHost(
+                registry = registry,
+                journalFor = { ref -> context.journalFor(ref) },
+            )
+            context = ApplyContext(
+                host = host,
+                journals = journal?.let { mapOf(HOST_JOURNAL_ID to it) }.orEmpty(),
+                topology = journal,
+            )
+            val recovered = journal?.replay()?.isNotEmpty() == true
+            val refs = if (recovered) {
+                context.recover(checkNotNull(journal)).awaitApplied()
+                TriagePipeline.recovered(context)
+            } else {
+                TriagePipeline.build(context, journalId = journal?.let { HOST_JOURNAL_ID })
+            }
+            return TriageRuntime(registry, host, context, journal, refs, recovered)
+        }
+    }
+}
+
 class TriageApp(
     port: Int = 8080,
-    private val journalPath: Path? = null,
+    journalPath: Path? = null,
     inspector: InspectorFlag.Options? = null,
 ) {
     private val inspectorOptions = inspector
 
-    private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+    private val runtime = TriageRuntime.create(journalPath)
+    private val registry = runtime.registry
+    private val host = runtime.host
     private val manage = host.managementInlet.call
-    private val refs = TriagePipeline.build(host)
+    private val refs = runtime.refs
     private val featureOps = host.lookup(refs.features)!!.inlet.call
     private val prefOps = host.lookup(refs.prefs)!!.inlet.call
+    private val metaOps = host.lookup(refs.meta)!!.inlet.call
 
     private val state = Object()
     // async read model, folded off the hub cells
@@ -164,14 +238,6 @@ class TriageApp(
     // "mean" is the kernel-operator pipeline's own `score` map
     private val algoScores = mutableMapOf<String, Map<String, Double>>()
 
-    // ponytail: app-level op journal (JSONL, DSYNC appends) replayed through
-    // the same op functions on boot — one mechanism restores the cells, the
-    // title/body meta (which never enters the dataflow), and the write-side
-    // indices. The kernel FileJournal/recoverFrom path (see :demo:agora)
-    // journals cell frames only and needs a structure log for stable refs;
-    // adopt it when the pipeline stops being static.
-    private var journal: OutputStream? = null   // null while replaying → record() no-ops
-
     private val shell = DemoShell(port)
 
     val boundPort: Int get() = shell.boundPort
@@ -181,6 +247,11 @@ class TriageApp(
         private set
 
     init {
+        if (runtime.recovered) {
+            rebuildMirrors()
+            host.checkpoint(checkNotNull(runtime.journal))
+        }
+
         fun <E> setHub(ref: CellRef, sink: (Set<E>) -> Unit) {
             val hub = SetHubCell<E>({ synchronized(state) { sink(it) }; broadcast() })
             manage.spawn(hub)
@@ -201,14 +272,6 @@ class TriageApp(
             mapHub<String, Double>(ref) { algoScores[algo] = it }
         }
 
-        journalPath?.let { p ->
-            if (Files.exists(p)) Files.readAllLines(p).forEach { if (it.isNotBlank()) applyJournalLine(it) }
-            Files.createDirectories(p.toAbsolutePath().parent)
-            journal = Files.newOutputStream(
-                p, StandardOpenOption.CREATE, StandardOpenOption.APPEND, StandardOpenOption.DSYNC,
-            )
-        }
-
         shell.route("/") { ex ->
             if (ex.requestURI.path == "/") ex.respond(200, PAGE, "text/html; charset=utf-8")
             else ex.respond(404, "not found")
@@ -220,31 +283,37 @@ class TriageApp(
         shell.sse("/events") { stateJson() }
     }
 
-    // ── ops (shared by HTTP handlers, --seed, and journal replay) ────────
+    // ── ops (HTTP handlers and --seed write journaled kernel cells) ────────
 
-    private fun record(line: String) {
-        journal?.let { it.write((line + "\n").toByteArray()) }
+    private fun snapshot(ref: CellRef): Serializable =
+        checkNotNull(host.snapshotOf(ref).get(30, TimeUnit.SECONDS)) { "missing state snapshot for $ref" }
+
+    private fun <E> recoveredSet(ref: CellRef): Set<E> {
+        val restored = SetCell<E>(ref)
+        restored.restore(snapshot(ref))
+        return restored.membership()
     }
 
-    private fun applyJournalLine(line: String) {
-        val j = Json.parseToJsonElement(line).jsonObject
-        fun s(k: String) = (j[k] as? JsonPrimitive)?.content ?: ""
-        when (s("op")) {
-            "feature" -> addFeature(s("id"), s("title"), s("body"))
-            "unfeature" -> removeFeature(s("id"))
-            "pref" -> applyPref(Pref(s("agent"), s("winner"), s("loser")))
-            "unpref" -> retractPref(Pref(s("agent"), s("winner"), s("loser")))
-        }
+    private fun <K, V> recoveredMap(ref: CellRef): Map<K, V> {
+        val restored = OrMapCell<K, V>(ref)
+        restored.restore(snapshot(ref))
+        return restored.membership().associateWith { key -> checkNotNull(restored.value(key)) }
+    }
+
+    /** Durable cells are authoritative after recovery; these mirrors serve synchronous validation paths. */
+    private fun rebuildMirrors() = synchronized(state) {
+        meta.putAll(recoveredMap(refs.meta.ref))
+        livePrefs.addAll(recoveredSet(refs.prefs.ref))
     }
 
     fun addFeature(id: String, title: String, body: String) {
         synchronized(state) {
             val m = FeatureMeta(title, body)
-            if (meta[id] == m) return   // idempotent seed/upsert: don't re-journal
+            if (meta[id] == m) return
+            metaOps.put(id, m)
+            featureOps.add(id)
             meta[id] = m
-            record("""{"op":"feature","id":${esc(id)},"title":${esc(title)},"body":${esc(body)}}""")
         }
-        featureOps.add(id)
     }
 
     // ponytail: a deleted feature whose file still sits in the --seed dir
@@ -252,35 +321,38 @@ class TriageApp(
     // file too if the deletion should stick.
     private fun removeFeature(id: String): Boolean {
         synchronized(state) {
-            if (meta.remove(id) == null) return false
-            record("""{"op":"unfeature","id":${esc(id)}}""")
+            if (id !in meta) return false
+            metaOps.remove(id)
             featureOps.remove(id)
             // cascade the feature's preferences so it doesn't haunt the ranking
             livePrefs.filter { it.winner == id || it.loser == id }.forEach {
-                livePrefs -= it
-                record(unprefLine(it))
                 prefOps.remove(it)
+                livePrefs -= it
             }
+            meta.remove(id)
         }
         return true
     }
-
-    private fun prefLine(p: Pref) =
-        """{"op":"pref","agent":${esc(p.agent)},"winner":${esc(p.winner)},"loser":${esc(p.loser)}}"""
-
-    private fun unprefLine(p: Pref) =
-        """{"op":"unpref","agent":${esc(p.agent)},"winner":${esc(p.winner)},"loser":${esc(p.loser)}}"""
 
     private fun applyPref(p: Pref) = synchronized(state) {
         // an agent holds at most one direction per pair: adding a preference
         // retracts the same agent's reverse vote
         val reverse = Pref(p.agent, p.loser, p.winner)
-        if (livePrefs.remove(reverse)) { record(unprefLine(reverse)); prefOps.remove(reverse) }
-        if (livePrefs.add(p)) { record(prefLine(p)); prefOps.add(p) }
+        if (reverse in livePrefs) {
+            prefOps.remove(reverse)
+            livePrefs.remove(reverse)
+        }
+        if (p !in livePrefs) {
+            prefOps.add(p)
+            livePrefs.add(p)
+        }
     }
 
     private fun retractPref(p: Pref) = synchronized(state) {
-        if (livePrefs.remove(p)) { record(unprefLine(p)); prefOps.remove(p) }
+        if (p in livePrefs) {
+            prefOps.remove(p)
+            livePrefs.remove(p)
+        }
     }
 
     private fun handleFeatures(exchange: HttpExchange) {
@@ -441,7 +513,6 @@ class TriageApp(
     fun stop() {
         inspector?.stop()
         shell.stop()
-        journal?.close()
     }
 }
 
@@ -471,6 +542,7 @@ fun main(args: Array<String>) {
         inspector = parsed.options,
     ).start()
     parsed.rest.flag("--seed")?.let { seedFrom(app, Path.of(it)) }
+    announcePort("http", app.boundPort)
     println("computenet backlog-triage: http://localhost:${app.boundPort}")
     parsed.options?.let { InspectorFlag.announce(app.inspector!!, it) }
 }
