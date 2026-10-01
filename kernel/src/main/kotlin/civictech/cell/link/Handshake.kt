@@ -5,7 +5,7 @@ import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.FeedbackInlet
+import civictech.cell.port.FeedbackPort
 import civictech.cell.port.LinkTo
 import civictech.cell.nature.NatureNegotiation
 import civictech.cell.port.Port
@@ -46,14 +46,16 @@ internal fun reconcileNatures(offered: NatureVector, required: NatureVector): Li
 
 /**
  * T08 finding 1: the payload class each side declares, when the port is a
- * [FanOutlet]/[FanInlet] — the only two [Linked] port kinds that carry it
- * ([FanOutlet.clazz] / [FanInlet.clazz], both constructor fields already).
- * `null` for any other port kind (e.g. [civictech.cell.port.FeedbackInlet]),
- * which simply opts the check out rather than risking a false refusal.
+ * [FanOutlet]/[FanInlet] or a [FeedbackPort]. Fan ports carry their API class
+ * in `clazz`; a feedback port exposes [FeedbackPort.apiClass] so Consumer and
+ * Propagate feedback shapes are refused before installation when mismatched.
+ * `null` for any other port kind, which opts the check out rather than risking
+ * a false refusal.
  */
 private fun payloadClassOf(port: Any?): Class<*>? = when (port) {
     is FanOutlet<*> -> port.clazz
     is FanInlet<*> -> port.clazz
+    is FeedbackPort<*> -> port.apiClass
     else -> null
 }
 
@@ -110,7 +112,7 @@ internal fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, target
  * §Cycles, ADR 1 feature 8). Any of:
  *
  *  1. **Magnitude payload** — the weak-tier quiescence damper is live. Tested
- *     the same way [FeedbackInlet] dispatches at runtime (`is Magnitude`),
+ *     the same way [FeedbackPort] dispatches at runtime (`is Magnitude`),
  *     here against the reified payload class the
  *     [civictech.cell.port.feedbackInlet] delegate records; equivalently the
  *     KSP scan stamps such a producer MONOTONE (2).
@@ -126,7 +128,7 @@ internal fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, target
  * `civictech.cell.host.LinkAdmission.admitCycle` (T11-B), behind
  * `ManagedHost.connect`.
  */
-internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
+internal fun hasDampingWitness(outlet: Port, head: FeedbackPort<*>): Boolean {
     head.payloadType?.let { if (Magnitude::class.java.isAssignableFrom(it)) return true }
     val natures = outlet.natures
     if (natures.level(NatureAxis.MONOTONICITY).rank >= Monotonicity.MONOTONE.rank) return true

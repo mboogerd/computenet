@@ -1770,10 +1770,10 @@ open class ManagedHost(
                     PortRegistry.of(cell)[name]?.let { port ->
                         ProtocolSupport.of(port).relay(Protocols.Saturation)
                         // CycleHead fusion barrier (spec 21 §Fusion, 93 I-6):
-                        // route every FeedbackInlet's re-origination through
+                        // route every FeedbackPort's re-origination through
                         // this host's real queue, port-generic, no cell-
                         // specific wiring needed (mirrors AttentionSupport).
-                        if (port is FeedbackInlet<*>) port.barrier = { ctx.enqueueBarrier(it) }
+                        if (port is FeedbackPort<*>) port.barrier = { ctx.enqueueBarrier(it) }
                     }
                 }
                 // generated descriptors are authoritative: if the processor saw
@@ -2100,7 +2100,7 @@ open class ManagedHost(
         if (port !is Use<*>) return RoutedInletResolution.NotUsable
         val apiClass = when (port) {
             is FanInlet<*> -> port.clazz
-            else -> null // e.g. FeedbackInlet carries no erased api class — skip the wrapper check
+            else -> null // e.g. a FeedbackPort: its apiClass is not consulted here — skip the wrapper check
         }
         return RoutedInletResolution.Usable(apiClass)
     }

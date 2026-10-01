@@ -8,7 +8,7 @@ import civictech.cell.link.LinkRole
 import civictech.cell.link.StagedSubscription
 import civictech.cell.link.hasDampingWitness
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.FeedbackInlet
+import civictech.cell.port.FeedbackPort
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.LinkTo
 import civictech.cell.port.Port
@@ -107,7 +107,7 @@ internal object LinkAdmission {
     /**
      * Cycle admission (spec 10/13 `CycleWithoutHead`, 20/21 §Cycles, 93 I-5):
      * a connect that would close a cycle wholly visible to [topology] is
-     * rejected unless [inlet] is a declared [FeedbackInlet] (headedness)
+     * rejected unless [inlet] is a declared [FeedbackPort] (headedness)
      * carrying a damping witness (FU-8, ADR 1 feature 8). Cross-host cycles
      * are not locally visible here; they fall to the runtime hop guard
      * (20/22) instead. `null` = admitted.
@@ -144,7 +144,7 @@ internal object LinkAdmission {
     ): LinkResult.Rejected? {
         // Headedness (spec 10/13): the closing edge MUST land on a declared
         // CycleHead.
-        if (inlet !is FeedbackInlet<*>) {
+        if (inlet !is FeedbackPort<*>) {
             return LinkResult.Rejected(
                 "CycleWithoutHead: connecting $from.$outletName -> $to.$inletName would close a " +
                     "locally-visible cycle with no declared CycleHead (spec 10/13, 20/21 §Cycles)"
