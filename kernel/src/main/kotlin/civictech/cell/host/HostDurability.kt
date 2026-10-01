@@ -25,6 +25,12 @@ private const val RECORD_FRONTIER: Byte = 3
 private const val RECORD_OUTLET_WAVE: Byte = 4
 private const val RECORD_BASELINE: Byte = 5
 
+/** One accepted-but-undelivered frame and its host-wide acceptance position. */
+internal data class CheckpointFrame(
+    val sequence: Long,
+    val invocation: HostedPortInvocation,
+)
+
 /**
  * `[24-DUR-08]`'s bound: the most discharged-baseline positions
  * ([HostDurability.dischargedBaselines]) one `Effectful` inlet retains
@@ -302,10 +308,12 @@ object JournalRecords {
  * (`enqueueAwaiting(0, ...)`, so [checkpoint] keeps running on the management
  * band, unable to interleave with a dispatching cell, exactly as before), and
  * [underIntakeLock] — the one path that takes the host's `dataLock`: it runs
- * [checkpoint]'s staged-set read and `Journal.reset` under that monitor so the
- * compaction is atomic with respect to the intake (computenet-xy7w4 D3). Its
- * lock order is `dataLock` -> journal monitor, the same order the intake's
- * append+stage takes; nothing here takes them the other way round.
+ * [checkpoint]'s accepted-but-undelivered read and `Journal.reset` under that
+ * monitor so compaction is atomic with respect to the intake (computenet-xy7w4
+ * D3, computenet-hknt0). The read covers scheduler staging, supervision-SUSPEND
+ * parking and cold-inlet ACTIVATE tails, merged by their host acceptance
+ * position. Its lock order is `dataLock` -> journal monitor, the same order the
+ * intake's append+stage takes; nothing here takes them the other way round.
  */
 internal class HostDurability(
     private val journalSelector: (CellRef, String) -> Journal?,
@@ -315,13 +323,13 @@ internal class HostDurability(
     private val submit: (HostedPortInvocation) -> Unit,
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
     /**
-     * Runs its argument while holding the host's `dataLock`, handing it every staged
-     * (queued or attention-parked) invocation in host-sequence order
-     * ([civictech.cell.control.AttentionScheduler.stagedInSequence]). The default — nothing
-     * staged, no lock — is for a delegate built without a host (`JournalRecordsTest`);
-     * `ManagedHost` always passes its own.
+     * Runs its argument while holding the host's `dataLock`, handing it every
+     * accepted-but-undelivered invocation in host-sequence order: scheduler
+     * queued/attention-parked work, supervision-SUSPEND parking and cold-inlet
+     * ACTIVATE tails. The default — nothing pending, no lock — is for a delegate
+     * built without a host (`JournalRecordsTest`); `ManagedHost` always passes its own.
      */
-    private val underIntakeLock: ((staged: List<HostedPortInvocation>) -> Unit) -> Unit = { it(emptyList()) },
+    private val underIntakeLock: ((pending: List<CheckpointFrame>) -> Unit) -> Unit = { it(emptyList()) },
 ) {
 
     /**
@@ -511,14 +519,14 @@ internal class HostDurability(
      * **Safe at any inter-invocation boundary** (93 I-7 R7, computenet-xy7w4 D3). The
      * management band runs between two deliveries of the single-consumer host, so at that
      * point every frame accepted for [journal] is either DELIVERED — its effect is in the
-     * snapshot — or STAGED and not yet delivered: live traffic, frames a [recoverFrom]
-     * staged and no data task has applied yet, a coalesced entry, attention-parked
-     * traffic. The compacted journal is the checkpoint records followed by every staged
-     * frame whose target port tees to [journal] — or whose target cell's snapshot it holds,
-     * a per-port selector's volatile inlet included — re-encoded by [journalFrame] in host
-     * sequence order — so a host that recovers from it reproduces the fold of every frame
+     * snapshot — or pending and not yet delivered: live/recovery staging, a coalesced entry,
+     * attention parking, supervision-SUSPEND parking, or a cold inlet's pre-activation tail.
+     * The compacted journal is the checkpoint records followed by every pending frame whose
+     * target port tees to [journal] — or whose target cell's snapshot it holds, a per-port
+     * selector's volatile inlet included — re-encoded by [journalFrame] in host sequence
+     * order. A host that recovers from it therefore reproduces the fold of every frame
      * accepted before this returns, with no quiescence fence and with writers running.
-     * The staged-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
+     * The pending-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
      * the monitor the intake's append+stage holds, so a frame accepted concurrently is
      * either staged before the read (carried) or appended after the reset (tail) — never
      * truncated unseen. The snapshot describes the host's staging sequence number
@@ -546,9 +554,10 @@ internal class HostDurability(
      * [IllegalArgumentException] if it holds any record, and is a no-op that writes
      * nothing if it is empty (computenet-s4n8y).
      *
-     * Not covered, and still lost by the reset: a frame already dequeued and held
-     * elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-activation
-     * tail — and, on a suspending (🟢) scheduler, a delivery suspended mid-handler.
+     * A delivery suspended mid-handler is not a concurrent holding place: a suspending
+     * [CoroutineScheduler] drains one task through completion (including suspension and
+     * resumption) before polling the next task, so the management-band checkpoint waits
+     * for that delivery. Its completed effect is therefore in the snapshot.
      */
     fun checkpoint(journal: Journal) {
         awaitOnManagementBand {
@@ -670,13 +679,14 @@ internal class HostDurability(
             // may be folded into a snapshot by this very reset, and a restored snapshot
             // re-emits nothing, so replay could no longer re-derive it; the cell's own
             // snapshot would silently lack it (feature review, computenet-xy7w4).
-            underIntakeLock { staged ->
-                val carried = staged
+            underIntakeLock { pending ->
+                val carried = pending
                     .filter {
-                        journalSelector(it.cellRef, it.portName) === journal ||
-                            cellJournalSelector(it.cellRef) === journal
+                        journalSelector(it.invocation.cellRef, it.invocation.portName) === journal ||
+                            cellJournalSelector(it.invocation.cellRef) === journal
                     }
-                    .map(::journalFrame)
+                    .sortedBy(CheckpointFrame::sequence)
+                    .map { journalFrame(it.invocation) }
                 journal.reset(compacted + carried)
             }
         }
