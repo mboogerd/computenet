@@ -112,11 +112,13 @@ class TopologyRecoveryTest {
             ),
             SpawnStep(
                 "doomed",
-                RecordingSetFactory,
+                RecordingObserveFactory,
                 IdentityBinding.Exact(despawnedRef),
             ),
             ConnectStep("source", "outlet", "sink", "inlet", LinkOptions(staged = true)),
             ConnectStep("source", "outlet", "detached", "inlet", LinkOptions(staged = true)),
+            // (d): the despawned cell holds a live link, so replaying its Despawn must unlink first.
+            ConnectStep("source", "outlet", "doomed", "inlet", LinkOptions(staged = true)),
         ),
     )
 
@@ -201,6 +203,28 @@ class TopologyRecoveryTest {
         failure.cause!!.message shouldContain "unregistered namespace 'missing'"
         host.quiescence().await(30_000, "topology recovery dead letter")
         letters.size shouldBe 1
+    }
+
+    @Test
+    fun `GraphSpec topology append precedes the delta's first host operation`() {
+        val journal = InMemoryJournal()
+        val runtime = runtime(journal)
+        val firstRef = CellRef(UUID.randomUUID(), 9)
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    "first",
+                    CellFactory { throw IllegalStateException("first factory boom") },
+                    IdentityBinding.Exact(firstRef),
+                ),
+            ),
+        )
+
+        shouldThrow<IllegalStateException> { spec.apply(runtime.context) }.message shouldContain "first factory boom"
+
+        JournalRecords.decode(journal.replay().single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Topology>()
+            .events.single().shouldBeInstanceOf<TopoEvent.Spawn>().ref shouldBe firstRef
     }
 
     @Test
