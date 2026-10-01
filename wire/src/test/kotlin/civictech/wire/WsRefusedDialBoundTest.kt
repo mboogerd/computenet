@@ -53,8 +53,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * listener sends frames only after admitting this side's hello), with
  * [WsTransport.REFUSAL_WINDOW_MS] only a secondary way to clear the run,
  * rather than `Session.peered`, which on this transport answers a different
- * question — is argued on [WsTransport.REFUSED_DIAL_LIMIT], together with what
- * `:iroh` does instead and why the two may differ.
+ * question — is argued on [WsTransport.REFUSED_DIAL_LIMIT].
  */
 class WsRefusedDialBoundTest {
 
