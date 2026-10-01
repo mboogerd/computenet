@@ -2,6 +2,8 @@ package civictech.cell.graph
 
 import civictech.cell.CellRef
 import civictech.cell.data.SetCell
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.Interest
@@ -64,8 +66,18 @@ class InstanceSetDeclarationTest {
         return set.overlapCount()
     }
 
-    private fun freshHost(seed: Long): ManagedHost =
-        ManagedHost(scheduler = SimulationController(seed).scheduler())
+    private fun freshContext(seed: Long, journals: Map<String, Journal>): ApplyContext {
+        lateinit var context: ApplyContext
+        val host = ManagedHost(
+            scheduler = SimulationController(seed).scheduler(),
+            journalFor = { ref -> context.journalFor(ref) },
+        )
+        context = ApplyContext(host, journals = journals)
+        return context
+    }
+
+    private fun journalsFor(specs: List<InstanceSpec>): Map<String, Journal> =
+        specs.mapNotNull { it.journalId }.associateWith { InMemoryJournal() }
 
     @Test
     fun `a declared set replays with identical memberships and link sets across 100 step orderings`() {
@@ -75,9 +87,16 @@ class InstanceSetDeclarationTest {
         // reference replay (unshuffled) on a fresh host
         val refCells = mutableMapOf<Int, ShardCell<String>>()
         val refSpec = GraphSpec(listOf(InstanceSetStep("orders", logicalId, recordingShardBase(refCells), declared)))
-        refSpec.applyTo(freshHost(seed = 0).managementInlet)
+        val refJournals = journalsFor(declared)
+        val refContext = freshContext(seed = 0, journals = refJournals)
+        refSpec.apply(refContext)
         val refMembership = membershipOf(refCells)
         val refLinks = overlapOf(refCells)
+
+        declared.forEach { instance ->
+            val cell = refCells.getValue(instance.instanceId)
+            refContext.journalFor(cell.ref) shouldBe refJournals.getValue(instance.journalId!!)
+        }
 
         // the set is genuinely heterogeneous: disjoint across shards, overlapping within a shard
         refMembership.values.toSet().size shouldBe 3 // 3 distinct shard interests
@@ -89,10 +108,16 @@ class InstanceSetDeclarationTest {
             val cells = mutableMapOf<Int, ShardCell<String>>()
             val lowered = InstanceSetStep("orders", logicalId, recordingShardBase(cells), declared).lower()
             val shuffled = GraphSpec(lowered.shuffled(Random(seed.toLong())))
-            shuffled.applyTo(freshHost(seed = seed + 1L).managementInlet)
+            val journals = journalsFor(declared)
+            val context = freshContext(seed = seed + 1L, journals = journals)
+            shuffled.apply(context)
 
             membershipOf(cells) shouldBe refMembership
             overlapOf(cells) shouldBe refLinks
+            declared.forEach { instance ->
+                val cell = cells.getValue(instance.instanceId)
+                context.journalFor(cell.ref) shouldBe journals.getValue(instance.journalId!!)
+            }
         }
     }
 
@@ -138,12 +163,24 @@ class InstanceSetDeclarationTest {
         val lowered = GraphSpec(InstanceSetStep("s", logicalId, base, specs).lower())
         val handWritten = GraphSpec(
             listOf(
-                SpawnStep("s-0", InstanceCellFactory(base, specs[0]), IdentityBinding.NewInstanceOf(logicalId)),
-                SpawnStep("s-1", InstanceCellFactory(base, specs[1]), IdentityBinding.NewInstanceOf(logicalId)),
+                SpawnStep(
+                    "s-0",
+                    InstanceCellFactory(base, specs[0]),
+                    IdentityBinding.NewInstanceOf(logicalId),
+                    journalId = specs[0].journalId,
+                ),
+                SpawnStep(
+                    "s-1",
+                    InstanceCellFactory(base, specs[1]),
+                    IdentityBinding.NewInstanceOf(logicalId),
+                    journalId = specs[1].journalId,
+                ),
             ),
         )
 
-        // parameters, not verbs: the convenience lowers to exactly the primitive steps.
+        // Red if lowering drops either InstanceSpec journalId from its primitive spawn.
+        // Parameters, not verbs: the convenience lowers to exactly the primitive steps,
+        // including the durable hint on each lowered spawn.
         lowered shouldBe handWritten
     }
 }

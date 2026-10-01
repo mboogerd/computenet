@@ -6,6 +6,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.CountCell
+import civictech.cell.durability.InMemoryJournal
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -105,10 +106,16 @@ class GraphSpecReplicationParameterTest {
     private fun shardedRun(declared: Boolean, seed: Long): Map<Int, Set<Int>> {
         val controller = SimulationController(seed)
         val registry = LocationRegistry()
-        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        var context: ApplyContext? = null
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalFor = { ref -> context?.journalFor(ref) },
+        )
         val replication = Replication(registry, keyOf = { it })
         val logicalId = UUID.nameUUIDFromBytes("graph-shards-$seed".toByteArray())
         val specs = shardSpecs()
+        val journals = specs.mapNotNull { it.journalId }.associateWith { InMemoryJournal() }
         val cells = mutableMapOf<Int, ShardCell<Int>>()
         val factory = InstanceFactory { ref, spec ->
             // The formation assignment is construction-time data: publish it
@@ -118,8 +125,14 @@ class GraphSpecReplicationParameterTest {
         }
 
         if (declared) {
+            val applyContext = ApplyContext(host, replication, journals = journals)
+            context = applyContext
             GraphSpec(listOf(InstanceSetStep("orders", logicalId, factory, specs)))
-                .apply(ApplyContext(host, replication))
+                .apply(applyContext)
+            specs.forEach { instance ->
+                val cell = cells.getValue(instance.instanceId)
+                context!!.journalFor(cell.ref) shouldBe journals.getValue(instance.journalId!!)
+            }
         } else {
             specs.forEach { spec ->
                 val ref = CellRef(logicalId, spec.instanceId.toLong())
@@ -260,8 +273,6 @@ class GraphSpecReplicationParameterTest {
     fun `context builder spawn and instanceSet replicate while the Use builder refuses instanceSet`() {
         val controller = SimulationController(seed = 43)
         val registry = LocationRegistry()
-        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
-        val context = ApplyContext(host, Replication(registry))
         val spawnId = UUID.nameUUIDFromBytes("builder-spawn".toByteArray())
         val setId = UUID.nameUUIDFromBytes("builder-set".toByteArray())
         // InstanceSetStep.validate() builds an unspawned sample, so cells are keyed by ref.
@@ -269,9 +280,18 @@ class GraphSpecReplicationParameterTest {
         val replicas = (0 until 2).map {
             InstanceSpec(Interest.Total, instanceId = it, journalId = "j-$it", replicated = true)
         }
+        val journals = replicas.mapNotNull { it.journalId }.associateWith { InMemoryJournal() }
+        var context: ApplyContext? = null
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalFor = { ref -> context?.journalFor(ref) },
+        )
+        val applyContext = ApplyContext(host, Replication(registry), journals = journals)
+        context = applyContext
         val factory = InstanceFactory { ref, _ -> SetCell<String>(ref).also { setCells[ref] = it } }
 
-        val (spawned, _) = graphOf(context) {
+        val (spawned, _) = graphOf(applyContext) {
             val a = spawn("a", IdentityBinding.Exact(CellRef(spawnId, 1)), replicated = true) { SetCell<String>(it) }
             val b = spawn("b", IdentityBinding.Exact(CellRef(spawnId, 2)), replicated = true) { SetCell<String>(it) }
             val set = instanceSet("set", setId, factory, replicas)
@@ -283,6 +303,10 @@ class GraphSpecReplicationParameterTest {
         (HostedCellProxy.create(spawned.third[0], registry, SetInletProxy::class.java) as SetInletProxy)
             .inlet.call.add("y")
         controller.runToIdle()
+
+        replicas.forEachIndexed { index, instance ->
+            context!!.journalFor(spawned.third[index]) shouldBe journals.getValue(instance.journalId!!)
+        }
 
         withClue("builder spawn b holds x") { spawned.second.cell.membership() shouldBe setOf("x") }
         withClue("builder instanceSet replica 2 holds y") { setCells.getValue(spawned.third[1]).membership() shouldBe setOf("y") }
