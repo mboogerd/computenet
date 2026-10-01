@@ -259,8 +259,6 @@ class CredenceGraph(
             ref,
             layers,
             quiescence = if (head) quiescence else 0.0,
-            // A head's feedback inlet absorbs the size-0 catch-up, so prime it (as AgoraService does).
-            initialSourceCredence = if (head) cells.getValue(source).credence.values else null,
         )
         manage.spawn(edge)
         cells[ref] = edge

@@ -144,7 +144,12 @@ class SensitivityNode(
             recompute()
         }
         hubOutlet.catchUpOnLinked { sensitivity.copy(size = 0.0) }
-        frameOutlet.catchUpOnLinked { frame?.copy(size = 0.0) }
+        // A linked edge has no prior target frame, so this state-as-delta-from-
+        // empty is effective even though the target itself did not just change.
+        // The null-to-present magnitude also lets a feedback-frame inlet learn
+        // a frame that already contains this edge instead of absorbing its only
+        // baseline at quiescence.
+        frameOutlet.catchUpOnLinked { frame?.copy(size = 1.0) }
         sourceOutlet.catchUpOnLinked { share?.copy(size = 0.0) }
     }
 
