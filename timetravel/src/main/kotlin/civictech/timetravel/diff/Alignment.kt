@@ -8,6 +8,7 @@ import civictech.timetravel.journal.FrontierRecord
 import civictech.timetravel.journal.JournalRecord
 import civictech.timetravel.journal.MalformedRecord
 import civictech.timetravel.journal.OutletWaveRecord
+import civictech.timetravel.journal.TopologyRecord
 import civictech.timetravel.journal.UnknownRecord
 import civictech.timetravel.timeline.RunTimeline
 import java.util.UUID
@@ -224,7 +225,8 @@ object RecordAlignment {
         is FrontierRecord -> Triple(kindOf(record), record.cellRef, record.portName)
         is OutletWaveRecord -> Triple(kindOf(record), record.cellRef, record.portName)
         is BaselineDischargeRecord -> Triple(kindOf(record), record.cellRef, record.portName)
-        is CheckpointRecord, is UnknownRecord, is MalformedRecord -> Triple(kindOf(record), null, null)
+        is CheckpointRecord, is TopologyRecord, is UnknownRecord, is MalformedRecord ->
+            Triple(kindOf(record), null, null)
     }
 
     private fun kindOf(record: JournalRecord): String = record::class.java.simpleName
