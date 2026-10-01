@@ -30,7 +30,18 @@ sealed interface MirrorWire {
     }
 }
 
-/** The optional two-node settings of a [BeadsMirrorConfig]. */
+/**
+ * The optional two-node settings of a [BeadsMirrorConfig]: everything the
+ * mirror needs to gossip its projector state to one peer, and nothing else.
+ *
+ * @param rigName the rig's fixed name. **Both nodes must be given the
+ *   identical string** — it is hashed into the shared logical `CellRef`s
+ *   ([MirrorCellRefs]) and is therefore the entire coordination mechanism, so
+ *   a typo on one side mints an unrelated logical cell and the two nodes
+ *   silently never link.
+ * @param wire which end of the socket this node is; also what fixes its
+ *   [MirrorCellRefs.role], and hence its replica `instanceId`.
+ */
 data class MirrorPeeringSettings(val rigName: String, val wire: MirrorWire) {
 
     /** [MirrorCellRefs.LISTENER] for [MirrorWire.Listen], [MirrorCellRefs.DIALER] for [MirrorWire.Dial]. */
@@ -99,10 +110,41 @@ class MirrorPeering(
     }
 
     /**
-     * Re-points the replica mesh at a re-baselined projector. Tag state is not
-     * carried: the baseline is the authoritative replacement, and this mirror
-     * mints every delta's dot from its feed position rather than a cell-local
-     * counter.
+     * Re-points the replica mesh from the currently attached projector's cells
+     * at [next]'s — the re-baseline swap seam. A no-op before [attach], so an
+     * app that swaps before it has peered (it does not, but the ordering is not
+     * this class's to enforce) is not broken by it.
+     *
+     * Throws (out of [MirrorState.swap], and so out of the re-baseline that
+     * triggered it) when [next]'s cells do not carry the incumbent's
+     * `CellRef`s — `Replication.rebind`'s own precondition. That is the right
+     * failure: a projector rebuilt under different refs is a *different*
+     * logical cell, and continuing would leave this node silently gossiping
+     * nothing while still serving a fold. Task computenet-7em.1.1 is what
+     * makes it not fire, by threading [refs] through every rebuild site.
+     *
+     * **`carryTagState = false`, deliberately, against the parameter's own
+     * default.** `Replication.rebind` defaults to restoring the incumbent's
+     * [civictech.cell.Stateful] snapshot into the candidate, because its
+     * original use — crash-recovery promotion — wants the incumbent's state and its
+     * tag counter continued. A re-baseline wants the exact opposite: the
+     * discard *is* the operation ([MirrorState]). Carrying the snapshot would
+     * restore every key of the projector the rebuild just replaced, so an
+     * issue absent from the fresh `bd export` would come back as a zombie,
+     * and — after a history compaction, where commit heights restart *lower*
+     * than the pre-gap ones — the carried dots would outrank the baseline's
+     * and win last-writer-wins outright. That is precisely the hazard
+     * [MirrorState]'s class doc says the swap exists to avoid.
+     *
+     * Turning it off is safe here for the reason it is normally unsafe
+     * elsewhere: the default exists to continue a cell's *internal* tag
+     * counter, and this mirror never drives one. Every delta is minted
+     * outside the cell by
+     * [civictech.demo.beadsmirror.projector.DotMinter] from the record's feed
+     * position and injected through the `Replicable` delta seam — the cells'
+     * own `MapOps`/`SetOps` inlets are deliberately never used (see
+     * [MirrorProjector]) — so there is no counter to restart and no fresh-epoch
+     * collision to reproduce.
      */
     fun rebind(next: MirrorProjector) {
         val incumbent = attached ?: return
@@ -112,7 +154,34 @@ class MirrorPeering(
         attached = next
     }
 
-    /** Open this node's manifest endpoints after application wiring is installed. */
+    /**
+     * Open this node's manifest endpoints after application wiring is installed.
+     *
+     * **Why `Peering.chainOnReannounce` is not called here.** Task
+     * computenet-7em.1.2 prescribes it, transposed from demo/shopping, and it
+     * does not transpose: `chainOnReannounce` re-fires the on-link catch-up of
+     * a link the *application* created, and shopping has such links because it
+     * chains its unions into the peer's counterparts by hand
+     * (`itemsUnion.outlet.streamTo(routedDelta(peerRef))`). This rig has no
+     * application-created link at all — every link in it is minted inside
+     * [Replication.replicate]'s linker, whose `linked` map is private to the
+     * kernel — so the only `chained` map expressible here is the empty one, and
+     * `chainOnReannounce(registry, emptyMap())` registers a hook that can never
+     * match a ref. It would be a call that reads like a guarantee and provides
+     * none.
+     *
+     * The guarantee itself is not missing; it is already in the kernel, one
+     * layer down. [Replication]'s `init` installs `registry.onPublish { ref ->
+     * linkOut(ref) }`, `linkOut` calls `maybeLink` for every local replica, and
+     * `maybeLink`'s first branch — for a pair that is *already* linked, which
+     * is exactly the reconnect case — does
+     * `cell.outlet.linking.fireLinked(link)` and returns. That is
+     * `chainOnReannounce`'s body, applied to the gossip mesh's own links, with
+     * the same "state-as-delta unicast is idempotent, so a redundant re-fire
+     * costs one wasted delta at worst" argument in its comment. So a returning
+     * peer does get the deltas its dying socket swallowed re-served; adding
+     * `chainOnReannounce` on top would change nothing.
+     */
     fun connect() = runtime.open()
 
     /** Close transport endpoints and drain the runtime-owned bridge and application host. */
