@@ -53,8 +53,7 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   open, so a suite that never ran reports success.
 - Every Gradle and npm call sets the Bash tool's `dangerouslyDisableSandbox`
   parameter (a tool parameter, not a `./gradlew` flag); the default sandbox
-  fails KSP with `Operation not permitted`. Where no such parameter exists
-  (Codex), add `--no-daemon` to every `./gradlew` call instead.
+  fails KSP with `Operation not permitted`.
 - `Operation not permitted` on `gradle.properties` or `fileHashes.lock`
   before any task runs is a shared daemon poisoned by a sandboxed call, not a
   build failure. Re-run with `--no-daemon`; never `./gradlew --stop`.
@@ -150,9 +149,10 @@ above applies; where it names a Claude Code feature, use:
 - **Bash `timeout` / `run_in_background`** → bound every long run with the
   `perl -e 'alarm …'` wrapper and wait on its log in the foreground, in short
   polls. Nothing notifies you, and your turn ending is your completion.
-- **`dangerouslyDisableSandbox`** → nothing. Your sandbox already allows
-  Gradle (KSP included), the network, `~/.gradle`, and the shared `.git` and
-  `.beads`. An `Operation not permitted` beyond those is a finding: list the
+- **`dangerouslyDisableSandbox`** → `--no-daemon` on every `./gradlew` call:
+  your sandbox allows Gradle (KSP included), the network, `~/.gradle`, and the
+  shared `.git` and `.beads`, but a daemon it starts poisons other agents'
+  builds. Any other `Operation not permitted` is a finding: list the
   command under `REQUIRED ORCHESTRATOR ACTION`; never work around it.
 - **The Read tool** → `sed -n` / `cat`. **The harness scratchpad** → the
   scratch root your prompt names. **The stop tool** → kill only PIDs in your ledger.
