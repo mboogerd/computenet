@@ -160,6 +160,12 @@ object JournalReader {
             is DecodedJournalRecord.BaselineDischarge -> BaselineDischargeRecord(
                 index, journalId, decoded.cellRef, decoded.portName, decoded.timestamp, emptySet(),
             )
+            is DecodedJournalRecord.Topology -> TopologyRecord(
+                index,
+                journalId,
+                decoded.events.map { it.javaClass.simpleName },
+                emptySet(),
+            )
             is DecodedJournalRecord.Unknown -> UnknownRecord(index, journalId, decoded.typeByte)
         }
     }
@@ -172,6 +178,7 @@ object JournalReader {
             is FrontierRecord -> copy(reasons = widened)
             is OutletWaveRecord -> copy(reasons = widened)
             is BaselineDischargeRecord -> copy(reasons = widened)
+            is TopologyRecord -> copy(reasons = widened)
             is UnknownRecord -> copy(reasons = widened)
             is MalformedRecord -> copy(reasons = widened)
         }
