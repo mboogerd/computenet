@@ -2,6 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.data.Replicable
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.link.Interest
@@ -77,6 +78,8 @@ data class SpawnStep(
     /** Spec-local handle of the parent, resolved to a [CellRef] at apply time
      * (organelle nesting, G-28) — never a step of its own (93 I-21 §4.3). */
     val parent: String? = null,
+    /** Spawn through [civictech.cell.replication.Replication] rather than directly on a host. */
+    val replicated: Boolean = false,
 ) : GraphStep
 
 data class ConnectStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
@@ -106,6 +109,7 @@ data class InstanceSpec(
     val placement: String? = null,
     val journalId: String? = null,
     val frontierPolicy: String? = null,
+    val replicated: Boolean = false,
 ) : Serializable
 
 /**
@@ -157,6 +161,7 @@ data class InstanceSetStep(
                 handle = "$handle-${spec.instanceId}",
                 factory = InstanceCellFactory(factory, spec),
                 identity = IdentityBinding.NewInstanceOf(logicalId),
+                replicated = spec.replicated,
             )
         }
     }
@@ -241,6 +246,71 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         steps.flatMap { if (it is InstanceSetStep) it.lower() else listOf(it) }
 
     /**
+     * Local parameter-aware application. The complete lowered spawn set is
+     * prepared before the first host operation, so a missing replication
+     * service or a non-[Replicable] cell cannot leave a partially-applied
+     * prefix behind.
+     */
+    fun apply(context: ApplyContext): AppliedGraph {
+        val lowered = lowered()
+        lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { it.replicated && context.replication == null }
+            ?.let { throw missingReplication(it.handle) }
+
+        val prepared = mutableMapOf<Int, Cell>()
+        lowered.forEachIndexed { index, step ->
+            if (step !is SpawnStep) return@forEachIndexed
+            val ref = step.identity.resolve()
+            val cell = step.factory.create(ref)
+            requireBoundRef(step.handle, step.identity, ref, cell.ref)
+            if (step.replicated && cell !is Replicable<*>) {
+                throw IllegalStateException(
+                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                        "(built ${cell.javaClass.name})",
+                )
+            }
+            prepared[index] = cell
+        }
+
+        val refs = mutableMapOf<String, CellRef>()
+        val links = mutableMapOf<String, civictech.cell.link.Link>()
+        lowered.forEachIndexed { index, step ->
+            when (step) {
+                is SpawnStep -> {
+                    val cell = prepared.getValue(index)
+                    refs[step.handle] = if (step.replicated) {
+                        @Suppress("UNCHECKED_CAST")
+                        context.replication!!.replicate(cell as Replicable<*>, context.host)
+                        cell.ref
+                    } else {
+                        context.host.managementInlet.call.spawn(cell)
+                    }
+                }
+
+                is ConnectStep -> {
+                    // TODO(computenet-x0oag.1): retain LinkOptions/UnlinkStep handles after that sibling lands.
+                    val key = stepKey(step)
+                    when (
+                        val result = context.host.managementInlet.call.connect(
+                            refs.getValue(step.from), step.outlet,
+                            refs.getValue(step.to), step.inlet,
+                        )
+                    ) {
+                        is LinkResult.Connected -> links[key] = result.link
+                        is LinkResult.Rejected -> error(
+                            "link ${step.from}.${step.outlet} → ${step.to}.${step.inlet} rejected: ${result.reason}",
+                        )
+                        LinkResult.Deferred -> Unit
+                    }
+                }
+
+                is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
+            }
+        }
+        return AppliedGraph(refs.toMap(), emptyMap(), links.toMap())
+    }
+
+    /**
      * Local, co-located replay (51 §Graph construction DSL): synchronous loud
      * failure, unchanged — the first rejected `connect` throws, and a `spawn`
      * whose resolved ref is already live throws too (the ordinary live-ref
@@ -249,8 +319,12 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
      * uniformly whether the target is local or (via [applyRemote]) remote.
      */
     fun applyTo(host: Use<HostManagementApi>): Map<String, CellRef> {
+        val lowered = lowered()
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
+            throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
         val refs = mutableMapOf<String, CellRef>()
-        lowered().forEach { step ->
+        lowered.forEach { step ->
             when (step) {
                 is SpawnStep -> {
                     val ref = step.identity.resolve()
@@ -306,16 +380,22 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         lowered().forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
-                    val parentRef = step.parent?.let { refs[it] }
-                    try {
-                        val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
-                        refs[step.handle] = ref
-                        results[step.handle] = StepResult.Applied(ref)
-                    } catch (e: Exception) {
-                        // dead-lettered on the target host already (ManagedHost.spawnBound);
-                        // here we only fold the outcome into the report, never rethrow —
-                        // the wire form never surfaces a synchronous cross-wire reply.
-                        results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
+                    if (step.replicated) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'replicated' is not supported by applyRemote",
+                        )
+                    } else {
+                        val parentRef = step.parent?.let { refs[it] }
+                        try {
+                            val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
+                            refs[step.handle] = ref
+                            results[step.handle] = StepResult.Applied(ref)
+                        } catch (e: Exception) {
+                            // dead-lettered on the target host already (ManagedHost.spawnBound);
+                            // here we only fold the outcome into the report, never rethrow —
+                            // the wire form never surfaces a synchronous cross-wire reply.
+                            results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
+                        }
                     }
                     // Outside the try: a throw from the callback propagates (D2) and
                     // is never folded into the report as the step's own failure.
@@ -351,6 +431,16 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     }
 }
 
+private fun stepKey(step: ConnectStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+
+private fun missingReplication(handle: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'replicated' requires ApplyContext.replication",
+)
+
+private fun unsupportedReplication(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'replicated' cannot be applied by $path; use apply(ApplyContext)",
+)
+
 open class CellHandle internal constructor(
     val name: String,
     val ref: CellRef,
@@ -377,7 +467,13 @@ class TypedCellHandle<C : Cell> internal constructor(
  * applies immediately through [host] and records into the [GraphSpec]. No new
  * semantics in the DSL layer, ever.
  */
-class GraphBuilder internal constructor(private val host: Use<HostManagementApi>) {
+class GraphBuilder private constructor(
+    private val host: Use<HostManagementApi>,
+    private val context: ApplyContext?,
+) {
+    internal constructor(host: Use<HostManagementApi>) : this(host, null)
+    internal constructor(context: ApplyContext) : this(context.host.managementInlet, context)
+
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
 
@@ -394,15 +490,40 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         name: String,
         identity: IdentityBinding = IdentityBinding.FreshLogical,
         parent: CellHandle? = null,
+        replicated: Boolean = false,
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
         val ref = identity.resolve()
         val cell = factory.create(ref)
         requireBoundRef(name, identity, ref, cell.ref)
-        steps += SpawnStep(name, factory, identity, parent?.name)
-        return TypedCellHandle(name, host.call.spawn(cell), this, cell)
+        val step = SpawnStep(name, factory, identity, parent?.name, replicated)
+        val spawnedRef = spawn(step, cell)
+        steps += step
+        return TypedCellHandle(name, spawnedRef, this, cell)
             .also { handlesByRef[it.ref] = it }
+    }
+
+    /** Source-compatible positional form from before the replicated parameter. */
+    fun <C : Cell> spawn(
+        name: String,
+        identity: IdentityBinding,
+        parent: CellHandle?,
+        factory: TypedCellFactory<C>,
+    ): TypedCellHandle<C> = spawn(name, identity, parent, replicated = false, factory)
+
+    private fun spawn(step: SpawnStep, cell: Cell): CellRef {
+        if (!step.replicated) return host.call.spawn(cell)
+        val applyContext = context
+            ?: throw unsupportedReplication(step.handle, "graph(Use<HostManagementApi>)")
+        val replication = applyContext.replication ?: throw missingReplication(step.handle)
+        val replicable = cell as? Replicable<*>
+            ?: throw IllegalStateException(
+                "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                    "(built ${cell.javaClass.name})",
+            )
+        replication.replicate(replicable, applyContext.host)
+        return cell.ref
     }
 
     /**
@@ -419,12 +540,22 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         instances: List<InstanceSpec>,
     ): List<CellHandle> {
         val step = InstanceSetStep(handle, logicalId, factory, instances)
-        val handles = step.lower().filterIsInstance<SpawnStep>().map { s ->
+        val lowered = step.lower().filterIsInstance<SpawnStep>()
+        lowered.firstOrNull { it.replicated && context == null }?.let { s ->
+            throw unsupportedReplication(s.handle, "graph(Use<HostManagementApi>)")
+        }
+        val applied = context?.let { GraphSpec(lowered).apply(it) }
+        val handles = lowered.map { s ->
             require(names.add(s.handle)) { "duplicate handle '${s.handle}'" }
-            val ref = s.identity.resolve()
-            val cell = s.factory.create(ref)
-            requireBoundRef(s.handle, s.identity, ref, cell.ref)
-            CellHandle(s.handle, host.call.spawn(cell), this).also { handlesByRef[it.ref] = it }
+            val spawnedRef = if (applied != null) {
+                applied.refs.getValue(s.handle)
+            } else {
+                val ref = s.identity.resolve()
+                val cell = s.factory.create(ref)
+                requireBoundRef(s.handle, s.identity, ref, cell.ref)
+                host.call.spawn(cell)
+            }
+            CellHandle(s.handle, spawnedRef, this).also { handlesByRef[it.ref] = it }
         }
         steps += step
         return handles
@@ -493,6 +624,10 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
 fun graph(host: Use<HostManagementApi>, block: GraphBuilder.() -> Unit): GraphSpec =
     GraphBuilder(host).apply(block).spec()
 
+/** Parameter-aware [graph] builder backed by [ApplyContext]. */
+fun graph(context: ApplyContext, block: GraphBuilder.() -> Unit): GraphSpec =
+    GraphBuilder(context).apply(block).spec()
+
 /**
  * [graph] variant that also returns the block's result (T08 finding 3): the
  * documented happy path was `lateinit var refs` mutated from inside the block,
@@ -509,6 +644,13 @@ fun graph(host: Use<HostManagementApi>, block: GraphBuilder.() -> Unit): GraphSp
  */
 fun <R> graphOf(host: Use<HostManagementApi>, block: GraphBuilder.() -> R): Pair<R, GraphSpec> {
     val builder = GraphBuilder(host)
+    val result = builder.block()
+    return result to builder.spec()
+}
+
+/** Parameter-aware [graphOf] builder backed by [ApplyContext]. */
+fun <R> graphOf(context: ApplyContext, block: GraphBuilder.() -> R): Pair<R, GraphSpec> {
+    val builder = GraphBuilder(context)
     val result = builder.block()
     return result to builder.spec()
 }
