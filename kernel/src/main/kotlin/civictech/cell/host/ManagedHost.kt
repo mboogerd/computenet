@@ -2100,7 +2100,7 @@ open class ManagedHost(
         if (port !is Use<*>) return RoutedInletResolution.NotUsable
         val apiClass = when (port) {
             is FanInlet<*> -> port.clazz
-            else -> null // e.g. FeedbackInlet carries no erased api class — skip the wrapper check
+            else -> null // e.g. a FeedbackPort: its apiClass is not consulted here — skip the wrapper check
         }
         return RoutedInletResolution.Usable(apiClass)
     }
