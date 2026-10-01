@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror
 
+import civictech.cell.wire.PeerAddress
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
 import civictech.demo.beadsmirror.feed.FeedPosition
@@ -17,6 +18,7 @@ import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.net.URI
 
 /**
  * Task computenet-7em.1.2: [BeadsMirrorApp]'s opt-in two-node mode — the
@@ -54,6 +56,11 @@ class MirrorPeeringTest {
         fieldDiffs = listOf(FieldDiff("status", old = null, new = JsonPrimitive("open"))),
         edgeDiffs = emptyList(),
     )
+
+    private fun address(text: String): PeerAddress = object : PeerAddress {
+        override val scheme: String = text.substringBefore("://")
+        override val text: String = text
+    }
 
     @Nested
     inner class FlagParsing {
@@ -157,7 +164,7 @@ class MirrorPeeringTest {
         @Test
         fun `discover accepting end advertises for discovery, announces no ws port`() {
             val settings = MirrorPeeringSettings("bds2", MirrorWire.Listen(0))
-            val (line, announced) = peeringBanner(settings, discover = true, boundWsPort = 54321)
+            val (line, announced) = peeringBanner(settings, discover = true, boundAddress = address("iroh+mdns://"))
             line shouldContain "advertising for discovery on the local segment"
             line shouldNotContain "ws://"
             announced shouldBe null
@@ -166,7 +173,7 @@ class MirrorPeeringTest {
         @Test
         fun `non-discover accepting end still announces the bound ws port`() {
             val settings = MirrorPeeringSettings("bds2", MirrorWire.Listen(0))
-            val (line, announced) = peeringBanner(settings, discover = false, boundWsPort = 54321)
+            val (line, announced) = peeringBanner(settings, discover = false, boundAddress = address("ws://localhost:54321"))
             line shouldContain "ws://localhost:54321"
             announced shouldBe 54321
         }
@@ -174,7 +181,7 @@ class MirrorPeeringTest {
         @Test
         fun `discovering end is unchanged by the discover flag`() {
             val settings = MirrorPeeringSettings("bds2", MirrorWire.Dial(MirrorWire.Dial.DISCOVERED))
-            val (line, announced) = peeringBanner(settings, discover = true, boundWsPort = null)
+            val (line, announced) = peeringBanner(settings, discover = true, boundAddress = null)
             line shouldContain "discovering a peer on the local segment"
             announced shouldBe null
         }
@@ -182,14 +189,14 @@ class MirrorPeeringTest {
         @Test
         fun `dialer with an explicit peer uri is unchanged`() {
             val settings = MirrorPeeringSettings("bds2", MirrorWire.Dial("ws://localhost:9001"))
-            val (line, announced) = peeringBanner(settings, discover = false, boundWsPort = null)
+            val (line, announced) = peeringBanner(settings, discover = false, boundAddress = null)
             line shouldContain "peered with ws://localhost:9001"
             announced shouldBe null
         }
 
         @Test
         fun `solo mode is unchanged`() {
-            val (line, announced) = peeringBanner(null, discover = false, boundWsPort = null)
+            val (line, announced) = peeringBanner(null, discover = false, boundAddress = null)
             line shouldContain "single-node mode"
             announced shouldBe null
         }
@@ -331,7 +338,7 @@ class MirrorPeeringTest {
         /**
          * The `--listen 0` half of the flag clause (computenet-dqy.25): the
          * port a listening node announces must be the one it **bound**, never
-         * the `0` it asked for. `WsTransport.listen` awaits its own start
+         * the `0` it asked for. The ws binding awaits its own start
          * before returning, so this is deterministic rather than a race.
          *
          * The only test here that opens a socket — a bare local listen with no
@@ -340,13 +347,13 @@ class MirrorPeeringTest {
         @Test
         fun `--listen 0 reports the bound port, not the requested one`() {
             MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Listen(0))).use { peering ->
-                peering.boundWsPort shouldBe null // nothing is bound before connect()
+                peering.boundAddress shouldBe null // nothing is bound before connect()
 
                 peering.connect()
 
-                val bound = peering.boundWsPort
+                val bound = peering.boundAddress
                 bound.shouldNotBeNull()
-                bound shouldNotBe 0
+                URI(bound.text).port shouldNotBe 0
             }
         }
 
@@ -354,7 +361,7 @@ class MirrorPeeringTest {
         @Test
         fun `a dialer has no bound ws port`() {
             MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Dial("ws://localhost:1"))).use { peering ->
-                peering.boundWsPort shouldBe null
+                peering.boundAddress shouldBe null
             }
         }
     }

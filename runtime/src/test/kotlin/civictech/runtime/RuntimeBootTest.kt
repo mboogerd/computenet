@@ -11,6 +11,12 @@ import civictech.cell.graph.SpawnStep
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
+import civictech.cell.wire.LoopbackPeerTransport
+import civictech.cell.wire.PeerAddress
+import civictech.cell.wire.PeerConnection
+import civictech.cell.wire.PeerListener
+import civictech.cell.wire.PeerTransport
+import civictech.cell.wire.Peering
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
 import civictech.inspect.InspectorFlag
@@ -146,6 +152,41 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `a supplied transport instance opens the node and a scheme mismatch is refused`() {
+        val supplied = RecordingTransport(LoopbackPeerTransport())
+        val manifest = Manifest(
+            mapOf(
+                "listener" to NodeSpec(
+                    transport = "loopback",
+                    listen = "loopback://supplied-instance",
+                ),
+            ),
+        )
+        val node = Runtime.boot(manifest, "listener", GraphSpec(emptyList()), transport = supplied)
+
+        try {
+            node.open()
+            assertEquals(1, supplied.listenCalls, "open did not use the supplied transport instance")
+            assertEquals("loopback://supplied-instance", node.boundAddress?.text)
+        } finally {
+            node.close()
+        }
+
+        val mismatch = assertThrows<IllegalArgumentException> {
+            Runtime.boot(
+                Manifest(mapOf("listener" to NodeSpec(transport = "ws"))),
+                "listener",
+                GraphSpec(emptyList()),
+                transport = supplied,
+            )
+        }
+        assertTrue(
+            mismatch.message!!.contains("transport override scheme 'loopback' does not match node 'listener' scheme 'ws'"),
+            mismatch.message,
+        )
+    }
+
+    @Test
     fun `boot refuses a node absent from the manifest`() {
         val failure = assertThrows<IllegalArgumentException> {
             Runtime.boot(Manifest(mapOf("present" to NodeSpec())), "missing", GraphSpec(emptyList()))
@@ -157,4 +198,20 @@ class RuntimeBootTest {
     private fun setSpec(): GraphSpec = GraphSpec(
         listOf(SpawnStep("items", CellFactory { ref -> SetCell<String>(ref) })),
     )
+
+    private class RecordingTransport(private val delegate: PeerTransport) : PeerTransport {
+        var listenCalls: Int = 0
+            private set
+
+        override val scheme: String get() = delegate.scheme
+
+        override fun parseAddress(text: String): PeerAddress = delegate.parseAddress(text)
+
+        override fun listen(address: PeerAddress, side: Peering.Side): PeerListener {
+            listenCalls += 1
+            return delegate.listen(address, side)
+        }
+
+        override fun dial(address: PeerAddress, side: Peering.Side): PeerConnection = delegate.dial(address, side)
+    }
 }

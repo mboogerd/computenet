@@ -1,5 +1,7 @@
 package civictech.demo.beadsmirror
 
+import civictech.cell.wire.PeerAddress
+import civictech.cell.wire.PeerTransport
 import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.baseline.PollLoopDied
 import civictech.demo.beadsmirror.baseline.Rebaseline
@@ -16,6 +18,7 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import java.io.IOException
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -101,11 +104,11 @@ class BeadsMirrorApp private constructor(
     val peering: MirrorPeering? get() = mirrors.single().peering
 
     /**
-     * The peering port this node is listening on, or `null` in dial/solo mode
-     * — the port it **bound**, not the one it asked for, so `--listen 0` is
-     * announceable (computenet-dqy.25).
+     * The peering address this node is listening on, or `null` in dial/solo
+     * mode. It is the address the transport **bound**, so a `ws` listener
+     * asked for port `0` still has an announceable granted port.
      */
-    val boundWsPort: Int? get() = peering?.boundWsPort
+    val boundAddress: PeerAddress? get() = peering?.boundAddress
 
     /**
      * Set if the background poll loop died — most usefully, when a
@@ -336,12 +339,9 @@ class BeadsMirrorApp private constructor(
  *   mode is exactly the app that existed before this parameter did**: no
  *   registry, no host, no [MirrorPeering], no `:wire` class loaded, and the
  *   projector keeps its random-`CellRef` default.
- * @param peeringTransport the transport binding [peering] establishes its end
- *   through (task computenet-7em.2.1); `null` — the default — means the
- *   production [WsMirrorTransport], constructed lazily *inside* the
- *   [peering]-only branch so a solo run still loads no `:wire` class. Supplied
- *   only by a rig that must hold the two nodes' peering as one object, because
- *   partition and heal are properties of the peering rather than of a node.
+ * @param peeringTransport the kernel transport binding [peering] establishes
+ *   its end through; `null` resolves the production `ws` provider lazily in
+ *   the peering-only branch. A rig supplies one exact instance to both nodes.
  * @param writeBack opt-in (task computenet-6wc.1.5): when true, EVERY
  *   configured workspace runs its own [civictech.demo.beadsmirror.writeback.WriteBackApplier],
  *   imposing its fold's dot-order winner onto its own `bd` workspace with one
@@ -369,7 +369,7 @@ data class BeadsMirrorConfig(
     val repoSearchRoot: Path = Path.of("").toAbsolutePath(),
     val onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
     val peering: MirrorPeeringSettings? = null,
-    val peeringTransport: MirrorTransport? = null,
+    val peeringTransport: PeerTransport? = null,
     val writeBack: Boolean = false,
     val onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
 ) {
@@ -396,7 +396,7 @@ data class BeadsMirrorConfig(
         repoSearchRoot: Path = Path.of("").toAbsolutePath(),
         onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
         peering: MirrorPeeringSettings? = null,
-        peeringTransport: MirrorTransport? = null,
+        peeringTransport: PeerTransport? = null,
         writeBack: Boolean = false,
         onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
     ) : this(
@@ -801,25 +801,23 @@ internal fun Array<String>.extractPeering(discover: Boolean = false): Pair<Mirro
  * Pulled out of [main] so the discover-mode accepting-end banner
  * (computenet-emn9z) is testable without invoking a process-exiting
  * function. [discover] mirrors `main`'s `discoverBinaryPath != null`: under
- * discovery the accepting end ([MirrorWire.Listen]) has no real WebSocket
- * port to advertise — [boundWsPort] there is
- * [DiscoveredIrohMirrorTransport.ListenLink.boundWsPort], a number read off
- * the iroh endpoint's UDP address, not a WebSocket port — so that branch
- * neither prints a `ws://` URI nor returns a port to announce. Every other
- * branch, including non-discover [MirrorWire.Listen], is unchanged.
+ * discovery the accepting end ([MirrorWire.Listen]) has no WebSocket address
+ * to advertise, so that branch neither prints a `ws://` URI nor returns a
+ * port to announce. Every other branch is unchanged.
  */
 internal fun peeringBanner(
     peering: MirrorPeeringSettings?,
     discover: Boolean,
-    boundWsPort: Int?,
+    boundAddress: PeerAddress?,
 ): Pair<String, Int?> = when (val wire = peering?.wire) {
     is MirrorWire.Listen -> if (discover) {
         "  rig '${peering.rigName}' as ${peering.role}; advertising for discovery on the local segment" to null
     } else {
-        // the BOUND port, not `wire.wsPort`: `--listen 0` asks for any free
-        // one, and only this process knows which it got (computenet-dqy.25)
-        val wsPort = checkNotNull(boundWsPort) { "a listening node must have a bound ws port" }
-        "  rig '${peering.rigName}' as ${peering.role}; awaiting a peer on ws://localhost:$wsPort" to wsPort
+        val address = checkNotNull(boundAddress) { "a listening node must have a bound address" }
+        require(address.scheme == "ws") { "a non-discovery listener must bind a ws address, not ${address.text}" }
+        val wsPort = URI(address.text).port
+        require(wsPort >= 0) { "a bound ws address must carry a port: ${address.text}" }
+        "  rig '${peering.rigName}' as ${peering.role}; awaiting a peer on ${address.text}" to wsPort
     }
     is MirrorWire.Dial -> if (wire.uri == MirrorWire.Dial.DISCOVERED) {
         "  rig '${peering.rigName}' as ${peering.role}; discovering a peer on the local segment" to null
@@ -874,7 +872,7 @@ fun main(args: Array<String>) {
         pollInterval = Duration.ofMillis(pollIntervalArg?.toLongOrNull() ?: 1000L),
         runDir = runDirArg?.let { Path.of(it) },
         peering = peering,
-        peeringTransport = discoverBinaryPath?.let { DiscoveredIrohMirrorTransport(it) },
+        peeringTransport = discoverBinaryPath?.let { DiscoveredIrohPeerTransport(it) },
         writeBack = writeBack,
     )
 
@@ -894,7 +892,7 @@ fun main(args: Array<String>) {
     println("computenet beadsmirror: http://localhost:${app.boundPort}")
     app.mirrors.forEach { println("  mirroring ${it.workspace} as '${it.identity}' (run dir ${it.runDir})") }
     announcePort("http", app.boundPort)
-    val (bannerLine, wsPortToAnnounce) = peeringBanner(peering, discoverBinaryPath != null, app.boundWsPort)
+    val (bannerLine, wsPortToAnnounce) = peeringBanner(peering, discoverBinaryPath != null, app.boundAddress)
     println(bannerLine)
     wsPortToAnnounce?.let { announcePort("ws", it) }
 }
