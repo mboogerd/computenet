@@ -130,6 +130,12 @@ interface HostManagementApi {
 
     /**
      * Connects an outlet of a hosted cell to a remote inlet (represented by a [Use] instance).
+     *
+     * For demo/application wiring between hosted cells, use the unified
+     * admitted primitive `HostManagementApi.connect(from, outlet, to, inlet,
+     * LinkOptions(staged = true))` instead. This `Use`-based path has no cycle
+     * admission, topology record, or in-band `EdgeOpen`/`EdgeClose`; it remains
+     * available for the kernel's existing bypass wiring.
      */
     fun connect(from: CellRef, outletName: String, to: Use<*>)
 }
