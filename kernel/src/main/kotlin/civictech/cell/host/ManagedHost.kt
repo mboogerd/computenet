@@ -2046,8 +2046,12 @@ open class ManagedHost(
                 // transition that definitively happened (resuming a cell on a
                 // drained host does exactly that).
                 notifyLifecycle(ref, LifecycleTransition.RESUMED)
-                // re-enqueue at data priority: replay order = park order (sequence tiebreaker)
-                parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
+                // re-enqueue at data priority: replay order = park order (sequence tiebreaker).
+                // Already-accepted work: its intake already teed it to the journal (and a
+                // checkpoint taken while it was parked carried it, computenet-hknt0), so
+                // re-entering the intake must not tee it again — a second WAL copy is a
+                // duplicate delivery on recovery. Same rule as [resumeAttentionParked].
+                parked.forEach { accept(it, skipJournalTee = true) }
             }
 
             override fun suspend(ref: CellRef) {

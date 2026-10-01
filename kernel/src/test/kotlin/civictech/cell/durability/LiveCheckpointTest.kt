@@ -527,4 +527,47 @@ class LiveCheckpointTest {
             scheduler.shutdown()
         }
     }
+
+
+    /**
+     * Crash-recovers a SUSPEND-supervised cell whose parked frames were resumed and delivered
+     * live, with or without a checkpoint taken while they were parked. Recovery must deliver
+     * each accepted frame exactly once: a resume that re-tees parked frames leaves a second
+     * WAL copy (beside the intake's, or beside the copy the checkpoint carried).
+     */
+    private fun resumedThenRecovered(checkpointWhileParked: Boolean): List<Int> {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = SupervisedFoldCell(ref)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        host.managementInlet.call.supervise(ref, SupervisionPolicy.SUSPEND)
+        val inlet = (HostedCellProxy.create(ref, host, IntInletProxy::class.java) as IntInletProxy).inlet.call
+        listOf(-1, 1, 2).forEach(inlet::provide)
+        controller.runToIdle()
+        if (checkpointWhileParked) host.checkpoint(journal)
+        host.managementInlet.call.resume(ref)
+        controller.runToIdle()
+        withClue("resume delivers the parked frames live") { cell.received shouldBe listOf(1, 2) }
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = SupervisedFoldCell(ref)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        return recovered.received
+    }
+
+    @Test
+    fun `(k) resumed SUSPEND-parked frames are not re-journaled, so recovery delivers them once`() {
+        withClue("checkpoint taken while parked, then resume, then crash") {
+            resumedThenRecovered(checkpointWhileParked = true) shouldBe listOf(1, 2)
+        }
+        withClue("no checkpoint: intake copy only") {
+            resumedThenRecovered(checkpointWhileParked = false) shouldBe listOf(1, 2)
+        }
+    }
 }
