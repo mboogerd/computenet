@@ -2,6 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.link.CloseSequencer
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
@@ -88,7 +89,8 @@ internal object LinkAdmission {
         }
         val result = if (options.staged) {
             val standIn = StagedStandIn(inlet.ref, fanOutlet!!.clazz, to, inletName, host)
-            StagedSubscription.with(standIn, connect)
+            val closeSequencer = CloseSequencer { link -> host.stageBehindData(to, inletName, link) }
+            StagedSubscription.with(standIn, closeSequencer, connect)
         } else {
             connect()
         }
