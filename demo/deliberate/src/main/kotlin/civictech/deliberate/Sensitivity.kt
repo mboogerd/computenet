@@ -119,6 +119,9 @@ class SensitivityNode(
     private val shares = TreeMap<CellRef, Sensitivity>(ClaimNode.REF_ORDER)
     private var fromTarget: SensitivityFrame? = null
 
+    // recompute() runs on the host scheduler, while catchUpOnLinked snapshots
+    // run on the linking thread. These immutable snapshot references therefore
+    // need volatile publication so a link-time catch-up sees the latest state.
     @Volatile
     var sensitivity: Sensitivity = Sensitivity(subject, if (question) subject else null, if (question) List(layers.ids.size) { 1.0 } else null, 0.0)
         private set
