@@ -2,7 +2,9 @@ package civictech.deliberate
 
 import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -10,15 +12,20 @@ import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.host.inlet
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.onEach
+import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
+import civictech.cell.port.registerPort
 import civictech.testkit.SimWorld
 import civictech.testkit.awaitUntil
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -211,6 +218,88 @@ class CredenceGraphTest {
     }
 
     @Test
+    fun `claim credence is safely published to link-time catch-up`() {
+        val field = ClaimNode::class.java.getDeclaredField("credence")
+
+        assertTrue(
+            Modifier.isVolatile(field.modifiers),
+            "ClaimNode.credence is read by catchUpOnLinked on the linking thread, so it must be volatile",
+        )
+    }
+
+    @Test
+    fun `a head feedback link learns its source baseline from catch-up on a real scheduler`() {
+        val scheduler = VirtualThreadScheduler("head-source-catch-up-test").also { schedulers += it }
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = scheduler, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+        val layers = LayerSet.of(listOf("dfquad"))
+        val source = ClaimNode(CellRef(UUID.randomUUID()), layers)
+        val edge = EdgeNode(Polarity.ATTACK, CellRef(UUID.randomUUID()), layers, quiescence = 1e-3)
+        val observed = AtomicReference<Influence>()
+        val sink = object : Cell {
+            override val ref = CellRef(UUID.randomUUID())
+            val inlet = registerPort("inlet", FanInlet.create<Propagate<Influence>>())
+
+            init {
+                inlet.onEach(observed::set)
+            }
+        }
+        host.managementInlet.call.spawn(source)
+        host.managementInlet.call.spawn(edge)
+        host.managementInlet.call.spawn(sink)
+        registry.inlet(source.ref, ClaimNodePorts.stanceInlet).propagate(Stance("u", 0.95))
+        awaitUntil("the source settles before its feedback link is installed") {
+            source.credence.values == listOf(0.95)
+        }
+        assertTrue(
+            host.managementInlet.call.connect(edge.ref, "influenceOutlet", sink.ref, "inlet", LinkOptions(staged = true)) is LinkResult.Connected,
+        )
+        awaitUntil("the sink receives the edge's neutral initial influence") {
+            observed.get()?.sourceCredence == listOf(0.5)
+        }
+
+        val linked = host.managementInlet.call.connect(
+            source.ref,
+            "credenceOutlet",
+            edge.ref,
+            "feedbackInlet",
+            LinkOptions(staged = true),
+        )
+        assertTrue(linked is LinkResult.Connected)
+        awaitUntil("the feedback link's catch-up becomes the head's source baseline") {
+            observed.get()?.sourceCredence == listOf(0.95)
+        }
+    }
+
+    @Test
+    fun `a head sensitivity link learns a target frame that already contains its edge`() {
+        val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
+        val layers = LayerSet.of(listOf("dfquad"))
+        val targetRef = CellRef(UUID.randomUUID())
+        val edgeRef = CellRef(UUID.randomUUID())
+        val target = SensitivityNode(CellRef(UUID.randomUUID()), targetRef, layers, question = true, quiescence = 1e-3)
+        val edge = SensitivityNode(CellRef(UUID.randomUUID()), edgeRef, layers, isEdge = true, quiescence = 1e-3)
+        world.host.managementInlet.call.spawn(target)
+        world.host.managementInlet.call.spawn(edge)
+        target.influenceInlet.call.propagate(
+            Influence(edgeRef, Polarity.SUPPORT, strength = listOf(0.7), sourceCredence = listOf(0.8), size = 1.0),
+        )
+
+        val linked = world.host.managementInlet.call.connect(
+            target.ref,
+            "frameOutlet",
+            edge.ref,
+            "feedbackFrameInlet",
+            LinkOptions(staged = true),
+        )
+        assertTrue(linked is LinkResult.Connected)
+        world.runToIdle()
+
+        assertEquals(targetRef, edge.sensitivity.root)
+        assertNotNull(edge.sensitivity.values, "the existing target frame must survive the feedback inlet's catch-up")
+    }
+
+    @Test
     fun `admitted staged wiring records head feedback ports and reaches finite sensitivity`() {
         val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
         val g = CredenceGraph(world.host, world.registry, LayerSet.of(listOf("dfquad")), quiescence = 1e-3)
@@ -239,7 +328,7 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `a new head edge learns its source's current credence despite the absorbed size-0 catch-up`() {
+    fun `a new head edge learns its source's current credence by catch-up`() {
         // b's credence is fixed by its stance before the head edge exists; the a -> b edge has
         // strength 0, so no later lap ever re-emits b. The head edge (b -> a) therefore learns
         // b's credence ONLY from the catch-up its feedback inlet receives at link time.
@@ -262,8 +351,8 @@ class CredenceGraphTest {
         }
         val (cyclic, a1) = build(withCycle = true)
         val (acyclic, a2) = build(withCycle = false)
-        // The a -> b edge's residual strength lets a sub-threshold lap through the weak tier
-        // (accepted, wakkv-D12), so compare within 10q; the un-primed head missed by 0.135.
+        // The a -> b edge's residual strength lets a sub-threshold lap through the weak tier,
+        // so compare within 10q; a head that misses b's baseline diverges by much more.
         assertEquals(acyclic.credenceOf(a2)!!.values.single(), cyclic.credenceOf(a1)!!.values.single(), absoluteTolerance = 1e-2)
     }
 
