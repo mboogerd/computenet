@@ -22,6 +22,8 @@
 #       was printed; 2 = bad usage; 3 = bd unusable (task unresolvable).
 set -uo pipefail
 
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
 DRY_RUN=0
 # --keep-open: merge and push the task branch WITHOUT closing the bead. The
 # one case that needs it is an ask-human PARK that carries a commit worth
@@ -194,7 +196,7 @@ if [ "$KEEP_OPEN" -eq 1 ]; then
   echo "  (--keep-open: the bead's own state is the record; nothing here closes it)"
   exit 0
 fi
-bd close "$task" \
+"$DIR/close-bead.sh" "$task" \
   || { echo "merge-task: bd close $task FAILED — the merge IS durable but the task still reads open; close it by hand and say so" >&2; exit 1; }
 echo "closed: $task"
 

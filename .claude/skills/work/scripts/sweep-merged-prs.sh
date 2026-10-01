@@ -58,7 +58,8 @@ die() { echo "sweep-merged-prs: $*" >&2; exit 3; }
 # contract names, not as an unrelated exit 1.
 [ -n "${BEADS_ACTOR:-}" ] || die "BEADS_ACTOR must be set, uniquely, per machine"
 SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/swept-record-lib.sh"    # record_swept
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$DIR/swept-record-lib.sh"    # record_swept
 
 # Which repo's PR numbers are ours. A bead's metadata.pr is a full url, and an
 # unanchored /pull/<n> match will happily join someone else's #106 to our
@@ -171,7 +172,7 @@ while IFS=$'\t' read -r id action worktree why; do
   # the opposite of a backstop.
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "would close: $id — $why"
-  elif err=$(bd close "$id" 2>&1 >/dev/null); then
+  elif err=$("$DIR/close-bead.sh" "$id" 2>&1 >/dev/null); then
     echo "closed: $id — $why"
     record_swept "$id"
     closed=$((closed + 1))

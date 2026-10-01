@@ -83,7 +83,8 @@ EOF
   chmod +x "$STUB/bd" "$STUB/gh"
 }
 
-run() { (cd "$CO" && PATH="$STUB:$PATH" CTRL="$CTRL" BD_LOG="$BD_LOG" "$SCRIPT" "$@" 2>&1); }
+run() { (cd "$CO" && PATH="$STUB:$PATH" CTRL="$CTRL" BD_LOG="$BD_LOG" \
+           CLOSE_BEAD_UNDEFER=/bin/true "$SCRIPT" "$@" 2>&1); }
 # conflict <paths...> -> a sibling merged into the feature after the task
 # forked, and both sides changed <paths> differently. Also installs the regen
 # stub (stands in for ./gradlew; logs its args, rewrites the concordance).

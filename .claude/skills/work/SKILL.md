@@ -81,6 +81,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 15min reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
 | `undefer-unblocked.sh` | `[--dry-run]` — reopens deferred epics whose `undefers:<epic>` blockers all closed |
+| `close-bead.sh` | `<bead-id> [bd-close-args...]` — closes a bead, then immediately runs the undefer sweep so a blocked epic reopens at close time, not at the next session's startup check |
 | `claim-epic.sh` | `<epic-id>` — claims or takes over an epic and pushes the acquisition; `--release <epic-id>` reopens a dead run's epic unless a live session works beneath it |
 | `claim-item.sh` | `<id>` — claims an item with the session holder token |
 | `ready-in-epic.sh` | `<epic-id> [--ids-only]` — ready work at any depth beneath an epic |
@@ -211,8 +212,12 @@ check each non-`skill-friction` row's `metadata.holder` with `session-holder.sh
 `<N>`, the sibling count used for capacity, is the number of distinct LIVE
 holder tokens. Then run `reclaim-worktrees.sh` (SKIPs for LIVE holders are
 expected), `sweep-merged-prs.sh` (`--dry-run` first when `<N>` > 0: it does not
-check holders) and, after its real run, `undefer-unblocked.sh`; capture each to
-a file with its exit code and report all three.
+check holders) and, after its real run, `undefer-unblocked.sh` — the FALLBACK
+sweep, for closes that never went through `close-bead.sh`: a human typing `bd
+close` by hand, or a close that happened on another machine and synced in via
+Dolt; `close-bead.sh` itself already ran this sweep at close time for every
+close this skill makes. Capture each to a file with its exit code and report
+all three.
 
 **Select the epic** from `bd ready --type=epic --json`: `resumable-epics.sh`
 entries first unless their in-progress feature's holder is LIVE or FOREIGN, then
@@ -285,7 +290,7 @@ the epic ([recovery.md](references/recovery.md), "Parks").
 **Select:** an `in_progress` feature under the epic first, else the first row of
 `ready-in-epic.sh <epic>` — a feature → 5a; a sub-epic → step 4; another type →
 "Direct children". A resumed feature with `metadata.review=passed` whose PR
-merged → close it.
+merged → `close-bead.sh <feature-id>`.
 
 A feature is the unit of integration: one worktree, branch and draft PR, into
 which reviewed task branches merge. Integrate one feature at a time; a capacity
@@ -528,8 +533,8 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
    time: a burst makes their merges race.
 
 Every new head restarts the required checks; keep at most about two open PRs on
-any one file, sequencing the rest. Close the feature once MERGED, not on the
-verdict. Still open well after shipping: `DIRTY` → Ship step 1 again (`BEHIND` never blocks);
+any one file, sequencing the rest. `close-bead.sh <feature-id>` once MERGED,
+not on the verdict. Still open well after shipping: `DIRTY` → Ship step 1 again (`BEHIND` never blocks);
 red → recovery.md; `CLEAN` → arm again, then push a fresh commit. Cannot land it
 → leave `in_progress` with `review=passed`, name the PR and blocked command in the summary.
 
@@ -566,7 +571,7 @@ built. Dispatch at `opus`, from the main checkout, with the step 4 template's
 worktree and Read-tool lines, and this prompt: "You are the epic-close gate for
 <epic-id>; it is claimed for you, do not claim or close it. Judge against
 origin/main at <sha>. Read agent.md, then review.md "Epic-close gate". Prior
-gate: <metadata.epic_gate, or none>." CLOSE → `bd close <epic>`. GAPS → work
+gate: <metadata.epic_gate, or none>." CLOSE → `close-bead.sh <epic>`. GAPS → work
 the children it filed (step 5). A park under `REQUIRED ORCHESTRATOR ACTION` →
 park the epic per recovery.md "Parks". No token → continue the agent.
 
@@ -618,8 +623,8 @@ the main checkout's HEAD against `<scratch>/step1-head` if it moved.
 5. **Worktrees:** remove those of merged tasks and closed features whose agents
    all reported and whose trees are clean.
 6. **Merge check** (skip if EXPIRED): `gh pr view <pr> --json
-   state,mergeStateStatus,statusCheckRollup` on PRs you shipped. MERGED → close,
-   remove worktree. Red → attribute, one PR, briefly. Else name it. Publish again
+   state,mergeStateStatus,statusCheckRollup` on PRs you shipped. MERGED →
+   `close-bead.sh <feature-id>`, remove worktree. Red → attribute, one PR, briefly. Else name it. Publish again
    if anything closed.
 7. **Stop** the monitor and every job in `<scratch>/jobs`. Summarize: epic and
    disposition, tasks done, draft PRs, parked questions, startup releases and
