@@ -313,8 +313,8 @@ class CredenceGraph(
             manage.spawn(issue)
             issueCells[root] = issue
             refs.forEach { p ->
-                    wire(p, "credenceOutlet", issue.ref, "positionInlet")
-                }
+                wire(p, "credenceOutlet", issue.ref, "positionInlet")
+            }
             wire(issue.ref, "sharesOutlet", sharesHub.ref, "inlet")
         }
         refs
