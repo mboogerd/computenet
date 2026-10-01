@@ -167,20 +167,27 @@ class RuntimeBootTest {
             plain.close()
         }
 
-        val node = Runtime.boot(
-            Manifest(
-                mapOf(
-                    "n" to NodeSpec(
-                        transport = "loopback",
-                        listen = "loopback://inspector-customization",
-                    ),
+        val transport = LoopbackPeerTransport()
+        val network = Manifest(
+            mapOf(
+                "n" to NodeSpec(
+                    transport = "loopback",
+                    listen = "loopback://inspector-customization",
+                ),
+                "peer" to NodeSpec(
+                    transport = "loopback",
+                    dial = listOf("n"),
                 ),
             ),
+        )
+        val node = Runtime.boot(
+            network,
             "n",
             setSpec(),
             inspector = InspectorFlag.Options(port = 0),
-            transport = LoopbackPeerTransport(),
+            transport = transport,
         )
+        val peer = Runtime.boot(network, "peer", GraphSpec(emptyList()), transport = transport)
         var configured = false
         try {
             node.customizeInspector(
@@ -190,6 +197,7 @@ class RuntimeBootTest {
                 ) { configured = true },
             )
             node.open()
+            peer.open()
             val text = topology(node)
             assertTrue(configured, "configure did not run")
             assertTrue("\"custom-main\"" in text, text)
@@ -198,6 +206,7 @@ class RuntimeBootTest {
             assertTrue("n/main" !in text, text)
             assertThrows<IllegalStateException> { node.customizeInspector(Runtime.InspectorExtras()) }
         } finally {
+            peer.close()
             node.close()
         }
     }
