@@ -19,7 +19,7 @@ The kernel `PeerTransport` seam owns establishing the listening end, establishin
 the dialing end, and `partition()`/`heal()` on the peering between them.
 `Runtime.boot` constructs each runtime node around that seam, while
 `DiscoveredIrohPeerTransport` (`iroh+mdns`) supplies the discovery-backed
-binding for local-segment iroh peering. `MirrorPeering` passes one exact
+binding for local-segment iroh peering. A rig (`TwoNodeRig`) passes one exact
 `PeerTransport` instance to both nodes, so the same convergence assertions can
 exercise each binding.
 
