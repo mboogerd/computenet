@@ -1,6 +1,8 @@
 package civictech.demo.tiering
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.JvmPeer
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -214,6 +216,46 @@ class TieringServerTest {
         } finally {
             dialer?.stop()
             listener.stop()
+        }
+    }
+
+    @Tag("multi-jvm")
+    @Test
+    fun `explicit replica ids keep two diallers distinct on one listener`() {
+        val listener = JvmPeer.launch("civictech.demo.tiering.TieringAppKt", "0", "--listen", "0")
+        var dialerA: JvmPeer.Peer? = null
+        var dialerB: JvmPeer.Peer? = null
+        try {
+            val wsPort = listener.port("ws")
+            dialerA = JvmPeer.launch(
+                "civictech.demo.tiering.TieringAppKt",
+                "0",
+                "--peer",
+                "ws://localhost:$wsPort",
+                "--replica",
+                "2",
+            )
+            dialerB = JvmPeer.launch(
+                "civictech.demo.tiering.TieringAppKt",
+                "0",
+                "--peer",
+                "ws://localhost:$wsPort",
+                "--replica",
+                "3",
+            )
+
+            val diallerA = checkNotNull(dialerA)
+            val diallerB = checkNotNull(dialerB)
+            diallerA.port("http")
+            diallerB.port("http")
+            JvmPeer.await("explicit replica id announcements", listOf(listener, diallerA, diallerB)) {
+                "this JVM's instance 2" in diallerA.output() &&
+                    "this JVM's instance 3" in diallerB.output()
+            }
+            assertTrue("this JVM's instance 2" in diallerA.output(), diallerA.output())
+            assertTrue("this JVM's instance 3" in diallerB.output(), diallerB.output())
+        } finally {
+            JvmPeer.destroy(listOfNotNull(dialerB, dialerA, listener))
         }
     }
 }
