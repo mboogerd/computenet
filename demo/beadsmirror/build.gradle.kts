@@ -13,32 +13,19 @@ plugins {
 // :demo:shell for the HTTP/SSE plumbing the mirror serves the materialized
 // fold through. computenet-dqj.4.2 adds the runnable main (reader ->
 // projector -> shell against a --workspace path). computenet-7em.1.2 adds
-// :wire for the opt-in two-node mode, in which the projector's two cells
-// gossip their deltas to one peer over the real WebSocket transport
-// (civictech.demo.beadsmirror.MirrorTransport's WsMirrorTransport binding —
-// the only file in the module that names a :wire type, so a solo run loads
-// none of it; MirrorPeering itself only names civictech.cell.wire.Peering, a
-// :kernel type despite the package name — corrected, computenet-mwwr).
+// :runtime for the opt-in two-node mode, in which the projector's two cells
+// gossip through the kernel PeerTransport seam. A solo run constructs no
+// runtime node or endpoint.
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":demo:shell"))
-    implementation(project(":wire"))
-    // computenet-egl.4.1: the second MirrorTransport binding
-    // (IrohMirrorTransport), which carries the same peering over an iroh QUIC
-    // link. This does NOT put cargo on the default compile path: :iroh
+    implementation(project(":runtime"))
+    // The demo-local iroh+mdns PeerTransport provider retains DSC2 discovery.
+    // This does NOT put cargo on the default compile path: :iroh
     // registers its cargo tasks only inside `if
     // (project.hasProperty("iroh.enabled"))`, so on the unset path :iroh is an
     // ordinary pure-JVM module and this dependency costs a Kotlin compile.
     implementation(project(":iroh"))
-    // `--listen 0` lets this node pick its own port and `MirrorPeering.boundWsPort`
-    // reads back which one it got (computenet-dqy.25) — that accessor is
-    // `WsTransport.WsListener`'s inherited `WebSocketServer.getPort()`, and
-    // `close()` is `WsConnection`'s inherited `WebSocketClient.close()`. `:wire`
-    // declares java-websocket as `implementation` (deliberately — `:kernel` stays
-    // transport-free), so those supertypes reach this module's runtime classpath
-    // transitively but not its compile classpath: needs stating here, exactly as
-    // demo/shopping does for the same two accessors.
-    implementation(libs.java.websocket)
     implementation(libs.kotlinx.serialization)
 
     testImplementation(project(":testkit"))
@@ -74,14 +61,14 @@ if (project.hasProperty("iroh.enabled")) {
         // computenet-o0m3.3: same forwarding as iroh/build.gradle.kts — pass
         // -Piroh.relay.url=<url> through as the JVM system property
         // SidecarProcess.spawn reads, so one -P flag steers every sidecar this
-        // module's tests spawn (including IrohMirrorTransport's).
+        // module's tests spawn (including its iroh PeerTransport bindings).
         if (project.hasProperty("iroh.relay.url")) {
             systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
         }
         // computenet-vnscs F2-D5/F2-D8: same forwarding as iroh/build.gradle.kts
         // for the rendezvous flags SidecarProcess.effectiveArgs steers on, so
         // this module's own sidecar-spawning tests (including
-        // IrohMirrorTransport's) receive them too.
+        // its iroh PeerTransport bindings) receive them too.
         if (project.hasProperty("iroh.pkarr.url")) {
             systemProperty("iroh.pkarr.url", project.property("iroh.pkarr.url") as String)
         }

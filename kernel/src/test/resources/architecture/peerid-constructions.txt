@@ -37,7 +37,3 @@ demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 # configured name — the demo's CLI-supplied `netName` becomes this side's
 # asserted `Side.peer`.
-
-demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
-# configured name — built from the mirror rig's configured `rigName`/`role`
-# settings, not from key material.

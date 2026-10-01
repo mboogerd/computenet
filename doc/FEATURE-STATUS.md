@@ -40,7 +40,7 @@
 | Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | tiering | demos |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Generated @Contract/@CellBase cells | - | USED | - | USED | - | - | - | - | - | - | - | - | - | 2 |
-| Hosted execution (ManagedHost) | USED | USED | - | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 12 |
+| Hosted execution (ManagedHost) | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | USED | USED | 11 |
 | Colors (Blocking/Suspending) | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Time-travel | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Query / Datalog | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -102,7 +102,7 @@
 - replication / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
 - replication / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - replication / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
-- wire / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/DiscoveredIrohMirrorTransport.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/IrohMirrorTransport.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorTransport.kt
+- wire / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/DiscoveredIrohPeerTransport.kt
 - wire / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - wire / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - wire / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
@@ -121,7 +121,6 @@
 - hosts / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt, demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 - hosts / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - hosts / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
-- hosts / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
 - hosts / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt
 - hosts / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
 - hosts / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt

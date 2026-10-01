@@ -1,13 +1,13 @@
 package civictech.demo.beadsmirror.e2e
 
 import civictech.cell.Timestamp
+import civictech.cell.wire.PeerTransport
+import civictech.cell.wire.PeerTransports
 import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.BeadsMirrorApp
 import civictech.demo.beadsmirror.BeadsMirrorConfig
 import civictech.demo.beadsmirror.MirrorPeeringSettings
-import civictech.demo.beadsmirror.MirrorTransport
 import civictech.demo.beadsmirror.MirrorWire
-import civictech.demo.beadsmirror.WsMirrorTransport
 import civictech.demo.beadsmirror.baseline.ExportRow
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.MirrorEvent
@@ -41,7 +41,7 @@ import java.util.UUID
  * `:wire` WebSocket socket.
  *
  * This is feature computenet-7em.1's decided allowance ("nodes may run as two
- * ManagedHosts in one test JVM connected through a real WsTransport socket
+ * runtime nodes in one test JVM connected through a real ws transport
  * where two full JVMs are impractical"). The two-full-JVM launch path is a
  * different test and stays that way: [TwoJvmMirrorTest], task
  * computenet-7em.1.4. What this rig buys over that one is *reach* — the test
@@ -77,25 +77,11 @@ class TwoNodeRig private constructor(
      * of either node, so the object that severs it has to be the one that
      * established both ends.
      *
-     * This is the seam the DSC0 iroh re-run turns, and it is a **constructor
-     * parameter** rather than a field expression precisely so that turning it
-     * costs no edit to this file: [create]'s default is
-     * [civictech.demo.beadsmirror.WsMirrorTransport], the only binding that
-     * exists today, and a future transport is passed in by whatever
-     * constructs the rig (a sibling of [WsConvergenceSuiteTest] supplying a
-     * different `newRig`). What the seam does NOT deliver is transport
-     * neutrality of the *rig's own* test file set: this class and every test
-     * that names [create] without an argument still get the WebSocket
-     * binding, and [ConvergenceDivergenceControlTest] uses the same parameter
-     * to inject a deliberately defective wrapper around it.
-     *
-     * The near-zero reconnect backoff of [create]'s default is the same T12
-     * seam `:wire`'s own reconnect tests use: a heal then costs scheduling
-     * rather than the production 1s-doubling wall clock, and a dropped socket
-     * the rig did not ask for is retried promptly instead of on a
-     * real-network schedule.
+     * This is the kernel seam the iroh re-run turns. The exact same instance
+     * is supplied to both runtime nodes, so a binding may keep rig-scoped
+     * listener/dial state and a wrapper observes the production call path.
      */
-    private val transport: MirrorTransport,
+    private val transport: PeerTransport,
 ) : AutoCloseable {
 
     private val tempDirs = mutableListOf<Path>()
@@ -117,7 +103,7 @@ class TwoNodeRig private constructor(
 
     /**
      * Starts node L: `--listen 0`, so it binds a port of its own choosing and
-     * [BeadsMirrorApp.boundWsPort] is the only place that knows which
+     * [BeadsMirrorApp.boundAddress] is the only place that knows which
      * (computenet-dqy.25 — a pre-picked number would be a port nobody bound).
      *
      * @param writeBack task computenet-6wc.1.5: starts this node's mirror with
@@ -127,16 +113,16 @@ class TwoNodeRig private constructor(
     fun startListener(writeBack: Boolean = false): Node {
         check(listenerNode == null) { "the listener is already started" }
         val node = start(MirrorCellRefs.LISTENER, listenerWorkspace, MirrorWire.Listen(0), writeBack)
-        checkNotNull(node.app.boundWsPort) { "a listening node must have bound a ws port" }
+        checkNotNull(node.app.boundAddress) { "a listening node must have bound an address" }
         listenerNode = node
         return node
     }
 
-    /** Starts node D against the listener's **bound** ws port. See [startListener] for [writeBack]. */
+    /** Starts node D against the listener's **bound** transport address. See [startListener] for [writeBack]. */
     fun startDialer(writeBack: Boolean = false): Node {
         check(dialerNode == null) { "the dialer is already started" }
-        val wsPort = checkNotNull(listener.app.boundWsPort) { "the listener has no bound ws port" }
-        val node = start(MirrorCellRefs.DIALER, dialerWorkspace, MirrorWire.Dial("ws://localhost:$wsPort"), writeBack)
+        val address = checkNotNull(listener.app.boundAddress) { "the listener has no bound address" }
+        val node = start(MirrorCellRefs.DIALER, dialerWorkspace, MirrorWire.Dial(address.text), writeBack)
         dialerNode = node
         return node
     }
@@ -171,17 +157,13 @@ class TwoNodeRig private constructor(
      * neither node's deltas can reach the other until [heal] (task
      * computenet-7em.2.1).
      *
-     * Delegated to the injected binding, which decides what severing means for
-     * its transport — for the WebSocket binding it is the dialing end shutting
-     * its connection down for good, the listener staying bound throughout (see
-     * [civictech.demo.beadsmirror.WsMirrorTransport]). A test states "the
-     * peering is down", never "the socket is closed", which is what lets the
-     * same case run over a different transport unedited.
+     * Delegated through the dialling runtime node's [civictech.cell.wire.PeerConnection],
+     * so every binding is driven through the same lifecycle surface.
      *
      * Each node keeps folding its own workspace while severed; what stops is
      * the gossip between them.
      */
-    fun partition() = transport.partition()
+    fun partition() = checkNotNull(dialer.app.peering?.connection) { "the dialer has no peer connection" }.partition()
 
     /**
      * Re-establish what [partition] severed. Returns once the peering is
@@ -189,7 +171,7 @@ class TwoNodeRig private constructor(
      * re-announcement catch-up, so the caller still awaits the *fold*, with
      * [await], rather than assuming this call converged anything.
      */
-    fun heal() = transport.heal()
+    fun heal() = checkNotNull(dialer.app.peering?.connection) { "the dialer has no peer connection" }.heal()
 
     /**
      * Run a `bd` mutation on [node]'s OWN workspace and return only once that
@@ -806,7 +788,7 @@ class TwoNodeRig private constructor(
              * ([ConvergenceDivergenceControlTest]) is supplied without editing
              * this class.
              */
-            transport: MirrorTransport = WsMirrorTransport(reconnectBackoff = { 10L }),
+            transport: PeerTransport = PeerTransports.forScheme("ws"),
             /**
              * The two workspaces the nodes mirror — defaulted to two fresh,
              * mutually *independent* scratch workspaces, which is what every

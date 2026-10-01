@@ -17,13 +17,12 @@ import org.junit.jupiter.api.Test
  * **Transport injection (feature rule 3, shared with computenet-7em.2.1).**
  * This class is constructed with [newRig] — a factory for the rig under
  * test — rather than naming a transport itself, and nothing in this file
- * imports `civictech.wire` or [civictech.demo.beadsmirror.WsMirrorTransport]:
+ * imports a concrete transport binding:
  * a future transport (DSC0, epic computenet-7em §3) is a different [newRig]
  * supplied to a different concrete subclass, with zero edits here.
  * [TwoNodeRig.create] takes the binding as a parameter (computenet-7em.2.3)
- * and defaults it to [civictech.demo.beadsmirror.WsMirrorTransport], the only
- * one that exists; [WsConvergenceSuiteTest] is that default's only production
- * instantiation.
+ * and defaults it through the kernel provider registry; [WsConvergenceSuiteTest]
+ * is that default's production instantiation.
  *
  * **Partition and heal ride the same parameter** (task computenet-7em.2.3):
  * the mid-schedule partition case below drives [TwoNodeRig.partition] /
