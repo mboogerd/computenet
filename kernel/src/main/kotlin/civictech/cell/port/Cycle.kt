@@ -1,5 +1,6 @@
 package civictech.cell.port
 
+import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.Leased
@@ -72,7 +73,7 @@ interface CycleHead<D : Any> {
  *   [FeedbackPort] it finds on a cell.
  */
 abstract class FeedbackPort<D : Any>(
-    override val ref: PortRef = PortRef.generate(),
+    initialRef: PortRef = PortRef.generate(),
     val quiescence: Double = 0.0,
     /**
      * The erased payload class, when the port was declared via [feedbackInlet]
@@ -84,7 +85,14 @@ abstract class FeedbackPort<D : Any>(
      */
     val payloadType: Class<*>? = null,
     private val onLap: (D) -> Unit,
-) : Port, Linked, ProtocolAnchored {
+) : Port, Linked, DerivedPortRef, ProtocolAnchored {
+
+    final override var ref: PortRef = initialRef
+        private set
+
+    override fun deriveRef(owner: CellRef, name: String) {
+        ref = PortRef.of(owner, name)
+    }
 
     /** The top-level port API shape used by link-time payload negotiation. */
     abstract val apiClass: Class<*>

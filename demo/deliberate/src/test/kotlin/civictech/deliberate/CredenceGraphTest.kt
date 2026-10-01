@@ -229,12 +229,7 @@ class CredenceGraphTest {
         assertEquals(g.wiring.size, links.size, "every named wire must be an admitted local link")
         g.wiring.forEach { wire ->
             val link = links.single { it.from.cell == wire.from && it.to.cell == wire.to && it.from == PortRef.of(wire.from, wire.outlet) }
-            // FeedbackPort keeps its deliberate head ref, so its target id is
-            // not derived from the property name; the Wire record is the
-            // authoritative name for that admitted endpoint.
-            if (wire.inlet != "feedbackInlet" && wire.inlet != "feedbackFrameInlet") {
-                assertEquals(PortRef.of(wire.to, wire.inlet), link.to)
-            }
+            assertEquals(PortRef.of(wire.to, wire.inlet), link.to)
         }
 
         world.runToIdle()

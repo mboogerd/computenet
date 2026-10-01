@@ -64,12 +64,51 @@ class PropagateFeedbackInletTest {
         val feedbackInput by feedbackInlet<Delta>(0.0) { }
     }
 
+    private class RegisteredFeedbackCell(
+        consumerRef: PortRef = PortRef.generate(),
+        propagateRef: PortRef = PortRef.generate(),
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val consumer = registerPort("consumer", FeedbackInlet<Delta>(consumerRef) { })
+        val propagate = registerPort("propagate", PropagateFeedbackInlet<Delta>(propagateRef) { })
+    }
+
     private fun collectDeadLetters(host: ManagedHost): MutableList<DeadLetter> {
         val letters = mutableListOf<DeadLetter>()
         host.deadLetterOutlet.subscribe(
             Use.fixed(Propagate { letter -> letters += letter }, PortRef.generate()),
         )
         return letters
+    }
+
+    @Test
+    fun `a registered Consumer feedback inlet derives its ref from its owner and name`() {
+        val cell = RegisteredFeedbackCell()
+
+        cell.consumer.ref shouldBe PortRef.of(cell.ref, "consumer")
+    }
+
+    @Test
+    fun `a registered Propagate feedback inlet derives its ref from its owner and name`() {
+        val cell = RegisteredFeedbackCell()
+
+        cell.propagate.ref shouldBe PortRef.of(cell.ref, "propagate")
+    }
+
+    @Test
+    fun `feedback inlets preserve their constructor refs when derivation is disabled`() {
+        val consumerRef = PortRef.generate()
+        val propagateRef = PortRef.generate()
+        val previousDerive = PortIdentities.deriveRefs
+        PortIdentities.deriveRefs = false
+        try {
+            val cell = RegisteredFeedbackCell(consumerRef, propagateRef)
+
+            cell.consumer.ref shouldBe consumerRef
+            cell.propagate.ref shouldBe propagateRef
+        } finally {
+            PortIdentities.deriveRefs = previousDerive
+        }
     }
 
     @Test
