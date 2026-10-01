@@ -1276,8 +1276,13 @@ cells' records, such that replaying it restores exactly those cells and
 re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
 `checkpoint` is keyed the same way: it snapshots only the cells teeing to the
 passed journal and compacts that journal atomically; the compaction carries
-every frame accepted for that journal and not yet delivered, so a checkpoint is
-safe at any inter-invocation boundary (93 I-7 R7);
+every frame accepted for that journal and not yet delivered. It also carries a
+not-yet-delivered frame for a volatile inlet when both the target cell and the
+deriving upstream cell are folded into that checkpoint: compaction removes the
+upstream replay that could otherwise re-derive it. A frame derived from a cell
+on another journal is not carried — that journal's replay re-derives it, and a
+second copy in this checkpoint would duplicate the delivery. Thus a checkpoint
+is safe at any inter-invocation boundary (93 I-7 R7);
 not yet covered are frames retained in an inlet policy tier or released into a
 cold inlet outside that inlet's hosted offer (computenet-amgre);
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the

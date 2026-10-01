@@ -522,10 +522,16 @@ internal class HostDurability(
      * snapshot — or pending and not yet delivered: live/recovery staging, a coalesced entry,
      * attention parking, supervision-SUSPEND parking, or a cold inlet's pre-activation tail.
      * The compacted journal is the checkpoint records followed by every pending frame whose
-     * target port tees to [journal] — or whose target cell's snapshot it holds, a per-port
-     * selector's volatile inlet included — re-encoded by [journalFrame] in host sequence
-     * order. A host that recovers from it therefore reproduces the fold of every frame
-     * accepted before this returns, with no quiescence fence and with writers running.
+     * target port tees to [journal]. It also carries a frame for a per-port selector's
+     * volatile inlet when both that target cell and the deriving upstream cell are folded
+     * into this checkpoint: resetting [journal] removes the upstream replay that could
+     * otherwise re-derive it. An upstream cell folded into another journal is excluded;
+     * its own replay re-derives the frame, and carrying it here as well would duplicate the
+     * delivery. The already-present [civictech.cell.MessageContext.sourcePort] identifies
+     * that upstream cell, so this needs no additional per-frame provenance. Carried frames
+     * are re-encoded by [journalFrame] in host sequence order. A host that recovers from it
+     * therefore reproduces the fold of every frame accepted before this returns, with no
+     * quiescence fence and with writers running.
      * The pending-set read and the `reset` run under the host's `dataLock` ([underIntakeLock]),
      * the monitor the intake's append+stage holds, so a frame accepted concurrently is
      * either staged before the read (carried) or appended after the reset (tail) — never
@@ -674,16 +680,23 @@ internal class HostDurability(
             // computenet-xy7w4 D3: carry every accepted-but-undelivered frame of this
             // journal, read and reset under the intake's own lock. Encoded before the
             // reset, so an unencodable frame fails the checkpoint and truncates nothing.
-            // Also carried: a frame staged for a VOLATILE port of a cell whose snapshot this
-            // journal holds (a per-port selector's `derived` inlet, D4). Its upstream frame
-            // may be folded into a snapshot by this very reset, and a restored snapshot
-            // re-emits nothing, so replay could no longer re-derive it; the cell's own
-            // snapshot would silently lack it (feature review, computenet-xy7w4).
+            // Also carried: a frame staged for a VOLATILE port when this journal holds both
+            // its target cell's snapshot and its deriving upstream cell's snapshot (a
+            // per-port selector's `derived` inlet, D4). The reset removes that upstream
+            // replay and a restored snapshot re-emits nothing, so without the carry the
+            // target's snapshot would silently lack the frame (computenet-xy7w4). When the
+            // upstream cell belongs to a different journal, that journal still replays and
+            // re-derives the frame; carrying it here too would deliver it twice
+            // (computenet-4fpyy).
             underIntakeLock { pending ->
                 val carried = pending
                     .filter {
+                        val upstreamCell = it.invocation.invocation.context?.sourcePort?.cell
                         journalSelector(it.invocation.cellRef, it.invocation.portName) === journal ||
-                            cellJournalSelector(it.invocation.cellRef) === journal
+                            (
+                                cellJournalSelector(it.invocation.cellRef) === journal &&
+                                    upstreamCell != null && cellJournalSelector(upstreamCell) === journal
+                                )
                     }
                     .sortedBy(CheckpointFrame::sequence)
                     .map { journalFrame(it.invocation) }
