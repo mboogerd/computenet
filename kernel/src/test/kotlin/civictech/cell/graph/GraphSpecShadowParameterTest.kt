@@ -143,6 +143,21 @@ class GraphSpecShadowParameterTest {
     }
 
     @Test
+    fun `context builder spawn with shadow suppresses like Shadow spawn`() {
+        val controller = SimulationController(seed = 41)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val (handle, builtSpec) = graphOf(ApplyContext(host)) {
+            spawn("built-candidate", shadow = true) { ContractBoundaryCell(it) }
+        }
+        controller.runToIdle()
+        handle.cell.effectInlet.call.fire(3)
+        handle.cell.pureInlet.call.update(7)
+
+        (builtSpec.steps.single() as SpawnStep).shadow shouldBe true
+        Outcome(handle.cell.effects, handle.cell.state) shouldBe imperativeBoundary()
+    }
+
+    @Test
     fun `Use builders refuse shadow and remote folds it into a rejection`() {
         val ref = CellRef(UUID.randomUUID(), 1)
         val spec = GraphSpec(

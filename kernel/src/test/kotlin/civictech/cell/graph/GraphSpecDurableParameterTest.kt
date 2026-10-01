@@ -159,7 +159,7 @@ class GraphSpecDurableParameterTest {
         )
 
         val failure = shouldThrow<IllegalStateException> { spec.apply(ApplyContext(host)) }
-        failure.message!! shouldContain "s"
+        failure.message!! shouldContain "'s'"
         failure.message!! shouldContain "journalId"
         failure.message!! shouldContain "missing"
         host.lookup<SetCell<String>>(first) shouldBe null
