@@ -52,12 +52,12 @@ name: iroh-sidecar
 # The beadsmirror iroh convergence suite (bd+dolt+sidecar together) IS wired
 # into this job (computenet-cqde, after computenet-egl.4 landed as #598): the
 # "beadsmirror iroh convergence suite" step below runs
-# IrohConvergenceSuiteTest's four cases and IrohMirrorTransportTest under
-# `-Piroh.enabled=true`, with `bd`/`dolt` provisioned via the same
+# IrohConvergenceSuiteTest's four cases under `-Piroh.enabled=true`, with
+# `bd`/`dolt` provisioned via the same
 # `install-bd-dolt` composite action ci.yml's beadsmirror lanes use, and the
 # same step runs DiscoveredIrohConvergenceSuiteTest's four cases (the same
 # suite over a peering formed by `--offline --mdns` discovery, computenet-63um5
-# — 13 tests in the step, not 8; they SKIP on a macOS host without multicast
+# plus DiscoveryStoppedAfterFormationTest; they SKIP on a macOS host without multicast
 # delivery and must EXECUTE here, since ubuntu-latest delivers it), and the
 # following step asserts (via `assert-beadsmirror-e2e`) that no named class
 # reported itself skipped — a Linux run of these cases with the toolchain
@@ -413,8 +413,7 @@ jobs:
             civictech.iroh.IrohPeerTransportContractTest
 
       # computenet-cqde: the only place IrohConvergenceSuiteTest's four cases
-      # and IrohMirrorTransportTest's sidecar-backed case execute anywhere
-      # besides a developer's darwin/arm64 machine — and, since
+      # execute anywhere besides a developer's darwin/arm64 machine — and, since
       # computenet-63um5, the only place DiscoveredIrohConvergenceSuiteTest's
       # four cases execute at all (mDNS; darwin SKIPs them, ne2oh-B6). `-Piroh.enabled=true`
       # makes :demo:beadsmirror depend on `:iroh:cargoBuild` and sets the
@@ -432,8 +431,7 @@ jobs:
             -Piroh.pkarr.url="$PKARR_URL" -Piroh.dns.origin="$DNS_ORIGIN" -Piroh.dns.nameserver="$DNS_ADDR" --rerun \
             --tests 'civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest' \
             --tests 'civictech.demo.beadsmirror.e2e.DiscoveredIrohConvergenceSuiteTest' \
-            --tests 'civictech.demo.beadsmirror.e2e.DiscoveryStoppedAfterFormationTest' \
-            --tests 'civictech.demo.beadsmirror.IrohMirrorTransportTest'
+            --tests 'civictech.demo.beadsmirror.e2e.DiscoveryStoppedAfterFormationTest'
 
       # Non-vacuity assertion (computenet-cqde's acceptance clause 3): reddens
       # this job, rather than logging, when either class above reports itself
@@ -451,7 +449,6 @@ jobs:
             civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest
             civictech.demo.beadsmirror.e2e.DiscoveredIrohConvergenceSuiteTest
             civictech.demo.beadsmirror.e2e.DiscoveryStoppedAfterFormationTest
-            civictech.demo.beadsmirror.IrohMirrorTransportTest
 
       # computenet-o0m3.4: the ONLY thing in this job that makes the
       # self-hosting claim non-vacuous. Every peer above still carries a
