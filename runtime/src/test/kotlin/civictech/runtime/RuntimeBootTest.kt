@@ -168,7 +168,18 @@ class RuntimeBootTest {
         }
 
         val node = Runtime.boot(
-            Manifest(mapOf("n" to NodeSpec())), "n", setSpec(), inspector = InspectorFlag.Options(port = 0),
+            Manifest(
+                mapOf(
+                    "n" to NodeSpec(
+                        transport = "loopback",
+                        listen = "loopback://inspector-customization",
+                    ),
+                ),
+            ),
+            "n",
+            setSpec(),
+            inspector = InspectorFlag.Options(port = 0),
+            transport = LoopbackPeerTransport(),
         )
         var configured = false
         try {
