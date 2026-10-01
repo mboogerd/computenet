@@ -79,10 +79,7 @@ snapshot record of every `Stateful` cell, followed by every frame accepted for
 that journal and not yet delivered (read and reset under the intake's lock, in
 acceptance order), so a checkpoint is safe at any inter-invocation boundary of
 a live host — no quiescence fence is needed for a frame still staged there (93
-I-7 R7); not covered, and still lost by the reset: a frame already dequeued and
-held elsewhere — a supervision-SUSPENDed cell's park queue, a cold inlet's pre-
-activation tail — and, on a suspending scheduler, a delivery suspended mid-
-handler (computenet-hknt0); `recoverFrom` (after the graph is rebuilt) restores
+I-7 R7); `recoverFrom` (after the graph is rebuilt) restores
 the checkpoint and replays the tail through the ordinary decode path. Replay
 only stages frames, so `recoverFrom` returns a `Recovery` handle whose
 `awaitApplied` fences on delivery of the replayed tail and of every same-host
