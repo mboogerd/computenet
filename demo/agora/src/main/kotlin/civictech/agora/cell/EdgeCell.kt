@@ -30,15 +30,14 @@ interface EdgeApi : ClaimApi {
  * tracks its source's credence and pushes `influence = ownCredence ×
  * sourceCredence`, signed by [polarity], at its target.
  *
- * [quiescence] > 0 designates this edge a **cycle head**. The source feed has
- * both an ordinary inlet and a kernel [PropagateFeedbackInlet]; the service
- * lands the admitted cycle-closing link on the latter. The kernel inlet keeps
- * the cycle's admission and fresh-wave boundary with quiescence `0.0`, while
- * this cell applies [quiescence] to drift from its last accepted source value.
- * That split is deliberate: [CredenceUpdate.size] measures only the source's
- * latest emission, so using it as the app threshold would discard consecutive
- * small updates whose accumulated drift is significant. The service sets the
- * app threshold only on edges that close a cycle.
+ * [quiescence] > 0 designates this edge a **cycle head** (spec 21 §Cycles,
+ * wakkv-D6/D12). The source feed has both an ordinary [sourceInlet] and a
+ * kernel [PropagateFeedbackInlet], [feedbackInlet], at threshold [quiescence];
+ * the service lands the admitted cycle-closing link on the latter, and both
+ * feed the same handler. The kernel weak tier absorbs a returning lap whose
+ * [CredenceUpdate.size] is at or under [quiescence] — gating re-origination,
+ * never the credence outlet broadcast. There is no app-side drift gate.
+ * The service sets [quiescence] only on edges that close a cycle.
  */
 class EdgeCell(
     val polarity: Polarity,
@@ -52,7 +51,7 @@ class EdgeCell(
     val feedbackInlet = registerPort(
         "feedbackInlet",
         PropagateFeedbackInlet<CredenceUpdate>(
-            quiescence = 0.0,
+            quiescence = quiescence,
             payloadType = CredenceUpdate::class.java,
         ) { value -> onSource(value) },
     )
@@ -75,11 +74,6 @@ class EdgeCell(
     override fun onCredence(value: Double) = emitInfluence()
 
     private fun onSource(value: CredenceUpdate) {
-        val drift = abs(value.credence - sourceCredence)
-        // CredenceUpdate.size is relative to the source's last emission, not
-        // this edge's last accepted source value. Accumulate sub-threshold
-        // laps against the stored value so their total drift stays bounded.
-        if (quiescence > 0 && drift < quiescence) return
         sourceCredence = value.credence
         emitInfluence()
     }

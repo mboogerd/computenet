@@ -83,6 +83,13 @@ class AgoraService(
     /** Per edge: the link feeding it from its source's credence outlet. */
     private val sourceLinks = mutableMapOf<CellRef, Link>()
 
+    /**
+     * Per cell: its outbound admitted links (hub, and for an edge its
+     * influence link). `despawn` does not unlink, so [remove] does — otherwise
+     * topology keeps links to a cell that no longer exists.
+     */
+    private val outboundLinks = mutableMapOf<CellRef, MutableList<Link>>()
+
     @kotlinx.serialization.Serializable
     private data class StructureOp(
         val op: String,
@@ -150,7 +157,7 @@ class AgoraService(
         synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text) }
         // Durable record first: see [log]'s note (computenet-t3sp).
         log(StructureOp("claim", ref.id.toString(), text = text))
-        connectStaged(ref, "credenceOutlet", hub.ref, "inlet")
+        outboundLinks[ref] = mutableListOf(connectStaged(ref, "credenceOutlet", hub.ref, "inlet"))
         return ref
     }
 
@@ -185,8 +192,10 @@ class AgoraService(
         // Install the source link last: it is the link that closes a newly
         // visible cycle, so admission sees the already-recorded hub and
         // influence paths and can require the feedback inlet for a head.
-        connectStaged(ref, "credenceOutlet", hub.ref, "inlet")
-        connectStaged(ref, "influenceOutlet", target, "influenceInlet")
+        outboundLinks[ref] = mutableListOf(
+            connectStaged(ref, "credenceOutlet", hub.ref, "inlet"),
+            connectStaged(ref, "influenceOutlet", target, "influenceInlet"),
+        )
         sourceLinks[ref] = connectStaged(
             source,
             "credenceOutlet",
@@ -233,6 +242,8 @@ class AgoraService(
             }
         }
         doomed.forEach { ref ->
+            // after the retraction above, so each staged EdgeClose trails it
+            outboundLinks.remove(ref)?.forEach { it.unlink() }
             manage.despawn(ref)
             cells.remove(ref)
         }

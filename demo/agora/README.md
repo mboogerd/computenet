@@ -35,11 +35,11 @@ model (93 I-5/I-6):
   gates: they silence fan-out subscribers).
 - The service owns the topology, so it detects the edge that closes each
   cycle and designates it a **head**: that edge's admitted source link lands
-  on its kernel `PropagateFeedbackInlet`. The kernel inlet runs at quiescence
-  `0.0` to provide admission and the fresh-wave boundary; the edge retains the
-  `1e-3` app gate against its last accepted source credence, so consecutive
-  micro-updates accumulate instead of being discarded independently. The
-  outbound broadcast is never gated.
+  on its kernel `PropagateFeedbackInlet` at threshold `quiescence` (default
+  1e-3). The kernel weak tier absorbs a returning lap whose `size()` is at or
+  under it, gating re-origination and never the outbound broadcast. Because
+  that inlet also absorbs the size-0 catch-up a new link replays, the service
+  primes a new head edge with its source's current credence.
 - Termination physics: the base clamp keeps single-cycle loop gain < 1, so
   laps contract geometrically; the head threshold stops them ~5× earlier
   than floating-point resolution would. Non-contractive multi-cycle
