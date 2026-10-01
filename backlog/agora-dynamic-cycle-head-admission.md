@@ -1,5 +1,7 @@
 # Dynamic (topology-driven) cycle-head admission
 
+**Status**: absorbed by computenet-wakkv (INT1 1.1), 2026-10 — see `LinkOptions(staged = true)` and `PropagateFeedbackInlet`.
+
 **Origin**: agora demo (`demo/agora`). Building and testing the argumentation
 graph, I found `AgoraService` reimplements the kernel's now-landed cycle model in
 application code, because the landed model doesn't fit how agora decides head-ness.

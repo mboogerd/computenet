@@ -7,6 +7,7 @@ import civictech.cell.Propagate
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PropagateFeedbackInlet
 import civictech.cell.port.Use
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
@@ -29,33 +30,41 @@ interface EdgeApi : ClaimApi {
  * tracks its source's credence and pushes `influence = ownCredence ×
  * sourceCredence`, signed by [polarity], at its target.
  *
- * [quiescence] > 0 designates this edge a **cycle head** (the app-side form
- * of the decided I-5/I-6 model, spec 21 §Cycles): a returning source update
- * whose change is below the threshold is absorbed at the *inbound* feedback
- * edge — re-origination is gated, the credence outlet broadcast never is.
- * The service sets it on exactly the edges that close a cycle.
+ * [quiescence] > 0 designates this edge a **cycle head** (spec 21 §Cycles,
+ * wakkv-D6/D12). The source feed has both an ordinary [sourceInlet] and a
+ * kernel [PropagateFeedbackInlet], [feedbackInlet], at threshold [quiescence];
+ * the service lands the admitted cycle-closing link on the latter, and both
+ * feed the same handler. The kernel weak tier absorbs a returning lap whose
+ * [CredenceUpdate.size] is at or under [quiescence] — gating re-origination,
+ * never the credence outlet broadcast. There is no app-side drift gate.
+ * The service sets [quiescence] only on edges that close a cycle.
  */
 class EdgeCell(
     val polarity: Polarity,
     ref: CellRef = CellRef(UUID.randomUUID()),
     semantics: GradualSemantics = DfQuad,
     val quiescence: Double = 0.0,
+    initialSourceCredence: Double? = null,
 ) : ClaimCell(ref, semantics), EdgeApi {
 
     override val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<CredenceUpdate>>())
+    val feedbackInlet = registerPort(
+        "feedbackInlet",
+        PropagateFeedbackInlet<CredenceUpdate>(
+            quiescence = quiescence,
+            payloadType = CredenceUpdate::class.java,
+        ) { value -> onSource(value) },
+    )
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<InfluenceDelta>>())
 
-    private var sourceCredence: Double = credence // neutral until the source's catch-up arrives
+    // A feedback inlet absorbs size-zero updates, including FanOutlet's
+    // state-as-delta catch-up. Agora therefore primes a new head from its
+    // source's current state; ordinary edges still learn it through catch-up.
+    private var sourceCredence: Double = initialSourceCredence ?: credence
     private var lastInfluence: Double = credence * sourceCredence
 
     init {
-        sourceInlet.onEach { value ->
-            // cycle-head absorb gate: drift accumulates against the stored
-            // value, so total absorbed error stays below the threshold
-            if (quiescence > 0 && abs(value.credence - sourceCredence) < quiescence) return@onEach
-            sourceCredence = value.credence
-            emitInfluence()
-        }
+        sourceInlet.onEach { value -> onSource(value) }
         // a fresh target learns this edge's current influence at once
         influenceOutlet.catchUpOnLinked {
             if (catchUp) InfluenceDelta(ref, polarity, lastInfluence, size = 0.0) else null
@@ -63,6 +72,11 @@ class EdgeCell(
     }
 
     override fun onCredence(value: Double) = emitInfluence()
+
+    private fun onSource(value: CredenceUpdate) {
+        sourceCredence = value.credence
+        emitInfluence()
+    }
 
     private fun emitInfluence() {
         val v = credence * sourceCredence

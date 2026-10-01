@@ -5,29 +5,26 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.link.Link
-import civictech.cell.port.streamTo
 import civictech.cell.host.inlet
-import civictech.cell.host.routeTo
+import civictech.cell.link.Link
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkResult
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay
  * topology-blind; the service owns the index — which is also what lets it
- * designate cycle heads at edge-creation time (the app-side form of the
- * decided cycle model, spec 21 §Cycles / 93 I-5+I-6: every elementary cycle
- * contains at least one head, because any new cycle runs through the edge
- * that closed it).
+ * designate cycle heads at edge-creation time for the decided cycle model
+ * (spec 21 §Cycles / 93 I-5+I-6: every elementary cycle contains at least
+ * one head, because any new cycle runs through the edge that closed it).
  *
- * All wiring is **routed** through the host queue (`streamTo` + typed registry
- * inlet handles, the demo idiom) rather than DSL-linked: co-hosted DSL links fuse
- * into synchronous calls that bypass the scheduler, and magnitude-based
- * prioritization needs every hop staged. Hops into a `ClaimCell` or `EdgeCell`
- * resolve through the generated `ClaimCellPorts`/`EdgeCellPorts` ids
- * (computenet-jnkvu R5); the `hub` (`ObserveCell`, generic) keeps the reified
- * string form (jnkvu-D6).
+ * All wiring uses the host-admitted primitive with
+ * `LinkOptions(staged = true)`: every hop enters the host queue, so
+ * magnitude-based prioritization remains active even for co-hosted cells, and
+ * the topology records the same links the kernel admits for cycle safety. Hops
+ * into a `ClaimCell` or `EdgeCell` use their registered port-name strings; the
+ * `hub` (`ObserveCell`, generic) keeps the reified string form.
  */
 class AgoraService(
     private val host: ManagedHost,
@@ -85,6 +82,13 @@ class AgoraService(
 
     /** Per edge: the link feeding it from its source's credence outlet. */
     private val sourceLinks = mutableMapOf<CellRef, Link>()
+
+    /**
+     * Per cell: its outbound admitted links (hub, and for an edge its
+     * influence link). `despawn` does not unlink, so [remove] does — otherwise
+     * topology keeps links to a cell that no longer exists.
+     */
+    private val outboundLinks = mutableMapOf<CellRef, MutableList<Link>>()
 
     @kotlinx.serialization.Serializable
     private data class StructureOp(
@@ -153,7 +157,7 @@ class AgoraService(
         synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text) }
         // Durable record first: see [log]'s note (computenet-t3sp).
         log(StructureOp("claim", ref.id.toString(), text = text))
-        cell.credenceOutlet.streamTo(routedHub())
+        outboundLinks[ref] = mutableListOf(connectStaged(ref, "credenceOutlet", hub.ref, "inlet"))
         return ref
     }
 
@@ -175,13 +179,29 @@ class AgoraService(
         // through the future), so it must not sit between publication into
         // [nodes] and this append (computenet-f7y8).
         log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
-        val edge = EdgeCell(polarity, ref, semantics, quiescence = if (head) quiescence else 0.0)
+        val edge = EdgeCell(
+            polarity,
+            ref,
+            semantics,
+            quiescence = if (head) quiescence else 0.0,
+            initialSourceCredence = if (head) cells.getValue(source).credence else null,
+        )
             .also { it.catchUp = !replaying }
         manage.spawn(edge)
         cells[ref] = edge
-        edge.credenceOutlet.streamTo(routedHub())
-        edge.influenceOutlet.routeTo(registry, target, ClaimCellPorts.influenceInlet)
-        sourceLinks[ref] = cells.getValue(source).credenceOutlet.routeTo(registry, ref, EdgeCellPorts.sourceInlet)
+        // Install the source link last: it is the link that closes a newly
+        // visible cycle, so admission sees the already-recorded hub and
+        // influence paths and can require the feedback inlet for a head.
+        outboundLinks[ref] = mutableListOf(
+            connectStaged(ref, "credenceOutlet", hub.ref, "inlet"),
+            connectStaged(ref, "influenceOutlet", target, "influenceInlet"),
+        )
+        sourceLinks[ref] = connectStaged(
+            source,
+            "credenceOutlet",
+            ref,
+            if (head) "feedbackInlet" else "sourceInlet",
+        )
         return ref
     }
 
@@ -222,6 +242,8 @@ class AgoraService(
             }
         }
         doomed.forEach { ref ->
+            // after the retraction above, so each staged EdgeClose trails it
+            outboundLinks.remove(ref)?.forEach { it.unlink() }
             manage.despawn(ref)
             cells.remove(ref)
         }
@@ -278,11 +300,19 @@ class AgoraService(
         return false
     }
 
-    /** Hub hop into the generic `ObserveCell`: reified string form (jnkvu-D6). */
-    private fun routedHub(): Propagate<CredenceUpdate> =
-        registry.inlet(hub.ref, "inlet")
+    /** One admitted realization for every in-process graph edge. */
+    private fun connectStaged(from: CellRef, outlet: String, to: CellRef, inlet: String): Link {
+        val result = manage.connect(from, outlet, to, inlet, STAGED)
+        check(result is LinkResult.Connected) {
+            (result as? LinkResult.Rejected)?.reason
+                ?: "Agora graph link was not connected: $result"
+        }
+        return result.link
+    }
 
     companion object {
+        private val STAGED = LinkOptions(staged = true)
+
         /**
          * Magnitude → band mapping for agora hosts: sizes are credence deltas
          * in [0,1], so the attention quantizer's 0.4/0.75 knees would leave
