@@ -1,5 +1,6 @@
 package civictech.runtime
 
+import civictech.cell.CellRef
 import civictech.cell.BudgetLedger
 import civictech.cell.BudgetRefusedException
 import civictech.cell.ClaimClass
@@ -7,7 +8,11 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.KeyedCellFactory
+import civictech.cell.graph.KeyedFamily
 import civictech.cell.graph.SpawnStep
+import civictech.cell.host.KeyedCells
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
@@ -17,6 +22,7 @@ import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
 import civictech.cell.wire.PeerTransport
 import civictech.cell.wire.Peering
+import civictech.testkit.awaitUntil
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
 import civictech.inspect.InspectorFlag
@@ -29,8 +35,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 
 class RuntimeBootTest {
 
@@ -77,6 +85,127 @@ class RuntimeBootTest {
         }
 
         assertTrue(node.hosts.values.all { it.isDrained }, "close did not drain every manifest host")
+    }
+
+    @Test
+    fun `boot applies replicated graph steps through the node replication`() {
+        val address = "runtime-boot-${UUID.randomUUID()}"
+        val manifest = Manifest(
+            mapOf(
+                "a" to NodeSpec(
+                    transport = "loopback",
+                    listen = "loopback://$address",
+                    peerName = "a",
+                ),
+                "b" to NodeSpec(
+                    transport = "loopback",
+                    dial = listOf("a"),
+                    peerName = "b",
+                ),
+            ),
+        )
+        val logicalId = UUID.randomUUID()
+        val cells = mutableListOf<SetCell<String>>()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "items",
+                    factory = CellFactory { ref -> SetCell<String>(ref).also(cells::add) },
+                    identity = IdentityBinding.NewInstanceOf(logicalId),
+                    replicated = true,
+                ),
+            ),
+        )
+        val transport = LoopbackPeerTransport(backoff = { 0L })
+        val a = Runtime.boot(manifest, "a", spec, transport = transport)
+        var b: Runtime.Node? = null
+        try {
+            assertNotNull(a.replication)
+            a.open()
+            val bNode = Runtime.boot(manifest, "b", spec, transport = transport)
+            b = bNode
+            assertNotNull(bNode.replication)
+            bNode.open()
+
+            val aItems = cells.first()
+            a.mainHost.lookup<SetApi<String>>(aItems.ref)!!.inlet.call.add("runtime-replication")
+            awaitUntil("node a applies the routed add", 10_000) {
+                "runtime-replication" in aItems.membership()
+            }
+            awaitUntil("node b receives the routed add", 10_000) {
+                val bItems = cells.last()
+                "runtime-replication" in bItems.membership()
+            }
+        } finally {
+            b?.close()
+            a.close()
+        }
+    }
+
+    @Test
+    fun `boot binds a journalId spawn to its named host journal across reboot`() {
+        val journalRoot = tempDir.resolve("journal-id")
+        val manifest = Manifest(
+            mapOf(
+                "durable" to NodeSpec(
+                    hosts = listOf("main", "worker"),
+                    journalDir = journalRoot.toString(),
+                ),
+            ),
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val cells = mutableListOf<SetCell<String>>()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "items",
+                    factory = CellFactory { chosen -> SetCell<String>(chosen).also(cells::add) },
+                    identity = IdentityBinding.Exact(ref),
+                    journalId = "main",
+                ),
+            ),
+        )
+        val first = Runtime.boot(manifest, "durable", spec)
+        try {
+            first.mainHost.lookup<SetApi<String>>(ref)!!.inlet.call.add("survives-reboot")
+            first.mainHost.quiescence().await(10_000, "journalId write")
+            assertTrue(Files.isRegularFile(journalRoot.resolve("main").resolve("host.journal")))
+        } finally {
+            first.close()
+        }
+
+        val second = Runtime.boot(manifest, "durable", spec)
+        try {
+            val journal = KeyedCells.hostJournal(File(journalRoot.toString(), "main"))
+            checkNotNull(journal) { "the named host journal was not constructed" }
+            second.mainHost.recoverFrom(journal).awaitApplied(10_000)
+            val recovered = cells.last()
+            assertTrue("survives-reboot" in recovered.membership())
+        } finally {
+            second.close()
+        }
+    }
+
+    @Test
+    fun `boot exposes keyed families and the runtime replication`() {
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "writers",
+                    factory = KeyedCellFactory { _, ref -> SetCell<String>(ref) },
+                    family = KeyedFamily("runtime-writers"),
+                ),
+            ),
+        )
+        val node = Runtime.boot(Manifest(mapOf("families" to NodeSpec())), "families", spec)
+        try {
+            assertTrue(node.refs.isEmpty(), "a family handle must not be exposed as one cell ref")
+            assertEquals(setOf("writers"), node.families.keys)
+            assertNotNull(node.families["writers"])
+            assertNotNull(node.replication)
+        } finally {
+            node.close()
+        }
     }
 
     @Test
