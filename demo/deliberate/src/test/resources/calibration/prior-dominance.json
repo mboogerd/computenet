@@ -2069,6 +2069,30 @@
                 "inputTokens": 1584,
                 "outputTokens": 32
             }
+        },
+        {
+            "scenario": "target-support",
+            "nodeId": "q1/d0",
+            "input": "e9873d8b473bde99743833b7",
+            "considered": 0.8175,
+            "argumentsOnly": 0.84,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 702,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "target-attack",
+            "nodeId": "q2/d1",
+            "input": "f49ecdef038ae1cb833c6a21",
+            "considered": 0.2025,
+            "argumentsOnly": 0.1325,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 724,
+                "outputTokens": 32
+            }
         }
     ]
 }

@@ -287,7 +287,12 @@ The requested exact strong-argument subgroup is empty on this material. There
 are 65 claims at credence at least 0.8, but no link strength reaches 0.8; the
 maximum is 0.7975. The harness reports `n/a` and does not relax the threshold.
 The implementation recommendation below therefore requires the property as a
-synthetic semantics test rather than claiming it was observed live.
+synthetic semantics test rather than claiming it was observed live. To keep
+the candidates comparable against that property, the harness also isolates
+the nearest actual support and attack whose child already clears 0.8 credence,
+and raises only their measured strengths to the exact 0.8 boundary: support
+0.835 credence and 0.7975 → 0.8 strength; attack 0.945 credence and 0.785 → 0.8
+strength. These are labelled counterfactual probes, never live observations.
 
 ### Candidate semantics on the same material
 
@@ -295,12 +300,12 @@ For the two formal candidates, a node with no arguments keeps its Jev prior;
 only an argued node's base is shrunk. All outputs stayed in [0,1]. Prior-share
 columns average the headline member layers (`wlo`, `jnb`, `woe`) at d0–d3.
 
-| candidate | max freeze d1 / d2 / d3 | prior share d0 / d1 / d2 / d3 |
-|---|---|---|
-| current full prior | 0.011 / 0.003 / 0.000 | 0.424 / 0.921 / 0.545 / 0.422 |
-| weak prior, weight 0.25 | 0.035 / 0.002 / 0.000 | 0.200 / 0.293 / 0.322 / 0.328 |
-| arguments-first neutral base | **0.048** / 0.002 / 0.000 | 0 / 0 / 0 / 0 |
-| bottom-up Jev reassessment | **0.057** / 0.010 / 0.013 | 0.262 / 0.424 / 0.331 / 0.094 |
+| candidate | max freeze d1 / d2 / d3 | prior share d0 / d1 / d2 / d3 | exact-threshold target probes |
+|---|---|---|---:|
+| current full prior | 0.011 / 0.003 / 0.000 | 0.424 / 0.921 / 0.545 / 0.422 | 10/14 layers |
+| weak prior, weight 0.25 | 0.035 / 0.002 / 0.000 | 0.200 / 0.293 / 0.322 / 0.328 | 13/14 layers |
+| arguments-first neutral base | **0.048** / 0.002 / 0.000 | 0 / 0 / 0 / 0 | **14/14 layers** |
+| bottom-up Jev reassessment | **0.057** / 0.010 / 0.013 | 0.262 / 0.424 / 0.331 / 0.094 | 2/2 judgments |
 
 The weak and neutral formal views make depth-1 work more visible, but the
 remaining d2/d3 attenuation shows that removing the local prior is not the
@@ -336,8 +341,9 @@ arguments-only standing. The design questions resolve as follows:
    shares at every measured depth (0.738, 0.576, 0.669, 0.906 at d0–d3), so it
    does not merely copy the first impression. Its effective propagation is
    nevertheless uneven: freezing d1 moved the policy root 0.057 but the other
-   roots only 0.003 and 0.000. With no exact ≥0.8-strength example, this is not
-   enough evidence that reassessment reliably satisfies the target property.
+   roots only 0.003 and 0.000. It followed both exact-threshold counterfactual
+   probes (2/2), but with no live ≥0.8-strength example this is not enough
+   evidence that reassessment reliably satisfies the target property.
 
 ### Recommendation
 

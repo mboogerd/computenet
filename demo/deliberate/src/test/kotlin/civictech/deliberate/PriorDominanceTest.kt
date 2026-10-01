@@ -130,6 +130,14 @@ class PriorDominanceTest {
         val strength: Double,
     )
 
+    private data class TargetProbe(
+        val tree: Tree,
+        val parent: Node,
+        val edge: Edge,
+        val credence: Double,
+        val measuredStrength: Double,
+    )
+
     private class CacheStore(private val file: File, private val json: Json) {
         val value: Cache = if (file.isFile) json.decodeFromString(Cache.serializer(), file.readText()) else Cache(CACHE_VERSION)
 
@@ -181,6 +189,7 @@ class PriorDominanceTest {
         val strongParents = trees.associate { tree ->
             tree.question to strongUnrebuttedParents(tree, current.evaluations.getValue(tree.question), cache, layers)
         }
+        val targetProbes = targetProbes(trees, current, cache, layers)
 
         val bottomUp = trees.associate { tree ->
             tree.question to bottomUp(tree, "actual", cache, emptySet(), layers)
@@ -189,19 +198,20 @@ class PriorDominanceTest {
             trees.forEach { tree -> bottomUp(tree, "freeze-depth-$depth", cache, setOf(depth), layers) }
         }
 
-        // The target-property counterfactual for reassessment is local: remove
-        // each qualifying strong argument and ask Jev for the parent again.
-        trees.forEach { tree ->
-            val actual = bottomUp.getValue(tree.question)
-            for (parent in strongParents.getValue(tree.question)) {
-                val shown = shownArguments(parent, actual, cache)
-                for (edge in parent.edges.filter { qualifiesStrong(it, parent, current.evaluations.getValue(tree.question), cache, layers) }) {
-                    reassess(tree, parent, "without-${edge.id}", shown.filterNot { it.edgeId == edge.id }, cache)
-                }
-            }
+        // No measured link reached strength 0.8. Probe the exact threshold on
+        // the nearest actual support and attack whose child already clears the
+        // credence threshold, isolated so the argument is unrebutted.
+        targetProbes.forEach { probe ->
+            reassess(
+                probe.tree,
+                probe.parent,
+                "target-${probe.edge.side.name.lowercase()}",
+                listOf(ShownArgument(probe.edge.id, probe.edge.side, probe.edge.child.text, probe.credence, STRONG)),
+                cache,
+            )
         }
 
-        val report = report(trees, cache, layers, runs, strongParents, bottomUp)
+        val report = report(trees, cache, layers, runs, strongParents, targetProbes, bottomUp)
         File("build/calibration").mkdirs()
         File("build/calibration/prior-dominance-report.txt").writeText(report)
         println(report)
@@ -350,6 +360,29 @@ class PriorDominanceTest {
         return strong(edge) && parent.edges.none { it.side != edge.side && strong(it) }
     }
 
+    private fun targetProbes(
+        trees: List<Tree>,
+        current: FormalRun,
+        cache: CacheStore,
+        layers: LayerSet,
+    ): List<TargetProbe> = listOf(Polarity.SUPPORT, Polarity.ATTACK).map { side ->
+        trees.flatMap { tree ->
+            val evaluations = current.evaluations.getValue(tree.question)
+            tree.nodes.flatMap { parent ->
+                parent.edges.filter { it.side == side }.mapNotNull { edge ->
+                    val credence = headline(evaluations.getValue(edge.child.id).values, layers)
+                    if (credence < STRONG) null else TargetProbe(
+                        tree,
+                        parent,
+                        edge,
+                        credence,
+                        strength(tree, parent, edge, cache),
+                    )
+                }
+            }
+        }.maxBy { it.measuredStrength }
+    }
+
     /** Edge ids include qN, so the owning tree is recoverable without another index. */
     private fun strengthFor(parent: Node, edge: Edge, cache: CacheStore): Double =
         cache.value.strengths.single { it.edgeId == edge.id }.value
@@ -472,6 +505,7 @@ class PriorDominanceTest {
         layers: LayerSet,
         runs: List<FormalRun>,
         strongParents: Map<String, List<Node>>,
+        targetProbes: List<TargetProbe>,
         bottomUp: Map<String, Map<String, Double>>,
     ): String = buildString {
         fun f(x: Double) = String.format(Locale.ROOT, "%.3f", x)
@@ -526,6 +560,19 @@ class PriorDominanceTest {
                 strongParents.getValue(tree.question).mapNotNull { dominance(e.getValue(it.id), layers.ids.indexOf("wlo")) }
             }.map { (_, argument) -> argument > 0.5 }
             appendLine("  target on strong-unrebutted parents (wlo argument share > prior share): ${share(target)}")
+            val probes = targetProbes.flatMap { probe ->
+                val p = prior(probe.tree, probe.parent, cache)
+                val priorValues = layers.evaluate(listOf(p), emptyList(), emptyList())
+                val argument = List(layers.ids.size) { Arg(STRONG, probe.credence) }
+                val attacks = if (probe.edge.side == Polarity.ATTACK) listOf(argument) else emptyList()
+                val supports = if (probe.edge.side == Polarity.SUPPORT) listOf(argument) else emptyList()
+                val values = layers.evaluate(listOf(p), attacks, supports, run.mode.priorWeight)
+                val neutral = layers.evaluate(listOf(p), attacks, supports, 0.0)
+                values.indices.mapNotNull { l ->
+                    shares(abs(values[l] - neutral[l]), abs(values[l] - priorValues[l]))?.let { (_, argumentShare) -> argumentShare > 0.5 }
+                }
+            }
+            appendLine("  exact-threshold support+attack probes (all layers, argument share > prior share): ${share(probes)}")
         }
 
         val current = runs.first()
@@ -596,6 +643,22 @@ class PriorDominanceTest {
             }
         }
         appendLine("  target on strong-unrebutted parents (argument move > re-anchoring): ${share(reassessmentTarget)}")
+        val reassessmentProbes = targetProbes.map { probe ->
+            val shown = mapOf(probe.edge.child.id to probe.credence)
+            val r = cachedReassessment(
+                probe.tree,
+                probe.parent,
+                "target-${probe.edge.side.name.lowercase()}",
+                shown,
+                cache,
+                listOf(ShownArgument(probe.edge.id, probe.edge.side, probe.edge.child.text, probe.credence, STRONG)),
+            )
+            abs(r.considered - prior(probe.tree, probe.parent, cache)) > abs(r.considered - r.argumentsOnly)
+        }
+        appendLine("  exact-threshold support+attack probes (argument move > re-anchoring): ${share(reassessmentProbes)}")
+        targetProbes.forEach { probe ->
+            appendLine("    ${probe.edge.side.name.lowercase()} uses ${probe.edge.id}: credence=${f(probe.credence)} strength ${f(probe.measuredStrength)} -> ${f(STRONG)}")
+        }
         appendLine("  prior dominance by depth (mean prior and argument shares):")
         for (depth in 0..3) {
             val rows = trees.flatMap { tree ->
@@ -624,8 +687,9 @@ class PriorDominanceTest {
         scenario: String,
         standings: Map<String, Double>,
         cache: CacheStore,
+        shownOverride: List<ShownArgument>? = null,
     ): CachedReassessment {
-        val args = shownArguments(node, standings, cache)
+        val args = shownOverride ?: shownArguments(node, standings, cache)
         val signature = hash(
             tree.question,
             node.text,
