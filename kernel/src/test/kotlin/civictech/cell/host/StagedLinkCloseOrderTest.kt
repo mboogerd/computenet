@@ -71,9 +71,9 @@ class StagedLinkCloseOrderTest {
 
         world.runToIdle()
 
+        sink.frontier.unmatchedDrops shouldBe 0L
         sink.received shouldBe listOf(1, 2, 3)
         sink.events shouldBe listOf("data(1)", "data(2)", "data(3)", "EdgeClose")
-        sink.frontier.unmatchedDrops shouldBe 0L
     }
 
     @Test
