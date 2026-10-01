@@ -83,6 +83,22 @@ object Runtime {
         )
     }
 
+    /**
+     * Additive inspector customization, registered with [Node.customizeInspector] before
+     * [Node.open]. Everything defaults to what the Runtime derives itself, so a node that
+     * registers nothing is served exactly as before.
+     *
+     * @property hostNames display name per host, keyed by manifest host name (`"main"`) or
+     *   `"bridge"` for the peering bridge host; unnamed hosts keep `<node>/<host>`.
+     * @property cellNames extra cell labels, merged over the spec-handle labels.
+     * @property configure runs on the server before it starts (graph names, declared links).
+     */
+    class InspectorExtras(
+        val hostNames: Map<String, String> = emptyMap(),
+        val cellNames: Map<CellRef, String> = emptyMap(),
+        val configure: InspectorServer.() -> Unit = {},
+    )
+
     /** A booted node. Call [open] only after application-owned wiring is installed. */
     class Node internal constructor(
         val name: String,
@@ -104,6 +120,14 @@ object Runtime {
         private var bridgeHost: ManagedHost? = null
         private var listener: PeerListener? = null
         private val connectionEndpoints = mutableListOf<PeerConnection>()
+        private var inspectorExtras = InspectorExtras()
+
+        /** Register inspector naming/link extras; only meaningful before [open]. */
+        @Synchronized
+        fun customizeInspector(extras: InspectorExtras) {
+            check(!opened) { "runtime node '$name' is already open; customize the inspector before open()" }
+            inspectorExtras = extras
+        }
 
         /** The listener's granted address, including a selected port or iroh NodeId, after [open]. */
         val boundAddress: PeerAddress? get() = listener?.boundAddress
@@ -150,10 +174,13 @@ object Runtime {
                 inspector = inspectorOptions?.serve(
                     registry = registry,
                     hosts = buildMap {
-                        hosts.forEach { (hostName, host) -> put("$name/$hostName", host) }
-                        put("$name/bridge", bridge)
+                        hosts.forEach { (hostName, host) ->
+                            put(inspectorExtras.hostNames[hostName] ?: "$name/$hostName", host)
+                        }
+                        put(inspectorExtras.hostNames["bridge"] ?: "$name/bridge", bridge)
                     },
-                    cellNames = refs.entries.associate { (handle, ref) -> ref to handle },
+                    cellNames = refs.entries.associate { (handle, ref) -> ref to handle } + inspectorExtras.cellNames,
+                    configure = inspectorExtras.configure,
                 )
             } catch (failure: Throwable) {
                 runCatching { close() }.exceptionOrNull()?.let(failure::addSuppressed)

@@ -10,9 +10,6 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
-import civictech.cell.host.LocationRegistry
-import civictech.cell.host.ManagedHost
-import civictech.cell.link.PeerId
 import civictech.cell.observe.View
 import civictech.cell.host.link
 import civictech.cell.observe.observe
@@ -21,18 +18,19 @@ import civictech.cell.observe.observeAligned
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.replication.Replication
+import civictech.cell.graph.GraphSpec
 import civictech.cell.wire.Peering
+import civictech.runtime.Manifest
+import civictech.runtime.NodeSpec
+import civictech.runtime.Runtime
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
 import civictech.inspect.InspectorFlag
-import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.edit.WritePlane
-import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
-import java.net.URI
 import java.net.URLDecoder
 import java.util.*
 import civictech.cell.data.delta.SetDelta
@@ -48,7 +46,7 @@ import civictech.cell.data.op.IntersectSetCell
 
 /**
  * [netName] is this JVM's network-host name (`--net-name`). It is both what
- * [startInspector] labels local cells with and — since V4-PEERID — the
+ * [inspectorExtras] labels local cells with and — since V4-PEERID — the
  * [PeerId] this JVM puts in its transport hello, so the *peer's* inspector can
  * group this JVM's cells under `jvm-a`/`jvm-b` and keep that grouping across a
  * reconnect. Null (the flag absent) means an **anonymous** peer: no name in
@@ -71,6 +69,15 @@ class DemoApp(
     journalDir: java.io.File? = null,
     private val netName: String? = null,
     replicate: Boolean = false,
+    /**
+     * `--replica <n>`: this JVM's replica instance id, assigned by the manifest
+     * (gyvli-D7, the computenet-d2j2 mechanism). Null keeps the legacy role rule
+     * ([sharedInstance]: listener/solo 0, dialer 1), so every existing launch line
+     * is unchanged; two dialers need distinct explicit values.
+     */
+    private val replica: Long? = null,
+    /** `--inspect-port` options, handed to [Runtime.boot]; the Runtime serves the inspector in `open()`. */
+    inspectorOptions: InspectorFlag.Options? = null,
 ) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
@@ -78,22 +85,44 @@ class DemoApp(
         data class Dial(val uri: String) : Wire
     }
 
-    private val registry = LocationRegistry()
-
     // Durability (M10.4): the app host write-ahead journals every routed
     // invocation; on restart the same directory replays it — kill -9 safe.
-    // The WAL file is minted via the KeyedCells helper so it matches exactly
-    // what writerCells.recover() replays.
-    private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
+    // The Runtime mints the WAL at `<journalDir>/main` via the KeyedCells helper,
+    // so it is exactly what writerCells.recover() replays (`mainJournalDir`).
+    private val mainJournalDir: java.io.File? = journalDir?.let { java.io.File(it, "main").apply { mkdirs() } }
+
+    // The whole node — registry, application host, journal, and (in `open()`) the
+    // bridge host, peering side and listener/dialer — is the Runtime's. The
+    // manifest is this process's flags: one node, plus the dialled peer as a
+    // stand-in whose address is handed over via `overrides` (the `--peer` URI).
+    private val node: Runtime.Node = Runtime.boot(
+        manifest = Manifest(
+            buildMap {
+                put(
+                    NODE,
+                    NodeSpec(
+                        listen = (wire as? Wire.Listen)?.let { "ws://0.0.0.0:${it.wsPort}" },
+                        dial = if (wire is Wire.Dial) listOf(PEER) else emptyList(),
+                        journalDir = journalDir?.path,
+                        replica = replica ?: if (replicate) sharedInstance(roleOf(wire)) else null,
+                        peerName = netName,
+                    ),
+                )
+                if (wire is Wire.Dial) put(PEER, NodeSpec(listen = wire.uri))
+            },
+        ),
+        node = NODE,
+        spec = GraphSpec(emptyList()),
+        overrides = if (wire is Wire.Dial) mapOf(PEER to wire.uri) else emptyMap(),
+        inspector = inspectorOptions,
+    )
+    private val registry = node.registry
+    private val host = node.mainHost
     private val manage = host.managementInlet.call
 
     // union refs are role-derived so each peer can address its counterpart's
     // unions without a discovery protocol (that's M6+ territory)
-    private val myRole = when (wire) {
-        is Wire.Listen -> "listener"
-        is Wire.Dial -> "dialer"
-        null -> "solo"
-    }
+    private val myRole = roleOf(wire)
     private val peerRole = if (myRole == "listener") "dialer" else "listener"
 
     private fun unionRef(name: String, role: String) =
@@ -129,13 +158,13 @@ class DemoApp(
      *
      * Same [SHARED_ID] on both sides, `instanceId` derived from the peering
      * role ([sharedInstance]) so no discovery protocol and no extra flag is
-     * needed — the same trick [startInspector] already uses to address the
+     * needed — the same trick [inspectorExtras] already uses to address the
      * peer's union counterparts. `sameLogical` holds between the two; the refs
      * differ. Spawning is [Replication.replicate]'s job (`Replication.kt:204`),
      * so this is deliberately *not* also `manage.spawn`ed.
      */
     private val sharedCell: SetCell<String>? =
-        if (replicate) SetCell<String>(CellRef(SHARED_ID, sharedInstance(myRole))) else null
+        if (replicate) SetCell<String>(CellRef(SHARED_ID, checkNotNull(node.replica))) else null
 
     // Per-user writers: one durable, dynamically-keyed family (M10.4). Compound
     // keys "$user:items"/"$user:votes" pack both writers into a single family so
@@ -145,7 +174,7 @@ class DemoApp(
     private val writerApi = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
     private val writerCells = KeyedCells<String>(
         host = host,
-        journalDir = journalDir,
+        journalDir = mainJournalDir,
         namespace = "demo-writer@$myRole",
         factory = { key, ref ->
             val union = if (key.endsWith(":items")) itemsUnion else votesUnion
@@ -154,14 +183,6 @@ class DemoApp(
     )
 
     private val shell = DemoShell(port)
-
-    /**
-     * The peering bridge's own host, hoisted out of [init] so [startInspector]
-     * can name it: its cells (the bridge egress/ingress and the registry
-     * mirror) are published on this registry like any other, and an
-     * unrecognised host would otherwise show up under a generated name.
-     */
-    private val bridgeHost: ManagedHost? = wire?.let { ManagedHost(registry = registry) }
 
     /** The DSL-spawned derived views, kept for the inspector's cell names. */
     private var produceRef: CellRef? = null
@@ -179,10 +200,8 @@ class DemoApp(
     /** Diagnostic (G-13): 0 at idle: no wave held awaiting a stalled or phantom arm. */
     internal val alignedBufferedWaves: Int get() = aligned.bufferedWaves
 
-    private var inspector: civictech.inspect.InspectorServer? = null
-
-    /** The `--listen` listener, kept so [boundWsPort] can report what it actually bound. */
-    private var wsListener: WsTransport.WsListener? = null
+    /** The inspector the Runtime serves for `--inspect-port`, null when the flag is absent. */
+    val inspector: civictech.inspect.InspectorServer? get() = node.inspector
 
     val boundPort: Int get() = shell.boundPort
 
@@ -195,7 +214,7 @@ class DemoApp(
      * picks a port it does not yet hold (computenet-dqy.25), so this — not the
      * requested value — is what `main` announces for the dialer to reach.
      */
-    val boundWsPort: Int? get() = wsListener?.port
+    val boundWsPort: Int? get() = node.boundAddress?.text?.substringAfterLast(':')?.toIntOrNull()
 
     /** V4-PILOT: this JVM's replica instance id, or null with `--replicate` off. */
     val sharedInstanceId: Long? get() = sharedCell?.ref?.instanceId
@@ -274,15 +293,15 @@ class DemoApp(
             }
         }
 
+        // V4-PEERID: `peerName = netName` is in the manifest above, so the peer's
+        // inspector labels our cells with our own --net-name and keeps that label
+        // across a reconnect (unset --net-name = anonymous). The Runtime builds the
+        // Peering.Side, binds the listener, dials and serves the inspector — solo
+        // launches included (no endpoints, still an inspector) — after Replication's
+        // hooks and the replica are in place, which is why `open()` is called here.
+        node.customizeInspector(inspectorExtras())
+        node.open()
         if (wire != null) {
-            // V4-PEERID: name this side, so the peer's inspector labels our
-            // cells with our own --net-name and keeps that label across a
-            // reconnect. Unset --net-name ⇒ anonymous, exactly as before.
-            val side = Peering.Side(registry, bridgeHost!!, peer = netName?.let { PeerId(it) })
-            when (wire) {
-                is Wire.Listen -> wsListener = WsTransport.listen(wire.wsPort, side)
-                is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
-            }
             // symmetric view chaining: my unions stream into the peer's counterparts.
             // Tag dedup + effective-only emission make the two-way chain cycle-safe;
             // sends park in the registry until the peer announces, so a late-starting
@@ -455,12 +474,12 @@ class DemoApp(
      * the read-only instrument, so a disabled plane leaves the catalogue exactly
      * as it found it.
      */
-    fun startInspector(
-        options: InspectorFlag.Options = InspectorFlag.Options(port = civictech.inspect.InspectorServer.DEFAULT_PORT),
-    ): civictech.inspect.InspectorServer {
+    private fun inspectorExtras(): Runtime.InspectorExtras {
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
-        val peerShared = CellRef(SHARED_ID, sharedInstance(peerRole))
+        // the peer's instance id is knowable (and so nameable/declarable) only under
+        // the role rule; with explicit `--replica` values the topology names it itself
+        val peerShared = if (replica == null) CellRef(SHARED_ID, sharedInstance(peerRole)) else null
         val names = buildMap {
             put(itemsUnion.ref, "items")
             put(votesUnion.ref, "votes")
@@ -478,18 +497,29 @@ class DemoApp(
             sharedCell?.let { local ->
                 put(local.ref, "shared")
                 put(sharedWatermarkRef(local.ref.instanceId), "shared-watermark")
-                if (wire != null) {
+                if (wire != null && peerShared != null) {
                     put(peerShared, "shared@$peerRole")
                     put(sharedWatermarkRef(peerShared.instanceId), "shared-watermark@$peerRole")
                 }
             }
         }
-        val hosts = buildMap {
-            put("shopping", host)
-            bridgeHost?.let { put("shopping-bridge", it) }
+        return Runtime.InspectorExtras(
+            // the application host keeps its historical name; the bridge host a stable one
+            hostNames = mapOf("main" to "shopping", "bridge" to "shopping-bridge"),
+            cellNames = names,
+        ) {
+            nameGraph(itemsUnion.ref, "shopping")
+            if (wire != null) declareLinks(this, peerItems, peerVotes, peerShared)
         }
-        val started = options.serve(registry, hosts, names) { nameGraph(itemsUnion.ref, "shopping") }
-        if (wire != null) {
+    }
+
+    private fun declareLinks(
+        started: civictech.inspect.InspectorServer,
+        peerItems: CellRef,
+        peerVotes: CellRef,
+        peerShared: CellRef?,
+    ) {
+        run {
             started.declareLink(itemsUnion.ref, "outlet", peerItems, "inlet")
             started.declareLink(votesUnion.ref, "outlet", peerVotes, "inlet")
             // V4-PILOT: the gossip subscription is `local.outlet.streamTo(sink)`
@@ -497,19 +527,27 @@ class DemoApp(
             // TopologyLink records it and the inspector could never infer the
             // mesh. Same reported-never-inferred annotation as the union chain
             // above.
-            sharedCell?.let { started.declareLink(it.ref, "outlet", peerShared, "deltaInlet") }
+            if (peerShared != null) sharedCell?.let { started.declareLink(it.ref, "outlet", peerShared, "deltaInlet") }
         }
-        return started.also { inspector = it }
     }
 
     fun start(): DemoApp = apply { shell.start() }
 
     fun stop() {
-        inspector?.stop()
         shell.stop()
+        runCatching { node.close() }
     }
 
     companion object {
+        private const val NODE = "shopping"
+        private const val PEER = "peer"
+
+        private fun roleOf(wire: Wire?): String = when (wire) {
+            is Wire.Listen -> "listener"
+            is Wire.Dial -> "dialer"
+            null -> "solo"
+        }
+
         /**
          * V4-PILOT — the one deterministic logical id both JVMs mint their
          * replica under. Derived exactly the way [unionRef] derives its refs;
@@ -556,8 +594,11 @@ fun main(args: Array<String>) {
     // needs no stripping: `demoPort` skips any token starting with `--`
     // (DemoShell.kt:128-130), so it can never be mistaken for the demo's port.
     val replicate = "--replicate" in parsed.rest
+    // `--replica <n>`: the manifest-assigned replica instance id (two dialers need
+    // distinct values); absent = the legacy role rule (listener 0, dialer 1)
+    val replica = parsed.rest.value("--replica")?.toLong()
 
-    val app = DemoApp(port, wire, journalDir, netName, replicate).start()
+    val app = DemoApp(port, wire, journalDir, netName, replicate, replica, parsed.options).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
     // every announcePort here reports a port this process HOLDS, so a supervising
     // test never has to pick one for it — see [announcePort] (computenet-dqy.25)
@@ -578,8 +619,7 @@ fun main(args: Array<String>) {
         if (wire == null) println("  (no --listen/--peer: the replica mesh has no peer to gossip with)")
     }
     parsed.options?.let { options ->
-        val inspector = app.startInspector(options)
-        InspectorFlag.announce(inspector, options)
+        InspectorFlag.announce(checkNotNull(app.inspector) { "the Runtime did not start the inspector" }, options)
     }
 }
 

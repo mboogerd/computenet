@@ -30,10 +30,6 @@ wire/src/main/kotlin/civictech/wire/HelloProtocol.kt
 # frame/hello token parse — the identity a HELLO2 frame CLAIMS, read off the
 # wire as a plain string token, not derived from key material.
 
-demo/shopping/src/main/kotlin/civictech/demo/Main.kt
-# configured name — the demo's CLI-supplied `netName` becomes this side's
-# asserted `Side.peer`.
-
 demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 # configured name — the demo's CLI-supplied `netName` becomes this side's
 # asserted `Side.peer`.
