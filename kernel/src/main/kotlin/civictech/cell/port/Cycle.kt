@@ -4,6 +4,7 @@ import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.Leased
 import civictech.cell.MessageContext
+import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.control.Magnitude
 import civictech.cell.link.Linked
@@ -27,20 +28,23 @@ class CycleError(message: String) : RuntimeException(message)
 /**
  * Marker for a cell that declares at least one cycle-closing terminus (spec
  * 21 §Cycles, 10/13 `CycleWithoutHead`, 93 I-5): every cycle MUST have at
- * least one such head. [feedbackInput] is the absorbing inlet — see
- * [FeedbackInlet]. Link-time cycle admission
+ * least one such head. [feedbackInput] is the conventional Consumer-shaped
+ * absorbing inlet — see [FeedbackInlet] and its shared [FeedbackPort] core.
+ * Link-time cycle admission
  * ([civictech.cell.host.ManagedHost.connect]) accepts a locally-visible
- * cycle-closing edge only when it lands on a [FeedbackInlet] port; declaring
- * [CycleHead] on the cell documents intent for readers of the graph.
+ * cycle-closing edge only when it lands on a [FeedbackPort] port; declaring
+ * [CycleHead] on a Consumer-shaped cell documents intent for readers of the
+ * graph. The interface remains Consumer-shaped for source compatibility;
+ * Propagate-shaped heads declare a [PropagateFeedbackInlet] directly.
  */
 interface CycleHead<D : Any> {
     val feedbackInput: FeedbackInlet<D>
 }
 
 /**
- * The feedback-absorbing terminus of a cycle-closing edge (spec 21 §Cycles,
- * 10/13 `CycleWithoutHead`, 93 I-5/I-6). Every cycle MUST declare at least
- * one [FeedbackInlet]-backed head. Distinct from an ordinary [Inlet]/
+ * Shared feedback-absorbing core for the terminus of a cycle-closing edge
+ * (spec 21 §Cycles, 10/13 `CycleWithoutHead`, 93 I-5/I-6). Every cycle MUST
+ * declare at least one [FeedbackPort]-backed head. Distinct from an ordinary [Inlet]/
  * [FanInlet]:
  *
  * - **Absorbed, not joined**: the returning lap terminates here — it never
@@ -65,22 +69,25 @@ interface CycleHead<D : Any> {
  *   host queue even co-hosted, bounding stack depth to O(1) per lap. [barrier]
  *   defaults to an inline call for bare/unhosted use;
  *   [civictech.cell.host.ManagedHost] rebinds it at spawn time for every
- *   [FeedbackInlet] port it finds on a cell.
+ *   [FeedbackPort] it finds on a cell.
  */
-class FeedbackInlet<D : Any>(
+abstract class FeedbackPort<D : Any>(
     override val ref: PortRef = PortRef.generate(),
     val quiescence: Double = 0.0,
     /**
-     * The erased payload class, when the port was declared via the [feedbackInlet]
-     * delegate (which reifies `D`). It lets link-time admission apply the same
-     * `is Magnitude` damping test this inlet dispatches on at runtime (Cycle.kt
-     * `provide`), without a KSP descriptor — see
+     * The erased payload class, when the port was declared via [feedbackInlet]
+     * or [propagateFeedbackInlet] (which reify `D`). It lets link-time
+     * admission apply the same `is Magnitude` damping test this inlet dispatches
+     * on at runtime ([absorb]), without a KSP descriptor — see
      * [civictech.cell.host.ManagedHost.connect]. `null` for bare/direct
      * construction, in which case the payload-type witness simply does not fire.
      */
     val payloadType: Class<*>? = null,
     private val onLap: (D) -> Unit,
-) : Use<Consumer<D>>, Linked, ProtocolAnchored {
+) : Port, Linked, ProtocolAnchored {
+
+    /** The top-level port API shape used by link-time payload negotiation. */
+    abstract val apiClass: Class<*>
 
     /**
      * computenet-7iyy: a cell-owned port anchors its own [ProtocolSupport]
@@ -113,30 +120,29 @@ class FeedbackInlet<D : Any>(
     var lastQuiescent: Boolean? = null
         private set
 
-    override val call: Consumer<D> = object : Consumer<D> {
-        override fun provide(input: D) {
-            if (input is Leased<*>) {
-                throw CycleError(
-                    "CycleRejectsLeased: Leased is forbidden on cycle edges (spec 20/23, 93 I-6); freeze() or copy first"
-                )
-            }
-            val magnitude = input as? Magnitude
-            lastQuiescent = magnitude?.let { it.size() <= quiescence }
-            val effective = magnitude?.let { it.size() > quiescence } ?: true
-            if (!effective) return // weak tier: absorbed, not re-originated
-            barrier {
-                val fresh = MessageContext(Timestamp(headSourceId, headCounter.incrementAndGet()), ref)
-                CurrentContext.with(fresh) { onLap(input) }
-            }
+    /** One absorb/quiescence/fresh-wave core shared by every feedback API shape. */
+    protected fun absorb(input: D) {
+        if (input is Leased<*>) {
+            throw CycleError(
+                "CycleRejectsLeased: Leased is forbidden on cycle edges (spec 20/23, 93 I-6); freeze() or copy first"
+            )
+        }
+        val magnitude = input as? Magnitude
+        lastQuiescent = magnitude?.let { it.size() <= quiescence }
+        val effective = magnitude?.let { it.size() > quiescence } ?: true
+        if (!effective) return // weak tier: absorbed, not re-originated
+        barrier {
+            val fresh = MessageContext(Timestamp(headSourceId, headCounter.incrementAndGet()), ref)
+            CurrentContext.with(fresh) { onLap(input) }
         }
     }
 
-    override fun at(portRef: PortRef): Consumer<D> =
-        if (activeProducer == portRef) call else object : Consumer<D> {
-            override fun provide(input: D) {}
-        }
+    /** Single-producer targeted delivery shared by the concrete API shapes. */
+    protected fun <Api : Any> at(portRef: PortRef, call: Api, inactive: () -> Api): Api =
+        if (activeProducer == portRef) call else inactive()
 
-    override fun linkFrom(portOut: LinkTo<Consumer<D>>): LinkResult {
+    /** Single-producer admission and teardown shared by the concrete API shapes. */
+    protected fun <Api : Any> linkFrom(portOut: LinkTo<Api>, target: Use<Api>): LinkResult {
         if (activeProducer != null) {
             return LinkResult.Rejected("FeedbackInlet at capacity: already has an active producer (strict point-to-point)")
         }
@@ -144,11 +150,58 @@ class FeedbackInlet<D : Any>(
             portOut = portOut,
             target = this,
             targetRef = ref,
-            install = { activeProducer = portOut.ref; portOut.linkTo(this as Use<Consumer<D>>) },
+            install = { activeProducer = portOut.ref; portOut.linkTo(target) },
             uninstall = {
-                (portOut as? Subscribe<Consumer<D>>)?.unsubscribe(ref)
+                (portOut as? Subscribe<Api>)?.unsubscribe(ref)
                 if (activeProducer == portOut.ref) activeProducer = null
             },
         )
     }
+}
+
+/**
+ * Consumer-shaped [FeedbackPort]. Its constructor and public behavior are the
+ * original feedback-inlet surface; all cycle-head semantics live in the base.
+ */
+class FeedbackInlet<D : Any>(
+    ref: PortRef = PortRef.generate(),
+    quiescence: Double = 0.0,
+    payloadType: Class<*>? = null,
+    onLap: (D) -> Unit,
+) : FeedbackPort<D>(ref, quiescence, payloadType, onLap), Use<Consumer<D>> {
+
+    override val apiClass: Class<*> = Consumer::class.java
+
+    override val call: Consumer<D> = object : Consumer<D> {
+        override fun provide(input: D) = absorb(input)
+    }
+
+    override fun at(portRef: PortRef): Consumer<D> =
+        super.at(portRef, call) {
+            object : Consumer<D> {
+                override fun provide(input: D) {}
+            }
+        }
+
+    override fun linkFrom(portOut: LinkTo<Consumer<D>>): LinkResult = super.linkFrom(portOut, this)
+}
+
+/**
+ * Propagate-shaped [FeedbackPort] for the kernel's standard incremental data
+ * path. It differs from [FeedbackInlet] only in its port API shape.
+ */
+class PropagateFeedbackInlet<D : Any>(
+    ref: PortRef = PortRef.generate(),
+    quiescence: Double = 0.0,
+    payloadType: Class<*>? = null,
+    onLap: (D) -> Unit,
+) : FeedbackPort<D>(ref, quiescence, payloadType, onLap), Use<Propagate<D>> {
+
+    override val apiClass: Class<*> = Propagate::class.java
+
+    override val call: Propagate<D> = Propagate { absorb(it) }
+
+    override fun at(portRef: PortRef): Propagate<D> = super.at(portRef, call) { Propagate { _ -> } }
+
+    override fun linkFrom(portOut: LinkTo<Propagate<D>>): LinkResult = super.linkFrom(portOut, this)
 }

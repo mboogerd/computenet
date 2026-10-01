@@ -49,3 +49,14 @@ fun <T : Any> output(clazz: Class<T>) = PortDelegateProvider { FanOutlet(clazz) 
  */
 inline fun <reified D : Any> feedbackInlet(quiescence: Double = 0.0, noinline onLap: (D) -> Unit) =
     PortDelegateProvider { FeedbackInlet(quiescence = quiescence, payloadType = D::class.java, onLap = onLap) }
+
+/**
+ * Declares a [PropagateFeedbackInlet] for a Propagate-shaped cycle-closing
+ * edge. It shares all absorption and admission behavior with [FeedbackInlet].
+ */
+inline fun <reified D : Any> propagateFeedbackInlet(
+    quiescence: Double = 0.0,
+    noinline onLap: (D) -> Unit,
+) = PortDelegateProvider {
+    PropagateFeedbackInlet(quiescence = quiescence, payloadType = D::class.java, onLap = onLap)
+}

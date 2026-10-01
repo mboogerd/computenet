@@ -17,7 +17,7 @@ import civictech.cell.link.checkPayload
 import civictech.cell.link.reconcileNatures
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.FeedbackInlet
+import civictech.cell.port.FeedbackPort
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.LinkTo
 import civictech.cell.port.Port
@@ -440,9 +440,9 @@ private class Scratch(live: LiveView) {
 
     /**
      * AT_CAPACITY ([13-LINK-05] "at capacity"): a single-writer [FanInlet]
-     * (FU-6) or a [FeedbackInlet] admits one Consume producer. For
+     * (FU-6) or a [FeedbackPort] admits one Consume producer. For
      * `FanInlet` the witness is the live rule's own (`linking.links`). For
-     * `FeedbackInlet` the live rule reads its private `activeProducer`; the
+     * `FeedbackPort` the live rule reads its private `activeProducer`; the
      * witness here is `linking.links` Consume records, which agree with it
      * on the in-process path: `handshake` sets `activeProducer` in `install`
      * and registers the link right after, and the unlink clears both.
@@ -456,7 +456,7 @@ private class Scratch(live: LiveView) {
                 RefusalCode.AT_CAPACITY,
                 "single-writer inlet already has a producer (strict point-to-point, FU-6)",
             )
-            inlet is FeedbackInlet<*> && (live || plannedInto(inlet)) -> StepCheck.Refused(
+            inlet is FeedbackPort<*> && (live || plannedInto(inlet)) -> StepCheck.Refused(
                 RefusalCode.AT_CAPACITY,
                 "FeedbackInlet at capacity: already has an active producer (strict point-to-point)",
             )
