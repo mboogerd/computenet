@@ -2,6 +2,7 @@ package civictech.demo.tiering
 
 import civictech.testkit.HttpProbe
 import civictech.testkit.JvmPeer
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -218,6 +219,7 @@ class TieringServerTest {
         }
     }
 
+    @Tag("multi-jvm")
     @Test
     fun `explicit replica ids keep two diallers distinct on one listener`() {
         val listener = JvmPeer.launch("civictech.demo.tiering.TieringAppKt", "0", "--listen", "0")
