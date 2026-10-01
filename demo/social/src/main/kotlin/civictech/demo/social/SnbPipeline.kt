@@ -131,7 +131,7 @@ object SnbPipeline {
      *
      * [registry], when given, receives each `snb-authored` cell's per-author
      * interest at spawn (8eb53-D4); `null` registers nothing.
-    */
+     */
     fun build(host: ManagedHost, journalDir: File?, registry: LocationRegistry? = null): Graph {
         val context = ApplyContext(
             host = host,
