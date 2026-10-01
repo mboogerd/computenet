@@ -593,6 +593,8 @@ object WsTransport {
          * private one serves it.
          */
         private val supersession: Supersession = Supersession(),
+        /** Test seam that can hold the socket thread in the counted-before-enqueue window. */
+        private val beforeFrameEnqueue: () -> Unit = {},
     ) {
         init {
             // The :wire enforcement point for "RequireAuthenticated implies
@@ -906,8 +908,9 @@ object WsTransport {
          *
          * [framesSent] is incremented once per frame this side handed to the
          * transport *without the write throwing*; [framesReceived] once per
-         * binary frame this side routed into its ingress. Together they cut the
-         * three apart with no attribution and no reasoning: in the stress probe's
+         * binary frame the socket handed to this side, and [framesEnqueued]
+         * once its bridge-host hand-off returned. Together they cut the three
+         * apart with no attribution and no reasoning: in the stress probe's
          * shape a healthy iteration is server `framesSent=3` / client
          * `framesReceived=3`, so `sent=3 received=2` is case 2, `sent=2` is case 1,
          * and `sent=3 received=3` with an empty mirror is case 3.
@@ -967,6 +970,15 @@ object WsTransport {
         /** @see framesSent */
         private val framesReceivedCount = AtomicLong()
         val framesReceived: Long get() = framesReceivedCount.get()
+
+        /**
+         * Received frames whose hand-off to the bridge host returned. Kept
+         * separate from [framesReceived]: the socket IO thread increments that
+         * counter before [beforeFrameEnqueue], so a quiescence reader can see
+         * the exact window in which a delivered frame is not yet enqueued.
+         */
+        private val framesEnqueuedCount = AtomicLong()
+        val framesEnqueued: Long get() = framesEnqueuedCount.get()
 
         /** @see framesSent */
         val socketHasBufferedData: Boolean get() = socketBuffered()
@@ -1741,9 +1753,11 @@ object WsTransport {
             if (current != null) {
                 // computenet-dqy.68: counted BEFORE the hop it hands to, so the
                 // reading means "this side's socket delivered it", never "the
-                // bridge accepted it" — that is what `staged` is for.
+                // bridge accepted it" — that is what framesEnqueued is for.
                 framesReceivedCount.incrementAndGet()
+                beforeFrameEnqueue()
                 current.propagate(bytes)
+                framesEnqueuedCount.incrementAndGet()
             } else {
                 preHelloDropCount.incrementAndGet()
             }
@@ -2019,6 +2033,9 @@ object WsTransport {
 
         /** @see framesSent */
         val framesReceived: Long get() = sessions.values.sumOf { it.framesReceived }
+
+        /** Received frames accepted into the bridge hosts of the live sessions. */
+        val framesEnqueued: Long get() = sessions.values.sumOf { it.framesEnqueued }
 
         /** @see framesSent */
         val socketHasBufferedData: Boolean get() = sessions.values.any { it.socketHasBufferedData }
@@ -2781,6 +2798,9 @@ object WsTransport {
 
         /** @see framesSent */
         val framesReceived: Long get() = session.framesReceived
+
+        /** @see framesReceived */
+        val framesEnqueued: Long get() = session.framesEnqueued
 
         /** @see framesSent */
         val socketHasBufferedData: Boolean get() = session.socketHasBufferedData
