@@ -17,6 +17,7 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.control.ParkQueue
 import civictech.cell.proxy.Proxy
 import civictech.cell.port.PortRef
+import java.util.IdentityHashMap
 
 /**
  * Per-inlet wave-completeness policy (spec 20/22 §Bridged frontier / Completeness
@@ -93,6 +94,17 @@ class FanInlet<Api : Any>(
     /** Parked tail (G-55): invocations that arrive cold, awaiting activation. */
     private val parked = ParkQueue<Invocation>()
 
+    /**
+     * Host acceptance positions for the journaled subset of [parked]. A direct
+     * in-process call can also reach a cold inlet, but has no host acceptance
+     * position and therefore no journal frame for a checkpoint to carry.
+     * Identity keys distinguish byte-identical repeated calls.
+     */
+    private val checkpointOrder = IdentityHashMap<Invocation, Long>()
+
+    /** Set only around [offerHostedWhileCold]'s synchronous policy-chain offer. */
+    private var offeredCheckpointOrder: Long? = null
+
     /** Cold-state sink: every method call parks instead of dispatching or throwing. */
     private val parkingImplementation: Api = Proxy.fromClass(clazz, Buffering(parked::park))
 
@@ -118,7 +130,13 @@ class FanInlet<Api : Any>(
 
     /** The chain terminal: the ACTIVATE tier — dispatch to the handler, or cold-park. */
     private val terminal: (Invocation) -> Unit = { inv ->
-        inv.invoke(activeImplementation?.call ?: parkingImplementation)
+        val active = activeImplementation
+        if (active == null) {
+            parked.park(inv)
+            offeredCheckpointOrder?.let { checkpointOrder[inv] = it }
+        } else {
+            inv.invoke(active.call)
+        }
     }
 
     /**
@@ -186,6 +204,38 @@ class FanInlet<Api : Any>(
     fun resetPolicies() = stages.forEach { it.policy.reset() }
 
     /**
+     * Offer one host-accepted invocation while this inlet is cold, preserving
+     * [hostSequence] if it reaches the ACTIVATE-tier tail. `null` means the
+     * inlet became hot before the offer and the caller must dispatch normally;
+     * `false` means an earlier policy tier retained or dropped it; `true` means
+     * it is now in [parked]. The offer is synchronous — policy release and the
+     * cold terminal are ordinary functions — so the temporary order stamp
+     * cannot escape onto another delivery.
+     */
+    internal fun offerHostedWhileCold(invocation: Invocation, hostSequence: Long): Boolean? {
+        if (activeImplementation != null) return null
+        val sizeBefore = parked.size
+        val previous = offeredCheckpointOrder
+        offeredCheckpointOrder = hostSequence
+        try {
+            (chainEntry ?: terminal).invoke(invocation)
+        } finally {
+            offeredCheckpointOrder = previous
+        }
+        return parked.size > sizeBefore
+    }
+
+    /** Journaled cold-tail entries with their original host acceptance positions. */
+    internal fun checkpointParked(): List<Pair<Long, Invocation>> =
+        parked.snapshot().mapNotNull { invocation ->
+            checkpointOrder[invocation]?.let { it to invocation }
+        }
+
+    private fun drainColdTail(): List<Invocation> = parked.drain().also { tail ->
+        tail.forEach(checkpointOrder::remove)
+    }
+
+    /**
      * Drains the ACTIVATE-tier cold tail — invocations that arrived before a
      * handler was installed (10/15, 10/13 §Admission vs activation) — for a
      * caller tearing this inlet down without ever activating it (T05 finding
@@ -195,7 +245,7 @@ class FanInlet<Api : Any>(
      * that has already activated (served a handler) finds nothing here,
      * since [replayParked] already ran it out at that point.
      */
-    fun drainParked(): List<Invocation> = parked.drain()
+    fun drainParked(): List<Invocation> = drainColdTail()
 
     /**
      * Deprecated ALIGN sugar (PN-9): assigning a frontier is now shorthand for
@@ -260,7 +310,7 @@ class FanInlet<Api : Any>(
      * post-activation send can land ahead of it (10/15 §Admission vs activation).
      */
     private fun replayParked() {
-        parked.drain().forEach { it.invoke(call) }
+        drainColdTail().forEach { it.invoke(call) }
     }
 
     override fun linkFrom(portOut: LinkTo<Api>): LinkResult {

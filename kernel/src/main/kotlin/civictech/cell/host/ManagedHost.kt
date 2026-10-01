@@ -733,6 +733,15 @@ open class ManagedHost(
     private val dataLock = Any()
 
     /**
+     * Host-wide acceptance positions retained until delivery, including after
+     * a frame leaves [AttentionScheduler] for supervision parking. Identity
+     * keys keep repeated byte-identical invocations distinct. Guarded by
+     * [dataLock]; cold-inlet tails transfer the position into [FanInlet].
+     */
+    private val checkpointSequences = IdentityHashMap<HostedPortInvocation, Long>()
+    private var nextCheckpointSequence = 0L
+
+    /**
      * Exact in-process frames created by [stageBehindData]. Identity, rather
      * than the protocol payload alone, keeps an independently received
      * topology marker on the ordinary dead-letter path. Guarded by [dataLock].
@@ -806,11 +815,12 @@ open class ManagedHost(
      * host and this delegate; reads a live view of [cells] and delegates
      * dead-letter reporting and replayed-frame re-intake back to the host.
      * [checkpoint] still runs via [enqueueAwaiting] at management priority 0,
-     * unable to interleave with a dispatching cell; its staged-set read and
-     * journal reset run under [dataLock] (computenet-xy7w4 D3) so the
-     * compaction carries every accepted-but-undelivered frame atomically with
-     * respect to the intake — lock order `dataLock` -> journal monitor, as on
-     * the intake path.
+     * unable to interleave with a dispatching cell; its pending-set read and
+     * journal reset run under [dataLock] (computenet-xy7w4 D3,
+     * computenet-hknt0) so compaction carries scheduler-staged,
+     * supervision-parked and cold-tail frames together in acceptance order,
+     * atomically with respect to the intake — lock order `dataLock` -> journal
+     * monitor, as on the intake path.
      */
     private val hostDurability = HostDurability(
         journalSelector = portJournalSelector,
@@ -824,7 +834,45 @@ open class ManagedHost(
                 // A staged link's EdgeClose marker ([stageBehindData]) shares the data
                 // FIFO but is a protocol frame: it is never journaled, so a checkpoint
                 // does not carry it either (and could not encode its in-process link).
-                action(attentionScheduler.stagedInSequence().filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL })
+                val pending = ArrayList<CheckpointFrame>()
+                attentionScheduler.stagedInSequence()
+                    .filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL }
+                    .forEach { invocation ->
+                        pending += CheckpointFrame(
+                            checkNotNull(checkpointSequences[invocation]) {
+                                "staged invocation has no host acceptance position: $invocation"
+                            },
+                            invocation,
+                        )
+                    }
+                suspendedCells.values.forEach { queue ->
+                    queue.snapshot().forEach { invocation ->
+                        pending += CheckpointFrame(
+                            checkNotNull(checkpointSequences[invocation]) {
+                                "supervision-parked invocation has no host acceptance position: $invocation"
+                            },
+                            invocation,
+                        )
+                    }
+                }
+                cells.forEach { (cellRef, cell) ->
+                    PortRegistry.of(cell).names().forEach { portName ->
+                        (PortRegistry.of(cell)[portName] as? FanInlet<*>)
+                            ?.checkpointParked()
+                            ?.forEach { (sequence, invocation) ->
+                                pending += CheckpointFrame(
+                                    sequence,
+                                    HostedPortInvocation(
+                                        cellRef,
+                                        portName,
+                                        HostedPortInvocation.Type.PORT_API,
+                                        invocation,
+                                    ),
+                                )
+                            }
+                    }
+                }
+                action(pending.sortedBy(CheckpointFrame::sequence))
             }
         },
     )
@@ -851,11 +899,13 @@ open class ManagedHost(
         checkpoints.remove(cellRef)
         generations.remove(cellRef)
         suspendedCells.remove(cellRef)?.drain()?.forEach {
+            synchronized(dataLock) { checkpointSequences.remove(it) }
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
             if (consumeStagedLinkCloseMarker(parked)) return@forEach
+            synchronized(dataLock) { checkpointSequences.remove(parked) }
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
         }
@@ -1079,7 +1129,24 @@ open class ManagedHost(
         if (!isManagement && hostedInvocation.replayOf == null) {
             synchronized(dataLock) {
                 if (intakeControl.intakeState == IntakeState.SATURATED) {
+                    val beforeCoalesce = attentionScheduler.dataQueues[hostedInvocation.cellRef]
+                        ?.map { it.second }
+                        .orEmpty()
                     if (intakeBound?.policy == SaturationPolicy.Coalesce && intakeControl.coalesce(hostedInvocation)) {
+                        val afterCoalesce = attentionScheduler.dataQueues[hostedInvocation.cellRef]
+                            ?.map { it.second }
+                            .orEmpty()
+                        val replaced = beforeCoalesce.singleOrNull { before ->
+                            afterCoalesce.none { after -> after === before }
+                        }
+                        val replacement = afterCoalesce.singleOrNull { after ->
+                            beforeCoalesce.none { before -> before === after }
+                        }
+                        if (replaced != null && replacement != null) {
+                            checkpointSequences.remove(replaced)?.let { sequence ->
+                                checkpointSequences[replacement] = sequence
+                            }
+                        }
                         // Coalescing is acceptance, not loss: retain every original
                         // in the WAL so recovery may replay the equivalent sequence.
                         if (!skipJournalTee) journalTee(hostedInvocation)
@@ -1120,9 +1187,16 @@ open class ManagedHost(
         // that traversal can reach another host's enqueueHostedInvocation
         // and ITS dataLock, so it must run only after this lock releases.
         val announce = synchronized(dataLock) {
-            if (!skipJournalTee) journalTee(hostedInvocation)
-            attentionScheduler.stage(hostedInvocation)
-            intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
+            val newlyPositioned = !checkpointSequences.containsKey(hostedInvocation)
+            if (newlyPositioned) checkpointSequences[hostedInvocation] = ++nextCheckpointSequence
+            try {
+                if (!skipJournalTee) journalTee(hostedInvocation)
+                attentionScheduler.stage(hostedInvocation)
+                intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
+            } catch (e: Throwable) {
+                if (newlyPositioned) checkpointSequences.remove(hostedInvocation)
+                throw e
+            }
         }
         announce?.invoke()
         if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
@@ -1296,11 +1370,14 @@ open class ManagedHost(
 
     private suspend fun deliver(hostedInvocation: HostedPortInvocation) {
         val cellRef = hostedInvocation.cellRef
+        var retainCheckpointSequence = false
+        try {
         // A supervised cell parks only its data/ordinary management traffic.
         // Metadata protocols remain on the always-open plane: resume and
         // catch-up protocols must not deadlock behind what they unpark.
         if (hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
             suspendedCells[cellRef]?.let {
+                retainCheckpointSequence = true
                 it.park(hostedInvocation)
                 return
             }
@@ -1543,9 +1620,17 @@ open class ManagedHost(
                             // computenet-xy7w4 D1: likewise re-install the frame's replay
                             // provenance, so every frame this handler emits into an intake
                             // inherits it (and is not re-journaled into the replayed journal).
-                            civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
-                                    hostedInvocation.invocation.invokeSuspending(port.call)
+                            val coldOffer = (port as? FanInlet<*>)?.let { inlet ->
+                                synchronized(dataLock) { checkpointSequences[hostedInvocation] }
+                                    ?.let { sequence ->
+                                        inlet.offerHostedWhileCold(hostedInvocation.invocation, sequence)
+                                    }
+                            }
+                            if (coldOffer == null) {
+                                civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
+                                    civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                        hostedInvocation.invocation.invokeSuspending(port.call)
+                                    }
                                 }
                             }
                             if (cell is Effectful) {
@@ -1642,6 +1727,11 @@ open class ManagedHost(
                     }
                     notifyDownstream(cell, StallNotice.Stall(StallReason.SUSPENDED))
                 }
+            }
+        }
+        } finally {
+            if (!retainCheckpointSequence && hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
+                synchronized(dataLock) { checkpointSequences.remove(hostedInvocation) }
             }
         }
     }
@@ -1956,8 +2046,12 @@ open class ManagedHost(
                 // transition that definitively happened (resuming a cell on a
                 // drained host does exactly that).
                 notifyLifecycle(ref, LifecycleTransition.RESUMED)
-                // re-enqueue at data priority: replay order = park order (sequence tiebreaker)
-                parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
+                // re-enqueue at data priority: replay order = park order (sequence tiebreaker).
+                // Already-accepted work: its intake already teed it to the journal (and a
+                // checkpoint taken while it was parked carried it, computenet-hknt0), so
+                // re-entering the intake must not tee it again — a second WAL copy is a
+                // duplicate delivery on recovery. Same rule as [resumeAttentionParked].
+                parked.forEach { accept(it, skipJournalTee = true) }
             }
 
             override fun suspend(ref: CellRef) {
