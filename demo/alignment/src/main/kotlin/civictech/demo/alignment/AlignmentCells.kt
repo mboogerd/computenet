@@ -7,9 +7,12 @@ import civictech.cell.data.KeyedSetApi
 import civictech.cell.data.KeyedSetCell
 import civictech.cell.data.MapApi
 import civictech.cell.data.MapCell
+import civictech.cell.data.OrMapApi
+import civictech.cell.data.OrMapCell
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.view.MapDiffPublisher
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.refAs
@@ -266,27 +269,50 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
  * ```
  */
 object AlignmentPipeline {
-    data class Refs(
+    internal data class Refs(
         val ratings: TypedRef<KeyedSetApi<RatingKey, Rating>>,
         val weights: TypedRef<MapApi<DimKey, DimConfig>>,
+        val topics: TypedRef<OrMapApi<String, TopicRecord>>,
+        val dots: TypedRef<OrMapApi<DotKey, Int>>,
+        val judgements: TypedRef<OrMapApi<JudgementRecordKey, JudgementRecord>>,
         val stats: CellRef,
         val fusion: CellRef,
     )
 
-    fun build(host: ManagedHost): Refs {
+    internal fun build(host: ManagedHost): Refs = build(ApplyContext(host))
+
+    internal fun build(context: ApplyContext, journalId: String? = null): Refs {
         lateinit var refs: Refs
-        graph(host.managementInlet) {
-            val ratings = spawn("ratings") { KeyedSetCell<RatingKey, Rating>() }
+        graph(context) {
+            val ratings = spawn("ratings", journalId = journalId) { KeyedSetCell<RatingKey, Rating>(it) }
             val stats = spawn("stats") {
-                GroupByCell(keyFn = { r: Rating -> r.key.ideaDimKey }, aggregator = RatingStatsAggregator())
+                GroupByCell(ref = it, keyFn = { r: Rating -> r.key.ideaDimKey }, aggregator = RatingStatsAggregator())
             }
-            val weights = spawn("weights") { MapCell<DimKey, DimConfig>() }
-            val fusion = spawn("fusion") { WeightedFusionCell() }
+            val weights = spawn("weights", journalId = journalId) { MapCell<DimKey, DimConfig>(it) }
+            val topics = spawn("topics", journalId = journalId) { OrMapCell<String, TopicRecord>(it) }
+            val dots = spawn("dots", journalId = journalId) { OrMapCell<DotKey, Int>(it) }
+            val judgements = spawn("judgements", journalId = journalId) {
+                OrMapCell<JudgementRecordKey, JudgementRecord>(it)
+            }
+            val fusion = spawn("fusion") { WeightedFusionCell(it) }
             connect(ratings, "outlet", stats, "inlet")
             connect(stats, "outlet", fusion, "stats")
             connect(weights, "outlet", fusion, "weights")
-            refs = Refs(ratings.refAs(), weights.refAs(), stats.ref, fusion.ref)
+            refs = Refs(
+                ratings.refAs(), weights.refAs(), topics.refAs(), dots.refAs(), judgements.refAs(), stats.ref, fusion.ref,
+            )
         }
         return refs
     }
+
+    /** Recovered graphs preserve these handles; no app-side respawn is needed. */
+    internal fun recovered(context: ApplyContext): Refs = Refs(
+        ratings = TypedRef(context.handles.getValue("ratings")),
+        weights = TypedRef(context.handles.getValue("weights")),
+        topics = TypedRef(context.handles.getValue("topics")),
+        dots = TypedRef(context.handles.getValue("dots")),
+        judgements = TypedRef(context.handles.getValue("judgements")),
+        stats = context.handles.getValue("stats"),
+        fusion = context.handles.getValue("fusion"),
+    )
 }
