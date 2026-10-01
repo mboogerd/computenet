@@ -110,6 +110,7 @@ internal class PortLink(
     override val fromPort: Port? = null,
     override val toPort: Port? = null,
     override val role: LinkRole = LinkRole.Consume,
+    internal val closeSequencer: CloseSequencer? = null,
     private val doUnlink: (PortLink) -> Unit,
 ) : Link {
     override val id: UUID = UUID.randomUUID()

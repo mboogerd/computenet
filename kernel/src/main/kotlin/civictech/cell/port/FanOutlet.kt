@@ -14,6 +14,7 @@ import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.link.LinkSupport
 import civictech.cell.link.PortLink
+import civictech.cell.link.StagedSubscription
 import civictech.cell.link.handshake
 import civictech.cell.protocol.ProtocolAnchored
 import civictech.cell.protocol.ProtocolSupport
@@ -557,7 +558,9 @@ class FanOutlet<Api : Any>(
         check(!(exclusive && consumers.isNotEmpty() && keyOf(port.ref) !in consumers)) {
             "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; a second subscriber is not allowed"
         }
-        putConsumer(keyOf(port.ref), port)
+        @Suppress("UNCHECKED_CAST")
+        val effective = (StagedSubscription.current()?.takeIf { it.ref == port.ref } ?: port) as Use<Api>
+        putConsumer(keyOf(port.ref), effective)
     }
 
     /**
@@ -592,7 +595,12 @@ class FanOutlet<Api : Any>(
                 target = target,
                 targetRef = port.ref,
                 role = LinkRole.Observe,
-                install = { putTap(keyOf(port.ref), TapTarget.Typed(port)) },
+                install = {
+                    @Suppress("UNCHECKED_CAST")
+                    val effective =
+                        (StagedSubscription.current()?.takeIf { it.ref == port.ref } ?: port) as Use<Api>
+                    putTap(keyOf(port.ref), TapTarget.Typed(effective))
+                },
                 uninstall = { removeTap(keyOf(port.ref)) },
             )
         }

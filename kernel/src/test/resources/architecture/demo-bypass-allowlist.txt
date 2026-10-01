@@ -7,12 +7,10 @@
 #
 # Lines may ONLY ever be REMOVED, never added: this file is the ratchet's
 # shrink-only allowlist. A file is removed once it no longer contains such a
-# call outside comments (migrated onto the routed/glitch-free path — INT1
-# 1.1 tracks that migration). One repo-relative path per line, sorted.
-demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
+# call outside comments (migrated onto the admitted primitive — INT1 1.1
+# tracks that migration). One repo-relative path per line, sorted.
 demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt
 demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
-demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt
 demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt

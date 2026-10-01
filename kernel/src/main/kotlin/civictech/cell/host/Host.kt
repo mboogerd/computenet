@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.IdentityBinding
+import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
@@ -104,6 +105,8 @@ interface HostManagementApi {
 
     /**
      * Connects an outlet of one hosted cell to an inlet of another hosted cell.
+     * Equivalent to calling the five-argument overload with
+     * `options = LinkOptions.DEFAULT`.
      *
      * @param from The reference to the source cell.
      * @param outletName The name or identifier of the outlet on the source cell.
@@ -114,7 +117,25 @@ interface HostManagementApi {
     fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult
 
     /**
+     * Connects two hosted ports through admission and topology bookkeeping,
+     * applying [options] to the admitted link's role and delivery realization.
+     */
+    fun connect(
+        from: CellRef,
+        outletName: String,
+        to: CellRef,
+        inletName: String,
+        options: LinkOptions,
+    ): LinkResult
+
+    /**
      * Connects an outlet of a hosted cell to a remote inlet (represented by a [Use] instance).
+     *
+     * For demo/application wiring between hosted cells, use the unified
+     * admitted primitive `HostManagementApi.connect(from, outlet, to, inlet,
+     * LinkOptions(staged = true))` instead. This `Use`-based path has no cycle
+     * admission, topology record, or in-band `EdgeOpen`/`EdgeClose`; it remains
+     * available for the kernel's existing bypass wiring.
      */
     fun connect(from: CellRef, outletName: String, to: Use<*>)
 }

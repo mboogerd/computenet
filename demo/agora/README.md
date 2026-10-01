@@ -25,24 +25,29 @@ the base toward its extreme. Pure functions — the incremental cells and the
 batch reference solver in the exit test share them, so incremental == batch
 tests the propagation machinery, never parallel math.
 
-## Cycles (spec 21 §Cycles, app-side)
+## Cycles (spec 21 §Cycles)
 
-Mutual attacks are legal and common. This module approximates the decided
-kernel cycle model (93 I-5/I-6, unbuilt) in application code:
+Mutual attacks are legal and common. The service owns the topology and uses
+the kernel's admitted staged links and feedback inlets for the decided cycle
+model (93 I-5/I-6):
 
 - **Emission is exact** — no per-cell ε-gate (I-6 explicitly rejects outlet
   gates: they silence fan-out subscribers).
 - The service owns the topology, so it detects the edge that closes each
-  cycle and designates it a **head**: that edge's *inbound* feedback inlet
-  absorbs source updates whose change is below `quiescence` (default 1e-3),
-  gating re-origination and never the outbound broadcast.
+  cycle and designates it a **head**: that edge's admitted source link lands
+  on its kernel `PropagateFeedbackInlet` at threshold `quiescence` (default
+  1e-3). The kernel weak tier absorbs a returning lap whose `size()` is at or
+  under it, gating re-origination and never the outbound broadcast. Because
+  that inlet also absorbs the size-0 catch-up a new link replays, the service
+  primes a new head edge with its source's current credence.
 - Termination physics: the base clamp keeps single-cycle loop gain < 1, so
   laps contract geometrically; the head threshold stops them ~5× earlier
   than floating-point resolution would. Non-contractive multi-cycle
   interleavings remain the open G-19 residual — the step-budgeted 100-seed
   exit test is its empirical probe.
-- When kernel `CycleHead`/admission lands (M13.5), head `EdgeCell`s migrate
-  onto `feedbackInput` with no domain-logic change.
+- Every claim and edge hop is a `HostManagementApi.connect(...,
+  LinkOptions(staged = true))` link, so it is queued and visible to topology
+  admission while preserving magnitude scheduling.
 
 ## Magnitude scheduling (spec 34 decision 7)
 
@@ -51,9 +56,8 @@ Every credence/influence delta implements `Magnitude` with
 `AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS)`, so cells
 holding dramatic staged changes dispatch before micro-adjustments
 (`MagnitudePriorityTest` proves the ordering both ways). All wiring is
-**routed** through the host queue (`streamTo` + registry proxies) rather
-than DSL-linked — co-hosted DSL links fuse into synchronous calls that
-bypass the scheduler, and magnitude scheduling needs every hop staged.
+**admitted and staged** through the host queue, so co-hosted links do not fuse
+around the scheduler and cycle admission sees the complete graph.
 
 ## Run
 

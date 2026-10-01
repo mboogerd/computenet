@@ -33,6 +33,18 @@ import civictech.cell.link.notifyAll
  * run. A local `streamTo` therefore negotiates by default (policies + allowlist +
  * nature reconcile + `EdgeOpen` as an `Observe` link); routed/cross-process
  * targets are unaffected (not [Linked]). Gated on the demo suite.
+ *
+ * For demo/application wiring between hosted cells, use the unified admitted
+ * primitive `HostManagementApi.connect(from, outlet, to, inlet,
+ * LinkOptions(staged = true))` with `role = Observe` for this Observe-shaped
+ * surface. That admitted primitive performs cycle admission, records topology,
+ * and carries in-band `EdgeOpen`/`EdgeClose`; the legacy routed/bypass branch
+ * lacks those guarantees. `role = Observe` deliberately does not participate
+ * in glitch-free gating. `streamTo` remains for the kernel's own bypass
+ * callers, including `SingleWriterReplication.shipTo` and the wire. A
+ * co-hosted routed target learns of teardown when it is linked through
+ * admission with `LinkOptions`; a cross-process routed target remains on
+ * `streamTo` as today.
  */
 fun <Api : Any> FanOutlet<Api>.streamTo(
     target: Api,
@@ -93,9 +105,11 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     //   bare `Api` object — a routed proxy, or a filtering lambda
     //   (`SingleWriterReplication.shipTo`) — never a local `Port`, which is the
     //   very condition that routed it down this path. There is no endpoint to
-    //   deliver a topology marker to. Whether a *routed* target should learn of
-    //   the close over the wire is a separate question with a much larger blast
-    //   radius; it is not answered here.
+    //   deliver a topology marker to. computenet-g92i is resolved for the
+    //   co-hosted case: link that target through admission with
+    //   `HostManagementApi.connect(..., LinkOptions(staged = true))` and the
+    //   in-band close is delivered there. A cross-process routed target stays
+    //   on this `streamTo` path, as it does today.
     // - The cell-facing `linking.onUnlink` slot is NOT fired, because the
     //   negotiated teardown does not fire it on the SOURCE side either — it
     //   fires `support.onUnlink`, the TARGET's slot, and this path has no target

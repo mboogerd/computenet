@@ -2,22 +2,27 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.link.CloseSequencer
+import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.link.LinkRole
+import civictech.cell.link.StagedSubscription
 import civictech.cell.link.hasDampingWitness
-import civictech.cell.port.FeedbackInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.FeedbackPort
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.LinkTo
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
+import civictech.cell.port.Use
 
 /**
  * Link-admission logic behind [ManagedHost.connect] (T11-B extraction):
  * cycle detection, headedness, the FU-8 damping-witness check, and the
- * topology-recording that follows a successful link. Each function takes
- * exactly what it reads — the live `cells` view, the read-only `topology`
- * projection, and the already-resolved outlet/inlet — rather than reaching
- * into `ManagedHost`'s private state, so this stays (near-)pure and testable
- * on its own.
+ * topology-recording that follows a successful link. The staged realization
+ * additionally captures [ManagedHost] as its eventual intake; admission itself
+ * still reads only the live `cells` view, the read-only `topology` projection,
+ * and the already-resolved outlet/inlet.
  *
  * Deliberately NOT extracted: `ManagedHost.connect(from, outletName, to:
  * Use<*>)`, the other overload sharing the file's `connect` name. It has no
@@ -35,16 +40,17 @@ internal object LinkAdmission {
      * Resolves `from.outletName` / `to.inletName` on [cells], admits the
      * link (cycle/headedness/damping), performs it, and — on
      * [LinkResult.Connected] — records the edge on [topology] and wires its
-     * unlink to remove that record again. Moved verbatim from
-     * `ManagedHost.connect(from, outletName, to, inletName)`.
+     * unlink to remove that record again.
      */
     fun connect(
+        host: ManagedHost,
         cells: Map<CellRef, Cell>,
         topology: LocationRegistry?,
         from: CellRef,
         outletName: String,
         to: CellRef,
         inletName: String,
+        options: LinkOptions,
     ): LinkResult {
         val fromCell = cells[from] ?: throw IllegalArgumentException("Source cell not found: $from")
         val toCell = cells[to] ?: throw IllegalArgumentException("Target cell not found: $to")
@@ -57,7 +63,37 @@ internal object LinkAdmission {
         admitCycle(topology, from, outletName, outlet, to, inletName, inlet)?.let { return it }
 
         @Suppress("UNCHECKED_CAST")
-        val result = (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
+        val typedOutlet = outlet as LinkTo<Any>
+        @Suppress("UNCHECKED_CAST")
+        val typedInlet = inlet as LinkFrom<Any>
+
+        val fanOutlet = outlet as? FanOutlet<Any>
+        if (options.role == LinkRole.Observe && fanOutlet == null) {
+            return LinkResult.Rejected(
+                "ObserveRequiresFanOutlet: $from.$outletName is ${outlet::class.java.name}",
+            )
+        }
+        if (options.staged && fanOutlet == null) {
+            return LinkResult.Rejected(
+                "StagedRequiresFanOutlet: $from.$outletName is ${outlet::class.java.name}",
+            )
+        }
+
+        val connect = {
+            if (options.role == LinkRole.Observe) {
+                @Suppress("UNCHECKED_CAST")
+                fanOutlet!!.tap(inlet as Use<Any>, negotiated = true)
+            } else {
+                typedOutlet.linkTo(typedInlet)
+            }
+        }
+        val result = if (options.staged) {
+            val standIn = StagedStandIn(inlet.ref, fanOutlet!!.clazz, to, inletName, host)
+            val closeSequencer = CloseSequencer { link -> host.stageBehindData(to, inletName, link) }
+            StagedSubscription.with(standIn, closeSequencer, connect)
+        } else {
+            connect()
+        }
         if (result is LinkResult.Connected) {
             val edge = TopologyLink(
                 result.link.id,
@@ -73,7 +109,7 @@ internal object LinkAdmission {
     /**
      * Cycle admission (spec 10/13 `CycleWithoutHead`, 20/21 §Cycles, 93 I-5):
      * a connect that would close a cycle wholly visible to [topology] is
-     * rejected unless [inlet] is a declared [FeedbackInlet] (headedness)
+     * rejected unless [inlet] is a declared [FeedbackPort] (headedness)
      * carrying a damping witness (FU-8, ADR 1 feature 8). Cross-host cycles
      * are not locally visible here; they fall to the runtime hop guard
      * (20/22) instead. `null` = admitted.
@@ -110,7 +146,7 @@ internal object LinkAdmission {
     ): LinkResult.Rejected? {
         // Headedness (spec 10/13): the closing edge MUST land on a declared
         // CycleHead.
-        if (inlet !is FeedbackInlet<*>) {
+        if (inlet !is FeedbackPort<*>) {
             return LinkResult.Rejected(
                 "CycleWithoutHead: connecting $from.$outletName -> $to.$inletName would close a " +
                     "locally-visible cycle with no declared CycleHead (spec 10/13, 20/21 §Cycles)"

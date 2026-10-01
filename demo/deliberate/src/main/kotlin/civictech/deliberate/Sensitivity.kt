@@ -9,6 +9,7 @@ import civictech.cell.observe.View
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PropagateFeedbackInlet
 import civictech.cell.port.registerPort
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -93,11 +94,19 @@ class SensitivityNode(
     private val layers: LayerSet,
     private val question: Boolean = false,
     private val isEdge: Boolean = false,
+    private val quiescence: Double = 0.0,
 ) : Cell {
     val stanceInlet = registerPort("stanceInlet", FanInlet.create<Propagate<Stance>>())
     val influenceInlet = registerPort("influenceInlet", FanInlet.create<Propagate<Influence>>())
     /** An edge's: its target's frames. */
     val frameInlet = registerPort("frameInlet", FanInlet.create<Propagate<SensitivityFrame>>())
+    val feedbackFrameInlet = registerPort(
+        "feedbackFrameInlet",
+        PropagateFeedbackInlet<SensitivityFrame>(
+            quiescence = quiescence,
+            payloadType = SensitivityFrame::class.java,
+        ) { onFrame(it) },
+    )
     /** A claim's: the shares its outgoing edges pass on. */
     val shareInlet = registerPort("shareInlet", FanInlet.create<Propagate<Sensitivity>>())
     val frameOutlet = registerPort("frameOutlet", FanOutlet.create<Propagate<SensitivityFrame>>())
@@ -129,10 +138,7 @@ class SensitivityNode(
             if (i.strength == null || i.sourceCredence == null) influences.remove(i.edge) else influences[i.edge] = i
             recompute()
         }
-        frameInlet.onEach { f ->
-            fromTarget = f
-            recompute()
-        }
+        frameInlet.onEach(::onFrame)
         shareInlet.onEach { s ->
             if (s.values == null) shares.remove(s.source) else shares[s.source] = s
             recompute()
@@ -140,6 +146,11 @@ class SensitivityNode(
         hubOutlet.catchUpOnLinked { sensitivity.copy(size = 0.0) }
         frameOutlet.catchUpOnLinked { frame?.copy(size = 0.0) }
         sourceOutlet.catchUpOnLinked { share?.copy(size = 0.0) }
+    }
+
+    private fun onFrame(f: SensitivityFrame) {
+        fromTarget = f
+        recompute()
     }
 
     /** This node's own sensitivity vector, from the root's 1, its target's frame, or the shares of its edges. */
