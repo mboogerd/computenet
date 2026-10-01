@@ -79,6 +79,54 @@ class StagedLinkCloseOrderTest {
     }
 
     @Test
+    fun `staged close marker for a despawned target is not a dead letter`() {
+        val world = SimWorld()
+        val source = Source()
+        val sink = GlitchSink()
+        world.host.managementInlet.call.spawn(source)
+        world.host.managementInlet.call.spawn(sink)
+        val link = world.host.managementInlet.call.connect(
+            source.ref, "outlet", sink.ref, "inlet", LinkOptions(staged = true),
+        ).shouldBeInstanceOf<LinkResult.Connected>().link
+
+        (1..3).forEach(source::emit)
+        link.unlink()
+        world.host.stagedWorkDepth()[sink.ref] shouldBe 4
+        world.host.managementInlet.call.despawn(sink.ref)
+
+        world.runToIdle()
+
+        // The three payload-bearing data frames keep the existing despawn policy:
+        // each dead-letters as an unknown-cell delivery. The terminal EdgeClose is
+        // payload-free and its edge disappeared with the target, so it adds none.
+        world.host.supervisionAccounting().deadLetters shouldBe 3L
+    }
+
+    @Test
+    fun `attention parked staged close marker is discarded on despawn`() {
+        val world = SimWorld(attention = AttentionPolicy(suspendAfter = 0))
+        val source = Source()
+        val sink = GlitchSink()
+        world.host.managementInlet.call.spawn(source)
+        world.host.managementInlet.call.spawn(sink)
+        val link = world.host.managementInlet.call.connect(
+            source.ref, "outlet", sink.ref, "inlet", LinkOptions(staged = true),
+        ).shouldBeInstanceOf<LinkResult.Connected>().link
+        AttentionSupport.of(sink).attend(0f)
+
+        (1..3).forEach(source::emit)
+        world.runToIdle()
+        sink.received.shouldBeEmpty()
+        link.unlink()
+        world.host.managementInlet.call.despawn(sink.ref)
+
+        world.runToIdle()
+
+        world.host.supervisionAccounting().deadLetters shouldBe 3L
+        world.host.supervisionAccounting().parkedDrainedOnTeardown shouldBe 3L
+    }
+
+    @Test
     fun `fused close remains synchronous`() {
         val world = SimWorld()
         val source = Source()
