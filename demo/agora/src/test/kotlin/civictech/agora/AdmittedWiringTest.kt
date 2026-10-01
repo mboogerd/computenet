@@ -3,6 +3,7 @@ package civictech.agora
 import civictech.agora.cell.ClaimCell
 import civictech.agora.cell.EdgeCell
 import civictech.agora.cell.InfluenceDelta
+import civictech.agora.cell.Polarity.ATTACK
 import civictech.agora.cell.Polarity.SUPPORT
 import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
@@ -79,6 +80,25 @@ class AdmittedWiringTest {
 
         h.runToIdle()
         assertEquals(0L, h.host.supervisionAccounting().deadLetters)
+    }
+
+    @Test
+    fun `quiesced cycle records kernel weak tier absorption`() {
+        val h = Harness(seed = 15L, quiescence = 1e-3)
+        val a = h.service.createClaim("A")
+        val b = h.service.createClaim("B")
+        h.service.createEdge(a, b, ATTACK)
+        val head = h.service.createEdge(b, a, ATTACK)
+        h.service.setStance(a, "u", 0.99)
+        h.service.setStance(b, "u", 0.99)
+
+        h.runToIdle()
+
+        assertEquals(
+            true,
+            h.edge(head).feedbackInlet.lastQuiescent,
+            "the feedback inlet must record the thresholded lap that stopped the cycle",
+        )
     }
 
     @Test
