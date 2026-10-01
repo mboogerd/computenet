@@ -1,6 +1,6 @@
 package civictech.demo.beadsmirror.e2e
 
-import civictech.demo.beadsmirror.DiscoveredIrohMirrorTransport
+import civictech.demo.beadsmirror.DiscoveredIrohPeerTransport
 import civictech.demo.beadsmirror.IrohSidecarGate
 import civictech.demo.beadsmirror.MulticastGate
 import org.junit.jupiter.api.AfterAll
@@ -10,17 +10,15 @@ import org.junit.jupiter.api.BeforeEach
 /**
  * BS-03 of feature `computenet-63um5` (DSC2, epic `computenet-aas`;
  * [DSC2-NEU-02], [41-LOC-01], [42-REPL-05]): [ConvergenceSuite] — every case,
- * unmodified — run over [DiscoveredIrohMirrorTransport], whose peering forms
+ * unmodified — run over [DiscoveredIrohPeerTransport], whose peering forms
  * by mDNS discovery. Like [IrohConvergenceSuiteTest], this class imports the
  * binding and the gates and nothing under `civictech.iroh`; the substitution
  * is entirely in the [newRig] factory ([DSC2-NEU-03]).
  *
  * **What the dialling end is handed.** `TwoNodeRig.startDialer` builds
- * `MirrorWire.Dial("ws://localhost:<n>")` from the listener's `boundWsPort`,
- * which for this binding is a synthetic number read off the listener's UDP
- * address. The binding ignores that string: no NodeId and no address crosses
- * from the listening node to the dialling node. The dialling sidecar finds the
- * listening one by its `--mdns` advertisement, and nothing else.
+ * `MirrorWire.Dial("iroh+mdns://")` from the listener's bound address. No
+ * NodeId or endpoint crosses between them; the dialling sidecar finds the
+ * listener by its `--mdns` advertisement.
  *
  * **Three skip gates, all `@BeforeEach`, and where this executes.**
  * [ConvergenceSuite.checkPrerequisites] (inherited) needs `bd`/`dolt`;
@@ -36,7 +34,7 @@ class DiscoveredIrohConvergenceSuiteTest : ConvergenceSuite(
     newRig = {
         TwoNodeRig.create(
             "bds2-discovered-convergence",
-            transport = DiscoveredIrohMirrorTransport(
+            transport = DiscoveredIrohPeerTransport(
                 binary = IrohSidecarGate.orSkip(),
                 reconnectBackoff = { 10L },
             ),

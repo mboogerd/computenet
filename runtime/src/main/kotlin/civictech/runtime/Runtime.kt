@@ -10,6 +10,7 @@ import civictech.cell.link.PeerId
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
+import civictech.cell.wire.PeerTransport
 import civictech.cell.wire.PeerTransports
 import civictech.cell.wire.Peering
 import civictech.economy.EconomicPolicy
@@ -24,6 +25,17 @@ import java.io.File
 object Runtime {
 
     /**
+     * Construct with an exact transport instance without exposing the optional
+     * Inspector type to callers that do not otherwise depend on `:inspect`.
+     */
+    fun boot(
+        manifest: Manifest,
+        node: String,
+        spec: GraphSpec,
+        transport: PeerTransport,
+    ): Node = boot(manifest, node, spec, overrides = emptyMap(), transport = transport)
+
+    /**
      * Construct the node-local graph. Network endpoints and the inspector are deferred to [Node.open].
      * A future GraphSpec structure-log hook (INT1 1.2b) belongs immediately before the apply below.
      */
@@ -33,9 +45,13 @@ object Runtime {
         spec: GraphSpec,
         overrides: Map<String, String> = emptyMap(),
         inspector: InspectorFlag.Options? = null,
+        transport: PeerTransport? = null,
     ): Node {
         manifest.validated()
         val nodeSpec = requireNotNull(manifest.nodes[node]) { "manifest has no node '$node'" }
+        require(transport == null || transport.scheme == nodeSpec.transport) {
+            "transport override scheme '${transport?.scheme}' does not match node '$node' scheme '${nodeSpec.transport}'"
+        }
         val registry = LocationRegistry()
         val budget = nodeSpec.budget?.let { policyFile ->
             val policy = Json.decodeFromString(EconomicPolicy.serializer(), File(policyFile).readText())
@@ -63,6 +79,7 @@ object Runtime {
             budget = budget,
             overrides = overrides.toMap(),
             inspectorOptions = inspector,
+            transportOverride = transport,
         )
     }
 
@@ -79,6 +96,7 @@ object Runtime {
         val budget: BudgetLedger,
         private val overrides: Map<String, String>,
         private val inspectorOptions: InspectorFlag.Options?,
+        private val transportOverride: PeerTransport?,
     ) : AutoCloseable {
 
         private var opened = false
@@ -116,7 +134,7 @@ object Runtime {
                 )
                 val hasEndpoints = nodeSpec.listen != null || nodeSpec.dial.isNotEmpty()
                 val transport = if (hasEndpoints) {
-                    PeerTransports.forScheme(nodeSpec.transport, nodeSpec.transportConfig)
+                    transportOverride ?: PeerTransports.forScheme(nodeSpec.transport, nodeSpec.transportConfig)
                 } else {
                     null
                 }
