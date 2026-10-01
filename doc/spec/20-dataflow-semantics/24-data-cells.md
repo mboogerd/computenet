@@ -1278,6 +1278,8 @@ re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
 passed journal and compacts that journal atomically; the compaction carries
 every frame accepted for that journal and not yet delivered, so a checkpoint is
 safe at any inter-invocation boundary (93 I-7 R7);
+not yet covered are frames retained in an inlet policy tier or released into a
+cold inlet outside that inlet's hosted offer (computenet-amgre);
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the
 per-cell scoping; its control shows a constant selector restores every cell).
 Cells stay oblivious — with one honest exception:
