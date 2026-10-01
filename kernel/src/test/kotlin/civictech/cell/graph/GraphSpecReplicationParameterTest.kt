@@ -255,4 +255,42 @@ class GraphSpecReplicationParameterTest {
         (specOf.steps.single() as SpawnStep).replicated shouldBe true
         handle.cell.membership() shouldBe emptySet()
     }
+
+    @Test
+    fun `context builder spawn and instanceSet replicate while the Use builder refuses instanceSet`() {
+        val controller = SimulationController(seed = 43)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val context = ApplyContext(host, Replication(registry))
+        val spawnId = UUID.nameUUIDFromBytes("builder-spawn".toByteArray())
+        val setId = UUID.nameUUIDFromBytes("builder-set".toByteArray())
+        // InstanceSetStep.validate() builds an unspawned sample, so cells are keyed by ref.
+        val setCells = mutableMapOf<CellRef, SetCell<String>>()
+        val replicas = (0 until 2).map {
+            InstanceSpec(Interest.Total, instanceId = it, journalId = "j-$it", replicated = true)
+        }
+        val factory = InstanceFactory { ref, _ -> SetCell<String>(ref).also { setCells[ref] = it } }
+
+        val (spawned, _) = graphOf(context) {
+            val a = spawn("a", IdentityBinding.Exact(CellRef(spawnId, 1)), replicated = true) { SetCell<String>(it) }
+            val b = spawn("b", IdentityBinding.Exact(CellRef(spawnId, 2)), replicated = true) { SetCell<String>(it) }
+            val set = instanceSet("set", setId, factory, replicas)
+            Triple(a, b, set.map { it.ref })
+        }
+        controller.runToIdle()
+        (HostedCellProxy.create(spawned.first.ref, registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("x")
+        (HostedCellProxy.create(spawned.third[0], registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("y")
+        controller.runToIdle()
+
+        withClue("builder spawn b holds x") { spawned.second.cell.membership() shouldBe setOf("x") }
+        withClue("builder instanceSet replica 2 holds y") { setCells.getValue(spawned.third[1]).membership() shouldBe setOf("y") }
+
+        val useFailure = shouldThrow<IllegalStateException> {
+            graph(ManagedHost().managementInlet) { instanceSet("use-set", UUID.randomUUID(), factory, replicas) }
+        }
+        useFailure.message!! shouldContain "use-set"
+        useFailure.message!! shouldContain "replicated"
+    }
 }
