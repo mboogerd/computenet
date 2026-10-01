@@ -768,7 +768,7 @@ open class ManagedHost(
         notifyResumed = ::notifyResumed,
         intakeLowWaterCheck = ::intakeLowWaterCheck,
         deliver = ::deliver,
-        submit = ::resumeAttentionParked,
+        resume = ::resumeAttentionParked,
     )
 
     /**
@@ -1012,16 +1012,18 @@ open class ManagedHost(
     }
 
     /**
-     * Attention parking contains accepted work in FIFO order. Ordinary data
-     * keeps its existing intake replay, but a protocol marker placed there by
-     * [stageBehindData] must rejoin the data FIFO: sending it through [accept]
-     * would submit it at protocol band 0 and overtake the data before it.
+     * Attention parking contains already-accepted work in FIFO order. Ordinary
+     * data keeps its existing intake replay, including the closed/saturated gates,
+     * but skips the journal tee that acceptance already performed. A protocol
+     * marker placed there by [stageBehindData] must instead rejoin the data FIFO:
+     * sending it through [accept] would submit it at protocol band 0 and overtake
+     * the data before it.
      */
     private fun resumeAttentionParked(hostedInvocation: HostedPortInvocation) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             stageForDataDispatch(hostedInvocation)
         } else {
-            enqueueHostedInvocation(hostedInvocation)
+            accept(hostedInvocation, skipJournalTee = true)
         }
     }
 
@@ -1039,7 +1041,7 @@ open class ManagedHost(
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
         synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
 
-    private fun accept(hostedInvocation: HostedPortInvocation) {
+    private fun accept(hostedInvocation: HostedPortInvocation, skipJournalTee: Boolean = false) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             require(hostedInvocation.invocation.context == null) { "protocol invocations must carry null MessageContext" }
             val id = requireNotNull(hostedInvocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
@@ -1080,7 +1082,7 @@ open class ManagedHost(
                     if (intakeBound?.policy == SaturationPolicy.Coalesce && intakeControl.coalesce(hostedInvocation)) {
                         // Coalescing is acceptance, not loss: retain every original
                         // in the WAL so recovery may replay the equivalent sequence.
-                        journalTee(hostedInvocation)
+                        if (!skipJournalTee) journalTee(hostedInvocation)
                         return
                     }
                     throw IntakeSaturatedException(ref)
@@ -1118,7 +1120,7 @@ open class ManagedHost(
         // that traversal can reach another host's enqueueHostedInvocation
         // and ITS dataLock, so it must run only after this lock releases.
         val announce = synchronized(dataLock) {
-            journalTee(hostedInvocation)
+            if (!skipJournalTee) journalTee(hostedInvocation)
             attentionScheduler.stage(hostedInvocation)
             intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
