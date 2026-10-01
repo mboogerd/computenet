@@ -391,7 +391,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         throw familyLinkRefusal(step.to, key)
                     }
                     when (
-                        val result = context.host.managementInlet.call.connect(
+                        val result = context.host.managementInlet.call.connectStep(
                             refs.getValue(step.from), step.outlet,
                             refs.getValue(step.to), step.inlet,
                             step.options,
@@ -452,7 +452,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 
                 is ConnectStep -> {
                     val key = stepKey(step)
-                    val result = host.call.connect(
+                    val result = host.call.connectStep(
                         refs.getValue(step.from), step.outlet,
                         refs.getValue(step.to), step.inlet,
                         step.options,
@@ -558,7 +558,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         )
                     } else {
                         try {
-                            when (val result = host.call.connect(from, step.outlet, to, step.inlet, step.options)) {
+                            when (val result = host.call.connectStep(from, step.outlet, to, step.inlet, step.options)) {
                                 is LinkResult.Rejected -> results[key] = StepResult.Rejected(result.reason)
                                 else -> results[key] = StepResult.Applied(null)
                             }
@@ -585,6 +585,25 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         return ApplyReport(results)
     }
 }
+
+/**
+ * x0oag-D3: a step with [LinkOptions.DEFAULT] keeps the 4-arg `connect` it
+ * made before options existed, so a [HostManagementApi] decorator that
+ * intercepts only that overload (inspect's `StagedApplier` recorder, which
+ * records the links its UNWIND retracts) still sees every parameter-free edge.
+ */
+private fun HostManagementApi.connectStep(
+    from: CellRef,
+    outletName: String,
+    to: CellRef,
+    inletName: String,
+    options: LinkOptions,
+): LinkResult =
+    if (options == LinkOptions.DEFAULT) {
+        connect(from, outletName, to, inletName)
+    } else {
+        connect(from, outletName, to, inletName, options)
+    }
 
 private fun stepKey(step: ConnectStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
 
@@ -831,7 +850,7 @@ class GraphBuilder private constructor(
         inlet: String,
         options: LinkOptions = LinkOptions.DEFAULT,
     ) {
-        val result = host.call.connect(from.ref, outlet, to.ref, inlet, options)
+        val result = host.call.connectStep(from.ref, outlet, to.ref, inlet, options)
         check(result !is LinkResult.Rejected) {
             "link ${from.name}.$outlet → ${to.name}.$inlet rejected: ${(result as LinkResult.Rejected).reason}"
         }

@@ -3,9 +3,12 @@ package civictech.cell.graph
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.host.HostManagementApi
+import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkRole
 import civictech.cell.port.input
+import civictech.cell.port.Use
 import civictech.cell.port.output
 import civictech.cell.protocol.EdgeClose
 import civictech.testkit.SimWorld
@@ -168,5 +171,46 @@ class GraphSpecLinkStepsTest {
         )
         events.last().result shouldBe rejected
         world.registry.localLinks().size shouldBe 1
+    }
+
+    /** Records which `connect` overload each applier called, delegating everything. */
+    private class OverloadRecorder(private val delegate: HostManagementApi) : HostManagementApi by delegate {
+        val calls = mutableListOf<String>()
+
+        override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult =
+            delegate.connect(from, outletName, to, inletName).also { calls += "4-arg" }
+
+        override fun connect(
+            from: CellRef,
+            outletName: String,
+            to: CellRef,
+            inletName: String,
+            options: LinkOptions,
+        ): LinkResult = delegate.connect(from, outletName, to, inletName, options).also { calls += "5-arg" }
+    }
+
+    @Test
+    fun `a DEFAULT-options connect keeps the 4-arg overload a decorator intercepts on every Use path`() {
+        // x0oag-D3: inspect's StagedApplier recorder overrides only the 4-arg
+        // connect to remember the links its UNWIND retracts.
+        fun recorderOn(world: SimWorld) = OverloadRecorder(world.host.managementInlet.call)
+
+        val local = recorderOn(SimWorld())
+        spec(Capture(), LinkOptions.DEFAULT).applyTo(Use.fixed<HostManagementApi>(local))
+        local.calls shouldBe listOf("4-arg")
+
+        val remote = recorderOn(SimWorld())
+        spec(Capture(), LinkOptions.DEFAULT).applyRemote(Use.fixed<HostManagementApi>(remote))
+        remote.calls shouldBe listOf("4-arg")
+
+        val builder = recorderOn(SimWorld())
+        graph(Use.fixed<HostManagementApi>(builder)) {
+            connect(spawn("source") { ref -> Source(ref) }, "outlet", spawn("sink") { ref -> Sink(ref) }, "inlet")
+        }
+        builder.calls shouldBe listOf("4-arg")
+
+        val staged = recorderOn(SimWorld())
+        spec(Capture(), LinkOptions(staged = true)).applyRemote(Use.fixed<HostManagementApi>(staged))
+        staged.calls shouldBe listOf("5-arg")
     }
 }
