@@ -5,6 +5,7 @@ import civictech.agora.cell.EdgeCell
 import civictech.agora.cell.InfluenceDelta
 import civictech.agora.cell.Polarity.ATTACK
 import civictech.agora.cell.Polarity.SUPPORT
+import civictech.agora.cell.StanceDelta
 import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
 import civictech.cell.host.TopologyLink
@@ -63,6 +64,35 @@ class AdmittedWiringTest {
 
         h.runToIdle()
         assertEquals(0L, h.host.supervisionAccounting().deadLetters)
+    }
+
+    @Test
+    fun `head learns an existing source credence through feedback catch-up`() {
+        val h = Harness(seed = 16L, quiescence = 1e-3)
+        val source = ClaimCell().also {
+            it.stanceInlet.call.propagate(StanceDelta("u", 0.95))
+        }
+        val head = EdgeCell(ATTACK, quiescence = 1e-3)
+        h.host.managementInlet.call.spawn(source)
+        h.host.managementInlet.call.spawn(head)
+
+        val linked = h.host.managementInlet.call.connect(
+            source.ref,
+            "credenceOutlet",
+            head.ref,
+            "feedbackInlet",
+            LinkOptions(staged = true),
+        )
+        assertTrue(linked is LinkResult.Connected)
+        h.runToIdle()
+
+        val headSourceCredence = (head.snapshot() as List<*>)[1] as Double
+        assertEquals(
+            source.credence,
+            headSourceCredence,
+            1e-9,
+            "the feedback link's catch-up must install the source's existing credence in the head",
+        )
     }
 
     @Test
