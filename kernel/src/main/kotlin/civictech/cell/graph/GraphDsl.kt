@@ -9,6 +9,8 @@ import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.KeyedCells
 import civictech.cell.link.Interest
+import civictech.cell.link.Link
+import civictech.cell.link.LinkOptions
 import civictech.nature.Manifest
 import civictech.cell.link.LinkResult
 import civictech.cell.port.Port
@@ -132,7 +134,16 @@ data class SpawnStep(
     }
 }
 
-data class ConnectStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
+data class ConnectStep(
+    val from: String,
+    val outlet: String,
+    val to: String,
+    val inlet: String,
+    val options: LinkOptions = LinkOptions.DEFAULT,
+) : GraphStep
+
+/** Detaches the link admitted by an earlier [ConnectStep] with the same edge key. */
+data class UnlinkStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
 
 /**
  * PN-13 — one instance's declared slot in a heterogeneous instance set (spec
@@ -272,7 +283,8 @@ sealed interface StepResult : Serializable {
  * The eventual fold of a remote [GraphSpec] application (93 I-21 §4.4, G-51):
  * a structured per-step result an applier can inspect after [GraphSpec.applyRemote]
  * returns, keyed by the step's spec-local handle (spawn steps) or
- * `"from.outlet->to.inlet"` (connect steps).
+ * `"from.outlet->to.inlet"` (connect steps), or
+ * `"unlink from.outlet->to.inlet"` (unlink steps).
  */
 data class ApplyReport(val results: Map<String, StepResult>) : Serializable {
     val allApplied: Boolean get() = results.values.all { it is StepResult.Applied }
@@ -280,7 +292,7 @@ data class ApplyReport(val results: Map<String, StepResult>) : Serializable {
 
 /**
  * A graph as data: an ordered step list, each lowering to a host-management
- * invocation — nothing the spec does is beyond `spawn`/`connect` (51). Replay
+ * invocation — nothing the spec does is beyond `spawn`/`connect`/`Link.unlink()` (51). Replay
  * onto any host creates fresh cells (fresh refs) with the same topology by
  * default ([IdentityBinding.FreshLogical]); an explicit binding preserves or
  * targets a specific identity instead.
@@ -341,7 +353,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 
         val refs = mutableMapOf<String, CellRef>()
         val families = mutableMapOf<String, KeyedCells<*>>()
-        val links = mutableMapOf<String, civictech.cell.link.Link>()
+        val links = mutableMapOf<String, Link>()
         val familyHandles = lowered.filterIsInstance<SpawnStep>()
             .filter { it.family != null }
             .mapTo(mutableSetOf()) { it.handle }
@@ -371,7 +383,6 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
 
                 is ConnectStep -> {
-                    // TODO(computenet-x0oag.1): retain LinkOptions/UnlinkStep handles after that sibling lands.
                     val key = stepKey(step)
                     if (step.from in familyHandles) {
                         throw familyLinkRefusal(step.from, key)
@@ -383,6 +394,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         val result = context.host.managementInlet.call.connect(
                             refs.getValue(step.from), step.outlet,
                             refs.getValue(step.to), step.inlet,
+                            step.options,
                         )
                     ) {
                         is LinkResult.Connected -> links[key] = result.link
@@ -391,6 +403,12 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         )
                         LinkResult.Deferred -> Unit
                     }
+                }
+
+                is UnlinkStep -> {
+                    val key = stepKey(step)
+                    val link = links.remove(key) ?: throw unresolvedUnlink(key)
+                    link.unlink()
                 }
 
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
@@ -422,6 +440,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
             throw unsupportedShadow(step.handle, "applyTo(Use<HostManagementApi>)")
         }
         val refs = mutableMapOf<String, CellRef>()
+        val links = mutableMapOf<String, Link>()
         lowered.forEach { step ->
             when (step) {
                 is SpawnStep -> {
@@ -432,14 +451,23 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
 
                 is ConnectStep -> {
+                    val key = stepKey(step)
                     val result = host.call.connect(
                         refs.getValue(step.from), step.outlet,
                         refs.getValue(step.to), step.inlet,
+                        step.options,
                     )
                     check(result !is LinkResult.Rejected) {
                         "link ${step.from}.${step.outlet} → ${step.to}.${step.inlet} rejected: " +
                             (result as LinkResult.Rejected).reason
                     }
+                    if (result is LinkResult.Connected) links[key] = result.link
+                }
+
+                is UnlinkStep -> {
+                    val key = stepKey(step)
+                    val link = links.remove(key) ?: throw unresolvedUnlink(key)
+                    link.unlink()
                 }
 
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
@@ -530,7 +558,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         )
                     } else {
                         try {
-                            when (val result = host.call.connect(from, step.outlet, to, step.inlet)) {
+                            when (val result = host.call.connect(from, step.outlet, to, step.inlet, step.options)) {
                                 is LinkResult.Rejected -> results[key] = StepResult.Rejected(result.reason)
                                 else -> results[key] = StepResult.Applied(null)
                             }
@@ -538,6 +566,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                             results[key] = StepResult.Rejected(e.message ?: e.toString())
                         }
                     }
+                    progress.onStep(StepEvent(index, key, results.getValue(key)))
+                }
+
+                is UnlinkStep -> {
+                    val key = unlinkStepKey(step)
+                    results[key] = StepResult.Rejected(
+                        "unlink step '${stepKey(step)}' is not supported by applyRemote: " +
+                            "HostManagementApi has no disconnect operation",
+                    )
                     progress.onStep(StepEvent(index, key, results.getValue(key)))
                 }
 
@@ -550,6 +587,14 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 }
 
 private fun stepKey(step: ConnectStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+
+private fun stepKey(step: UnlinkStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+
+private fun unlinkStepKey(step: UnlinkStep): String = "unlink ${stepKey(step)}"
+
+private fun unresolvedUnlink(key: String): IllegalStateException = IllegalStateException(
+    "unlink step '$key': no earlier connected edge in this apply",
+)
 
 private fun missingReplication(handle: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'replicated' requires ApplyContext.replication",
@@ -625,6 +670,7 @@ class GraphBuilder private constructor(
 
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
+    private val links = mutableMapOf<String, Link>()
 
     /** Spec-local handle by resolved [CellRef] — lets typed [link] recover the
      * handle name a port's owner was spawned under (typed-port-links). */
@@ -778,12 +824,29 @@ class GraphBuilder private constructor(
         return CellHandle(name, cell.ref, this).also { handlesByRef[it.ref] = it }
     }
 
-    fun connect(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
-        val result = host.call.connect(from.ref, outlet, to.ref, inlet)
+    fun connect(
+        from: CellHandle,
+        outlet: String,
+        to: CellHandle,
+        inlet: String,
+        options: LinkOptions = LinkOptions.DEFAULT,
+    ) {
+        val result = host.call.connect(from.ref, outlet, to.ref, inlet, options)
         check(result !is LinkResult.Rejected) {
             "link ${from.name}.$outlet → ${to.name}.$inlet rejected: ${(result as LinkResult.Rejected).reason}"
         }
-        steps += ConnectStep(from.name, outlet, to.name, inlet)
+        val step = ConnectStep(from.name, outlet, to.name, inlet, options)
+        if (result is LinkResult.Connected) links[stepKey(step)] = result.link
+        steps += step
+    }
+
+    /** Detaches and records an edge this builder connected earlier. */
+    fun unlink(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
+        val step = UnlinkStep(from.name, outlet, to.name, inlet)
+        val key = stepKey(step)
+        val link = links.remove(key) ?: throw unresolvedUnlink(key)
+        link.unlink()
+        steps += step
     }
 
     /**
@@ -801,10 +864,10 @@ class GraphBuilder private constructor(
      * [spawn]ed on this builder; a port whose owner is unknown here (or
      * carries no identity) falls back to the string [connect].
      */
-    fun <Api> link(out: Subscribe<Api>, inn: Serve<Api>) {
+    fun <Api> link(out: Subscribe<Api>, inn: Serve<Api>, options: LinkOptions = LinkOptions.DEFAULT) {
         val from = out.requireHandle("outlet")
         val to = inn.requireHandle("inlet")
-        connect(from.first, from.second, to.first, to.second)
+        connect(from.first, from.second, to.first, to.second, options)
     }
 
     private fun Port.requireHandle(role: String): Pair<CellHandle, String> {
