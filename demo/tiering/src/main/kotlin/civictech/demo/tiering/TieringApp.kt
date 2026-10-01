@@ -101,15 +101,14 @@ object TierPipeline {
     val MANUAL_ID: UUID = UUID.nameUUIDFromBytes("tiering-replica:manual-retier".toByteArray())
 
     /**
-     * The manual replica's instance id for a peering role: the dialer takes 1,
-     * the listener and a solo process take 0. Role-derived, so the two sides
-     * need no discovery protocol and no extra flag to end up with distinct
-     * instance ids under one shared logical id — `demo/shopping`'s
-     * `sharedInstance` idiom verbatim.
+     * The manual replica's instance id. An explicit replica id is the
+     * manifest/CLI-assigned value for multi-dialler topologies; when absent,
+     * preserve the legacy role mapping: dialer 1, listener and solo 0.
      */
-    fun manualInstance(role: String): Long = if (role == "dialer") 1L else 0L
+    fun manualInstance(role: String, replica: Long? = null): Long =
+        replica ?: if (role == "dialer") 1L else 0L
 
-    fun manualRef(role: String): CellRef = CellRef(MANUAL_ID, manualInstance(role))
+    fun manualRef(role: String, replica: Long? = null): CellRef = CellRef(MANUAL_ID, manualInstance(role, replica))
 
     /**
      * Derived logical ids for the three cells [handleOp][TieringApp.handleOp]
@@ -119,9 +118,9 @@ object TierPipeline {
      * SAME ref across a restart, not the `graph { }` DSL's default
      * `IdentityBinding.FreshLogical` random mint.
      *
-     * **The instance id is [manualInstance]'s, role-derived, for the same
-     * reason [MANUAL_ID]'s is — and it is NOT optional (computenet-3san,
-     * caught in review).** These cells are not [Replication]-replicated, but
+     * **The instance id is [manualInstance]'s, explicitly assigned when the
+     * CLI provides `--replica`, and otherwise role-derived for the same
+     * reason [MANUAL_ID]'s is.** These cells are not [Replication]-replicated, but
      * `Peering.announceTo` announces *every* local ref its registry holds and
      * `LocationRegistry.publish(ref, sink)` installs the announced `Remote`
      * unconditionally — it does not defer to an existing `Local`. So two
@@ -168,7 +167,8 @@ object TierPipeline {
      *
      * [manual] is passed in (rather than spawned inside the `graph { }` spec)
      * because in wire mode it is not this host's to spawn: it is a replica,
-     * minted at a role-derived ref and handed to `Replication.replicate`,
+     * minted at the explicitly assigned or legacy role-derived ref and handed
+     * to `Replication.replicate`,
      * which does the spawning itself. [spawnManual] is that seam — the
      * default is a plain management spawn, which is exactly what solo mode
      * wants.
@@ -179,9 +179,9 @@ object TierPipeline {
         spawnManual: (OrMapCell<String, String>) -> Unit = { host.managementInlet.call.spawn(it) },
     ): Refs {
         spawnManual(manual)
-        // The peering role slot, read off the manual replica's own ref rather
-        // than taken as a parameter: [manual] is already minted at
-        // [manualRef], so its instance id IS this host's role. Keeping the
+        // The replica slot, read off the manual replica's own ref rather than
+        // recomputed here: [manual] is already minted at [manualRef] using
+        // either the explicit assignment or the legacy role rule. Keeping the
         // routed pipeline cells on the same slot is what stops two peers
         // minting one ref (see [ITEMS_ID]'s KDoc).
         val instance = manual.ref.instanceId
@@ -286,9 +286,9 @@ object TierPipeline {
  *    record names the ref it was written against. The three cells a routed
  *    invocation actually reaches — `items`, `vals`, `prefs` — now spawn at
  *    fixed, derived refs ([TierPipeline.ITEMS_ID]/[TierPipeline.VALS_ID]/
- *    [TierPipeline.PREFS_ID] over a role-derived instance id), the same
+ *    [TierPipeline.PREFS_ID] over the assigned instance id), the same
  *    treatment [TierPipeline.MANUAL_ID] already gave the manual lane — the
- *    role included, because two peers on one ref lose every routed write to
+ *    instance included, because two peers on one ref lose every routed write to
  *    it (see [TierPipeline.ITEMS_ID]'s KDoc). The remaining pipeline cells stay
  *    `FreshLogical`: nothing writes to them directly, so replaying
  *    `items`/`vals`/`prefs`/`manual` and re-linking the rebuilt graph is
@@ -307,6 +307,13 @@ class TieringApp(
     private val wire: Wire? = null,
     journalDir: java.io.File? = null,
     inspector: InspectorFlag.Options? = null,
+    /**
+     * `--replica <n>`: this JVM's manual replica instance id. Null keeps the
+     * legacy role rule ([TierPipeline.manualInstance]: listener/solo 0,
+     * dialer 1), so existing launch lines remain unchanged; two diallers need
+     * distinct explicit values.
+     */
+    private val replica: Long? = null,
 ) {
     /** Peer mode: symmetric peers — one listens, the other dials. */
     sealed interface Wire {
@@ -340,11 +347,12 @@ class TieringApp(
 
     /**
      * This host's instance of the one shared manual-re-tier logical cell.
-     * Same [TierPipeline.MANUAL_ID] on both sides, instance id derived from
-     * the peering role — so a restart at the same role re-derives the same
-     * ref, which is what makes the dots it mints replay-stable ([KE1-31]).
+     * Same [TierPipeline.MANUAL_ID] on both sides. The instance id uses the
+     * explicit [replica] when supplied, otherwise the peering role — so a
+     * restart with the same assignment re-derives the same ref, which is what
+     * makes the dots it mints replay-stable ([KE1-31]).
      */
-    private val manualCell = OrMapCell<String, String>(TierPipeline.manualRef(myRole))
+    private val manualCell = OrMapCell<String, String>(TierPipeline.manualRef(myRole, replica))
 
     private val refs = TierPipeline.build(host, manualCell) { cell ->
         // In wire mode the replica is spawned by Replication, which also links
@@ -424,7 +432,7 @@ class TieringApp(
      */
     val boundWsPort: Int? get() = wsListener?.let { URI(it.boundAddress.text).port }
 
-    /** This host's manual-replica instance id — 0 listener/solo, 1 dialer. */
+    /** This host's manual-replica instance id — explicit [replica], or the legacy role default. */
     val manualInstanceId: Long get() = manualCell.ref.instanceId
 
     init {
@@ -628,13 +636,16 @@ fun main(args: Array<String>) {
     // reading the first non-`--` token never mistakes either flag's value for
     // this demo's port (demo/shopping's `main`, verbatim, plus the inspector).
     val parsed = InspectorFlag.parse(args)
-    val demoArgs = stripPairs(parsed.rest, "--listen", "--peer", "--journal")
+    val demoArgs = stripPairs(parsed.rest, "--listen", "--peer", "--journal", "--replica")
     val port = demoPort(demoArgs)
     val wire = parsed.rest.value("--listen")?.let { TieringApp.Wire.Listen(it.toInt()) }
         ?: parsed.rest.value("--peer")?.let { TieringApp.Wire.Dial(it) }
     val journalDir = parsed.rest.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+    // `--replica <n>`: explicit replica identity for topologies with multiple
+    // diallers; absent = the legacy role rule (listener 0, dialer 1).
+    val replica = parsed.rest.value("--replica")?.toLong()
 
-    val app = TieringApp(port, wire, journalDir, parsed.options).start()
+    val app = TieringApp(port, wire, journalDir, parsed.options, replica).start()
     println("computenet tiering: http://localhost:${app.boundPort}")
     // every announcePort here reports a port this process HOLDS, so a
     // supervising test never has to pick one for it (computenet-dqy.25)
