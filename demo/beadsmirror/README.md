@@ -15,11 +15,13 @@ two-node mode (`MirrorPeering`): the projector's two cells become replicas of
 one logical cell and gossip their deltas to the peer.
 
 **Which transport carries that gossip is a parameter, not a fact of the code.**
-`MirrorTransport` (main sources) is the seam — it owns establishing the
-listening end, establishing the dialing end, and `partition()`/`heal()` on the
-peering between them. `WsMirrorTransport` is the only binding that exists and
-the only one a running app constructs; it is also the only file in the module
-that names a `:wire` type, so a solo run still loads none of it.
+The kernel `PeerTransport` seam owns establishing the listening end, establishing
+the dialing end, and `partition()`/`heal()` on the peering between them.
+`Runtime.boot` constructs each runtime node around that seam, while
+`DiscoveredIrohPeerTransport` (`iroh+mdns`) supplies the discovery-backed
+binding for local-segment iroh peering. `MirrorPeering` passes one exact
+`PeerTransport` instance to both nodes, so the same convergence assertions can
+exercise each binding.
 
 The point of the seam is the convergence suite (feature computenet-7em.2): it
 receives its wiring instead of naming it, so re-running the same assertions

@@ -90,7 +90,6 @@ interface PeerListener : PeerEndpoint {
 
 /**
  * A dialled end — the end that can sever the peering and restore it
- * (the `MirrorTransport` contract of `:demo:beadsmirror`, lifted).
  */
 interface PeerConnection : PeerEndpoint {
 
