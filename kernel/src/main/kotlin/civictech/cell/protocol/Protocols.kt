@@ -89,9 +89,7 @@ object Protocols {
  * hosted-cell ports — `FanInlet`, `FanOutlet`, `FeedbackInlet`, which are the
  * kernel's only [civictech.cell.link.Linked] port classes: these are the ports
  * a [civictech.cell.Cell] owns, so they are the ports whose retention retains a
- * cell. (`FanInlet`/`FanOutlet` also implement
- * [civictech.cell.port.DerivedPortRef]; `FeedbackInlet` does not, so the two
- * sets are close but not equal.)
+ * cell. (All three also implement [civictech.cell.port.DerivedPortRef].)
  *
  * **Why the slot has to exist.** `ProtocolSupport` holds caller-supplied
  * handler closures, and a closure captures whatever its call site captures —

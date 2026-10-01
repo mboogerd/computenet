@@ -37,7 +37,7 @@ data class PortRef(
 
 /**
  * A port whose [Port.ref] is re-derivable from its owner identity at stamp time
- * (PN-1). Implemented by hosted-cell ports (FanInlet/FanOutlet); the stamp seam
+ * (PN-1). Implemented by hosted-cell ports (FanInlet/FanOutlet/FeedbackPort); the stamp seam
  * ([PortIdentities.stamp]) calls [deriveRef] once, when the owner is a
  * [civictech.cell.Cell]. Anonymous/test ports do not implement it and keep the
  * fresh random ref minted at construction.
