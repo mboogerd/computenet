@@ -2,11 +2,14 @@ package civictech.runtime
 
 import civictech.cell.BudgetLedger
 import civictech.cell.CellRef
+import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.GraphSpec
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.PeerId
+import civictech.cell.replication.Replication
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
@@ -57,16 +60,30 @@ object Runtime {
             val policy = Json.decodeFromString(EconomicPolicy.serializer(), File(policyFile).readText())
             TokenBucketLedger(policy.applied(), System::nanoTime, scope = node)
         } ?: BudgetLedger.Unlimited
+        lateinit var applyContext: ApplyContext
+        val journals = mutableMapOf<String, Journal>()
+        val journalDirs = mutableMapOf<String, File>()
         val hosts = nodeSpec.hosts.associateWith { hostName ->
             val journalDir = nodeSpec.journalDir?.let { File(it, hostName) }
+            journalDir?.let { journalDirs[hostName] = it }
+            val hostJournal = KeyedCells.hostJournal(journalDir)
+            hostJournal?.let { journals[hostName] = it }
             ManagedHost(
                 registry = registry,
-                journal = KeyedCells.hostJournal(journalDir),
+                journal = hostJournal,
+                journalFor = { ref -> applyContext.journalFor(ref) ?: hostJournal },
                 budget = budget,
             )
         }
         val mainHost = hosts.getValue(nodeSpec.hosts.first())
-        val refs = spec.applyTo(mainHost.managementInlet)
+        val replication = Replication(registry)
+        applyContext = ApplyContext(
+            host = mainHost,
+            replication = replication,
+            journals = journals.toMap(),
+            journalDirs = journalDirs.toMap(),
+        )
+        val applied = spec.apply(applyContext)
         return Node(
             name = node,
             manifest = manifest,
@@ -74,7 +91,9 @@ object Runtime {
             registry = registry,
             hosts = hosts,
             mainHost = mainHost,
-            refs = refs,
+            refs = applied.refs,
+            families = applied.families,
+            replication = replication,
             replica = nodeSpec.replica,
             budget = budget,
             overrides = overrides.toMap(),
@@ -108,6 +127,8 @@ object Runtime {
         val hosts: Map<String, ManagedHost>,
         val mainHost: ManagedHost,
         val refs: Map<String, CellRef>,
+        val families: Map<String, KeyedCells<*>>,
+        val replication: Replication,
         val replica: Long?,
         val budget: BudgetLedger,
         private val overrides: Map<String, String>,
