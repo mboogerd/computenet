@@ -1943,7 +1943,16 @@ open class ManagedHost(
             // no dataLock interaction anywhere in that path, so the
             // extraction is a pure delegation — no lock-order change.
             override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult =
-                LinkAdmission.connect(cells, registry, from, outletName, to, inletName)
+                connect(from, outletName, to, inletName, LinkOptions.DEFAULT)
+
+            override fun connect(
+                from: CellRef,
+                outletName: String,
+                to: CellRef,
+                inletName: String,
+                options: LinkOptions,
+            ): LinkResult =
+                LinkAdmission.connect(this@ManagedHost, cells, registry, from, outletName, to, inletName, options)
 
             override fun connect(from: CellRef, outletName: String, to: Use<*>) {
                 val fromCell = cells[from] ?: throw IllegalArgumentException("Source cell not found: $from")
