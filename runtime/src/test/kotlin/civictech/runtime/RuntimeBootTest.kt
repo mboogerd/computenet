@@ -152,6 +152,45 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `customizeInspector renames hosts and cells and runs configure, and defaults stay unchanged`() {
+        fun topology(node: Runtime.Node): String =
+            java.net.URI("http://localhost:${node.inspector!!.boundPort}/api/inspect/topology").toURL().readText()
+
+        val plain = Runtime.boot(
+            Manifest(mapOf("n" to NodeSpec())), "n", setSpec(), inspector = InspectorFlag.Options(port = 0),
+        )
+        try {
+            plain.open()
+            val text = topology(plain)
+            assertTrue("\"n/main\"" in text && "custom-main" !in text, text)
+        } finally {
+            plain.close()
+        }
+
+        val node = Runtime.boot(
+            Manifest(mapOf("n" to NodeSpec())), "n", setSpec(), inspector = InspectorFlag.Options(port = 0),
+        )
+        var configured = false
+        try {
+            node.customizeInspector(
+                Runtime.InspectorExtras(
+                    hostNames = mapOf("main" to "custom-main", "bridge" to "custom-bridge"),
+                    cellNames = mapOf(node.refs.getValue("items") to "renamed-items"),
+                ) { configured = true },
+            )
+            node.open()
+            val text = topology(node)
+            assertTrue(configured, "configure did not run")
+            assertTrue("\"custom-main\"" in text, text)
+            assertTrue("renamed-items" in text, text)
+            assertTrue("n/main" !in text, text)
+            assertThrows<IllegalStateException> { node.customizeInspector(Runtime.InspectorExtras()) }
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
     fun `a supplied transport instance opens the node and a scheme mismatch is refused`() {
         val supplied = RecordingTransport(LoopbackPeerTransport())
         val manifest = Manifest(
