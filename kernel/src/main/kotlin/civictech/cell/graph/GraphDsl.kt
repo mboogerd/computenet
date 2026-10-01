@@ -3,6 +3,8 @@ package civictech.cell.graph
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Replicable
+import civictech.cell.evolve.Effectful
+import civictech.cell.evolve.Shadow
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.KeyedCells
@@ -114,6 +116,10 @@ data class SpawnStep(
     val parent: String? = null,
     /** Spawn through [civictech.cell.replication.Replication] rather than directly on a host. */
     val replicated: Boolean = false,
+    /** Journal handle resolved by [ApplyContext] before this cell is spawned. */
+    val journalId: String? = null,
+    /** Apply [Shadow]'s effect suppression after this cell is spawned. */
+    val shadow: Boolean = false,
     /** Lazily-spawned keyed family parameters; a family handle has no single cell ref. */
     val family: KeyedFamily? = null,
 ) : GraphStep {
@@ -206,6 +212,7 @@ data class InstanceSetStep(
                 factory = InstanceCellFactory(factory, spec),
                 identity = IdentityBinding.NewInstanceOf(logicalId),
                 replicated = spec.replicated,
+                journalId = spec.journalId,
             )
         }
     }
@@ -302,6 +309,13 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
             ?.let { throw missingReplication(it.handle) }
         lowered.filterIsInstance<SpawnStep>()
             .firstOrNull { step ->
+                step.journalId != null && step.journalId !in context.journals
+            }
+            ?.let { step ->
+                throw missingJournal(step.handle, step.journalId!!)
+            }
+        lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { step ->
                 val journalId = step.family?.journalId
                 journalId != null && journalId !in context.journalDirs
             }
@@ -338,12 +352,20 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         families[step.handle] = context.buildFamily(step)
                     } else {
                         val cell = prepared.getValue(index)
+                        step.journalId?.let { journalId ->
+                            context.bind(cell.ref, context.journals.getValue(journalId))
+                        }
                         refs[step.handle] = if (step.replicated) {
                             @Suppress("UNCHECKED_CAST")
                             context.replication!!.replicate(cell as Replicable<*>, context.host)
+                            if (step.shadow) suppressShadow(cell)
                             cell.ref
                         } else {
-                            context.host.managementInlet.call.spawn(cell)
+                            if (step.shadow) {
+                                Shadow.spawn(context.host, cell)
+                            } else {
+                                context.host.managementInlet.call.spawn(cell)
+                            }
                         }
                     }
                 }
@@ -392,6 +414,12 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         }
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
             throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.journalId != null }?.let { step ->
+            throw unsupportedJournal(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.shadow }?.let { step ->
+            throw unsupportedShadow(step.handle, "applyTo(Use<HostManagementApi>)")
         }
         val refs = mutableMapOf<String, CellRef>()
         lowered.forEach { step ->
@@ -462,6 +490,14 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         results[step.handle] = StepResult.Rejected(
                             "spawn step '${step.handle}': parameter 'replicated' is not supported by applyRemote",
                         )
+                    } else if (step.journalId != null) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'journalId' is not supported by applyRemote",
+                        )
+                    } else if (step.shadow) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'shadow' is not supported by applyRemote",
+                        )
                     } else {
                         val parentRef = step.parent?.let { refs[it] }
                         try {
@@ -522,6 +558,22 @@ private fun missingReplication(handle: String): IllegalStateException = IllegalS
 private fun unsupportedReplication(handle: String, path: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'replicated' cannot be applied by $path; use apply(ApplyContext)",
 )
+
+private fun missingJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'journalId' names '$journalId', but ApplyContext.journals has no such journal",
+)
+
+private fun unsupportedJournal(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'journalId' cannot be applied by $path; use apply(ApplyContext)",
+)
+
+private fun unsupportedShadow(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'shadow' cannot be applied by $path; use apply(ApplyContext)",
+)
+
+private fun suppressShadow(cell: Cell) {
+    if (cell is Effectful) Shadow.suppress(cell) else Shadow.suppressEffectContracts(cell)
+}
 
 internal fun missingFamilyJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'family.journalId' names '$journalId', " +
@@ -588,13 +640,27 @@ class GraphBuilder private constructor(
         identity: IdentityBinding = IdentityBinding.FreshLogical,
         parent: CellHandle? = null,
         replicated: Boolean = false,
+        journalId: String? = null,
+        shadow: Boolean = false,
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
+        if (context == null) {
+            if (journalId != null) throw unsupportedJournal(name, "graph(Use<HostManagementApi>)")
+            if (shadow) throw unsupportedShadow(name, "graph(Use<HostManagementApi>)")
+        }
         val ref = identity.resolve()
         val cell = factory.create(ref)
         requireBoundRef(name, identity, ref, cell.ref)
-        val step = SpawnStep(name, factory, identity, parent?.name, replicated)
+        val step = SpawnStep(
+            handle = name,
+            factory = factory,
+            identity = identity,
+            parent = parent?.name,
+            replicated = replicated,
+            journalId = journalId,
+            shadow = shadow,
+        )
         val spawnedRef = spawn(step, cell)
         steps += step
         return TypedCellHandle(name, spawnedRef, this, cell)
@@ -628,20 +694,29 @@ class GraphBuilder private constructor(
         identity: IdentityBinding,
         parent: CellHandle?,
         factory: TypedCellFactory<C>,
-    ): TypedCellHandle<C> = spawn(name, identity, parent, replicated = false, factory)
+    ): TypedCellHandle<C> = spawn(name, identity, parent, replicated = false, factory = factory)
 
     private fun spawn(step: SpawnStep, cell: Cell): CellRef {
-        if (!step.replicated) return host.call.spawn(cell)
         val applyContext = context
-            ?: throw unsupportedReplication(step.handle, "graph(Use<HostManagementApi>)")
-        val replication = applyContext.replication ?: throw missingReplication(step.handle)
-        val replicable = cell as? Replicable<*>
-            ?: throw IllegalStateException(
-                "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
-                    "(built ${cell.javaClass.name})",
-            )
-        replication.replicate(replicable, applyContext.host)
-        return cell.ref
+        if (applyContext == null) {
+            if (step.replicated) throw unsupportedReplication(step.handle, "graph(Use<HostManagementApi>)")
+            return host.call.spawn(cell)
+        }
+        step.journalId?.let { journalId ->
+            applyContext.bind(cell.ref, applyContext.journals[journalId] ?: throw missingJournal(step.handle, journalId))
+        }
+        if (step.replicated) {
+            val replication = applyContext.replication ?: throw missingReplication(step.handle)
+            val replicable = cell as? Replicable<*>
+                ?: throw IllegalStateException(
+                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                        "(built ${cell.javaClass.name})",
+                )
+            replication.replicate(replicable, applyContext.host)
+            if (step.shadow) suppressShadow(cell)
+            return cell.ref
+        }
+        return if (step.shadow) Shadow.spawn(applyContext.host, cell) else host.call.spawn(cell)
     }
 
     /**
@@ -661,6 +736,14 @@ class GraphBuilder private constructor(
         val lowered = step.lower().filterIsInstance<SpawnStep>()
         lowered.firstOrNull { it.replicated && context == null }?.let { s ->
             throw unsupportedReplication(s.handle, "graph(Use<HostManagementApi>)")
+        }
+        if (context == null) {
+            lowered.firstOrNull { it.journalId != null }?.let { s ->
+                throw unsupportedJournal(s.handle, "graph(Use<HostManagementApi>)")
+            }
+            lowered.firstOrNull { it.shadow }?.let { s ->
+                throw unsupportedShadow(s.handle, "graph(Use<HostManagementApi>)")
+            }
         }
         val applied = context?.let { GraphSpec(lowered).apply(it) }
         val handles = lowered.map { s ->
