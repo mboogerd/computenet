@@ -3,6 +3,7 @@ package civictech.cell.host
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.Stateful
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.WaveFrontier
 import civictech.cell.control.AttentionPolicy
@@ -20,6 +21,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import java.io.Serializable
 import java.util.UUID
 
 /** Acceptance coverage for sequencing a staged link's close behind its accepted data. */
@@ -154,6 +156,53 @@ class StagedLinkCloseOrderTest {
 
         sink.received shouldBe listOf(1, 2, 3)
         sink.events shouldBe listOf("data(1)", "data(2)", "data(3)", "EdgeClose")
+        sink.frontier.unmatchedDrops shouldBe 0L
+    }
+
+    private class StatefulSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Stateful {
+        val received = mutableListOf<Int>()
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet by input<Propagate<Int>>()
+
+        init {
+            inlet.serve(Propagate { value -> received += value })
+            inlet.install(frontier)
+        }
+
+        override fun snapshot(): Serializable = ArrayList(received)
+        override fun restore(state: Serializable) {}
+    }
+
+    @Test
+    fun `checkpoint with a staged close marker queued carries the data and not the marker`() {
+        val controller = SimulationController()
+        val journal = InMemoryJournal()
+        val source = Source()
+        val sink = StatefulSink()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = LocationRegistry(),
+            journalForPort = { ref, port ->
+                if (ref == sink.ref && port == "inlet") journal else null
+            },
+        )
+        host.managementInlet.call.spawn(source)
+        host.managementInlet.call.spawn(sink)
+        val link = host.managementInlet.call.connect(
+            source.ref, "outlet", sink.ref, "inlet", LinkOptions(staged = true),
+        ).shouldBeInstanceOf<LinkResult.Connected>().link
+
+        (1..3).forEach(source::emit)
+        link.unlink()
+        host.checkpoint(journal)
+        controller.runToIdle()
+
+        val frames = journal.replay()
+            .map { JournalRecords.decode(it) }
+            .filterIsInstance<DecodedJournalRecord.Frame>()
+            .map { WireCodec.decode(it.payload) }
+        frames.map { it.type } shouldBe List(3) { HostedPortInvocation.Type.PORT_API }
+        sink.received shouldBe listOf(1, 2, 3)
         sink.frontier.unmatchedDrops shouldBe 0L
     }
 }

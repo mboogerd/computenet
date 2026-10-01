@@ -813,7 +813,10 @@ open class ManagedHost(
         awaitOnManagementBand = { action -> enqueueAwaiting(0, action) },
         underIntakeLock = { action ->
             synchronized(dataLock) {
-                action(attentionScheduler.stagedInSequence())
+                // A staged link's EdgeClose marker ([stageBehindData]) shares the data
+                // FIFO but is a protocol frame: it is never journaled, so a checkpoint
+                // does not carry it either (and could not encode its in-process link).
+                action(attentionScheduler.stagedInSequence().filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL })
             }
         },
     )
