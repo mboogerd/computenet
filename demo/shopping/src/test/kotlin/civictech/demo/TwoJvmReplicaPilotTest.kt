@@ -209,6 +209,39 @@ class TwoJvmReplicaPilotTest {
      * `SetCell`'s `catchUpOnLinked`) leaves B holding everything A holds,
      * including the write A accepted while B was gone.
      */
+    /**
+     * gyvli-D7 (the computenet-d2j2 mechanism): a replica's instance id comes from the
+     * manifest (`--replica`), not from the peering role. Under the role rule every
+     * dialer is instance 1, so two dialers of one listener would collide; with
+     * `--replica 1` / `--replica 2` each announces its own, and a dialer with no flag
+     * still takes the legacy 1.
+     */
+    @Test
+    fun `--replica assigns the replica instance id, so two dialers announce distinct ids`() {
+        fun instanceOf(peer: JvmPeer.Peer): String {
+            peer.port("http")
+            var id: String? = null
+            awaitUntil("a replica banner in the output") {
+                id = Regex("this JVM's instance (\\d+)").find(peer.output())?.groupValues?.get(1)
+                id != null
+            }
+            return id!!
+        }
+        val peerA = launch("0", "--listen", "0", "--replicate")
+        val ws = "ws://localhost:${peerA.port("ws")}"
+        val peerB = launch("0", "--peer", ws, "--replicate", "--replica", "1")
+        val peerC = launch("0", "--peer", ws, "--replicate", "--replica", "2")
+        val peerD = launch("0", "--peer", ws, "--replicate")
+        try {
+            instanceOf(peerA) shouldBe "0"
+            instanceOf(peerB) shouldBe "1"
+            instanceOf(peerC) shouldBe "2"
+            instanceOf(peerD) shouldBe "1"
+        } finally {
+            JvmPeer.destroy(peerA, peerB, peerC, peerD)
+        }
+    }
+
     @Test
     fun `the replica mesh survives a killed and relaunched dialer`() {
         // see the sibling test: `0` everywhere, each peer announces what it bound

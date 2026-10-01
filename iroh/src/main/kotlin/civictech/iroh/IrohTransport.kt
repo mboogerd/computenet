@@ -18,7 +18,10 @@ import civictech.cell.link.UnboundReason
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.BridgeEgressCell
+import civictech.cell.wire.BridgeIngressCell
+import civictech.cell.wire.HelloCredentialLimits
 import civictech.cell.wire.Peering
+import civictech.cell.wire.ReconnectPolicy
 import civictech.cell.wire.RegistryMirrorCell
 import civictech.cell.wire.denialReasonFor
 import civictech.identity.Ed25519
@@ -206,27 +209,21 @@ object IrohTransport {
     const val MAX_HELLO_STATEMENTS: Int = 8
 
     /**
-     * The production re-dial backoff: fixed doubling from 1s, capped at 30s,
-     * retrying forever. `attempt` is 0-based — the delay *before* the
-     * (attempt+1)-th re-dial.
-     *
-     * The values are `WsTransport.DEFAULT_RECONNECT_BACKOFF`'s (M10.3), and the
-     * seam is the same T12 seam: a test injects a near-zero schedule instead of
-     * paying wall-clock delays. The *type* is declared here rather than imported
-     * from `:wire` deliberately — this module's whole dependency claim is
-     * `:iroh -> :kernel` (feature rule 2), and taking a `:wire` dependency for
-     * one lambda type would couple two transports that have no business on each
-     * other's classpath. The cost is one duplicated four-line lambda; the price
-     * of the alternative is a module edge.
+     * The production re-dial backoff — the kernel's shared schedule
+     * ([ReconnectPolicy.DEFAULT_BACKOFF]: 1 s doubling, capped at 30 s,
+     * retrying forever), re-exported under its old name for the callers that
+     * read it here (`IrohNode`, `discover.DiscoveredPeering`, the beadsmirror
+     * demo). `attempt` is 0-based — the delay *before* the (attempt+1)-th
+     * re-dial. Feature `computenet-gyvli` (gyvli-D2) hoisted the copy this
+     * object used to declare into `:kernel`, which is where `:wire`'s copy went
+     * too, so the two transports can no longer drift apart.
      */
-    val DEFAULT_RECONNECT_BACKOFF: (attempt: Int) -> Long = { attempt ->
-        // guard overflow on a long-lived failing connection: cap the shift itself
-        (1_000L shl attempt.coerceAtMost(20)).coerceAtMost(30_000L)
-    }
+    val DEFAULT_RECONNECT_BACKOFF = ReconnectPolicy.DEFAULT_BACKOFF
 
     /**
      * How many consecutive links may come **up** and go **down without ever
-     * being admitted** before this side stops re-dialling (computenet-4gzr).
+     * being admitted** before this side stops re-dialling (computenet-4gzr) —
+     * the kernel's [ReconnectPolicy.REFUSED_DIAL_LIMIT], re-exported.
      *
      * ## The case it bounds, and why nothing else could
      *
@@ -234,51 +231,34 @@ object IrohTransport {
      * The `DIAL` succeeds, `LINK_UP` arrives, the hello goes out — and only then
      * does the peer refuse it by closing the link. `PROTOCOL.md` carries no
      * refusal reason, so the resulting `LINK_DOWN` is byte-identical to a
-     * transport drop's, and [IrohConnection.retire] treated it as one. Worse,
-     * because the dial itself succeeded, each re-dial loop terminated
-     * immediately and the *next* refusal started a fresh loop at `attempt = 0`:
-     * the schedule never escalated past its first delay, so a refused peer
-     * re-dialled at a fixed ~1s forever, charging the refusing side one link
-     * accept plus one hello parse per second, indefinitely.
+     * transport drop's. The case is distinguishable **locally**, which is why
+     * this needs no wire change: `LINK_UP` followed by `LINK_DOWN` with
+     * [Session.peered] never true.
      *
-     * The case is nonetheless distinguishable **locally**, which is why this
-     * needs no wire change: `LINK_UP` followed by `LINK_DOWN` with
-     * [Session.peered] never true. Carrying a refusal reason on the wire is the
-     * other remedy the filing bead offers and is deliberately not taken here —
-     * it is a `PROTOCOL.md` change, which belongs to the open sibling
-     * `computenet-ey4v`, and AGENTS.md holds this module to wire compatibility
-     * absent a spec requirement.
+     * ## Where iroh charges the run, and why not where `:wire` does
      *
-     * ## Why five, and what it does not bound
+     * [ReconnectPolicy.admitDial] charges an open the moment it opens and
+     * cannot undo the charge. This transport charges at **close** instead, in
+     * [IrohConnection.retire], because only then does it know whether the
+     * link was a refusal at all: a link the [HelloGate] closed quietly, a
+     * mutual-dial tie-break loss, and a down after the sidecar refused a frame
+     * are all exempt, and none of them is known at open. So `retire` drives the
+     * policy's [ReconnectPolicy.onOpened]/[ReconnectPolicy.onClosed] pair at
+     * charge time, with the refusal window disabled (an admitted link, not a
+     * long-lived one, clears the run here — [ReconnectPolicy.onAdmitted]).
      *
-     * The number is a cost ceiling, not a semantic threshold: it is the total
-     * accept-plus-hello-parse work one refused peer may charge a listener per
-     * connection handle, and any small number does that. Five leaves room for
-     * the handful of unadmitted opens a *transient* fault can produce — a link
-     * torn down mid-handshake, a peer restarting between the dial and the hello
-     * — before the connection concludes it is being refused rather than
-     * unlucky. An **admitted** link resets the count to zero
-     * ([IrohConnection.unadmittedOpens]), so a healthy peering that flaps for
-     * hours never approaches it.
+     * ## What it does not bound
      *
-     * **The listening side's cost is this limit plus at most one.** The re-dial
-     * loop re-arms itself when it finds no live session, and that check can win
-     * the race against the `LINK_DOWN` that would have set the give-up — so one
-     * further link can be in flight when the run completes. It is exactly one:
-     * the single-flight [IrohConnection.reconnecting] guard admits no second
-     * loop, and the in-flight link's own `LINK_DOWN` finds the give-up already
-     * set. So a refused peer costs a listener between `limit` and `limit + 1`
-     * link-accept-plus-hello-parses, and never more —
-     * [IrohConnection.unadmittedOpens] can likewise finish one above the limit,
-     * because the in-flight link still counts itself when it goes down.
-     *
-     * It does **not** bound a dial that never establishes at all — an
-     * unreachable or absent peer. That throws inside the re-dial loop, produces
-     * no link and no accept for the peer to pay for, and still retries forever
-     * on purpose, exactly as `:wire`'s reconnect into an unbound port does
-     * (`WsReconnectRefusedTest`).
+     * **The listening side's cost is this limit plus at most one**: the re-dial
+     * loop re-arms when it finds no live session, and that check can win the
+     * race against the `LINK_DOWN` that sets the give-up, so one further link
+     * can be in flight when the run completes ([IrohConnection.unadmittedOpens]
+     * can likewise finish one above the limit). It does **not** bound a dial
+     * that never establishes at all — an unreachable or absent peer — which
+     * retries forever on purpose, as `:wire`'s reconnect into an unbound port
+     * does.
      */
-    const val REFUSED_DIAL_LIMIT: Int = 5
+    val REFUSED_DIAL_LIMIT: Int = ReconnectPolicy.REFUSED_DIAL_LIMIT
 
     /**
      * A [Peering.Side] whose credentials no [HELLO2_PREFIX] line can carry:
@@ -291,46 +271,34 @@ object IrohTransport {
      * credentials and still does: a dialler's `hello` runs inside the re-dial
      * loop, which would log and retry it forever; and a listener's runs from
      * `onHello` on the `SidecarClient` reader thread, whose catch-all fails
-     * every link on the sidecar — so one admitted hello would have taken down
-     * every peering the listener held. A configuration fault is refused at the
-     * call that configured it instead.
+     * every link on the sidecar. A configuration fault is refused at the call
+     * that configured it instead.
      *
-     * Credentials with **no** statements are never refused here: they send
-     * [HELLO_PREFIX]'s line, which carries no name.
-     *
-     * `WsTransport.UnsendableHelloCredentialsException` is the same refusal on
-     * `:wire`, declared twice by name because this module does not depend on
-     * `:wire` (see [DEFAULT_RECONNECT_BACKOFF] for the same trade).
+     * The rules are the kernel's [HelloCredentialLimits] ([HELLO_LIMITS]);
+     * this subclass of the kernel's exception exists so catches of the
+     * iroh-specific name keep working (gyvli-D2).
      */
     class UnsendableHelloCredentialsException internal constructor(message: String, cause: Throwable? = null) :
-        IllegalArgumentException(message, cause)
+        civictech.cell.wire.UnsendableHelloCredentialsException(message, cause)
 
-    /** Refuses [side] with [UnsendableHelloCredentialsException] when `Session.hello` could not send its credentials. */
-    private fun requireSendableHelloCredentials(side: Peering.Side) {
-        val credentials = side.credentials ?: return
-        val statements = credentials.statements
-        if (statements.isEmpty()) return
-        val name = credentials.peerId.name
-        if (statements.size > MAX_HELLO_STATEMENTS) {
-            throw UnsendableHelloCredentialsException(
-                "credentials for $name hold ${statements.size} statements; an IROH-HELLO2 line carries at most " +
-                    "$MAX_HELLO_STATEMENTS",
-            )
-        }
-        if (name.isEmpty() || ' ' in name) {
-            throw UnsendableHelloCredentialsException(
-                "credentials name '$name' cannot be an IROH-HELLO2 name token (empty or contains a space)",
-            )
-        }
-        statements.forEachIndexed { index, statement ->
-            try {
-                encodeIdentityStatementToken(statement)
-            } catch (e: IllegalArgumentException) {
-                throw UnsendableHelloCredentialsException(
-                    "credentials for $name: statement $index cannot be an IROH-HELLO2 token: ${e.message}",
-                    e,
-                )
-            }
+    /**
+     * What an `IROH-HELLO2` line can carry of a side's credentials: at most
+     * [MAX_HELLO_STATEMENTS] statements, a space-free non-empty name token,
+     * and statements `encodeIdentityStatementToken` accepts.
+     */
+    val HELLO_LIMITS: HelloCredentialLimits = HelloCredentialLimits(
+        maxStatements = MAX_HELLO_STATEMENTS,
+        tokenOk = HelloCredentialLimits.NAME_TOKEN,
+        lineName = "IROH-HELLO2",
+        encodeStatement = { encodeIdentityStatementToken(it) },
+    )
+
+    /** [HELLO_LIMITS] applied to [side], refusing with this module's [UnsendableHelloCredentialsException]. */
+    internal fun refuseUnsendable(side: Peering.Side) {
+        try {
+            HELLO_LIMITS.requireSendable(side)
+        } catch (e: civictech.cell.wire.UnsendableHelloCredentialsException) {
+            throw UnsendableHelloCredentialsException(e.message ?: "unsendable credentials", e.cause)
         }
     }
 
@@ -358,7 +326,7 @@ object IrohTransport {
         stderrSink: (String) -> Unit = {},
         sidecarArgs: List<String> = emptyList(),
     ): IrohListener {
-        requireSendableHelloCredentials(side)
+        refuseUnsendable(side)
         val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         val listener = try {
             IrohListener(process, process.connect(timeout), side)
@@ -409,7 +377,7 @@ object IrohTransport {
         sidecarArgs: List<String> = emptyList(),
         refusedDialLimit: Int = REFUSED_DIAL_LIMIT,
     ): IrohConnection {
-        requireSendableHelloCredentials(side)
+        refuseUnsendable(side)
         val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         return try {
             val client = process.connect(timeout)
@@ -446,7 +414,7 @@ object IrohTransport {
         stderrSink: (String) -> Unit = {},
         sidecarArgs: List<String> = emptyList(),
     ): IrohNode {
-        requireSendableHelloCredentials(side)
+        refuseUnsendable(side)
         val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         val node = try {
             IrohNode(process.asSidecar(), process.connect(timeout), side)
@@ -641,6 +609,15 @@ object IrohTransport {
          * no [gate] of their own — [HelloGate.ADMIT_ALL] never inspects it.
          */
         private val linkId: () -> Long = { -1L },
+        /**
+         * Invoked with this link's [Peering.ConnectionInstance] the instant
+         * [bindAndAnnounce] has admitted it — the edge a caller's
+         * [InstanceSuccession] needs to lift a predecessor's tombstones
+         * (gyvli-D3). The default makes every existing site unchanged.
+         */
+        private val onInstanceAdmitted: (Peering.ConnectionInstance) -> Unit = {},
+        /** Invoked once per inbound `DATA` this Session is handed — frame accounting for `PeerStats`. */
+        private val onFrameReceived: () -> Unit = {},
     ) {
         /**
          * This side's announcement signer is borrowed from the `Peering.Side`,
@@ -674,12 +651,43 @@ object IrohTransport {
             runCatching { fingerprint(Ed25519.publicKeyFromRaw(remoteNodeId)) }
         }
 
-        /** @see Session — minted by [hello], retired for good by [onDown]. */
+        /**
+         * This link's connection instance (gyvli-D3, computenet-vzb): its
+         * mirror, its ingress and its announcer, minted by [hello] and
+         * retired for good by [onDown].
+         */
         @Volatile
-        private var mirror: RegistryMirrorCell? = null
+        private var instance: Peering.ConnectionInstance? = null
+
+        /** @see Session — minted by [hello] as part of [instance], retired with it by [onDown]. */
+        private val mirror: RegistryMirrorCell? get() = instance?.mirror
+
+        /** The instance, once [hello] minted it — what a caller's [InstanceSuccession] retires and supersedes. */
+        val connectionInstance: Peering.ConnectionInstance? get() = instance
 
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
+
+        /** The ingress cell [bindAndAnnounce] minted, for its announcement-admission denial count. */
+        @Volatile
+        private var ingressCell: BridgeIngressCell? = null
+
+        /** Announcements this link's ingress refused at its admission gate (`PeerStats.refusedAnnouncements`). */
+        val refusedAnnouncements: Long
+            get() = ingressCell?.boundaryDenials?.get("announcement-admission")?.denialCount ?: 0L
+
+        /**
+         * Set by [fence]: the link is being severed on this side's behalf and
+         * nothing more it carries may reach the graph. Checked first in
+         * [onData], so a frame the sidecar dispatches between our `CLOSE_LINK`
+         * and the `LINK_DOWN` that answers it is dropped.
+         */
+        @Volatile
+        private var fenced = false
+
+        /** Frames dropped because [fence] had run. */
+        private val fencedDropCount = AtomicLong()
+        val fencedDrops: Long get() = fencedDropCount.get()
 
         /**
          * Whether the first `DATA` on this link has arrived. The grammar is
@@ -689,9 +697,6 @@ object IrohTransport {
          */
         @Volatile
         private var helloSeen = false
-
-        @Volatile
-        private var announcement: AutoCloseable? = null
 
         /**
          * Frames dropped because no admitted hello had installed an [ingress] yet
@@ -845,17 +850,22 @@ object IrohTransport {
                 // Tokens are computed before the mirror is minted, so a statement
                 // the codec refuses leaves no mirror behind.
                 val tokens = statements.map { encodeIdentityStatementToken(it) }
-                val fresh = Peering.spawnMirror(side, toPeer = egress)
-                mirror = fresh
+                val fresh = openInstance()
                 val line = buildString {
                     append(HELLO2_PREFIX).append(fresh.ref.id).append(' ').append(name)
                     tokens.forEach { append(' ').append(it) }
                 }
                 return line.toByteArray(StandardCharsets.UTF_8)
             }
-            val fresh = Peering.spawnMirror(side, toPeer = egress)
-            mirror = fresh
+            val fresh = openInstance()
             return (HELLO_PREFIX + fresh.ref.id).toByteArray(StandardCharsets.UTF_8)
+        }
+
+        /** Mint this link's connection instance and return its mirror. */
+        private fun openInstance(): RegistryMirrorCell {
+            val opened = Peering.openInstance(side, toPeer = egress)
+            instance = opened
+            return opened.mirror
         }
 
         /**
@@ -864,6 +874,11 @@ object IrohTransport {
          * link; dropped and counted otherwise.
          */
         fun onData(payload: ByteArray) {
+            onFrameReceived()
+            if (fenced) {
+                fencedDropCount.incrementAndGet()
+                return
+            }
             val current = ingress
             if (current != null) {
                 current.propagate(payload)
@@ -1170,32 +1185,39 @@ object IrohTransport {
          * `PeerStamp.issuer` is a parameter of the admission, never read later.
          */
         private fun bindAndAnnounce(peer: PeerId, key: KeyId, peerMirrorRef: UUID, issuer: IssuerId?) {
-            val instance = checkNotNull(mirror) { "onHello admitted a peer without opening a link instance" }
+            val opened = checkNotNull(instance) { "onHello admitted a peer without opening a link instance" }
             // Bind BEFORE announcing, so every Remote location this link installs
             // — including the peer's own catch-up burst, which cannot start
             // before it has seen our hello — records the peer's name (V4-PEERID).
-            instance.peer = peer
+            opened.mirror.peer = peer
             attributedPeer = peer
             // The level is a parameter fixed HERE, at the admission decision,
             // before the ingress exists — never read from a frame. See the class
             // KDoc for the proof-of-possession argument and its assumptions.
-            ingress = Peering.hostIngress(
-                side,
+            ingress = opened.hostIngress(
                 fromPeer = peer,
                 fromPeerAuth = AuthLevel.Authenticated,
                 fromPeerIssuer = issuer,
                 fromKey = key,
+                onSpawn = { ingressCell = it },
             )
-            announcement?.close()
-            announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
+            opened.announceTo(CellRef(peerMirrorRef), via = egress)
             // Last, so an observer that reads `peered`/`attributedPeer` from
             // this callback sees a link that is fully bound.
+            onInstanceAdmitted(opened)
             onAdmitted(peer)
         }
 
         /**
-         * The link is down: retire the announcer and detach the mirror, both
-         * permanently.
+         * The link is down: retire this link's connection instance for good
+         * ([Peering.ConnectionInstance.retire], gyvli-D3) — stop announcing,
+         * detach the mirror, tombstone the instance's refs, despawn its cells.
+         *
+         * Called only from a `LINK_DOWN`, which `PROTOCOL.md` §3 makes the last
+         * event on its link: the sidecar reader dispatches nothing for this
+         * link afterwards, so nothing can still decode for this instance — the
+         * premise [Peering.ConnectionInstance.supersededBy] needs before a
+         * successor may lift the tombstones.
          *
          * `detach` shuts the gate and retracts this link's Remote locations in
          * one step, which a bare `unpublishRemotes(via = egress)` could not: this
@@ -1204,9 +1226,75 @@ object IrohTransport {
          * announcement decoded before this close can be applied after it.
          */
         fun onDown() {
-            announcement?.close()
-            announcement = null
+            instance?.retire()
+        }
+
+        /**
+         * Sever this link on this side's behalf **before** its `LINK_DOWN`
+         * arrives (`IrohConnection.partition`): stop announcing, shut the
+         * mirror's gate (retracting what it installed), and drop every frame
+         * dispatched from here on. Not a retirement — frames may still be
+         * dispatched for this link until its `LINK_DOWN`, so the tombstones
+         * [onDown] lays must wait for it. Idempotent.
+         */
+        fun fence() {
+            fenced = true
+            instance?.stopAnnouncing()
             mirror?.detach()
+        }
+    }
+
+    /**
+     * The succession of one peer's connection instances on one side
+     * (gyvli-D3): which retired instances may have their tombstones lifted
+     * ([Peering.ConnectionInstance.supersededBy]), and when.
+     *
+     * An instance is retired on its link's `LINK_DOWN` ([Session.onDown]) —
+     * the last event the sidecar reader dispatches for that link, so nothing
+     * can still decode for it. It is superseded once a **later** instance of
+     * the same peer is admitted. The two edges arrive in either order (a
+     * partition fences a link and heals onto a new one before the old link's
+     * `LINK_DOWN` is read), so each is recorded until its partner arrives:
+     * a retirement with no admitted successor yet waits in [pending]; an
+     * admission supersedes everything pending.
+     *
+     * ## The second unpublish a lifted tombstone lets through is harmless
+     *
+     * [Peering.ConnectionInstance.retire] enqueues the despawn of the
+     * instance's cells on the bridge host; supersession can lift the tombstone
+     * before that despawn runs. The despawn then reaches
+     * `LocationRegistry.unpublish` for a ref with no location and no
+     * tombstone, which fires the any-scope `onUnpublish` hooks once more for a
+     * ref [Peering.ConnectionInstance.retire] already unpublished. It does
+     * **not** fire `onLocalUnpublish` (the ref no longer has a `Local`
+     * location), so no announcer tells the peer anything; the any-scope
+     * consumers (the inspector's model, replication's link table, the module
+     * loader's observation) each remove by ref, which is idempotent. Pinned
+     * by `SeveredDialClosesQuietlyTest` (computenet-gyvli.4, amending
+     * gyvli.2's review).
+     */
+    internal class InstanceSuccession {
+        private val pending = mutableListOf<Peering.ConnectionInstance>()
+        private var admitted: Peering.ConnectionInstance? = null
+
+        /** [instance] was retired ([Peering.ConnectionInstance.retire] has run). */
+        @Synchronized
+        fun retired(instance: Peering.ConnectionInstance) {
+            val successor = admitted
+            if (successor != null && successor !== instance) {
+                instance.supersededBy(successor)
+            } else {
+                if (successor === instance) admitted = null
+                pending += instance
+            }
+        }
+
+        /** [instance] was admitted: every retired predecessor is superseded by it. */
+        @Synchronized
+        fun admitted(instance: Peering.ConnectionInstance) {
+            pending.forEach { it.supersededBy(instance) }
+            pending.clear()
+            admitted = instance
         }
     }
 
@@ -1266,16 +1354,39 @@ object IrohTransport {
 
         internal fun sessionFor(linkId: Long): Session? = sessions[linkId]
 
+        private val sent = AtomicLong()
+        private val received = AtomicLong()
+        private val retiredRefusedAnnouncements = AtomicLong()
+
+        /** Frames written to, and read from, every link this listener accepted (`PeerStats`). */
+        val framesSent: Long get() = sent.get()
+
+        /** @see framesSent */
+        val framesReceived: Long get() = received.get()
+
+        /** Announcements refused at the admission gate of every ingress this listener minted, live or retired. */
+        val refusedAnnouncements: Long
+            get() = retiredRefusedAnnouncements.get() + sessions.values.sumOf { it.refusedAnnouncements }
+
+        /** One [InstanceSuccession] per remote NodeId (hex): a peer's re-dial supersedes its previous link. */
+        private val successions = ConcurrentHashMap<String, InstanceSuccession>()
+
         internal fun start(timeout: Duration) {
             client.onInboundLink { link ->
+                val succession = successions.computeIfAbsent(link.remoteNodeId.toHex()) { InstanceSuccession() }
                 val session = Session(
                     side,
                     // The key this link is admitted on: the endpoint the sidecar
                     // authenticated when it accepted the QUIC connection.
                     link.remoteNodeId,
-                    send = { link.send(it) },
+                    send = {
+                        link.send(it)
+                        sent.incrementAndGet()
+                    },
                     refuse = { link.close() },
                     admissionSink = admissionSink,
+                    onInstanceAdmitted = succession::admitted,
+                    onFrameReceived = { received.incrementAndGet() },
                 )
                 sessions[link.id] = session
                 object : LinkListener {
@@ -1283,7 +1394,9 @@ object IrohTransport {
 
                     override fun onDown(link: SidecarLink, reason: String) {
                         sessions.remove(link.id)
+                        retiredRefusedAnnouncements.addAndGet(session.refusedAnnouncements)
                         session.onDown()
+                        session.connectionInstance?.let(succession::retired)
                     }
 
                     override fun onError(link: SidecarLink, reason: String) {
@@ -1509,32 +1622,64 @@ object IrohTransport {
         private var shuttingDown = false
 
         /**
+         * The kernel's shared reconnect decision (gyvli-D2): the refused-dial
+         * run and its abandonment, and the two intent flags — `severed`
+         * ([partition] until [heal]) and `deliberateClose` ([close]). Charged
+         * at close rather than at open, with the refusal window disabled; see
+         * [REFUSED_DIAL_LIMIT] for why.
+         */
+        private val policy = ReconnectPolicy(backoff, refusedDialLimit, refusalWindowMs = Long.MAX_VALUE)
+
+        /**
+         * Guards the step from "a dial returned" to "its link is this
+         * connection's current link" against [partition]: either the partition
+         * sees the new link and closes it, or the dial sees the partition and
+         * closes its link quietly — never neither (computenet-g1aua).
+         */
+        private val linkLock = Any()
+
+        /**
+         * Links this side closed on its own behalf without a [closeRequested]
+         * one-shot: a link [partition] severed, and a dial that returned after
+         * a [partition] or [close] ([openLink]'s post-dial gate). Their
+         * `LINK_DOWN`s are charged to nothing and re-dial nothing, whenever
+         * they arrive — a set of ids rather than a one-shot flag because a
+         * [heal] may run before they do.
+         */
+        private val closedOnOurBehalf: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+        /** @see InstanceSuccession — this connection's successive links, for [Peering.ConnectionInstance.supersededBy]. */
+        private val succession = InstanceSuccession()
+
+        private val sent = AtomicLong()
+        private val received = AtomicLong()
+        private val retiredRefusedAnnouncements = AtomicLong()
+        private val severedDials = AtomicLong()
+
+        /** Frames written to, and read from, every link of this connection (`PeerStats`). */
+        val framesSent: Long get() = sent.get()
+
+        /** @see framesSent */
+        val framesReceived: Long get() = received.get()
+
+        /** Announcements refused at the admission gate of every ingress this connection minted. */
+        val refusedAnnouncements: Long
+            get() = retiredRefusedAnnouncements.get() + (currentSession.get()?.refusedAnnouncements ?: 0L)
+
+        /**
+         * Dials that returned after a [partition] or [close] and were closed
+         * quietly by [openLink]'s post-dial gate, never admitted
+         * (computenet-g1aua).
+         */
+        val severedDialsClosed: Long get() = severedDials.get()
+
+        /**
          * Single-flight guard on the re-dial loop, for the reason
          * `WsConnection.reconnecting` exists: one loop retries, and a
          * `LINK_DOWN` that arrives while a loop is running must not spawn a
          * second one racing it onto the same connection.
          */
         private val reconnecting = java.util.concurrent.atomic.AtomicBoolean(false)
-
-        /**
-         * Consecutive links that came **up** and went **down without ever being
-         * admitted** — the refusal signal `PROTOCOL.md` does not carry, read off
-         * the local link lifecycle instead (computenet-4gzr, [REFUSED_DIAL_LIMIT]).
-         *
-         * Reset to zero by any link that *was* admitted, so this counts a run of
-         * refusals rather than a lifetime total: a peering that flaps for hours
-         * and re-peers each time never approaches the limit.
-         */
-        private val unadmitted = java.util.concurrent.atomic.AtomicInteger(0)
-
-        /**
-         * True once [refusedDialLimit] consecutive unadmitted opens have ended
-         * the re-dialling. Terminal for the connection's own retry loop — only
-         * an explicit [heal] resumes it, which is an operator's decision to try
-         * again rather than a schedule's.
-         */
-        @Volatile
-        private var abandoned = false
 
         private val backoffCalls = AtomicLong()
         private val highestAttempt = java.util.concurrent.atomic.AtomicInteger(-1)
@@ -1596,6 +1741,9 @@ object IrohTransport {
         /** True while a link is up whose peer hello was admitted. */
         val peered: Boolean get() = currentSession.get()?.peered ?: false
 
+        /** [peered], and not [partition]ed — `PeerConnection.isCarrying`. */
+        val isCarrying: Boolean get() = peered && !policy.severed
+
         /**
          * The live link instance's mirror ref, or null while there is no link.
          * **A different [CellRef] after every re-establishment** — the assertion
@@ -1622,7 +1770,7 @@ object IrohTransport {
          * How many consecutive links have come up and gone down without ever
          * being admitted. @see REFUSED_DIAL_LIMIT
          */
-        val unadmittedOpens: Int get() = unadmitted.get()
+        val unadmittedOpens: Int get() = policy.unadmittedOpens
 
         /**
          * True once this connection has given up re-dialling a peer that keeps
@@ -1631,7 +1779,10 @@ object IrohTransport {
          * which is the same reason `WsConnection.scheduleReconnect` announces an
          * interrupted retry loop instead of dying quietly.
          */
-        val abandonedAfterRefusals: Boolean get() = abandoned
+        val abandonedAfterRefusals: Boolean get() = policy.abandoned
+
+        /** Whether [partition] holds this connection severed (until [heal]). */
+        val severed: Boolean get() = policy.severed
 
         /** This side's own iroh endpoint id. */
         val nodeId: ByteArray get() = sidecar.nodeId
@@ -1647,6 +1798,33 @@ object IrohTransport {
             val link = currentLink.get() ?: return
             closeRequested.set(true)
             link.close()
+        }
+
+        /**
+         * Sever this connection and **hold it severed** until [heal]
+         * (`PeerConnection.partition`, gyvli-D1/D2): the policy is marked
+         * severed first, so no re-dial is attempted — the loop asks before every
+         * attempt — and a dial already in flight is closed quietly when it
+         * returns ([openLink]'s post-dial gate). That in-flight dial is the
+         * computenet-g1aua race: an instant-backoff re-dial completing after
+         * the sever used to carry a ref published while partitioned.
+         *
+         * The live link, if any, is fenced before it is closed
+         * ([Session.fence]): announcing stops and the mirror's gate shuts now,
+         * and frames the sidecar still dispatches for the link before its
+         * `LINK_DOWN` are dropped. Unlike [sever] this leaves [isCarrying]
+         * false on return.
+         */
+        fun partition() {
+            val (link, session) = synchronized(linkLock) {
+                policy.sever()
+                val link = currentLink.getAndSet(null)
+                val session = currentSession.getAndSet(null)
+                if (link != null) closedOnOurBehalf += link.id
+                link to session
+            }
+            session?.fence()
+            link?.let { runCatching { it.close() } }
         }
 
         /**
@@ -1726,8 +1904,7 @@ object IrohTransport {
          *   retrying silently.
          */
         fun heal(timeout: Duration = redialTimeout) {
-            unadmitted.set(0)
-            abandoned = false
+            policy.heal()
             if (!reconnecting.compareAndSet(false, true)) return // a loop is already dialling
             try {
                 openLink(timeout)
@@ -1766,6 +1943,7 @@ object IrohTransport {
                 send = { payload ->
                     val link = linkHolder.get() ?: throw SidecarException("this connection has no link yet")
                     link.send(payload)
+                    sent.incrementAndGet()
                 },
                 refuse = { linkHolder.get()?.close() },
                 admissionSink = admissionSink,
@@ -1783,6 +1961,8 @@ object IrohTransport {
                 // Session is built, but `linkHolder` is set before any frame —
                 // and so any hello — can be delivered on it.
                 linkId = { linkHolder.get()!!.id },
+                onInstanceAdmitted = succession::admitted,
+                onFrameReceived = { received.incrementAndGet() },
             )
             val link = client.dial(
                 peerNodeId,
@@ -1804,8 +1984,31 @@ object IrohTransport {
             )
             observer?.dialReturned(link)
             linkHolder.set(link)
-            currentLink.set(link)
-            currentSession.set(session)
+            // The post-dial gate (gyvli-D2, computenet-g1aua): a dial that was
+            // already in flight when this connection was partitioned or closed
+            // returns here AFTER the policy said no. Asked under [linkLock], so
+            // a concurrent [partition] either sees this link installed (and
+            // closes it) or is seen here — and such a link is closed quietly:
+            // no hello, no session, no charge, no re-dial.
+            val gated = synchronized(linkLock) {
+                if (policy.severed || policy.deliberateClose) {
+                    closedOnOurBehalf += link.id
+                    true
+                } else {
+                    currentLink.set(link)
+                    currentSession.set(session)
+                    false
+                }
+            }
+            if (gated) {
+                severedDials.incrementAndGet()
+                System.err.println(
+                    "[IrohTransport] link ${link.id} opened after this connection was partitioned or closed; " +
+                        "closing it quietly, unadmitted and uncharged",
+                )
+                runCatching { link.close() }
+                return
+            }
             // The link's LINK_DOWN may already have been dispatched: the client
             // releases a dialled link's events once the dial has decided, which
             // is before this thread gets here (computenet-wad38). If `retire`
@@ -1848,10 +2051,22 @@ object IrohTransport {
         private fun retire(session: Session, link: SidecarLink, reason: String) {
             retiredPreHelloDrops.addAndGet(session.preHelloDrops)
             retiredQuietCloseDrops.addAndGet(session.quietCloseDrops)
+            retiredRefusedAnnouncements.addAndGet(session.refusedAnnouncements)
             session.onDown()
+            // LINK_DOWN is the last event on this link, so the instance just
+            // retired may now be superseded (gyvli-D3).
+            session.connectionInstance?.let(succession::retired)
             currentSession.compareAndSet(session, null)
             currentLink.compareAndSet(link, null)
             if (shuttingDown) {
+                observer?.onDown(link.id, null)
+                return
+            }
+            // A link this side severed ([partition]) or closed at the post-dial
+            // gate: requested, whenever its down arrives — charged to nothing,
+            // re-dialled by nothing. The policy check covers a down that raced
+            // ahead of the gate recording the id.
+            if (closedOnOurBehalf.remove(link.id) || policy.severed || policy.deliberateClose) {
                 observer?.onDown(link.id, null)
                 return
             }
@@ -1873,7 +2088,7 @@ object IrohTransport {
                     // it to exempt the next down is the same safe direction
                     // retire's other early returns take.
                     afterRefusal = false,
-                    abandoned = abandoned,
+                    abandoned = policy.abandoned,
                     lastDenial = session.lastAdmissionDenial,
                 )
                 System.err.println("[IrohTransport] link ${link.id} closed quietly ($reason); not re-dialled, not charged")
@@ -1894,7 +2109,7 @@ object IrohTransport {
                     peered = false,
                     quiet = true,
                     afterRefusal = false,
-                    abandoned = abandoned,
+                    abandoned = policy.abandoned,
                     lastDenial = session.lastAdmissionDenial,
                 )
                 System.err.println(
@@ -1915,10 +2130,15 @@ object IrohTransport {
             // (computenet-4gzr). An admitted link clears the run; a run that
             // reaches the limit ends the re-dialling for good, because nothing
             // that happens on this wire will ever change the peer's mind.
+            //
+            // The charge is made HERE, at close, through the policy's
+            // onOpened/onClosed pair rather than at open through admitDial,
+            // because every exemption above (quiet close, tie-break loss) and
+            // the after-refusal one below is only known now — see
+            // REFUSED_DIAL_LIMIT. onClosed is what sets `abandoned` at the limit.
             if (session.peered) {
-                unadmitted.set(0)
-            } else if (!afterRefusal && unadmitted.incrementAndGet() >= refusedDialLimit) {
-                abandoned = true
+                policy.onAdmitted()
+            } else if (!afterRefusal && chargeUnadmittedOpen()) {
                 System.err.println(
                     "[IrohTransport] link ${link.id} went down unplanned ($reason) after $refusedDialLimit " +
                         "consecutive links that were never admitted; this peer is refusing us and will not be " +
@@ -1929,6 +2149,14 @@ object IrohTransport {
             }
             System.err.println("[IrohTransport] link ${link.id} went down unplanned ($reason); re-dialling")
             if (!reportUnplanned(session, link, afterRefusal)) scheduleReconnect()
+        }
+
+        /** Charge one unadmitted open to the policy; true when it ended the re-dialling ([ReconnectPolicy.abandoned]). */
+        private fun chargeUnadmittedOpen(): Boolean {
+            val now = System.nanoTime()
+            policy.onOpened(now)
+            policy.onClosed(now)
+            return policy.abandoned
         }
 
         /**
@@ -1942,7 +2170,7 @@ object IrohTransport {
                 peered = session.peered,
                 quiet = false,
                 afterRefusal = afterRefusal,
-                abandoned = abandoned,
+                abandoned = policy.abandoned,
                 lastDenial = session.lastAdmissionDenial,
             )
             observer?.onDown(link.id, outcome)
@@ -1960,16 +2188,19 @@ object IrohTransport {
          * re-dial that happens to succeed at once.
          */
         private fun scheduleReconnect() {
-            if (shuttingDown || abandoned) return
+            if (shuttingDown || !policy.shouldRedial()) return
             if (!reconnecting.compareAndSet(false, true)) return // a loop is already retrying
             Thread({
                 try {
                     var attempt = 0
-                    while (!shuttingDown && currentSession.get() == null) {
+                    // The policy is asked before EVERY attempt, after the sleep
+                    // too: a partition or close that lands during the backoff
+                    // stops the loop without a dial (gyvli-D2).
+                    while (!shuttingDown && currentSession.get() == null && policy.shouldRedial()) {
                         try {
                             Thread.sleep(delayFor(attempt))
                             attempt++
-                            if (shuttingDown) break
+                            if (shuttingDown || !policy.shouldRedial()) break
                             openLink(redialTimeout)
                         } catch (_: InterruptedException) {
                             System.err.println("[IrohTransport] re-dial loop interrupted; this connection will not retry")
@@ -2003,6 +2234,9 @@ object IrohTransport {
          * would take an endpoint down to close one peering (ktn1l-D13).
          */
         override fun close() {
+            // Deliberate (gyvli-D4): recorded before anything goes down, so no
+            // loop re-arms and a dial still in flight is closed at the gate.
+            policy.closeDeliberately()
             shuttingDown = true
             closeRequested.set(true)
             runCatching { currentLink.get()?.close() }

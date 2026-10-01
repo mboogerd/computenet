@@ -3,10 +3,12 @@ package civictech.demo.beadsmirror.e2e
 import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.wire.PeerAddress
+import civictech.cell.wire.PeerConnection
+import civictech.cell.wire.PeerListener
+import civictech.cell.wire.PeerTransport
+import civictech.cell.wire.PeerTransports
 import civictech.cell.wire.Peering
-import civictech.demo.beadsmirror.MirrorLink
-import civictech.demo.beadsmirror.MirrorTransport
-import civictech.demo.beadsmirror.WsMirrorTransport
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
@@ -32,8 +34,8 @@ import org.opentest4j.AssertionFailedError
  * **Deliberately NOT part of [ConvergenceSuite].** The suite is the artifact
  * DSC0 re-runs unmodified over an iroh transport; a seeded defect proves the
  * assertions' teeth ONCE, against the WebSocket binding, and a future
- * transport has no reason to re-pay it. That is why this class names
- * [WsMirrorTransport] where the suite refuses to.
+ * transport has no reason to re-pay it. That is why this class resolves the
+ * `ws` provider where the suite refuses to.
  *
  * **Cost.** The defective run pays the full [TwoNodeRig.AWAIT_CONVERGENCE_MS]
  * budget by construction — it is waiting for something that will never
@@ -206,7 +208,7 @@ class ConvergenceDivergenceControlTest {
 }
 
 /**
- * **The seeded defect** (task computenet-7em.2.3): a [MirrorTransport]
+ * **The seeded defect** (task computenet-7em.2.3): a [PeerTransport]
  * decorator that leaves the dialer's end alone and makes the LISTENER *deaf*
  * to the peer's announcements — so the listener never learns the dialer's
  * replica refs, never links out to them, and its deltas never reach the
@@ -216,7 +218,7 @@ class ConvergenceDivergenceControlTest {
  *
  * The feature's design says "suppressing gossip link establishment in one
  * direction", and one WebSocket socket has no one-direction switch: severing
- * it is [WsMirrorTransport.partition], which is the *other* control entirely.
+ * it through [PeerConnection.partition], which is the *other* control entirely.
  * What IS directional is the announcement that causes a link to form.
  * `Replication` links a local replica outward when a peer's ref appears in the
  * local [LocationRegistry] (`registry.onPublish { linkOut(it) }`), and that ref
@@ -229,7 +231,7 @@ class ConvergenceDivergenceControlTest {
  *
  * That is expressible entirely at the injection seam, with public kernel API
  * and no kernel or `:wire` main-source change — which is the point of the seam
- * ([MirrorTransport]), and mirrors how [civictech.demo.beadsmirror.projector.SeededDefects]
+ * ([PeerTransport]), and mirrors how [civictech.demo.beadsmirror.projector.SeededDefects]
  * deliberately does not exist on `BeadsMirrorConfig`: a defective wiring must
  * not be reachable from a running app.
  *
@@ -258,19 +260,19 @@ class ConvergenceDivergenceControlTest {
  * exactly as long as the rig that failed on purpose.
  */
 private class DeafListenerTransport(
-    private val delegate: MirrorTransport = WsMirrorTransport(reconnectBackoff = { 10L }),
-) : MirrorTransport {
+    private val delegate: PeerTransport = PeerTransports.forScheme("ws"),
+) : PeerTransport {
+
+    override val scheme: String get() = delegate.scheme
+
+    override fun parseAddress(text: String): PeerAddress = delegate.parseAddress(text)
 
     /** The listening end — the deaf one. */
-    override fun listen(requestedWsPort: Int, side: Peering.Side): MirrorLink =
-        delegate.listen(requestedWsPort, deafened(side))
+    override fun listen(address: PeerAddress, side: Peering.Side): PeerListener =
+        delegate.listen(address, deafened(side))
 
     /** The dialing end, untouched: it hears the listener and links out normally. */
-    override fun dial(uri: String, side: Peering.Side): MirrorLink = delegate.dial(uri, side)
-
-    override fun partition() = delegate.partition()
-
-    override fun heal() = delegate.heal()
+    override fun dial(address: PeerAddress, side: Peering.Side): PeerConnection = delegate.dial(address, side)
 
     private fun deafened(real: Peering.Side): Peering.Side {
         val decoy = LocationRegistry()

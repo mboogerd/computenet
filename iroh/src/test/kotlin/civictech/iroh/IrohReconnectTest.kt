@@ -126,7 +126,6 @@ class IrohReconnectTest {
                     b.registry.location(shared.ref) is LocationRegistry.Remote
                 }
                 val severedRef: CellRef = connection.mirrorRef ?: fail("the first link minted no mirror")
-                val severedMirror = connection.mirrorCell ?: fail("the first link minted no mirror")
 
                 // ---- sever: CLOSE_LINK, one LINK_DOWN per side ---------------
                 //
@@ -151,6 +150,14 @@ class IrohReconnectTest {
                     b.registry.location(shared.ref) !is LocationRegistry.Remote,
                     "the severed instance's mirror did not retract what it had installed",
                 )
+
+                // ---- the severed instance is RETIRED (gyvli-D3) --------------
+                // Its LINK_DOWN retires it: the mirror's ref is tombstoned, so
+                // a late announcement addressed to it is refused at the
+                // registry and counted — neither delivered nor parked — while
+                // the cell itself is despawned rather than left detached.
+                await("the severed link's instance is retired") { severedRef in b.registry.retiredRefs() }
+                assertLateAnnouncementRefused(b, severedRef)
 
                 // ---- heal: a NEW link, and therefore a new everything --------
                 connection.heal()
@@ -183,22 +190,11 @@ class IrohReconnectTest {
                     afterHeal.membership() == setOf("milk")
                 }
 
-                // ---- the pre-heal mirror's gate never re-opens ---------------
-                // Nothing addresses a retired mirror any more, so its refusal
-                // count would stay 0 on its own and prove nothing. Drive it
-                // directly instead: a detached mirror refuses, and installs
-                // nothing.
-                val ghost = CellRef(UUID.randomUUID())
-                val refusedBefore = severedMirror.refusedAnnouncements
-                severedMirror.inlet.call.published(ghost)
-                await("the detached mirror refuses an announcement addressed to it") {
-                    severedMirror.refusedAnnouncements == refusedBefore + 1
-                }
-                assertEquals(
-                    null,
-                    b.registry.location(ghost),
-                    "a detached mirror installed a location; its fence is not permanent",
-                )
+                // ---- the pre-heal instance is gone, not left spawned ---------
+                // Superseded by the healed instance, its tombstone is lifted
+                // (nothing can decode for it: its LINK_DOWN was its link's last
+                // event), its mirror cell is despawned, and its gate stays shut.
+                assertInstanceSuperseded(b, severedRef)
                 assertTrue(connection.linkErrors.isEmpty(), "sidecar reported link errors: ${connection.linkErrors}")
             }
         }
@@ -352,6 +348,10 @@ class IrohReconnectTest {
                     // ---- an UNPLANNED drop: the loop starts ------------------
                     fake.send(SidecarMessage.LinkDown(link1, "peer vanished"))
                     await("the dialler's link went down") { !connection.peered }
+                    // Retired on its LINK_DOWN (gyvli-D3): tombstoned, so a late
+                    // announcement to it is refused, never parked.
+                    await("the dropped link's instance is retired") { mirror1.ref in b.registry.retiredRefs() }
+                    assertLateAnnouncementRefused(b, mirror1.ref)
 
                     // The loop's re-dial. It is NOT answered: `SidecarClient.dial`
                     // blocks on the LINK_UP, so from here to the end of the pin
@@ -384,26 +384,45 @@ class IrohReconnectTest {
                     val mirror2 = connection.mirrorCell ?: fail("the re-dialled link minted no mirror")
                     assertNotSame(mirror1, mirror2, "a reconnect must mint a FRESH mirror (computenet-dqy.14)")
 
-                    // ...and the only other mirror this connection ever minted is
-                    // detached for good. Nothing addresses a retired mirror any
-                    // more, so drive it directly: a detached mirror refuses, and
-                    // installs nothing.
-                    val ghost = CellRef(UUID.randomUUID())
-                    val refusedBefore = mirror1.refusedAnnouncements
-                    mirror1.inlet.call.published(ghost)
-                    await("the dropped link's mirror refuses an announcement addressed to it") {
-                        mirror1.refusedAnnouncements == refusedBefore + 1
-                    }
-                    assertEquals(
-                        null,
-                        b.registry.location(ghost),
-                        "a detached mirror installed a location; its fence is not permanent",
-                    )
+                    // ...and the only other instance this connection ever minted
+                    // is retired and superseded: despawned, gate shut, tombstone
+                    // lifted by the re-dial's admission.
+                    assertInstanceSuperseded(b, mirror1.ref)
                 } finally {
                     connection.close()
                 }
             }
         }
+    }
+
+    /**
+     * A late `published` addressed to the retired mirror [mirror], sent
+     * through [stack]'s registry the way a peer's announcer's frame would
+     * arrive: refused at the tombstone and counted, installing nothing.
+     */
+    private fun assertLateAnnouncementRefused(stack: Stack, mirror: CellRef) {
+        val ghost = CellRef(UUID.randomUUID())
+        val refusedBefore = stack.registry.retiredRefusals
+        (HostedCellProxy.create(mirror, stack.registry, Peering.AnnounceInletProxy::class.java) as Peering.AnnounceInletProxy)
+            .inlet.call.published(ghost)
+        await("the retired mirror's tombstone refuses an announcement addressed to it") {
+            stack.registry.retiredRefusals == refusedBefore + 1
+        }
+        assertEquals(null, stack.registry.location(ghost), "a retired mirror installed a location")
+    }
+
+    /**
+     * The instance whose mirror is [ref] was superseded: its tombstone lifted
+     * (a successor was admitted), its mirror cell despawned from the bridge
+     * host and unlocated.
+     */
+    private fun assertInstanceSuperseded(stack: Stack, ref: CellRef) {
+        await("the retired instance's tombstone is lifted by its successor") { ref !in stack.registry.retiredRefs() }
+        await("the retired mirror cell is despawned") {
+            stack.bridgeHost.lookup(ref, Peering.AnnounceInletProxy::class.java) == null
+        }
+        assertFalse(ref in stack.registry.localRefs(), "a retired mirror is still announced as a local ref")
+        assertEquals(null, stack.registry.location(ref), "a retired mirror still has a location")
     }
 
     /** There is no child process behind [FakeSidecar]; the node id is never read here. */

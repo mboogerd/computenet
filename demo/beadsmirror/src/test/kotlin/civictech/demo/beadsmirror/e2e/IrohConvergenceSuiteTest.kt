@@ -1,18 +1,15 @@
 package civictech.demo.beadsmirror.e2e
 
-import civictech.demo.beadsmirror.IrohMirrorTransport
+import civictech.cell.wire.PeerTransports
 import civictech.demo.beadsmirror.IrohSidecarGate
 import org.junit.jupiter.api.BeforeEach
 
 /**
  * Epic `computenet-egl`'s headline acceptance (task `computenet-egl.4.2`):
  * [ConvergenceSuite] — every case, unmodified — run over
- * [IrohMirrorTransport] instead of
- * [civictech.demo.beadsmirror.WsMirrorTransport]. This class imports
- * `civictech.demo.beadsmirror.IrohMirrorTransport` and nothing under
- * `civictech.iroh`; [ConvergenceSuite] itself still imports neither. The
- * substitution is entirely in this file's [newRig] factory — "same tests,
- * different module" (epic `computenet-egl` §2 bullet 2).
+ * the kernel `iroh` provider instead of the `ws` provider.
+ * [ConvergenceSuite] itself names neither binding; substitution stays in
+ * this file's [newRig] factory — "same tests, different module".
  *
  * **Two independent skip gates, both `@BeforeEach`.** [ConvergenceSuite.checkPrerequisites]
  * (inherited) assumes `bd`/`dolt` on `PATH`; [checkSidecar] below assumes the
@@ -26,18 +23,15 @@ import org.junit.jupiter.api.BeforeEach
  * its own is never called with a missing binary, since [ConvergenceSuite]'s
  * test bodies construct a rig unconditionally once `@BeforeEach` has passed.
  *
- * The reconnect backoff is the same near-zero T12 seam
- * [WsConvergenceSuiteTest] passes to `WsMirrorTransport` — an unplanned
- * re-dial (there is none on the planned-sever path the partition case takes)
- * costs scheduling, not wall clock.
+ * The provider receives the sidecar binary through its ordinary config.
  */
 class IrohConvergenceSuiteTest : ConvergenceSuite(
     newRig = {
         TwoNodeRig.create(
             "bds2-iroh-convergence",
-            transport = IrohMirrorTransport(
-                binary = IrohSidecarGate.orSkip(),
-                reconnectBackoff = { 10L },
+            transport = PeerTransports.forScheme(
+                "iroh",
+                mapOf("binary" to IrohSidecarGate.orSkip().toString()),
             ),
         )
     },

@@ -112,6 +112,12 @@ for documentation maintenance.
   stream per peer link (DSC0, epic `computenet-egl`); Cargo tasks are opt-in
   behind `-Piroh.enabled=true`, so the default build and CI stay pure-JVM.
   Depends on `:kernel`, `:identity`; `:kernel` must not depend on it.
+- `runtime/` (`:runtime`): the application composition root — validates a
+  serializable manifest, builds registries/hosts/per-host journals and one
+  shared node budget, applies a `GraphSpec`, then opens `PeerTransport`
+  peering and an optional Inspector in a second phase. It is the one module
+  that knows both `:wire` and `:iroh`; those bindings, `:kernel`, `:inspect`
+  and `:economy` must not depend back on it.
 - `economy/` (`:economy`): validated, serializable economic policy
   (`EconomicPolicy`) for `BudgetLedger` implementations, plus a token-bucket
   ledger built on it (ECO1, epic `computenet-66m`). Same dependency shape as
@@ -186,8 +192,8 @@ for documentation maintenance.
   `doc/archive/{runs,frontend,adr}/` holds historical material, not guidance.
 - `backlog/`: idea inbox, one file per prospective feature (some marked
   IMPLEMENTED/absorbed). `bugs/`: fixed-defect reports, inert.
-- `legacy/` and `runtime/`: untracked directories containing only stale build
-  output — no sources. Ignore them.
+- `legacy/`: an untracked directory containing only stale build output — no
+  sources. Ignore it.
 
 ## Core invariants to protect
 
