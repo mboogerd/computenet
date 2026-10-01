@@ -16,6 +16,7 @@ import civictech.cell.partition.ShardCell
 import civictech.cell.port.Use
 import civictech.cell.replication.Replication
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
@@ -84,6 +85,7 @@ class GraphSpecReplicationParameterTest {
         val declared = replicatedRun(declared = true)
         val imperative = replicatedRun(declared = false)
 
+        withClue("instance 2 holds x") { declared.memberships[1] shouldBe setOf("x") }
         declared.memberships shouldBe listOf(setOf("x"), setOf("x"))
         declared shouldBe imperative
     }
