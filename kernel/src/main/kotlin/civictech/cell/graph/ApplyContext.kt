@@ -32,6 +32,26 @@ class ApplyContext(
     }
 
     fun journalFor(ref: CellRef): Journal? = journalBindings[ref]
+
+    /** Construct the wrapper for a keyed family without spawning or recovering any key. */
+    internal fun buildFamily(step: SpawnStep): KeyedCells<Any> {
+        val family = step.family
+            ?: error("spawn step '${step.handle}' has no family parameter")
+        val factory = step.factory as? KeyedCellFactory
+            ?: error("spawn step '${step.handle}': parameter 'family' requires a KeyedCellFactory")
+        val journalDir = family.journalId?.let { journalId ->
+            journalDirs[journalId]
+                ?: throw missingFamilyJournal(step.handle, journalId)
+        }
+        return KeyedCells(
+            host = host,
+            journalDir = journalDir,
+            namespace = family.namespace,
+            factory = { key, ref -> factory.create(key, ref) },
+            render = family.keys.render,
+            parse = family.keys.parse,
+        )
+    }
 }
 
 /** The handles produced by one local [GraphSpec.apply]. */

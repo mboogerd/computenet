@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
+import civictech.cell.host.KeyedCells
 import civictech.cell.link.Interest
 import civictech.nature.Manifest
 import civictech.cell.link.LinkResult
@@ -27,6 +28,35 @@ import kotlin.random.Random
  */
 fun interface CellFactory : Serializable {
     fun create(ref: CellRef): Cell
+}
+
+/** The key encoding and decoding used by a [KeyedFamily]'s durable key log. */
+class KeyCodec(
+    val render: (Any) -> String,
+    val parse: (String) -> Any,
+) : Serializable {
+    companion object {
+        /** The default codec for string keys. */
+        val Strings = KeyCodec({ it as String }, { it })
+
+        /** A decimal codec for long keys. */
+        val Longs = KeyCodec({ (it as Long).toString() }, { it.toLong() })
+    }
+}
+
+/** The declarative parameters for a lazily-spawned keyed cell family. */
+data class KeyedFamily(
+    val namespace: String,
+    val keys: KeyCodec = KeyCodec.Strings,
+    val journalId: String? = null,
+) : Serializable
+
+/** A cell factory whose construction also receives the family key. */
+fun interface KeyedCellFactory : CellFactory {
+    fun create(key: Any, ref: CellRef): Cell
+
+    override fun create(ref: CellRef): Cell =
+        throw UnsupportedOperationException("keyed family factory needs a key")
 }
 
 /** [CellFactory] that remembers the concrete cell type — SAM-compatible with every existing `spawn { … }` lambda. */
@@ -80,7 +110,17 @@ data class SpawnStep(
     val parent: String? = null,
     /** Spawn through [civictech.cell.replication.Replication] rather than directly on a host. */
     val replicated: Boolean = false,
-) : GraphStep
+    /** Lazily-spawned keyed family parameters; a family handle has no single cell ref. */
+    val family: KeyedFamily? = null,
+) : GraphStep {
+    init {
+        if (family != null) {
+            require(factory is KeyedCellFactory) {
+                "spawn step '$handle': parameter 'family' requires a KeyedCellFactory"
+            }
+        }
+    }
+}
 
 data class ConnectStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
 
@@ -256,10 +296,19 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         lowered.filterIsInstance<SpawnStep>()
             .firstOrNull { it.replicated && context.replication == null }
             ?.let { throw missingReplication(it.handle) }
+        lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { step ->
+                val journalId = step.family?.journalId
+                journalId != null && journalId !in context.journalDirs
+            }
+            ?.let { step ->
+                throw missingFamilyJournal(step.handle, step.family!!.journalId!!)
+            }
 
         val prepared = mutableMapOf<Int, Cell>()
         lowered.forEachIndexed { index, step ->
             if (step !is SpawnStep) return@forEachIndexed
+            if (step.family != null) return@forEachIndexed
             val ref = step.identity.resolve()
             val cell = step.factory.create(ref)
             requireBoundRef(step.handle, step.identity, ref, cell.ref)
@@ -273,23 +322,36 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         }
 
         val refs = mutableMapOf<String, CellRef>()
+        val families = mutableMapOf<String, KeyedCells<*>>()
         val links = mutableMapOf<String, civictech.cell.link.Link>()
+        val familyHandles = lowered.filterIsInstance<SpawnStep>()
+            .filter { it.family != null }
+            .mapTo(mutableSetOf()) { it.handle }
         lowered.forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
-                    val cell = prepared.getValue(index)
-                    refs[step.handle] = if (step.replicated) {
-                        @Suppress("UNCHECKED_CAST")
-                        context.replication!!.replicate(cell as Replicable<*>, context.host)
-                        cell.ref
+                    if (step.family != null) {
+                        families[step.handle] = context.buildFamily(step)
                     } else {
-                        context.host.managementInlet.call.spawn(cell)
+                        val cell = prepared.getValue(index)
+                        refs[step.handle] = if (step.replicated) {
+                            @Suppress("UNCHECKED_CAST")
+                            context.replication!!.replicate(cell as Replicable<*>, context.host)
+                            cell.ref
+                        } else {
+                            context.host.managementInlet.call.spawn(cell)
+                        }
                     }
                 }
 
                 is ConnectStep -> {
-                    // TODO(computenet-x0oag.1): retain LinkOptions/UnlinkStep handles after that sibling lands.
                     val key = stepKey(step)
+                    if (step.from in familyHandles) {
+                        throw familyLinkRefusal(step.from, key)
+                    }
+                    if (step.to in familyHandles) {
+                        throw familyLinkRefusal(step.to, key)
+                    }
                     when (
                         val result = context.host.managementInlet.call.connect(
                             refs.getValue(step.from), step.outlet,
@@ -307,7 +369,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
         }
-        return AppliedGraph(refs.toMap(), emptyMap(), links.toMap())
+        return AppliedGraph(refs.toMap(), families.toMap(), links.toMap())
     }
 
     /**
@@ -320,6 +382,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
      */
     fun applyTo(host: Use<HostManagementApi>): Map<String, CellRef> {
         val lowered = lowered()
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.family != null }?.let { step ->
+            throw unsupportedFamily(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
             throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
         }
@@ -377,10 +442,18 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     fun applyRemote(host: Use<HostManagementApi>, progress: ApplyProgress): ApplyReport {
         val refs = mutableMapOf<String, CellRef>()
         val results = mutableMapOf<String, StepResult>()
-        lowered().forEachIndexed { index, step ->
+        val lowered = lowered()
+        val familyHandles = lowered.filterIsInstance<SpawnStep>()
+            .filter { it.family != null }
+            .mapTo(mutableSetOf()) { it.handle }
+        lowered.forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
-                    if (step.replicated) {
+                    if (step.family != null) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'family' is not supported by applyRemote",
+                        )
+                    } else if (step.replicated) {
                         results[step.handle] = StepResult.Rejected(
                             "spawn step '${step.handle}': parameter 'replicated' is not supported by applyRemote",
                         )
@@ -406,7 +479,11 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     val key = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
                     val from = refs[step.from]
                     val to = refs[step.to]
-                    if (from == null || to == null) {
+                    if (step.from in familyHandles) {
+                        results[key] = StepResult.Rejected(familyLinkReason(step.from, key))
+                    } else if (step.to in familyHandles) {
+                        results[key] = StepResult.Rejected(familyLinkReason(step.to, key))
+                    } else if (from == null || to == null) {
                         results[key] = StepResult.Rejected(
                             "endpoint not constructed: '${step.from}' or '${step.to}' was rejected/missing",
                         )
@@ -440,6 +517,21 @@ private fun missingReplication(handle: String): IllegalStateException = IllegalS
 private fun unsupportedReplication(handle: String, path: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'replicated' cannot be applied by $path; use apply(ApplyContext)",
 )
+
+internal fun missingFamilyJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'family.journalId' names '$journalId', " +
+        "but ApplyContext.journalDirs has no such journal directory",
+)
+
+internal fun unsupportedFamily(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'family' cannot be applied by $path; use graph(ApplyContext)",
+)
+
+private fun familyLinkReason(handle: String, key: String): String =
+    "link '$key' names family handle '$handle' (parameter 'family' has no single port)"
+
+private fun familyLinkRefusal(handle: String, key: String): IllegalStateException =
+    IllegalStateException(familyLinkReason(handle, key))
 
 open class CellHandle internal constructor(
     val name: String,
@@ -502,6 +594,27 @@ class GraphBuilder private constructor(
         steps += step
         return TypedCellHandle(name, spawnedRef, this, cell)
             .also { handlesByRef[it.ref] = it }
+    }
+
+    /** Declare and construct a keyed family; family cells are spawned lazily by [KeyedCells]. */
+    fun family(
+        name: String,
+        namespace: String,
+        keys: KeyCodec = KeyCodec.Strings,
+        journalId: String? = null,
+        factory: KeyedCellFactory,
+    ): KeyedCells<Any> {
+        val applyContext = context
+            ?: throw unsupportedFamily(name, "graph(Use<HostManagementApi>)")
+        require(names.add(name)) { "duplicate handle '$name'" }
+        val step = SpawnStep(
+            handle = name,
+            factory = factory,
+            family = KeyedFamily(namespace, keys, journalId),
+        )
+        val family = applyContext.buildFamily(step)
+        steps += step
+        return family
     }
 
     /** Source-compatible positional form from before the replicated parameter. */

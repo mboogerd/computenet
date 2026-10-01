@@ -192,7 +192,10 @@ data class Plan(val steps: List<PlannedStep>, val verdict: Verdict)
  * structural verdict and propagates.
  */
 fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveView): Plan {
-    val scratch = Scratch(live)
+    val familyHandles = steps.filterIsInstance<SpawnStep>()
+        .filter { it.family != null }
+        .mapTo(mutableSetOf()) { it.handle }
+    val scratch = Scratch(live, familyHandles)
     val planned = mutableListOf<PlannedStep>()
     steps.forEach { step ->
         when (step) {
@@ -246,7 +249,7 @@ private class LinkCandidate(
     val inletName: String,
 )
 
-private class Scratch(live: LiveView) {
+private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
     val staged = mutableMapOf<String, Staged>()
     val refusedHandles = mutableSetOf<String>()
     val links = mutableListOf<PlannedLink>()
@@ -271,6 +274,11 @@ private class Scratch(live: LiveView) {
             refusedHandles += step.handle
             return planned(StepCheck.Refused(code, reason))
         }
+
+        // A family has no single ref or ports. Its key-aware factory cannot be
+        // sampled without inventing a key, so the cold plan records only the
+        // family declaration and leaves the handle unresolved for links.
+        if (step.family != null) return planned(StepCheck.Ok)
 
         step.parent?.let { parent ->
             if (parent !in staged) return refuse(RefusalCode.UNRESOLVED_HANDLE, unresolvedHandle(parent, "parent of '${step.handle}'"))
@@ -297,6 +305,13 @@ private class Scratch(live: LiveView) {
         fun planned(result: StepCheck) =
             PlannedStep("${step.from}.${step.outlet}->${step.to}.${step.inlet}", null, PlannedAction.LINK, emptySet(), result)
 
+        if (step.from in familyHandles) {
+            return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(step.from, "source")))
+        }
+        if (step.to in familyHandles) {
+            return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(step.to, "target")))
+        }
+
         val from = staged[step.from]
             ?: return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, unresolvedHandle(step.from, "source")))
         val to = staged[step.to]
@@ -317,6 +332,10 @@ private class Scratch(live: LiveView) {
         }
         fun planned(result: StepCheck) = PlannedStep(key, link.handle, PlannedAction.LINK, setOf(link.liveRef), result)
         fun refuse(code: RefusalCode, reason: String) = planned(StepCheck.Refused(code, reason))
+
+        if (link.handle in familyHandles) {
+            return refuse(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(link.handle, "boundary"))
+        }
 
         when (val location = live.locationOf(link.liveRef)) {
             null -> return refuse(
@@ -479,6 +498,9 @@ private class Scratch(live: LiveView) {
         return rejected.toRefused(RefusalCode.POLICY_DENIAL)
     }
 }
+
+private fun familyUnresolved(handle: String, role: String) =
+    "unresolved handle '$handle' ($role): family has no single port"
 
 /**
  * Whether [port] carries `Owned`/`Leased` payloads, by either witness the KSP

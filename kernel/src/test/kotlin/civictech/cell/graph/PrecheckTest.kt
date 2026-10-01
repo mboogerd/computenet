@@ -279,6 +279,34 @@ class PrecheckTest {
         refused.reason shouldContain "spawn step 'rogue': factory must construct a cell with ref $chosen"
     }
 
+    @Test
+    fun `a keyed family is planned without sampling and cannot be linked as one cell`() {
+        val f = Fixture(seed = 19)
+        var sampled = false
+        val familyFactory = KeyedCellFactory { _, ref ->
+            sampled = true
+            SetCell<String>(ref)
+        }
+        val before = f.footprint()
+        val plan = GraphSpec(
+            listOf(
+                SpawnStep("writers", familyFactory, family = KeyedFamily("writer")),
+                SpawnStep("sink", countFactory),
+                ConnectStep("writers", "outlet", "sink", "inlet"),
+            ),
+        ).precheck(live = f.view)
+
+        sampled shouldBe false
+        plan.step("writers").action shouldBe PlannedAction.SPAWN
+        plan.step("writers").touches shouldBe emptySet()
+        plan.step("writers").result shouldBe StepCheck.Ok
+        val refused = plan.step("writers.outlet->sink.inlet").result.refused()
+        refused.code shouldBe RefusalCode.UNRESOLVED_HANDLE
+        refused.reason shouldContain "writers"
+        refused.reason shouldContain "family"
+        f.footprint() shouldBe before
+    }
+
     // ---- boundary refs ----
 
     @Test
