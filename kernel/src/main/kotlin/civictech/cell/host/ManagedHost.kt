@@ -760,7 +760,7 @@ open class ManagedHost(
         notifyResumed = ::notifyResumed,
         intakeLowWaterCheck = ::intakeLowWaterCheck,
         deliver = ::deliver,
-        submit = ::enqueueHostedInvocation,
+        submit = ::resumeAttentionParked,
     )
 
     /**
@@ -977,6 +977,45 @@ open class ManagedHost(
         // cascade of any depth carries it (see [civictech.cell.ReplayProvenance]).
         val ambient = civictech.cell.ReplayProvenance.get()
         accept(if (ambient == null || hostedInvocation.replayOf != null) hostedInvocation else hostedInvocation.copy(replayOf = ambient))
+    }
+
+    /**
+     * Places a staged link's terminal marker in the target cell's data FIFO.
+     * The link's stand-in has already been removed, so every frame this marker
+     * follows was accepted before unlink. This intentionally bypasses [accept]:
+     * protocol-band submission would overtake data, while intake gates, hop
+     * accounting and journaling do not apply to an in-band topology marker.
+     */
+    internal fun stageBehindData(to: CellRef, inletName: String, link: Link) {
+        val close = HostedPortInvocation(
+            cellRef = to,
+            portName = inletName,
+            type = HostedPortInvocation.Type.PORT_PROTOCOL,
+            invocation = Invocation.of(null, null, null),
+            protocolId = Protocols.TopologyOrder,
+            protocolLink = link,
+            protocolMessage = EdgeClose,
+        )
+        stageForDataDispatch(close)
+    }
+
+    /**
+     * Attention parking contains accepted work in FIFO order. Ordinary data
+     * keeps its existing intake replay, but a protocol marker placed there by
+     * [stageBehindData] must rejoin the data FIFO: sending it through [accept]
+     * would submit it at protocol band 0 and overtake the data before it.
+     */
+    private fun resumeAttentionParked(hostedInvocation: HostedPortInvocation) {
+        if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
+            stageForDataDispatch(hostedInvocation)
+        } else {
+            enqueueHostedInvocation(hostedInvocation)
+        }
+    }
+
+    private fun stageForDataDispatch(hostedInvocation: HostedPortInvocation) {
+        synchronized(dataLock) { attentionScheduler.stage(hostedInvocation) }
+        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
     }
 
     private fun accept(hostedInvocation: HostedPortInvocation) {

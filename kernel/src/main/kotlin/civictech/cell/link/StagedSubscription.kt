@@ -10,11 +10,16 @@ import civictech.cell.port.Use
  * by a fan outlet is replaced with the staged stand-in carried here.
  */
 internal object StagedSubscription {
-    private val local = ThreadLocal<Use<*>?>()
+    private data class Scope(
+        val standIn: Use<*>,
+        val closeSequencer: CloseSequencer,
+    )
 
-    fun <T> with(standIn: Use<*>, block: () -> T): T {
+    private val local = ThreadLocal<Scope?>()
+
+    fun <T> with(standIn: Use<*>, closeSequencer: CloseSequencer, block: () -> T): T {
         val prior = local.get()
-        local.set(standIn)
+        local.set(Scope(standIn, closeSequencer))
         try {
             return block()
         } finally {
@@ -23,5 +28,13 @@ internal object StagedSubscription {
     }
 
     /** The current stand-in without clearing it; one handshake may consult it more than once. */
-    fun current(): Use<*>? = local.get()
+    fun current(): Use<*>? = local.get()?.standIn
+
+    /** Close ordering paired with [current] for the same admitted staged link. */
+    fun currentSequencer(): CloseSequencer? = local.get()?.closeSequencer
+}
+
+/** Places a staged link's terminal marker behind data already accepted on that link. */
+internal fun interface CloseSequencer {
+    fun sequence(link: Link)
 }

@@ -320,16 +320,30 @@ internal fun <Api> handshake(
     reconcileNatures(portOut.natures, (target as? Port)?.natures ?: NatureVector.DEFAULT)
         ?.let { return it }
 
-    val link = PortLink(portOut.ref, targetRef, portOut, target as? Port, role) { link ->
-        // The close is terminal on the link's in-process protocol/data FIFO:
-        // announce it while both endpoints are still reachable, then detach.
-        link.toPort?.let { port ->
-            val protocols = ProtocolSupport.of(port)
-            if (protocols.handles(Protocols.TopologyOrder)) {
-                protocols.deliver(Protocols.TopologyOrder, link, EdgeClose)
+    val link = PortLink(
+        portOut.ref,
+        targetRef,
+        portOut,
+        target as? Port,
+        role,
+        StagedSubscription.currentSequencer(),
+    ) { link ->
+        if (link.closeSequencer == null) {
+            // The close is terminal on the link's in-process protocol/data FIFO:
+            // announce it while both endpoints are still reachable, then detach.
+            link.toPort?.let { port ->
+                val protocols = ProtocolSupport.of(port)
+                if (protocols.handles(Protocols.TopologyOrder)) {
+                    protocols.deliver(Protocols.TopologyOrder, link, EdgeClose)
+                }
             }
+            uninstall(link)
+        } else {
+            // Stop intake on this edge before its terminal marker joins the
+            // target cell's FIFO behind every frame already accepted on it.
+            uninstall(link)
+            link.closeSequencer.sequence(link)
         }
-        uninstall(link)
         sourceLinking?.remove(link)
         support.remove(link)
         support.onUnlink(link)
