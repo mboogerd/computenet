@@ -408,6 +408,172 @@ def load_advice(cores, cap, since_last_read=None):
     return load1, lag
 
 
+HEADROOM_HIGH = 40.0     # >= this: continue is cheap regardless of relatedness
+HEADROOM_LOW = 15.0      # <= this: not enough room left to risk a rebuild mid-unit
+RELATEDNESS = frozenset({"same-feature", "same-epic", "different-epic", "unclear"})
+
+# 5f routes that pick a genuinely new epic-level unit, mapped to what that
+# choice means for continuation (computenet-f3i26 design note, 2026-10-01):
+# staying under the held epic (1, a sibling feature; 2b, your own blocker) is
+# same-epic; leaving it (3, an item blocked-elsewhere; 4, continuation-work
+# pickup once the epic is dry) is different-epic. Route 0 (a second unit
+# dispatched in parallel while one runs) is a concurrency question, not a
+# continuation one, and route 2 (waiting on a shipped feature's merge) never
+# dispatches a new unit — neither ever calls this. "same-feature" is not
+# reachable from a route at all: it means the next unit is still part of the
+# feature already in flight, i.e. more of 5b/5c's own task loop, which never
+# reaches 5f's route table — pass it explicitly when that is the situation.
+ROUTE_RELATEDNESS = {"1": "same-epic", "2b": "same-epic",
+                     "3": "different-epic", "4": "different-epic"}
+
+
+def relatedness_for_route(route):
+    """Derive continuation relatedness mechanically from a 5f route instead
+    of asking the orchestrator to self-report it — the route already encodes
+    the relationship, and self-report risks a session rounding toward
+    CONTINUE-favoring categories because it wants to keep working. Unknown or
+    unmapped routes (including None) read "unclear", which still resolves
+    correctly through continuation_advice (ESCALATE in the mid-band, same as
+    a genuinely unsure self-report)."""
+    return ROUTE_RELATEDNESS.get(str(route), "unclear")
+
+
+def continuation_advice(headroom_pct, relatedness, jev_verdict=None, epic_closed=False):
+    """Continue the orchestrator's OWN session into the next ticket, or hand
+    off to a fresh one — the happy-path twin of the failure-side per-agent
+    bound (computenet-9zzsc / PR #1191's dispatched-<id> bounds, which cover
+    how long ONE dispatched unit may run, not whether the orchestrator starts
+    the next one in itself or in a clean session). Deliberately two cheap
+    signals, not a judgment call, because a Jev round-trip on every ticket
+    boundary would tax the hot path for a question that is rarely ambiguous
+    (design constraint agreed 2026-09-30, see the PR description).
+
+    `epic_closed` is True exactly when the epic-close gate (5g) just ran and
+    returned CLOSE for the epic this session was working: its acceptance
+    criteria are verified actually met, not merely its children all closed
+    (design refinement 2026-10-01). That is a genuine completion boundary —
+    it bypasses headroom and relatedness entirely and always reads HANDOFF,
+    even at 40%+ headroom, because continuing into unrelated pickup work
+    right after a verified close spends a clean stopping point (the retro, a
+    fresh session's full context budget on the next epic) for marginal
+    benefit. A 5g GAPS outcome is the opposite of this case: new children were
+    filed under the SAME epic, so the orchestrator falls through to the
+    ordinary route table (now route 1, against the fresh children) rather
+    than calling this function at all — GAPS is not a continuation decision.
+
+    `headroom_pct` is the orchestrator's OWN context-window headroom, i.e.
+    `autoCompactsAtPercent - percentUsed` from a `get_usage(session_id="self")`
+    read (the auto-compact floor, not 100%, is the real ceiling — a session
+    that reaches it loses control of what gets summarised). `relatedness` is
+    how the next candidate ticket (SKILL.md 5f) relates to what is currently
+    loaded: "same-feature" (finishing what the session is already deep in),
+    "same-epic" (a sibling feature under the held epic), "different-epic" (an
+    unparented or foreign-epic continuation-work pickup, 5f route 4),
+    "unclear" (relatedness could not be classified — mirrors
+    ready-in-epic.sh's own "could not resolve the epic of <id>" case, so this
+    reuses that reading rather than inventing a second one).
+
+    Three-value band, not two:
+    - headroom <= HEADROOM_LOW: HANDOFF unconditionally. Not enough room to
+      absorb even a related ticket without risking an uncontrolled compaction
+      mid-unit; relatedness cannot buy that back.
+    - headroom >= HEADROOM_HIGH: CONTINUE unconditionally. Plenty of room, so
+      even an unrelated pickup costs less than a fresh session's rebuild.
+    - the MIDDLE band (HEADROOM_LOW < headroom < HEADROOM_HIGH) is where
+      relatedness actually decides: "same-feature" still reads CONTINUE (the
+      context is exactly what the next ticket needs), "different-epic" reads
+      HANDOFF (there is little to save by staying loaded, and less room to
+      waste finding out). "same-epic" and "unclear" are the genuinely
+      ambiguous corner — a sibling feature MIGHT share enough loaded context
+      to be worth it, or might not, and "unclear" means the heuristic itself
+      does not know — so THAT is the escalation trigger, precisely: mid-band
+      headroom AND relatedness in {"same-epic", "unclear"}. Everything
+      outside that corner is decided without asking anyone.
+
+    `jev_verdict` lets a caller that already escalated (see `jev_continuation`
+    below) hand back "CONTINUE" or "HANDOFF" and get it relayed through this
+    same function, so the ambiguous corner and its resolution go through one
+    return path rather than two. Returns (decision, reason) with decision one
+    of "CONTINUE", "HANDOFF", "ESCALATE" (only when `jev_verdict` is None and
+    the ambiguous corner is hit).
+    """
+    if epic_closed:
+        return "HANDOFF", ("the epic-close gate (5g) verified this epic's intent is "
+                           "actually met, not just its children closed: a genuine "
+                           "completion boundary, independent of headroom — hand off "
+                           "so the retro and a fresh session's full budget land "
+                           "cleanly on the next epic")
+    if relatedness not in RELATEDNESS:
+        relatedness = "unclear"
+    if headroom_pct <= HEADROOM_LOW:
+        return "HANDOFF", (f"headroom {headroom_pct:.0f}% <= {HEADROOM_LOW:.0f}%: "
+                           f"not enough room left to risk a rebuild mid-unit, "
+                           f"whatever the next ticket is")
+    if headroom_pct >= HEADROOM_HIGH:
+        return "CONTINUE", (f"headroom {headroom_pct:.0f}% >= {HEADROOM_HIGH:.0f}%: "
+                            f"plenty of room; continuing costs less than a fresh "
+                            f"session's rebuild even for an unrelated pickup")
+    if relatedness == "same-feature":
+        return "CONTINUE", (f"headroom {headroom_pct:.0f}% (mid-band) but the next "
+                            f"ticket is the SAME feature already loaded: continue")
+    if relatedness == "different-epic":
+        return "HANDOFF", (f"headroom {headroom_pct:.0f}% (mid-band) and the next "
+                           f"ticket is a DIFFERENT epic: little of the loaded "
+                           f"context transfers, and there is not much room to "
+                           f"spend finding that out; hand off")
+    # relatedness in {"same-epic", "unclear"}: the ambiguous corner.
+    if jev_verdict is not None:
+        return jev_verdict, f"Jev: {jev_verdict.lower()} (ambiguous corner resolved)"
+    return "ESCALATE", (f"headroom {headroom_pct:.0f}% (mid-band) and relatedness "
+                        f"{relatedness!r} is not a clean match or mismatch: ask Jev "
+                        f"rather than guess (jev_continuation, or --ask-jev)")
+
+
+def jev_continuation(headroom_pct, relatedness, current_context, candidate_context,
+                     dry_run=False, dry_reply="CONTINUE"):
+    """One cheap systemone judgment for the ambiguous corner above — the same
+    integration deliberate.py's `jev_vote` uses (a `type: choice` question over
+    `https://api.typesafe.ai/v1/systemone`, `TYPESAFE_API_KEY` from the
+    environment), scaled down to a single yes/no rather than a whole council:
+    this is a per-ticket routing call on the hot path, not a high-stakes
+    multi-option decision, so the council's ideate/case/attack/vote phases
+    would be the wrong tool even before counting their latency.
+
+    `current_context` and `candidate_context` are short strings (what epic and
+    feature is loaded now; what the candidate ticket is) — Jev's whole input,
+    since the two cheap signals already ruled out everything except "does this
+    specific pairing share enough to be worth staying loaded".
+
+    `dry_run` skips the network call and returns `dry_reply` instead (tests
+    exercise the routing, never the live call, mirroring deliberate.py's own
+    `--dry-run`).
+    """
+    if dry_run:
+        return dry_reply
+    import urllib.request
+    body = {"model": "jev-latest",
+            "state": {"headroom_pct": headroom_pct, "current": current_context,
+                      "candidate": candidate_context},
+            "questions": {"continue": {"type": "choice",
+                          "criteria": {"CONTINUE": {"option": "Keep working in this "
+                                       "session; the loaded context is worth keeping."},
+                                      "HANDOFF": {"option": "End this session and let "
+                                       "a fresh one pick up the ticket."}},
+                          "instructions": ("Context headroom is in the ambiguous "
+                                           "middle band. Given what is currently "
+                                           "loaded and the next candidate ticket, "
+                                           "is continuing in this session worth "
+                                           "more than the context-rebuild cost of "
+                                           "a fresh one?")}}}
+    req = urllib.request.Request(
+        "https://api.typesafe.ai/v1/systemone", data=json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + os.environ["TYPESAFE_API_KEY"],
+                 "Content-Type": "application/json"})
+    resp = json.loads(urllib.request.urlopen(req, timeout=300).read())
+    choice = resp["answers"]["continue"]["choice"]
+    return "HANDOFF" if str(choice).strip().upper().startswith("HANDOFF") else "CONTINUE"
+
+
 def busy_builds(ps_output=None):
     """Names of OUR build processes actually burning CPU right now.
 
@@ -836,7 +1002,48 @@ def _siblings():
     return 0
 
 
+def _flag_val(name):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+
 def main():
+    if "--continuation" in sys.argv:
+        # Advisory alone, like --capacity: no feature id, no bd calls. The
+        # orchestrator computes headroom_pct itself (a get_usage read) and
+        # either names the 5f route that fired (relatedness derives
+        # mechanically, relatedness_for_route) or passes --relatedness
+        # directly for the same-feature case, which no route reaches. 5g's
+        # CLOSE outcome bypasses both via --epic-closed alone.
+        epic_closed = "--epic-closed" in sys.argv
+        headroom = _flag_val("--headroom-pct")
+        route = _flag_val("--route")
+        relatedness = _flag_val("--relatedness")
+        if relatedness is None and route is not None:
+            relatedness = relatedness_for_route(route)
+        if headroom is None or (relatedness is None and not epic_closed):
+            sys.exit("next-batch.py --continuation needs --headroom-pct N, plus one "
+                     "of: --route 1|2b|3|4, --relatedness "
+                     "same-feature|same-epic|different-epic|unclear, or "
+                     "--epic-closed (5g's CLOSE outcome; bypasses both)")
+        try:
+            headroom = float(headroom)
+        except ValueError:
+            sys.exit("next-batch: --headroom-pct takes a number")
+        relatedness = relatedness or "unclear"
+        decision, reason = continuation_advice(headroom, relatedness, epic_closed=epic_closed)
+        if decision == "ESCALATE" and "--ask-jev" in sys.argv:
+            dry_reply = _flag_val("--dry-run-jev")
+            verdict = jev_continuation(
+                headroom, relatedness,
+                _flag_val("--current-context") or "", _flag_val("--candidate-context") or "",
+                dry_run=dry_reply is not None, dry_reply=dry_reply or "CONTINUE")
+            decision, reason = continuation_advice(headroom, relatedness, jev_verdict=verdict)
+        print(json.dumps({"continuation": {"decision": decision, "reason": reason,
+                                           "headroom_pct": headroom,
+                                           "relatedness": relatedness,
+                                           "route": route,
+                                           "epic_closed": epic_closed}}, indent=2))
+        return
     if "--capacity" in sys.argv:
         # Capacity alone, no feature id: for a dispatch that has no batch call
         # of its own (every reviewer dispatch). computenet-lx7t.
