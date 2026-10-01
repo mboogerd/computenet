@@ -46,8 +46,9 @@ class PerPortJournalTest {
         val input = registerPort("input", FanInlet.create<Consumer<String>>())
         val derived = registerPort("derived", FanInlet.create<Propagate<SetDelta<String>>>())
 
-        private val elements = mutableSetOf<String>()
+        private val elements = mutableListOf<String>()
         fun membership(): Set<String> = elements.toSet()
+        fun deliveryLog(): List<String> = elements.toList()
 
         init {
             input.serve(object : Consumer<String> {
@@ -62,12 +63,12 @@ class PerPortJournalTest {
             })
         }
 
-        override fun snapshot(): Serializable = HashSet(elements)
+        override fun snapshot(): Serializable = ArrayList(elements)
 
         @Suppress("UNCHECKED_CAST")
         override fun restore(state: Serializable) {
             elements.clear()
-            elements += state as Set<String>
+            elements += state as List<String>
         }
     }
 
@@ -313,6 +314,62 @@ class PerPortJournalTest {
         controller.runToIdle()
         u2.membership() shouldBe setOf("b1")
         c2.membership() shouldBe setOf("a1", "b1")
+    }
+
+    /**
+     * A volatile derived frame for C is carried by J1 because J1 checkpoints C, even when
+     * the deriving U tees to J2. Recovering J1 delivers that carried frame, then recovering
+     * J2 replays U and derives it again. The non-idempotent fold deliberately observes `b1`
+     * twice: this is the loud, bounded duplicate preferred to silently omitting a delivery.
+     */
+    @Test
+    fun `cross-journal volatile-port frame is deliberately delivered twice after both journals recover`() {
+        val controller = SimulationController(seed = 1)
+        val j1 = InMemoryJournal()
+        val j2 = InMemoryJournal()
+        val cRef = CellRef(UUID.randomUUID())
+        val uRef = CellRef(UUID.randomUUID())
+        val selector: (CellRef, String) -> Journal? = { ref, port ->
+            when {
+                ref == cRef && port == "input" -> j1
+                ref == uRef -> j2
+                else -> null
+            }
+        }
+
+        fun build(): Triple<ManagedHost, FoldCell, SetCell<String>> {
+            val host = ManagedHost(scheduler = controller.scheduler(), journalForPort = selector)
+            val c = FoldCell(cRef)
+            val u = SetCell<String>(uRef)
+            host.managementInlet.call.spawn(c)
+            host.managementInlet.call.spawn(u)
+            controller.runToIdle()
+            u.outlet.subscribe(Use.fixed(foldDerived(host, cRef), PortRef.generate()))
+            controller.runToIdle()
+            return Triple(host, c, u)
+        }
+
+        val (host, c, u) = build()
+        foldInput(host, cRef).provide("a1")
+        controller.runToIdle()
+        setOps(host, uRef).add("b1")
+        controller.step() // U applies b1; C's derived frame is accepted but not delivered
+        u.membership() shouldBe setOf("b1")
+        c.deliveryLog() shouldBe listOf("a1")
+        host.stagedWorkTotal() shouldBe 1
+
+        host.checkpoint(j1)
+        controller.runToIdle()
+        c.deliveryLog() shouldBe listOf("a1", "b1")
+
+        // CRASH: J1 carries b1; J2's surviving U frame then deliberately re-derives it.
+        val (host2, c2, u2) = build()
+        host2.recoverFrom(j1)
+        host2.recoverFrom(j2)
+        controller.runToIdle()
+        u2.membership() shouldBe setOf("b1")
+        c2.deliveryLog() shouldBe listOf("a1", "b1", "b1")
+        decodedFrames(j1).map { it.cellRef to it.portName } shouldBe listOf(cRef to "derived")
     }
 
     /**
