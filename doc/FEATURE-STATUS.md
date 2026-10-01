@@ -24,7 +24,7 @@
 | Interest-driven execution | - | - | - | - | - | - | - | USED | - | - | - | USED | - | 2 |
 | Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Partitioning | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Durability / recovery | USED | - | - | - | - | USED | USED | USED | USED | - | - | USED | USED | 7 |
+| Durability / recovery | USED | - | - | - | - | USED | USED | USED | - | - | - | USED | USED | 6 |
 | Replication | - | - | - | - | USED | - | - | - | USED | - | - | - | USED | 3 |
 | Wire transport (ws / iroh) | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
 | Identity / authority | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -33,14 +33,14 @@
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| **headline count** | 4 | 3 | 2 | 3 | 4 | 4 | 5 | 7 | 7 | 4 | 4 | 5 | 7 |  |
+| **headline count** | 4 | 3 | 2 | 3 | 4 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
 | Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | tiering | demos |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Generated @Contract/@CellBase cells | - | USED | - | USED | - | - | - | - | - | - | - | - | - | 2 |
-| Hosted execution (ManagedHost) | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | USED | USED | 11 |
+| Hosted execution (ManagedHost) | USED | USED | - | USED | - | USED | USED | USED | - | USED | USED | USED | USED | 10 |
 | Colors (Blocking/Suspending) | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Time-travel | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Query / Datalog | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -96,7 +96,6 @@
 - durability / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt
 - durability / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt
 - durability / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
-- durability / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - durability / social: demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
 - durability / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - replication / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
@@ -124,7 +123,6 @@
 - hosts / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt
 - hosts / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
 - hosts / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
-- hosts / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - hosts / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
 - hosts / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - hosts / social: demo/social/src/main/kotlin/civictech/demo/social/BoundedReader.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
