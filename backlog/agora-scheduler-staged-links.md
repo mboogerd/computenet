@@ -1,5 +1,7 @@
 # A DSL link mode that stays staged on the host queue
 
+**Status**: absorbed by computenet-wakkv (INT1 1.1), 2026-10 — see `LinkOptions(staged = true)` and `PropagateFeedbackInlet`.
+
 **Origin**: agora demo. The service's central design comment explains why it
 abandons the ergonomic graph DSL and hand-routes everything through `streamTo` +
 registry proxies — and the reason is a framework limitation, not a domain need.

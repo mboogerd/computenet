@@ -9,7 +9,6 @@
 # shrink-only allowlist. A file is removed once it no longer contains such a
 # call outside comments (migrated onto the admitted primitive — INT1 1.1
 # tracks that migration). One repo-relative path per line, sorted.
-demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt
 demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
 demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
