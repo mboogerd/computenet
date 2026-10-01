@@ -59,6 +59,7 @@ interface PeerAddress {
 /**
  * Counters every endpoint reports, as a snapshot. [framesSent] and
  * [framesReceived] count bridge frames crossing this endpoint;
+ * [framesEnqueued] counts received frames accepted into the bridge host;
  * [unadmittedOpens] is the dialling end's current refused-dial run
  * ([ReconnectPolicy.unadmittedOpens]), always 0 on a listener;
  * [refusedAnnouncements] counts announcements this endpoint's ingress refused
@@ -69,7 +70,28 @@ data class PeerStats(
     val framesReceived: Long,
     val unadmittedOpens: Int,
     val refusedAnnouncements: Long,
-)
+) {
+    /**
+     * Received frames accepted into the endpoint's bridge host. Bindings that
+     * cannot distinguish socket receipt from bridge acceptance inherit the
+     * pre-counter behaviour, [framesReceived], through the original four-arg
+     * constructor. Keeping that constructor as the data-class primary preserves
+     * its JVM descriptor and source calls; bindings with a distinct seam use
+     * the additive five-arg constructor.
+     */
+    private var enqueuedFrames: Long = framesReceived
+    val framesEnqueued: Long get() = enqueuedFrames
+
+    constructor(
+        framesSent: Long,
+        framesReceived: Long,
+        unadmittedOpens: Int,
+        refusedAnnouncements: Long,
+        framesEnqueued: Long,
+    ) : this(framesSent, framesReceived, unadmittedOpens, refusedAnnouncements) {
+        this.enqueuedFrames = framesEnqueued
+    }
+}
 
 /**
  * One end of a peering. [close] is always **deliberate** (gyvli-D4): it

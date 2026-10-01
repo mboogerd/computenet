@@ -141,12 +141,17 @@ class WsPeerTransport(
     ) : PeerListener {
 
         override val stats: PeerStats
-            get() = PeerStats(
-                framesSent = raw.framesSent,
-                framesReceived = raw.framesReceived,
-                unadmittedOpens = 0,
-                refusedAnnouncements = raw.announcementAdmissionDenials,
-            )
+            get() {
+                val framesEnqueued = raw.framesEnqueued
+                val framesReceived = raw.framesReceived
+                return PeerStats(
+                    framesSent = raw.framesSent,
+                    framesReceived = framesReceived,
+                    unadmittedOpens = 0,
+                    refusedAnnouncements = raw.announcementAdmissionDenials,
+                    framesEnqueued = framesEnqueued,
+                )
+            }
 
         @Volatile
         private var closed = false
@@ -171,12 +176,17 @@ class WsPeerTransport(
         override val isCarrying: Boolean get() = raw.carrying
 
         override val stats: PeerStats
-            get() = PeerStats(
-                framesSent = raw.framesSent,
-                framesReceived = raw.framesReceived,
-                unadmittedOpens = raw.unadmittedOpens,
-                refusedAnnouncements = raw.announcementAdmissionDenials,
-            )
+            get() {
+                val framesEnqueued = raw.framesEnqueued
+                val framesReceived = raw.framesReceived
+                return PeerStats(
+                    framesSent = raw.framesSent,
+                    framesReceived = framesReceived,
+                    unadmittedOpens = raw.unadmittedOpens,
+                    refusedAnnouncements = raw.announcementAdmissionDenials,
+                    framesEnqueued = framesEnqueued,
+                )
+            }
 
         @Synchronized
         override fun partition() {

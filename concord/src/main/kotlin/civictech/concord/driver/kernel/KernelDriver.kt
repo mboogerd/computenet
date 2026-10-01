@@ -72,13 +72,22 @@ import kotlin.time.Duration.Companion.seconds
  * a real socket), not for the deterministic schedule sweep; omitting the scheme
  * preserves the original single-registry seeded mode exactly.
  */
-class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver {
+class KernelDriver private constructor(
+    seed: Long?,
+    transportScheme: String?,
+    transportOverride: PeerTransport?,
+) : Driver {
+
+    constructor(seed: Long? = null, transportScheme: String? = null) : this(seed, transportScheme, null)
+
+    /** Deterministic transport seam for quiescence tests; production resolves by scheme. */
+    internal constructor(seed: Long?, transport: PeerTransport) : this(seed, transport.scheme, transport)
 
     internal val controller = SimulationController(seed)
     /** The original registry, retained verbatim for the default single-registry mode. */
     internal val registry = LocationRegistry()
     internal val transportScheme: String? = transportScheme?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
-    private val transport: PeerTransport? = this.transportScheme?.let(PeerTransports::forScheme)
+    private val transport: PeerTransport? = transportOverride ?: this.transportScheme?.let(PeerTransports::forScheme)
     private val controllerDrive = Any()
 
     /** Separate registries exist only in transport mode; the default always returns [registry]. */
@@ -461,10 +470,10 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
             }
 
             if (transportFramesBalanced()) {
-                // framesReceived is incremented immediately before the IO thread
-                // enqueues bridge work. Give that enqueue its turn, then require
-                // the controller to remain empty and the counters to stay equal.
-                Thread.sleep(TRANSPORT_POLL_MILLIS)
+                // A received frame is balanced only after its endpoint reports
+                // that the bridge host accepted it. No timing gap is bridged
+                // here: require the controller to remain empty and re-read the
+                // transport barrier before reporting settlement.
                 val confirming = drainController((budget - steps).coerceAtLeast(0))
                 steps += confirming.steps
                 if (!confirming.settled) {
@@ -499,10 +508,13 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
     private fun transportFramesBalanced(): Boolean = transportHosts.values.all { host ->
         val listener = host.listener ?: return@all true
         val listening = listener.stats
-        val dialled = host.dialers.values
-        dialled.all { it.isCarrying } &&
-            listening.framesSent == dialled.sumOf { it.stats.framesReceived } &&
-            listening.framesReceived == dialled.sumOf { it.stats.framesSent }
+        val dialled = host.dialers.values.map { it to it.stats }
+        listening.framesEnqueued == listening.framesReceived &&
+            dialled.all { (endpoint, stats) ->
+                endpoint.isCarrying && stats.framesEnqueued == stats.framesReceived
+            } &&
+            listening.framesSent == dialled.sumOf { (_, stats) -> stats.framesReceived } &&
+            listening.framesReceived == dialled.sumOf { (_, stats) -> stats.framesSent }
     }
 
     private fun transportCounterSummary(): String = transportHosts.values
@@ -511,9 +523,11 @@ class KernelDriver(seed: Long? = null, transportScheme: String? = null) : Driver
             val listening = checkNotNull(host.listener).stats
             val dialled = host.dialers.entries.joinToString(prefix = "[", postfix = "]") { (peer, endpoint) ->
                 val stats = endpoint.stats
-                "$peer(sent=${stats.framesSent},received=${stats.framesReceived},carrying=${endpoint.isCarrying})"
+                "$peer(sent=${stats.framesSent},received=${stats.framesReceived}," +
+                    "enqueued=${stats.framesEnqueued},carrying=${endpoint.isCarrying})"
             }
-            "${host.id}-listener(sent=${listening.framesSent},received=${listening.framesReceived}) dialers=$dialled"
+            "${host.id}-listener(sent=${listening.framesSent},received=${listening.framesReceived}," +
+                "enqueued=${listening.framesEnqueued}) dialers=$dialled"
         }
 
     /**
