@@ -44,7 +44,6 @@ class EdgeCell(
     ref: CellRef = CellRef(UUID.randomUUID()),
     semantics: GradualSemantics = DfQuad,
     val quiescence: Double = 0.0,
-    initialSourceCredence: Double? = null,
 ) : ClaimCell(ref, semantics), EdgeApi {
 
     override val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<CredenceUpdate>>())
@@ -57,10 +56,8 @@ class EdgeCell(
     )
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<InfluenceDelta>>())
 
-    // A feedback inlet absorbs size-zero updates, including FanOutlet's
-    // state-as-delta catch-up. Agora therefore primes a new head from its
-    // source's current state; ordinary edges still learn it through catch-up.
-    private var sourceCredence: Double = initialSourceCredence ?: credence
+    /** Neutral until the source's state-as-delta-from-empty catch-up arrives. */
+    private var sourceCredence: Double = credence
     private var lastInfluence: Double = credence * sourceCredence
 
     init {
