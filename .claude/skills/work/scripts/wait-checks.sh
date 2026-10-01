@@ -162,11 +162,17 @@ gh() {
     [ "$remain" -lt "$lim" ] && lim=$remain
   fi
   deadline=$(( now + lim ))
+  # Own process group, killed whole: `gh` forks `git` to resolve
+  # {owner}/{repo}, and a child that survives gh keeps the $(...) pipe open,
+  # so killing gh alone left the caller blocked past the 600s cap
+  # (computenet-igcdc).
+  set -m
   command gh "$@" &
   pid=$!
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      kill -9 "$pid" 2>/dev/null
+      kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null
       echo "gh $* exceeded ${lim}s and was killed" >&2
       wait "$pid" 2>/dev/null
       return 124
