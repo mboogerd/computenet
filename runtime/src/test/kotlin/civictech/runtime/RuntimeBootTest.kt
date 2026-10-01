@@ -187,6 +187,49 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `boot binds a journalId naming another host's journal to a main-host spawn`() {
+        // A journalId equal to the spawning host's own name cannot tell the
+        // per-ref binding from the host default; "worker" on mainHost can.
+        val journalRoot = tempDir.resolve("journal-id-worker")
+        val manifest = Manifest(
+            mapOf(
+                "durable" to NodeSpec(
+                    hosts = listOf("main", "worker"),
+                    journalDir = journalRoot.toString(),
+                ),
+            ),
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val cells = mutableListOf<SetCell<String>>()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "items",
+                    factory = CellFactory { chosen -> SetCell<String>(chosen).also(cells::add) },
+                    identity = IdentityBinding.Exact(ref),
+                    journalId = "worker",
+                ),
+            ),
+        )
+        val first = Runtime.boot(manifest, "durable", spec)
+        try {
+            first.mainHost.lookup<SetApi<String>>(ref)!!.inlet.call.add("in-worker-journal")
+            first.mainHost.quiescence().await(10_000, "journalId write")
+        } finally {
+            first.close()
+        }
+
+        val second = Runtime.boot(manifest, "durable", spec)
+        try {
+            val worker = checkNotNull(KeyedCells.hostJournal(File(journalRoot.toString(), "worker")))
+            second.mainHost.recoverFrom(worker).awaitApplied(10_000)
+            assertTrue("in-worker-journal" in cells.last().membership())
+        } finally {
+            second.close()
+        }
+    }
+
+    @Test
     fun `boot exposes keyed families and the runtime replication`() {
         val spec = GraphSpec(
             listOf(
