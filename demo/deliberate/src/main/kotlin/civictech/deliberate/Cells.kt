@@ -10,6 +10,7 @@ import civictech.cell.observe.View
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PropagateFeedbackInlet
 import civictech.cell.port.registerPort
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -157,9 +158,9 @@ open class ClaimNode(
  * undercutters attack it) that also follows its source's credence and pushes
  * an [Influence] carrying both vectors at its target.
  *
- * [quiescence] > 0 makes it a cycle head, exactly as agora's `EdgeCell`: a
- * returning source update whose largest per-layer change is below the
- * threshold is absorbed here, at the inbound feedback edge. A deliberation
+ * [quiescence] is the cycle-head absorb threshold. The admitted closing link
+ * lands on [feedbackInlet] when this edge is a head; ordinary source links
+ * land on [sourceInlet]. Both inlets feed the same handler. A deliberation
  * tree has no cycles, but the graph does not assume that.
  */
 class EdgeNode(
@@ -169,6 +170,13 @@ class EdgeNode(
     val quiescence: Double = 0.0,
 ) : ClaimNode(ref, layers) {
     val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<Credence>>())
+    val feedbackInlet = registerPort(
+        "feedbackInlet",
+        PropagateFeedbackInlet<Credence>(
+            quiescence = quiescence,
+            payloadType = Credence::class.java,
+        ) { onSource(it) },
+    )
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<Influence>>())
 
     /** Neutral until the source's catch-up arrives. */
@@ -176,14 +184,13 @@ class EdgeNode(
     private var last = Influence(ref, polarity, credence.values, sourceCredence, size = 0.0)
 
     init {
-        sourceInlet.onEach { c ->
-            // Cycle-head absorb gate: drift accumulates against the stored vector,
-            // so the total absorbed error stays below the threshold.
-            if (quiescence > 0 && maxDelta(c.values, sourceCredence) < quiescence) return@onEach
-            sourceCredence = c.values
-            emitInfluence()
-        }
+        sourceInlet.onEach(::onSource)
         influenceOutlet.catchUpOnLinked { last.copy(size = 0.0) }
+    }
+
+    private fun onSource(c: Credence) {
+        sourceCredence = c.values
+        emitInfluence()
     }
 
     override fun onCredence() = emitInfluence()
