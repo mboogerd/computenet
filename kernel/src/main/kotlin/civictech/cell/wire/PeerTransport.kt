@@ -89,7 +89,7 @@ interface PeerListener : PeerEndpoint {
 }
 
 /**
- * A dialled end — the end that can sever the peering and restore it
+ * A dialled end — the end that can sever the peering and restore it.
  */
 interface PeerConnection : PeerEndpoint {
 
