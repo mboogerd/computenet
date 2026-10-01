@@ -52,12 +52,12 @@ Command pitfalls for `bd`, `git`, `gh` and the shell are in [traps.md](traps.md)
   Bash tool's parameter: there is no `timeout` binary here, and piped it fails
   open, so a suite that never ran reports success.
 - Every Gradle and npm call sets the Bash tool's `dangerouslyDisableSandbox`
-  parameter (a tool parameter, not a `./gradlew` flag). The default sandbox
-  fails KSP with `Operation not permitted`.
-- `gradle.properties (Operation not permitted)` is not a build failure. A
-  daemon started from a sandboxed call survives it and poisons later calls,
-  other agents' worktrees included. Run `./gradlew --stop`, then re-run with
-  the sandbox disabled.
+  parameter (a tool parameter, not a `./gradlew` flag); the default sandbox
+  fails KSP with `Operation not permitted`. Where no such parameter exists
+  (Codex), add `--no-daemon` to every `./gradlew` call instead.
+- `Operation not permitted` on `gradle.properties` or `fileHashes.lock`
+  before any task runs is a shared daemon poisoned by a sandboxed call, not a
+  build failure. Re-run with `--no-daemon`; never `./gradlew --stop`.
 - **Never write an unquoted `=` separator between batched commands.** zsh
   expands an `=`-initial word to that command's path, so `echo ===` fails with
   `(eval):1: == not found` **and kills every command batched after it** — the
