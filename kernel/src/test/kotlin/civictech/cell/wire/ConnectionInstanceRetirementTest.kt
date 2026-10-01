@@ -215,18 +215,23 @@ class ConnectionInstanceRetirementTest {
     }
 
     @Test
-    fun `a frame a severed loopback instance left staged meets the tombstone after the heal`() {
-        // The announcement is staged on A's bridge host, undecoded, across a
-        // partition and a heal. Loopback ingresses persist, so it still
-        // decodes — addressed to the retired mirror — and must be refused
-        // rather than parked (and rather than applied: MirrorCloseFenceTest).
-        val controller = SimulationController(31)
+    fun `a frame a severed loopback instance left staged decodes only after heal returns`() {
+        // Register B's schedulers first. A seedless SimulationController drains
+        // the first busy host, so each awaited priority-0 spawn on B completes
+        // without stepping A's already-staged priority-20 frame. The matching
+        // spawn on A then overtakes that frame and returns as soon as the
+        // management task completes. This leaves the old frame queued after
+        // heal() returns, just as a production scheduler may when its caller
+        // resumes between drains.
+        val controller = SimulationController()
         val registryA = LocationRegistry()
         val registryB = LocationRegistry()
+        val bridgeHostB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
         val hostB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
+        val hostA = ManagedHost(scheduler = controller.scheduler(), registry = registryA)
         val loopback = Peering.loopback(
-            Peering.Side(registryA, ManagedHost(scheduler = controller.scheduler(), registry = registryA), peer = PeerId("jvm-a")),
-            Peering.Side(registryB, ManagedHost(scheduler = controller.scheduler(), registry = registryB), peer = PeerId("jvm-b")),
+            Peering.Side(registryA, hostA, peer = PeerId("jvm-a")),
+            Peering.Side(registryB, bridgeHostB, peer = PeerId("jvm-b")),
         )
         controller.runToIdle()
         val severed = loopback.mirrorRefOnA
@@ -235,9 +240,14 @@ class ConnectionInstanceRetirementTest {
         hostB.managementInlet.call.spawn(theirs) // announced, not yet decoded on A
         loopback.partition()
         loopback.heal()
-        controller.runToIdle()
 
         loopback.mirrorRefOnA shouldNotBe severed
+        // The refusal has not happened inside heal(): the staged frame has not
+        // decoded yet, so this assertion pins the post-return interleaving.
+        registryA.retiredRefusals shouldBe 0L
+
+        controller.runToIdle()
+
         registryA.parkedFor(severed).shouldBeEmpty()
         registryA.retiredRefusals shouldBe 1L
         // and the healed instance's catch-up carried it the ordinary way
