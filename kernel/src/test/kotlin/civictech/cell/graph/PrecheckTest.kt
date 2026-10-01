@@ -2,6 +2,8 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Consumer
+import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -10,13 +12,27 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.Interest
+import civictech.cell.link.Linked
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkRole
+import civictech.cell.link.LinkSupport
 import civictech.cell.link.reconcileNatures
 import civictech.cell.partition.ShardCell
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.LinkTo
 import civictech.cell.port.Port
 import civictech.cell.port.PortNatures
+import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
+import civictech.cell.port.Use
 import civictech.cell.port.feedbackInlet
+import civictech.cell.port.input
 import civictech.cell.port.natures
+import civictech.cell.port.output
+import civictech.cell.port.registerPort
+import civictech.gen.wire.Contract
+import civictech.gen.wire.Key
 import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
 import civictech.nature.Ownership
@@ -27,6 +43,11 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
+
+@Contract
+interface GraphPrecheckOwnedPush {
+    fun push(@Key value: Owned<String>)
+}
 
 /**
  * WKB2 F2 task 1 (computenet-91xzn.1): [GraphSpec.precheck] plans SPAWN/LINK
@@ -66,6 +87,35 @@ class PrecheckTest {
      */
     private class HeadOnly(override val ref: CellRef) : Cell {
         val feedback by feedbackInlet<String> { }
+    }
+
+    private class Source(override val ref: CellRef) : Cell {
+        val outlet by output<Consumer<String>>()
+    }
+
+    private class SingleSink(override val ref: CellRef) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>(singleWriter = true))
+    }
+
+    private class OwnedSource(override val ref: CellRef) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<GraphPrecheckOwnedPush>())
+    }
+
+    private class OwnedSink(override val ref: CellRef) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<GraphPrecheckOwnedPush>())
+    }
+
+    private class PlainOutlet<Api : Any>(override val ref: PortRef = PortRef.generate()) : LinkTo<Api>, Linked {
+        override val linking = LinkSupport()
+        override fun linkTo(useApi: Use<Api>) = Unit
+    }
+
+    private class PlainSource(override val ref: CellRef) : Cell {
+        val outlet = registerPort("outlet", PlainOutlet<Consumer<String>>())
+    }
+
+    private class ConsumerSink(override val ref: CellRef) : Cell {
+        val inlet by input<Consumer<String>>()
     }
 
     private val setFactory = CellFactory { ref -> SetCell<String>(ref = ref) }
@@ -166,6 +216,74 @@ class PrecheckTest {
         plan.step("child").result.refused().code shouldBe RefusalCode.UNRESOLVED_HANDLE
         plan.step("child").result.refused().reason shouldContain "'nobody'"
         plan.step("${f.liveSet.ref}.outlet->phantom.inlet").result.refused().code shouldBe RefusalCode.UNRESOLVED_HANDLE
+    }
+
+    @Test
+    fun `an accepted unlink releases the planned single-writer slot and an unmatched edge is refused`() {
+        val f = Fixture(seed = 151)
+        val plan = GraphSpec(
+            listOf(
+                SpawnStep("a", CellFactory { Source(it) }),
+                SpawnStep("b", CellFactory { Source(it) }),
+                SpawnStep("sink", CellFactory { SingleSink(it) }),
+                ConnectStep("a", "outlet", "sink", "inlet"),
+                UnlinkStep("a", "outlet", "sink", "inlet"),
+                ConnectStep("b", "outlet", "sink", "inlet"),
+                UnlinkStep("ghost", "outlet", "sink", "inlet"),
+            ),
+        ).precheck(live = f.view)
+
+        plan.step("a.outlet->sink.inlet").result shouldBe StepCheck.Ok
+        plan.step("unlink a.outlet->sink.inlet").let {
+            it.action shouldBe PlannedAction.UNLINK
+            it.result shouldBe StepCheck.Ok
+        }
+        plan.step("b.outlet->sink.inlet").result shouldBe StepCheck.Ok
+        plan.step("unlink ghost.outlet->sink.inlet").result.refused().let {
+            it.code shouldBe RefusalCode.UNRESOLVED_HANDLE
+            it.reason shouldContain "ghost.outlet->sink.inlet"
+        }
+    }
+
+    @Test
+    fun `Observe links consume neither single-producer nor SPSC planned capacity`() {
+        val f = Fixture(seed = 152)
+        val observe = LinkOptions(role = LinkRole.Observe)
+        val plan = GraphSpec(
+            listOf(
+                SpawnStep("a", CellFactory { Source(it) }),
+                SpawnStep("b", CellFactory { Source(it) }),
+                SpawnStep("single", CellFactory { SingleSink(it) }),
+                ConnectStep("a", "outlet", "single", "inlet", observe),
+                ConnectStep("b", "outlet", "single", "inlet"),
+                SpawnStep("owned", CellFactory { OwnedSource(it) }),
+                SpawnStep("tap", CellFactory { OwnedSink(it) }),
+                SpawnStep("consumer", CellFactory { OwnedSink(it) }),
+                ConnectStep("owned", "outlet", "tap", "inlet", observe),
+                ConnectStep("owned", "outlet", "consumer", "inlet"),
+            ),
+        ).precheck(live = f.view)
+
+        plan.verdict shouldBe Verdict.Appliable
+        plan.steps.filter { it.action == PlannedAction.LINK }.map { it.result }.toSet() shouldBe setOf(StepCheck.Ok)
+    }
+
+    @Test
+    fun `Observe and staged options on a non-FanOutlet use LinkAdmission refusal reasons`() {
+        val f = Fixture(seed = 153)
+        val plan = GraphSpec(
+            listOf(
+                SpawnStep("plain", CellFactory { PlainSource(it) }),
+                SpawnStep("sink", CellFactory { ConsumerSink(it) }),
+                ConnectStep("plain", "outlet", "sink", "inlet", LinkOptions(role = LinkRole.Observe)),
+                ConnectStep("plain", "outlet", "sink", "inlet", LinkOptions(staged = true)),
+            ),
+        ).precheck(live = f.view)
+
+        val refusals = plan.steps.drop(2).map { it.result.refused() }
+        refusals.map { it.code } shouldBe listOf(RefusalCode.POLICY_DENIAL, RefusalCode.POLICY_DENIAL)
+        refusals[0].reason shouldContain "ObserveRequiresFanOutlet:"
+        refusals[1].reason shouldContain "StagedRequiresFanOutlet:"
     }
 
     @Test
