@@ -105,6 +105,7 @@ open class ClaimNode(
     /** Ref-sorted so every layer folds its arguments in one fixed order (FP determinism). */
     private val influences = TreeMap<CellRef, Influence>(REF_ORDER)
 
+    @Volatile
     var credence: Credence = credenceOf(
         layers.evaluate(emptyList(), emptyList(), emptyList()),
         if (neutralPrior) layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT) else null,
@@ -121,8 +122,12 @@ open class ClaimNode(
             if (i.strength == null || i.sourceCredence == null) influences.remove(i.edge) else influences[i.edge] = i
             recompute()
         }
-        // Late-join catch-up: a fresh subscriber learns the current vector at once (a baseline, size 0).
-        credenceOutlet.catchUpOnLinked { credence.copy(size = 0.0) }
+        // A catch-up is state-as-delta-from-empty: it is effective for a fresh
+        // receiver even when it is not a live change at this source. Using the
+        // model's null-to-present magnitude keeps a feedback head from absorbing
+        // its only baseline. The snapshot read can run on the linking thread, so
+        // [credence] is safely published above.
+        credenceOutlet.catchUpOnLinked { credence.copy(size = 1.0) }
     }
 
     private fun credenceOf(values: List<Double>, neutral: List<Double>?, size: Double) =
@@ -168,7 +173,6 @@ class EdgeNode(
     ref: CellRef,
     layers: LayerSet,
     val quiescence: Double = 0.0,
-    initialSourceCredence: List<Double>? = null,
 ) : ClaimNode(ref, layers) {
     val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<Credence>>())
     val feedbackInlet = registerPort(
@@ -180,12 +184,8 @@ class EdgeNode(
     )
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<Influence>>())
 
-    /**
-     * Neutral until the source's catch-up arrives — except on a head: its
-     * [feedbackInlet] absorbs that size-0 catch-up, so the graph primes it
-     * with [initialSourceCredence] (wakkv-D12 amendment).
-     */
-    private var sourceCredence: List<Double> = initialSourceCredence ?: credence.values
+    /** Neutral until the source's state-as-delta-from-empty catch-up arrives. */
+    private var sourceCredence: List<Double> = credence.values
     private var last = Influence(ref, polarity, credence.values, sourceCredence, size = 0.0)
 
     init {

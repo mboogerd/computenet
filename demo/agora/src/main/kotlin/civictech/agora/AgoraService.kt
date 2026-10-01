@@ -184,7 +184,6 @@ class AgoraService(
             ref,
             semantics,
             quiescence = if (head) quiescence else 0.0,
-            initialSourceCredence = if (head) cells.getValue(source).credence else null,
         )
             .also { it.catchUp = !replaying }
         manage.spawn(edge)

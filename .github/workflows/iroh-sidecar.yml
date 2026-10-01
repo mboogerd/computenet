@@ -373,6 +373,37 @@ jobs:
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
 
+      # computenet-4hzsn: :runtime has its own manifest-driven two-node iroh
+      # test. Run it in this lane with the same local relay/rendezvous endpoints
+      # as :iroh:check, and force execution so a cached report cannot satisfy
+      # the lane without exercising the runtime bootstrap.
+      - name: runtime iroh two-node test, flag-enabled
+        run: |
+          set -euo pipefail
+          ./gradlew :runtime:test --tests 'civictech.runtime.TwoNodesOverIrohTest' --rerun \
+            -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL" \
+            -Piroh.pkarr.url="$PKARR_URL" -Piroh.dns.origin="$DNS_ORIGIN" -Piroh.dns.nameserver="$DNS_ADDR"
+
+      # The test's assumption only skips when the sidecar property is absent or
+      # points at no binary. Keep that failure mode visible in this required
+      # lane instead of accepting a green Gradle task with no runtime evidence.
+      - name: Assert runtime iroh two-node test executed
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          report=runtime/build/test-results/test/TEST-civictech.runtime.TwoNodesOverIrohTest.xml
+          if [ ! -f "$report" ]; then
+            echo "FAIL: no JUnit XML at $report — :runtime:test did not run TwoNodesOverIrohTest" >&2
+            exit 1
+          fi
+          tests=$(sed -n 's/.*tests="\([0-9]*\)".*/\1/p' "$report" | head -1)
+          skipped=$(sed -n 's/.*skipped="\([0-9]*\)".*/\1/p' "$report" | head -1)
+          if [ "${tests:-0}" -eq 0 ] || [ "${skipped:-0}" -ne 0 ]; then
+            echo "FAIL: TwoNodesOverIrohTest reports ${tests:-0} test(s), ${skipped:-0} skipped" >&2
+            exit 1
+          fi
+          echo "ok: TwoNodesOverIrohTest executed ${tests} test(s), 0 skipped" | tee -a "$GITHUB_STEP_SUMMARY"
+
       # computenet-6buf: the only Linux run of :iroh's JUnit suite (see the
       # "iroh Gradle check, flag-enabled" step above) otherwise has its exact
       # per-testcase `time` attributes torn down with the runner. `if:

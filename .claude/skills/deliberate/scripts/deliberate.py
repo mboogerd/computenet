@@ -43,8 +43,9 @@ def call(member, prompt, out, tag):
     if DRY:
         text = dry_reply(tag)
     elif member == "opus":
-        # --bare: no user hooks/plugins/CLAUDE.md leak a persona into a member.
-        r = subprocess.run([claude_bin(), "-p", "--bare", "--model", OPUS_MODEL, "--tools", "",
+        # --safe-mode: no user hooks/plugins/CLAUDE.md leak a persona into a member.
+        # Not --bare: it never reads OAuth, so a subscription token logs out.
+        r = subprocess.run([claude_bin(), "-p", "--safe-mode", "--model", OPUS_MODEL, "--tools", "",
                             "--no-session-persistence", "--output-format", "json"],
                            input=prompt, capture_output=True, text=True, timeout=TIMEOUT, cwd=out)
         try:

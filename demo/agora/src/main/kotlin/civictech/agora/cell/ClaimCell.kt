@@ -48,6 +48,7 @@ open class ClaimCell(
      * the fold order matches the batch reference solver exactly (FP determinism). */
     private val influences = TreeMap<CellRef, Double>(REF_ORDER)
 
+    @Volatile
     var credence: Double = semantics.combine(semantics.base(emptyList()), emptyList(), emptyList())
         private set
 
@@ -73,10 +74,13 @@ open class ClaimCell(
             else influences[value.edge] = if (value.polarity == Polarity.SUPPORT) value.value else -value.value
             recompute()
         }
-        // late-join catch-up (G-22): a fresh subscriber learns the current
-        // credence at once — a baseline, so size = 0 (no urgency).
+        // A catch-up is state-as-delta-from-empty: it is effective for a fresh
+        // receiver even when it is not a live change at this source. Using the
+        // model's null-to-present magnitude keeps a feedback head from absorbing
+        // its only baseline. The snapshot read can run on the linking thread, so
+        // [credence] is safely published above.
         credenceOutlet.catchUpOnLinked {
-            if (catchUp) CredenceUpdate(ref, credence, size = 0.0) else null
+            if (catchUp) CredenceUpdate(ref, credence, size = 1.0) else null
         }
     }
 
