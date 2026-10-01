@@ -33,3 +33,7 @@ wire/src/main/kotlin/civictech/wire/HelloProtocol.kt
 demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 # configured name — the demo's CLI-supplied `netName` becomes this side's
 # asserted `Side.peer`.
+
+runtime/src/main/kotlin/civictech/runtime/Runtime.kt
+# configured name — Runtime maps the manifest's `peerName` through a
+# constructor reference before assigning the bridge side's asserted peer.

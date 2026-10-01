@@ -24,11 +24,11 @@ import java.io.File
  * [ModuleInventoryTest] discovers module names, so a module added to the
  * build is covered without editing this file):
  *
- * (a) the set of files containing a `PeerId(` **construction** — deliberately
- *     distinguished from a `PeerId(` **mention**: a line matching `PeerId(`
- *     after stripping `//` comments, skipping KDoc lines (trimmed line starts
- *     with `*`), and excluding the `data class PeerId(` declaration line
- *     itself — must equal the checked-in baseline
+ * (a) the set of files containing a `PeerId(` or `::PeerId` **construction** —
+ *     deliberately distinguished from a mention: a line matching either
+ *     constructor form after stripping `//` comments, skipping KDoc lines
+ *     (trimmed line starts with `*`), and excluding the `data class PeerId(`
+ *     declaration line itself — must equal the checked-in baseline
  *     `kernel/src/test/resources/architecture/peerid-constructions.txt`.
  *     Constructing a `PeerId` from a hello/frame token, or from a configured
  *     name, is not a derivation from key material and is fine to baseline;
@@ -54,6 +54,7 @@ class IdentityDerivationRatchetTest {
 
     private val includeLine = Regex("""^\s*include\("(:[^"]+)"\)""")
     private val peerIdConstruction = Regex("""\bPeerId\(""")
+    private val peerIdConstructorReference = Regex("""::PeerId\b""")
     private val peerIdDeclaration = Regex("""\bclass\s+PeerId\(""")
     private val bindingSamConversion = Regex("""\bPeerIdentityBinding\s*\{""")
 
@@ -370,14 +371,18 @@ class IdentityDerivationRatchetTest {
         }
     }
 
-    /** Repo-relative paths of production files containing a `PeerId(` construction. */
+    /** Repo-relative paths of production files containing a `PeerId` construction or constructor reference. */
     fun scanPeerIdConstructions(root: File, moduleRoots: List<File>): Set<String> {
         val paths = mutableSetOf<String>()
         eachKotlinFile(root, moduleRoots) { file, relativePath ->
             file.forEachLine { line ->
                 val content = contentOrNull(line) ?: return@forEachLine
                 if (peerIdDeclaration.containsMatchIn(content)) return@forEachLine
-                if (peerIdConstruction.containsMatchIn(content)) paths += relativePath
+                if (peerIdConstruction.containsMatchIn(content) ||
+                    peerIdConstructorReference.containsMatchIn(content)
+                ) {
+                    paths += relativePath
+                }
             }
         }
         return paths
@@ -614,14 +619,14 @@ class IdentityDerivationRatchetTest {
      * Non-vacuousness route (test-only task — no production edit is in this
      * claim to prove discrimination against, so the test carries its own
      * fixture). Builds a synthetic two-module tree with one legitimate
-     * construction, one KDoc-only mention of the same text, and one stray
-     * construction shaped exactly like the derivation the feature forbids
-     * (`PeerId(fingerprint(key).name)`), and asserts [scanPeerIdConstructions]
-     * reports the legitimate site and the stray, but never the KDoc mention —
-     * so a scanner that matched every occurrence of the substring `PeerId(`
-     * indiscriminately (which would also flag the KDoc line) is caught, and
-     * a scanner that matched nothing (which would also miss the stray) is
-     * caught too.
+     * construction, one constructor reference, one KDoc-only mention of the
+     * same text, and one stray construction shaped exactly like the derivation
+     * the feature forbids (`PeerId(fingerprint(key).name)`), and asserts
+     * [scanPeerIdConstructions] reports both executable construction forms and
+     * the stray, but never the KDoc mention — so a scanner that matched every
+     * occurrence of the substring `PeerId(` indiscriminately (which would also
+     * flag the KDoc line), a scanner that ignored `::PeerId`, or a scanner that
+     * matched nothing is caught.
      */
     @Test
     fun `fixture self-check - the scanner flags a stray construction and ignores a KDoc mention`(
@@ -660,6 +665,16 @@ class IdentityDerivationRatchetTest {
             """.trimIndent(),
         )
 
+        File(moduleADir, "Reference.kt").writeText(
+            """
+            package fixture.a
+
+            class Reference {
+                val constructor: (String) -> PeerId = ::PeerId
+            }
+            """.trimIndent(),
+        )
+
         File(moduleBDir, "Stray.kt").writeText(
             """
             package fixture.b
@@ -680,6 +695,7 @@ class IdentityDerivationRatchetTest {
         assertEquals(
             setOf(
                 "fixture-a/src/main/kotlin/fixture/a/Legit.kt",
+                "fixture-a/src/main/kotlin/fixture/a/Reference.kt",
                 "fixture-b/src/main/kotlin/fixture/b/Stray.kt",
             ),
             actual,
