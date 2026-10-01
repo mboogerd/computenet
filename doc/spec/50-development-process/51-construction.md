@@ -2,8 +2,8 @@
 
 > **Status**: Partial (cell authoring + graph DSL exist; `SpawnStep`
 > identity/parent/factory and `spawnBound` remote application built (W3.6,
-> G-51 core); `UnlinkStep` and placement/membrane extensions decided in
-> [93](../90-roadmap/93-feature-interactions.md), unimplemented;
+> G-51 core); `UnlinkStep(from, outlet, to, inlet)` built; placement/membrane
+> extensions decided in [93](../90-roadmap/93-feature-interactions.md), unimplemented;
 > codegen/tooling exploratory)
 > **Sources**: ADR — Cellular Software Development Process, ADR — Task Definitions, ADR 3 (codegen)
 > **Implementation**: hand-written cells + host API; `cell.graph` DSL (`graph`/`GraphSpec`, `IdentityBinding`, `HostManagementApi.spawnBound`, `GraphSpec.applyRemote`/`ApplyReport`); KSP seed (`gen`); no scaffolding
@@ -64,9 +64,9 @@ cold/hot operators) stay unbuilt until a caller needs more than
 spawn-and-link.
 
 The step vocabulary's decided extension (decided in 93 I-21; `SpawnStep`'s
-identity/parent/factory parameters built W3.6, `UnlinkStep` still unbuilt):
+identity/parent/factory parameters and `UnlinkStep` built):
 steps are `SpawnStep(handle, factory, identity, parent)`, `ConnectStep`,
-and `UnlinkStep` (`Link.unlink()` as a recorded step — unbuilt). `identity` is
+and `UnlinkStep(from, outlet, to, inlet)` (`Link.unlink()` as a recorded step). `identity` is
 an `IdentityBinding` choosing which ref the host mints — `FreshLogical`
 (default: the shipped replay-as-new-graph behavior, so "replay mints fresh
 cells and refs" stays true by default), `NewInstanceOf(logicalId)` (fresh

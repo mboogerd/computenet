@@ -10,6 +10,7 @@ import civictech.cell.host.TopologyIndex
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkRequest
+import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
@@ -144,15 +145,16 @@ sealed interface StepCheck {
 }
 
 /**
- * What a planned step would do ([WKB2-14]). Precheck produces only [SPAWN] and
- * [LINK]; [UNLINK], [DESPAWN] and [PROMOTE] are arms for the write plane's
- * draft (WKB2 F3/F9).
+ * What a planned step would do ([WKB2-14]). Precheck produces [SPAWN], [LINK]
+ * and [UNLINK]; [DESPAWN] and [PROMOTE] are arms for the write plane's draft
+ * (WKB2 F3/F9).
  */
 enum class PlannedAction { SPAWN, LINK, UNLINK, DESPAWN, PROMOTE }
 
 /**
  * One step of a [Plan]. [key] mirrors [ApplyReport] (91xzn-D8): the spawn
- * handle, `"from.outlet->to.inlet"` for a [ConnectStep], and
+ * handle, `"from.outlet->to.inlet"` for a [ConnectStep],
+ * `"unlink from.outlet->to.inlet"` for an [UnlinkStep], and
  * `"<liveRef>.<port>->handle.<port>"` / `"handle.<port>-><liveRef>.<port>"`
  * for a [BoundaryLink] by direction. [touches] is the live refs the step
  * would change: empty for spec-internal steps, `{liveRef}` for a boundary link.
@@ -192,12 +194,16 @@ data class Plan(val steps: List<PlannedStep>, val verdict: Verdict)
  * structural verdict and propagates.
  */
 fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveView): Plan {
-    val scratch = Scratch(live)
+    val familyHandles = steps.filterIsInstance<SpawnStep>()
+        .filter { it.family != null }
+        .mapTo(mutableSetOf()) { it.handle }
+    val scratch = Scratch(live, familyHandles)
     val planned = mutableListOf<PlannedStep>()
     steps.forEach { step ->
         when (step) {
             is SpawnStep -> planned += scratch.spawn(step, live)
             is ConnectStep -> planned += scratch.connect(step)
+            is UnlinkStep -> planned += scratch.unlink(step)
             is InstanceSetStep -> {
                 val lowered = try {
                     step.lower()
@@ -226,11 +232,18 @@ private fun refusedInstanceSet(step: InstanceSetStep, e: IllegalArgumentExceptio
 private class Staged(val ref: CellRef, val cell: Cell)
 
 /**
- * A link accepted earlier in this plan (every one is a Consume link). The
- * cardinality and SPSC checks count these beside the live `linking.links`; a
- * refused link is never recorded, so it never counts.
+ * A link accepted earlier in this plan. Cardinality and SPSC checks count only
+ * [LinkRole.Consume] records beside the live `linking.links`; an Observe or
+ * refused link never consumes either budget.
  */
-private class PlannedLink(val outlet: LinkTo<*>, val inlet: LinkFrom<*>, val from: CellRef, val to: CellRef)
+private class PlannedLink(
+    val outlet: LinkTo<*>,
+    val inlet: LinkFrom<*>,
+    val from: CellRef,
+    val to: CellRef,
+    val role: LinkRole,
+    val topologyId: UUID,
+)
 
 /**
  * A link about to be checked, both endpoints resolved. [outletName] and
@@ -244,12 +257,13 @@ private class LinkCandidate(
     val to: CellRef,
     val outletName: String,
     val inletName: String,
+    val options: LinkOptions = LinkOptions.DEFAULT,
 )
 
-private class Scratch(live: LiveView) {
+private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
     val staged = mutableMapOf<String, Staged>()
     val refusedHandles = mutableSetOf<String>()
-    val links = mutableListOf<PlannedLink>()
+    val links = mutableMapOf<String, PlannedLink>()
 
     /**
      * 91xzn-D5: a private [TopologyIndex] seeded once with the live links and
@@ -271,6 +285,11 @@ private class Scratch(live: LiveView) {
             refusedHandles += step.handle
             return planned(StepCheck.Refused(code, reason))
         }
+
+        // A family has no single ref or ports. Its key-aware factory cannot be
+        // sampled without inventing a key, so the cold plan records only the
+        // family declaration and leaves the handle unresolved for links.
+        if (step.family != null) return planned(StepCheck.Ok)
 
         step.parent?.let { parent ->
             if (parent !in staged) return refuse(RefusalCode.UNRESOLVED_HANDLE, unresolvedHandle(parent, "parent of '${step.handle}'"))
@@ -294,8 +313,15 @@ private class Scratch(live: LiveView) {
     }
 
     fun connect(step: ConnectStep): PlannedStep {
-        fun planned(result: StepCheck) =
-            PlannedStep("${step.from}.${step.outlet}->${step.to}.${step.inlet}", null, PlannedAction.LINK, emptySet(), result)
+        val key = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+        fun planned(result: StepCheck) = PlannedStep(key, null, PlannedAction.LINK, emptySet(), result)
+
+        if (step.from in familyHandles) {
+            return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(step.from, "source")))
+        }
+        if (step.to in familyHandles) {
+            return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(step.to, "target")))
+        }
 
         val from = staged[step.from]
             ?: return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, unresolvedHandle(step.from, "source")))
@@ -305,7 +331,25 @@ private class Scratch(live: LiveView) {
             ?: return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_PORT, outletUnresolved(step.outlet, step.from)))
         val inlet = PortRegistry.of(to.cell)[step.inlet] as? LinkFrom<*>
             ?: return planned(StepCheck.Refused(RefusalCode.UNRESOLVED_PORT, inletUnresolved(step.inlet, step.to)))
-        return planned(checkLink(LinkCandidate(outlet, inlet, from.ref, to.ref, step.outlet, step.inlet)))
+        return planned(checkLink(LinkCandidate(outlet, inlet, from.ref, to.ref, step.outlet, step.inlet, step.options), key))
+    }
+
+    fun unlink(step: UnlinkStep): PlannedStep {
+        val edgeKey = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+        val key = "unlink $edgeKey"
+        val link = links.remove(edgeKey)
+            ?: return PlannedStep(
+                key,
+                null,
+                PlannedAction.UNLINK,
+                emptySet(),
+                StepCheck.Refused(
+                    RefusalCode.UNRESOLVED_HANDLE,
+                    "unresolved edge '$edgeKey' (unlink): no earlier accepted link in this spec produced it",
+                ),
+            )
+        topology.unlinked(link.topologyId)
+        return PlannedStep(key, null, PlannedAction.UNLINK, emptySet(), StepCheck.Ok)
     }
 
     fun boundary(link: BoundaryLink, live: LiveView): PlannedStep {
@@ -317,6 +361,10 @@ private class Scratch(live: LiveView) {
         }
         fun planned(result: StepCheck) = PlannedStep(key, link.handle, PlannedAction.LINK, setOf(link.liveRef), result)
         fun refuse(code: RefusalCode, reason: String) = planned(StepCheck.Refused(code, reason))
+
+        if (link.handle in familyHandles) {
+            return refuse(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(link.handle, "boundary"))
+        }
 
         when (val location = live.locationOf(link.liveRef)) {
             null -> return refuse(
@@ -361,7 +409,7 @@ private class Scratch(live: LiveView) {
                 LinkCandidate(outlet, inlet, stagedCell.ref, link.liveRef, link.handlePort, link.livePort)
             }
         }
-        return planned(checkLink(candidate))
+        return planned(checkLink(candidate, key))
     }
 
     /**
@@ -369,10 +417,18 @@ private class Scratch(live: LiveView) {
      * accepted link is recorded in [links] so later checks can see links
      * planned earlier in the same plan.
      */
-    fun checkLink(candidate: LinkCandidate): StepCheck {
+    fun checkLink(candidate: LinkCandidate, key: String): StepCheck {
         linkChecks.forEach { check -> check(candidate)?.let { return it } }
-        links += PlannedLink(candidate.outlet, candidate.inlet, candidate.from, candidate.to)
-        topology.linked(TopologyLink(UUID.randomUUID(), PortRef.generate(candidate.from), PortRef.generate(candidate.to)))
+        val topologyId = UUID.randomUUID()
+        links[key] = PlannedLink(
+            candidate.outlet,
+            candidate.inlet,
+            candidate.from,
+            candidate.to,
+            candidate.options.role,
+            topologyId,
+        )
+        topology.linked(TopologyLink(topologyId, PortRef.generate(candidate.from), PortRef.generate(candidate.to)))
         return StepCheck.Ok
     }
 
@@ -392,6 +448,7 @@ private class Scratch(live: LiveView) {
      */
     val linkChecks: List<(LinkCandidate) -> StepCheck.Refused?> = listOf(
         ::cycleCheck,
+        ::optionsCheck,
         ::ownershipCheck,
         ::capacityCheck,
         ::policyCheck,
@@ -399,9 +456,11 @@ private class Scratch(live: LiveView) {
         ::natureCheck,
     )
 
-    private fun plannedInto(inlet: LinkFrom<*>) = links.any { it.inlet.ref == inlet.ref }
+    private fun plannedInto(inlet: LinkFrom<*>) =
+        links.values.any { it.role == LinkRole.Consume && it.inlet.ref == inlet.ref }
 
-    private fun plannedFrom(outlet: LinkTo<*>) = links.any { it.outlet.ref == outlet.ref }
+    private fun plannedFrom(outlet: LinkTo<*>) =
+        links.values.any { it.role == LinkRole.Consume && it.outlet.ref == outlet.ref }
 
     /**
      * CYCLE_WITHOUT_HEAD ([13-LINK-06]): [topology] (live ∪ planned) decides
@@ -413,6 +472,22 @@ private class Scratch(live: LiveView) {
         if (!topology.wouldCloseCycle(c.from, c.to)) return null
         return LinkAdmission.cycleRefusal(c.from, c.outletName, c.outlet, c.to, c.inletName, c.inlet)
             ?.toRefused(RefusalCode.CYCLE_WITHOUT_HEAD)
+    }
+
+    /** The two option-shape refusals from [LinkAdmission.connect], verbatim. */
+    private fun optionsCheck(c: LinkCandidate): StepCheck.Refused? {
+        if (c.outlet is FanOutlet<*>) return null
+        return when {
+            c.options.role == LinkRole.Observe -> StepCheck.Refused(
+                RefusalCode.POLICY_DENIAL,
+                "ObserveRequiresFanOutlet: ${c.from}.${c.outletName} is ${c.outlet::class.java.name}",
+            )
+            c.options.staged -> StepCheck.Refused(
+                RefusalCode.POLICY_DENIAL,
+                "StagedRequiresFanOutlet: ${c.from}.${c.outletName} is ${c.outlet::class.java.name}",
+            )
+            else -> null
+        }
     }
 
     /**
@@ -428,6 +503,7 @@ private class Scratch(live: LiveView) {
      * natures stamp.
      */
     private fun ownershipCheck(c: LinkCandidate): StepCheck.Refused? {
+        if (c.options.role != LinkRole.Consume) return null
         val outlet = c.outlet as? FanOutlet<*> ?: return null
         if (!carriesExclusive(outlet)) return null
         val subscribed = outlet.linking.links.any { it.role == LinkRole.Consume } || plannedFrom(outlet)
@@ -449,6 +525,7 @@ private class Scratch(live: LiveView) {
      * A staged inlet has no live links; planned ones still count.
      */
     private fun capacityCheck(c: LinkCandidate): StepCheck.Refused? {
+        if (c.options.role != LinkRole.Consume) return null
         val inlet = c.inlet
         val live = (inlet as? Linked)?.linking?.links.orEmpty().any { it.role == LinkRole.Consume }
         return when {
@@ -472,13 +549,16 @@ private class Scratch(live: LiveView) {
      * `graph -> evolve` edge (91xzn-D5).
      */
     private fun policyCheck(c: LinkCandidate): StepCheck.Refused? {
-        val request = LinkRequest(c.outlet.ref, c.inlet.ref, CurrentPeer.get(), LinkRole.Consume)
+        val request = LinkRequest(c.outlet.ref, c.inlet.ref, CurrentPeer.get(), c.options.role)
         val rejected = (c.inlet as? Linked)?.linking?.reject(request)
             ?: (c.outlet as? Linked)?.linking?.reject(request)
             ?: return null
         return rejected.toRefused(RefusalCode.POLICY_DENIAL)
     }
 }
+
+private fun familyUnresolved(handle: String, role: String) =
+    "unresolved handle '$handle' ($role): family has no single port"
 
 /**
  * Whether [port] carries `Owned`/`Leased` payloads, by either witness the KSP

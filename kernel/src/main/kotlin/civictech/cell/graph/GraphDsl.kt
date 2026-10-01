@@ -2,9 +2,15 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.data.Replicable
+import civictech.cell.evolve.Effectful
+import civictech.cell.evolve.Shadow
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
+import civictech.cell.host.KeyedCells
 import civictech.cell.link.Interest
+import civictech.cell.link.Link
+import civictech.cell.link.LinkOptions
 import civictech.nature.Manifest
 import civictech.cell.link.LinkResult
 import civictech.cell.port.Port
@@ -26,6 +32,39 @@ import kotlin.random.Random
  */
 fun interface CellFactory : Serializable {
     fun create(ref: CellRef): Cell
+}
+
+/**
+ * The key encoding and decoding used by a [KeyedFamily]'s durable key log.
+ * A [GraphSpec] is serialized whole, so a custom codec's lambdas must be
+ * `@JvmSerializableLambda` (as the built-in codecs' are).
+ */
+class KeyCodec(
+    val render: (Any) -> String,
+    val parse: (String) -> Any,
+) : Serializable {
+    companion object {
+        /** The default codec for string keys. */
+        val Strings = KeyCodec(@JvmSerializableLambda { it as String }, @JvmSerializableLambda { it })
+
+        /** A decimal codec for long keys. */
+        val Longs = KeyCodec(@JvmSerializableLambda { (it as Long).toString() }, @JvmSerializableLambda { it.toLong() })
+    }
+}
+
+/** The declarative parameters for a lazily-spawned keyed cell family. */
+data class KeyedFamily(
+    val namespace: String,
+    val keys: KeyCodec = KeyCodec.Strings,
+    val journalId: String? = null,
+) : Serializable
+
+/** A cell factory whose construction also receives the family key. */
+fun interface KeyedCellFactory : CellFactory {
+    fun create(key: Any, ref: CellRef): Cell
+
+    override fun create(ref: CellRef): Cell =
+        throw UnsupportedOperationException("keyed family factory needs a key")
 }
 
 /** [CellFactory] that remembers the concrete cell type — SAM-compatible with every existing `spawn { … }` lambda. */
@@ -77,9 +116,34 @@ data class SpawnStep(
     /** Spec-local handle of the parent, resolved to a [CellRef] at apply time
      * (organelle nesting, G-28) — never a step of its own (93 I-21 §4.3). */
     val parent: String? = null,
+    /** Spawn through [civictech.cell.replication.Replication] rather than directly on a host. */
+    val replicated: Boolean = false,
+    /** Journal handle resolved by [ApplyContext] before this cell is spawned. */
+    val journalId: String? = null,
+    /** Apply [Shadow]'s effect suppression after this cell is spawned. */
+    val shadow: Boolean = false,
+    /** Lazily-spawned keyed family parameters; a family handle has no single cell ref. */
+    val family: KeyedFamily? = null,
+) : GraphStep {
+    init {
+        if (family != null) {
+            require(factory is KeyedCellFactory) {
+                "spawn step '$handle': parameter 'family' requires a KeyedCellFactory"
+            }
+        }
+    }
+}
+
+data class ConnectStep(
+    val from: String,
+    val outlet: String,
+    val to: String,
+    val inlet: String,
+    val options: LinkOptions = LinkOptions.DEFAULT,
 ) : GraphStep
 
-data class ConnectStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
+/** Detaches the link admitted by an earlier [ConnectStep] with the same edge key. */
+data class UnlinkStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
 
 /**
  * PN-13 — one instance's declared slot in a heterogeneous instance set (spec
@@ -106,6 +170,7 @@ data class InstanceSpec(
     val placement: String? = null,
     val journalId: String? = null,
     val frontierPolicy: String? = null,
+    val replicated: Boolean = false,
 ) : Serializable
 
 /**
@@ -157,6 +222,8 @@ data class InstanceSetStep(
                 handle = "$handle-${spec.instanceId}",
                 factory = InstanceCellFactory(factory, spec),
                 identity = IdentityBinding.NewInstanceOf(logicalId),
+                replicated = spec.replicated,
+                journalId = spec.journalId,
             )
         }
     }
@@ -216,7 +283,8 @@ sealed interface StepResult : Serializable {
  * The eventual fold of a remote [GraphSpec] application (93 I-21 §4.4, G-51):
  * a structured per-step result an applier can inspect after [GraphSpec.applyRemote]
  * returns, keyed by the step's spec-local handle (spawn steps) or
- * `"from.outlet->to.inlet"` (connect steps).
+ * `"from.outlet->to.inlet"` (connect steps), or
+ * `"unlink from.outlet->to.inlet"` (unlink steps).
  */
 data class ApplyReport(val results: Map<String, StepResult>) : Serializable {
     val allApplied: Boolean get() = results.values.all { it is StepResult.Applied }
@@ -224,7 +292,7 @@ data class ApplyReport(val results: Map<String, StepResult>) : Serializable {
 
 /**
  * A graph as data: an ordered step list, each lowering to a host-management
- * invocation — nothing the spec does is beyond `spawn`/`connect` (51). Replay
+ * invocation — nothing the spec does is beyond `spawn`/`connect`/`Link.unlink()` (51). Replay
  * onto any host creates fresh cells (fresh refs) with the same topology by
  * default ([IdentityBinding.FreshLogical]); an explicit binding preserves or
  * targets a specific identity instead.
@@ -241,6 +309,115 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         steps.flatMap { if (it is InstanceSetStep) it.lower() else listOf(it) }
 
     /**
+     * Local parameter-aware application. The complete lowered spawn set is
+     * prepared before the first host operation, so a missing replication
+     * service or a non-[Replicable] cell cannot leave a partially-applied
+     * prefix behind.
+     */
+    fun apply(context: ApplyContext): AppliedGraph {
+        val lowered = lowered()
+        lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { it.replicated && context.replication == null }
+            ?.let { throw missingReplication(it.handle) }
+        lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { step ->
+                step.journalId != null && step.journalId !in context.journals
+            }
+            ?.let { step ->
+                throw missingJournal(step.handle, step.journalId!!)
+            }
+        lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { step ->
+                val journalId = step.family?.journalId
+                journalId != null && journalId !in context.journalDirs
+            }
+            ?.let { step ->
+                throw missingFamilyJournal(step.handle, step.family!!.journalId!!)
+            }
+
+        val prepared = mutableMapOf<Int, Cell>()
+        lowered.forEachIndexed { index, step ->
+            if (step !is SpawnStep) return@forEachIndexed
+            if (step.family != null) return@forEachIndexed
+            val ref = step.identity.resolve()
+            val cell = step.factory.create(ref)
+            requireBoundRef(step.handle, step.identity, ref, cell.ref)
+            if (step.replicated && cell !is Replicable<*>) {
+                throw IllegalStateException(
+                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                        "(built ${cell.javaClass.name})",
+                )
+            }
+            prepared[index] = cell
+        }
+
+        val refs = mutableMapOf<String, CellRef>()
+        val families = mutableMapOf<String, KeyedCells<*>>()
+        val links = mutableMapOf<String, Link>()
+        val familyHandles = lowered.filterIsInstance<SpawnStep>()
+            .filter { it.family != null }
+            .mapTo(mutableSetOf()) { it.handle }
+        lowered.forEachIndexed { index, step ->
+            when (step) {
+                is SpawnStep -> {
+                    if (step.family != null) {
+                        families[step.handle] = context.buildFamily(step)
+                    } else {
+                        val cell = prepared.getValue(index)
+                        step.journalId?.let { journalId ->
+                            context.bind(cell.ref, context.journals.getValue(journalId))
+                        }
+                        refs[step.handle] = if (step.replicated) {
+                            @Suppress("UNCHECKED_CAST")
+                            context.replication!!.replicate(cell as Replicable<*>, context.host)
+                            if (step.shadow) suppressShadow(cell)
+                            cell.ref
+                        } else {
+                            if (step.shadow) {
+                                Shadow.spawn(context.host, cell)
+                            } else {
+                                context.host.managementInlet.call.spawn(cell)
+                            }
+                        }
+                    }
+                }
+
+                is ConnectStep -> {
+                    val key = stepKey(step)
+                    if (step.from in familyHandles) {
+                        throw familyLinkRefusal(step.from, key)
+                    }
+                    if (step.to in familyHandles) {
+                        throw familyLinkRefusal(step.to, key)
+                    }
+                    when (
+                        val result = context.host.managementInlet.call.connectStep(
+                            refs.getValue(step.from), step.outlet,
+                            refs.getValue(step.to), step.inlet,
+                            step.options,
+                        )
+                    ) {
+                        is LinkResult.Connected -> links[key] = result.link
+                        is LinkResult.Rejected -> error(
+                            "link ${step.from}.${step.outlet} → ${step.to}.${step.inlet} rejected: ${result.reason}",
+                        )
+                        LinkResult.Deferred -> Unit
+                    }
+                }
+
+                is UnlinkStep -> {
+                    val key = stepKey(step)
+                    val link = links.remove(key) ?: throw unresolvedUnlink(key)
+                    link.unlink()
+                }
+
+                is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
+            }
+        }
+        return AppliedGraph(refs.toMap(), families.toMap(), links.toMap())
+    }
+
+    /**
      * Local, co-located replay (51 §Graph construction DSL): synchronous loud
      * failure, unchanged — the first rejected `connect` throws, and a `spawn`
      * whose resolved ref is already live throws too (the ordinary live-ref
@@ -249,8 +426,22 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
      * uniformly whether the target is local or (via [applyRemote]) remote.
      */
     fun applyTo(host: Use<HostManagementApi>): Map<String, CellRef> {
+        val lowered = lowered()
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.family != null }?.let { step ->
+            throw unsupportedFamily(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
+            throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.journalId != null }?.let { step ->
+            throw unsupportedJournal(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.shadow }?.let { step ->
+            throw unsupportedShadow(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
         val refs = mutableMapOf<String, CellRef>()
-        lowered().forEach { step ->
+        val links = mutableMapOf<String, Link>()
+        lowered.forEach { step ->
             when (step) {
                 is SpawnStep -> {
                     val ref = step.identity.resolve()
@@ -260,14 +451,23 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
 
                 is ConnectStep -> {
-                    val result = host.call.connect(
+                    val key = stepKey(step)
+                    val result = host.call.connectStep(
                         refs.getValue(step.from), step.outlet,
                         refs.getValue(step.to), step.inlet,
+                        step.options,
                     )
                     check(result !is LinkResult.Rejected) {
                         "link ${step.from}.${step.outlet} → ${step.to}.${step.inlet} rejected: " +
                             (result as LinkResult.Rejected).reason
                     }
+                    if (result is LinkResult.Connected) links[key] = result.link
+                }
+
+                is UnlinkStep -> {
+                    val key = stepKey(step)
+                    val link = links.remove(key) ?: throw unresolvedUnlink(key)
+                    link.unlink()
                 }
 
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
@@ -303,19 +503,41 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     fun applyRemote(host: Use<HostManagementApi>, progress: ApplyProgress): ApplyReport {
         val refs = mutableMapOf<String, CellRef>()
         val results = mutableMapOf<String, StepResult>()
-        lowered().forEachIndexed { index, step ->
+        val lowered = lowered()
+        val familyHandles = lowered.filterIsInstance<SpawnStep>()
+            .filter { it.family != null }
+            .mapTo(mutableSetOf()) { it.handle }
+        lowered.forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
-                    val parentRef = step.parent?.let { refs[it] }
-                    try {
-                        val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
-                        refs[step.handle] = ref
-                        results[step.handle] = StepResult.Applied(ref)
-                    } catch (e: Exception) {
-                        // dead-lettered on the target host already (ManagedHost.spawnBound);
-                        // here we only fold the outcome into the report, never rethrow —
-                        // the wire form never surfaces a synchronous cross-wire reply.
-                        results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
+                    if (step.family != null) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'family' is not supported by applyRemote",
+                        )
+                    } else if (step.replicated) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'replicated' is not supported by applyRemote",
+                        )
+                    } else if (step.journalId != null) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'journalId' is not supported by applyRemote",
+                        )
+                    } else if (step.shadow) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'shadow' is not supported by applyRemote",
+                        )
+                    } else {
+                        val parentRef = step.parent?.let { refs[it] }
+                        try {
+                            val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
+                            refs[step.handle] = ref
+                            results[step.handle] = StepResult.Applied(ref)
+                        } catch (e: Exception) {
+                            // dead-lettered on the target host already (ManagedHost.spawnBound);
+                            // here we only fold the outcome into the report, never rethrow —
+                            // the wire form never surfaces a synchronous cross-wire reply.
+                            results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
+                        }
                     }
                     // Outside the try: a throw from the callback propagates (D2) and
                     // is never folded into the report as the step's own failure.
@@ -326,13 +548,17 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     val key = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
                     val from = refs[step.from]
                     val to = refs[step.to]
-                    if (from == null || to == null) {
+                    if (step.from in familyHandles) {
+                        results[key] = StepResult.Rejected(familyLinkReason(step.from, key))
+                    } else if (step.to in familyHandles) {
+                        results[key] = StepResult.Rejected(familyLinkReason(step.to, key))
+                    } else if (from == null || to == null) {
                         results[key] = StepResult.Rejected(
                             "endpoint not constructed: '${step.from}' or '${step.to}' was rejected/missing",
                         )
                     } else {
                         try {
-                            when (val result = host.call.connect(from, step.outlet, to, step.inlet)) {
+                            when (val result = host.call.connectStep(from, step.outlet, to, step.inlet, step.options)) {
                                 is LinkResult.Rejected -> results[key] = StepResult.Rejected(result.reason)
                                 else -> results[key] = StepResult.Applied(null)
                             }
@@ -343,6 +569,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     progress.onStep(StepEvent(index, key, results.getValue(key)))
                 }
 
+                is UnlinkStep -> {
+                    val key = unlinkStepKey(step)
+                    results[key] = StepResult.Rejected(
+                        "unlink step '${stepKey(step)}' is not supported by applyRemote: " +
+                            "HostManagementApi has no disconnect operation",
+                    )
+                    progress.onStep(StepEvent(index, key, results.getValue(key)))
+                }
+
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
@@ -350,6 +585,74 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         return ApplyReport(results)
     }
 }
+
+/**
+ * x0oag-D3: a step with [LinkOptions.DEFAULT] keeps the 4-arg `connect` it
+ * made before options existed, so a [HostManagementApi] decorator that
+ * intercepts only that overload (inspect's `StagedApplier` recorder, which
+ * records the links its UNWIND retracts) still sees every parameter-free edge.
+ */
+private fun HostManagementApi.connectStep(
+    from: CellRef,
+    outletName: String,
+    to: CellRef,
+    inletName: String,
+    options: LinkOptions,
+): LinkResult =
+    if (options == LinkOptions.DEFAULT) {
+        connect(from, outletName, to, inletName)
+    } else {
+        connect(from, outletName, to, inletName, options)
+    }
+
+private fun stepKey(step: ConnectStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+
+private fun stepKey(step: UnlinkStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+
+private fun unlinkStepKey(step: UnlinkStep): String = "unlink ${stepKey(step)}"
+
+private fun unresolvedUnlink(key: String): IllegalStateException = IllegalStateException(
+    "unlink step '$key': no earlier connected edge in this apply",
+)
+
+private fun missingReplication(handle: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'replicated' requires ApplyContext.replication",
+)
+
+private fun unsupportedReplication(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'replicated' cannot be applied by $path; use apply(ApplyContext)",
+)
+
+private fun missingJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'journalId' names '$journalId', but ApplyContext.journals has no such journal",
+)
+
+private fun unsupportedJournal(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'journalId' cannot be applied by $path; use apply(ApplyContext)",
+)
+
+private fun unsupportedShadow(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'shadow' cannot be applied by $path; use apply(ApplyContext)",
+)
+
+private fun suppressShadow(cell: Cell) {
+    if (cell is Effectful) Shadow.suppress(cell) else Shadow.suppressEffectContracts(cell)
+}
+
+internal fun missingFamilyJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'family.journalId' names '$journalId', " +
+        "but ApplyContext.journalDirs has no such journal directory",
+)
+
+internal fun unsupportedFamily(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'family' cannot be applied by $path; use graph(ApplyContext)",
+)
+
+private fun familyLinkReason(handle: String, key: String): String =
+    "link '$key' names family handle '$handle' (parameter 'family' has no single port)"
+
+private fun familyLinkRefusal(handle: String, key: String): IllegalStateException =
+    IllegalStateException(familyLinkReason(handle, key))
 
 open class CellHandle internal constructor(
     val name: String,
@@ -377,9 +680,16 @@ class TypedCellHandle<C : Cell> internal constructor(
  * applies immediately through [host] and records into the [GraphSpec]. No new
  * semantics in the DSL layer, ever.
  */
-class GraphBuilder internal constructor(private val host: Use<HostManagementApi>) {
+class GraphBuilder private constructor(
+    private val host: Use<HostManagementApi>,
+    private val context: ApplyContext?,
+) {
+    internal constructor(host: Use<HostManagementApi>) : this(host, null)
+    internal constructor(context: ApplyContext) : this(context.host.managementInlet, context)
+
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
+    private val links = mutableMapOf<String, Link>()
 
     /** Spec-local handle by resolved [CellRef] — lets typed [link] recover the
      * handle name a port's owner was spawned under (typed-port-links). */
@@ -394,15 +704,84 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         name: String,
         identity: IdentityBinding = IdentityBinding.FreshLogical,
         parent: CellHandle? = null,
+        replicated: Boolean = false,
+        journalId: String? = null,
+        shadow: Boolean = false,
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
+        if (context == null) {
+            if (journalId != null) throw unsupportedJournal(name, "graph(Use<HostManagementApi>)")
+            if (shadow) throw unsupportedShadow(name, "graph(Use<HostManagementApi>)")
+        }
         val ref = identity.resolve()
         val cell = factory.create(ref)
         requireBoundRef(name, identity, ref, cell.ref)
-        steps += SpawnStep(name, factory, identity, parent?.name)
-        return TypedCellHandle(name, host.call.spawn(cell), this, cell)
+        val step = SpawnStep(
+            handle = name,
+            factory = factory,
+            identity = identity,
+            parent = parent?.name,
+            replicated = replicated,
+            journalId = journalId,
+            shadow = shadow,
+        )
+        val spawnedRef = spawn(step, cell)
+        steps += step
+        return TypedCellHandle(name, spawnedRef, this, cell)
             .also { handlesByRef[it.ref] = it }
+    }
+
+    /** Declare and construct a keyed family; family cells are spawned lazily by [KeyedCells]. */
+    fun family(
+        name: String,
+        namespace: String,
+        keys: KeyCodec = KeyCodec.Strings,
+        journalId: String? = null,
+        factory: KeyedCellFactory,
+    ): KeyedCells<Any> {
+        val applyContext = context
+            ?: throw unsupportedFamily(name, "graph(Use<HostManagementApi>)")
+        require(names.add(name)) { "duplicate handle '$name'" }
+        val step = SpawnStep(
+            handle = name,
+            factory = factory,
+            family = KeyedFamily(namespace, keys, journalId),
+        )
+        val family = applyContext.buildFamily(step)
+        steps += step
+        return family
+    }
+
+    /** Source-compatible positional form from before the replicated parameter. */
+    fun <C : Cell> spawn(
+        name: String,
+        identity: IdentityBinding,
+        parent: CellHandle?,
+        factory: TypedCellFactory<C>,
+    ): TypedCellHandle<C> = spawn(name, identity, parent, replicated = false, factory = factory)
+
+    private fun spawn(step: SpawnStep, cell: Cell): CellRef {
+        val applyContext = context
+        if (applyContext == null) {
+            if (step.replicated) throw unsupportedReplication(step.handle, "graph(Use<HostManagementApi>)")
+            return host.call.spawn(cell)
+        }
+        step.journalId?.let { journalId ->
+            applyContext.bind(cell.ref, applyContext.journals[journalId] ?: throw missingJournal(step.handle, journalId))
+        }
+        if (step.replicated) {
+            val replication = applyContext.replication ?: throw missingReplication(step.handle)
+            val replicable = cell as? Replicable<*>
+                ?: throw IllegalStateException(
+                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                        "(built ${cell.javaClass.name})",
+                )
+            replication.replicate(replicable, applyContext.host)
+            if (step.shadow) suppressShadow(cell)
+            return cell.ref
+        }
+        return if (step.shadow) Shadow.spawn(applyContext.host, cell) else host.call.spawn(cell)
     }
 
     /**
@@ -419,12 +798,30 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         instances: List<InstanceSpec>,
     ): List<CellHandle> {
         val step = InstanceSetStep(handle, logicalId, factory, instances)
-        val handles = step.lower().filterIsInstance<SpawnStep>().map { s ->
+        val lowered = step.lower().filterIsInstance<SpawnStep>()
+        lowered.firstOrNull { it.replicated && context == null }?.let { s ->
+            throw unsupportedReplication(s.handle, "graph(Use<HostManagementApi>)")
+        }
+        if (context == null) {
+            lowered.firstOrNull { it.journalId != null }?.let { s ->
+                throw unsupportedJournal(s.handle, "graph(Use<HostManagementApi>)")
+            }
+            lowered.firstOrNull { it.shadow }?.let { s ->
+                throw unsupportedShadow(s.handle, "graph(Use<HostManagementApi>)")
+            }
+        }
+        val applied = context?.let { GraphSpec(lowered).apply(it) }
+        val handles = lowered.map { s ->
             require(names.add(s.handle)) { "duplicate handle '${s.handle}'" }
-            val ref = s.identity.resolve()
-            val cell = s.factory.create(ref)
-            requireBoundRef(s.handle, s.identity, ref, cell.ref)
-            CellHandle(s.handle, host.call.spawn(cell), this).also { handlesByRef[it.ref] = it }
+            val spawnedRef = if (applied != null) {
+                applied.refs.getValue(s.handle)
+            } else {
+                val ref = s.identity.resolve()
+                val cell = s.factory.create(ref)
+                requireBoundRef(s.handle, s.identity, ref, cell.ref)
+                host.call.spawn(cell)
+            }
+            CellHandle(s.handle, spawnedRef, this).also { handlesByRef[it.ref] = it }
         }
         steps += step
         return handles
@@ -446,12 +843,29 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         return CellHandle(name, cell.ref, this).also { handlesByRef[it.ref] = it }
     }
 
-    fun connect(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
-        val result = host.call.connect(from.ref, outlet, to.ref, inlet)
+    fun connect(
+        from: CellHandle,
+        outlet: String,
+        to: CellHandle,
+        inlet: String,
+        options: LinkOptions = LinkOptions.DEFAULT,
+    ) {
+        val result = host.call.connectStep(from.ref, outlet, to.ref, inlet, options)
         check(result !is LinkResult.Rejected) {
             "link ${from.name}.$outlet → ${to.name}.$inlet rejected: ${(result as LinkResult.Rejected).reason}"
         }
-        steps += ConnectStep(from.name, outlet, to.name, inlet)
+        val step = ConnectStep(from.name, outlet, to.name, inlet, options)
+        if (result is LinkResult.Connected) links[stepKey(step)] = result.link
+        steps += step
+    }
+
+    /** Detaches and records an edge this builder connected earlier. */
+    fun unlink(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
+        val step = UnlinkStep(from.name, outlet, to.name, inlet)
+        val key = stepKey(step)
+        val link = links.remove(key) ?: throw unresolvedUnlink(key)
+        link.unlink()
+        steps += step
     }
 
     /**
@@ -469,10 +883,10 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
      * [spawn]ed on this builder; a port whose owner is unknown here (or
      * carries no identity) falls back to the string [connect].
      */
-    fun <Api> link(out: Subscribe<Api>, inn: Serve<Api>) {
+    fun <Api> link(out: Subscribe<Api>, inn: Serve<Api>, options: LinkOptions = LinkOptions.DEFAULT) {
         val from = out.requireHandle("outlet")
         val to = inn.requireHandle("inlet")
-        connect(from.first, from.second, to.first, to.second)
+        connect(from.first, from.second, to.first, to.second, options)
     }
 
     private fun Port.requireHandle(role: String): Pair<CellHandle, String> {
@@ -493,6 +907,10 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
 fun graph(host: Use<HostManagementApi>, block: GraphBuilder.() -> Unit): GraphSpec =
     GraphBuilder(host).apply(block).spec()
 
+/** Parameter-aware [graph] builder backed by [ApplyContext]. */
+fun graph(context: ApplyContext, block: GraphBuilder.() -> Unit): GraphSpec =
+    GraphBuilder(context).apply(block).spec()
+
 /**
  * [graph] variant that also returns the block's result (T08 finding 3): the
  * documented happy path was `lateinit var refs` mutated from inside the block,
@@ -509,6 +927,13 @@ fun graph(host: Use<HostManagementApi>, block: GraphBuilder.() -> Unit): GraphSp
  */
 fun <R> graphOf(host: Use<HostManagementApi>, block: GraphBuilder.() -> R): Pair<R, GraphSpec> {
     val builder = GraphBuilder(host)
+    val result = builder.block()
+    return result to builder.spec()
+}
+
+/** Parameter-aware [graphOf] builder backed by [ApplyContext]. */
+fun <R> graphOf(context: ApplyContext, block: GraphBuilder.() -> R): Pair<R, GraphSpec> {
+    val builder = GraphBuilder(context)
     val result = builder.block()
     return result to builder.spec()
 }

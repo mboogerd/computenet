@@ -86,7 +86,10 @@ package civictech.demo.social
 import civictech.cell.CellRef
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.KeyCodec
+import civictech.cell.graph.KeyedCellFactory
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.refAs
@@ -130,41 +133,64 @@ object SnbPipeline {
      * interest at spawn (8eb53-D4); `null` registers nothing.
      */
     fun build(host: ManagedHost, journalDir: File?, registry: LocationRegistry? = null): Graph {
-        val families = Families(
-            person = KeyedCells<Long>(
-                host = host,
-                journalDir = journalDir?.resolve("person"),
-                namespace = "snb-person",
-                factory = { _: Long, ref: CellRef -> SetCell<PersonFact>(ref) },
-                parse = String::toLong,
-            ),
-            authored = KeyedCells<Long>(
-                host = host,
-                journalDir = journalDir?.resolve("authored"),
-                namespace = "snb-authored",
-                factory = { key: Long, ref: CellRef ->
-                    registry?.setInterest(ref, Interest.Ranges(listOf(Interest.Ranges.Range(key, key + 1))))
-                    SetCell<Message>(ref)
-                },
-                parse = String::toLong,
-            ),
-            forum = KeyedCells<Long>(
-                host = host,
-                journalDir = journalDir?.resolve("forum"),
-                namespace = "snb-forum",
-                factory = { _: Long, ref: CellRef -> SetCell<ForumFact>(ref) },
-                parse = String::toLong,
-            ),
-            message = KeyedCells<Long>(
-                host = host,
-                journalDir = journalDir?.resolve("message"),
-                namespace = "snb-message",
-                factory = { _: Long, ref: CellRef -> SetCell<MessageFact>(ref) },
-                parse = String::toLong,
-            ),
+        val context = ApplyContext(
+            host = host,
+            journalDirs = journalDir?.let { root ->
+                mapOf(
+                    "person" to root.resolve("person"),
+                    "authored" to root.resolve("authored"),
+                    "forum" to root.resolve("forum"),
+                    "message" to root.resolve("message"),
+                )
+            } ?: emptyMap(),
         )
-        val (statics, _) = graphOf(host.managementInlet) {
-            Statics(
+        @Suppress("UNCHECKED_CAST")
+        fun <K : Any> asKeyedCells(family: KeyedCells<Any>): KeyedCells<K> = family as KeyedCells<K>
+
+        val (graph, _) = graphOf(context) {
+            val families = Families(
+                person = asKeyedCells(
+                    family(
+                        name = "snb-person",
+                        namespace = "snb-person",
+                        keys = KeyCodec.Longs,
+                        journalId = journalDir?.let { "person" },
+                        factory = KeyedCellFactory { _, ref -> SetCell<PersonFact>(ref) },
+                    ),
+                ),
+                authored = asKeyedCells(
+                    family(
+                        name = "snb-authored",
+                        namespace = "snb-authored",
+                        keys = KeyCodec.Longs,
+                        journalId = journalDir?.let { "authored" },
+                        factory = KeyedCellFactory { key, ref ->
+                            val author = key as Long
+                            registry?.setInterest(ref, Interest.Ranges(listOf(Interest.Ranges.Range(author, author + 1))))
+                            SetCell<Message>(ref)
+                        },
+                    ),
+                ),
+                forum = asKeyedCells(
+                    family(
+                        name = "snb-forum",
+                        namespace = "snb-forum",
+                        keys = KeyCodec.Longs,
+                        journalId = journalDir?.let { "forum" },
+                        factory = KeyedCellFactory { _, ref -> SetCell<ForumFact>(ref) },
+                    ),
+                ),
+                message = asKeyedCells(
+                    family(
+                        name = "snb-message",
+                        namespace = "snb-message",
+                        keys = KeyCodec.Longs,
+                        journalId = journalDir?.let { "message" },
+                        factory = KeyedCellFactory { _, ref -> SetCell<MessageFact>(ref) },
+                    ),
+                ),
+            )
+            val statics = Statics(
                 tags = spawn("snb-tags", identity = staticIdentity("snb-tags")) { ref -> SetCell<Tag>(ref) }.refAs(),
                 tagClasses = spawn("snb-tagclasses", identity = staticIdentity("snb-tagclasses")) { ref ->
                     SetCell<TagClass>(ref)
@@ -174,8 +200,9 @@ object SnbPipeline {
                     SetCell<Organisation>(ref)
                 }.refAs(),
             )
+            Graph(families, statics)
         }
-        return Graph(families, statics)
+        return graph
     }
 
     /**
