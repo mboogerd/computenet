@@ -228,6 +228,18 @@ class CredenceGraphTest {
     }
 
     @Test
+    fun `sensitivity catch-up snapshots are safely published to the linking thread`() {
+        listOf("frame", "sensitivity", "share").forEach { name ->
+            val field = SensitivityNode::class.java.getDeclaredField(name)
+
+            assertTrue(
+                Modifier.isVolatile(field.modifiers),
+                "SensitivityNode.$name is read by catchUpOnLinked on the linking thread, so it must be volatile",
+            )
+        }
+    }
+
+    @Test
     fun `a head feedback link learns its source baseline from catch-up on a real scheduler`() {
         val scheduler = VirtualThreadScheduler("head-source-catch-up-test").also { schedulers += it }
         val registry = LocationRegistry()
