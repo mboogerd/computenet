@@ -182,6 +182,7 @@ class RuntimeBootTest {
             val text = topology(node)
             assertTrue(configured, "configure did not run")
             assertTrue("\"custom-main\"" in text, text)
+            assertTrue("\"custom-bridge\"" in text, text)
             assertTrue("renamed-items" in text, text)
             assertTrue("n/main" !in text, text)
             assertThrows<IllegalStateException> { node.customizeInspector(Runtime.InspectorExtras()) }
