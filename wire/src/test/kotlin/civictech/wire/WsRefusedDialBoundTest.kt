@@ -48,11 +48,13 @@ import java.util.concurrent.CopyOnWriteArrayList
  * measured: `admissionDenialCount` is one accept-plus-hello-parse charged to
  * the refusing side. It must stay bounded, and it must stop growing.
  *
- * How the dialler concludes it — an open that did not outlive
- * [WsTransport.REFUSAL_WINDOW_MS], rather than `Session.peered`, which on this
- * transport answers a different question — is argued on
- * [WsTransport.REFUSED_DIAL_LIMIT], together with what `:iroh` does instead
- * and why the two may differ.
+ * How the dialler concludes it — an open on which the peer never sent a
+ * binary frame (the admission signal fed to `ReconnectPolicy.onAdmitted`; a
+ * listener sends frames only after admitting this side's hello), with
+ * [WsTransport.REFUSAL_WINDOW_MS] only a secondary way to clear the run,
+ * rather than `Session.peered`, which on this transport answers a different
+ * question — is argued on [WsTransport.REFUSED_DIAL_LIMIT], together with what
+ * `:iroh` does instead and why the two may differ.
  */
 class WsRefusedDialBoundTest {
 
@@ -396,11 +398,11 @@ class WsRefusedDialBoundTest {
      * computenet-f6dr: an abandoned `:wire` client has a way back —
      * [WsConnection.heal] — the same shape `IrohConnection.heal` already gave
      * `:iroh`. This pins that a healed client re-peers once the listener's
-     * allowlist has since admitted it, which is exactly the false-positive
-     * case [WsTransport.REFUSED_DIAL_LIMIT]'s own KDoc names: a peering that
-     * genuinely could not stay up gets abandoned as though it had been
-     * refused, and an operator who judges that wrong needs a way to retry
-     * without reconstructing the connection.
+     * allowlist has since admitted it: a client abandoned after
+     * [WsTransport.REFUSED_DIAL_LIMIT] refused dials (opens on which the peer
+     * never sent a frame) may later become admissible, or the abandonment may
+     * have been a misjudgement, and an operator needs a way to retry without
+     * reconstructing the connection.
      *
      * The allowlist is a mutable set held by the test, not by [Stack]: the
      * listener's [civictech.cell.wire.Peering.Side.admits] reads `allow` at
