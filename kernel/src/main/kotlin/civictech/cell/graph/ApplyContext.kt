@@ -17,7 +17,17 @@ import java.util.concurrent.ConcurrentHashMap
  * [journalFor] is intentionally backed by a per-ref binding table rather than
  * by [journals] directly: a later durable spawn binds its resolved ref before
  * the host evaluates its `journalFor` selector. The durable graph task owns
- * those bindings; this type only provides their shared home.
+ * those bindings; this type only provides their shared home. A context owner
+ * wires the host to that table before applying a spec, for example:
+ *
+ * ```
+ * lateinit var context: ApplyContext
+ * val host = ManagedHost(journalFor = { ref -> context.journalFor(ref) ?: defaultJournal })
+ * context = ApplyContext(host, journals = mapOf("default" to defaultJournal))
+ * ```
+ *
+ * The selector is evaluated once at spawn, so [GraphSpec.apply] binds a
+ * `journalId` before calling the host's spawn path.
  */
 class ApplyContext(
     val host: ManagedHost,
