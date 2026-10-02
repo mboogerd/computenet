@@ -36,8 +36,7 @@ internal object EngineRecords {
     /**
      * One claim's engine metadata as the store keeps it, one field per
      * property; a property at its default is not stored. [text] is stored
-     * only when a rewrite (EXP-03 REPLACE/MERGE) changed it: the structure
-     * log holds the original. The `jev` stances are [plausibility] and
+     * only when a rewrite (EXP-03 REPLACE/MERGE) changed it. The `jev` stances are [plausibility] and
      * [edgeStrength]; nothing else of the credence graph is persisted.
      */
     @Serializable
