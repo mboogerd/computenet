@@ -1976,7 +1976,7 @@ class DeliberationEngineTest {
         first.close()
         val saved = store.load()
         val root = saved.entries.single { (key, fields) -> fields["question"] == "\"${key.removePrefix("c:")}\"" }.value
-        // The structure log holds the text; the record holds it only after a rewrite.
+        // The topology journal holds the text; the record holds it only after a rewrite.
         assertNull(root["text"], root.toString())
         // One record per claim, plus one per question (EXP-10: its round yields).
         // ... and one per link (SPEC §3 "Links as claims"), keyed by its edge ref.
