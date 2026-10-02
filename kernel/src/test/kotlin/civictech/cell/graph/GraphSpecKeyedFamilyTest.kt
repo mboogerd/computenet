@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.durability.InMemoryJournal
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -63,14 +64,15 @@ class GraphSpecKeyedFamilyTest {
     private fun runFamily(root: File, declared: Boolean): FamilySnapshot {
         val controller1 = SimulationController(seed = 1)
         val registry1 = LocationRegistry()
+        val journal1 = KeyedCells.hostJournal(root)!!
         val host1 = ManagedHost(
             scheduler = controller1.scheduler(),
             registry = registry1,
-            journal = KeyedCells.hostJournal(root),
+            journal = journal1,
         )
         val spec = familySpec()
         val family1 = if (declared) {
-            val applied = spec.apply(ApplyContext(host1, journalDirs = mapOf("d" to root)))
+            val applied = spec.apply(ApplyContext(host1, journalDirs = mapOf("d" to root), topology = journal1))
             applied.refs shouldBe emptyMap()
             applied.families.keys shouldBe setOf("writers")
             anyFamily(applied.families.getValue("writers"))
@@ -88,17 +90,20 @@ class GraphSpecKeyedFamilyTest {
 
         val controller2 = SimulationController(seed = 2)
         val registry2 = LocationRegistry()
+        val journal2 = KeyedCells.hostJournal(root)!!
         val host2 = ManagedHost(
             scheduler = controller2.scheduler(),
             registry = registry2,
-            journal = KeyedCells.hostJournal(root),
+            journal = journal2,
         )
         val family2 = if (declared) {
-            anyFamily(spec.apply(ApplyContext(host2, journalDirs = mapOf("d" to root))).families.getValue("writers"))
+            val context = ApplyContext(host2, journalDirs = mapOf("d" to root), topology = journal2)
+            context.recover(journal2)
+            anyFamily(checkNotNull(context.familyFor("writers")))
         } else {
             anyFamily(KeyedCells<String>(host2, root, "demo-writer", { _, ref -> SetCell<String>(ref) }))
         }
-        family2.recover()
+        if (!declared) family2.recover()
         controller2.runToIdle()
 
         val alice2 = family2.getOrSpawn("alice")
@@ -115,13 +120,17 @@ class GraphSpecKeyedFamilyTest {
 
     @Test
     fun `declared family matches imperative family through crash and recover`(@TempDir dir: File) {
-        val declared = runFamily(dir.resolve("declared"), declared = true)
-        val imperative = runFamily(dir.resolve("imperative"), declared = false)
+        val declaredDir = dir.resolve("declared")
+        val imperativeDir = dir.resolve("imperative")
+        val declared = runFamily(declaredDir, declared = true)
+        val imperative = runFamily(imperativeDir, declared = false)
 
         declared shouldBe imperative
         declared.aliceMembers shouldBe setOf("eggs")
         declared.bobMembers shouldBe setOf("bread")
         declared.aliceRef shouldBe CellRef(java.util.UUID.nameUUIDFromBytes("demo-writer:alice".toByteArray()))
+        declaredDir.list()!!.toSet() shouldBe setOf(KeyedCells.HOST_JOURNAL)
+        imperativeDir.list()!!.toSet() shouldBe setOf(KeyedCells.HOST_JOURNAL)
     }
 
     @Test
@@ -136,28 +145,35 @@ class GraphSpecKeyedFamilyTest {
             ),
         )
         val controller1 = SimulationController(seed = 3)
+        val journal1 = KeyedCells.hostJournal(dir)!!
         val host1 = ManagedHost(
             scheduler = controller1.scheduler(),
-            journal = KeyedCells.hostJournal(dir),
+            journal = journal1,
         )
-        val family1 = anyFamily(spec.apply(ApplyContext(host1, journalDirs = mapOf("d" to dir))).families.getValue("writers"))
+        val family1 = anyFamily(
+            spec.apply(ApplyContext(host1, journalDirs = mapOf("d" to dir), topology = journal1))
+                .families.getValue("writers"),
+        )
         val ref = family1.getOrSpawn(42L).ref
 
         val controller2 = SimulationController(seed = 4)
+        val journal2 = KeyedCells.hostJournal(dir)!!
         val host2 = ManagedHost(
             scheduler = controller2.scheduler(),
-            journal = KeyedCells.hostJournal(dir),
+            journal = journal2,
         )
-        val family2 = anyFamily(spec.apply(ApplyContext(host2, journalDirs = mapOf("d" to dir))).families.getValue("writers"))
-        family2.keys() shouldBe setOf(42L)
-        family2.recover()
+        val context2 = ApplyContext(host2, journalDirs = mapOf("d" to dir), topology = journal2)
+        context2.recover(journal2)
         controller2.runToIdle()
+        val family2 = anyFamily(checkNotNull(context2.familyFor("writers")))
+        family2.keys() shouldBe setOf(42L)
         family2.getOrSpawn(42L).ref shouldBe ref
+        dir.list()!!.toSet() shouldBe setOf(KeyedCells.HOST_JOURNAL)
     }
 
     @Test
     fun `a family spec survives Java serialization with both built-in codecs`(@TempDir dir: File) {
-        listOf(KeyCodec.Strings to "alice", KeyCodec.Longs to 42L).forEachIndexed { i, (codec, key) ->
+        listOf(KeyCodec.Strings to "alice", KeyCodec.Longs to 42L).forEach { (codec, key) ->
             val spec = GraphSpec(
                 listOf(
                     SpawnStep(
@@ -172,16 +188,22 @@ class GraphSpecKeyedFamilyTest {
                 .toByteArray()
             val revived = java.io.ObjectInputStream(java.io.ByteArrayInputStream(bytes)).readObject() as GraphSpec
 
-            val journal = dir.resolve("j$i")
+            val journal = InMemoryJournal()
             val family = anyFamily(
-                revived.apply(ApplyContext(ManagedHost(), journalDirs = mapOf("d" to journal))).families.getValue("writers"),
+                revived.apply(
+                    ApplyContext(ManagedHost(journal = journal), journalDirs = mapOf("d" to dir), topology = journal),
+                ).families.getValue("writers"),
             )
-            family.getOrSpawn(key).ref shouldBe
-                CellRef(java.util.UUID.nameUUIDFromBytes("ser-writer:$key".toByteArray()))
-            File(journal, KeyedCells.KEYS_FILE).readLines() shouldBe listOf("$key")
-            anyFamily(
-                revived.apply(ApplyContext(ManagedHost(), journalDirs = mapOf("d" to journal))).families.getValue("writers"),
-            ).keys() shouldBe setOf(key)
+            val ref = family.getOrSpawn(key).ref
+            ref shouldBe CellRef(java.util.UUID.nameUUIDFromBytes("ser-writer:$key".toByteArray()))
+
+            val recoveredContext = ApplyContext(
+                ManagedHost(journal = journal),
+                journalDirs = mapOf("d" to dir),
+                topology = journal,
+            )
+            recoveredContext.recover(journal).awaitApplied(30_000)
+            anyFamily(checkNotNull(recoveredContext.familyFor("writers"))).keys() shouldBe setOf(key)
         }
     }
 

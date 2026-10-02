@@ -5,6 +5,7 @@ import civictech.cell.data.SetApi
 import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.graph.TypedRef
+import civictech.cell.graph.TopoEvent
 import civictech.cell.graph.lookup
 import civictech.cell.host.ActorIngress
 import civictech.cell.host.DecodedJournalRecord
@@ -97,12 +98,12 @@ class SocialCrashRestartTest {
         assertEquals(0, app1.deadLetterCount(), "app 1's live run dead-lettered nothing")
         assertFalse(snap1.knows[a].orEmpty().any { it.otherId == edge.otherId }, "app 1 applied the removal")
 
-        // [SOC1-DUR-01]: one root WAL, one keys log per family, all non-empty.
+        // [SOC1-DUR-01]: one root WAL carries non-empty FamilyKey topology for every family.
         val wal = File(dir, KeyedCells.HOST_JOURNAL)
         assertTrue(wal.isFile && wal.length() > 0, "WAL $wal exists and is non-empty")
-        for (family in listOf("person", "authored", "forum", "message")) {
-            val keys = File(File(dir, family), KeyedCells.KEYS_FILE)
-            assertTrue(keys.isFile && keys.length() > 0, "keys log $keys exists and is non-empty")
+        val namespaces = journalKeys(dir).map { it.first }.toSet()
+        for (namespace in listOf("snb-person", "snb-authored", "snb-forum", "snb-message")) {
+            assertTrue(namespace in namespaces, "root WAL has no FamilyKey for $namespace")
         }
         return Crashed(n, a, edge.otherId, edge.creationDate, snap1, statics1)
     }
@@ -375,7 +376,7 @@ class SocialCrashRestartTest {
         }
 
         assertEquals(setOf(1L), graph1.personIds(), "the ghost must not be an entity before the restart")
-        assertTrue(2L in pipeline1.families.person.keys(), "the family key is expected to have been minted")
+        assertFalse(2L in pipeline1.families.person.keys(), "a refused FamilyKey append must not mint the key")
 
         // --- app 2: a real restart, through a plain SocialApp on the same dir
         val c2 = SimulationController(42)
@@ -392,11 +393,11 @@ class SocialCrashRestartTest {
 
     /**
      * A [Journal] decorator (v10ou-D8) over [inner] whose [replay] records, at
-     * the moment it is called, whether every on-disk key of every family
-     * under [dir] resolves to a live cell on [host] — the [SOC1-DUR-02] order
-     * assertion: pre-spawn ([SocialGraph.spawnKnown]) must have run before
-     * [ManagedHost.recoverFrom] ever calls [Journal.replay]. `append`/`reset`
-     * delegate straight through; only [replay] is observed.
+     * the moment it is called, whether every journaled key of every family
+     * under [dir] resolves to a live cell on [host]. With journal-native keys
+     * this is deliberately false at replay entry: FamilyKey records inside
+     * that replay do the spawning before later frame records are submitted.
+     * `append`/`reset` delegate straight through; only [replay] is observed.
      */
     private class RecordingJournal(
         private val inner: Journal,
@@ -415,7 +416,7 @@ class SocialCrashRestartTest {
 
         override fun replay(): List<ByteArray> {
             replayCalls++
-            allLiveAtReplay = onDiskKeys(dir).all { (namespace, key) ->
+            allLiveAtReplay = journalKeys(dir).all { (namespace, key) ->
                 host.lookup(TypedRef<SetApi<Any>>(CellRef(UUID.nameUUIDFromBytes("$namespace:$key".toByteArray())))) != null
             }
             return inner.replay()
@@ -425,26 +426,15 @@ class SocialCrashRestartTest {
     }
 
     /**
-     * [SOC1-DUR-02]: every key in every family's `keys` file must have a live
-     * cell at the moment [Journal.replay] is called — pre-spawn before
-     * replay, not after. Pieces-level, mirroring `SocialJournalTest`'s shape
-     * (`:169-174`).
-     *
-     * The positive case builds [SocialRecovery] directly (its own contract:
-     * [SocialGraph.spawnKnown] before `host.recoverFrom`) over a
-     * [RecordingJournal] — `replay()` must run exactly once and every
-     * on-disk key must already be live when it does.
-     *
-     * The discriminator is a THIRD host that calls `host3.recoverFrom` over
-     * its own [RecordingJournal] with no [SocialGraph]/`spawnKnown` ever run
-     * against it: the same on-disk keys read NOT live at `replay()`, and
-     * after `runToIdle` the host has dead-lettered every replayed frame.
+     * [SOC1-DUR-02]: the family starts empty when replay reads the WAL, then
+     * synchronous FamilyKey topology populates and spawns every key before
+     * any replayed frame (which is only scheduler-staged) can be delivered.
      */
     @Test
     fun `SOC1-DUR-02 keys are live before the first replayed frame is delivered`(@TempDir dir: File) {
         crashAfterPrefix(dir)
 
-        // --- correct order: SocialRecovery.stage() spawns known keys first ---
+        // Topology, not an app-side pre-spawn loop, owns the ordering.
         val c2 = SimulationController(42)
         val host2 = ManagedHost(scheduler = c2.scheduler(), registry = LocationRegistry(), journal = KeyedCells.hostJournal(dir))
         val pipeline2 = SnbPipeline.build(host2, dir)
@@ -455,32 +445,16 @@ class SocialCrashRestartTest {
 
         assertEquals(1, recording2.replayCalls, "replay() must run exactly once")
         assertEquals(
-            true,
-            recording2.allLiveAtReplay,
-            "every on-disk key must be live at replay() when spawnKnown ran first",
-        )
-
-        // --- discriminator: recoverFrom with no cell ever pre-spawned --------
-        val c3 = SimulationController(42)
-        val host3 = ManagedHost(scheduler = c3.scheduler(), registry = LocationRegistry())
-        val recording3 = RecordingJournal(KeyedCells.hostJournal(dir)!!, host3, dir)
-        host3.recoverFrom(recording3)
-        c3.runToIdle()
-
-        assertEquals(1, recording3.replayCalls, "replay() must run exactly once")
-        assertEquals(
             false,
-            recording3.allLiveAtReplay,
-            "no on-disk key can be live at replay() when recoverFrom ran before any cell was spawned",
+            recording2.allLiveAtReplay,
+            "families must still be empty when replay first reads the WAL",
         )
-        assertTrue(
-            host3.supervisionAccounting().deadLetters > 0,
-            "the wrong order dead-letters every replayed frame",
-        )
+        assertTrue(pipeline2.families.person.keys().isNotEmpty(), "FamilyKey topology populated person keys")
+        assertEquals(0, host2.supervisionAccounting().deadLetters, "FamilyKey records preceded their frames")
     }
 
     /**
-     * B17 ([SOC1-DUR-04]): a `keys` file missing entries the WAL references
+     * B17 ([SOC1-DUR-04]): missing FamilyKey topology for frames in the WAL
      * makes recovery refuse loudly, naming the missing person, and the app
      * never binds a port. [SocialApp.start] completes recovery ([SocialApp.completeRecovery])
      * before it ever constructs `DemoShell` (v10ou-D3) — a thrown
@@ -488,17 +462,22 @@ class SocialCrashRestartTest {
      * is built and [SocialApp.boundPort] still throws "not started".
      */
     @Test
-    fun `B17 a truncated keys file fails recovery loudly and binds no port`(@TempDir dir: File) {
+    fun `B17 stripped FamilyKey topology fails recovery loudly and binds no port`(@TempDir dir: File) {
         crashAfterPrefix(dir)
 
-        val keysFile = File(File(dir, "person"), KeyedCells.KEYS_FILE)
-        val lines = keysFile.readLines().filter { it.isNotBlank() }
-        assertTrue(lines.size >= 2, "the prefix must have minted at least two persons to truncate, had ${lines.size}")
-        val kept = lines.size / 2
-        val dropped = lines.drop(kept)
-        assertTrue(dropped.isNotEmpty(), "truncation must drop at least one line")
-        keysFile.writeText(lines.take(kept).joinToString("\n", postfix = "\n"))
-        val droppedId = dropped.first().trim()
+        val journal = KeyedCells.hostJournal(dir)!!
+        val persons = journalKeys(dir).filter { it.first == "snb-person" }.map { it.second }
+        assertTrue(persons.size >= 2, "the prefix must have minted at least two persons, had ${persons.size}")
+        val dropped = persons.drop(persons.size / 2).toSet()
+        val droppedId = dropped.first()
+        journal.reset(
+            journal.replay().filterNot { record ->
+                val topology = JournalRecords.decode(record) as? DecodedJournalRecord.Topology
+                topology?.events?.any {
+                    it is TopoEvent.FamilyKey && it.namespace == "snb-person" && it.key in dropped
+                } == true
+            },
+        )
 
         val c2 = SimulationController(42)
         val app2 = SocialApp(port = 0, journalDir = dir, scheduler = c2.scheduler())
@@ -615,17 +594,13 @@ class SocialCrashRestartTest {
 }
 
 /**
- * Every `(namespace, key)` pair on disk under [dir], one per line of each
- * family's `keys` file — file-scope so [SocialCrashRestartTest.RecordingJournal],
- * a plain nested class with no implicit outer access, can call it too.
+ * Every `(namespace, rendered key)` pair in the root WAL's topology records —
+ * file-scope so [SocialCrashRestartTest.RecordingJournal] can call it too.
  */
-private fun onDiskKeys(dir: File): List<Pair<String, String>> =
-    listOf("person" to "snb-person", "authored" to "snb-authored", "forum" to "snb-forum", "message" to "snb-message")
-        .flatMap { (folder, namespace) ->
-            File(File(dir, folder), KeyedCells.KEYS_FILE)
-                .takeIf { it.isFile }
-                ?.readLines()
-                ?.filter { it.isNotBlank() }
-                ?.map { namespace to it.trim() }
-                .orEmpty()
-        }
+private fun journalKeys(dir: File): List<Pair<String, String>> =
+    KeyedCells.hostJournal(dir)!!.replay()
+        .map(JournalRecords::decode)
+        .filterIsInstance<DecodedJournalRecord.Topology>()
+        .flatMap { it.events }
+        .filterIsInstance<TopoEvent.FamilyKey>()
+        .map { it.namespace to it.key }
