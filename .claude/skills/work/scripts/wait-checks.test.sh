@@ -497,6 +497,25 @@ else
 fi
 wait "$capped" 2>/dev/null
 
+# A child of gh that outlives it (gh forks git) holds the $(...) pipe open, so
+# killing gh alone does not end the call; the whole group must go (computenet-igcdc).
+cat > "$CTRL/bin/gh" <<'HANG'
+#!/usr/bin/env bash
+case "$*" in
+  *check-runs*) /bin/sleep 40 & wait ;;
+  *rules/branches*) printf '%s\n' build-test-fast; exit 0 ;;
+  *pulls/*) echo deadbeefcafe; exit 0 ;;
+  *) echo 1; exit 0 ;;
+esac
+HANG
+chmod +x "$CTRL/bin/gh"
+started=$(date +%s)
+PATH="$CTRL/bin:$PATH" WAIT_CHECKS_GH_TIMEOUT_SECONDS=2 WAIT_CHECKS_COLD_ROUNDS=0 \
+  "$SCRIPT" "https://github.com/mboogerd/computenet/pull/1" 1 >"$CTRL/grand.out" 2>&1
+took=$(( $(date +%s) - started ))
+[ "$took" -lt 20 ] && ok "a surviving grandchild does not hold the call open (${took}s)" \
+  || bad "took ${took}s — the per-call kill left a child holding the pipe"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
