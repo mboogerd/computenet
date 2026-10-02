@@ -74,10 +74,14 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null, inspector: InspectorF
         // Replay is fenced by the recovery handle: routes are registered only
         // after every replayed frame and its same-host cascade has been
         // applied (civictech.cell.host.Recovery.awaitApplied, computenet-q5jzk
-        // Q4/Q5). The checkpoint right after the fence compacts the replayed
-        // tail; replay itself re-journals nothing (computenet-xy7w4.1).
+        // Q4/Q5). A torn removal is completed only on this live recovery path;
+        // its retractions are fenced before the checkpoint compacts the
+        // repaired state. Replay itself re-journals nothing (computenet-xy7w4.1).
         if (journal != null) {
             context.recover(journal).awaitApplied(60_000)
+            if (service.repairTornRemovals()) {
+                host.quiescence().await(60_000, "AgoraApp torn-removal repair")
+            }
             host.checkpoint(journal)
             service.rebuildIndex()
         }

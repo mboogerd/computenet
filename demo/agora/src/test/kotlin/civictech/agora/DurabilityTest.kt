@@ -9,6 +9,7 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.UnlinkStep
@@ -21,74 +22,124 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
 import civictech.testkit.awaitDrained
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.util.*
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class DurabilityTest {
 
+    private val removalQ = 1e-3
+    private val removalA = CellRef(UUID.nameUUIDFromBytes("torn-removal:a".toByteArray()))
+    private val removalB = CellRef(UUID.nameUUIDFromBytes("torn-removal:b".toByteArray()))
+    private val removalC = CellRef(UUID.nameUUIDFromBytes("torn-removal:c".toByteArray()))
+    private val removalEdge = CellRef(UUID.nameUUIDFromBytes("torn-removal:edge".toByteArray()))
+    private val removalCascaded = CellRef(UUID.nameUUIDFromBytes("torn-removal:cascaded".toByteArray()))
+
+    private data class RemovalWorld(
+        val controller: SimulationController,
+        val host: ManagedHost,
+        val context: ApplyContext,
+        val service: AgoraService,
+    )
+
+    private class SimulatedCrash : RuntimeException()
+
+    /** Persists one acknowledged append, then stops the caller before it can apply that record. */
+    private class CrashAfterNextAppendJournal(private val delegate: Journal) : Journal {
+        override val formatVersion: Int get() = delegate.formatVersion
+        override val durability get() = delegate.durability
+        private var armed = false
+
+        fun arm() {
+            check(!armed)
+            armed = true
+        }
+
+        override fun append(record: ByteArray) {
+            delegate.append(record)
+            if (armed) {
+                armed = false
+                throw SimulatedCrash()
+            }
+        }
+
+        override fun replay(): List<ByteArray> = delegate.replay()
+
+        override fun reset(records: List<ByteArray>) = delegate.reset(records)
+    }
+
+    private fun removalWorld(journal: Journal): RemovalWorld {
+        val controller = SimulationController(23L)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+            journal = journal,
+        )
+        val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
+        return RemovalWorld(
+            controller,
+            host,
+            context,
+            AgoraService(host, registry, quiescence = removalQ, context = context),
+        )
+    }
+
+    private fun buildRemovalGraph(journal: Journal): RemovalWorld = removalWorld(journal).also { built ->
+        built.service.createClaim("A", removalA)
+        built.service.createClaim("B", removalB)
+        built.service.createClaim("C", removalC)
+        built.service.createEdge(removalA, removalB, Polarity.ATTACK, removalEdge)
+        built.service.createEdge(removalEdge, removalC, Polarity.SUPPORT, removalCascaded)
+        built.service.setStance(removalA, "author", 0.9)
+        built.service.setStance(removalEdge, "author", 0.8)
+        built.service.setStance(removalCascaded, "author", 0.7)
+        built.controller.runToIdle()
+    }
+
+    /** The first write-ahead delta of removing either B or its incoming edge. */
+    private fun tearRemovalAfterSourceUnlinks(world: RemovalWorld) {
+        GraphSpec(
+            listOf(
+                UnlinkStep(
+                    "claim:${removalA.id}",
+                    "credenceOutlet",
+                    "edge:${removalEdge.id}",
+                    "sourceInlet",
+                ),
+                UnlinkStep(
+                    "edge:${removalEdge.id}",
+                    "credenceOutlet",
+                    "edge:${removalCascaded.id}",
+                    "sourceInlet",
+                ),
+            ),
+        ).apply(world.context)
+    }
+
     @Test
     fun `a torn edge removal is completed during recovery`() {
-        val q = 1e-3
-        val a = CellRef(UUID.nameUUIDFromBytes("torn-removal:a".toByteArray()))
-        val b = CellRef(UUID.nameUUIDFromBytes("torn-removal:b".toByteArray()))
-        val c = CellRef(UUID.nameUUIDFromBytes("torn-removal:c".toByteArray()))
-        val edge = CellRef(UUID.nameUUIDFromBytes("torn-removal:edge".toByteArray()))
-        val cascaded = CellRef(UUID.nameUUIDFromBytes("torn-removal:cascaded".toByteArray()))
-
-        data class World(
-            val controller: SimulationController,
-            val host: ManagedHost,
-            val context: ApplyContext,
-            val service: AgoraService,
-        )
-
-        fun world(journal: InMemoryJournal): World {
-            val controller = SimulationController(23L)
-            val registry = LocationRegistry()
-            val host = ManagedHost(
-                scheduler = controller.scheduler(),
-                registry = registry,
-                attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
-                journal = journal,
-            )
-            val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
-            return World(controller, host, context, AgoraService(host, registry, quiescence = q, context = context))
-        }
-
-        fun build(journal: InMemoryJournal): World = world(journal).also { built ->
-            built.service.createClaim("A", a)
-            built.service.createClaim("B", b)
-            built.service.createClaim("C", c)
-            built.service.createEdge(a, b, Polarity.ATTACK, edge)
-            built.service.createEdge(edge, c, Polarity.SUPPORT, cascaded)
-            built.service.setStance(a, "author", 0.9)
-            built.service.setStance(edge, "author", 0.8)
-            built.service.setStance(cascaded, "author", 0.7)
-            built.controller.runToIdle()
-        }
-
-        val completed = build(InMemoryJournal())
-        completed.service.remove(edge)
+        val completed = buildRemovalGraph(InMemoryJournal())
+        completed.service.remove(removalEdge)
         completed.controller.runToIdle()
         val expected = completed.service.graph().associateBy { it.ref }
 
         val tornJournal = InMemoryJournal()
-        val torn = build(tornJournal)
-        GraphSpec(
-            listOf(
-                UnlinkStep("claim:${a.id}", "credenceOutlet", "edge:${edge.id}", "sourceInlet"),
-                UnlinkStep("edge:${edge.id}", "credenceOutlet", "edge:${cascaded.id}", "sourceInlet"),
-            ),
-        ).apply(torn.context)
+        val torn = buildRemovalGraph(tornJournal)
+        tearRemovalAfterSourceUnlinks(torn)
 
-        val recovered = world(tornJournal)
+        val recovered = removalWorld(tornJournal)
         recovered.context.recover(tornJournal)
         recovered.controller.runToIdle()
-        recovered.service.rebuildIndex()
+        recovered.service.repairTornRemovals()
         recovered.controller.runToIdle()
+        recovered.service.rebuildIndex()
         val actual = recovered.service.graph().associateBy { it.ref }
 
         assertEquals(expected.keys, actual.keys, "recovered topology differs from a completed removal")
@@ -99,15 +150,70 @@ class DurabilityTest {
         )
         expected.forEach { (ref, node) ->
             assertTrue(
-                abs(node.credence - actual.getValue(ref).credence) <= 25 * q,
+                abs(node.credence - actual.getValue(ref).credence) <= 25 * removalQ,
                 "node $ref: completed removal ${node.credence} vs recovered ${actual.getValue(ref).credence}",
             )
         }
-        val removed = setOf(edge, cascaded)
+        val removed = setOf(removalEdge, removalCascaded)
         assertTrue(recovered.context.live().spawns.keys.none { it in removed }, "torn edge spawns survived recovery")
         removed.forEach { ref ->
             assertEquals(null, recovered.host.lookup(ref, ClaimApi::class.java), "recovered host retained $ref")
         }
+    }
+
+    @Test
+    fun `a torn claim removal is completed by the live recovery path`(@TempDir dir: File) {
+        val completed = buildRemovalGraph(InMemoryJournal())
+        completed.service.remove(removalB)
+        completed.controller.runToIdle()
+        val expected = completed.service.graph().associateBy { it.ref }
+
+        val journalFile = File(dir, "host.journal")
+        val crashJournal = CrashAfterNextAppendJournal(FileJournal(journalFile))
+        val torn = buildRemovalGraph(crashJournal)
+        crashJournal.arm()
+        assertFailsWith<SimulatedCrash> { torn.service.remove(removalB) }
+
+        val restarted = AgoraApp(port = 0, journalDir = dir).start()
+        try {
+            val actual = restarted.service.graph().associateBy { it.ref }
+            assertEquals(expected.keys, actual.keys, "recovered topology differs from a completed claim removal")
+            assertEquals(
+                expected.mapValues { it.value.info },
+                actual.mapValues { it.value.info },
+                "recovered node infos differ from a completed claim removal",
+            )
+            expected.forEach { (ref, node) ->
+                assertTrue(
+                    abs(node.credence - actual.getValue(ref).credence) <= 25 * removalQ,
+                    "node $ref: completed removal ${node.credence} vs recovered ${actual.getValue(ref).credence}",
+                )
+            }
+        } finally {
+            restarted.stop()
+        }
+    }
+
+    @Test
+    fun `offline graph build reports a torn edge without changing its journal`(@TempDir dir: File) {
+        val journalFile = File(dir, "host.journal")
+        val journal = FileJournal(journalFile)
+        val torn = buildRemovalGraph(journal)
+        tearRemovalAfterSourceUnlinks(torn)
+        val before = journal.replay().size
+
+        val controller = SimulationController(29L)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val result = runCatching { AgoraGraphSource(dir.path).build(host, registry) }
+        val after = FileJournal(journalFile).replay().size
+
+        assertEquals(before, after, "offline graph build appended repair records to its input journal")
+        assertTrue(result.isFailure, "offline graph build should report the torn topology")
+        assertTrue(
+            result.exceptionOrNull()?.message?.contains("no unique source link") == true,
+            "offline graph build reported an unexpected failure: ${result.exceptionOrNull()}",
+        )
     }
 
     /** The K2 seam: agora deltas cross the codec via the ServiceLoader contribution. */
@@ -189,6 +295,8 @@ class DurabilityTest {
         repeat(2) { phase ->
             val (controller, host, context, service) = world()
             context.recover(journal)
+            controller.runToIdle()
+            service.repairTornRemovals()
             controller.runToIdle()
             service.rebuildIndex()
             val after = service.graph().associate { it.ref to it.credence }
@@ -306,6 +414,9 @@ class DurabilityTest {
         repeat(2) { phase ->
             val (scheduler, host, context, service, journal) = world("restart-${phase + 2}")
             context.recover(journal).awaitApplied(30_000)
+            if (service.repairTornRemovals()) {
+                scheduler.awaitDrained("torn-removal repair")
+            }
             // Keep link catch-up suppressed through both frame replay and the
             // compacting checkpoint; rebuildIndex flips it only afterwards.
             if (phase == 0) host.checkpoint(journal)

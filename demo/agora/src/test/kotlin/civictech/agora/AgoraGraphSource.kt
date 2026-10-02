@@ -40,6 +40,8 @@ class AgoraGraphSource(private val journalDir: String) : GraphSource {
         // during recovery so link admission cannot emit neutral catch-ups
         // before the reconstructor restores state and replays the frame tail.
         ReplayScope.with(TagFrontier(emptyMap())) { context.replayTopology(journal) }
+        // Deliberately inspection-only: rebuildIndex reports an unfinished
+        // removal. Only the live app recovery paths may append its repair.
         service.rebuildIndex()
         return GraphBuild(service.cells())
     }
