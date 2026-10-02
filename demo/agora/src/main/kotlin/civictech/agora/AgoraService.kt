@@ -93,6 +93,13 @@ class AgoraService(
 
     data class Node(val ref: CellRef, val info: NodeInfo, val credence: Double)
 
+    private data class TornEdgeRemoval(
+        val ref: CellRef,
+        val handle: String,
+        val polarity: Polarity,
+        val target: CellRef,
+    )
+
     private val manage = host.managementInlet.call
     private val context = context ?: ApplyContext(host)
 
@@ -196,8 +203,15 @@ class AgoraService(
      * Recovery-created cells keep catch-up disabled while frames replay. The
      * caller invokes this only after `Recovery.awaitApplied`; this method is
      * the one point that re-enables future link baselines.
+     *
+     * [remove] deliberately journals source unlinks before retraction frames
+     * and the final despawn delta. If a process dies in that window, the fold
+     * contains a live [EdgeFactory] with no source link. Complete that durable
+     * prefix before rebuilding the indexes: retract each surviving target and
+     * append the missing despawns as a normal write-ahead topology delta.
      */
     fun rebuildIndex() {
+        repairTornEdgeRemovals(context.live())
         val topology = context.live()
         val rebuiltCells = linkedMapOf<CellRef, ClaimCell>()
         val rebuiltNodes = linkedMapOf<CellRef, NodeInfo>()
@@ -243,6 +257,41 @@ class AgoraService(
             nodes.putAll(rebuiltNodes)
         }
         rebuiltCells.values.forEach { it.catchUp = true }
+    }
+
+    private fun repairTornEdgeRemovals(topology: TopologyFold) {
+        val torn = topology.spawns.values.mapNotNull { spawn ->
+            val factory = spawn.factory as? EdgeFactory ?: return@mapNotNull null
+            val sourceLinks = topology.links.values.filter { link ->
+                link.to == spawn.ref &&
+                    link.outlet == "credenceOutlet" &&
+                    link.inlet in SOURCE_INLETS
+            }
+            when (sourceLinks.size) {
+                1 -> null
+                0 -> {
+                    val target = topology.links.values.singleOrNull { link ->
+                        link.from == spawn.ref &&
+                            link.outlet == "influenceOutlet" &&
+                            link.inlet == "influenceInlet"
+                    }?.to ?: error("edge ${spawn.ref} has no unique target link in recovered topology")
+                    TornEdgeRemoval(spawn.ref, spawn.handle, factory.polarity, target)
+                }
+
+                else -> error("edge ${spawn.ref} has no unique source link in recovered topology")
+            }
+        }
+        if (torn.isEmpty()) return
+
+        val doomed = torn.mapTo(mutableSetOf()) { it.ref }
+        torn.forEach { edge ->
+            if (edge.target !in doomed) {
+                val size = hub.credenceOf(edge.ref) ?: 1.0
+                registry.inlet(edge.target, ClaimCellPorts.influenceInlet)
+                    .propagate(InfluenceDelta(edge.ref, edge.polarity, null, size))
+            }
+        }
+        GraphSpec(torn.map { DespawnStep(it.handle) }).apply(context)
     }
 
     fun setStance(id: CellRef, user: String, value: Double?) {
