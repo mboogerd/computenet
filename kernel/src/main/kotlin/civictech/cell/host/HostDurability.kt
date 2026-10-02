@@ -7,6 +7,7 @@ import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContextTopologyProvider
 import civictech.cell.graph.TopoEvent
 import civictech.cell.graph.TopologyApplier
 import civictech.cell.port.FanOutlet
@@ -386,8 +387,8 @@ internal class HostDurability(
      */
     private val dischargedBaselines = mutableMapOf<Pair<CellRef, String>, MutableSet<Timestamp>>()
 
-    /** One fold provider per journal, owned by its topology-recording [civictech.cell.graph.ApplyContext]. */
-    private val topologyProviders = java.util.IdentityHashMap<Journal, () -> List<TopoEvent>>()
+    /** Fold providers registered by topology owners; at most one is an [ApplyContextTopologyProvider]. */
+    private val topologyProviders = java.util.IdentityHashMap<Journal, MutableList<() -> List<TopoEvent>>>()
 
     /**
      * Replay this host's [journal] (M10.1): checkpoint records restore
@@ -514,20 +515,23 @@ internal class HostDurability(
         journal.append(journalRecord(RECORD_TOPOLOGY, TopologyRecord(events)))
     }
 
-    /** Register the one live fold provider whose compact form must lead [journal]'s checkpoint. */
+    /** Register a live fold provider whose compact form must lead [journal]'s checkpoint. */
     fun registerTopology(journal: Journal, provider: () -> List<TopoEvent>) {
         synchronized(topologyProviders) {
-            check(journal !in topologyProviders) {
-                "topology provider already registered for journal ${journal.javaClass.name}@" +
-                    Integer.toHexString(System.identityHashCode(journal))
+            val providers = topologyProviders.getOrPut(journal) { mutableListOf() }
+            if (provider is ApplyContextTopologyProvider) {
+                check(providers.none { it is ApplyContextTopologyProvider }) {
+                    "topology provider already registered for journal ${journal.javaClass.name}@" +
+                        Integer.toHexString(System.identityHashCode(journal))
+                }
             }
-            topologyProviders[journal] = provider
+            providers += provider
         }
     }
 
     private fun topologyFor(journal: Journal): Pair<Boolean, List<TopoEvent>> {
-        val provider = synchronized(topologyProviders) { topologyProviders[journal] }
-        return if (provider == null) false to emptyList() else true to provider().distinct()
+        val providers = synchronized(topologyProviders) { topologyProviders[journal]?.toList().orEmpty() }
+        return (providers.isNotEmpty()) to providers.flatMap { it() }.distinct()
     }
 
     private fun journalRecord(type: Byte, record: Serializable): ByteArray {
