@@ -1322,15 +1322,41 @@ open class ManagedHost(
     fun registerTopology(journal: Journal, provider: () -> List<TopoEvent>) =
         hostDurability.registerTopology(journal, provider)
 
-    /** Task 8xstm.2's per-key entry point: record against the journal already bound to [ref]. */
+    /** Task 8xstm.2's per-key entry point: record against the journal selected for [ref]. */
     fun recordTopology(ref: CellRef, event: TopoEvent) {
-        journalSelector(ref)?.let { hostDurability.journalTopology(it, listOf(event)) }
+        topologyJournal(ref, cells[ref])?.let { hostDurability.journalTopology(it, listOf(event)) }
     }
+
+    /**
+     * Write-ahead variant used before [cell] is admitted. [beforeAppend] lets a family
+     * register its checkpoint provider on the exact selected journal before the record
+     * becomes visible.
+     */
+    internal fun recordTopology(
+        ref: CellRef,
+        event: TopoEvent,
+        cell: Cell,
+        beforeAppend: (Journal) -> Unit,
+    ): Journal? {
+        val selected = topologyJournal(ref, cell) ?: return null
+        beforeAppend(selected)
+        hostDurability.journalTopology(selected, listOf(event))
+        return selected
+    }
+
+    /** Resolve the same per-cell selector spawn will cache, including explicit per-port selectors. */
+    internal fun topologyJournal(ref: CellRef, cell: Cell?): Journal? =
+        journalSelector(ref) ?: when {
+            cell != null -> cellJournal(ref, cell)
+            journalForPort != null -> null // a cell is required to validate its per-port selection
+            journalFor != null -> journalFor.invoke(ref)
+            else -> journal
+        }
 
     /** Register one live keyed family for [TopoEvent.FamilyKey] recovery. */
     fun registerFamily(namespace: String, family: KeyedCells<*>) {
         val existing = topologyFamilies.putIfAbsent(namespace, family)
-        require(existing == null || existing === family) {
+        check(existing == null || existing === family) {
             "family namespace '$namespace' is already registered on host $ref"
         }
     }
@@ -1339,8 +1365,7 @@ open class ManagedHost(
     internal fun recoverFamilyKey(namespace: String, key: String) {
         val family = topologyFamilies[namespace]
             ?: error("topology FamilyKey names unregistered namespace '$namespace'")
-        @Suppress("UNCHECKED_CAST")
-        (family as KeyedCells<Any>).getOrSpawn(key)
+        family.recoverKey(key)
     }
 
     /**

@@ -516,7 +516,7 @@ internal class HostDurability(
 
     private fun topologyFor(journal: Journal): Pair<Boolean, List<TopoEvent>> {
         val providers = synchronized(topologyProviders) { topologyProviders[journal]?.toList().orEmpty() }
-        return (providers.isNotEmpty()) to providers.flatMap { it() }
+        return (providers.isNotEmpty()) to providers.flatMap { it() }.distinct()
     }
 
     private fun journalRecord(type: Byte, record: Serializable): ByteArray {
