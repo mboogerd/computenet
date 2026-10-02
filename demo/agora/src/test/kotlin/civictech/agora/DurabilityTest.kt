@@ -1,6 +1,7 @@
 package civictech.agora
 
 import civictech.agora.cell.CredenceUpdate
+import civictech.agora.cell.ClaimApi
 import civictech.agora.cell.InfluenceDelta
 import civictech.agora.cell.Polarity
 import civictech.agora.cell.StanceDelta
@@ -92,7 +93,7 @@ class DurabilityTest {
         s1.setStance(b, "u2", 0.8)
         s1.setStance(e1, "u1", 0.7) // edges are claims: stance on the relation
         val doomed = s1.createClaim("doomed")
-        s1.createEdge(doomed, a, Polarity.SUPPORT)
+        val doomedEdge = s1.createEdge(doomed, a, Polarity.SUPPORT)
         c1.runToIdle()
         s1.remove(doomed) // retraction must survive the crash too
         c1.runToIdle()
@@ -103,7 +104,7 @@ class DurabilityTest {
         // a rebuild that appends to (or a checkpoint that races) the journal
         // shows up as second-restart drift
         repeat(2) { phase ->
-            val (controller, _, context, service) = world()
+            val (controller, host, context, service) = world()
             context.recover(journal)
             controller.runToIdle()
             service.rebuildIndex()
@@ -111,6 +112,19 @@ class DurabilityTest {
             val afterInfos = service.graph().associate { it.ref to it.info }
             assertEquals(before.keys, after.keys, "restart ${phase + 2}: recovered topology differs")
             assertEquals(beforeInfos, afterInfos, "restart ${phase + 2}: recovered node infos differ")
+            val removed = setOf(doomed, doomedEdge)
+            val live = context.live()
+            assertTrue(
+                live.spawns.keys.none { it in removed },
+                "restart ${phase + 2}: removed cells survived in the topology fold",
+            )
+            assertTrue(
+                live.links.values.none { it.from in removed || it.to in removed },
+                "restart ${phase + 2}: links touching removed cells survived in the topology fold",
+            )
+            removed.forEach { ref ->
+                assertEquals(null, host.lookup(ref, ClaimApi::class.java), "restart ${phase + 2}: host retained $ref")
+            }
             before.forEach { (ref, credence) ->
                 assertTrue(
                     abs(credence - after.getValue(ref)) <= 25 * q,
