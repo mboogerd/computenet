@@ -87,16 +87,11 @@ class TimeTravelWalkthroughTest {
         service.createClaim("C", c)
         service.createEdge(a, b, Polarity.ATTACK, CellRef(UUID(11, 11)))
         service.createEdge(c, b, Polarity.SUPPORT, CellRef(UUID(12, 12)))
-        if (extraClaim) service.createClaim("D", d)
         controller.runToIdle()
-        // The topology fold precedes the checkpoint. Reconstruction starts at
-        // that checkpoint after AgoraGraphSource has replayed the fold, so the
-        // reconstructor owns checkpoint/frame replay without applying topology
-        // a second time.
-        host.checkpoint(journal)
         service.setStance(a, "u1", 0.9)
         service.setStance(c, "u2", 0.8)
         service.setStance(b, "u3", 0.6)
+        if (extraClaim) service.createClaim("D", d)
         controller.runToIdle()
         return service to service.cells().associate { it.ref to (it as Stateful).snapshot() }
     }
@@ -128,11 +123,17 @@ class TimeTravelWalkthroughTest {
     @Test
     fun `reconstruct through AgoraGraphSource equals the live run, every cell degraded by the allow-list`(@TempDir root: File) {
         val dir = File(root, "a")
-        val (_, live) = record(dir)
+        val (_, live) = record(dir, extraClaim = true)
         val journalPath = File(dir, "host.journal").path
 
         val inspected = cli("inspect", journalPath, "--json")
-        val last = json.decodeFromString<InspectReport>(inspected.out.trim()).journals.single().recordCount - 1
+        val journal = json.decodeFromString<InspectReport>(inspected.out.trim()).journals.single()
+        journal.records.none { it.kind == "CheckpointRecord" } shouldBe true
+        (
+            journal.records.last { it.kind == "TopologyRecord" }.index >
+                journal.records.first { it.kind == "FrameRecord" }.index
+        ) shouldBe true
+        val last = journal.recordCount - 1
         val args = arrayOf(
             "reconstruct", journalPath, "--at", last.toString(),
             "--graph-provider", "civictech.agora.AgoraGraphSource", "--graph-arg", dir.path,

@@ -15,6 +15,7 @@ import civictech.timetravel.fidelity.journalDefectsUpTo
 import civictech.timetravel.fidelity.rollUp
 import civictech.timetravel.fidelity.worst
 import civictech.timetravel.journal.JournalReading
+import civictech.timetravel.journal.TopologyRecord
 import civictech.timetravel.timeline.Position
 import civictech.timetravel.timeline.RunTimeline
 import java.io.Serializable
@@ -37,11 +38,11 @@ sealed interface ReconstructorResult {
  * epic computenet-ocv §3 "Reconstruction reuses the recovery path"; `[TTD1-20]`..`[TTD1-25]`,
  * `[TTD1-32]`).
  *
- * Every [stateAt] builds a **fresh** reconstruction host from [graph], feeds it
- * `reading.rawRecords[timeline.journalId][anchor until n]` through [ManagedHost.recoverFrom] —
- * the same decode, checkpoint restore and dedup the live recovery path runs, never a second copy
- * of it — drains it, reads every cell's snapshot, and tears the host down. `:timetravel` decodes
- * no frame and restores no checkpoint itself (`[TTD1-20]`, `[24-DUR-02]` made true offline).
+ * Every [stateAt] builds a **fresh** reconstruction host from [graph], then feeds the selected
+ * journal window through [ManagedHost.recoverFrom] after removing topology records already
+ * applied by that [GraphSource]. The kernel still owns frame decoding, checkpoint restore and
+ * dedup — never a second copy of them here — after which the reconstructor drains the host, reads
+ * every cell's snapshot, and tears the host down (`[TTD1-20]`, `[24-DUR-02]` made true offline).
  *
  * The host is `ManagedHost(scheduler, registry, journalFor = { DiscardingJournal })` with no
  * `journal` (6tm33-D9): a non-null selector makes the kernel install each outlet's ref-derived
@@ -130,26 +131,38 @@ open class Reconstructor(
     }
 
     /**
-     * Feeds records `[from, until)` of this timeline's raw journal to [ManagedHost.recoverFrom]
-     * through an [InMemoryJournal] seeded with exactly those bytes (6tm33-D6), then drains the
-     * host. Returns the kernel's `RecoveryIncomplete` translated to timeline indices
-     * (6tm33-D7), or `null` when every record applied.
+     * Feeds non-topology records in `[from, until)` to [ManagedHost.recoverFrom] through an
+     * [InMemoryJournal]. The [GraphSource] has already constructed the graph; replaying any
+     * topology record here would apply its events twice — including `FamilyKey` events — and
+     * fail on already-live refs, families, or keys. Returns the kernel's `RecoveryIncomplete`
+     * translated from the filtered journal back to timeline indices (6tm33-D7), or `null` when
+     * every replayable record applied.
      */
     protected open fun replayInto(session: Session, from: Int, until: Int): RecoveryIncomplete? {
-        val raw = reading.rawRecords.getValue(timeline.journalId)
-        val prefix = InMemoryJournal().apply { reset(raw.subList(from, until)) }
+        val records = replayableRecords(from, until)
+        val prefix = InMemoryJournal().apply { reset(records.map { it.value }) }
         val recovery = try {
             session.host.recoverFrom(prefix)
             null
         } catch (e: KernelRecoveryIncomplete) {
             RecoveryIncomplete(
-                recordIndex = from + e.recordIndex,
-                total = until - from,
+                recordIndex = records[e.recordIndex].index,
+                total = records.size,
                 cause = e.cause?.toString() ?: e.message.orEmpty(),
             )
         }
         session.controller.runToIdle()
         return recovery
+    }
+
+    /** Raw records in `[from, until)` that remain after the graph source consumed topology. */
+    private fun replayableRecords(from: Int, until: Int): List<IndexedValue<ByteArray>> {
+        val raw = reading.rawRecords.getValue(timeline.journalId)
+        return timeline.positions.subList(from, until)
+            .asSequence()
+            .filterNot { it.record is TopologyRecord }
+            .map { IndexedValue(it.index, raw[it.index]) }
+            .toList()
     }
 
     /**
@@ -220,7 +233,7 @@ open class Reconstructor(
             session.suppressed.forEach { (ref, inlets) -> add(EffectInletsSuppressed(ref, inlets)) }
         }
         return Reconstruction(
-            position = ResolvedPosition(requested, n, anchor, n - anchor),
+            position = ResolvedPosition(requested, n, anchor, replayableRecords(anchor, n).size),
             cells = cells,
             run = rollUp(cells.mapValues { it.value.fidelity }, runReasons),
             details = details,
