@@ -270,7 +270,7 @@ class AgoraService(
             d to d.associateWith { nodes.getValue(it) }
         }
         val topology = context.live()
-        val handles = doomed.associateWith(topology::handleFor)
+        val handles = doomed.associateWith { topology.handleFor(it) }
         val unlinkSourceSteps = infos.mapNotNull { (ref, info) ->
             if (info.kind != Kind.EDGE) null else UnlinkStep(
                 from = topology.handleFor(checkNotNull(info.source)),
