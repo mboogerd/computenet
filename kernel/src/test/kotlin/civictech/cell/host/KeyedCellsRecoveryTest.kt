@@ -12,6 +12,7 @@ import civictech.cell.port.Use
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -183,7 +184,8 @@ class KeyedCellsRecoveryTest {
         host1.quiescence().await(30_000, "family write")
 
         host1.checkpoint(journal)
-        val first = JournalRecords.decode(journal.replay().first()) as DecodedJournalRecord.Topology
+        val first = JournalRecords.decode(journal.replay().first())
+            .shouldBeInstanceOf<DecodedJournalRecord.Topology>()
         first.events.filterIsInstance<TopoEvent.FamilyKey>() shouldBe
             listOf(TopoEvent.FamilyKey("writer", "alice"))
 
