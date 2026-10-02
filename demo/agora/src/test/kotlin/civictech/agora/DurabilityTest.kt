@@ -10,6 +10,8 @@ import civictech.cell.Propagate
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.UnlinkStep
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -26,6 +28,87 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class DurabilityTest {
+
+    @Test
+    fun `a torn edge removal is completed during recovery`() {
+        val q = 1e-3
+        val a = CellRef(UUID.nameUUIDFromBytes("torn-removal:a".toByteArray()))
+        val b = CellRef(UUID.nameUUIDFromBytes("torn-removal:b".toByteArray()))
+        val c = CellRef(UUID.nameUUIDFromBytes("torn-removal:c".toByteArray()))
+        val edge = CellRef(UUID.nameUUIDFromBytes("torn-removal:edge".toByteArray()))
+        val cascaded = CellRef(UUID.nameUUIDFromBytes("torn-removal:cascaded".toByteArray()))
+
+        data class World(
+            val controller: SimulationController,
+            val host: ManagedHost,
+            val context: ApplyContext,
+            val service: AgoraService,
+        )
+
+        fun world(journal: InMemoryJournal): World {
+            val controller = SimulationController(23L)
+            val registry = LocationRegistry()
+            val host = ManagedHost(
+                scheduler = controller.scheduler(),
+                registry = registry,
+                attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+                journal = journal,
+            )
+            val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
+            return World(controller, host, context, AgoraService(host, registry, quiescence = q, context = context))
+        }
+
+        fun build(journal: InMemoryJournal): World = world(journal).also { built ->
+            built.service.createClaim("A", a)
+            built.service.createClaim("B", b)
+            built.service.createClaim("C", c)
+            built.service.createEdge(a, b, Polarity.ATTACK, edge)
+            built.service.createEdge(edge, c, Polarity.SUPPORT, cascaded)
+            built.service.setStance(a, "author", 0.9)
+            built.service.setStance(edge, "author", 0.8)
+            built.service.setStance(cascaded, "author", 0.7)
+            built.controller.runToIdle()
+        }
+
+        val completed = build(InMemoryJournal())
+        completed.service.remove(edge)
+        completed.controller.runToIdle()
+        val expected = completed.service.graph().associateBy { it.ref }
+
+        val tornJournal = InMemoryJournal()
+        val torn = build(tornJournal)
+        GraphSpec(
+            listOf(
+                UnlinkStep("claim:${a.id}", "credenceOutlet", "edge:${edge.id}", "sourceInlet"),
+                UnlinkStep("edge:${edge.id}", "credenceOutlet", "edge:${cascaded.id}", "sourceInlet"),
+            ),
+        ).apply(torn.context)
+
+        val recovered = world(tornJournal)
+        recovered.context.recover(tornJournal)
+        recovered.controller.runToIdle()
+        recovered.service.rebuildIndex()
+        recovered.controller.runToIdle()
+        val actual = recovered.service.graph().associateBy { it.ref }
+
+        assertEquals(expected.keys, actual.keys, "recovered topology differs from a completed removal")
+        assertEquals(
+            expected.mapValues { it.value.info },
+            actual.mapValues { it.value.info },
+            "recovered node infos differ from a completed removal",
+        )
+        expected.forEach { (ref, node) ->
+            assertTrue(
+                abs(node.credence - actual.getValue(ref).credence) <= 25 * q,
+                "node $ref: completed removal ${node.credence} vs recovered ${actual.getValue(ref).credence}",
+            )
+        }
+        val removed = setOf(edge, cascaded)
+        assertTrue(recovered.context.live().spawns.keys.none { it in removed }, "torn edge spawns survived recovery")
+        removed.forEach { ref ->
+            assertEquals(null, recovered.host.lookup(ref, ClaimApi::class.java), "recovered host retained $ref")
+        }
+    }
 
     /** The K2 seam: agora deltas cross the codec via the ServiceLoader contribution. */
     @Test

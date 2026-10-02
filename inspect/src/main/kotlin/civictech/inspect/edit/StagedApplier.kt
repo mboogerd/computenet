@@ -22,6 +22,7 @@ import civictech.cell.host.HostManagementApi
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.Link
+import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -313,7 +314,7 @@ class StagedApplier(
 
         /**
          * e1ojt-D2: every verb goes to the target host; `spawnBound` and the
-         * 4-arg `connect` are also remembered, so UNWIND can retract exactly
+         * both `connect` overloads are also remembered, so UNWIND can retract exactly
          * what this apply created. Only STAGE's links are recorded here —
          * CUT_OVER's boundary links are kept with their taps in [attachments].
          */
@@ -326,13 +327,33 @@ class StagedApplier(
                 }
 
             override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult =
-                delegate.connect(from, outletName, to, inletName).also { result ->
-                    if (result is LinkResult.Connected && record.phase == ApplyPhase.STAGE) {
-                        // applyRemote's own step key; both handles resolved on earlier steps' events.
-                        val key = "${handleByRef[from]}.$outletName->${handleByRef[to]}.$inletName"
-                        internalLinks += result.link to key
-                    }
+                delegate.connect(from, outletName, to, inletName).also {
+                    rememberInternalLink(from, outletName, to, inletName, it)
                 }
+
+            override fun connect(
+                from: CellRef,
+                outletName: String,
+                to: CellRef,
+                inletName: String,
+                options: LinkOptions,
+            ): LinkResult = delegate.connect(from, outletName, to, inletName, options).also {
+                rememberInternalLink(from, outletName, to, inletName, it)
+            }
+
+            private fun rememberInternalLink(
+                from: CellRef,
+                outletName: String,
+                to: CellRef,
+                inletName: String,
+                result: LinkResult,
+            ) {
+                if (result is LinkResult.Connected && record.phase == ApplyPhase.STAGE) {
+                    // applyRemote's own step key; both handles resolved on earlier steps' events.
+                    val key = "${handleByRef[from]}.$outletName->${handleByRef[to]}.$inletName"
+                    internalLinks += result.link to key
+                }
+            }
 
             override fun despawn(ref: CellRef) = delegate.despawn(ref)
         }
