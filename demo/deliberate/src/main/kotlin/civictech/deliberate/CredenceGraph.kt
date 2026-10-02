@@ -218,22 +218,35 @@ class CredenceGraph(
         question: Boolean = false,
     ): CellRef = synchronized(mutationLock) {
         val handle = claimHandle(ref)
+        val factory = ClaimNodeFactory(text, question, layers)
         val steps = mutableListOf<GraphStep>(
-            SpawnStep(handle, ClaimNodeFactory(text, question, layers), IdentityBinding.Exact(ref)),
+            SpawnStep(handle, factory, IdentityBinding.Exact(ref)),
             ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
         )
+        var sensitivityEntry: Pair<CellRef, SensitivityFactory>? = null
         if (sensitivity) {
             val sensitivityRef = CellRef(UUID.randomUUID())
             val sensitivityHandle = sensitivityHandle(ref)
+            val sensitivityFactory =
+                SensitivityFactory(ref, isEdge = false, question = question, layers = layers, quiescence = quiescence)
+            sensitivityEntry = sensitivityRef to sensitivityFactory
             steps += SpawnStep(
                 sensitivityHandle,
-                SensitivityFactory(ref, isEdge = false, question = question, layers = layers, quiescence = quiescence),
+                sensitivityFactory,
                 IdentityBinding.Exact(sensitivityRef),
             )
             steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
         }
         GraphSpec(steps).apply(context)
-        rebuildIndex()
+        synchronized(nodesLock) {
+            cells[ref] = checkNotNull(factory.created) { "claim factory did not retain $ref" }
+            nodes[ref] = NodeInfo(kind = Kind.CLAIM, text = text, question = question)
+        }
+        sensitivityEntry?.let { (sensitivityRef, sensitivityFactory) ->
+            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
+            sensCells[ref] = sensitivityRef
+        }
+        rebuildWiring()
         ref
     }
 
@@ -251,10 +264,11 @@ class CredenceGraph(
         }
         val topology = context.live()
         val handle = edgeHandle(ref)
+        val factory = EdgeNodeFactory(polarity, head, layers, quiescence)
         val steps = mutableListOf<GraphStep>(
             SpawnStep(
                 handle,
-                EdgeNodeFactory(polarity, head, layers, quiescence),
+                factory,
                 IdentityBinding.Exact(ref),
             ),
             ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
@@ -267,14 +281,19 @@ class CredenceGraph(
                 STAGED,
             ),
         )
+        var sensitivityEntry: Pair<CellRef, SensitivityFactory>? = null
         if (sensitivity) {
             // Model C: the edge's sensitivity cell hears its target's frame and hands its source its share;
             // the target's sensitivity cell folds the same influence the target's credence cell does.
             val sensitivityHandle = sensitivityHandle(ref)
+            val sensitivityRef = CellRef(UUID.randomUUID())
+            val sensitivityFactory =
+                SensitivityFactory(ref, isEdge = true, question = false, layers = layers, quiescence = quiescence)
+            sensitivityEntry = sensitivityRef to sensitivityFactory
             steps += SpawnStep(
                 sensitivityHandle,
-                SensitivityFactory(ref, isEdge = true, question = false, layers = layers, quiescence = quiescence),
-                IdentityBinding.Exact(CellRef(UUID.randomUUID())),
+                sensitivityFactory,
+                IdentityBinding.Exact(sensitivityRef),
             )
             steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
             steps += ConnectStep(sensitivityHandle, "sourceOutlet", sensitivityHandle(source), "shareInlet", STAGED)
@@ -288,8 +307,27 @@ class CredenceGraph(
             )
         }
         GraphSpec(steps).apply(context)
-        rebuildIndex()
+        synchronized(nodesLock) {
+            cells[ref] = checkNotNull(factory.created) { "edge factory did not retain $ref" }
+            nodes[ref] = NodeInfo(
+                kind = Kind.EDGE,
+                polarity = polarity,
+                source = source,
+                target = target,
+                head = head,
+            )
+        }
+        sensitivityEntry?.let { (sensitivityRef, sensitivityFactory) ->
+            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
+            sensCells[ref] = sensitivityRef
+        }
+        rebuildWiring()
         ref
+    }
+
+    private fun rebuildWiring(topology: TopologyFold = context.live()) {
+        wires.clear()
+        wires.addAll(topology.links.values.map { Wire(it.from, it.outlet, it.to, it.inlet) })
     }
 
     /**
@@ -372,7 +410,6 @@ class CredenceGraph(
             if (factory.mode == IssueMode.POSITIONS) rebuiltIssues[factory.root] = issueRef
         }
 
-        val rebuiltWires = topology.links.values.map { Wire(it.from, it.outlet, it.to, it.inlet) }
         synchronized(nodesLock) {
             cells.clear()
             cells.putAll(rebuiltCells)
@@ -383,8 +420,7 @@ class CredenceGraph(
         issueCells.putAll(rebuiltIssues)
         sensCells.clear()
         sensCells.putAll(rebuiltSensitivity)
-        wires.clear()
-        wires.addAll(rebuiltWires)
+        rebuildWiring(topology)
     }
 
     /**
@@ -411,29 +447,39 @@ class CredenceGraph(
             require(refs.distinct().size == refs.size && refs.none { it in nodes }) { "position refs must be new and distinct" }
         }
         val steps = mutableListOf<GraphStep>()
+        val claimFactories = linkedMapOf<CellRef, ClaimNodeFactory>()
+        val sensitivityFactories = linkedMapOf<CellRef, Pair<CellRef, SensitivityFactory>>()
         texts.zip(refs).forEach { (text, ref) ->
             val claimHandle = claimHandle(ref)
+            val claimFactory = ClaimNodeFactory(text, question = true, layers = layers)
+            claimFactories[ref] = claimFactory
             steps += SpawnStep(
                 claimHandle,
-                ClaimNodeFactory(text, question = true, layers = layers),
+                claimFactory,
                 IdentityBinding.Exact(ref),
             )
             steps += ConnectStep(claimHandle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED)
             if (sensitivity) {
                 val sensitivityHandle = sensitivityHandle(ref)
+                val sensitivityRef = CellRef(UUID.randomUUID())
+                val sensitivityFactory =
+                    SensitivityFactory(ref, isEdge = false, question = true, layers = layers, quiescence = quiescence)
+                sensitivityFactories[ref] = sensitivityRef to sensitivityFactory
                 steps += SpawnStep(
                     sensitivityHandle,
-                    SensitivityFactory(ref, isEdge = false, question = true, layers = layers, quiescence = quiescence),
-                    IdentityBinding.Exact(CellRef(UUID.randomUUID())),
+                    sensitivityFactory,
+                    IdentityBinding.Exact(sensitivityRef),
                 )
                 steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
             }
         }
         val issueHandle = issueHandle(root)
+        val issueRef = CellRef(UUID.randomUUID())
+        val issueFactory = IssueFactory(root, refs, mode, layers)
         steps += SpawnStep(
             issueHandle,
-            IssueFactory(root, refs, mode, layers),
-            IdentityBinding.Exact(CellRef(UUID.randomUUID())),
+            issueFactory,
+            IdentityBinding.Exact(issueRef),
         )
         if (mode == IssueMode.POSITIONS) {
             refs.forEach { position ->
@@ -442,7 +488,21 @@ class CredenceGraph(
             steps += ConnectStep(issueHandle, "sharesOutlet", SHARES_HUB_HANDLE, "inlet", STAGED)
         }
         GraphSpec(steps).apply(context)
-        rebuildIndex()
+        checkNotNull(issueFactory.created) { "issue factory did not retain $issueRef" }
+        synchronized(nodesLock) {
+            claimFactories.forEach { (ref, factory) ->
+                cells[ref] = checkNotNull(factory.created) { "claim factory did not retain $ref" }
+                nodes[ref] = NodeInfo(kind = Kind.CLAIM, text = factory.text, question = true, positionOf = root)
+            }
+            nodes[root] = checkNotNull(nodes[root]).copy(issue = IssueInfo(mode, refs))
+        }
+        sensitivityFactories.forEach { (subject, entry) ->
+            val (sensitivityRef, sensitivityFactory) = entry
+            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
+            sensCells[subject] = sensitivityRef
+        }
+        if (mode == IssueMode.POSITIONS) issueCells[root] = issueRef
+        rebuildWiring()
         refs
     }
 
