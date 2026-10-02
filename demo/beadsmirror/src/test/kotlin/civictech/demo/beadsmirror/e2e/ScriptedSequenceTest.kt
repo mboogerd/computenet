@@ -27,6 +27,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.opentest4j.AssertionFailedError
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -266,9 +267,26 @@ class ScriptedSequenceTest {
         mirror.app.state.rebaselineCount shouldBe 1
 
         workspace.flatten()
-        awaitUntil("the mirror re-baselines past the flattened-away checkpoint") {
-            mirror.events.count { it is MirrorEvent.Rebaselined } == 2
+        // computenet-3vng: this await has timed out ~12 times in CI's
+        // build-test-fast lane (never locally: 40/40 green on darwin/arm64,
+        // re-baseline observed in 0.3–5.6s against the 30s budget) with no
+        // diagnosis, because the bare timeout said nothing about WHY. It now
+        // (a) stops early on a dead poll loop — a loop that died cannot
+        // re-baseline, so waiting out the budget only hid the cause — and
+        // (b) accepts `>= 2`, so an over-count reaches the exact
+        // `rebaselineCount shouldBe 2` assertion below instead of presenting
+        // as a timeout; and (c) on timeout reports the poller failure, every
+        // Rebaselined event, the persisted checkpoint and `dolt_log`'s head.
+        // That is instrumentation, not a fix: the next occurrence names its
+        // mechanism, and the fix belongs to that evidence.
+        try {
+            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") {
+                mirror.app.pollerFailure != null || mirror.events.count { it is MirrorEvent.Rebaselined } >= 2
+            }
+        } catch (timeout: AssertionFailedError) {
+            throw AssertionFailedError("${timeout.message}; ${mirror.diagnostics()}", timeout)
         }
+        mirror.app.pollerFailure shouldBe null
 
         // The further mutation waits for the rebuild rather than racing it —
         // now for sequencing, not for correctness. It originally worked around
@@ -361,6 +379,21 @@ class ScriptedSequenceTest {
                 app.pollerFailure == null && checkpoint() == feed.history().last()
             }
             app.pollerFailure shouldBe null
+        }
+
+        /**
+         * What a failed await needs to say (computenet-3vng): the poll loop's
+         * failure if it died, every re-baseline so far, and where the
+         * persisted checkpoint sits against `dolt_log`'s head. Each read is
+         * guarded, since this runs on a path that is already failing.
+         */
+        fun diagnostics(): String {
+            val head = runCatching { DoltCommitFeed(workspace.doltRoot).history().lastOrNull() }
+                .getOrElse { "unreadable (${it.javaClass.simpleName}: ${it.message})" }
+            val failure = running?.pollerFailure?.let { "${it.javaClass.name}: ${it.message}" }
+            return "pollerFailure=$failure, " +
+                "rebaselined=${events.filterIsInstance<MirrorEvent.Rebaselined>().map { "${it.reason}@${it.headCommit}" }}, " +
+                "checkpoint=${checkpoint()}, doltLogHead=$head"
         }
 
         private fun checkpoint(): String? =
