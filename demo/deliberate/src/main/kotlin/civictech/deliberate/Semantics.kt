@@ -23,7 +23,7 @@ data class Arg(val strength: Double, val credence: Double)
  * supports. The default energy is DF-QuAD's product `s·c`; the default base
  * is agora's, the clamped mean of the stances.
  */
-interface Semantics {
+interface Semantics : java.io.Serializable {
     fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
 
     fun energy(arg: Arg): Double = arg.strength.coerceIn(0.0, 1.0) * arg.credence.coerceIn(0.0, 1.0)
@@ -36,10 +36,13 @@ interface Semantics {
 }
 
 /** An agora [GradualSemantics] as a layer: product energies, agora's own base. */
-class EnergySemantics(private val g: GradualSemantics) : Semantics {
+class EnergySemantics(@Transient private val g: GradualSemantics) : Semantics {
     override fun base(stances: Collection<Double>) = g.base(stances)
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>) = g.combine(base, attacks, supports)
     override fun toString() = g.toString()
+
+    /** The only energy semantics in the catalog is DF-QuAD; do not serialize its non-serializable strategy object. */
+    private fun readResolve(): Any = EnergySemantics(DfQuad)
 }
 
 /**
@@ -224,7 +227,7 @@ class LayerSet(
     val semantics: List<Semantics>,
     consensusMembers: List<String> = Consensus.DEFAULT_MEMBERS,
     val headline: String = ids.first(),
-) {
+) : java.io.Serializable {
     init {
         require(ids.isNotEmpty()) { "at least one credence layer must run" }
         require(ids.size == semantics.size) { "one semantics per layer id" }

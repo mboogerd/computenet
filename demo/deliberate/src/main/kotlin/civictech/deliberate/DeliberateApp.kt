@@ -4,6 +4,7 @@ import civictech.agora.AgoraService
 import civictech.cell.CellRef
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
@@ -102,24 +103,28 @@ class DeliberateApp(
     )
     private val dirty = AtomicBoolean(false)
     private val metaStore = dataDir?.let { JournaledMetaStore(host, registry) }
+    private val context = ApplyContext(
+        host,
+        journals = journal?.let { mapOf("meta" to it) }.orEmpty(),
+        topology = journal,
+    )
 
-    /** Every credence layer in one cell graph; its structure log is the one durable record of the trees. */
+    /** Every credence layer in one cell graph; the kernel journal owns its durable topology. */
     private val graph = CredenceGraph(
         host,
         registry,
         LayerSet.of(semantics.running, semantics.consensus, semantics.headline, semantics.wlo),
-        structureLog = dataDir?.let { File(it, STRUCTURE_LOG) },
+        context = context,
         onCredence = { dirty.set(true) },
     )
 
     init {
-        // Rebuild (the graph replayed its structure log) → replay the metadata journal →
-        // fence on the kernel's Recovery handle, which holds every replayed frame once it
-        // returns → compact it: the fold now holds every replayed frame, so the checkpoint
-        // is quiescent (JournaledMetaStore.checkpoint fences again for its own hold-off).
+        // Recover topology before the metadata frames that address it, then fence on the
+        // kernel Recovery handle and compact the combined topology/metadata journal.
         if (journal != null) {
-            host.recoverFrom(journal).awaitApplied(60_000)
+            context.recover(journal).awaitApplied(60_000)
             metaStore!!.checkpoint(journal)
+            graph.rebuildIndex()
         }
     }
 
@@ -304,8 +309,6 @@ class DeliberateApp(
 
     companion object {
         const val DEFAULT_PORT = 8091
-        /** SPEC DUR-01: the one structure log (claims and edges, in creation order). */
-        const val STRUCTURE_LOG = "graph.jsonl"
         /** The metadata journal compacts once it grew by at least this much since its last checkpoint. */
         const val COMPACT_MIN_BYTES = 64L * 1024
         const val MAX_QUESTION = 1_000
