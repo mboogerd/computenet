@@ -55,9 +55,10 @@ data class GraphSourceIncomplete(val unreturned: Set<CellRef>) : ReconstructionD
 
 /**
  * Recovery over the replayed prefix did not fully complete: [recordIndex] is the **timeline**
- * index of the record recovery stopped at (`anchor + e.recordIndex`, since `recoverFrom` numbers
- * the seeded prefix from 0), [total] is the number of records fed (`n - anchor`), and [cause] is
- * the underlying failure's message ([Reason.RECOVERY_INCOMPLETE]).
+ * index of the record recovery stopped at (`recoverFrom` numbers the records it was fed from 0;
+ * the reconstructor maps that back to the timeline), [total] is the number of records fed (the
+ * window `[anchor, n)` less its topology records, which the graph source already applied), and
+ * [cause] is the underlying failure's message ([Reason.RECOVERY_INCOMPLETE]).
  */
 data class RecoveryIncomplete(val recordIndex: Int, val total: Int, val cause: String) : ReconstructionDetail {
     override val reason: Reason = Reason.RECOVERY_INCOMPLETE
