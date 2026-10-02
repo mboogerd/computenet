@@ -1613,7 +1613,7 @@ existing instances, per `[42-INT-01]`'s own text — "each instance carries an
 conjure a new instance purely from another instance's stated demand. Neither
 question is resolved here.
 
-## F-25 — topology journaling removes the application structure-log dependency; time-travel still needs an app graph source
+## F-25 — topology journaling removes the application structure-log dependency; time-travel still needs an app graph source and per-cell journals have no manifest
 
 **Observation**: TTD1's `timetravel` CLI (`inspect`/`reconstruct`/`diff`,
 epic `computenet-ocv`) still cannot materialize a crash artifact into live
@@ -1631,6 +1631,13 @@ then rebuilds its application index; it no longer rebuilds topology from an
 application-owned structure log. `KeyedCells` likewise persists family
 membership as `FamilyKey` events in the selected journal, so membership does
 not require a separate membership file (`computenet-8xstm`).
+The per-cell journal half of the original finding is **not** resolved: a
+`journalFor` selector (CP-C1, `[24-DUR-03]`) can still give a run many
+per-cell journal files with no manifest naming them or mapping them to cells.
+`TopoEvent.Spawn` now records each durable cell's logical `journalId`, but the
+id-to-file binding is the application's `ApplyContext(journals = …)` map, so
+the CLI reading a directory still learns the cell↔journal mapping only from
+the records themselves (epic §9.6).
 
 **Why the remaining boundary matters**: `:timetravel` can decode and classify
 topology without knowing how to construct an application's concrete cells,
@@ -1644,10 +1651,10 @@ journal-native.
 `ApplyContext.replayTopology` and rebuild their own indexes from the resulting
 fold. A future generic reconstruction facility would need a safe application
 factory/registry contract, not another application structure log. This finding
-no longer proposes topology journaling or a separate membership-file manifest;
-it records
-the remaining app-specific construction requirement after
-`computenet-8xstm`.
+no longer proposes topology journaling; it records the remaining
+app-specific construction requirement after `computenet-8xstm`, and keeps
+open the per-journal-directory manifest naming each file's cell(s), so a
+`journalFor` split needs no record-level discovery.
 
 ## F-26 — G-24 trigger: placement pressure measured on the SOC1 per-person families
 
