@@ -69,16 +69,18 @@ around the scheduler and cycle admission sees the complete graph.
   stances address any node id — edges are claims)
 - `GET /graph` — nodes + credences as JSON; `GET /events` — SSE stream
 
-Durability = two files in the journal dir (`graph.jsonl` structure log +
-`host.journal` write-ahead data journal). Restart rebuilds cells under their
-recorded refs (with catch-up baselines suppressed — the journal holds the
-originals, and re-emitting them would clobber recovered state), then replays
-the journal. Replay re-transmits idempotent duplicates in-process but
-re-journals nothing (computenet-xy7w4.1): the journal grows with live
+Durability = one file in the journal dir, `host.journal`, carrying the
+write-ahead topology records and data frames. Each claim or edge creation is
+one `GraphSpec` delta; restart re-applies its topology under the recorded refs
+and restores the links before replaying frames (with catch-up baselines
+suppressed — the journal holds the originals, and re-emitting them would
+clobber recovered state). Replay re-transmits idempotent duplicates in-process
+but re-journals nothing (computenet-xy7w4.1): the journal grows with live
 traffic only, and a startup checkpoint taken right after
-`Recovery.awaitApplied()` compacts the replayed tail. `remove` cascades over
-dangling edges; a crash mid-cascade can leave a dangling influence until the
-next remove — accepted for v1 (single host).
+`Recovery.awaitApplied()` compacts the replayed tail while carrying the live
+topology fold. `remove` cascades over dangling edges; a crash mid-cascade can
+leave a dangling influence until the next remove — accepted for v1 (single
+host).
 
 ## Tests
 

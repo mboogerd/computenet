@@ -350,19 +350,21 @@ time vs 2% for Sol — Jev does not catch this.
 ## Durability
 
 With `--data <dir>` a deliberation survives a restart, `kill -9` included.
-Only **inputs** are kept: `graph.jsonl` records every claim and edge once
-(append-only, in creation order), and the write-ahead `host.journal` holds
-the engine's per-claim metadata — status, override, proposer, rewritten text,
-the Jev judgments (which are the `jev` stances), triage counts, rounds,
-errors — as field-level changes written into one hosted cell, the only
-journaled cell on the host. Nothing derived is written: every credence,
-influence, consensus and sensitivity (model C) is recomputed from those
-inputs on boot. The journal
-compacts itself to one checkpoint at boot, at shutdown, and whenever it has
-grown by more than 64 KB and its own last checkpoint size. On restart the
-trees are rebuilt, and every claim that was waiting or being explored is
-queued again; an interrupted round simply runs again. An `EXPAND` whose
-forced round the restart interrupted is not resumed: expand the claim again.
+Only **inputs** are kept in the one write-ahead file, `host.journal`: topology
+records capture every claim, edge, sensitivity cell and issue framing in
+creation order, while the journal's metadata fold holds per-claim status,
+override, proposer, rewritten text, the Jev judgments (which are the `jev`
+stances), triage counts, rounds and errors. Nothing derived is written: every
+credence, influence, consensus and sensitivity (model C) is recomputed from
+those inputs on boot. Each framing is one topology delta, so it is either
+present as a complete graph construction or absent. The journal compacts
+itself to one checkpoint at boot, at shutdown, and whenever it has grown by
+more than 64 KB and its own last checkpoint size. On restart the topology is
+rebuilt under its recorded refs before metadata frames replay, the trees are
+rebuilt from the topology fold, and every claim that was waiting or being
+explored is queued again; an interrupted round simply runs again. An `EXPAND`
+whose forced round the restart interrupted is not resumed: expand the claim
+again.
 
 Measured live on 2026-09-27 ("Should cities ban private cars from their
 centres?", `--max-claims 60`, all seven layers): 87 KB for the 60 claims while

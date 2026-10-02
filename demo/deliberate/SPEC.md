@@ -457,16 +457,16 @@ open question, each explored as a root of its own.
   shares (0.696, 0.261, 0.043). Before any position has emitted, every share
   is 1/n. `READINGS` spawns no `IssueNode`: each reading's verdict is its own
   credence, with no shares to fold.
-- **FRA-04 Durability.** `CredenceGraph` logs one structure op, `"issue"`
-  (`{ref = root, mode, positions = [refs, in order]}`), **before** any
-  position claim, with the position refs pre-allocated; replay drops an
-  `"issue"` op whose positions are not all present as claims (a torn frame)
-  and skips its listed positions — framing completes before any position is
-  enqueued, so a torn frame never has edges into it, and edges touching a
-  skipped ref are skipped anyway. The root claim's record carries
-  `framingMode`/`framingTerm` (null when unframed); on restart a root that
-  had finished `FRAMED` but whose issue op did not survive replay restores
-  `QUEUED` and is framed again (EngineRecords).
+- **FRA-04 Durability.** `CredenceGraph` applies one `GraphSpec` delta for an
+  issue framing — the position claims, their sensitivity cells, the `IssueNode`
+  when present and every wire — as one write-ahead topology record, with the
+  refs pre-allocated. The delta is atomic at journal admission: if its record
+  is absent on restart, none of that framing's topology is rebuilt; if it is
+  present, the whole framing is restored under its recorded refs before
+  metadata frames replay. The root claim's record carries
+  `framingMode`/`framingTerm` (null when unframed); on restart a root whose
+  complete issue delta was not journaled restores `QUEUED` and is framed again
+  (EngineRecords).
 
 ## 4. Human control (requirements CTL-*)
 
@@ -671,10 +671,10 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
 
 - **DUR-01** With `--data <dir>`, deliberations survive restarts, including
   `kill -9`; without it the app is volatile. Only **inputs** are durable:
-  the structure — every claim and edge, once, in creation order — in one
-  append-only log `graph.jsonl` (a torn last line is cut off on boot), and
-  the engine's metadata, which includes the `jev` stances, in the host
-  journal (`host.journal`, write-ahead, synced per frame). Nothing derived —
+  the structure — every claim and edge, once, in creation order — is carried
+  by topology records in the one write-ahead host journal (`host.journal`),
+  together with the engine's metadata, which includes the `jev` stances.
+  Nothing derived —
   no credence vector, influence, hub update, or sensitivity vector or frame
   (model C, §3 "Sensitivity and value of information") — is ever written: the
   metadata cell is the only journaled cell on the host (a per-cell journal
@@ -693,7 +693,7 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   field). Only the fields that changed are written (a field back at its
   default is written as a removal), every 100 ms and when the engine closes
   (before its workers are interrupted); the text is written only when a
-  rewrite changed it, since the structure log holds the original. The engine
+  rewrite changed it, since the topology factory holds the original. The engine
   seeds what it last wrote from the state it loaded, so an unchanged record
   is never rewritten. After a restart the host journal replays into the fold;
   the kernel's quiescence fence (`Recovery.awaitApplied`) tells the app when
@@ -702,11 +702,11 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   (`ManagedHost.quiescence().await(...)`) awaited, so every frame it holds
   has been applied: at boot after the replay, at shutdown, and whenever it
   has grown by more than 64 KB and its own last checkpoint size.
-- **DUR-03** On restart the trees are rebuilt from the structure (claims and
-  the edges placing them, in creation order) plus those records. A claim
-  whose record never reached the journal is rebuilt from the structure alone
-  and queued afresh; a claim created without the edge that places it (the
-  process died between the two writes) is left out. Each question's EXP-10
+- **DUR-03** On restart the trees are rebuilt from the topology fold (claims
+  and the edges placing them, in creation order) plus the metadata records. A
+  topology delta whose record never reached the journal is absent and its
+  cells are not rebuilt; a complete issue delta is restored as one graph
+  construction, so the process cannot leave a half-created framing. Each question's EXP-10
   record (its non-root round yields, for reference only — its stop is
   computed live from restored claim status, not journaled) is one more
   record of the same store; a record written before model C may also carry

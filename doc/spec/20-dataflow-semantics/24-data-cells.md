@@ -1306,6 +1306,13 @@ resurrect removals or double-count (Ubiquitous). Remaining with a trigger:
 journal segmentation/rotation and the disk-overflow mailbox (33) — the
 first workload where one fsync'd file hurts.
 
+The landed recovery path supplies that graph rebuild from the journal itself:
+each applied `GraphSpec` delta is written ahead as a topology record, whose
+concrete refs are re-applied in journal order before the frames that follow.
+Topology recovery uses preserve-refs mode, so links bind to the instances the
+journal already names, and checkpoint compaction carries the live topology fold
+alongside the `Stateful` snapshots.
+
 **Boundary of the landed mechanism** (decided in 93 I-7): un-suppressed
 replay through the ordinary decode path is safe exactly for the
 replay-stable idempotent vocabulary above — ref-derived identities,
@@ -1498,11 +1505,14 @@ the gap between the effect and its advance reduces the probability of landing in
 it and changes nothing about the guarantee, so no fsync placement, batching change or
 scheduler ordering should be read as retiring `[24-DUR-09]`.
 
-The decided journal classification still diverges from the landed
-tee: 93 I-7 journals only `PORT_API` data plus topology events, while the
-shipped journal appends every intake frame (management included) and does
-not journal topology at all — the graph is rebuilt out-of-band before
-`recoverFrom`.
+The landed journal classification still diverges from the decided tee only in
+its intake coverage: 93 I-7 journals only `PORT_API` data plus topology events,
+while the shipped journal appends every intake frame (management included).
+Topology records are now the journaled source of truth: recovery re-applies
+their concrete refs and links before frame replay, and checkpoint compaction
+carries the live topology fold. The remaining recorded divergence is
+un-suppressed replay (93 I-7 R4), which is safe for the replay-stable,
+idempotent vocabulary described above.
 
 ⚠ GAP (G-59): The M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells: wall-clock/random logic,
