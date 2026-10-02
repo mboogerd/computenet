@@ -2,17 +2,81 @@ package civictech.deliberate
 
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
+import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.ConnectStep
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.GraphStep
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.SpawnStep
+import civictech.cell.graph.TopologyFold
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
 import civictech.cell.link.LinkOptions
-import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.io.File
-import java.io.RandomAccessFile
 import java.util.UUID
+
+/** The durable construction record for one claim. */
+data class ClaimNodeFactory(
+    val text: String,
+    val question: Boolean,
+    val layers: LayerSet,
+) : CellFactory {
+    @Transient
+    internal var created: ClaimNode? = null
+
+    override fun create(ref: CellRef): ClaimNode =
+        ClaimNode(ref, layers, neutralPrior = question).also { created = it }
+}
+
+/** The durable construction record for one argument edge. */
+data class EdgeNodeFactory(
+    val polarity: Polarity,
+    val head: Boolean,
+    val layers: LayerSet,
+    val quiescence: Double,
+) : CellFactory {
+    @Transient
+    internal var created: EdgeNode? = null
+
+    override fun create(ref: CellRef): EdgeNode =
+        EdgeNode(polarity, ref, layers, quiescence = if (head) quiescence else 0.0).also { created = it }
+}
+
+/** The durable construction record for one claim or edge's sensitivity cell. */
+data class SensitivityFactory(
+    val subject: CellRef,
+    val isEdge: Boolean,
+    val question: Boolean,
+    val layers: LayerSet,
+    val quiescence: Double,
+) : CellFactory {
+    @Transient
+    internal var created: SensitivityNode? = null
+
+    override fun create(ref: CellRef): SensitivityNode = SensitivityNode(
+        ref = ref,
+        subject = subject,
+        layers = layers,
+        question = question,
+        isEdge = isEdge,
+        quiescence = quiescence,
+    ).also { created = it }
+}
+
+/** The durable framing record; READINGS keep the cell unlinked as metadata, POSITIONS wire its shares fold. */
+data class IssueFactory(
+    val root: CellRef,
+    val positions: List<CellRef>,
+    val mode: CredenceGraph.IssueMode,
+    val layers: LayerSet,
+) : CellFactory {
+    @Transient
+    internal var created: IssueNode? = null
+
+    override fun create(ref: CellRef): IssueNode = IssueNode(ref, root, positions, layers).also { created = it }
+}
 
 /**
  * One cell graph for every credence layer (SPEC CRED-04): a [ClaimNode] per
@@ -23,14 +87,11 @@ import java.util.UUID
  * primitive, so cycle admission, topology bookkeeping, EdgeClose ordering,
  * and magnitude scheduling apply uniformly to every hop.
  *
- * Durability (SPEC DUR-01): the only durable parts are the inputs.
- * [structureLog] records claims and edges (append-only, one line each,
- * written *before* wiring as agora does, computenet-t3sp); replaying it on
- * construction rebuilds every cell under its recorded ref. Stances are the
- * engine's to persist (they are its Jev judgments) and to re-apply. The cells
- * themselves are volatile: a restart recomputes every credence from those
- * inputs, with late-join catch-up baselines enabled throughout, so nothing
- * derived ever needs to be journaled.
+ * Durability (SPEC DUR-01): the kernel topology journal records each complete
+ * mutation as one write-ahead [GraphSpec]. Stances are the engine's to persist
+ * and re-apply. The cells themselves are volatile: recovery rebuilds them under
+ * their recorded refs and recomputes every credence from those inputs, with
+ * late-join catch-up baselines enabled throughout.
  *
  * Model C: beside the credence cells runs the sensitivity layer
  * ([SensitivityNode], one per claim and per edge, and a [SensitivityHubView]
@@ -43,7 +104,7 @@ class CredenceGraph(
     host: ManagedHost,
     private val registry: LocationRegistry,
     val layers: LayerSet,
-    private val structureLog: File? = null,
+    context: ApplyContext? = null,
     /** Cycle-head absorb threshold (per feedback edge; heads only), agora's default. */
     private val quiescence: Double = 1e-3,
     onCredence: () -> Unit = {},
@@ -93,24 +154,35 @@ class CredenceGraph(
     /** One link the graph installed: [outlet] of cell [from] streams to [inlet] of cell [to]. */
     data class Wire(val from: CellRef, val outlet: String, val to: CellRef, val inlet: String)
 
+    private val recordsTopology = context?.topology != null
     private val manage = host.managementInlet.call
+    private val context = context ?: ApplyContext(host)
 
     /** Volatile: its content is recomputed after every restart. */
-    val hub = ObserveCell(CredenceHubView(onCredence))
+    val hub = ObserveCell(
+        CredenceHubView(onCredence),
+        ref = hubRef("hub"),
+    )
 
     /** Model C: the sensitivity fold. Volatile, like [hub]. */
-    val sensitivityHub = ObserveCell(SensitivityHubView(onCredence))
+    val sensitivityHub = ObserveCell(
+        SensitivityHubView(onCredence),
+        ref = hubRef("sensitivity-hub"),
+    )
 
     /** Model A: the shares fold of every POSITIONS issue. Volatile, like [hub]. */
-    val sharesHub = ObserveCell(SharesHubView(onCredence))
+    val sharesHub = ObserveCell(
+        SharesHubView(onCredence),
+        ref = hubRef("shares-hub"),
+    )
 
     private val cells = HashMap<CellRef, ClaimNode>()
 
     /** Model A: each POSITIONS root's [IssueNode], by the root's ref. */
-    private val issueCells = HashMap<CellRef, IssueNode>()
+    private val issueCells = HashMap<CellRef, CellRef>()
 
     /** Model C: each node's sensitivity cell, by the node's ref. */
-    private val sensCells = HashMap<CellRef, SensitivityNode>()
+    private val sensCells = HashMap<CellRef, CellRef>()
 
     private val wires = java.util.concurrent.CopyOnWriteArrayList<Wire>()
 
@@ -118,9 +190,9 @@ class CredenceGraph(
     val wiring: List<Wire> get() = wires.toList()
 
     /** The cells of the sensitivity layer (the hub included). */
-    val sensitivityCells: Set<CellRef> get() = synchronized(mutationLock) { sensCells.values.map { it.ref }.toSet() + sensitivityHub.ref }
+    val sensitivityCells: Set<CellRef> get() = synchronized(mutationLock) { sensCells.values.toSet() + sensitivityHub.ref }
 
-    /** Serializes structure-log appends and graph mutations, including direct callers outside the engine. */
+    /** Serializes graph mutations, including direct callers outside the engine. */
     private val mutationLock = Any()
 
     /** Readers ([graph], [nodeInfo]) run off the mutation thread; see `AgoraService.nodesLock`. */
@@ -130,96 +202,14 @@ class CredenceGraph(
     /** The stance each node was last sent, by user: lets [setStance] skip one already held. */
     private val held = HashMap<CellRef, HashMap<String, Double>>()
 
-    @Serializable
-    private data class StructureOp(
-        val op: String,
-        val ref: String,
-        val text: String? = null,
-        val question: Boolean = false,
-        val polarity: Polarity? = null,
-        val source: String? = null,
-        val target: String? = null,
-        /** Model A, an "issue" op: the framing mode and the position refs, in order. */
-        val mode: IssueMode? = null,
-        val positions: List<String>? = null,
-    )
-
-    private var replaying = false
-
     init {
+        require(this.context.host === host) { "CredenceGraph context belongs to a different host" }
         manage.spawn(hub)
-        if (sensitivity) manage.spawn(sensitivityHub)
+        manage.spawn(sensitivityHub)
         manage.spawn(sharesHub)
-        structureLog?.takeIf { it.exists() }?.let { log ->
-            replaying = true
-            try {
-                replay(readStructure(log))
-            } finally {
-                replaying = false
-            }
-        }
-    }
-
-    /**
-     * Replays the structure log. Model A (feature D3): an "issue" op is valid
-     * only when every position it names has a "claim" op after it; a valid one
-     * replays as [frame], which recreates those position claims itself (so
-     * their own claim ops are skipped). A torn framing — an issue op whose
-     * positions are not all present — is dropped with its listed positions,
-     * and any edge touching a dropped position is skipped too.
-     */
-    private fun replay(ops: List<StructureOp>) {
-        val claimAt = HashMap<String, Int>()
-        ops.forEachIndexed { i, op -> if (op.op == "claim") claimAt.putIfAbsent(op.ref, i) }
-        val skipped = HashSet<String>()
-        val framed = HashSet<String>()
-        val validIssues = HashSet<Int>()
-        ops.forEachIndexed { i, op ->
-            if (op.op != "issue") return@forEachIndexed
-            val positions = op.positions.orEmpty()
-            if (positions.all { (claimAt[it] ?: -1) > i }) {
-                validIssues += i
-                framed += positions
-            } else {
-                skipped += positions
-                System.err.println("deliberate: dropping torn framing of root ${op.ref} (positions not all logged: $positions)")
-            }
-        }
-        fun ref(id: String) = CellRef(UUID.fromString(id))
-        ops.forEachIndexed { i, op ->
-            when (op.op) {
-                "claim" -> if (op.ref !in skipped && op.ref !in framed) createClaim(op.text ?: "", ref(op.ref), op.question)
-                "issue" -> if (i in validIssues) {
-                    val positions = op.positions!!
-                    frame(ref(op.ref), op.mode!!, positions.map { ops[claimAt.getValue(it)].text ?: "" }, positions.map(::ref))
-                }
-                "edge" -> if (op.source !in skipped && op.target !in skipped && op.ref !in skipped) createEdge(
-                    ref(op.source!!),
-                    ref(op.target!!),
-                    op.polarity!!,
-                    ref(op.ref),
-                )
-                else -> error("unknown structure op ${op.op}")
-            }
-        }
-    }
-
-    /**
-     * The log's operations. A `kill -9` mid-append can leave a torn last line:
-     * it is cut off (the file truncated to the last complete line) so the next
-     * append starts on a line of its own. A bad line anywhere else is an error.
-     */
-    private fun readStructure(log: File): List<StructureOp> {
-        val bytes = log.readBytes()
-        val complete = bytes.lastIndexOf('\n'.code.toByte()) + 1
-        if (complete < bytes.size) RandomAccessFile(log, "rw").use { it.setLength(complete.toLong()) }
-        return String(bytes, 0, complete, Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }
-            .map { JSON.decodeFromString(StructureOp.serializer(), it) }.toList()
-    }
-
-    /** Durable record first, then wiring: see `AgoraService.log` (computenet-t3sp). */
-    private fun log(op: StructureOp) {
-        if (!replaying) structureLog?.appendText(JSON.encodeToString(StructureOp.serializer(), op) + "\n")
+        this.context.adopt(HUB_HANDLE, hub.ref)
+        this.context.adopt(SENSITIVITY_HUB_HANDLE, sensitivityHub.ref)
+        this.context.adopt(SHARES_HUB_HANDLE, sharesHub.ref)
     }
 
     fun createClaim(
@@ -227,17 +217,36 @@ class CredenceGraph(
         ref: CellRef = CellRef(UUID.randomUUID()),
         question: Boolean = false,
     ): CellRef = synchronized(mutationLock) {
-        val cell = ClaimNode(ref, layers, neutralPrior = question)
-        // Persist before any hosted operation can block or fail. A logged but
-        // incompletely wired node is rebuilt in full on the next replay.
-        log(StructureOp("claim", ref.id.toString(), text = text, question = question))
-        manage.spawn(cell)
-        cells[ref] = cell
-        wire(ref, "credenceOutlet", hub.ref, "inlet")
+        val handle = claimHandle(ref)
+        val factory = ClaimNodeFactory(text, question, layers)
+        val steps = mutableListOf<GraphStep>(
+            SpawnStep(handle, factory, IdentityBinding.Exact(ref)),
+            ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
+        )
+        var sensitivityEntry: Pair<CellRef, SensitivityFactory>? = null
         if (sensitivity) {
-            spawnSensitivity(SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, question = question, quiescence = quiescence))
+            val sensitivityRef = CellRef(UUID.randomUUID())
+            val sensitivityHandle = sensitivityHandle(ref)
+            val sensitivityFactory =
+                SensitivityFactory(ref, isEdge = false, question = question, layers = layers, quiescence = quiescence)
+            sensitivityEntry = sensitivityRef to sensitivityFactory
+            steps += SpawnStep(
+                sensitivityHandle,
+                sensitivityFactory,
+                IdentityBinding.Exact(sensitivityRef),
+            )
+            steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
         }
-        synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text, question = question) }
+        GraphSpec(steps).apply(context)
+        synchronized(nodesLock) {
+            cells[ref] = checkNotNull(factory.created) { "claim factory did not retain $ref" }
+            nodes[ref] = NodeInfo(kind = Kind.CLAIM, text = text, question = question)
+        }
+        sensitivityEntry?.let { (sensitivityRef, sensitivityFactory) ->
+            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
+            sensCells[ref] = sensitivityRef
+        }
+        rebuildWiring()
         ref
     }
 
@@ -253,44 +262,174 @@ class CredenceGraph(
             // Every elementary cycle runs through the edge that closed it (agora's cycle model).
             reaches(from = target, to = source)
         }
-        log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
-        val edge = EdgeNode(
-            polarity,
-            ref,
-            layers,
-            quiescence = if (head) quiescence else 0.0,
+        val topology = context.live()
+        val handle = edgeHandle(ref)
+        val factory = EdgeNodeFactory(polarity, head, layers, quiescence)
+        val steps = mutableListOf<GraphStep>(
+            SpawnStep(
+                handle,
+                factory,
+                IdentityBinding.Exact(ref),
+            ),
+            ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
+            ConnectStep(handle, "influenceOutlet", topology.handleFor(target), "influenceInlet", STAGED),
+            ConnectStep(
+                topology.handleFor(source),
+                "credenceOutlet",
+                handle,
+                if (head) "feedbackInlet" else "sourceInlet",
+                STAGED,
+            ),
         )
-        manage.spawn(edge)
-        cells[ref] = edge
-        wire(ref, "credenceOutlet", hub.ref, "inlet")
-        wire(ref, "influenceOutlet", target, "influenceInlet")
-        wire(source, "credenceOutlet", ref, if (head) "feedbackInlet" else "sourceInlet")
+        var sensitivityEntry: Pair<CellRef, SensitivityFactory>? = null
         if (sensitivity) {
             // Model C: the edge's sensitivity cell hears its target's frame and hands its source its share;
             // the target's sensitivity cell folds the same influence the target's credence cell does.
-            val s = spawnSensitivity(
-                SensitivityNode(CellRef(UUID.randomUUID()), ref, layers, isEdge = true, quiescence = quiescence),
+            val sensitivityHandle = sensitivityHandle(ref)
+            val sensitivityRef = CellRef(UUID.randomUUID())
+            val sensitivityFactory =
+                SensitivityFactory(ref, isEdge = true, question = false, layers = layers, quiescence = quiescence)
+            sensitivityEntry = sensitivityRef to sensitivityFactory
+            steps += SpawnStep(
+                sensitivityHandle,
+                sensitivityFactory,
+                IdentityBinding.Exact(sensitivityRef),
             )
-            val onTarget = sensCells.getValue(target)
-            val ofSource = sensCells.getValue(source)
-            wire(s.ref, "sourceOutlet", ofSource.ref, "shareInlet")
-            wire(ref, "influenceOutlet", onTarget.ref, "influenceInlet")
-            wire(onTarget.ref, "frameOutlet", s.ref, if (head) "feedbackFrameInlet" else "frameInlet")
+            steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
+            steps += ConnectStep(sensitivityHandle, "sourceOutlet", sensitivityHandle(source), "shareInlet", STAGED)
+            steps += ConnectStep(handle, "influenceOutlet", sensitivityHandle(target), "influenceInlet", STAGED)
+            steps += ConnectStep(
+                sensitivityHandle(target),
+                "frameOutlet",
+                sensitivityHandle,
+                if (head) "feedbackFrameInlet" else "frameInlet",
+                STAGED,
+            )
         }
+        GraphSpec(steps).apply(context)
         synchronized(nodesLock) {
-            nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = head)
+            cells[ref] = checkNotNull(factory.created) { "edge factory did not retain $ref" }
+            nodes[ref] = NodeInfo(
+                kind = Kind.EDGE,
+                polarity = polarity,
+                source = source,
+                target = target,
+                head = head,
+            )
         }
+        sensitivityEntry?.let { (sensitivityRef, sensitivityFactory) ->
+            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
+            sensCells[ref] = sensitivityRef
+        }
+        rebuildWiring()
         ref
+    }
+
+    private fun rebuildWiring(topology: TopologyFold = context.live()) {
+        wires.clear()
+        wires.addAll(topology.links.values.map { Wire(it.from, it.outlet, it.to, it.inlet) })
+    }
+
+    /**
+     * Rebuild the application-owned indexes from the kernel's folded live topology.
+     * Factory data is the node record; edge endpoints are recovered from admitted
+     * connects, and framing metadata from [IssueFactory].
+     */
+    fun rebuildIndex() = synchronized(mutationLock) {
+        val topology = context.live()
+        val rebuiltCells = linkedMapOf<CellRef, ClaimNode>()
+        val rebuiltNodes = linkedMapOf<CellRef, NodeInfo>()
+        val rebuiltSensitivity = linkedMapOf<CellRef, CellRef>()
+        val rebuiltIssues = linkedMapOf<CellRef, CellRef>()
+        val framing = mutableListOf<Pair<CellRef, IssueFactory>>()
+
+        topology.spawns.values.forEach { spawn ->
+            when (val factory = spawn.factory) {
+                is ClaimNodeFactory -> {
+                    rebuiltCells[spawn.ref] = checkNotNull(factory.created) {
+                        "claim ${spawn.ref} is live in the topology fold but its factory has no cell"
+                    }
+                    rebuiltNodes[spawn.ref] = NodeInfo(
+                        kind = Kind.CLAIM,
+                        text = factory.text,
+                        question = factory.question,
+                    )
+                }
+
+                is EdgeNodeFactory -> {
+                    rebuiltCells[spawn.ref] = checkNotNull(factory.created) {
+                        "edge ${spawn.ref} is live in the topology fold but its factory has no cell"
+                    }
+                    val source = topology.links.values.singleOrNull { link ->
+                        link.to == spawn.ref &&
+                            link.outlet == "credenceOutlet" &&
+                            link.inlet in SOURCE_INLETS
+                    }?.from ?: error("edge ${spawn.ref} has no unique source link in recovered topology")
+                    val target = topology.links.values.singleOrNull { link ->
+                        link.from == spawn.ref &&
+                            link.outlet == "influenceOutlet" &&
+                            link.inlet == "influenceInlet" &&
+                            topology.spawns[link.to]?.factory !is SensitivityFactory
+                    }?.to ?: error("edge ${spawn.ref} has no unique target link in recovered topology")
+                    rebuiltNodes[spawn.ref] = NodeInfo(
+                        kind = Kind.EDGE,
+                        polarity = factory.polarity,
+                        source = source,
+                        target = target,
+                        head = factory.head,
+                    )
+                }
+
+                is SensitivityFactory -> {
+                    checkNotNull(factory.created) {
+                        "sensitivity ${spawn.ref} is live in the topology fold but its factory has no cell"
+                    }
+                    rebuiltSensitivity[factory.subject] = spawn.ref
+                }
+
+                is IssueFactory -> {
+                    checkNotNull(factory.created) {
+                        "issue ${spawn.ref} is live in the topology fold but its factory has no cell"
+                    }
+                    framing += spawn.ref to factory
+                }
+            }
+        }
+
+        framing.forEach { (issueRef, factory) ->
+            val root = checkNotNull(rebuiltNodes[factory.root]) {
+                "issue ${factory.root} has no recovered root claim"
+            }
+            factory.positions.forEach { position ->
+                val info = checkNotNull(rebuiltNodes[position]) {
+                    "issue ${factory.root} has no recovered position $position"
+                }
+                rebuiltNodes[position] = info.copy(positionOf = factory.root)
+            }
+            rebuiltNodes[factory.root] = root.copy(issue = IssueInfo(factory.mode, factory.positions))
+            if (factory.mode == IssueMode.POSITIONS) rebuiltIssues[factory.root] = issueRef
+        }
+
+        synchronized(nodesLock) {
+            cells.clear()
+            cells.putAll(rebuiltCells)
+            nodes.clear()
+            nodes.putAll(rebuiltNodes)
+        }
+        issueCells.clear()
+        issueCells.putAll(rebuiltIssues)
+        sensCells.clear()
+        sensCells.putAll(rebuiltSensitivity)
+        rebuildWiring(topology)
     }
 
     /**
      * Model A: frames question root [root] as an issue over [texts] — each a
      * new question-flagged claim (so each has model D's neutral verdict and is
-     * a model C sensitivity root). Logs ONE "issue" op naming every position
-     * ref *before* the position claims (feature D3: replay drops a torn
-     * framing). POSITIONS also spawn an [IssueNode] fed by the positions'
-     * credences, emitting [Shares] to [sharesHub]; nothing flows back from it
-     * (CRED-03). Returns the position refs, in order.
+     * a model C sensitivity root). The positions, framing metadata, sensitivity
+     * cells and every wire are one write-ahead topology delta, so recovery sees
+     * the whole framing or none of it. POSITIONS wire the [IssueNode] into the
+     * shares fold; READINGS keep it unlinked as the durable framing record.
      */
     fun frame(
         root: CellRef,
@@ -307,26 +446,68 @@ class CredenceGraph(
             require(refs.size == texts.size) { "one ref per position" }
             require(refs.distinct().size == refs.size && refs.none { it in nodes }) { "position refs must be new and distinct" }
         }
-        log(StructureOp("issue", root.id.toString(), mode = mode, positions = refs.map { it.id.toString() }))
-        texts.zip(refs).forEach { (text, ref) -> createClaim(text, ref, question = true) }
-        synchronized(nodesLock) {
-            refs.forEach { nodes[it] = nodes.getValue(it).copy(positionOf = root) }
-            nodes[root] = nodes.getValue(root).copy(issue = IssueInfo(mode, refs))
-        }
-        if (mode == IssueMode.POSITIONS) {
-            val issue = IssueNode(CellRef(UUID.randomUUID()), root, refs, layers)
-            manage.spawn(issue)
-            issueCells[root] = issue
-            refs.forEach { p ->
-                wire(p, "credenceOutlet", issue.ref, "positionInlet")
+        val steps = mutableListOf<GraphStep>()
+        val claimFactories = linkedMapOf<CellRef, ClaimNodeFactory>()
+        val sensitivityFactories = linkedMapOf<CellRef, Pair<CellRef, SensitivityFactory>>()
+        texts.zip(refs).forEach { (text, ref) ->
+            val claimHandle = claimHandle(ref)
+            val claimFactory = ClaimNodeFactory(text, question = true, layers = layers)
+            claimFactories[ref] = claimFactory
+            steps += SpawnStep(
+                claimHandle,
+                claimFactory,
+                IdentityBinding.Exact(ref),
+            )
+            steps += ConnectStep(claimHandle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED)
+            if (sensitivity) {
+                val sensitivityHandle = sensitivityHandle(ref)
+                val sensitivityRef = CellRef(UUID.randomUUID())
+                val sensitivityFactory =
+                    SensitivityFactory(ref, isEdge = false, question = true, layers = layers, quiescence = quiescence)
+                sensitivityFactories[ref] = sensitivityRef to sensitivityFactory
+                steps += SpawnStep(
+                    sensitivityHandle,
+                    sensitivityFactory,
+                    IdentityBinding.Exact(sensitivityRef),
+                )
+                steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
             }
-            wire(issue.ref, "sharesOutlet", sharesHub.ref, "inlet")
         }
+        val issueHandle = issueHandle(root)
+        val issueRef = CellRef(UUID.randomUUID())
+        val issueFactory = IssueFactory(root, refs, mode, layers)
+        steps += SpawnStep(
+            issueHandle,
+            issueFactory,
+            IdentityBinding.Exact(issueRef),
+        )
+        if (mode == IssueMode.POSITIONS) {
+            refs.forEach { position ->
+                steps += ConnectStep(claimHandle(position), "credenceOutlet", issueHandle, "positionInlet", STAGED)
+            }
+            steps += ConnectStep(issueHandle, "sharesOutlet", SHARES_HUB_HANDLE, "inlet", STAGED)
+        }
+        GraphSpec(steps).apply(context)
+        checkNotNull(issueFactory.created) { "issue factory did not retain $issueRef" }
+        synchronized(nodesLock) {
+            claimFactories.forEach { (ref, factory) ->
+                cells[ref] = checkNotNull(factory.created) { "claim factory did not retain $ref" }
+                nodes[ref] = NodeInfo(kind = Kind.CLAIM, text = factory.text, question = true, positionOf = root)
+            }
+            nodes[root] = checkNotNull(nodes[root]).copy(issue = IssueInfo(mode, refs))
+        }
+        sensitivityFactories.forEach { (subject, entry) ->
+            val (sensitivityRef, sensitivityFactory) = entry
+            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
+            sensCells[subject] = sensitivityRef
+        }
+        if (mode == IssueMode.POSITIONS) issueCells[root] = issueRef
+        rebuildWiring()
         refs
     }
 
     /** Model A: the [IssueNode] of POSITIONS root [root]; null for any other node. */
-    fun issueCellOf(root: CellRef): CellRef? = synchronized(mutationLock) { issueCells[root]?.ref }
+    fun issueCellOf(root: CellRef): CellRef? = synchronized(mutationLock) { issueCells[root] }
 
     /** Model A: POSITIONS root [root]'s latest shares; null until the fold has them, and for any other node. */
     fun sharesOf(root: CellRef): Shares? = sharesHub.current()[root]
@@ -341,7 +522,7 @@ class CredenceGraph(
             if (value == null) mine.remove(user) else mine[user] = value
         }
         registry.inlet(id, ClaimNodePorts.stanceInlet).propagate(Stance(user, value))
-        sensCells[id]?.let { registry.inlet(it.ref, SensitivityNodePorts.stanceInlet).propagate(Stance(user, value)) }
+        sensCells[id]?.let { registry.inlet(it, SensitivityNodePorts.stanceInlet).propagate(Stance(user, value)) }
     }
 
     fun graph(): List<Node> {
@@ -388,25 +569,28 @@ class CredenceGraph(
         return false
     }
 
-    private fun wire(from: CellRef, outlet: String, to: CellRef, inlet: String) {
-        val result = manage.connect(from, outlet, to, inlet, STAGED)
-        check(result is LinkResult.Connected) {
-            val reason = (result as? LinkResult.Rejected)?.reason ?: result.toString()
-            "CredenceGraph: admitted link $from.$outlet -> $to.$inlet rejected: $reason"
-        }
-        wires += Wire(from, outlet, to, inlet)
-    }
+    private fun TopologyFold.handleFor(ref: CellRef): String =
+        spawns[ref]?.handle
+            ?: handles.entries.singleOrNull { it.value == ref }?.key
+            ?: error("no live topology handle for $ref")
 
-    /** Caller holds [mutationLock]. Spawns a sensitivity cell and wires it to the sensitivity hub. */
-    private fun spawnSensitivity(s: SensitivityNode): SensitivityNode {
-        manage.spawn(s)
-        sensCells[s.subject] = s
-        wire(s.ref, "hubOutlet", sensitivityHub.ref, "inlet")
-        return s
+    /** Concrete topology links need stable app-owned endpoints; volatile graphs may coexist on one host. */
+    private fun hubRef(name: String): CellRef = if (recordsTopology) {
+        CellRef(UUID.nameUUIDFromBytes("deliberate:$name".toByteArray()))
+    } else {
+        CellRef(UUID.randomUUID())
     }
 
     private companion object {
-        val JSON = Json { explicitNulls = false }
+        const val HUB_HANDLE = "hub"
+        const val SENSITIVITY_HUB_HANDLE = "sensitivityHub"
+        const val SHARES_HUB_HANDLE = "sharesHub"
+        val SOURCE_INLETS = setOf("sourceInlet", "feedbackInlet")
         val STAGED = LinkOptions(staged = true)
+
+        fun claimHandle(ref: CellRef) = "claim:${ref.id}"
+        fun edgeHandle(ref: CellRef) = "edge:${ref.id}"
+        fun sensitivityHandle(ref: CellRef) = "sens:${ref.id}"
+        fun issueHandle(root: CellRef) = "issue:${root.id}"
     }
 }

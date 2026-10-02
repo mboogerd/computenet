@@ -4,6 +4,7 @@ import civictech.agora.AgoraService
 import civictech.cell.CellRef
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
@@ -48,7 +49,7 @@ class DeliberateApp(
     /** SPEC §11: with a directory, deliberations survive restarts (and `kill -9`); null is volatile. */
     private val dataDir: File? = null,
     private val semantics: SemanticsConfig = SemanticsConfig(),
-    /** How often the metadata journal checks whether it has grown enough to compact itself. */
+    /** How often the combined topology/metadata journal checks whether it should compact itself. */
     private val compactEveryMs: Long = 30_000,
     /** SPEC §12: how each backend's usage is priced. */
     pricing: Pricing = Pricing(),
@@ -90,9 +91,9 @@ class DeliberateApp(
     private val journal = dataDir?.let { FileJournal(File(it.apply { mkdirs() }, "host.journal")) }
 
     /**
-     * SPEC DUR-01: only the metadata cell is journaled (`journalFor`); every
-     * credence cell is volatile and recomputed from the inputs on boot, so
-     * the journal never holds a derived frame.
+     * SPEC DUR-01: `journalFor` tees only metadata-cell frames, while the
+     * [ApplyContext] below writes topology records to the same journal. Every
+     * credence cell remains volatile and is recomputed from inputs on boot.
      */
     private val host = ManagedHost(
         scheduler = scheduler,
@@ -102,24 +103,28 @@ class DeliberateApp(
     )
     private val dirty = AtomicBoolean(false)
     private val metaStore = dataDir?.let { JournaledMetaStore(host, registry) }
+    private val context = ApplyContext(
+        host,
+        journals = journal?.let { mapOf("meta" to it) }.orEmpty(),
+        topology = journal,
+    )
 
-    /** Every credence layer in one cell graph; its structure log is the one durable record of the trees. */
+    /** Every credence layer in one cell graph; the kernel journal owns its durable topology. */
     private val graph = CredenceGraph(
         host,
         registry,
         LayerSet.of(semantics.running, semantics.consensus, semantics.headline, semantics.wlo),
-        structureLog = dataDir?.let { File(it, STRUCTURE_LOG) },
+        context = context,
         onCredence = { dirty.set(true) },
     )
 
     init {
-        // Rebuild (the graph replayed its structure log) → replay the metadata journal →
-        // fence on the kernel's Recovery handle, which holds every replayed frame once it
-        // returns → compact it: the fold now holds every replayed frame, so the checkpoint
-        // is quiescent (JournaledMetaStore.checkpoint fences again for its own hold-off).
+        // Recover topology before the metadata frames that address it, then fence on the
+        // kernel Recovery handle and compact the combined topology/metadata journal.
         if (journal != null) {
-            host.recoverFrom(journal).awaitApplied(60_000)
+            context.recover(journal).awaitApplied(60_000)
             metaStore!!.checkpoint(journal)
+            graph.rebuildIndex()
         }
     }
 
@@ -174,7 +179,7 @@ class DeliberateApp(
             try {
                 compactIfGrown()
             } catch (e: Exception) {
-                System.err.println("deliberate: metadata checkpoint failed: $e")
+                System.err.println("deliberate: journal checkpoint failed: $e")
             }
         }, compactEveryMs, compactEveryMs, TimeUnit.MILLISECONDS)
     }
@@ -182,7 +187,7 @@ class DeliberateApp(
     private fun journalFile() = dataDir?.let { File(it, "host.journal") }
 
     /**
-     * SPEC DUR-02: the metadata journal compacts itself once it has grown by
+     * SPEC DUR-02: the combined topology/metadata journal compacts itself once it has grown by
      * [COMPACT_MIN_BYTES] and by as much again as its last checkpoint, so it
      * stays within about twice the size of the state it holds.
      */
@@ -192,7 +197,7 @@ class DeliberateApp(
         checkpointNow()
     }
 
-    /** Compacts the metadata journal to one checkpoint of the fold now (a no-op without `--data`). */
+    /** Compacts topology plus metadata to one checkpoint of their folds now (a no-op without `--data`). */
     internal fun checkpointNow() {
         val j = journal ?: return
         metaStore!!.checkpoint(j)
@@ -220,7 +225,7 @@ class DeliberateApp(
         try {
             checkpointNow()
         } catch (e: Exception) {
-            System.err.println("deliberate: final metadata checkpoint failed: $e")
+            System.err.println("deliberate: final journal checkpoint failed: $e")
         }
         inspector?.stop()
         shell.stop()
@@ -304,8 +309,6 @@ class DeliberateApp(
 
     companion object {
         const val DEFAULT_PORT = 8091
-        /** SPEC DUR-01: the one structure log (claims and edges, in creation order). */
-        const val STRUCTURE_LOG = "graph.jsonl"
         /** The metadata journal compacts once it grew by at least this much since its last checkpoint. */
         const val COMPACT_MIN_BYTES = 64L * 1024
         const val MAX_QUESTION = 1_000

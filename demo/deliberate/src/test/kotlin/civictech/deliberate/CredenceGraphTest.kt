@@ -6,8 +6,14 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.control.AttentionPolicy
+import civictech.cell.durability.FileJournal
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.host.inlet
 import civictech.cell.link.LinkOptions
@@ -18,10 +24,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.registerPort
 import civictech.testkit.SimWorld
 import civictech.testkit.awaitUntil
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import java.io.IOException
 import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.util.UUID
@@ -31,7 +34,6 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -43,11 +45,34 @@ class CredenceGraphTest {
     @AfterTest
     fun tearDown() = schedulers.forEach { it.shutdown() }
 
-    private fun graph(layers: LayerSet = LayerSet.of(SemanticsCatalog.IDS), log: java.io.File? = null): CredenceGraph {
+    private fun graph(layers: LayerSet = LayerSet.of(SemanticsCatalog.IDS), journalFile: java.io.File? = null): CredenceGraph {
+        val recover = journalFile?.let { it.exists() && it.length() > 0L } == true
+        return graphWithJournal(layers, journalFile?.let(::FileJournal), recover)
+    }
+
+    private fun graphWithJournal(layers: LayerSet, journal: Journal?, recover: Boolean): CredenceGraph {
         val scheduler = VirtualThreadScheduler("credence-graph-test").also { schedulers += it }
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = scheduler, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-        return CredenceGraph(host, registry, layers, structureLog = log)
+        val context = ApplyContext(host, topology = journal)
+        return CredenceGraph(host, registry, layers, context = context).also { graph ->
+            if (journal != null && recover) {
+                context.recover(journal).awaitApplied(60_000)
+                graph.rebuildIndex()
+            }
+        }
+    }
+
+    private class FailingAppendJournal(private val delegate: InMemoryJournal = InMemoryJournal()) : Journal by delegate {
+        var failNext = false
+
+        override fun append(record: ByteArray) {
+            if (failNext) {
+                failNext = false
+                throw IOException("injected topology append failure")
+            }
+            delegate.append(record)
+        }
     }
 
     private fun CredenceGraph.near(ref: CellRef, want: List<Double>) =
@@ -149,20 +174,16 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `the structure log rebuilds the graph, and stances recompute the same credences`() {
+    fun `the kernel journal rebuilds the graph, and stances recompute the same credences`() {
         val dir = Files.createTempDirectory("credence-graph").toFile()
         try {
-            val log = java.io.File(dir, "graph.jsonl")
-            val first = graph(log = log)
+            val journal = java.io.File(dir, "host.journal")
+            val first = graph(journalFile = journal)
             val refs = first.tree()
             awaitUntil("first settles") { first.near(refs.getValue("R"), first.layers.ids.map { prototype.getValue(it)[0] }) }
             val before = refs.mapValues { first.credenceOf(it.value)!!.values }
-            // A torn tail (kill -9 mid-append) is cut off, not fatal.
-            log.appendText("{\"op\":\"claim\",\"ref\":\"")
-            val second = graph(log = log)
+            val second = graph(journalFile = journal)
             assertEquals(first.graph().map { it.ref to it.info }, second.graph().map { it.ref to it.info })
-            assertFalse(log.readText().contains("{\"op\":\"claim\",\"ref\":\"\n"))
-            assertTrue(log.readText().endsWith("\n"))
             mapOf("R" to 0.7, "A" to 0.9, "B" to 0.4, "C" to 0.3, "D" to 0.8, "eA" to 0.8, "eB" to 0.6, "eC" to 0.9, "eD" to 0.5)
                 .forEach { (k, v) -> second.setStance(refs.getValue(k), "jev", v) }
             for ((k, want) in before) awaitUntil("$k recomputes") {
@@ -409,24 +430,27 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `model A - framing logs one issue op before the positions, and replay rebuilds the same issue and shares`() {
+    fun `model A - framing is one topology delta and recovery rebuilds the same issue and shares`() {
         val dir = Files.createTempDirectory("credence-graph-issue").toFile()
         try {
-            val log = java.io.File(dir, "graph.jsonl")
-            val first = graph(log = log)
+            val journalFile = java.io.File(dir, "host.journal")
+            val first = graph(journalFile = journalFile)
             val root = first.createClaim("Which is best?", question = true)
             val positions = first.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2", "P3"))
 
-            val ops = log.readLines().map { Json.parseToJsonElement(it).jsonObject }
-            assertEquals(listOf("claim", "issue", "claim", "claim", "claim"), ops.map { it["op"]!!.jsonPrimitive.content })
-            assertEquals(root.id.toString(), ops[0]["ref"]!!.jsonPrimitive.content)
-            assertEquals(root.id.toString(), ops[1]["ref"]!!.jsonPrimitive.content)
-            assertEquals("POSITIONS", ops[1]["mode"]!!.jsonPrimitive.content)
-            assertEquals(positions.map { it.id.toString() }, ops[1]["positions"]!!.jsonArray.map { it.jsonPrimitive.content })
-            ops.drop(2).zip(positions).forEach { (op, p) ->
-                assertEquals(p.id.toString(), op["ref"]!!.jsonPrimitive.content)
-                assertEquals("true", op["question"]!!.jsonPrimitive.content)
-            }
+            val deltas = FileJournal(journalFile).replay()
+                .map(JournalRecords::decode)
+                .filterIsInstance<DecodedJournalRecord.Topology>()
+            assertEquals(2, deltas.size, "the root and the complete framing are one topology record each")
+            val framing = deltas.last().events
+            assertEquals(1, framing.count { it is civictech.cell.graph.TopoEvent.Spawn && it.factory is IssueFactory })
+            assertEquals(
+                positions.toSet(),
+                framing.filterIsInstance<civictech.cell.graph.TopoEvent.Spawn>()
+                    .filter { it.factory is ClaimNodeFactory }
+                    .map { it.ref }
+                    .toSet(),
+            )
 
             assertEquals(CredenceGraph.IssueInfo(CredenceGraph.IssueMode.POSITIONS, positions), first.nodeInfo(root)!!.issue)
             positions.forEach { assertEquals(root, first.nodeInfo(it)!!.positionOf) }
@@ -442,7 +466,7 @@ class CredenceGraphTest {
             assertTrue(near(shares.consensus, want), "consensus: ${shares.consensus}")
             assertEquals(shares, first.graph().single { it.ref == root }.shares?.copy(size = shares.size))
 
-            val second = graph(log = log)
+            val second = graph(journalFile = journalFile)
             assertEquals(first.graph().map { it.ref to it.info }, second.graph().map { it.ref to it.info })
             positions.zip(stances3).forEach { (p, v) -> second.setStance(p, "jev", v) }
             awaitUntil("the rebuilt graph reaches the same shares and credences") {
@@ -451,7 +475,7 @@ class CredenceGraphTest {
                     s.values.indices.all { near(s.values[it], shares.values[it]) } && near(s.consensus, shares.consensus) &&
                     positions.all { p -> second.credenceOf(p)?.values?.let { near(it, first.credenceOf(p)!!.values) } == true }
             }
-            assertEquals(ops.size, log.readLines().size, "replay appends nothing")
+            assertEquals(deltas.size, FileJournal(journalFile).replay().size, "recovery appends nothing")
         } finally {
             dir.deleteRecursively()
         }
@@ -573,30 +597,24 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `model A - replay drops a torn framing with its positions and their edges`() {
-        val dir = Files.createTempDirectory("credence-graph-torn").toFile()
-        try {
-            val log = java.io.File(dir, "graph.jsonl")
-            val (root, p1, p2, x, e) = List(5) { CellRef(UUID.randomUUID()) }
-            log.writeText(
-                listOf(
-                    """{"op":"claim","ref":"${root.id}","text":"Q","question":true}""",
-                    """{"op":"issue","ref":"${root.id}","mode":"POSITIONS","positions":["${p1.id}","${p2.id}"]}""",
-                    """{"op":"claim","ref":"${p1.id}","text":"P1","question":true}""",
-                    """{"op":"claim","ref":"${x.id}","text":"X"}""",
-                    """{"op":"edge","ref":"${e.id}","polarity":"SUPPORT","source":"${p1.id}","target":"${x.id}"}""",
-                ).joinToString("\n", postfix = "\n"),
-            )
-            val g = graph(LayerSet.of(listOf("dfquad")), log)
-            assertNull(g.nodeInfo(root)!!.issue)
-            assertNull(g.nodeInfo(p1))
-            assertNull(g.nodeInfo(p2))
-            assertNull(g.nodeInfo(e))
-            assertEquals(listOf(root, x), g.graph().map { it.ref })
-            assertNull(g.issueCellOf(root))
-        } finally {
-            dir.deleteRecursively()
+    fun `model A - a framing whose topology append fails leaves no positions after recovery`() {
+        val layers = LayerSet.of(listOf("dfquad"))
+        val journal = FailingAppendJournal()
+        val first = graphWithJournal(layers, journal, recover = false)
+        val root = first.createClaim("Q", question = true)
+        val positions = List(2) { CellRef(UUID.randomUUID()) }
+
+        journal.failNext = true
+        assertFailsWith<IOException> {
+            first.frame(root, CredenceGraph.IssueMode.POSITIONS, listOf("P1", "P2"), positions)
         }
+        assertNull(first.nodeInfo(root)!!.issue)
+        positions.forEach { assertNull(first.nodeInfo(it)) }
+
+        val recovered = graphWithJournal(layers, journal, recover = true)
+        assertNull(recovered.nodeInfo(root)!!.issue)
+        positions.forEach { assertNull(recovered.nodeInfo(it)) }
+        assertEquals(listOf(root), recovered.graph().map { it.ref })
     }
 
     @Test

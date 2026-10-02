@@ -4,6 +4,8 @@ import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
 import civictech.cell.control.AttentionPolicy
+import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
@@ -147,6 +149,23 @@ class DeliberationEngineTest {
     ) = DeliberationEngine(service, judge, proposers, config, merger, framer = framer).also { engines += it }
 
     private fun DeliberationEngine.idle() = assertTrue(awaitIdle(20.seconds), "engine did not go idle")
+
+    private fun durableGraph(
+        host: ManagedHost,
+        registry: LocationRegistry,
+        journalFile: java.io.File,
+        layers: LayerSet = dfquad,
+    ): CredenceGraph {
+        val recover = journalFile.exists() && journalFile.length() > 0L
+        val journal = FileJournal(journalFile)
+        val context = ApplyContext(host, topology = journal)
+        return CredenceGraph(host, registry, layers, context = context).also { graph ->
+            if (recover) {
+                context.recover(journal).awaitApplied(60_000)
+                graph.rebuildIndex()
+            }
+        }
+    }
     private fun GraphDto.node(ref: CellRef) = nodes.single { it.ref == ref.id.toString() }
     private fun GraphDto.claims() = nodes.filter { it.kind == "CLAIM" }
     private fun GraphDto.edges() = nodes.filter { it.kind == "EDGE" }
@@ -1452,13 +1471,13 @@ class DeliberationEngineTest {
 
         val dir = java.nio.file.Files.createTempDirectory("deliberate-evidence").toFile()
         try {
-            val log = java.io.File(dir, "graph.jsonl")
+            val log = java.io.File(dir, "host.journal")
             val store = InMemoryMetaStore()
             val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0)
             val claude = FakeProposer("claude") { _, side, _ -> if (side == Polarity.SUPPORT) listOf("P") else emptyList() }
             val codex = FakeProposer("codex") { _, side, _ -> if (side == Polarity.SUPPORT) listOf("P example") else emptyList() }
             val judge = FakeJudge(triage = { _, cands -> cands.map { if (it.text == "P example") Triage(TriageAction.REFINE, 0) else Triage(TriageAction.ADD) } })
-            val e1 = DeliberationEngine(CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(claude, codex), config, store = store)
+            val e1 = DeliberationEngine(durableGraph(host, registry, log), judge, listOf(claude, codex), config, store = store)
                 .also { engines += it }
             e1.ask("Q?")
             e1.idle()
@@ -1759,14 +1778,14 @@ class DeliberationEngineTest {
     @Test
     fun `link metadata survives a restart`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-link-restore").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         val judge = FakeJudge(strength = { when (it) { "Strong" -> 1.0; "Even" -> 0.5; else -> 0.8 } })
         val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1)
         fun proposer() = linkProposer(rootPros = listOf("Strong"), rootCons = listOf("Even")) { link, side, _ ->
             if (link.argument == "Even") listOf(if (side == Polarity.SUPPORT) "Even holds" else "Even fails") else emptyList()
         }
-        val e1 = DeliberationEngine(CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(proposer()), config, store = store)
+        val e1 = DeliberationEngine(durableGraph(host, registry, log), judge, listOf(proposer()), config, store = store)
             .also { engines += it }
         e1.ask("Q?")
         e1.idle()
@@ -1781,7 +1800,7 @@ class DeliberationEngineTest {
         try {
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-            val e2 = DeliberationEngine(CredenceGraph(host2, registry2, dfquad, structureLog = log), judge, listOf(proposer()), config, store = store)
+            val e2 = DeliberationEngine(durableGraph(host2, registry2, log), judge, listOf(proposer()), config, store = store)
                 .also { engines += it }
             e2.idle()
             val after = e2.snapshot()
@@ -1861,7 +1880,7 @@ class DeliberationEngineTest {
     @Test
     fun `a new engine over the same structure and metadata rebuilds the trees and resumes active claims`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-restore").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         val gate = CountDownLatch(1)
         val blocked = CountDownLatch(1)
@@ -1890,7 +1909,7 @@ class DeliberationEngineTest {
             strength = { if (it == "claude-SUPPORT") 0.9 else 0.8 },
             triage = { _, cands -> cands.map { if (it.text == "codex-ATTACK") Triage(TriageAction.UNDERCUT, 0) else Triage(TriageAction.ADD) } },
         )
-        val first = CredenceGraph(host, registry, dfquad, structureLog = log)
+        val first = durableGraph(host, registry, log)
         // e1 writes to a store of its own; the test copies it at the "kill" instant and leaves e1
         // blocked, standing in for the killed process.
         val store1 = InMemoryMetaStore()
@@ -1910,7 +1929,7 @@ class DeliberationEngineTest {
         try {
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-            val second = CredenceGraph(host2, registry2, dfquad, structureLog = log)
+            val second = durableGraph(host2, registry2, log)
             val e2 = DeliberationEngine(second, judge,
                 listOf(proposer("claude", gated = false), proposer("codex", gated = false)), config, store = store)
                 .also { engines += it }
@@ -1957,7 +1976,7 @@ class DeliberationEngineTest {
         first.close()
         val saved = store.load()
         val root = saved.entries.single { (key, fields) -> fields["question"] == "\"${key.removePrefix("c:")}\"" }.value
-        // The structure log holds the text; the record holds it only after a rewrite.
+        // The topology journal holds the text; the record holds it only after a rewrite.
         assertNull(root["text"], root.toString())
         // One record per claim, plus one per question (EXP-10: its round yields).
         // ... and one per link (SPEC §3 "Links as claims"), keyed by its edge ref.
@@ -2008,7 +2027,7 @@ class DeliberationEngineTest {
     @Test
     fun `restart rebuilds missing metadata, omits an unplaced claim, and does not attach a duplicate`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-torn-restore").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val root = service.createClaim("Q?")
         val placed = service.createClaim("P")
         service.createEdge(placed, root, Polarity.SUPPORT)
@@ -2023,7 +2042,8 @@ class DeliberationEngineTest {
             val registryLog = LocationRegistry()
             val schedulerLog = VirtualThreadScheduler("deliberate-torn-restore-log")
             try {
-                val logService = CredenceGraph(ManagedHost(scheduler = schedulerLog, registry = registryLog), registryLog, dfquad, structureLog = log)
+                val logHost = ManagedHost(scheduler = schedulerLog, registry = registryLog)
+                val logService = durableGraph(logHost, registryLog, log)
                 val loggedRoot = logService.createClaim("Q?", root, question = true)
                 val loggedPlaced = logService.createClaim("P", placed)
                 logService.createEdge(loggedPlaced, loggedRoot, Polarity.SUPPORT)
@@ -2034,7 +2054,7 @@ class DeliberationEngineTest {
 
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2)
-            val restoredService = CredenceGraph(host2, registry2, dfquad, structureLog = log)
+            val restoredService = durableGraph(host2, registry2, log)
             val proposer = FakeProposer("claude") { ctx, side, _ ->
                 if (ctx.claim == "Q?" && side == Polarity.SUPPORT) listOf("P") else emptyList()
             }
@@ -2123,13 +2143,13 @@ class DeliberationEngineTest {
     @Test
     fun `sensitivity is derived - a restart recomputes it and a record from before model C still restores`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-voi").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         val scheduler2 = VirtualThreadScheduler("deliberate-test-voi")
         try {
             val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
             val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, exploreLinks = false)
-            val first = CredenceGraph(host, registry, dfquad, structureLog = log)
+            val first = durableGraph(host, registry, log)
             val e1 = DeliberationEngine(first, judge, listOf(FakeProposer("claude"), FakeProposer("codex")), config, store = store)
                 .also { engines += it }
             val root = e1.ask("Q?")
@@ -2146,7 +2166,7 @@ class DeliberationEngineTest {
 
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-            val second = CredenceGraph(host2, registry2, dfquad, structureLog = log)
+            val second = durableGraph(host2, registry2, log)
             val e2 = DeliberationEngine(second, FakeJudge(), listOf(FakeProposer("claude"), FakeProposer("codex")), config, store = store)
                 .also { engines += it }
             e2.idle()
@@ -2188,12 +2208,12 @@ class DeliberationEngineTest {
     @Test
     fun `model D - the first impression is kept and a neutral-prior verdict that disagrees is flagged`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-model-d").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         try {
             // DF-QuAD, one attack of energy 0.5 x 0.8 = 0.4: from Jev's 0.9 the root keeps 0.9 x 0.6 = 0.54,
             // from a neutral ½ the same argument leaves 0.5 x 0.6 = 0.3 — the first impression decides the side.
-            val e = modelDEngine("Q?", Polarity.ATTACK, CredenceGraph(host, registry, dfquad, structureLog = log), store)
+            val e = modelDEngine("Q?", Polarity.ATTACK, durableGraph(host, registry, log), store)
             val root = e.ask("Q?")
             e.idle()
             val q = e.settledQuestion(0.3)
@@ -2256,9 +2276,9 @@ class DeliberationEngineTest {
     @AfterTest
     fun stopRestartSchedulers() = restartSchedulers.forEach { it.shutdown() }
 
-    /** A fresh host over the same structure [log] and [store]: a process restart. */
+    /** A fresh host over the same topology [journalFile] and [store]: a process restart. */
     private fun restart(
-        log: java.io.File,
+        journalFile: java.io.File,
         store: MetaStore,
         config: DeliberationEngine.Config,
         judge: Judge = FakeJudge(),
@@ -2267,7 +2287,7 @@ class DeliberationEngineTest {
         val s = VirtualThreadScheduler("deliberate-restart").also { restartSchedulers += it }
         val r = LocationRegistry()
         val h = ManagedHost(scheduler = s, registry = r, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-        return DeliberationEngine(CredenceGraph(h, r, dfquad, structureLog = log), judge, proposers, config, store = store)
+        return DeliberationEngine(durableGraph(h, r, journalFile), judge, proposers, config, store = store)
             .also { engines += it }
     }
 
@@ -2280,7 +2300,7 @@ class DeliberationEngineTest {
     private fun twoLinkRun(dir: java.io.File, store: MetaStore): DeliberationEngine {
         val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true)
         val e = DeliberationEngine(
-            CredenceGraph(host, registry, dfquad, structureLog = java.io.File(dir, "graph.jsonl")),
+            durableGraph(host, registry, java.io.File(dir, "host.journal")),
             FakeJudge(strength = { 0.5 }), listOf(linkProposer(rootPros = listOf("A"), rootCons = listOf("B"))), config, store = store,
         ).also { engines += it }
         e.ask("Q?")
@@ -2316,7 +2336,7 @@ class DeliberationEngineTest {
             store.put(edges[0], mapOf("status" to "\"EXPLORING\"", "rounds" to "1", "roundLimit" to "3"))
             store.put(edges[1], mapOf("status" to null, "rounds" to null))
             val p = LinkCounter()
-            val e = restart(java.io.File(dir, "graph.jsonl"), store,
+            val e = restart(java.io.File(dir, "host.journal"), store,
                 DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 1, exploreLinks = false), proposers = listOf(p))
             e.idle()
             assertEquals(emptyList(), p.linkCalls.toList())
@@ -2347,7 +2367,7 @@ class DeliberationEngineTest {
             }
             val proposer = LinkCounter()
             val e = restart(
-                java.io.File(dir, "graph.jsonl"),
+                java.io.File(dir, "host.journal"),
                 store,
                 DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true),
                 judge = FakeJudge(strength = { 0.5 }),
@@ -2533,7 +2553,7 @@ class DeliberationEngineTest {
     @Test
     fun `start-paused restores every question paused and durable, runs no call, and new questions run`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-start-paused").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val gate = CountDownLatch(1)
         try {
             val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, exploreLinks = true, voiEpsilon = 0.0)
@@ -2546,7 +2566,7 @@ class DeliberationEngineTest {
                 null
             }
             val store1 = InMemoryMetaStore()
-            val e1 = DeliberationEngine(CredenceGraph(host, registry, dfquad, structureLog = log), FakeJudge(strength = { 0.5 }),
+            val e1 = DeliberationEngine(durableGraph(host, registry, log), FakeJudge(strength = { 0.5 }),
                 listOf(gated), config, store = store1).also { engines += it }
             val q1 = e1.ask("Q1?")
             assertTrue(blocked.await(20, TimeUnit.SECONDS))
@@ -2728,7 +2748,7 @@ class DeliberationEngineTest {
         // NONE, so a NONE outcome never reached the store; restoreFraming only restored framing
         // from the graph's structure (which a NONE framing never creates), so a restart re-asked.
         val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-none-restore").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         val counter = AtomicInteger()
         val entered = CountDownLatch(1)
@@ -2736,7 +2756,7 @@ class DeliberationEngineTest {
         val judge = FakeJudge(plausibility = { entered.countDown(); release.await(20, TimeUnit.SECONDS); 0.5 })
         val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false)
         val e1 = DeliberationEngine(
-            CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(FakeProposer("claude")), config,
+            durableGraph(host, registry, log), judge, listOf(FakeProposer("claude")), config,
             store = store, framer = FakeFramer({ Framing.NONE }, counter),
         ).also { engines += it }
         val root = e1.ask("Q?")
@@ -2749,7 +2769,7 @@ class DeliberationEngineTest {
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
             val e2 = DeliberationEngine(
-                CredenceGraph(host2, registry2, dfquad, structureLog = log), FakeJudge(), listOf(FakeProposer("claude")), config,
+                durableGraph(host2, registry2, log), FakeJudge(), listOf(FakeProposer("claude")), config,
                 store = store, framer = FakeFramer({ Framing.NONE }, counter),
             ).also { engines += it }
             e2.idle()
@@ -2894,13 +2914,13 @@ class DeliberationEngineTest {
     @Test
     fun `model A - a framing survives a restart without asking the framer again`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-restore").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         val counter = AtomicInteger()
         val judge = FakeJudge(plausibility = { when (it) { "R1" -> 0.9; "R2" -> 0.1; else -> 0.5 } })
         val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false)
         val e1 = DeliberationEngine(
-            CredenceGraph(host, registry, dfquad, structureLog = log), judge, listOf(FakeProposer("claude")), config,
+            durableGraph(host, registry, log), judge, listOf(FakeProposer("claude")), config,
             store = store, framer = FakeFramer({ readings("R1", "R2") }, counter),
         ).also { engines += it }
         val root = e1.ask("Q?")
@@ -2912,7 +2932,7 @@ class DeliberationEngineTest {
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
             val e2 = DeliberationEngine(
-                CredenceGraph(host2, registry2, dfquad, structureLog = log), judge, listOf(FakeProposer("claude")), config,
+                durableGraph(host2, registry2, log), judge, listOf(FakeProposer("claude")), config,
                 store = store, framer = FakeFramer({ readings("R1", "R2") }, counter),
             ).also { engines += it }
             e2.idle()
@@ -2932,35 +2952,30 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `model A - a torn framing restores the root unframed and frames it again`() {
-        val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-torn").toFile()
-        val log = java.io.File(dir, "graph.jsonl")
+    fun `model A - a landed framing topology record restores every position without reframing`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-framing-atomic").toFile()
+        val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
         val counter = AtomicInteger()
         val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false)
         val e1 = DeliberationEngine(
-            CredenceGraph(host, registry, dfquad, structureLog = log), FakeJudge(), listOf(FakeProposer("claude")), config,
+            durableGraph(host, registry, log), FakeJudge(), listOf(FakeProposer("claude")), config,
             store = store, framer = FakeFramer({ positions("P1", "P2", "P3") }, counter),
         ).also { engines += it }
         val root = e1.ask("Q?")
         e1.idle()
         e1.close()
         assertTrue(store.load().getValue("c:${root.id}")["status"]!!.contains("FRAMED"))
-        // Kill -9 between the issue op and its last position: keep the log up to the issue op and one position.
-        val lines = log.readLines().filter { it.isNotBlank() }
-        val issue = lines.indexOfFirst { it.contains("\"op\":\"issue\"") }
-        assertTrue(issue >= 0)
-        log.writeText(lines.take(issue + 2).joinToString("\n", postfix = "\n"))
-        val scheduler2 = VirtualThreadScheduler("deliberate-framing-torn-2")
+        val scheduler2 = VirtualThreadScheduler("deliberate-framing-atomic-2")
         try {
             val registry2 = LocationRegistry()
             val host2 = ManagedHost(scheduler = scheduler2, registry = registry2, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
             val e2 = DeliberationEngine(
-                CredenceGraph(host2, registry2, dfquad, structureLog = log), FakeJudge(), listOf(FakeProposer("claude")), config,
+                durableGraph(host2, registry2, log), FakeJudge(), listOf(FakeProposer("claude")), config,
                 store = store, framer = FakeFramer({ positions("P1", "P2", "P3") }, counter),
             ).also { engines += it }
             e2.idle()
-            assertEquals(2, counter.get(), "the torn root is framed again")
+            assertEquals(1, counter.get(), "a complete journaled framing is not asked again")
             val g = e2.snapshot()
             assertEquals(Status.FRAMED, g.node(root).status)
             assertEquals(listOf("P1", "P2", "P3"), g.questions.single().framing!!.positions.map { it.text })
