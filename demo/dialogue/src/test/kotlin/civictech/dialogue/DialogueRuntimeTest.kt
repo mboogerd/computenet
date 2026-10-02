@@ -484,6 +484,33 @@ class DialogueRuntimeTest {
         assertResetIsClean(dir = tempDir("dialogue-runtime-reset"), label = "journalled")
     }
 
+    // The removal half of the binding view's durability: a key reconcile
+    // removed must not come back as bound when the host journal is replayed.
+    // The retired binding log proved this with an `unbind` record; the view
+    // relies on the topology despawn delta instead.
+    @Test
+    fun `a key reconcile removed reads as unbound after a restart on the same host journal`() {
+        val dir = tempDir("dialogue-runtime-reset-restart")
+        run {
+            val world = World(dir).open()
+            world.runtime.source.replay(from = 1)
+            world.drain()
+            world.runtime.reconcile()
+            world.drain()
+            assertTrue(world.runtime.bindings.boundClaims().isNotEmpty())
+            world.runtime.reset()
+            world.drain()
+            val report = world.runtime.reconcile()
+            world.drain()
+            assertTrue(report.ops.isNotEmpty())
+            assertEquals(emptySet(), world.runtime.bindings.boundClaims())
+        }
+        val world = World(dir).open()
+        assertEquals(emptySet(), world.runtime.bindings.boundClaims(), "claims rebound after restart")
+        assertEquals(emptySet(), world.runtime.bindings.boundRelations(), "relations rebound after restart")
+        assertEquals(emptyList(), world.runtime.service.graph(), "graph resurrected after restart")
+    }
+
     private fun assertResetIsClean(dir: File?, label: String) {
         val world = World(dir).open()
         world.runtime.source.replay(from = 1)
