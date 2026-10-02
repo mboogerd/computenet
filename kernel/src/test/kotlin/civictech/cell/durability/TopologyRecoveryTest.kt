@@ -22,6 +22,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RecoveryIncomplete
 import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.cell.port.PortRef
@@ -48,6 +49,22 @@ class TopologyRecoveryTest {
     private object RecordingObserveFactory : CellFactory {
         override fun create(ref: CellRef): Cell =
             ObserveCell(View.set<String>(), ref).also { cells[ref] = it }
+    }
+
+    private object RejectingReconnectObserveFactory : CellFactory {
+        override fun create(ref: CellRef): Cell =
+            ObserveCell(View.set<String>(), ref).also { cell ->
+                var handshakes = 0
+                cell.inlet.linking.onLink = { link ->
+                    handshakes++
+                    if (handshakes > 1) {
+                        LinkResult.Rejected("checkpoint reconnect denied")
+                    } else {
+                        LinkResult.Connected(link)
+                    }
+                }
+                cells[ref] = cell
+            }
     }
 
     private interface SetInletProxy {
@@ -203,6 +220,46 @@ class TopologyRecoveryTest {
         failure.cause!!.message shouldContain "unregistered namespace 'missing'"
         host.quiescence().await(30_000, "topology recovery dead letter")
         letters.size shouldBe 1
+    }
+
+    @Test
+    fun `trailing checkpoint reconnect failure dead letters and aborts recovery loudly`() {
+        val journal = InMemoryJournal()
+        val before = runtime(journal)
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    "source",
+                    RecordingSetFactory,
+                    IdentityBinding.Exact(sourceRef),
+                    journalId = "j",
+                ),
+                SpawnStep("sink", RejectingReconnectObserveFactory, IdentityBinding.Exact(sinkRef)),
+                ConnectStep("source", "outlet", "sink", "inlet", LinkOptions(staged = true)),
+            ),
+        ).apply(before.context)
+        before.host.checkpoint(journal)
+
+        val recovering = runtime(journal)
+        val failure = shouldThrow<RecoveryIncomplete> { recovering.context.recover(journal) }
+
+        failure.cause!!.message shouldContain "checkpoint reconnect denied"
+        recovering.host.quiescence().await(30_000, "post-checkpoint reconnect dead letter")
+        recovering.deadLetters.single().description shouldContain "checkpoint reconnect denied"
+    }
+
+    @Test
+    fun `a host refuses a second topology context for the same journal`() {
+        val journal = InMemoryJournal()
+        val runtime = runtime(journal)
+
+        val failure = shouldThrow<IllegalStateException> {
+            ApplyContext(runtime.host, topology = journal)
+        }
+
+        failure.message shouldContain "topology provider already registered"
+        failure.message shouldContain journal.javaClass.name
+        failure.message shouldContain Integer.toHexString(System.identityHashCode(journal))
     }
 
     @Test
