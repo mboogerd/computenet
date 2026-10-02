@@ -508,6 +508,7 @@ class DeliberateAppTest {
             val before = settled(first, probe1, idle = false)
             first.stop() // persists, then interrupts the blocked round; a kill at this instant
             apps.remove(first)
+            assertEquals(listOf("host.journal"), dir.listFiles()!!.map { it.name }.sorted())
 
             val gate2 = java.util.concurrent.CountDownLatch(1)
             val blocked2 = java.util.concurrent.CountDownLatch(1)
@@ -636,8 +637,8 @@ class DeliberateAppTest {
     }
 
     /**
-     * SPEC DUR-01/02: the data directory holds inputs only — one structure log
-     * and a metadata journal compacted to a checkpoint — so a ~60-claim tree
+     * SPEC DUR-01/02: the data directory holds inputs only — one kernel journal
+     * compacted to a topology fold plus metadata checkpoint — so a ~60-claim tree
      * costs a few KB per claim, and restarts do not grow it.
      */
     @Test
@@ -661,8 +662,8 @@ class DeliberateAppTest {
             for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance", "agora.")) {
                 assertTrue(derived !in journal, "the journal holds a derived frame ($derived)")
             }
-            // What a kill -9 at this instant leaves behind: the structure log and a journal of
-            // uncompacted frames (both written through, the journal synced per frame).
+            // What a kill -9 at this instant leaves behind: one journal with topology records
+            // and uncompacted metadata frames (both written through and synced per record).
             // The copy must not interleave with a write: the engine's persister appends the
             // metadata diff every 100 ms, and copyRecursively throws "Source file wasn't
             // copied completely" when host.journal grows under it (computenet-sykeu). So hold
