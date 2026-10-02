@@ -180,9 +180,9 @@ class DialogueApp(
     /**
      * What the boot [settle] reconciled. `structureOps == 0` on a recovery
      * from an existing `--journal` directory is the app-level reading of
-     * BS-18: the structure log rebuilt the graph under its recorded refs and
-     * the binding table replayed, so there is nothing left for the applier to
-     * create.
+     * BS-18: topology recovery rebuilt the graph under its recorded refs and
+     * the binding view reads those live spawns, so there is nothing left for
+     * the applier to create.
      */
     @Volatile
     var bootReconcile: ReconcileReport? = null
@@ -729,14 +729,12 @@ class DialogueApp(
      * Graceful first, interrupting only as a backstop (computenet-t3sp).
      *
      * `shutdownNow()` alone interrupts whatever the driver is running, and a
-     * driver task is where the durable record of a structure op is written:
-     * `AgoraService.createEdge` publishes the edge into the node map (so
-     * `/graph` can already serve it) and appends to `graph.jsonl` afterwards.
-     * An interrupt taken between those two points leaves an edge that the
-     * first process served and the next process cannot recover — the
-     * lost-EDGE shape computenet-t3sp recorded. Draining the driver first
-     * lets an in-flight settle finish; the interrupt stays as the bound, so a
-     * genuinely wedged driver still cannot hold a `stop()` open.
+     * driver task is where a topology delta is recorded and applied. An
+     * interrupt in the middle can expose a partially completed settle to the
+     * current process even though recovery follows the write-ahead topology
+     * record. Draining the driver first lets an in-flight settle finish; the
+     * interrupt stays as the bound, so a genuinely wedged driver still cannot
+     * hold a `stop()` open.
      */
     fun stop() {
         inspector?.stop()
