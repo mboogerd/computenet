@@ -4,6 +4,7 @@ import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
 import civictech.cell.durability.FileJournal
 import civictech.cell.control.AttentionPolicy
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell
@@ -29,8 +30,8 @@ private val COALESCE_WINDOW = Duration.ofMillis(100)
 /**
  * The argumentation backend: JDK HttpServer + SSE over an [AgoraService]
  * (the demo transport idiom — no framework). With a `--journal` dir the app
- * is kill -9 safe: the structure log rebuilds the graph under its recorded
- * refs, the host journal replays the data, and a checkpoint compacts.
+ * is kill -9 safe: the kernel journal rebuilds topology under its recorded
+ * refs, replays the data, and is then checkpoint-compacted.
  */
 class AgoraApp(port: Int = 8080, journalDir: File? = null, inspector: InspectorFlag.Options? = null) {
 
@@ -43,10 +44,15 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null, inspector: InspectorF
         attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
         journal = journal,
     )
+    private val context = ApplyContext(
+        host,
+        journals = journal?.let { mapOf("host" to it) }.orEmpty(),
+        topology = journal,
+    )
     val service = AgoraService(
         host,
         registry,
-        structureLog = journalDir?.let { File(it, "graph.jsonl") },
+        context = context,
         // computenet-4nxe8: every credence change used to broadcast the full
         // graph immediately, so a burst of updates (a hub touching many
         // claims at once) recomputed and resent the same snapshot once per
@@ -71,8 +77,9 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null, inspector: InspectorF
         // Q4/Q5). The checkpoint right after the fence compacts the replayed
         // tail; replay itself re-journals nothing (computenet-xy7w4.1).
         if (journal != null) {
-            host.recoverFrom(journal).awaitApplied(60_000)
+            context.recover(journal).awaitApplied(60_000)
             host.checkpoint(journal)
+            service.rebuildIndex()
         }
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         shell.route("/graph") { it.respond(200, graphJson(), "application/json") }

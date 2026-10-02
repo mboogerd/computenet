@@ -6,6 +6,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.graph.TopoEvent
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
 import civictech.cell.proxy.HostedPortInvocation
@@ -37,6 +38,17 @@ class JournalRecordsTest {
         awaitOnManagementBand = { block -> runBlocking { block() } },
     )
     private val src = UUID.randomUUID()
+
+    @Test
+    fun `a topology record decodes to Topology carrying its resolved events`() {
+        val events = listOf<TopoEvent>(TopoEvent.Despawn(ref))
+
+        durability.journalTopology(journal, events)
+
+        val decoded = JournalRecords.decode(journal.replay().single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Topology>()
+        decoded.events shouldBe events
+    }
 
     @Test
     fun `a frame record decodes to Frame carrying the WireCodec payload`() {

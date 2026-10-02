@@ -508,6 +508,7 @@ class DeliberateAppTest {
             val before = settled(first, probe1, idle = false)
             first.stop() // persists, then interrupts the blocked round; a kill at this instant
             apps.remove(first)
+            assertEquals(listOf("host.journal"), dir.listFiles()!!.map { it.name }.sorted())
 
             val gate2 = java.util.concurrent.CountDownLatch(1)
             val blocked2 = java.util.concurrent.CountDownLatch(1)
@@ -636,8 +637,8 @@ class DeliberateAppTest {
     }
 
     /**
-     * SPEC DUR-01/02: the data directory holds inputs only — one structure log
-     * and a metadata journal compacted to a checkpoint — so a ~60-claim tree
+     * SPEC DUR-01/02: the data directory holds inputs only — one kernel journal
+     * compacted to a topology fold plus metadata checkpoint — so a ~60-claim tree
      * costs a few KB per claim, and restarts do not grow it.
      */
     @Test
@@ -654,15 +655,17 @@ class DeliberateAppTest {
             val before = settled(first, probe1)
             val claims = before.nodes.count { it.kind == "CLAIM" }
             assertTrue(claims in 55..60, "claims: $claims")
-            // While it runs, the journal holds metadata frames and nothing derived.
+            // While it runs, the journal holds topology and metadata frames, but no derived values.
+            // Topology factories legitimately encode the agora-owned Polarity enum, so assert
+            // against the derived Deliberate payload types rather than the whole agora package.
             val live = File(dir, "host.journal")
             val journal = live.readBytes().decodeToString()
             assertTrue("deliberate.MetaFields" in journal, "the running journal holds metadata frames")
-            for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance", "agora.")) {
+            for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance")) {
                 assertTrue(derived !in journal, "the journal holds a derived frame ($derived)")
             }
-            // What a kill -9 at this instant leaves behind: the structure log and a journal of
-            // uncompacted frames (both written through, the journal synced per frame).
+            // What a kill -9 at this instant leaves behind: one journal with topology records
+            // and uncompacted metadata frames (both written through and synced per record).
             // The copy must not interleave with a write: the engine's persister appends the
             // metadata diff every 100 ms, and copyRecursively throws "Source file wasn't
             // copied completely" when host.journal grows under it (computenet-sykeu). So hold
@@ -695,7 +698,7 @@ class DeliberateAppTest {
             }
             println(
                 "deliberate space: $claims claims, fresh $fresh B (${fresh / claims} B/claim: " +
-                    "graph.jsonl ${File(dir, "graph.jsonl").length()} B, host.journal ${File(dir, "host.journal").length()} B); " +
+                    "host.journal ${File(dir, "host.journal").length()} B); " +
                     "after restarts $sizes",
             )
             assertTrue(fresh / claims < 4_000, "fresh ${fresh / claims} B/claim")

@@ -5,12 +5,57 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.ReplayScope
+import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.ConnectStep
+import civictech.cell.graph.DespawnStep
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.SpawnStep
+import civictech.cell.graph.TopologyFold
+import civictech.cell.graph.UnlinkStep
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
-import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
-import civictech.cell.link.LinkResult
+
+/** The durable construction record for one claim. */
+data class ClaimFactory(
+    val text: String,
+    val semantics: GradualSemantics,
+) : CellFactory {
+    /** The live product is deliberately not part of the journaled factory data. */
+    @Transient
+    internal var created: ClaimCell? = null
+
+    override fun create(ref: CellRef): ClaimCell = ClaimCell(ref, semantics).also { cell ->
+        cell.catchUp = ReplayScope.get() == null
+        created = cell
+    }
+}
+
+/** The durable construction record for one argument edge. */
+data class EdgeFactory(
+    val polarity: Polarity,
+    val semantics: GradualSemantics,
+    val head: Boolean,
+    val quiescence: Double,
+) : CellFactory {
+    /** See [ClaimFactory.created]. */
+    @Transient
+    internal var created: EdgeCell? = null
+
+    override fun create(ref: CellRef): EdgeCell = EdgeCell(
+        polarity = polarity,
+        ref = ref,
+        semantics = semantics,
+        quiescence = if (head) quiescence else 0.0,
+    ).also { cell ->
+        cell.catchUp = ReplayScope.get() == null
+        created = cell
+    }
+}
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay
@@ -32,15 +77,7 @@ class AgoraService(
     private val semantics: GradualSemantics = DfQuad,
     /** Cycle-head absorb threshold (per feedback edge; heads only). */
     private val quiescence: Double = 1e-3,
-    /**
-     * Durable graph structure (the demo `users.txt` idiom): claim/edge/remove
-     * ops append here; on construction an existing log replays, rebuilding
-     * every cell under its recorded CellRef — replay-stable identity, so the
-     * host journal's data frames land on the same cells afterwards
-     * (rebuild → `host.recoverFrom(journal).awaitApplied(…)` →
-     * `host.checkpoint(journal)`).
-     */
-    private val structureLog: java.io.File? = null,
+    context: ApplyContext? = null,
     onCredence: (CellRef, Double) -> Unit = { _, _ -> },
 ) {
     enum class Kind { CLAIM, EDGE }
@@ -57,6 +94,7 @@ class AgoraService(
     data class Node(val ref: CellRef, val info: NodeInfo, val credence: Double)
 
     private val manage = host.managementInlet.call
+    private val context = context ?: ApplyContext(host)
 
     // deterministic ref: journaled hub frames re-deliver after a restart
     val hub = civictech.cell.observe.ObserveCell(
@@ -80,84 +118,29 @@ class AgoraService(
     private val nodesLock = Any()
     private val nodes = LinkedHashMap<CellRef, NodeInfo>()
 
-    /** Per edge: the link feeding it from its source's credence outlet. */
-    private val sourceLinks = mutableMapOf<CellRef, Link>()
-
-    /**
-     * Per cell: its outbound admitted links (hub, and for an edge its
-     * influence link). `despawn` does not unlink, so [remove] does — otherwise
-     * topology keeps links to a cell that no longer exists.
-     */
-    private val outboundLinks = mutableMapOf<CellRef, MutableList<Link>>()
-
-    @kotlinx.serialization.Serializable
-    private data class StructureOp(
-        val op: String,
-        val ref: String,
-        val text: String? = null,
-        val polarity: Polarity? = null,
-        val source: String? = null,
-        val target: String? = null,
-    )
-
-    private var replaying = false
-
     init {
+        require(this.context.host === host) { "AgoraService context belongs to a different host" }
         manage.spawn(hub)
-        structureLog?.takeIf { it.exists() }?.let { log ->
-            replaying = true
-            try {
-                log.readLines().filter { it.isNotBlank() }.forEach { line ->
-                    val op = kotlinx.serialization.json.Json.decodeFromString<StructureOp>(line)
-                    val ref = CellRef(java.util.UUID.fromString(op.ref))
-                    when (op.op) {
-                        "claim" -> createClaim(op.text ?: "", ref)
-                        "edge" -> createEdge(
-                            CellRef(java.util.UUID.fromString(op.source!!)),
-                            CellRef(java.util.UUID.fromString(op.target!!)),
-                            op.polarity!!,
-                            ref,
-                        )
-                        "remove" -> remove(ref)
-                        else -> error("unknown structure op ${op.op}")
-                    }
-                }
-            } finally {
-                replaying = false
-                // rebuild done: links created from now on emit baselines again
-                cells.values.forEach { it.catchUp = true }
-            }
-        }
+        this.context.adopt(HUB_HANDLE, hub.ref)
     }
 
-    /**
-     * Append a structure op to the durable log.
-     *
-     * **Call this before wiring, not after** (computenet-t3sp).
-     * `manage.spawn` and `streamTo` both stage work on the host queue and can
-     * block, so a thread interrupted there — `DialogueApp.stop()`'s driver
-     * shutdown being the observed case — unwinds out of
-     * [createClaim]/[createEdge] with the node already published into [nodes]
-     * (hence already served by [graph]) and nothing in `graph.jsonl`. That
-     * node is then unrecoverable: the next boot replays a log that never
-     * mentions it. Logging first inverts the failure into the benign
-     * direction — a logged-but-unwired node is rebuilt in full on the next
-     * replay, because replay re-runs the whole of `create*`.
-     */
-    private fun log(op: StructureOp) {
-        if (!replaying) structureLog?.appendText(
-            kotlinx.serialization.json.Json.encodeToString(StructureOp.serializer(), op) + "\n"
-        )
-    }
-
-    fun createClaim(text: String, ref: CellRef = CellRef(java.util.UUID.randomUUID())): CellRef {
-        val cell = ClaimCell(ref, semantics).also { it.catchUp = !replaying }
-        manage.spawn(cell)
-        cells[ref] = cell
+    /** Apply one claim and its hub link as one write-ahead topology delta. */
+    fun createClaim(
+        text: String,
+        ref: CellRef = CellRef(java.util.UUID.randomUUID()),
+        handle: String = "claim:${ref.id}",
+    ): CellRef {
         synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text) }
-        // Durable record first: see [log]'s note (computenet-t3sp).
-        log(StructureOp("claim", ref.id.toString(), text = text))
-        outboundLinks[ref] = mutableListOf(connectStaged(ref, "credenceOutlet", hub.ref, "inlet"))
+        val factory = ClaimFactory(text, semantics)
+        GraphSpec(
+            listOf(
+                SpawnStep(handle, factory, IdentityBinding.Exact(ref)),
+                ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
+            ),
+        ).apply(context)
+        synchronized(nodesLock) {
+            cells[ref] = checkNotNull(factory.created) { "claim factory did not retain $ref" }
+        }
         return ref
     }
 
@@ -166,6 +149,7 @@ class AgoraService(
         target: CellRef,
         polarity: Polarity,
         ref: CellRef = CellRef(java.util.UUID.randomUUID()),
+        handle: String = "edge:${ref.id}",
     ): CellRef {
         val head = synchronized(nodesLock) {
             require(source in nodes) { "unknown source ${source.id}" }
@@ -174,34 +158,91 @@ class AgoraService(
             nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = h)
             h
         }
-        // Durable record first: see [log]'s note (computenet-t3sp). manage.spawn
-        // below blocks and can throw (quota refusal, a spawn failure surfaced
-        // through the future), so it must not sit between publication into
-        // [nodes] and this append (computenet-f7y8).
-        log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
-        val edge = EdgeCell(
-            polarity,
-            ref,
-            semantics,
-            quiescence = if (head) quiescence else 0.0,
-        )
-            .also { it.catchUp = !replaying }
-        manage.spawn(edge)
-        cells[ref] = edge
-        // Install the source link last: it is the link that closes a newly
-        // visible cycle, so admission sees the already-recorded hub and
-        // influence paths and can require the feedback inlet for a head.
-        outboundLinks[ref] = mutableListOf(
-            connectStaged(ref, "credenceOutlet", hub.ref, "inlet"),
-            connectStaged(ref, "influenceOutlet", target, "influenceInlet"),
-        )
-        sourceLinks[ref] = connectStaged(
-            source,
-            "credenceOutlet",
-            ref,
-            if (head) "feedbackInlet" else "sourceInlet",
-        )
+        val topology = context.live()
+        val factory = EdgeFactory(polarity, semantics, head, quiescence)
+        GraphSpec(
+            listOf(
+                SpawnStep(handle, factory, IdentityBinding.Exact(ref)),
+                ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
+                ConnectStep(
+                    handle,
+                    "influenceOutlet",
+                    topology.handleFor(target),
+                    "influenceInlet",
+                    STAGED,
+                ),
+                // Install the source link last: it is the link that can close
+                // a newly visible cycle.
+                ConnectStep(
+                    topology.handleFor(source),
+                    "credenceOutlet",
+                    handle,
+                    if (head) "feedbackInlet" else "sourceInlet",
+                    STAGED,
+                ),
+            ),
+        ).apply(context)
+        synchronized(nodesLock) {
+            cells[ref] = checkNotNull(factory.created) { "edge factory did not retain $ref" }
+        }
         return ref
+    }
+
+    /**
+     * Rebuild the application index from the kernel's folded live topology.
+     * Factories are the durable node records; edge endpoints come from the
+     * admitted links, never from an application-owned side log.
+     *
+     * Recovery-created cells keep catch-up disabled while frames replay. The
+     * caller invokes this only after `Recovery.awaitApplied`; this method is
+     * the one point that re-enables future link baselines.
+     */
+    fun rebuildIndex() {
+        val topology = context.live()
+        val rebuiltCells = linkedMapOf<CellRef, ClaimCell>()
+        val rebuiltNodes = linkedMapOf<CellRef, NodeInfo>()
+
+        topology.spawns.values.forEach { spawn ->
+            when (val factory = spawn.factory) {
+                is ClaimFactory -> {
+                    rebuiltCells[spawn.ref] = checkNotNull(factory.created) {
+                        "claim ${spawn.ref} is live in the topology fold but its factory has no cell"
+                    }
+                    rebuiltNodes[spawn.ref] = NodeInfo(Kind.CLAIM, text = factory.text)
+                }
+
+                is EdgeFactory -> {
+                    rebuiltCells[spawn.ref] = checkNotNull(factory.created) {
+                        "edge ${spawn.ref} is live in the topology fold but its factory has no cell"
+                    }
+                    val source = topology.links.values.singleOrNull { link ->
+                        link.to == spawn.ref &&
+                            link.outlet == "credenceOutlet" &&
+                            link.inlet in SOURCE_INLETS
+                    }?.from ?: error("edge ${spawn.ref} has no unique source link in recovered topology")
+                    val target = topology.links.values.singleOrNull { link ->
+                        link.from == spawn.ref &&
+                            link.outlet == "influenceOutlet" &&
+                            link.inlet == "influenceInlet"
+                    }?.to ?: error("edge ${spawn.ref} has no unique target link in recovered topology")
+                    rebuiltNodes[spawn.ref] = NodeInfo(
+                        kind = Kind.EDGE,
+                        polarity = factory.polarity,
+                        source = source,
+                        target = target,
+                        head = factory.head,
+                    )
+                }
+            }
+        }
+
+        synchronized(nodesLock) {
+            cells.clear()
+            cells.putAll(rebuiltCells)
+            nodes.clear()
+            nodes.putAll(rebuiltNodes)
+        }
+        rebuiltCells.values.forEach { it.catchUp = true }
     }
 
     fun setStance(id: CellRef, user: String, value: Double?) {
@@ -228,26 +269,35 @@ class AgoraService(
             }
             d to d.associateWith { nodes.getValue(it) }
         }
+        val topology = context.live()
+        val handles = doomed.associateWith { topology.handleFor(it) }
+        val unlinkSourceSteps = infos.mapNotNull { (ref, info) ->
+            if (info.kind != Kind.EDGE) null else UnlinkStep(
+                from = topology.handleFor(checkNotNull(info.source)),
+                outlet = "credenceOutlet",
+                to = handles.getValue(ref),
+                inlet = if (info.head) "feedbackInlet" else "sourceInlet",
+            )
+        }
+        if (unlinkSourceSteps.isNotEmpty()) GraphSpec(unlinkSourceSteps).apply(context)
+
         infos.forEach { (ref, info) ->
             if (info.kind == Kind.EDGE) {
-                sourceLinks.remove(ref)?.unlink()
-                // during structure replay the journal already holds the
-                // original retraction — re-sending would double-journal it
-                if (info.target !in doomed && !replaying) {
+                if (info.target !in doomed) {
                     // retraction urgency: the edge's credence bounds its influence
                     val size = hub.credenceOf(ref) ?: 1.0
                     registry.inlet(info.target!!, ClaimCellPorts.influenceInlet).propagate(InfluenceDelta(ref, info.polarity!!, null, size))
                 }
             }
         }
-        doomed.forEach { ref ->
-            // after the retraction above, so each staged EdgeClose trails it
-            outboundLinks.remove(ref)?.forEach { it.unlink() }
-            manage.despawn(ref)
-            cells.remove(ref)
+        // After the retractions above, so each staged EdgeClose trails them.
+        GraphSpec(doomed.map { DespawnStep(handles.getValue(it)) }).apply(context)
+        synchronized(nodesLock) {
+            doomed.forEach {
+                cells.remove(it)
+                nodes.remove(it)
+            }
         }
-        synchronized(nodesLock) { doomed.forEach { nodes.remove(it) } }
-        log(StructureOp("remove", id.id.toString())) // cascade re-derives on replay
     }
 
     fun graph(): List<Node> {
@@ -266,7 +316,7 @@ class AgoraService(
      * *all* of the spawned instances or the reconstructor refuses with
      * `GRAPH_SOURCE_INCOMPLETE`.
      */
-    fun cells(): Collection<Cell> = listOf<Cell>(hub) + cells.values.toList()
+    fun cells(): Collection<Cell> = synchronized(nodesLock) { listOf<Cell>(hub) + cells.values.toList() }
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 
@@ -299,17 +349,14 @@ class AgoraService(
         return false
     }
 
-    /** One admitted realization for every in-process graph edge. */
-    private fun connectStaged(from: CellRef, outlet: String, to: CellRef, inlet: String): Link {
-        val result = manage.connect(from, outlet, to, inlet, STAGED)
-        check(result is LinkResult.Connected) {
-            (result as? LinkResult.Rejected)?.reason
-                ?: "Agora graph link was not connected: $result"
-        }
-        return result.link
-    }
+    private fun TopologyFold.handleFor(ref: CellRef): String =
+        spawns[ref]?.handle
+            ?: handles.entries.singleOrNull { it.value == ref }?.key
+            ?: error("no live topology handle for $ref")
 
     companion object {
+        private const val HUB_HANDLE = "hub"
+        private val SOURCE_INLETS = setOf("sourceInlet", "feedbackInlet")
         private val STAGED = LinkOptions(staged = true)
 
         /**

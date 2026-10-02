@@ -204,6 +204,7 @@ fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveVie
             is SpawnStep -> planned += scratch.spawn(step, live)
             is ConnectStep -> planned += scratch.connect(step)
             is UnlinkStep -> planned += scratch.unlink(step)
+            is DespawnStep -> planned += scratch.despawn(step)
             is InstanceSetStep -> {
                 val lowered = try {
                     step.lower()
@@ -350,6 +351,33 @@ private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
             )
         topology.unlinked(link.topologyId)
         return PlannedStep(key, null, PlannedAction.UNLINK, emptySet(), StepCheck.Ok)
+    }
+
+    fun despawn(step: DespawnStep): PlannedStep {
+        val key = "despawn ${step.handle}"
+        if (step.handle in familyHandles) {
+            return PlannedStep(
+                key,
+                step.handle,
+                PlannedAction.DESPAWN,
+                emptySet(),
+                StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, familyUnresolved(step.handle, "despawn")),
+            )
+        }
+        val stagedCell = staged.remove(step.handle)
+            ?: return PlannedStep(
+                key,
+                step.handle,
+                PlannedAction.DESPAWN,
+                emptySet(),
+                StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, unresolvedHandle(step.handle, "despawn")),
+            )
+        links.entries.removeIf { (_, link) ->
+            (link.from == stagedCell.ref || link.to == stagedCell.ref).also { remove ->
+                if (remove) topology.unlinked(link.topologyId)
+            }
+        }
+        return PlannedStep(key, step.handle, PlannedAction.DESPAWN, emptySet(), StepCheck.Ok)
     }
 
     fun boundary(link: BoundaryLink, live: LiveView): PlannedStep {

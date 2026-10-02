@@ -3,9 +3,13 @@ package civictech.demo.social
 import civictech.cell.CellRef
 import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
+import civictech.cell.graph.TopoEvent
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.wire.WireCodec
 import civictech.testkit.HttpProbe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -119,16 +123,26 @@ class SocialJournalTest {
             assertTrue(wal.isFile, "expected a host WAL at ${wal.path}; journal tree was ${dir.walkTopDown().toList()}")
             assertTrue(wal.length() > 0, "host WAL ${wal.path} exists but is empty — nothing was journaled")
 
-            // The layout SnbPipeline's KDoc describes, checked rather than asserted in prose
-            // (`computenet-5ab6f`): the WAL is at the root, every family's `keys` log is one
-            // level DOWN in that family's own subdirectory, and no family has a host journal
-            // of its own — which is why `family.recover()` would replay nothing.
-            listOf("person", "authored", "forum", "message").forEach { family ->
-                val keys = File(File(dir, family), KeyedCells.KEYS_FILE)
-                assertTrue(keys.isFile, "expected ${keys.path}; journal tree was ${dir.walkTopDown().toList()}")
-                val familyWal = File(File(dir, family), KeyedCells.HOST_JOURNAL)
-                assertTrue(!familyWal.exists(), "no per-family host journal should exist, found ${familyWal.path}")
+            val records = KeyedCells.hostJournal(dir)!!.replay().map(JournalRecords::decode)
+            val personRef = CellRef(UUID.nameUUIDFromBytes("snb-person:1".toByteArray()))
+            val keyIndex = records.indexOfFirst { decoded ->
+                decoded is DecodedJournalRecord.Topology && decoded.events.any {
+                    it == TopoEvent.FamilyKey("snb-person", "1")
+                }
             }
+            val frameIndex = records.indexOfFirst { decoded ->
+                decoded is DecodedJournalRecord.Frame && WireCodec.decode(decoded.payload).cellRef == personRef
+            }
+            assertTrue(keyIndex >= 0, "root WAL has no snb-person:1 FamilyKey")
+            assertTrue(frameIndex > keyIndex, "FamilyKey record $keyIndex must precede person frame $frameIndex")
+
+            // Family membership is topology in the shared root WAL. The old per-family
+            // `keys` files are retired, so this app's journal tree contains only that WAL.
+            assertEquals(
+                setOf(KeyedCells.HOST_JOURNAL),
+                dir.listFiles().orEmpty().map { it.name }.toSet(),
+                "journal tree was ${dir.walkTopDown().toList()}",
+            )
         } finally {
             journalled.stop()
             ephemeral.stop()
@@ -155,7 +169,7 @@ class SocialJournalTest {
     }
 
     @Test
-    fun `a write that fails after the family key is minted leaves no entity behind`(@TempDir dir: File) {
+    fun `a refused family topology write leaves no entity behind`(@TempDir dir: File) {
         // The deterministic ref of person 2's cell ([SOC1-SCHEMA-05]): the one cell
         // whose journal refuses. Everything else — the management band that spawns
         // cells, person 1, the observe sinks — keeps the real file journal, so the
@@ -185,8 +199,8 @@ class SocialJournalTest {
             graph.personIds(),
             "a person whose only write failed must not be an entity — /state enumerates exactly these ids",
         )
-        // The durable key IS minted before the write (KeyedCells has no un-mint),
-        // which is precisely why the id has to be suppressed at the read side.
-        assertTrue(2L in pipeline.families.person.keys(), "the family key is expected to have been minted")
+        // Family membership is write-ahead topology. Refusing that append prevents the
+        // following spawn, so the failed entity is absent from both the family and reads.
+        assertTrue(2L !in pipeline.families.person.keys(), "a refused FamilyKey must not be minted")
     }
 }

@@ -1,6 +1,8 @@
 package civictech.demo.alignment
 
+import civictech.cell.durability.FileJournal
 import civictech.testkit.HttpProbe
+import civictech.testkit.JvmPeer
 import civictech.testkit.boundedHttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -10,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Tag
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -96,7 +99,15 @@ class AlignmentServerTest {
         }
     }
 
-    private fun tmpJournal(): Path = createTempDirectory("alignment").resolve("journal.jsonl")
+    private fun tmpJournal(): Path = createTempDirectory("alignment")
+
+    private fun journalRecords(dir: Path): Int =
+        FileJournal(dir.resolve(ALIGNMENT_JOURNAL_FILE).toFile()).replay().size
+
+    private fun assertOnlyHostJournal(dir: Path) {
+        val files = Files.list(dir).use { paths -> paths.map { it.fileName.toString() }.sorted().toList() }
+        assertEquals(listOf(ALIGNMENT_JOURNAL_FILE), files)
+    }
 
     @Test
     fun `ratings and creator weights move the live ranking through the worked examples`() = withApp(tmpJournal()) { _, probe ->
@@ -291,8 +302,7 @@ class AlignmentServerTest {
         val journal = tmpJournal()
         lateinit var state: String
         withApp(journal) { _, probe -> state = continuousRatings(probe) }
-        // a non-integer rating round-trips through the journal line it writes
-        assertTrue(Files.readAllLines(journal).any { """"value":6.37}""" in it }, "journal carries 6.37")
+        // a non-integer rating round-trips through the journaled ratings cell
         withApp(journal) { _, probe -> assertEquals(state, probe.await { it == state }) }
     }
 
@@ -350,7 +360,7 @@ class AlignmentServerTest {
             seed(probe)
             assertEquals(200, probe.postJson("""{"participant":"ann","title":"C"}""", "/topics/t/ideas").statusCode())
             rate(probe, "bob", "a", "impact", "2") // bob's slider rating: must be untouched by ann's judgements
-            fun lines(op: String) = Files.readAllLines(journal).count { """"op":"$op"""" in it }
+            val recordsBeforeJudgements = journalRecords(journal)
 
             // a > b, b > c (sent reversed: normalized to a=b, b=c, outcome "a"), a > c
             judge(probe, "ann", "impact", "a", "b", "a")
@@ -372,14 +382,8 @@ class AlignmentServerTest {
                 me,
             )
             assertEquals(null, myRating(me, "a", "effort"), "only the judged dimension is rated")
-            // journaled: one judge line per judgement, each followed by the derived ratings as ordinary rate lines
-            val journalLines = Files.readAllLines(journal)
-            assertEquals(3, lines("judge"))
-            val lastJudge = journalLines.indexOfLast { """"op":"judge"""" in it }
-            assertTrue(
-                journalLines.drop(lastJudge + 1).any { """"op":"rate"""" in it && """"participant":"ann"""" in it },
-                "$journalLines",
-            )
+            // The flattened judgement rows and their derived ratings are both durable cell writes.
+            assertTrue(journalRecords(journal) > recordsBeforeJudgements)
 
             // bob: ratings untouched, no judgements, no trace of ann
             val bob = probe.get("/topics/t/me?participant=bob").body()
@@ -392,8 +396,9 @@ class AlignmentServerTest {
             }
 
             // an identical judgement is a no-op: no journal line
+            val recordsBeforeIdentical = journalRecords(journal)
             judge(probe, "ann", "impact", "b", "a", "b")
-            assertEquals(3, lines("judge"), "an identical judgement journals nothing")
+            assertEquals(recordsBeforeIdentical, journalRecords(journal), "an identical judgement journals nothing")
 
             // re-judging a pair replaces its judgement and moves the ratings
             val rejudged = judge(probe, "ann", "impact", "b", "a", "equal")
@@ -403,7 +408,7 @@ class AlignmentServerTest {
             assertTrue(myRating(me2, "a", "impact")!! < va, "a no longer beats b: $me2")
 
             // refusals change nothing
-            val judgesBefore = lines("judge")
+            val recordsBeforeRefusals = journalRecords(journal)
             val meBefore = probe.get("/topics/t/me?participant=ann").body() // the write-side view: synchronous
             for ((body, error) in listOf(
                 """{"participant":"ann","dim":"nope","a":"a","b":"b","outcome":"a"}""" to "no such dimension",
@@ -424,25 +429,26 @@ class AlignmentServerTest {
             assertEquals(405, probe.get("/topics/t/judge").statusCode())
             assertEquals(400, probe.delete("/topics/t/judge?participant=ann").statusCode(), "dim is required")
             assertEquals(400, probe.delete("/topics/t/judge?participant=ann&dim=nope").statusCode())
-            assertEquals(judgesBefore, lines("judge"))
+            assertEquals(recordsBeforeRefusals, journalRecords(journal))
             assertEquals(meBefore, probe.get("/topics/t/me?participant=ann").body())
 
             // clearing keeps the derived ratings as ordinary ratings
             val me3 = probe.get("/topics/t/me?participant=ann").body()
+            val recordsBeforeClear = journalRecords(journal)
             assertEquals("""{"cleared":3}""", probe.delete("/topics/t/judge?participant=ann&dim=impact").body())
             val cleared = probe.get("/topics/t/me?participant=ann").body()
             assertTrue(""""judgements":[]}""" in cleared, cleared)
             assertEquals(me3.substringBefore(""","judgements""""), cleared.substringBefore(""","judgements""""))
-            assertEquals(1, lines("unjudge"))
+            val recordsAfterClear = journalRecords(journal)
+            assertTrue(recordsAfterClear > recordsBeforeClear)
             assertEquals("""{"cleared":0}""", probe.delete("/topics/t/judge?participant=ann&dim=impact").body())
-            assertEquals(1, lines("unjudge"), "clearing an empty set journals nothing")
+            assertEquals(recordsAfterClear, journalRecords(journal), "clearing an empty set journals nothing")
 
             // cascades drop the involved judgements without a line and without re-fitting the others
             judge(probe, "ann", "impact", "a", "c", "a")
             judge(probe, "ann", "impact", "a", "b", "equal")
             judge(probe, "ann", "effort", "a", "b", "a")
             val beforeCascade = probe.get("/topics/t/me?participant=ann").body()
-            val (judges, unjudges) = lines("judge") to lines("unjudge")
             assertEquals(200, probe.delete("/topics/t/ideas/c?creator=cat").statusCode())
             val afterIdea = probe.get("/topics/t/me?participant=ann").body()
             assertTrue(
@@ -454,7 +460,6 @@ class AlignmentServerTest {
             assertEquals(200, probe.delete("/topics/t/dimensions/effort?creator=cat").statusCode())
             val afterDim = probe.get("/topics/t/me?participant=ann").body()
             assertTrue(""""judgements":[{"dim":"impact","a":"a","b":"b","outcome":"equal"}]}""" in afterDim, afterDim)
-            assertEquals(judges to unjudges, lines("judge") to lines("unjudge"), "cascades journal no judge/unjudge line")
         }
     }
 
@@ -747,15 +752,13 @@ class AlignmentServerTest {
             val put = probe.putJson("""{"participant":"bob","text":"ship A first"}""", "/topics/t/ideas/a/note")
             assertEquals(200, put.statusCode(), put.body())
             probe.await { """"note":"ship A first","noteBy":"bob"}""" in it }
-            val linesAfterFirst = Files.readAllLines(journal).count { """"op":"note"""" in it }
-            assertEquals(1, linesAfterFirst, "one note line after the first write")
+            val recordsAfterFirst = journalRecords(journal)
 
             val again = probe.putJson("""{"participant":"bob","text":"ship A first"}""", "/topics/t/ideas/a/note")
             assertEquals(200, again.statusCode(), again.body())
             assertEquals("""{"id":"a","note":"ship A first","noteBy":"bob"}""", again.body())
+            assertEquals(recordsAfterFirst, journalRecords(journal), "an identical PUT journals no additional frame")
         }
-        val linesAfterRepeat = Files.readAllLines(journal).count { """"op":"note"""" in it }
-        assertEquals(1, linesAfterRepeat, "an identical PUT journals no additional line")
     }
 
     @Test
@@ -816,30 +819,23 @@ class AlignmentServerTest {
             val put = probe.putJson("""{"creator":"cat","score":8.5}""", "/topics/t/ideas/b/override")
             assertEquals(200, put.statusCode(), put.body())
             probe.awaitRow("b") { near(8.5, it.num("override")) }
-            assertEquals(1, Files.readAllLines(journal).count { """"op":"override"""" in it }, "one override line after the first write")
+            val recordsAfterPut = journalRecords(journal)
 
             val again = probe.putJson("""{"creator":"cat","score":8.5}""", "/topics/t/ideas/b/override")
             assertEquals(200, again.statusCode(), again.body())
             assertEquals("""{"id":"b","override":8.5000}""", again.body())
-            assertEquals(
-                1,
-                Files.readAllLines(journal).count { """"op":"override"""" in it },
-                "an identical PUT journals no additional line",
-            )
+            assertEquals(recordsAfterPut, journalRecords(journal), "an identical PUT journals no additional frame")
 
             val clear1 = probe.putJson("""{"creator":"cat","score":null}""", "/topics/t/ideas/b/override")
             assertEquals(200, clear1.statusCode(), clear1.body())
             probe.await { row(parse(it)["aggregates"]!!.jsonObject["t"].toString(), "b")?.get("override") == JsonNull }
-            assertEquals(1, Files.readAllLines(journal).count { """"op":"unoverride"""" in it }, "one unoverride line after the first clear")
+            val recordsAfterClear = journalRecords(journal)
+            assertTrue(recordsAfterClear > recordsAfterPut)
 
             val clear2 = probe.putJson("""{"creator":"cat","score":null}""", "/topics/t/ideas/b/override")
             assertEquals(200, clear2.statusCode(), clear2.body())
             assertEquals("""{"id":"b","override":null}""", clear2.body())
-            assertEquals(
-                1,
-                Files.readAllLines(journal).count { """"op":"unoverride"""" in it },
-                "a repeat clear journals no additional line",
-            )
+            assertEquals(recordsAfterClear, journalRecords(journal), "a repeat clear journals no additional frame")
         }
     }
 
@@ -901,8 +897,6 @@ class AlignmentServerTest {
             val aggBefore = parse(before)["aggregates"]!!.jsonObject["t"].toString()
             assertEquals(JsonNull, row(aggBefore, "b")!!["override"], aggBefore)
         }
-        val lines = Files.readAllLines(journal)
-        assertTrue(lines.any { """"op":"unidea"""" in it }, "$lines")
 
         withApp(journal) { _, probe ->
             val after = probe.await { it == before }
@@ -997,23 +991,80 @@ class AlignmentServerTest {
             annBefore = probe.get("/topics/t/me?participant=ann").body()
             assertTrue(""""judgements":[]}""" in annBefore, "the undimension cascade dropped ann's cost judgement: $annBefore")
         }
-        val lines = Files.readAllLines(journal)
-        for (op in listOf(
-            "topic", "dimension", "idea", "note", "rate", "weight", "unrate", "unidea", "undimension",
-            "direction", "labels", "policy", "visibility", "reveal", "judge", "unjudge",
-            "override", "unoverride", "gutcheck", "dots",
-        )) {
-            assertTrue(lines.any { """"op":"$op"""" in it }, "journal records $op: $lines")
-        }
-        // cascades are journaled as unrate lines before the removal line
-        assertTrue(lines.indexOfFirst { """"op":"unrate"""" in it && """"idea":"c"""" in it } <
-            lines.indexOfFirst { """"op":"unidea"""" in it }, "$lines")
+        assertOnlyHostJournal(journal)
 
         withApp(journal) { _, probe ->
             val after = probe.await { it == before }
             assertEquals(before, after)
             assertEquals(deeBefore, probe.get("/topics/t/me?participant=dee").body())
             assertEquals(annBefore, probe.get("/topics/t/me?participant=ann").body())
+        }
+    }
+
+    @Tag("multi-jvm")
+    @Test
+    fun `a kill -9 restart rebuilds topic idea dots and judgement indices from host journal`() {
+        val journal = tmpJournal()
+        val peers = mutableListOf<JvmPeer.Peer>()
+        var peer = JvmPeer.launch(
+            "civictech.demo.alignment.AlignmentAppKt",
+            "0",
+            "--journal",
+            journal.toString(),
+        ).also(peers::add)
+        try {
+            val firstPort = peer.port("http")
+            lateinit var before: String
+            lateinit var judgementBefore: String
+            HttpProbe("http://localhost:$firstPort").use { probe ->
+                seed(probe)
+                assertEquals(
+                    200,
+                    probe.putJson("""{"participant":"bob","text":"durable note"}""", "/topics/t/ideas/b/note").statusCode(),
+                )
+                assertEquals(200, probe.putJson("""{"creator":"cat","score":7.5}""", "/topics/t/ideas/b/override").statusCode())
+                assertEquals(200, probe.putJson("""{"creator":"cat","gutCheck":true,"dotBudget":3}""", "/topics/t/policy").statusCode())
+                assertEquals(200, probe.postJson("""{"participant":"ann","idea":"a","count":2}""", "/topics/t/dots").statusCode())
+                judge(probe, "ann", "impact", "a", "b", "a")
+
+                before = probe.await { state ->
+                    "\"note\":\"durable note\"" in state &&
+                        "\"override\":7.5000" in state &&
+                        "\"dots\":2" in state &&
+                        "\"value\":6.444" in state &&
+                        "\"value\":3.556" in state &&
+                        "\"score\":3.5560" in state
+                }
+                judgementBefore = probe.get("/topics/t/me?participant=ann").body()
+                assertTrue("\"judgements\":[{" in judgementBefore, judgementBefore)
+            }
+
+            peer.kill()
+            assertTrue(peer.process.waitFor(10, TimeUnit.SECONDS), "the first alignment JVM did not die")
+
+            peer = JvmPeer.launch(
+                "civictech.demo.alignment.AlignmentAppKt",
+                "0",
+                "--journal",
+                journal.toString(),
+            ).also(peers::add)
+            val secondPort = peer.port("http")
+            HttpProbe("http://localhost:$secondPort").use { probe ->
+                // Separate comparisons cover topic+dimension, idea+note+override, dots, and judgements.
+                val after = probe.await { state ->
+                    "\"note\":\"durable note\"" in state &&
+                        "\"override\":7.5000" in state &&
+                        "\"dots\":2" in state &&
+                        "\"value\":6.444" in state &&
+                        "\"value\":3.556" in state &&
+                        "\"score\":3.5560" in state
+                }
+                assertEquals(before, after)
+                assertEquals(judgementBefore, probe.get("/topics/t/me?participant=ann").body())
+            }
+            assertOnlyHostJournal(journal)
+        } finally {
+            JvmPeer.destroy(peers)
         }
     }
 
@@ -1165,41 +1216,17 @@ class AlignmentServerTest {
             probe.awaitRow("a") { near(4.0, it.num("score")) }
             state = probe.state()
         }
-        assertTrue(Files.readAllLines(journal).any { """"direction":"factor"""" in it }, "journal carries the factor direction")
         withApp(journal) { _, probe -> assertEquals(state, probe.await { it == state }) }
     }
 
     @Test
-    fun `a literal v1 journal replays with the v1 defaults`() {
-        val journal = tmpJournal()
-        // byte-for-byte what the v1 record() calls emitted at 9b5bb520: no direction, no policy, no labels
-        Files.write(
-            journal,
-            listOf(
-                """{"op":"topic","id":"t","title":"T","creator":"cat"}""",
-                """{"op":"dimension","topic":"t","id":"impact","name":"Impact","weight":2.0}""",
-                """{"op":"dimension","topic":"t","id":"effort","name":"Effort","weight":1.0}""",
-                """{"op":"idea","topic":"t","id":"a","title":"A","description":"","proposer":"ann"}""",
-                """{"op":"rate","topic":"t","idea":"a","dim":"impact","participant":"ann","value":8}""",
-                """{"op":"rate","topic":"t","idea":"a","dim":"effort","participant":"ann","value":3}""",
-            ),
-        )
-        withApp(journal) { _, probe ->
-            val a = probe.awaitRow("a") { near((2.0 * 8 + 1.0 * 3) / 3.0, it.num("score")) }
-            assertEquals(JsonNull, a["cost"], "$a")
-            assertEquals(JsonNull, a["factor"], "$a")
-            val topics = probe.get("/topics").body()
-            assertTrue(""""ideas":"everyone","boardVisibility":"after-rating","revealed":false""" in topics, topics)
-            for (dim in listOf("effort", "impact")) {
-                assertTrue(
-                    Regex(""""id":"$dim","name":"[A-Za-z]+","weight":[0-9.]+,"direction":"value","lowLabel":"","highLabel":""""")
-                        .containsMatchIn(topics),
-                    "$dim: $topics",
-                )
-            }
-            // v1 idea policy is everyone: a non-creator may still add
-            assertEquals(200, probe.postJson("""{"participant":"ann","title":"E"}""", "/topics/t/ideas").statusCode())
+    fun `a legacy JSONL journal path is refused instead of migrated`() {
+        val oldFile = createTempDirectory("alignment-v1").resolve("journal.jsonl")
+        Files.writeString(oldFile, """{"op":"topic","id":"t"}""")
+        val failure = kotlin.test.assertFailsWith<IllegalArgumentException> {
+            AlignmentApp(port = 0, journalPath = oldFile)
         }
+        assertTrue("legacy JSONL files are not migrated" in failure.message.orEmpty(), failure.message.orEmpty())
     }
 
     @Test

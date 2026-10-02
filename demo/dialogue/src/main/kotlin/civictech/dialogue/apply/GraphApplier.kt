@@ -22,7 +22,7 @@ import civictech.dialogue.mint.StanceAggregate
  *
  * It observes the pipeline's three canonical folds — `canonicalClaims`,
  * `canonicalRelations`, `projectedStances` — and, when the driver says the
- * graph is at rest, reconciles those snapshots against a durable
+ * graph is at rest, reconciles those snapshots against a fold-backed
  * [BindingTable] by issuing `AgoraService.createClaim` / `createEdge` /
  * `remove` / `setStance`. Nothing else in `:demo:dialogue` holds an
  * [AgoraService].
@@ -50,27 +50,17 @@ import civictech.dialogue.mint.StanceAggregate
  * ### Never spawning ClaimCell/EdgeCell ([AGO1-APPLY-03], DESIGN D3)
  *
  * Every write goes through [AgoraService]. `createEdge` is what runs
- * `reaches(...)` and designates cycle heads, and what appends to the
- * structure log; spawning `EdgeCell` directly would silently lose both. This
- * file imports nothing from `civictech.agora.cell`.
+ * `reaches(...)`, designates cycle heads, and records the topology delta;
+ * spawning `EdgeCell` directly would silently lose both. This file imports
+ * nothing from `civictech.agora.cell`.
  *
- * ### Idempotence ([AGO1-APPLY-01]/-02) and the two crash-window checks
+ * ### Idempotence ([AGO1-APPLY-01]/-02)
  *
  * A key the [BindingTable] reports bound is never created again, so a
- * reconcile over an unchanged canonical set issues zero structure ops. Two
- * narrow checks against [AgoraService.nodeInfo] cover the crash window
- * between an agora write and the binding record that follows it:
- *
- * - **adopt-if-present**: a node already present under the key's
- *   deterministic ref is *bound*, not re-created (a create would spawn a
- *   second cell under the same ref).
- * - **absent-is-removed**: a removal whose node is already gone is *unbound*
- *   without calling `remove`, which would throw.
- *
- * Beyond those two the applier trusts its table and does **not** heal
- * external divergence: it is the sole writer, so anything else that moved the
- * graph underneath it surfaces as a recorded failure ([AGO1-APPLY-06]), never
- * as silent repair.
+ * reconcile over an unchanged canonical set issues zero structure ops. The
+ * kernel topology delta is written ahead of the spawn/despawn operation, and
+ * the binding view changes with that fold; there is no second bind/unbind
+ * write and therefore no application-level crash window between the two.
  *
  * ### Claim text is written once, at create (computenet-0d5e)
  *
@@ -93,7 +83,7 @@ import civictech.dialogue.mint.StanceAggregate
  *   pure function of the canonical key because identity must *converge
  *   without coordination*: two independent tables, a fresh directory, a
  *   replayed journal and a restarted process all have to agree on a claim's
- *   ref with nothing to consult, and adopt-if-present depends on it. Purity
+ *   ref with nothing to consult. Purity
  *   there buys **stability** — the same key is the same ref forever, and
  *   recomputing it changes nothing observable. Display text could never be a
  *   pure function of the canonical key at all (the key is lowercased and
@@ -109,8 +99,8 @@ import civictech.dialogue.mint.StanceAggregate
  *   actually uttered, and computenet-9bip already settled the division of
  *   labour this sits in: normalize the KEY, preserve the TEXT.
  * - **There is no write surface for it, and the substitute is destructive.**
- *   [AgoraService] exposes no text update, and its durable structure log has
- *   no op for one; adding both is a format change bought with an arbitrary
+ *   [AgoraService] exposes no text update, and its topology vocabulary has
+ *   no op for one; adding one is a format change bought with an arbitrary
  *   tie-break. The only re-text available to the sole writer today is
  *   `remove` + `createClaim` at the same deterministic ref — and
  *   [AgoraService.remove] cascades over every edge that becomes dangling, so
@@ -134,9 +124,8 @@ import civictech.dialogue.mint.StanceAggregate
  *   spawned into it under deterministic refs.
  * @param refs the pipeline handles to observe.
  * @param service the agora graph. Held by this class alone (2aw.F4-D1).
- * @param bindings the durable Key -> CellRef table; `bind` happens only
- *   *after* the agora write returns, `unbind` only after `remove` returns
- *   (2aw.F4-D2).
+ * @param bindings the read-only Key -> CellRef view of the context used by
+ *   [service].
  */
 class GraphApplier(
     private val host: ManagedHost,
@@ -241,16 +230,13 @@ class GraphApplier(
         //     taken an edge it was about to remove itself.
         (bindings.boundRelations() - relations.keys).forEach { key ->
             val ref = bindings.refOf(key) ?: return@forEach
-            remove(ApplyKind.RELATION, ApplyOp.OpKind.REMOVE_RELATION, key.value, ref, ops, failures) {
-                bindings.unbind(key)
-            }
+            remove(ApplyKind.RELATION, ApplyOp.OpKind.REMOVE_RELATION, key.value, ref, ops, failures)
         }
 
         // (2) claim removals.
         (bindings.boundClaims() - claims.keys).forEach { key ->
             val ref = bindings.refOf(key) ?: return@forEach
             remove(ApplyKind.CLAIM, ApplyOp.OpKind.REMOVE_CLAIM, key.value, ref, ops, failures) {
-                bindings.unbind(key)
                 // A claim that is gone has no stance; drop the memo so a
                 // re-minted claim re-issues rather than being suppressed.
                 appliedStances.keys.removeAll { (_, claimKey) -> claimKey == key }
@@ -265,15 +251,11 @@ class GraphApplier(
             // text is written once, at create" (computenet-0d5e).
             if (bindings.isBound(key)) return@forEach
             val ref = BindingTable.refFor(key)
-            if (service.nodeInfo(ref) != null) {
-                // adopt-if-present: the crash window between createClaim
-                // returning and bind recording it.
-                bindings.bind(key)
-                return@forEach
-            }
             try {
-                service.createClaim(aggregate.text, ref)
-                bindings.bind(key)
+                service.createClaim(aggregate.text, ref, handle = BindingTable.handleFor(key))
+                check(bindings.refOf(key) == ref) {
+                    "claim ${key.value} spawned without its dialogue topology handle"
+                }
                 ops += ApplyOp(ApplyOp.OpKind.CREATE_CLAIM, key.value, ref)
                 accounting.recordOp()
             } catch (e: IllegalArgumentException) {
@@ -285,10 +267,6 @@ class GraphApplier(
         relations.forEach { (key, aggregate) ->
             if (bindings.isBound(key)) return@forEach
             val ref = BindingTable.refFor(key)
-            if (service.nodeInfo(ref) != null) {
-                bindings.bind(key)
-                return@forEach
-            }
             val source = bindings.refOf(aggregate.source)
             val target = bindings.refOf(aggregate.target)
             if (source == null || target == null) {
@@ -303,8 +281,16 @@ class GraphApplier(
                 return@forEach
             }
             try {
-                service.createEdge(source, target, aggregate.polarity, ref)
-                bindings.bind(key)
+                service.createEdge(
+                    source,
+                    target,
+                    aggregate.polarity,
+                    ref,
+                    handle = BindingTable.handleFor(key),
+                )
+                check(bindings.refOf(key) == ref) {
+                    "relation ${key.value} spawned without its dialogue topology handle"
+                }
                 ops += ApplyOp(ApplyOp.OpKind.CREATE_RELATION, key.value, ref)
                 accounting.recordOp()
             } catch (e: IllegalArgumentException) {
@@ -344,12 +330,8 @@ class GraphApplier(
     }
 
     /**
-     * Issue one removal, unless the node is already absent.
-     *
-     * absent-is-removed: [AgoraService.remove] rejects an unknown ref, so a
-     * node agora no longer has (removed by its own cascade, or lost with the
-     * process before the unbind was recorded) is unbound directly. That is
-     * not a structure op and not a failure.
+     * Issue one removal. [AgoraService.remove] journals and applies the
+     * despawn, so the binding view is already unbound when it returns.
      */
     private inline fun remove(
         kind: ApplyKind,
@@ -358,15 +340,12 @@ class GraphApplier(
         ref: CellRef,
         ops: MutableList<ApplyOp>,
         failures: MutableList<ApplyFailure>,
-        unbind: () -> Unit,
+        afterRemove: () -> Unit = {},
     ) {
-        if (service.nodeInfo(ref) == null) {
-            unbind()
-            return
-        }
         try {
             service.remove(ref)
-            unbind()
+            check(bindings.keyOf(ref) == null) { "$kind $key remained bound after remove" }
+            afterRemove()
             ops += ApplyOp(opKind, key, ref)
             accounting.recordOp()
         } catch (e: IllegalArgumentException) {

@@ -42,7 +42,9 @@ import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.graph.CellFactory
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.TopoEvent
 import civictech.cell.graph.requireBoundRef
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
@@ -217,6 +219,9 @@ open class ManagedHost(
      * for the same concurrent-reader reason [cells] uses one.
      */
     private val cellJournals = ConcurrentHashMap<CellRef, Journal>()
+
+    /** Namespace registry used by journaled [TopoEvent.FamilyKey] recovery. */
+    private val topologyFamilies = ConcurrentHashMap<String, KeyedCells<*>>()
 
     /**
      * The effective per-cell journal selector (CP-C1), now DERIVED from
@@ -1300,9 +1305,67 @@ open class ManagedHost(
      * taken AFTER the replay's last submit — the order is what makes it sound.
      * A failed replay throws [RecoveryIncomplete] and returns no handle.
      */
-    fun recoverFrom(journal: Journal): Recovery {
-        val frames = hostDurability.recoverFrom(journal)
+    fun recoverFrom(journal: Journal): Recovery = recoverFrom(journal, ApplyContext(this))
+
+    /** Recover with the services and cumulative topology fold supplied by [context]. */
+    fun recoverFrom(journal: Journal, context: ApplyContext): Recovery {
+        require(context.host === this) { "recovery ApplyContext belongs to a different ManagedHost" }
+        val frames = context.replaying { hostDurability.recoverFrom(journal, context) }
         return Recovery(frames, scheduler.quiescence())
+    }
+
+    /** Append one write-ahead topology delta to [journal]. */
+    fun journalTopology(journal: Journal, events: List<TopoEvent>) =
+        hostDurability.journalTopology(journal, events)
+
+    /** Register a fold provider whose compact form leads [journal]'s next checkpoint. */
+    fun registerTopology(journal: Journal, provider: () -> List<TopoEvent>) =
+        hostDurability.registerTopology(journal, provider)
+
+    /** Task 8xstm.2's per-key entry point: record against the journal selected for [ref]. */
+    fun recordTopology(ref: CellRef, event: TopoEvent) {
+        topologyJournal(ref, cells[ref])?.let { hostDurability.journalTopology(it, listOf(event)) }
+    }
+
+    /**
+     * Write-ahead variant used before [cell] is admitted. [beforeAppend] lets a family
+     * register its checkpoint provider on the exact selected journal before the record
+     * becomes visible.
+     */
+    internal fun recordTopology(
+        ref: CellRef,
+        event: TopoEvent,
+        cell: Cell,
+        beforeAppend: (Journal) -> Unit,
+    ): Journal? {
+        val selected = topologyJournal(ref, cell) ?: return null
+        beforeAppend(selected)
+        hostDurability.journalTopology(selected, listOf(event))
+        return selected
+    }
+
+    /** Resolve the same per-cell selector spawn will cache, including explicit per-port selectors. */
+    internal fun topologyJournal(ref: CellRef, cell: Cell?): Journal? =
+        journalSelector(ref) ?: when {
+            cell != null -> cellJournal(ref, cell)
+            journalForPort != null -> null // a cell is required to validate its per-port selection
+            journalFor != null -> journalFor.invoke(ref)
+            else -> journal
+        }
+
+    /** Register one live keyed family for [TopoEvent.FamilyKey] recovery. */
+    fun registerFamily(namespace: String, family: KeyedCells<*>) {
+        val existing = topologyFamilies.putIfAbsent(namespace, family)
+        check(existing == null || existing === family) {
+            "family namespace '$namespace' is already registered on host $ref"
+        }
+    }
+
+    /** Apply a rendered family key, failing loudly when no family owns its namespace. */
+    internal fun recoverFamilyKey(namespace: String, key: String) {
+        val family = topologyFamilies[namespace]
+            ?: error("topology FamilyKey names unregistered namespace '$namespace'")
+        family.recoverKey(key)
     }
 
     /**

@@ -5,6 +5,7 @@ import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.graph.ApplyContext
 import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
@@ -158,8 +159,9 @@ class OrderIndependenceTest {
     private class Rig(seed: Long, cassette: CassetteExtractor) {
         val world = SimWorld(seed = seed)
         private val built = DialoguePipeline.build(world.host, cassette)
-        val service = AgoraService(world.host, world.registry)
-        val bindings = BindingTable(journalDir = null)
+        val context = ApplyContext(world.host)
+        val service = AgoraService(world.host, world.registry, context = context)
+        val bindings = BindingTable(context)
         val applier = GraphApplier(world.host, built.refs, service, bindings)
         private val ops: SetOps<Utterance> = DialoguePipeline.utteranceOps(world.host, built.refs)
 

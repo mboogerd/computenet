@@ -10,6 +10,7 @@ import civictech.timetravel.journal.JournalReading
 import civictech.timetravel.journal.JournalRecord
 import civictech.timetravel.journal.MalformedRecord
 import civictech.timetravel.journal.OutletWaveRecord
+import civictech.timetravel.journal.TopologyRecord
 import civictech.timetravel.journal.UnknownRecord
 import java.util.UUID
 
@@ -143,6 +144,7 @@ class RunTimeline(val journalId: String, records: List<JournalRecord>) {
             is FrontierRecord -> "$header frontier ${record.portName}"
             is OutletWaveRecord -> "$header outlet-wave ${record.portName}"
             is BaselineDischargeRecord -> "$header baseline-discharge ${record.portName}"
+            is TopologyRecord -> "$header topology (${record.events.size} events)"
             is UnknownRecord -> "$header unknown"
             is MalformedRecord -> "$header malformed"
         }
@@ -173,6 +175,7 @@ class RunTimeline(val journalId: String, records: List<JournalRecord>) {
             is FrontierRecord -> setOf(record.cellRef)
             is OutletWaveRecord -> setOf(record.cellRef)
             is BaselineDischargeRecord -> setOf(record.cellRef)
+            is TopologyRecord -> emptySet()
             is UnknownRecord -> emptySet()
             is MalformedRecord -> emptySet()
         }

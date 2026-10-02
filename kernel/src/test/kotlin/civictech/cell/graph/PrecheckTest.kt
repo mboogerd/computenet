@@ -526,6 +526,28 @@ class PrecheckTest {
         plan.verdict shouldBe Verdict.Appliable
     }
 
+    @Test
+    fun `DespawnStep plans the inverse and refuses a handle already removed`() {
+        val f = Fixture(seed = 261)
+        val plan = GraphSpec(
+            listOf(
+                SpawnStep("set", setFactory),
+                DespawnStep("set"),
+                DespawnStep("set"),
+            ),
+        ).precheck(live = f.view)
+
+        plan.steps.map { it.key to it.action } shouldBe listOf(
+            "set" to PlannedAction.SPAWN,
+            "despawn set" to PlannedAction.DESPAWN,
+            "despawn set" to PlannedAction.DESPAWN,
+        )
+        plan.steps[1].result shouldBe StepCheck.Ok
+        val refused = plan.steps[2].result.refused()
+        refused.code shouldBe RefusalCode.UNRESOLVED_HANDLE
+        refused.reason shouldContain "set"
+    }
+
     // ---- R5: every refusal, not first-failure ----
 
     @Test

@@ -4,6 +4,11 @@ import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
 import civictech.agora.semantics.DfQuad
 import civictech.cell.data.SetOps
+import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.SpawnStep
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.dialogue.ClaimKey
@@ -137,8 +142,9 @@ class GraphApplierTest {
         val world = SimWorld(seed = 1L)
         private val built = DialoguePipeline.build(world.host, cassette(), namespace = "applier-test")
         val refs: DialoguePipeline.Refs = built.refs
-        val service = AgoraService(world.host, world.registry)
-        val bindings = BindingTable(journalDir = null)
+        val context = ApplyContext(world.host)
+        val service = AgoraService(world.host, world.registry, context = context)
+        val bindings = BindingTable(context)
         val applier = GraphApplier(world.host, refs, service, bindings)
         val ops: SetOps<Utterance> = DialoguePipeline.utteranceOps(world.host, refs)
 
@@ -382,10 +388,21 @@ class GraphApplierTest {
         rig.reconcile()
         assertTrue(rig.bindings.isBound(catsKey) && rig.bindings.isBound(dogsKey), "precondition: both claims bound")
 
-        // The test is deliberately a SECOND writer: it removes "Cats purr."
-        // behind the applier's back, so the applier's binding table and agora
-        // diverge. The applier must not heal that; it must report it.
+        // The test is deliberately a SECOND writer: remove the real claim,
+        // then plant a dialogue-handled non-Agora cell at the same ref. The
+        // topology view says the key is bound while Agora's index correctly
+        // has no node for it. The applier must not heal that divergence; it
+        // must report the rejected relation and stance.
         rig.service.remove(BindingTable.refFor(catsKey))
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    BindingTable.handleFor(catsKey),
+                    CellFactory { ref -> ObserveCell(View.map<ClaimKey, ClaimAggregate>(), ref) },
+                    IdentityBinding.Exact(BindingTable.refFor(catsKey)),
+                ),
+            ),
+        ).apply(rig.context)
         rig.world.runToIdle()
 
         // u7 yields ATTACK "Dogs bark." -> "Cats purr." and bob's stance on
@@ -444,18 +461,19 @@ class GraphApplierTest {
     }
 
     // ------------------------------------------------------------------
-    // Crash-window check 1 — adopt-if-present
+    // The fold is the idempotence guard
     // ------------------------------------------------------------------
 
     @Test
-    fun `a node already present under a key's deterministic ref is adopted, not re-created`() {
+    fun `a live dialogue spawn is already bound and is not created twice`() {
         val rig = Rig()
         rig.admit(u1)
 
-        // The crash window: createClaim returned, the process died before
-        // bind was recorded. On restart the node exists and the table does
-        // not know about it.
-        rig.service.createClaim(catsPurr, BindingTable.refFor(catsKey))
+        rig.service.createClaim(
+            catsPurr,
+            BindingTable.refFor(catsKey),
+            handle = BindingTable.handleFor(catsKey),
+        )
         rig.world.runToIdle()
 
         val report = rig.reconcile()
@@ -463,10 +481,10 @@ class GraphApplierTest {
         assertEquals(
             emptyList(),
             report.ops,
-            "an already-present node must be ADOPTED: no create may be issued for it",
+            "a key with a live topology spawn must not be created again",
         )
         assertEquals(0, rig.applier.accounting.structureOps)
-        assertTrue(rig.bindings.isBound(catsKey), "adoption must record the binding")
+        assertTrue(rig.bindings.isBound(catsKey), "the live spawn is the binding")
         assertEquals(BindingTable.refFor(catsKey), rig.bindings.refOf(catsKey))
         assertEquals(1, rig.service.graph().size)
 
@@ -474,18 +492,16 @@ class GraphApplierTest {
     }
 
     // ------------------------------------------------------------------
-    // Crash-window check 2 — absent-is-removed
+    // Despawn updates the view immediately
     // ------------------------------------------------------------------
 
     @Test
-    fun `a removal whose node is already gone unbinds the key without calling remove`() {
+    fun `a key despawned before reconcile is already unbound and is not removed twice`() {
         val rig = Rig()
         rig.admit(u1)
         rig.reconcile()
         assertTrue(rig.bindings.isBound(catsKey))
 
-        // The mirror crash window: remove returned, the process died before
-        // unbind was recorded.
         rig.service.remove(BindingTable.refFor(catsKey))
         rig.world.runToIdle()
 
@@ -494,17 +510,17 @@ class GraphApplierTest {
 
         assertTrue(
             !rig.bindings.isBound(catsKey),
-            "an absent key must be UNBOUND even though no remove was issued",
+            "despawn removes the key from the topology-backed view",
         )
         assertEquals(
             emptyList(),
             report.ops,
-            "no structure op may be issued for a node agora no longer has",
+            "no structure op may be issued for a spawn already removed from the fold",
         )
         assertEquals(
             emptyList(),
             report.failures,
-            "an already-absent node is not a failure — calling remove on it would be",
+            "an already-unbound key needs no second remove",
         )
 
         rig.assertApply07()
@@ -558,10 +574,9 @@ class GraphApplierTest {
      * SAME reconcile call.
      *
      * The failure is forced by spawning a conflicting cell directly on the
-     * host under `catsKey`'s deterministic ref, bypassing [AgoraService] so
-     * its own `nodeInfo` (the applier's adopt-if-present check) does not see
-     * it: the applier still attempts a real `createClaim`, which collides
-     * with the pre-spawned cell and is rejected. Claim creates run before
+     * host under `catsKey`'s deterministic ref, bypassing [AgoraService] and
+     * the topology fold: the applier still attempts a real `createClaim`,
+     * which collides with the pre-spawned cell and is rejected. Claim creates run before
      * relation creates in the fixed op order, so by the time the relation
      * leg runs, `bindings.refOf(catsKey)` is null — not because the endpoint
      * was never attempted, but because its own attempt just failed.
@@ -579,8 +594,8 @@ class GraphApplierTest {
 
         // Force catsKey's own claim create to fail this reconcile: a cell
         // already occupies its deterministic ref, spawned OUTSIDE
-        // AgoraService so `nodeInfo` — the adopt-if-present guard — does not
-        // see it and the applier's real `createClaim` collides for real.
+        // AgoraService and the topology fold so the applier's real
+        // `createClaim` collides for real.
         val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), BindingTable.refFor(catsKey))
         rig.world.host.managementInlet.call.spawn(conflict)
 
@@ -646,8 +661,9 @@ class GraphApplierTest {
     fun `claims sink spawns at exactly DialogueRuntime's own sinkRef, not a re-literalized copy`() {
         val world = SimWorld(seed = 1L)
         val built = DialoguePipeline.build(world.host, cassette(), namespace = "applier-test")
-        val service = AgoraService(world.host, world.registry)
-        val bindings = BindingTable(journalDir = null)
+        val context = ApplyContext(world.host)
+        val service = AgoraService(world.host, world.registry, context = context)
+        val bindings = BindingTable(context)
 
         val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), DialogueRuntime.sinkRef("claims"))
         world.host.managementInlet.call.spawn(conflict)
