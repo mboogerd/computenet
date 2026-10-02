@@ -704,6 +704,9 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   has grown by more than 64 KB and its own last checkpoint size.
 - **DUR-03** On restart the trees are rebuilt from the topology fold (claims
   and the edges placing them, in creation order) plus the metadata records. A
+  claim whose record never reached the journal is rebuilt from the topology
+  fold alone and queued afresh; a claim created without the edge that places
+  it (the process died between the two topology deltas) is left out. A
   topology delta whose record never reached the journal is absent and its
   cells are not rebuilt; a complete issue delta is restored as one graph
   construction, so the process cannot leave a half-created framing. Each question's EXP-10

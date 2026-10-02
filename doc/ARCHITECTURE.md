@@ -266,11 +266,13 @@ payload.
 **Durability.** `HostDurability` writes wire-encoded invocation frames,
 write-ahead topology records, checkpoints (state + processed-frontier + live
 topology fold atomically), and `Effectful` frontier advances to an opaque
-`Journal`. Recovery re-applies topology records under their pinned refs in
-journal order, then `host.recoverFrom(journal).awaitApplied()` restores
-checkpoints and replays the frame tail (the `Recovery` handle fences on their
-delivery, `ManagedHost.quiescence()` being the general form), followed by
-`host.checkpoint(journal)` to compact. `KeyedCells` records each durable
+`Journal`. Recovery is one call, `host.recoverFrom(journal).awaitApplied()`
+(or `ApplyContext.recover(journal)` to keep an app's context and handle
+table): it walks the journal in order, re-applying each topology record under
+its pinned refs, restoring checkpoints and replaying frames, so a cell is
+re-spawned before the frames that follow its record (the `Recovery` handle
+fences on their delivery, `ManagedHost.quiescence()` being the general form);
+then `host.checkpoint(journal)` compacts. `KeyedCells` records each durable
 family key as a `FamilyKey` topology event in the key's selected journal, so
 recovery creates those cells before their frames and re-minted tags cannot
 resurrect removed elements.
