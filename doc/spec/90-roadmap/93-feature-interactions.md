@@ -2570,8 +2570,8 @@ silently taking the weak tier.
 > Member pairs: N1×N17, N2×N17, N3×N17, N5×N17, N7×N17, N8×N17, N9×N17, N12×N17, N13×N17, N14×N17, N16×N17, N17×N18, N17×N22, N17×N23, N17×N24, N17×N25, N17×N26
 > Existing gaps touched: G-25, G-26, G-32 · Confidence: medium
 > Spec drift (judged at `a69186a`): 12/17 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
-> Landed state at `0c09a32` (M11): **PARTIAL** — Topology journaling and the GraphSpec preserve-refs replay mode (recovery currently depends on out-of-band graph rebuild); output-side journaling for spontaneously-emitting sources; the Effectful processed-frontier so effectful sinks do not re-act on replay…
-> ⚠ Divergence with landed code: R4, the resolution's linchpin — replay with outlets NoOp-served (G-32 suppression) so recovery never re-transmits — is contradicted by the landed M10 design: recoverFrom replays frames through the ordinary decode path with UN-suppressed emission (the recove…
+> Landed topology slice at main `7f920a91` (`computenet-8xstm`): **LANDED** — `GraphSpec.apply` resolves each lowered delta to concrete `TopoEvent`s and appends one additive `RECORD_TOPOLOGY` (type 6) record write-ahead; `ApplyContext` owns the live fold; `HostDurability.recoverFrom` re-applies topology in journal order through that context with the recorded refs; and checkpoints put the folded topology before checkpoint state. `KeyedCells` records durable family membership as `FamilyKey` events in the selected key-cell journal, so recovery spawns each key before its frames and no keys side file is needed. The remaining I-7 work is the output-side source/effect treatment and the follow-on gaps below.
+> ⚠ Divergence with the landed recovery path: R4's proposed NoOp-served replay (G-32 suppression) is not the implementation here — `HostDurability.recoverFrom` re-enters frames through the ordinary decode/intake path and baseline-marks contextual replay frames instead. That residual is separate from the topology-journaling rule now landed by `computenet-8xstm`.
 
 #### 1. Challenge restatement
 
@@ -2915,8 +2915,10 @@ No CONFLICT flag required.
   realized as output-side journaling on a durable host (R8).
 - **`10/11 §Membranes`** — clarify that "replay at crossings" is realized mechanically at
   the durable host intake.
-- **`90/91` G-25** — update to Partial→(recovery designed): snapshot half shipped, journal
-  design fixed here, disk-overflow mailbox homed.
+- **`90/91` G-25** — the topology-journaling slice is landed by `computenet-8xstm`:
+  concrete GraphSpec deltas, preserve-ref recovery, checkpoint topology folds, and
+  journal-native keyed-family membership. The disk-overflow mailbox and journal
+  segmentation remain follow-on work.
 
 #### 8. Follow-on gaps
 
