@@ -24,7 +24,7 @@
 | Interest-driven execution | - | - | - | - | - | - | - | USED | - | - | - | USED | - | 2 |
 | Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Partitioning | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Durability / recovery | USED | - | - | - | - | USED | USED | USED | - | - | - | USED | USED | 6 |
+| Durability / recovery | USED | USED | - | USED | - | USED | USED | USED | - | - | - | USED | USED | 8 |
 | Replication | - | - | - | - | USED | - | - | - | USED | - | - | - | USED | 3 |
 | Wire transport (ws / iroh) | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
 | Identity / authority | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -33,7 +33,7 @@
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| **headline count** | 4 | 3 | 2 | 3 | 4 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
+| **headline count** | 4 | 4 | 2 | 4 | 4 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
@@ -57,13 +57,13 @@
 
 ## Evidence
 
-- typed-links / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt, demo/agora/src/main/kotlin/civictech/agora/cell/ClaimCell.kt, demo/agora/src/main/kotlin/civictech/agora/cell/EdgeCell.kt
+- typed-links / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt, demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt, demo/agora/src/main/kotlin/civictech/agora/cell/ClaimCell.kt, demo/agora/src/main/kotlin/civictech/agora/cell/EdgeCell.kt
 - typed-links / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - typed-links / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt
 - typed-links / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/RankingCells.kt, demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - typed-links / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
-- typed-links / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
-- typed-links / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
+- typed-links / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
+- typed-links / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/BindingTable.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
 - typed-links / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - typed-links / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - typed-links / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
@@ -93,6 +93,8 @@
 - interest / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - interest / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/InterestDrivenFamily.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
 - durability / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt
+- durability / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
+- durability / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - durability / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt
 - durability / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt
 - durability / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
