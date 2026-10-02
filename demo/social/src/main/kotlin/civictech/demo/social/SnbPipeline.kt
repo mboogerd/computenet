@@ -21,41 +21,29 @@
  * [FeedSession] can check a leg against `registry.interestOf(ref)` rather than
  * the `Interest.Total` an unregistered ref reads as.
  *
- * **Journal layout** (jo2jk-D4): each family gets its OWN subdirectory of
- * [build]'s `journalDir` — `person/`, `authored/`, `forum/`, `message/` —
- * because two [KeyedCells] families sharing one `journalDir` collide on the
- * family-local `keys` file (observed: `demo/shopping`'s `Main.kt:136-139`
- * comment on its own per-key writer family). The host write-ahead journal
- * itself stays at the ROOT of `journalDir`
- * ([KeyedCells.hostJournal]`(journalDir)`), one level ABOVE all four
- * subdirectories: the tree is `<root>/host.journal` beside `<root>/person/`,
- * `<root>/authored/`, `<root>/forum/` and `<root>/message/`, each holding its
- * own `keys` log. No family's `keys` log is a sibling of the WAL (corrected
- * under `computenet-5ab6f`; observed tree after the jo2jk-D6 op sequence:
- * `<root>/host.journal`, `<root>/person/keys`, `<root>/authored/keys`,
- * `<root>/forum/keys`, `<root>/message/keys`).
+ * **Journal layout** (jo2jk-D4): [build] still supplies the four named family
+ * journal directories — `person/`, `authored/`, `forum/`, `message/` — to the
+ * [KeyedFamily] configuration because its `journalId` is part of the recorded
+ * graph shape. Those directories are not membership stores and [SocialRecovery]
+ * does not read them. Each first key spawn records a `TopoEvent.FamilyKey` in
+ * the journal selected for that key's cell; here all four families use the
+ * host's shared root WAL ([KeyedCells.hostJournal]`(journalDir)`). The durable
+ * layout is therefore `<root>/host.journal`; there is no family-local
+ * membership side file to keep in sync.
  *
- * Recovery (F7, `computenet-v10ou`) is [SocialRecovery]: it pre-spawns every
- * family's known keys FIRST, through [SocialGraph.spawnKnown] so each cell's
- * observe sink exists, then calls `host.recoverFrom` exactly ONCE against the
- * shared root WAL ([KeyedCells.hostJournal]`(journalDir)`). It never calls
- * `family.recover()`: **four `family.recover()` calls would replay nothing
- * at all, silently** — not, as this KDoc claimed until `computenet-5ab6f`,
- * replay the same host journal four times over. [KeyedCells.recover] resolves
- * `hostJournal` against its OWN per-family `journalDir`
- * (`kernel/src/main/kotlin/civictech/cell/host/KeyedCells.kt:89-92`), which
- * here is `<root>/person/host.journal` — a file this pipeline never writes —
- * so the replay half of each call finds an absent journal and does nothing.
- * The other half of [KeyedCells.recover], pre-spawning that family's
- * durably-known keys, is correct in itself, but it spawns through the family
- * alone and would leave [SocialGraph] with no observe sink for the key — which
- * is why the pre-spawn goes through [SocialGraph.spawnKnown] instead — and
- * the root-WAL `recoverFrom` must happen exactly once.
+ * Recovery (F7, `computenet-v10ou`) is [SocialRecovery]: it calls
+ * `host.recoverFrom` exactly ONCE against the shared root WAL. During that
+ * replay, each `FamilyKey` is decoded and synchronously registered with its
+ * family and spawned before a later frame for that key is submitted. Once the
+ * WAL replay is staged, [SocialGraph.spawnKnown] attaches each key's observe
+ * sink. The app does not run an app-side pre-spawn pass. It also does not call
+ * `family.recover()`: that convenience entry point resolves its [KeyedCells]
+ * `journalDir`, whereas this composition replays the root WAL directly.
  *
  * `parse = String::toLong` is required on every family: [KeyedCells]'s
- * default `parse` is an unchecked identity cast from the keys-file `String`
- * to `K`, which is wrong for `Long` and would fail the moment a family's
- * `keys` file is read back (the first recovery).
+ * `KeyCodec.Longs` renders a `Long` into the `FamilyKey` topology record, and
+ * recovery must decode that rendered value back to `Long` before spawning the
+ * cell under its deterministic ref.
  *
  * No links are wired here (F1 non-goal): [SocialGraph] reaches each cell's
  * inlet directly through the routed, journaled write path

@@ -19,21 +19,23 @@
  *
  * **What it does.** `admit(scope)` walks every key `scope` names and, for any
  * key [family] does not already know, calls `family.getOrSpawn(key)` —
- * durably (`authored/keys`, the family's append-on-first-spawn log), so the
- * spawn survives a restart like any other. The spawned cell's `SocialGraph`
- * observe sink is minted the same way as any other author's: the first
- * `addPost` through `authoredCell`, not this class, so nothing about the
- * observation path is lost or duplicated by spawning early. A cell admitted
- * this way is registered with its own per-author `Ranges` by
+ * durably through a `TopoEvent.FamilyKey` in the key's selected journal; the
+ * write-ahead record lets replay restore the membership and cell before later
+ * frames for that key. The spawned cell's `SocialGraph` observe sink is minted
+ * the same way as any other author's: the first `addPost` through
+ * `authoredCell`, not this class, so nothing about the observation path is lost
+ * or duplicated by this admission. A cell admitted this way is registered
+ * with its own per-author `Ranges` by
  * `SnbPipeline.build`'s factory (8eb53-D4), so it passes
  * `LocationRegistry.interestOf(ref).overlaps(scope)` and the next pull answers
  * it with an empty page at `since = null`.
  *
- * **Why it is opt-in.** The spawn is durable: every admitted-but-absent
- * friend grows `authored.keys()` forever, which is exactly what
- * `[SOC1-SREAD-03]` and `SocialFeedScatterGatherTest`'s AMENDS behaviour
- * assert against for the default path. `SocialApp(interestDriven = true)` is
- * the only caller that wires this in.
+ * **Why it is opt-in.** When the family has a selected journal, every
+ * admitted-but-absent friend remains in `authored.keys()` and in the
+ * journal's topology fold, which is exactly what `[SOC1-SREAD-03]` and
+ * `SocialFeedScatterGatherTest`'s AMENDS behaviour assert against for the
+ * default path. `SocialApp(interestDriven = true)` is the only caller that
+ * wires this in.
  */
 package civictech.demo.social
 
