@@ -162,6 +162,45 @@ class TimeTravelWalkthroughTest {
     }
 
     @Test
+    fun `reconstruct before later spawn and despawn reports the topology mismatch`(@TempDir root: File) {
+        fun journalRecordCount(dir: File): Int {
+            val result = cli("inspect", File(dir, "host.journal").path, "--json")
+            withClue(result.err) { result.code shouldBe 0 }
+            return json.decodeFromString<InspectReport>(result.out.trim()).journals.single().recordCount
+        }
+
+        fun reconstructAt(dir: File, index: Int): ReconstructReport {
+            val result = cli(
+                "reconstruct", File(dir, "host.journal").path, "--at", index.toString(),
+                "--graph-provider", "civictech.agora.AgoraGraphSource", "--graph-arg", dir.path,
+                "--json",
+            )
+            withClue(result.err) { result.code shouldBe 0 }
+            return json.decodeFromString(result.out.trim())
+        }
+
+        val beforeSpawnDir = File(root, "before-spawn")
+        val (spawnService, _) = record(beforeSpawnDir)
+        val beforeSpawn = journalRecordCount(beforeSpawnDir) - 1
+        spawnService.createClaim("D", d)
+
+        val futureSpawn = reconstructAt(beforeSpawnDir, beforeSpawn)
+        val futureCell = futureSpawn.cells.single { it.cellRef == d.id.toString() }
+        (Reason.GRAPH_MISMATCH in futureCell.fidelity.reasons) shouldBe true
+        futureSpawn.details.any { d.id.toString() in it } shouldBe true
+
+        val beforeDespawnDir = File(root, "before-despawn")
+        val (despawnService, _) = record(beforeDespawnDir, extraClaim = true)
+        val beforeDespawn = journalRecordCount(beforeDespawnDir) - 1
+        despawnService.remove(d)
+
+        val futureDespawn = reconstructAt(beforeDespawnDir, beforeDespawn)
+        futureDespawn.cells.any { it.cellRef == d.id.toString() } shouldBe false
+        (Reason.GRAPH_MISMATCH in futureDespawn.run.reasons) shouldBe true
+        futureDespawn.details.any { d.id.toString() in it } shouldBe true
+    }
+
+    @Test
     fun `diff finds a same-seed rerun identical and an extra claim ONLY_IN_B`(@TempDir root: File) {
         val dirA = File(root, "a")
         val dirB = File(root, "b")
