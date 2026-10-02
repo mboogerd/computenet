@@ -6,6 +6,7 @@ import civictech.agora.cell.Polarity
 import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
 import civictech.cell.data.SetOps
+import civictech.cell.graph.ApplyContext
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
 import civictech.dialogue.Segment
@@ -182,8 +183,9 @@ class CycleProbeTest {
     private inner class Rig(seed: Long) {
         val world = SimWorld(seed = seed)
         private val built = DialoguePipeline.build(world.host, cassette())
-        val service = AgoraService(world.host, world.registry)
-        val bindings = BindingTable(journalDir = null)
+        val context = ApplyContext(world.host)
+        val service = AgoraService(world.host, world.registry, context = context)
+        val bindings = BindingTable(context)
         val applier = GraphApplier(world.host, built.refs, service, bindings)
         private val ops: SetOps<Utterance> = DialoguePipeline.utteranceOps(world.host, built.refs)
 

@@ -1,9 +1,13 @@
 package civictech.dialogue.apply
 
+import civictech.agora.AgoraService
+import civictech.agora.cell.Polarity
+import civictech.cell.CellRef
+import civictech.cell.graph.ApplyContext
 import civictech.dialogue.ClaimKey
 import civictech.dialogue.RelationKey
-import java.io.File
-import kotlin.io.path.createTempDirectory
+import civictech.testkit.SimWorld
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,106 +15,86 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * [BindingTable]: deterministic refs, durability across re-instantiation,
- * and the ephemeral (`journalDir = null`) contract. Test names are the
- * bead's acceptance-criteria clauses (computenet-2aw.4.1).
- */
+/** [BindingTable] is a read-only projection of dialogue handles in the topology fold. */
 class BindingTableTest {
+
+    private class Rig {
+        val world = SimWorld(seed = 1L)
+        val context = ApplyContext(world.host)
+        val service = AgoraService(world.host, world.registry, context = context)
+        val table = BindingTable(context)
+
+        fun create(key: ClaimKey, text: String = key.value): CellRef =
+            service.createClaim(text, BindingTable.refFor(key), handle = BindingTable.handleFor(key))
+    }
 
     @Test
     fun `refFor is a pure deterministic function of the key, distinct per key and per namespace`() {
         val k1 = ClaimKey("alice thinks the sky is blue")
         val k2 = ClaimKey("bob thinks the sky is green")
 
-        // Two independent instances (fresh directories) agree on refFor
-        // without ever talking to each other — proof it does not depend on
-        // instance state, only on the key's string value.
-        val tableA = BindingTable(journalDir = null)
-        val tableB = BindingTable(journalDir = null)
-
         assertEquals(BindingTable.refFor(k1), BindingTable.refFor(k1), "same key, same ref, called twice")
-        assertEquals(tableA.bind(k1), tableB.bind(k1), "same key binds to the same ref on independent instances")
-
         assertNotEquals(BindingTable.refFor(k1), BindingTable.refFor(k2), "distinct claim keys map to distinct refs")
-
-        // A claim key and a relation key sharing the same string value map to
-        // distinct refs: the namespaces (dialogue:claim: / dialogue:relation:)
-        // are disjoint.
-        val relationSameValue = RelationKey(k1.value)
         assertNotEquals(
             BindingTable.refFor(k1),
-            BindingTable.refFor(relationSameValue),
-            "a claim key and a relation key with the same string value map to distinct refs",
+            BindingTable.refFor(RelationKey(k1.value)),
+            "claim and relation namespaces are disjoint",
         )
     }
 
     @Test
-    fun `bindings on a journalled table survive re-instantiation, including an unbind`() {
-        val dir = createTempDirectory().toFile()
-        try {
-            val claim = ClaimKey("claim-k")
-            val relation = RelationKey("relation-k")
+    fun `live dialogue spawns define claim and relation bindings including the reverse lookup`() {
+        val rig = Rig()
+        val source = ClaimKey("source")
+        val target = ClaimKey("target")
+        val relation = RelationKey("source-supports-target")
+        val sourceRef = rig.create(source)
+        val targetRef = rig.create(target)
+        val relationRef = rig.service.createEdge(
+            sourceRef,
+            targetRef,
+            Polarity.SUPPORT,
+            BindingTable.refFor(relation),
+            handle = BindingTable.handleFor(relation),
+        )
+        rig.world.runToIdle()
 
-            val first = BindingTable(journalDir = dir)
-            val claimRef = first.bind(claim)
-            val relationRef = first.bind(relation)
-
-            val second = BindingTable(journalDir = dir)
-            assertTrue(second.isBound(claim))
-            assertTrue(second.isBound(relation))
-            assertEquals(claimRef, second.refOf(claim), "reopened table reports the SAME ref for the claim key")
-            assertEquals(relationRef, second.refOf(relation), "reopened table reports the SAME ref for the relation key")
-
-            // Now unbind the claim on the first table before a third opens.
-            first.unbind(claim)
-            val third = BindingTable(journalDir = dir)
-            assertFalse(third.isBound(claim), "the unbind record replays: the claim is unbound")
-            assertTrue(third.isBound(relation), "the relation, never unbound, is still bound")
-            assertEquals(relationRef, third.refOf(relation))
-        } finally {
-            dir.deleteRecursively()
-        }
+        assertEquals(setOf(source, target), rig.table.boundClaims())
+        assertEquals(setOf(relation), rig.table.boundRelations(), "relation-prefixed live spawns are included")
+        assertTrue(rig.table.isBound(source))
+        assertTrue(rig.table.isBound(relation))
+        assertEquals(sourceRef, rig.table.refOf(source))
+        assertEquals(relationRef, rig.table.refOf(relation))
+        assertEquals(BoundKey.OfClaim(source), rig.table.keyOf(sourceRef))
+        assertEquals(BoundKey.OfRelation(relation), rig.table.keyOf(relationRef))
     }
 
     @Test
-    fun `journalDir null touches no file and still binds and unbinds in memory`() {
-        val dir = createTempDirectory().toFile()
-        try {
-            val table = BindingTable(journalDir = null)
-            val key = ClaimKey("ephemeral")
+    fun `despawn removes the binding from every read surface`() {
+        val rig = Rig()
+        val key = ClaimKey("gone")
+        val ref = rig.create(key)
+        assertTrue(rig.table.isBound(key), "create made the dialogue handle live")
 
-            val ref = table.bind(key)
-            assertTrue(table.isBound(key))
-            assertEquals(ref, table.refOf(key))
+        rig.service.remove(ref)
+        rig.world.runToIdle()
 
-            table.unbind(key)
-            assertFalse(table.isBound(key))
-            assertNull(table.refOf(key))
-
-            assertEquals(emptyList<File>(), dir.listFiles()?.toList() ?: emptyList(), "no file was ever created")
-        } finally {
-            dir.deleteRecursively()
-        }
+        assertFalse(rig.table.isBound(key))
+        assertNull(rig.table.refOf(key))
+        assertNull(rig.table.keyOf(ref))
+        assertEquals(emptySet(), rig.table.boundClaims())
     }
 
     @Test
-    fun `keyOf is the reverse of bind, and boundClaims-boundRelations report exactly what is bound`() {
-        val table = BindingTable(journalDir = null)
-        val claim = ClaimKey("c1")
-        val relation = RelationKey("r1")
+    fun `a non-dialogue handle is not a binding even when its spawn ref is deterministic`() {
+        val rig = Rig()
+        val key = ClaimKey("foreign")
+        val ref = BindingTable.refFor(key)
+        rig.service.createClaim(key.value, ref, handle = "claim:${UUID.randomUUID()}")
 
-        val claimRef = table.bind(claim)
-        val relationRef = table.bind(relation)
-
-        assertEquals(BoundKey.OfClaim(claim), table.keyOf(claimRef))
-        assertEquals(BoundKey.OfRelation(relation), table.keyOf(relationRef))
-        assertEquals(setOf(claim), table.boundClaims())
-        assertEquals(setOf(relation), table.boundRelations())
-
-        table.unbind(claim)
-        assertNull(table.keyOf(claimRef), "unbinding removes the reverse-index entry too")
-        assertEquals(emptySet(), table.boundClaims())
-        assertEquals(setOf(relation), table.boundRelations())
+        assertFalse(rig.table.isBound(key))
+        assertNull(rig.table.refOf(key))
+        assertNull(rig.table.keyOf(ref))
+        assertEquals(emptySet(), rig.table.boundClaims())
     }
 }

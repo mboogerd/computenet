@@ -12,6 +12,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
@@ -48,14 +49,13 @@ import java.util.UUID
  * 1. [LocationRegistry] and the [ManagedHost], whose WAL is
  *    `KeyedCells.hostJournal(journalDir)` — reusing that factory so the file
  *    name matches what a `KeyedCells` on the same directory would write.
- * 2. `DialoguePipeline.build(host, extractor, namespace = `[NAMESPACE]`)` —
+ * 2. One [ApplyContext] records topology into that same journal.
+ * 3. `DialoguePipeline.build(host, extractor, namespace = `[NAMESPACE]`)` —
  *    the namespace is what makes every pipeline cell's ref
  *    `nameUUIDFromBytes("dialogue:$handle")` instead of random, so this run's
  *    cells sit under the refs last run's journal frames were written against.
- * 3. [AgoraService] with `structureLog = graph.jsonl`, whose own init replays
- *    that log and rebuilds every claim/edge cell under its **recorded** ref
- *    with catch-ups suppressed.
- * 4. [BindingTable] on the same directory, replaying `bindings.jsonl`.
+ * 4. [AgoraService] and [BindingTable] share that context; the table is a
+ *    read-only view of its live topology fold.
  * 5. [GraphApplier], which spawns its three deterministic-ref observation
  *    sinks and connects them.
  * 6. The utterances sink below — a `View.set` over `refs.utterances` under
@@ -78,9 +78,9 @@ import java.util.UUID
  *
  * ### Ephemeral mode
  *
- * `journalDir = null` touches no file anywhere: no host WAL
- * ([KeyedCells.hostJournal] returns null), no `graph.jsonl`, no
- * `bindings.jsonl`. [source] is then constructed eagerly with an empty
+ * `journalDir = null` touches no file anywhere: [KeyedCells.hostJournal]
+ * returns null, while the in-memory topology fold still backs bindings.
+ * [source] is then constructed eagerly with an empty
  * recovered set, and [recover]/[completeRecovery] are no-ops.
  *
  * Not thread-safe, exactly like the [TranscriptSource] it drives: construct,
@@ -91,9 +91,8 @@ class DialogueRuntime(
     /** The loaded transcript [TranscriptSource.replay] and `step` draw from. */
     private val transcript: List<Utterance> = emptyList(),
     /**
-     * Durable state directory: `host.journal` (the WAL), `graph.jsonl` (agora's
-     * structure log) and `bindings.jsonl` (the key → ref table) all live here.
-     * `null` = fully ephemeral; see the class doc.
+     * Durable state directory. Its sole file is `host.journal`, containing
+     * both the WAL and topology records. `null` = fully ephemeral.
      */
     val journalDir: File? = null,
     /**
@@ -141,7 +140,14 @@ class DialogueRuntime(
         journalFor = { ref -> if (isDurable(ref)) journal else null },
     )
 
-    // (2) pipeline, under replay-stable refs.
+    // (2) topology recorder and fold, sharing the host WAL when durable.
+    private val context = ApplyContext(
+        host = host,
+        journals = journal?.let { mapOf("host" to it) } ?: emptyMap(),
+        topology = journal,
+    )
+
+    // (3) pipeline, under replay-stable refs.
     private val built = DialoguePipeline.build(host, extractor, namespace = NAMESPACE)
 
     val refs: DialoguePipeline.Refs = built.refs
@@ -149,17 +155,17 @@ class DialogueRuntime(
     /** The extraction ledger ([AGO1-EXTR-06]'s status surface). */
     val accounting: ExtractionAccounting = built.accounting
 
-    // (3) agora, whose init replays graph.jsonl under recorded refs.
+    // (4) agora records every claim/edge topology delta through the shared context.
     val service = AgoraService(
         host,
         registry,
         quiescence = quiescence,
-        structureLog = journalDir?.let { File(it, STRUCTURE_LOG) },
+        context = context,
         onCredence = onCredence,
     )
 
-    // (4) the durable binding table, replaying bindings.jsonl.
-    val bindings = BindingTable(journalDir)
+    // (4b) the binding table reads the context's folded live spawns.
+    val bindings = BindingTable(context)
 
     // (5) the applier, which spawns its own deterministic-ref sinks.
     val applier = GraphApplier(host, refs, service, bindings)
@@ -259,7 +265,7 @@ class DialogueRuntime(
      */
     fun recover() {
         val journal = KeyedCells.hostJournal(journalDir) ?: return
-        host.recoverFrom(journal)
+        context.recover(journal)
     }
 
     /**
@@ -273,6 +279,7 @@ class DialogueRuntime(
      */
     fun completeRecovery() {
         if (journalDir == null || recovered != null) return
+        service.rebuildIndex()
         recovered = TranscriptSource(utteranceOps, transcript, recovered = utterancesSink.current())
     }
 
@@ -417,9 +424,6 @@ class DialogueRuntime(
          * thing that silently differs between a process and its restart.
          */
         const val NAMESPACE = "dialogue"
-
-        /** Agora's durable structure log inside [journalDir]. */
-        const val STRUCTURE_LOG = "graph.jsonl"
 
         /**
          * Ref prefix for this runtime's own observation sinks — disjoint from

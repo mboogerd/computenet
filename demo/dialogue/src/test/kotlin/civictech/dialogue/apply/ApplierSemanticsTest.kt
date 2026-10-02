@@ -6,6 +6,7 @@ import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.graph.ApplyContext
 import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
@@ -125,8 +126,9 @@ class ApplierSemanticsTest {
         val world = SimWorld(seed = 1L)
         private val built = DialoguePipeline.build(world.host, cassette(), namespace = "semantics-test")
         val refs: DialoguePipeline.Refs = built.refs
-        val service = AgoraService(world.host, world.registry)
-        val bindings = BindingTable(journalDir = null)
+        val context = ApplyContext(world.host)
+        val service = AgoraService(world.host, world.registry, context = context)
+        val bindings = BindingTable(context)
         val applier = GraphApplier(world.host, refs, service, bindings)
         val ops: SetOps<Utterance> = DialoguePipeline.utteranceOps(world.host, refs)
 
