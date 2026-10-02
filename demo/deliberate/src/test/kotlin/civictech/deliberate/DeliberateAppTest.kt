@@ -655,11 +655,13 @@ class DeliberateAppTest {
             val before = settled(first, probe1)
             val claims = before.nodes.count { it.kind == "CLAIM" }
             assertTrue(claims in 55..60, "claims: $claims")
-            // While it runs, the journal holds metadata frames and nothing derived.
+            // While it runs, the journal holds topology and metadata frames, but no derived values.
+            // Topology factories legitimately encode the agora-owned Polarity enum, so assert
+            // against the derived Deliberate payload types rather than the whole agora package.
             val live = File(dir, "host.journal")
             val journal = live.readBytes().decodeToString()
             assertTrue("deliberate.MetaFields" in journal, "the running journal holds metadata frames")
-            for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance", "agora.")) {
+            for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance")) {
                 assertTrue(derived !in journal, "the journal holds a derived frame ($derived)")
             }
             // What a kill -9 at this instant leaves behind: one journal with topology records
