@@ -164,10 +164,11 @@ internal object EngineRecords {
             state.questions.keys.map { q -> QUESTION_KEY + q.id to questionFieldsOf(q, state, ledger) }
 
     /**
-     * Model A: a root framed in the structure log gets its framing back, items
-     * from its positions' structure texts. A root whose record says framed but
-     * whose issue the graph dropped (a torn framing) restores unframed and,
-     * if it had finished FRAMED, QUEUED — so it is framed again.
+     * Model A: a root with a recovered issue gets its framing back from the
+     * topology journal's complete, write-ahead framing record, with item text
+     * from the position claims' [ClaimNodeFactory] values. If no issue was
+     * recovered, an otherwise-FRAMED root is restored unframed and queued so
+     * the engine can frame it again.
      */
     private fun restoreFraming(root: Claim, n: CredenceGraph.Node, rec: ClaimRecord?, graph: List<CredenceGraph.Node>) {
         val issue = n.info.issue

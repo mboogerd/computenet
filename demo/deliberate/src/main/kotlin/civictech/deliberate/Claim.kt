@@ -33,7 +33,11 @@ internal class Claim(
     val isLink get() = argument != null
     /** On an argument: its link — the claim-like node of its edge. */
     var link: Claim? = null
-    /** The text the structure log holds for it; the record stores [text] only when a rewrite changed it. */
+    /**
+     * The original topology text: [ClaimNodeFactory.text] for a graph claim,
+     * or its initial [linkText] for a link; the record stores [text] only when
+     * a rewrite changed it.
+     */
     val structureText: String = text
     var status = Status.QUEUED
     var override = Override.AUTO
