@@ -30,9 +30,10 @@
  * `LocationRegistry.interestOf(ref).overlaps(scope)` and the next pull answers
  * it with an empty page at `since = null`.
  *
- * **Why it is opt-in.** When the family has a selected journal, every
- * admitted-but-absent friend remains in `authored.keys()` and in the
- * journal's topology fold, which is exactly what `[SOC1-SREAD-03]` and
+ * **Why it is opt-in.** Every admitted-but-absent friend remains in
+ * `authored.keys()` for the lifetime of this process; when the family has a
+ * selected journal, the corresponding `FamilyKey` topology is also durable in
+ * that journal's fold. That is exactly what `[SOC1-SREAD-03]` and
  * `SocialFeedScatterGatherTest`'s AMENDS behaviour assert against for the
  * default path. `SocialApp(interestDriven = true)` is the only caller that
  * wires this in.

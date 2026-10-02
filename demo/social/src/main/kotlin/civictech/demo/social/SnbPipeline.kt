@@ -40,10 +40,10 @@
  * `family.recover()`: that convenience entry point resolves its [KeyedCells]
  * `journalDir`, whereas this composition replays the root WAL directly.
  *
- * `parse = String::toLong` is required on every family: [KeyedCells]'s
- * `KeyCodec.Longs` renders a `Long` into the `FamilyKey` topology record, and
- * recovery must decode that rendered value back to `Long` before spawning the
- * cell under its deterministic ref.
+ * Every family is configured with [KeyCodec.Longs], whose `parse` function is
+ * `String::toLong`: the graph key codec renders a `Long` into the `FamilyKey`
+ * topology record, and recovery must decode that rendered value back to
+ * `Long` before spawning the cell under its deterministic ref.
  *
  * No links are wired here (F1 non-goal): [SocialGraph] reaches each cell's
  * inlet directly through the routed, journaled write path

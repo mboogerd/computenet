@@ -40,12 +40,14 @@ import java.util.UUID
  * ### Construction order is the deliverable (2aw.F4-D2, BS-18)
  *
  * Topology records, rather than an app-side pre-spawn pass, own the ordering
- * this class exists to obey. During [ApplyContext.recover],
- * [ManagedHost.recoverFrom] replays the shared WAL in order; each
- * `FamilyKey` record decodes and spawns its family cell before a later frame
- * for that key is submitted. [BindingTable] then reads the live topology fold,
- * while the deterministic pipeline and sinks already have the refs needed for
- * replay. So the constructor runs, in this exact order:
+ * this class exists to obey. Dialogue and agora have no keyed family, so this
+ * runtime has no `FamilyKey` records to decode. During [ApplyContext.recover],
+ * [ManagedHost.recoverFrom] replays the shared WAL in order and
+ * [ApplyContext.apply] re-applies its recorded `Spawn`/`Connect` topology
+ * events. [DialoguePipeline.build] and the observation sinks spawn their
+ * cells at construction under deterministic refs, so the cells addressed by
+ * journaled frames are present when replay is staged. [BindingTable] then
+ * reads the live topology fold. So the constructor runs, in this exact order:
  *
  * 1. [LocationRegistry] and the [ManagedHost], whose WAL is
  *    `KeyedCells.hostJournal(journalDir)` — reusing that factory so the file
