@@ -49,7 +49,7 @@ class DeliberateApp(
     /** SPEC §11: with a directory, deliberations survive restarts (and `kill -9`); null is volatile. */
     private val dataDir: File? = null,
     private val semantics: SemanticsConfig = SemanticsConfig(),
-    /** How often the metadata journal checks whether it has grown enough to compact itself. */
+    /** How often the combined topology/metadata journal checks whether it should compact itself. */
     private val compactEveryMs: Long = 30_000,
     /** SPEC §12: how each backend's usage is priced. */
     pricing: Pricing = Pricing(),
@@ -91,9 +91,9 @@ class DeliberateApp(
     private val journal = dataDir?.let { FileJournal(File(it.apply { mkdirs() }, "host.journal")) }
 
     /**
-     * SPEC DUR-01: only the metadata cell is journaled (`journalFor`); every
-     * credence cell is volatile and recomputed from the inputs on boot, so
-     * the journal never holds a derived frame.
+     * SPEC DUR-01: `journalFor` tees only metadata-cell frames, while the
+     * [ApplyContext] below writes topology records to the same journal. Every
+     * credence cell remains volatile and is recomputed from inputs on boot.
      */
     private val host = ManagedHost(
         scheduler = scheduler,
@@ -179,7 +179,7 @@ class DeliberateApp(
             try {
                 compactIfGrown()
             } catch (e: Exception) {
-                System.err.println("deliberate: metadata checkpoint failed: $e")
+                System.err.println("deliberate: journal checkpoint failed: $e")
             }
         }, compactEveryMs, compactEveryMs, TimeUnit.MILLISECONDS)
     }
@@ -187,7 +187,7 @@ class DeliberateApp(
     private fun journalFile() = dataDir?.let { File(it, "host.journal") }
 
     /**
-     * SPEC DUR-02: the metadata journal compacts itself once it has grown by
+     * SPEC DUR-02: the combined topology/metadata journal compacts itself once it has grown by
      * [COMPACT_MIN_BYTES] and by as much again as its last checkpoint, so it
      * stays within about twice the size of the state it holds.
      */
@@ -197,7 +197,7 @@ class DeliberateApp(
         checkpointNow()
     }
 
-    /** Compacts the metadata journal to one checkpoint of the fold now (a no-op without `--data`). */
+    /** Compacts topology plus metadata to one checkpoint of their folds now (a no-op without `--data`). */
     internal fun checkpointNow() {
         val j = journal ?: return
         metaStore!!.checkpoint(j)
@@ -225,7 +225,7 @@ class DeliberateApp(
         try {
             checkpointNow()
         } catch (e: Exception) {
-            System.err.println("deliberate: final metadata checkpoint failed: $e")
+            System.err.println("deliberate: final journal checkpoint failed: $e")
         }
         inspector?.stop()
         shell.stop()
