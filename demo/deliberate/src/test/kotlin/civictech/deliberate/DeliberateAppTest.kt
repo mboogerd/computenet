@@ -695,7 +695,7 @@ class DeliberateAppTest {
             }
             println(
                 "deliberate space: $claims claims, fresh $fresh B (${fresh / claims} B/claim: " +
-                    "graph.jsonl ${File(dir, "graph.jsonl").length()} B, host.journal ${File(dir, "host.journal").length()} B); " +
+                    "host.journal ${File(dir, "host.journal").length()} B); " +
                     "after restarts $sizes",
             )
             assertTrue(fresh / claims < 4_000, "fresh ${fresh / claims} B/claim")
