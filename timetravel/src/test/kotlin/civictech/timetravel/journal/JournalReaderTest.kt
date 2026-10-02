@@ -31,7 +31,11 @@ import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
 import civictech.testkit.dst.JournalMutation
 import civictech.testkit.dst.MutatingJournal
+import civictech.timetravel.diff.AlignmentMode
+import civictech.timetravel.diff.RecordAlignment
+import civictech.timetravel.diff.RecordKey
 import civictech.timetravel.fidelity.Reason
+import civictech.timetravel.timeline.RunTimeline
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -287,6 +291,12 @@ class JournalReaderTest {
         input.name shouldBe "source"
         input.frameCount shouldBe 2
         input.reasons.shouldBeEmpty()
+
+        val timeline = RunTimeline("j", listOf(input))
+        timeline.positions.single().touches shouldBe setOf(ref)
+        timeline.labels(0) shouldBe "#0 input source (2 frames)"
+        RecordAlignment.keys(timeline, AlignmentMode.ORDINAL) shouldBe
+            listOf(RecordKey.Ordinal("InputRecord", ref, null, 0))
     }
 
     /** An `Effectful` sink: the only kind of cell whose deliveries journal frontier / baseline records. */

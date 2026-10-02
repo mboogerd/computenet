@@ -5,6 +5,7 @@ import civictech.timetravel.journal.BaselineDischargeRecord
 import civictech.timetravel.journal.CheckpointRecord
 import civictech.timetravel.journal.FrameRecord
 import civictech.timetravel.journal.FrontierRecord
+import civictech.timetravel.journal.InputRecord
 import civictech.timetravel.journal.JournalRecord
 import civictech.timetravel.journal.MalformedRecord
 import civictech.timetravel.journal.OutletWaveRecord
@@ -225,6 +226,7 @@ object RecordAlignment {
         is FrontierRecord -> Triple(kindOf(record), record.cellRef, record.portName)
         is OutletWaveRecord -> Triple(kindOf(record), record.cellRef, record.portName)
         is BaselineDischargeRecord -> Triple(kindOf(record), record.cellRef, record.portName)
+        is InputRecord -> Triple(kindOf(record), record.cellRef, null)
         is CheckpointRecord, is TopologyRecord, is UnknownRecord, is MalformedRecord ->
             Triple(kindOf(record), null, null)
     }

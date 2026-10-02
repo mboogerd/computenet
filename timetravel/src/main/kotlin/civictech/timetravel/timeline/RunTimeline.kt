@@ -6,6 +6,7 @@ import civictech.timetravel.journal.BaselineDischargeRecord
 import civictech.timetravel.journal.CheckpointRecord
 import civictech.timetravel.journal.FrameRecord
 import civictech.timetravel.journal.FrontierRecord
+import civictech.timetravel.journal.InputRecord
 import civictech.timetravel.journal.JournalReading
 import civictech.timetravel.journal.JournalRecord
 import civictech.timetravel.journal.MalformedRecord
@@ -144,6 +145,7 @@ class RunTimeline(val journalId: String, records: List<JournalRecord>) {
             is FrontierRecord -> "$header frontier ${record.portName}"
             is OutletWaveRecord -> "$header outlet-wave ${record.portName}"
             is BaselineDischargeRecord -> "$header baseline-discharge ${record.portName}"
+            is InputRecord -> "$header input ${record.name} (${record.frameCount} frames)"
             is TopologyRecord -> "$header topology (${record.events.size} events)"
             is UnknownRecord -> "$header unknown"
             is MalformedRecord -> "$header malformed"
@@ -175,6 +177,7 @@ class RunTimeline(val journalId: String, records: List<JournalRecord>) {
             is FrontierRecord -> setOf(record.cellRef)
             is OutletWaveRecord -> setOf(record.cellRef)
             is BaselineDischargeRecord -> setOf(record.cellRef)
+            is InputRecord -> setOf(record.cellRef)
             is TopologyRecord -> emptySet()
             is UnknownRecord -> emptySet()
             is MalformedRecord -> emptySet()
