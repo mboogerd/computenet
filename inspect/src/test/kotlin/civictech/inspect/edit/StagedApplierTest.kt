@@ -13,6 +13,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.TopologyLink
+import civictech.cell.link.LinkOptions
 import civictech.inspect.InspectorServer
 import civictech.inspect.inspectorJson
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -294,6 +295,31 @@ class StagedApplierTest {
             "s1.outlet->s2.inlet" to StepOutcome.Unwound,
             "s3" to StepOutcome.Failed("injected"),
         )
+        f.registry.localRefs() shouldBe refsBefore
+        f.registry.all() shouldBe linksBefore
+    }
+
+    @Test
+    fun `option-bearing STAGE connect is unwound after a later stage failure`() {
+        val f = Fixture(seed = 1813)
+        val refsBefore = f.registry.localRefs()
+        val linksBefore = f.registry.all()
+
+        val record = f.applier().apply(
+            Draft(
+                HOST,
+                spec(
+                    emitter("s1"),
+                    sink("s2"),
+                    ConnectStep("s1", "outlet", "s2", "inlet", LinkOptions(staged = true)),
+                    failingSink("s3"),
+                ),
+            ),
+            applyId = "a-1813", identity = "operator", baseTopologyVersion = 1,
+        )
+
+        record.outcome shouldBe ApplyOutcome.UnwoundClean
+        record.steps["s1.outlet->s2.inlet"] shouldBe StepOutcome.Unwound
         f.registry.localRefs() shouldBe refsBefore
         f.registry.all() shouldBe linksBefore
     }
