@@ -5,7 +5,8 @@ description: Runs one unattended beads work session end to end — claims an epi
 
 # /work
 
-One session claims one epic and works it until it is done or the slot ends.
+One session claims one epic and works it until it is done or its context is
+spent; the scheduler then starts a fresh session.
 You orchestrate: agents do breakdowns, implementations and reviews; you select,
 claim, dispatch, merge reviewed branches, ship, and keep the tracker true.
 Anything that needs reading or changing code, running builds, or produces long
@@ -161,14 +162,16 @@ Tracked modifications → stop and report. STALE and clean → `git -C <M> merge
 ## 2. Budget
 
 ```bash
-echo 18000 > <scratch>/slot-seconds   # the slot length allocated
+echo 43200 > <scratch>/slot-seconds   # a 12h backstop, not a work budget
 date -u +%s > <scratch>/slot-start
 ```
 
-`slot-elapsed.sh <scratch>` is the clock. Run it first in any turn where you
-might start work — dispatch, claim, route — and act on its rung, never on your
-sense of time or a notification's `duration_ms`. Never write an elapsed figure
-you did not compute that turn.
+There is no work slot: a session ends at 5f's HANDOFF (context spent, epic
+closed, or the context was compacted), and the scheduler starts a fresh one.
+The 12h clock only catches a run that never reaches a boundary.
+`slot-elapsed.sh <scratch>` reads it; run it first in any turn where you might
+start work and act on its rung, never on your sense of time. Never write an
+elapsed figure you did not compute that turn.
 
 | Rung | Means |
 |---|---|
@@ -176,11 +179,6 @@ you did not compute that turn.
 | T-90m | start no new unit; the current feature's tasks, reviews and breakdowns still dispatch |
 | T-45m | dispatch only reviewers for finished work; merge and ship what is in flight |
 | EXPIRED | step 6 now |
-
-EXPIRED always means step 6, but short of it, whether to keep going after a
-unit finishes is decided at 5f by context headroom and ticket relatedness, not
-by the rung alone ([recovery.md](references/recovery.md), "Continuation across
-ticket boundaries").
 
 With agents live, arm the one-shot `Monitor` (`sleep <s>; echo wake`) the clock's
 `wake:` line prints; `TaskStop` it in step 6. Settle once whether `SendMessage` exists
@@ -562,7 +560,8 @@ Otherwise, take the first route that applies. After T-90m no route starts a
 new unit; routes 2b, 3 and 4 may still dispatch a breakdown. Before routes
 1, 2b, 3 or 4 actually dispatch, read headroom (`next-batch.py --continuation
 --headroom-pct <N> --route <1|2b|3|4>`, which derives relatedness from the
-route itself rather than asking you to judge it) and follow CONTINUE/HANDOFF;
+route itself rather than asking you to judge it; add `--compacted` if your
+context was ever compacted this session) and follow CONTINUE/HANDOFF;
 ESCALATE (only reachable from route 1) → `--ask-jev`. HANDOFF → step 6
 *before* routes 3/4's acquire step, not after — acquiring then handing off
 leaves a stale claim for the next session. Routes 0 and 2 never read this (see
