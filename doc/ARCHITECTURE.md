@@ -65,7 +65,7 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:inspect` | The Inspector backend — a read-only HTTP/SSE view of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`, all six milestones M0–M5 merged). Reuses `:demo:shell`'s JDK-`httpserver`/SSE framing rather than duplicating it; adds no third-party dependency beyond kotlinx.serialization. Its frontend `inspect/ui/` (SolidJS + Vite + TypeScript) is npm-only and deliberately not wired into Gradle — same decision as `demo/agora/ui`. Required five kernel accessors added specifically for it: `ManagedHost.outletAt`, `ManagedHost.snapshotOf`, `ManagedHost.isDrained`, `ManagedHost.isSuspended`, `LocationRegistry.describe` — rationale in `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md`'s orchestrator closing note. | `:kernel`, `:demo:shell`, kotlinx.serialization |
 | `:demograph` | Charter/vocabulary module for subjective stances and personal preferences per actor, and their consolidation into aggregate views — insights over the participating actors (DGR, epic `computenet-drz8`); today the module holds exactly one file, `civictech.demograph.Vocabulary` (KDoc-only), and no data structures yet. Same dependency shape as `:identity`: depends on `:kernel` (and, transitively through `:kernel`'s own `api(:nature)`, on `:nature`); `:kernel` never depends on it. `civictech.demograph.Vocabulary` KDocs the six terms the charter fixes — actor, stance, preference, weight, contestation, aggregation — and states the boundary line: the module never models need, credit, subsidy, or vote-as-civic-act (the societal layer). Collective ranking and deliberation graphs are the first two families DGR.2/DGR.3 build on this vocabulary, not its extent; gated on socaity M1 or an XDEP ranking-view pull. Its own `ModuleDependencyTest` enforces the direction against `:kernel`/`:nature`/`:gen`'s build files (inbound) and against its own build file and runtime classpath (outbound), the same shape `:oracle` and `:loader` use. | `api(:kernel)`; must not depend on `:concord`, `:wire`, `:inspect`, `:oracle` or any `:demo:*` module |
 | `:economy` | Validated, serializable economic policy for `BudgetLedger` implementations to be configured with, plus the token-bucket ledger built on it (ECO1, epic `computenet-66m`). `civictech.economy.EconomicPolicy` is a pure `@Serializable` data type — prices, capacities, refills, retention, checkpoint config, per-issuer bootstrap rows and an unfitted `placeholder()` (`kwhw6-D10`) — with no function-typed field (`[ECO1-POL-04]`); `EconomicPolicy.applied()` fail-closes to `InvalidEconomicPolicyException` naming every offending field rather than substituting a default (BS-23). `AppliedPolicy` is read-only lookups over a validated policy; only `EconomicPolicy.applied()` constructs one. Issuer rows are keyed by `IssuerId.name` rather than the kernel `IssuerId` type itself (`kwhw6-D1`), so no `KSerializer<IssuerId>` is written and no kernel type is touched. Same dependency shape as `:identity`/`:demograph`: depends on `:kernel` (and, transitively through `:kernel`'s own `api(:nature)`, on `:nature`); `:kernel` never depends on it. Its own `ModuleDependencyTest` enforces the direction against `:kernel`/`:nature`/`:gen`'s build files (inbound) and against its own build file and runtime classpath (outbound, including `:identity` and `:iroh`), the same shape `:demograph` uses; its own `NoWallClockTest` fences `economy/src/main` clock-free (`kwhw6-D12`). | `api(:kernel)`; must not depend on `:concord`, `:wire`, `:inspect`, `:oracle`, `:identity`, `:iroh` or any `:demo:*` module |
-| `:timetravel` | Offline, headless time-travel tooling over durability journals — reader, reconstruction, diff, and a CLI (TTD1, epic `computenet-ocv`). Consumes the kernel's read-side seam (`JournalRecords.decode` / `scanJournalFile`). The CLI (`civictech.timetravel.cli.Main`) is `timetravel inspect | reconstruct | diff` over a journal file or directory, `--json` on each emitting the same DTOs the Kotlin API returns; it exits 0 (ran; for `diff`, no divergence), 1 (`diff` ran and found a divergence) or 2 (could not read or reconstruct — an unreadable path, a bad `--at`, or `reconstruct` refusing `NO_GRAPH_SOURCE` when given neither `--graph <serialized GraphSpec>` nor `--graph-provider <fqcn> [--graph-arg <s>]`, while `inspect` and record-level `diff` on the same path still succeed) (`[TTD1-47]`–`[TTD1-50]`). A leaf on `:kernel` by design (epic §2 "Module"); nothing depends on it in main scope until TTD2 adds `:inspect -> :timetravel` — `:demo:agora`'s **test** source set is its only consumer today (`AgoraGraphSource`, the structure-log adapter over `graph.jsonl` that lives in agora because `:timetravel` takes no application convention, epic §9.1), the same test-scope-consumer shape `:query` has with its four demo modules. Must not depend on `:inspect`, `:wire`, `:concord`, `:identity`, `:iroh`, `:oracle`, `:query` or any `:demo:*` module; its own `ModuleDependencyTest` enforces that against both the build file (both directions) and the runtime classpath ([TTD1-53]). | `:kernel`, kotlinx.serialization |
+| `:timetravel` | Offline, headless time-travel tooling over durability journals — reader, reconstruction, diff, and a CLI (TTD1, epic `computenet-ocv`). Consumes the kernel's read-side seam (`JournalRecords.decode` / `scanJournalFile`). The CLI (`civictech.timetravel.cli.Main`) is `timetravel inspect | reconstruct | diff` over a journal file or directory, `--json` on each emitting the same DTOs the Kotlin API returns; it exits 0 (ran; for `diff`, no divergence), 1 (`diff` ran and found a divergence) or 2 (could not read or reconstruct — an unreadable path, a bad `--at`, or `reconstruct` refusing `NO_GRAPH_SOURCE` when given neither `--graph <serialized GraphSpec>` nor `--graph-provider <fqcn> [--graph-arg <s>]`, while `inspect` and record-level `diff` on the same path still succeed) (`[TTD1-47]`–`[TTD1-50]`). A leaf on `:kernel` by design (epic §2 "Module"); nothing depends on it in main scope until TTD2 adds `:inspect -> :timetravel` — `:demo:agora`'s **test** source set is its only consumer today (`AgoraGraphSource`, the topology-fold adapter over the journal that lives in agora because `:timetravel` takes no application convention, epic §9.1), the same test-scope-consumer shape `:query` has with its four demo modules. Must not depend on `:inspect`, `:wire`, `:concord`, `:identity`, `:iroh`, `:oracle`, `:query` or any `:demo:*` module; its own `ModuleDependencyTest` enforces that against both the build file (both directions) and the runtime classpath ([TTD1-53]). | `:kernel`, kotlinx.serialization |
 
 Non-module directories: `buildSrc/` (two convention plugins —
 `buildsrc.convention.kotlin-jvm`: JDK 21 toolchain, JUnit platform, shared test
@@ -264,14 +264,18 @@ default; SUSPEND parks traffic for `resume(ref)`), sanitized `DeadLetters`,
 payload.
 
 **Durability.** `HostDurability` writes wire-encoded invocation frames,
-checkpoints (state + processed-frontier atomically), and `Effectful` frontier
-advances to an opaque `Journal`. Recovery: rebuild the graph, then
-`host.recoverFrom(journal).awaitApplied()` (replay only stages frames; the
-`Recovery` handle fences on their delivery, `ManagedHost.quiescence()` being the
-general form), then `host.checkpoint(journal)` to compact.
-`KeyedCells` packages the correct ordering for per-key cell families
-(pre-spawn known keys before replay so re-minted tags cannot resurrect removed
-elements).
+write-ahead topology records, checkpoints (state + processed-frontier + live
+topology fold atomically), and `Effectful` frontier advances to an opaque
+`Journal`. Recovery is one call, `host.recoverFrom(journal).awaitApplied()`
+(or `ApplyContext.recover(journal)` to keep an app's context and handle
+table): it walks the journal in order, re-applying each topology record under
+its pinned refs, restoring checkpoints and replaying frames, so a cell is
+re-spawned before the frames that follow its record (the `Recovery` handle
+fences on their delivery, `ManagedHost.quiescence()` being the general form);
+then `host.checkpoint(journal)` compacts. `KeyedCells` records each durable
+family key as a `FamilyKey` topology event in the key's selected journal, so
+recovery creates those cells before their frames and re-minted tags cannot
+resurrect removed elements.
 
 **Location and wire.** `LocationRegistry` maps `CellRef` → `Local(host)` |
 `Remote(sink)`; on absence/closure invocations park in per-ref order and
@@ -368,12 +372,12 @@ else `$PORT`, else 8080. See the README for run commands.
   recovery, late join — each paired with a deliberate failing control).
 - `:demo:agora` — argumentation graph (claims/edges with `DfQuad` gradual
   semantics; every edge is itself a claim), cycle heads, magnitude-band
-  attention, structure-log + journal durability. Has a SolidJS/Vite frontend
-  in `demo/agora/ui/` (not a Gradle module).
+  attention, and kernel topology-journal durability. Has a SolidJS/Vite
+  frontend in `demo/agora/ui/` (not a Gradle module).
 - `:demo:deliberate` — LLM-explored deliberation graph: Claude/Codex propose
   claims and edges, Jev judges them, credence is held in vector-valued cells,
-  and durability journals inputs only (derived state is recomputed on
-  replay). Depends on `:kernel`, `:demo:shell` and `:demo:agora`; has a
+  and one host journal carries topology plus input metadata (derived state is
+  recomputed on replay). Depends on `:kernel`, `:demo:shell` and `:demo:agora`; has a
   SolidJS/Vite frontend in `demo/deliberate/ui/` (npm, not a Gradle module),
   checked by the non-required CI job `deliberate-ui-test`.
 - `:demo:slotfinder` — smallest showcase: one `QuorumSetCell` fan-in read at
@@ -393,7 +397,9 @@ else `$PORT`, else 8080. See the README for run commands.
 - `:demo:dialogue` — argumentation extraction from recorded dialogue
   transcripts (AGO1, epic `computenet-2aw`); depends on `:kernel`,
   `:demo:shell` and `:demo:agora` (reuses agora's claim/edge vocabulary
-  rather than minting a parallel one).
+  rather than minting a parallel one). Its durable claim/relation bindings are
+  represented by deterministic handles in the recovered topology fold, with
+  the graph and bound-key view sharing one host journal.
 - `:demo:social` — LDBC-SNB social graph as four per-key `KeyedCells<Long>`
   families behind one ingress API; SOC1, epic `computenet-07k`.
 - `:demo:beadsmirror` — mirrors a `bd`/Dolt-backed beads workspace: polls the
