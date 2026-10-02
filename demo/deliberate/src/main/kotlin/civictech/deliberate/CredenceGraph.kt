@@ -154,25 +154,26 @@ class CredenceGraph(
     /** One link the graph installed: [outlet] of cell [from] streams to [inlet] of cell [to]. */
     data class Wire(val from: CellRef, val outlet: String, val to: CellRef, val inlet: String)
 
+    private val recordsTopology = context?.topology != null
     private val manage = host.managementInlet.call
     private val context = context ?: ApplyContext(host)
 
     /** Volatile: its content is recomputed after every restart. */
     val hub = ObserveCell(
         CredenceHubView(onCredence),
-        ref = CellRef(UUID.nameUUIDFromBytes("deliberate:hub".toByteArray())),
+        ref = hubRef("hub"),
     )
 
     /** Model C: the sensitivity fold. Volatile, like [hub]. */
     val sensitivityHub = ObserveCell(
         SensitivityHubView(onCredence),
-        ref = CellRef(UUID.nameUUIDFromBytes("deliberate:sensitivity-hub".toByteArray())),
+        ref = hubRef("sensitivity-hub"),
     )
 
     /** Model A: the shares fold of every POSITIONS issue. Volatile, like [hub]. */
     val sharesHub = ObserveCell(
         SharesHubView(onCredence),
-        ref = CellRef(UUID.nameUUIDFromBytes("deliberate:shares-hub".toByteArray())),
+        ref = hubRef("shares-hub"),
     )
 
     private val cells = HashMap<CellRef, ClaimNode>()
@@ -512,6 +513,13 @@ class CredenceGraph(
         spawns[ref]?.handle
             ?: handles.entries.singleOrNull { it.value == ref }?.key
             ?: error("no live topology handle for $ref")
+
+    /** Concrete topology links need stable app-owned endpoints; volatile graphs may coexist on one host. */
+    private fun hubRef(name: String): CellRef = if (recordsTopology) {
+        CellRef(UUID.nameUUIDFromBytes("deliberate:$name".toByteArray()))
+    } else {
+        CellRef(UUID.randomUUID())
+    }
 
     private companion object {
         const val HUB_HANDLE = "hub"
