@@ -1229,6 +1229,44 @@ Deliberately **no corpus scenario** accompanies this entry, for two reasons:
   (`computenet-t6b.2-D5`). A later feature that wants that equivalence in the corpus
   files a catalog-type ticket rather than inventing one.
 
+### The sixth boundary (`spec-gap`, `[24-DUR-02]` vs `[24-DUR-05]`) — an `Effectful` + `Stateful` cell has an undecided journal-tail state transition
+
+**The collision.** `[24-DUR-02]` requires `recoverFrom` to restore the latest
+checkpoint's `Stateful` snapshot and replay the journal tail through the ordinary
+decode path. `[24-DUR-05]` requires an invocation at or behind an `Effectful`
+inlet's processed-frontier to be suppressed rather than re-drive the sink. For a
+cell that is both `Effectful` and `Stateful`, the suppression branch in
+`ManagedHost.deliver` drops the whole invocation before the cell's own state
+transition runs. The effect is not re-driven, but state changes carried by the
+journal tail after the checkpoint are silently lost. The two requirements do not
+say which obligation wins for the cell's own state.
+
+**Observed evidence.** A reviewer probe on task `computenet-t6b.3.3.2` at
+`d0875eb5`, using the test-local `Effectful` + bounded-`Stateful` fixture in
+`kernel/src/test/kotlin/civictech/cell/observe/RoutedWalkEffectfulFrontierTest.kt`,
+emitted `1..20`, crashed, recovered from the same `InMemoryJournal`, and then
+delivered `21` without a checkpoint. The sink's world was correctly `1..21`, but
+the cell's own state read `[21]` instead of `1..21`. One of the test's two shapes
+works around the issue by checkpointing before the crash, with the caveat recorded
+in its KDoc. This is observed kernel/test evidence, not a corpus scenario, and no
+decision is inferred from it.
+
+**Open options — UNDECIDED (spec owner).**
+
+- **(a) UNDECIDED:** replay the cell's `Stateful` transition while suppressing
+  only the external effect, giving recovery separate state-replay and effect-
+  suppression semantics.
+- **(b) UNDECIDED:** forbid `Effectful` + `Stateful` combinations, or require a
+  checkpoint per effect, so a suppressed tail invocation cannot carry required
+  own-state changes.
+- **(c) UNDECIDED:** state the journal-tail state loss as an explicit limitation
+  of combining `Effectful` and `Stateful` cells.
+
+No spec or kernel change is taken here, and no corpus scenario is added until the
+spec owner chooses among (a), (b), and (c). Once decided, the corresponding
+recovery test and concordance treatment can be added without retroactively
+claiming coverage for this unresolved case.
+
 ### Not covered (deferred, honestly out of reach at W4-B)
 
 - `24-DUR-04` (replay-stable identity, no resurrected removals) — **NARROWED
