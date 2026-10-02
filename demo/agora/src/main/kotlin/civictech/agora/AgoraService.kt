@@ -58,6 +58,20 @@ data class EdgeFactory(
 }
 
 /**
+ * Durable intent for a removal whose source detaches, retractions, and
+ * despawns must stay ordered across separate runtime operations.
+ *
+ * This is app data inside the existing topology `Spawn` event, not a new
+ * journal record shape. A normal removal despawns the marker in its final
+ * delta; a recovered live host uses it to finish every referenced despawn.
+ */
+private data class RemovalIntentFactory(val doomed: List<CellRef>) : CellFactory {
+    override fun create(ref: CellRef): Cell = RemovalIntentCell(ref)
+}
+
+private class RemovalIntentCell(override val ref: CellRef) : Cell
+
+/**
  * Graph management shared by the HTTP layer and the tests. Cells stay
  * topology-blind; the service owns the index — which is also what lets it
  * designate cycle heads at edge-creation time for the decided cycle model
@@ -95,7 +109,6 @@ class AgoraService(
 
     private data class TornEdgeRemoval(
         val ref: CellRef,
-        val handle: String,
         val polarity: Polarity,
         val target: CellRef,
     )
@@ -204,15 +217,16 @@ class AgoraService(
      * caller invokes this only after `Recovery.awaitApplied`; this method is
      * the one point that re-enables future link baselines.
      *
-     * [remove] deliberately journals source unlinks before retraction frames
-     * and the final despawn delta. If a process dies in that window, the fold
-     * contains a live [EdgeFactory] with no source link. Complete that durable
-     * prefix before rebuilding the indexes: retract each surviving target and
-     * append the missing despawns as a normal write-ahead topology delta.
+     * This operation only reads the fold. A live recovery path must call
+     * [repairTornRemovals] first; offline readers deliberately do not, so an
+     * unfinished removal is reported instead of mutating the journal being
+     * inspected.
      */
     fun rebuildIndex() {
-        repairTornEdgeRemovals(context.live())
         val topology = context.live()
+        topology.spawns.values.firstOrNull { it.factory is RemovalIntentFactory }?.let { marker ->
+            error("unfinished removal intent '${marker.handle}' in recovered topology")
+        }
         val rebuiltCells = linkedMapOf<CellRef, ClaimCell>()
         val rebuiltNodes = linkedMapOf<CellRef, NodeInfo>()
 
@@ -259,8 +273,33 @@ class AgoraService(
         rebuiltCells.values.forEach { it.catchUp = true }
     }
 
-    private fun repairTornEdgeRemovals(topology: TopologyFold) {
-        val torn = topology.spawns.values.mapNotNull { spawn ->
+    /**
+     * Complete a write-ahead removal prefix on a live recovery host.
+     *
+     * New removals leave a [RemovalIntentFactory] in the same durable delta as
+     * their source unlinks. Journals written before that marker existed are
+     * still recognized by the old signature: a live [EdgeFactory] with no
+     * source link. Retractions are enqueued before the final despawns so each
+     * staged `EdgeClose` trails the explicit removal at a surviving target.
+     *
+     * @return `true` when repair enqueued retractions and journaled despawns.
+     */
+    fun repairTornRemovals(): Boolean {
+        val topology = context.live()
+        val intents = topology.spawns.values.mapNotNull { spawn ->
+            (spawn.factory as? RemovalIntentFactory)?.let { spawn to it }
+        }
+        val doomed = linkedSetOf<CellRef>()
+        intents.forEach { (marker, intent) ->
+            intent.doomed.forEach { ref ->
+                check(ref in topology.spawns) {
+                    "removal intent '${marker.handle}' names non-live cell $ref"
+                }
+                doomed += ref
+            }
+        }
+
+        val legacyTornEdges = topology.spawns.values.mapNotNull { spawn ->
             val factory = spawn.factory as? EdgeFactory ?: return@mapNotNull null
             val sourceLinks = topology.links.values.filter { link ->
                 link.to == spawn.ref &&
@@ -269,29 +308,34 @@ class AgoraService(
             }
             when (sourceLinks.size) {
                 1 -> null
-                0 -> {
-                    val target = topology.links.values.singleOrNull { link ->
-                        link.from == spawn.ref &&
-                            link.outlet == "influenceOutlet" &&
-                            link.inlet == "influenceInlet"
-                    }?.to ?: error("edge ${spawn.ref} has no unique target link in recovered topology")
-                    TornEdgeRemoval(spawn.ref, spawn.handle, factory.polarity, target)
-                }
+                0 -> spawn.ref
 
                 else -> error("edge ${spawn.ref} has no unique source link in recovered topology")
             }
         }
-        if (torn.isEmpty()) return
+        doomed += legacyTornEdges
+        if (doomed.isEmpty()) return false
 
-        val doomed = torn.mapTo(mutableSetOf()) { it.ref }
-        torn.forEach { edge ->
+        val doomedEdges = doomed.mapNotNull { ref ->
+            val spawn = topology.spawns.getValue(ref)
+            val factory = spawn.factory as? EdgeFactory ?: return@mapNotNull null
+            val target = topology.links.values.singleOrNull { link ->
+                link.from == ref &&
+                    link.outlet == "influenceOutlet" &&
+                    link.inlet == "influenceInlet"
+            }?.to ?: error("edge $ref has no unique target link in recovered topology")
+            TornEdgeRemoval(ref, factory.polarity, target)
+        }
+        doomedEdges.forEach { edge ->
             if (edge.target !in doomed) {
                 val size = hub.credenceOf(edge.ref) ?: 1.0
                 registry.inlet(edge.target, ClaimCellPorts.influenceInlet)
                     .propagate(InfluenceDelta(edge.ref, edge.polarity, null, size))
             }
         }
-        GraphSpec(torn.map { DespawnStep(it.handle) }).apply(context)
+        val markerRefs = intents.map { (spawn, _) -> spawn.ref }
+        GraphSpec((doomed + markerRefs).map { DespawnStep(topology.handleFor(it)) }).apply(context)
+        return true
     }
 
     fun setStance(id: CellRef, user: String, value: Double?) {
@@ -328,7 +372,10 @@ class AgoraService(
                 inlet = if (info.head) "feedbackInlet" else "sourceInlet",
             )
         }
-        if (unlinkSourceSteps.isNotEmpty()) GraphSpec(unlinkSourceSteps).apply(context)
+        val removalHandle = "removal:${java.util.UUID.randomUUID()}"
+        GraphSpec(
+            listOf(SpawnStep(removalHandle, RemovalIntentFactory(doomed.toList()))) + unlinkSourceSteps,
+        ).apply(context)
 
         infos.forEach { (ref, info) ->
             if (info.kind == Kind.EDGE) {
@@ -340,7 +387,7 @@ class AgoraService(
             }
         }
         // After the retractions above, so each staged EdgeClose trails them.
-        GraphSpec(doomed.map { DespawnStep(handles.getValue(it)) }).apply(context)
+        GraphSpec(doomed.map { DespawnStep(handles.getValue(it)) } + DespawnStep(removalHandle)).apply(context)
         synchronized(nodesLock) {
             doomed.forEach {
                 cells.remove(it)

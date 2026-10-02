@@ -283,6 +283,7 @@ class DialogueRuntime(
      */
     fun completeRecovery() {
         if (journalDir == null || recovered != null) return
+        service.repairTornRemovals()
         service.rebuildIndex()
         recovered = TranscriptSource(utteranceOps, transcript, recovered = utterancesSink.current())
     }
