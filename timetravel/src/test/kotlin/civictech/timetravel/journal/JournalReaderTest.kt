@@ -267,6 +267,28 @@ class JournalReaderTest {
         waves.any { it.highWater > 0 } shouldBe true
     }
 
+    @Test
+    fun `a durable-input record exposes its cell name and atomic frame count`() {
+        val journal = InMemoryJournal()
+        val controller = SimulationController(seed = 12)
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val ref = CellRef(UUID(12, 7))
+        host.managementInlet.call.spawn(SetCell<String>(ref))
+        val api = (HostedCellProxy.create(ref, host, SetInletProxy::class.java) as SetInletProxy).inlet.call
+
+        host.durableInput(ref, "source").commit {
+            api.add("a")
+            api.add("b")
+            2
+        }
+
+        val input = read(journal).single().shouldBeInstanceOf<InputRecord>()
+        input.cellRef shouldBe ref
+        input.name shouldBe "source"
+        input.frameCount shouldBe 2
+        input.reasons.shouldBeEmpty()
+    }
+
     /** An `Effectful` sink: the only kind of cell whose deliveries journal frontier / baseline records. */
     class EffectSink(override val ref: CellRef) : Cell, Effectful {
         val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())

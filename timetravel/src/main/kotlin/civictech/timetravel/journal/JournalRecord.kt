@@ -119,6 +119,16 @@ data class TopologyRecord(
     override val reasons: Set<Reason>,
 ) : JournalRecord
 
+/** A type-7 durable-input commit, exposing its source identity and atomic batch size. */
+data class InputRecord(
+    override val index: Int,
+    override val journalId: String,
+    val cellRef: CellRef,
+    val name: String,
+    val frameCount: Int,
+    override val reasons: Set<Reason>,
+) : JournalRecord
+
 /**
  * A record whose leading byte is no record type the kernel defines.
  *
