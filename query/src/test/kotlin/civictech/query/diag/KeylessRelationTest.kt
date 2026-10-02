@@ -28,11 +28,10 @@ import org.junit.jupiter.api.Test
  * `civictech.query.plan.BagSemanticsTest`.
  *
  * **Explicitly absent.** This test makes no assertion about a `COUNT`, `SUM` or `AVG` applied
- * *directly* to a keyless relation (`@count c(X) :- e(X, Y).` over keyless `e`) — that shape is
- * computenet-afnwl, parked pending a human decision on whether it should compile. Only the
- * negative control below asserts a rejection, and that rejection holds under both of
- * computenet-afnwl's options (a keyless relation feeding a `SUM` *through a projection* stays
- * refused either way).
+ * *directly* to a keyless relation (`@count c(X) :- e(X, Y).` over keyless `e`) — that shape was
+ * computenet-afnwl, decided (2026-09-20, option (a)): it stays refused. Only the negative control
+ * below asserts a rejection, and that rejection holds either way (a keyless relation feeding a
+ * `SUM` *through a projection* stays refused regardless of computenet-afnwl's decision).
  *
  * Two non-vacuity observations recorded from manual, reverted mutations of this fixture (per the
  * task's Verification note; not asserted in code — the suite's own catalogs already establish
