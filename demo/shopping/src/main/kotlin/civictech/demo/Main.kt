@@ -168,9 +168,9 @@ class DemoApp(
 
     // Per-user writers: one durable, dynamically-keyed family (M10.4). Compound
     // keys "$user:items"/"$user:votes" pack both writers into a single family so
-    // they share one journalDir without colliding on the `keys` file or double-
-    // running recoverFrom (a single family, not two). The factory does the
-    // streamTo wiring, so recover() re-establishes it for every known key.
+    // one family owns the journal selection and recovery fold. Its FamilyKey
+    // topology records membership; the factory does the streamTo wiring when
+    // each key is spawned during recovery.
     private val writerApi = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
     private val writerCells = KeyedCells<String>(
         host = host,
@@ -319,8 +319,9 @@ class DemoApp(
             Peering.chainOnReannounce(registry, chained)
         }
 
-        // recover() pre-spawns every known writer (the factory rewires streamTo)
-        // then replays the shared WAL exactly once — the one correct ordering.
+        // recover() replays the shared WAL exactly once. FamilyKey topology
+        // records spawn each known writer before its later frames, and the
+        // factory rewires streamTo during that spawn.
         if (journalDir != null) writerCells.recover()
 
         shell.route("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }

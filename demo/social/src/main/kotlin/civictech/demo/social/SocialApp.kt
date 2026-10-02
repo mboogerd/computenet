@@ -50,13 +50,14 @@ private class Bad(message: String) : IllegalArgumentException(message)
 
 /**
  * **Recovery seam** (SOC1 F7, feature `computenet-v10ou`, v10ou-D1..D4).
- * With a [journalDir], construction stages a [SocialRecovery] — every
- * durably-known key pre-spawned through [SocialGraph.spawnKnown], then the
- * shared root WAL replayed exactly once — BEFORE any [source] load. Staging
- * only submits the journaled frames; [start] first drains the host behind a
- * quiescence fence and calls [completeRecovery], and only THEN constructs the
- * [DemoShell] (which binds its socket in its own constructor), so no port is
- * bound until recovery has completed. A test on a `SimulationController`
+ * With a [journalDir], construction stages a [SocialRecovery] — the shared
+ * root WAL is replayed exactly once, with each `FamilyKey` topology record
+ * spawning its family cell before later frames for that key, and then
+ * [SocialGraph.spawnKnown] attaches the observe sinks — BEFORE any [source]
+ * load. Staging only submits the journaled frames; [start] first drains the
+ * host behind a quiescence fence and calls [completeRecovery], and only THEN
+ * constructs the [DemoShell] (which binds its socket in its own constructor),
+ * so no port is bound until recovery has completed. A test on a `SimulationController`
  * scheduler never reaches that fence: it settles with `runToIdle()` and calls
  * [completeRecovery] itself (the fence would block, since nothing steps that
  * scheduler while it waits). [boundPort] before [start] throws.
@@ -92,8 +93,9 @@ class SocialApp(
     // SimulationController.scheduler().
     scheduler: HostScheduler? = null,
     // 4q9is-D7: appended LAST. Opt-in because the spawn it wires in is
-    // durable (`authored/keys` grows for every admitted-but-absent friend,
-    // forever) — the default app never spawns ahead of a post, matching
+    // durable through the authored family's FamilyKey topology (every
+    // admitted-but-absent friend remains in its selected journal) — the
+    // default app never spawns ahead of a post, matching
     // SocialFeedScatterGatherTest's AMENDS behaviour and [SOC1-SREAD-03].
     private val interestDriven: Boolean = false,
 ) {

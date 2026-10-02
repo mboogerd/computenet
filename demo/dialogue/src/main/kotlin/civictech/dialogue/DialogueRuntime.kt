@@ -39,23 +39,27 @@ import java.util.UUID
  *
  * ### Construction order is the deliverable (2aw.F4-D2, BS-18)
  *
- * `KeyedCells.recover()`'s KDoc pins the rule this class exists to obey: every
- * durably-known cell must be spawned **before** [ManagedHost.recoverFrom], or
- * the replayed frames addressed to it find no cell
- * (`ManagedHost`: `cells[cellRef] ?: return deadLetter(...)`) and replay
- * silently diverges — no exception, just a smaller graph. So the constructor
- * runs, in this exact order:
+ * Topology records, rather than an app-side pre-spawn pass, own the ordering
+ * this class exists to obey. Dialogue and agora have no keyed family, so this
+ * runtime has no `FamilyKey` records to decode. During [ApplyContext.recover],
+ * [ManagedHost.recoverFrom] replays the shared WAL in order and
+ * [ApplyContext.apply] re-applies its recorded `Spawn`/`Connect` topology
+ * events. [DialoguePipeline.build] and the observation sinks spawn their
+ * cells at construction under deterministic refs, so the cells addressed by
+ * journaled frames are present when replay is staged. [BindingTable] then
+ * reads the live topology fold. So the constructor runs, in this exact order:
  *
  * 1. [LocationRegistry] and the [ManagedHost], whose WAL is
  *    `KeyedCells.hostJournal(journalDir)` — reusing that factory so the file
  *    name matches what a `KeyedCells` on the same directory would write.
- * 2. One [ApplyContext] records topology into that same journal.
+ * 2. One [ApplyContext] records topology into that same journal and exposes
+ *    its live fold to [BindingTable].
  * 3. `DialoguePipeline.build(host, extractor, namespace = `[NAMESPACE]`)` —
  *    the namespace is what makes every pipeline cell's ref
  *    `nameUUIDFromBytes("dialogue:$handle")` instead of random, so this run's
  *    cells sit under the refs last run's journal frames were written against.
- * 4. [AgoraService] and [BindingTable] share that context; the table is a
- *    read-only view of its live topology fold.
+ * 4. [AgoraService] shares that context, and [BindingTable] reads its
+ *    read-only live topology fold.
  * 5. [GraphApplier], which spawns its three deterministic-ref observation
  *    sinks and connects them.
  * 6. The utterances sink below — a `View.set` over `refs.utterances` under

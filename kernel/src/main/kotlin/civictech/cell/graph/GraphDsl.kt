@@ -35,8 +35,9 @@ fun interface CellFactory : Serializable {
 }
 
 /**
- * The key encoding and decoding used by a [KeyedFamily]'s durable key log.
- * A [GraphSpec] is serialized whole, so a custom codec's lambdas must be
+ * The key encoding and decoding used when a [KeyedFamily] renders and parses
+ * its `TopoEvent.FamilyKey` topology record in the selected journal. A
+ * [GraphSpec] is serialized whole, so a custom codec's lambdas must be
  * `@JvmSerializableLambda` (as the built-in codecs' are).
  */
 class KeyCodec(
