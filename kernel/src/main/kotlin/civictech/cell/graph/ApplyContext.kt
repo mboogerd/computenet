@@ -16,6 +16,13 @@ import civictech.cell.replication.Replication
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
+/** Marks the one topology fold owned by an [ApplyContext], distinct from auxiliary providers. */
+internal class ApplyContextTopologyProvider(
+    private val events: () -> List<TopoEvent>,
+) : () -> List<TopoEvent> {
+    override fun invoke(): List<TopoEvent> = events()
+}
+
 /**
  * The local services a parameterized [GraphSpec] may lower onto. Parameters
  * remain data on graph steps; this context supplies the already-existing
@@ -50,7 +57,9 @@ class ApplyContext(
     private var replayDepth = 0
 
     init {
-        topology?.let { journal -> host.registerTopology(journal) { live().events() } }
+        topology?.let { journal ->
+            host.registerTopology(journal, ApplyContextTopologyProvider { live().events() })
+        }
     }
 
     /** Cumulative live spawn handles, including handles explicitly [adopt]ed by the app. */

@@ -7,6 +7,7 @@ import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContextTopologyProvider
 import civictech.cell.graph.TopoEvent
 import civictech.cell.graph.TopologyApplier
 import civictech.cell.port.FanOutlet
@@ -386,7 +387,7 @@ internal class HostDurability(
      */
     private val dischargedBaselines = mutableMapOf<Pair<CellRef, String>, MutableSet<Timestamp>>()
 
-    /** Fold providers registered by topology-owning [civictech.cell.graph.ApplyContext]s. */
+    /** Fold providers registered by topology owners; at most one is an [ApplyContextTopologyProvider]. */
     private val topologyProviders = java.util.IdentityHashMap<Journal, MutableList<() -> List<TopoEvent>>>()
 
     /**
@@ -415,7 +416,7 @@ internal class HostDurability(
      */
     fun recoverFrom(journal: Journal, applier: TopologyApplier? = null): Int {
         var frames = 0
-        var checkpointCatchUpPending = false
+        var checkpointCatchUpPendingAt: Int? = null
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -447,9 +448,9 @@ internal class HostDurability(
                 try {
                     when (val decoded = JournalRecords.decode(record)) {
                         is DecodedJournalRecord.Frame -> {
-                            if (checkpointCatchUpPending) {
+                            if (checkpointCatchUpPendingAt != null) {
                                 applier?.checkpointRestored()
-                                checkpointCatchUpPending = false
+                                checkpointCatchUpPendingAt = null
                             }
                             submit(
                                 WireCodec.decode(decoded.payload).let { frame ->
@@ -462,7 +463,7 @@ internal class HostDurability(
 
                         is DecodedJournalRecord.Checkpoint -> {
                             restoreCheckpoint(decoded)
-                            checkpointCatchUpPending = true
+                            checkpointCatchUpPendingAt = index
                         }
                         is DecodedJournalRecord.Frontier ->
                             advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
@@ -481,7 +482,14 @@ internal class HostDurability(
                     throw RecoveryIncomplete(index, records.size, e)
                 }
             }
-            if (checkpointCatchUpPending) applier?.checkpointRestored()
+            checkpointCatchUpPendingAt?.let { checkpointIndex ->
+                try {
+                    applier?.checkpointRestored()
+                } catch (e: Exception) {
+                    deadLetter("journal replay: record $checkpointIndex of ${records.size} failed: $e")
+                    throw RecoveryIncomplete(checkpointIndex, records.size, e)
+                }
+            }
         }
         return frames
     }
@@ -510,7 +518,14 @@ internal class HostDurability(
     /** Register a live fold provider whose compact form must lead [journal]'s checkpoint. */
     fun registerTopology(journal: Journal, provider: () -> List<TopoEvent>) {
         synchronized(topologyProviders) {
-            topologyProviders.getOrPut(journal) { mutableListOf() } += provider
+            val providers = topologyProviders.getOrPut(journal) { mutableListOf() }
+            if (provider is ApplyContextTopologyProvider) {
+                check(providers.none { it is ApplyContextTopologyProvider }) {
+                    "topology provider already registered for journal ${journal.javaClass.name}@" +
+                        Integer.toHexString(System.identityHashCode(journal))
+                }
+            }
+            providers += provider
         }
     }
 
