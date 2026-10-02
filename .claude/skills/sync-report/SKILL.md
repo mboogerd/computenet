@@ -76,11 +76,17 @@ list` prints "(N found)": count your items against N. A report truncated at 40
 lines once showed 10 of 26 parks and silently dropped the other 16
 (2026-09-27).
 
-Before listing an item as a pending question, read its last comment: an item
-whose thread already records the maintainer's answer is not a question, it is
-bookkeeping drift — a stale park to propose clearing (computenet-em9i sat on
-the human list for a day after its recorded approval, 2026-08-20, because the
-`assignee=human` field outlived the decision).
+Before listing an item as a pending question, run
+`.claude/skills/work/scripts/park-thread.sh <id>` on EVERY item on the human
+list — never `bd show --json`, which has no comments field and reports "0
+comments" for a thread full of decisions (2026-10-02: q8fz7, approved twice, was
+presented as open that way). An item whose thread already records the
+maintainer's answer is not a question: propose clearing the stale park
+(computenet-em9i sat on the human list for a day after its recorded approval,
+2026-08-20, because the `assignee=human` field outlived the decision). If the
+answer says the label stays until an attended session lands the work, it is not
+a question either: report it as "approved, awaiting an attended session" and
+offer to do it now, since a sync-report session is attended.
 
 Everything is joined on the branch name: `work` names branches
 `feature/<bead-id>` and `task/<bead-id>`, so a PR's `headRefName` *is* its
