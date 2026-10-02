@@ -36,8 +36,7 @@ internal object EngineRecords {
     /**
      * One claim's engine metadata as the store keeps it, one field per
      * property; a property at its default is not stored. [text] is stored
-     * only when a rewrite (EXP-03 REPLACE/MERGE) changed it: the structure
-     * log holds the original. The `jev` stances are [plausibility] and
+     * only when a rewrite (EXP-03 REPLACE/MERGE) changed it. The `jev` stances are [plausibility] and
      * [edgeStrength]; nothing else of the credence graph is persisted.
      */
     @Serializable
@@ -164,10 +163,11 @@ internal object EngineRecords {
             state.questions.keys.map { q -> QUESTION_KEY + q.id to questionFieldsOf(q, state, ledger) }
 
     /**
-     * Model A: a root framed in the structure log gets its framing back, items
-     * from its positions' structure texts. A root whose record says framed but
-     * whose issue the graph dropped (a torn framing) restores unframed and,
-     * if it had finished FRAMED, QUEUED — so it is framed again.
+     * Model A: a root with a recovered issue gets its framing back from the
+     * topology journal's complete, write-ahead framing record, with item text
+     * from the position claims' [ClaimNodeFactory] values. If no issue was
+     * recovered, an otherwise-FRAMED root is restored unframed and queued so
+     * the engine can frame it again.
      */
     private fun restoreFraming(root: Claim, n: CredenceGraph.Node, rec: ClaimRecord?, graph: List<CredenceGraph.Node>) {
         val issue = n.info.issue
