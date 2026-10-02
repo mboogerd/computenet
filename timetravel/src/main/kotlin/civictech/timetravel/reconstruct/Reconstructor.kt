@@ -134,7 +134,10 @@ open class Reconstructor(
      * Feeds non-topology records in `[from, until)` to [ManagedHost.recoverFrom] through an
      * [InMemoryJournal]. The [GraphSource] has already constructed the graph; replaying any
      * topology record here would apply its events twice — including `FamilyKey` events — and
-     * fail on already-live refs, families, or keys. Returns the kernel's `RecoveryIncomplete`
+     * fail on already-live refs, families, or keys. Every topology record is dropped by kind, not
+     * matched against what the source built: a source that replays the whole journal's topology
+     * builds the end-of-journal graph, so at a position before a later Spawn the reconstruction
+     * holds cells that did not yet exist (computenet-67hgl). Returns the kernel's `RecoveryIncomplete`
      * translated from the filtered journal back to timeline indices (6tm33-D7), or `null` when
      * every replayable record applied.
      */
