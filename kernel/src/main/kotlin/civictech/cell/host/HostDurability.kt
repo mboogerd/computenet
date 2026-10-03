@@ -653,10 +653,11 @@ internal class HostDurability(
      * single-consumer host, so at that point every frame accepted for [journal] is either
      * DELIVERED — its effect is in the snapshot — or pending and not yet delivered:
      * live/recovery staging, a coalesced entry, attention parking, supervision-SUSPEND
-     * parking, or a cold inlet's pre-activation tail. The compacted journal is the
-     * checkpoint records followed by every pending frame whose target port tees to
-     * [journal] — or whose target cell's snapshot it holds, a per-port selector's volatile
-     * inlet included — re-encoded by [journalFrame] in host sequence order.
+     * parking, an inlet policy's transient holding tier, or a cold inlet's
+     * pre-activation tail. The compacted journal is the checkpoint records followed by
+     * every pending frame whose target port tees to [journal] — or whose target cell's
+     * snapshot it holds, a per-port selector's volatile inlet included — re-encoded by
+     * [journalFrame] in host sequence order.
      *
      * That cell-level carry is deliberately conservative. A cross-journal volatile-port
      * frame can be delivered twice after both journals recover: once from this carry and

@@ -754,7 +754,8 @@ open class ManagedHost(
      * Host-wide acceptance positions retained until delivery, including after
      * a frame leaves [AttentionScheduler] for supervision parking. Identity
      * keys keep repeated byte-identical invocations distinct. Guarded by
-     * [dataLock]; cold-inlet tails transfer the position into [FanInlet].
+     * [dataLock]; inlet policy buffers and cold tails transfer the position
+     * into [FanInlet].
      */
     private val checkpointSequences = IdentityHashMap<HostedPortInvocation, Long>()
     private var nextCheckpointSequence = 0L
@@ -836,9 +837,9 @@ open class ManagedHost(
      * unable to interleave with a dispatching cell; its pending-set read and
      * journal reset run under [dataLock] (computenet-xy7w4 D3,
      * computenet-hknt0) so compaction carries scheduler-staged,
-     * supervision-parked and cold-tail frames together in acceptance order,
-     * atomically with respect to the intake — lock order `dataLock` -> journal
-     * monitor, as on the intake path.
+     * supervision-parked, inlet-policy-held and cold-tail frames together in
+     * acceptance order, atomically with respect to the intake — lock order
+     * `dataLock` -> journal monitor, as on the intake path.
      */
     private val hostDurability = HostDurability(
         journalSelector = portJournalSelector,
@@ -1802,15 +1803,15 @@ open class ManagedHost(
                             // computenet-xy7w4 D1: likewise re-install the frame's replay
                             // provenance, so every frame this handler emits into an intake
                             // inherits it (and is not re-journaled into the replayed journal).
-                            val coldOffer = (port as? FanInlet<*>)?.let { inlet ->
-                                synchronized(dataLock) { checkpointSequences[hostedInvocation] }
-                                    ?.let { sequence ->
-                                        inlet.offerHostedWhileCold(hostedInvocation.invocation, sequence)
-                                    }
-                            }
-                            if (coldOffer == null) {
-                                civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                    civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                            civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
+                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                    val inletOffer = (port as? FanInlet<*>)?.let { inlet ->
+                                        synchronized(dataLock) { checkpointSequences[hostedInvocation] }
+                                            ?.let { sequence ->
+                                                inlet.offerHosted(hostedInvocation.invocation, sequence)
+                                            }
+                                    } ?: false
+                                    if (!inletOffer) {
                                         hostedInvocation.invocation.invokeSuspending(port.call)
                                     }
                                 }

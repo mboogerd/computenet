@@ -34,7 +34,18 @@ import java.util.IdentityHashMap
  * through the ordinary [ProtocolSupport] delivery path — identical whether the
  * arm is in-process or bridged (spec 40/41 point 4).
  */
-interface InletFrontier : InletPolicy
+interface InletFrontier : InletPolicy {
+    /**
+     * The host-checkpoint view of this frontier's transient holding tier. A
+     * frontier that retains an invocation after [InletPolicy.offer] returns
+     * exposes it here until it releases or drops it, so a durable host can carry
+     * the accepted frame even though it has left the host scheduler and is not
+     * yet reflected in cell state. The empty default preserves custom
+     * pass-through frontiers; retaining implementations must override it to
+     * participate in the durability contract.
+     */
+    fun checkpointPending(): List<Invocation> = emptyList()
+}
 
 /**
  * An aggregating input port that supports multiple concurrent producers.
@@ -95,15 +106,12 @@ class FanInlet<Api : Any>(
     private val parked = ParkQueue<Invocation>()
 
     /**
-     * Host acceptance positions for the journaled subset of [parked]. A direct
-     * in-process call can also reach a cold inlet, but has no host acceptance
-     * position and therefore no journal frame for a checkpoint to carry.
-     * Identity keys distinguish byte-identical repeated calls.
+     * Host acceptance positions for invocations retained in an ALIGN policy or
+     * [parked]. A direct in-process call can reach the same tiers but has no host
+     * acceptance position and therefore no journal frame for a checkpoint to
+     * carry. Identity keys distinguish byte-identical repeated calls.
      */
     private val checkpointOrder = IdentityHashMap<Invocation, Long>()
-
-    /** Set only around [offerHostedWhileCold]'s synchronous policy-chain offer. */
-    private var offeredCheckpointOrder: Long? = null
 
     /** Cold-state sink: every method call parks instead of dispatching or throwing. */
     private val parkingImplementation: Api = Proxy.fromClass(clazz, Buffering(parked::park))
@@ -133,9 +141,12 @@ class FanInlet<Api : Any>(
         val active = activeImplementation
         if (active == null) {
             parked.park(inv)
-            offeredCheckpointOrder?.let { checkpointOrder[inv] = it }
         } else {
-            inv.invoke(active.call)
+            try {
+                inv.invoke(active.call)
+            } finally {
+                checkpointOrder.remove(inv)
+            }
         }
     }
 
@@ -201,33 +212,59 @@ class FanInlet<Api : Any>(
     }
 
     /** Drop transient buffered state across every installed policy (RESTART). */
-    fun resetPolicies() = stages.forEach { it.policy.reset() }
-
-    /**
-     * Offer one host-accepted invocation while this inlet is cold, preserving
-     * [hostSequence] if it reaches the ACTIVATE-tier tail. `null` means the
-     * inlet became hot before the offer and the caller must dispatch normally;
-     * `false` means an earlier policy tier retained or dropped it; `true` means
-     * it is now in [parked]. The offer is synchronous — policy release and the
-     * cold terminal are ordinary functions — so the temporary order stamp
-     * cannot escape onto another delivery.
-     */
-    internal fun offerHostedWhileCold(invocation: Invocation, hostSequence: Long): Boolean? {
-        if (activeImplementation != null) return null
-        val sizeBefore = parked.size
-        val previous = offeredCheckpointOrder
-        offeredCheckpointOrder = hostSequence
-        try {
-            (chainEntry ?: terminal).invoke(invocation)
-        } finally {
-            offeredCheckpointOrder = previous
-        }
-        return parked.size > sizeBefore
+    fun resetPolicies() {
+        checkpointPolicyPending().forEach(checkpointOrder::remove)
+        stages.forEach { it.policy.reset() }
     }
 
-    /** Journaled cold-tail entries with their original host acceptance positions. */
+    /**
+     * Offer one host-accepted invocation through this inlet while preserving
+     * [hostSequence] if an ALIGN policy or the ACTIVATE tail retains it. Returns
+     * `false` only for a hot inlet with no policy chain, where the caller must
+     * use its ordinary suspend-aware dispatch path; otherwise this method has
+     * consumed the offer, whether it delivered, parked, retained, or dropped it.
+     *
+     * The position is installed before the policy offer, rather than stamped at
+     * the cold terminal. A frontier may release the invocation much later — on
+     * an edge/progress event or while a sibling arm is being offered — and the
+     * original acceptance position must survive that different call stack.
+     */
+    internal fun offerHosted(invocation: Invocation, hostSequence: Long): Boolean {
+        val entry = chainEntry
+        if (activeImplementation != null && entry == null) return false
+        checkpointOrder[invocation] = hostSequence
+        try {
+            CurrentContext.with(invocation.context) { (entry ?: terminal).invoke(invocation) }
+        } catch (failure: Throwable) {
+            if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)
+            throw failure
+        }
+        if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)
+        return true
+    }
+
+    private fun checkpointPolicyPending(): List<Invocation> = stages
+        .asSequence()
+        .mapNotNull { it.policy as? InletFrontier }
+        .flatMap { it.checkpointPending().asSequence() }
+        .toList()
+
+    private fun checkpointHeld(invocation: Invocation): Boolean =
+        parked.snapshot().any { it === invocation } || checkpointPolicyPending().any { it === invocation }
+
+    /**
+     * Forget the host acceptance position after a retaining policy removes an
+     * invocation without releasing it downstream. This only releases checkpoint
+     * bookkeeping; ownership and failure accounting stay with the policy path
+     * that removed the invocation.
+     */
+    internal fun forgetCheckpointAcceptance(invocation: Invocation) {
+        checkpointOrder.remove(invocation)
+    }
+
+    /** Journaled policy-held and cold-tail entries with their original host acceptance positions. */
     internal fun checkpointParked(): List<Pair<Long, Invocation>> =
-        parked.snapshot().mapNotNull { invocation ->
+        (checkpointPolicyPending() + parked.snapshot()).mapNotNull { invocation ->
             checkpointOrder[invocation]?.let { it to invocation }
         }
 
