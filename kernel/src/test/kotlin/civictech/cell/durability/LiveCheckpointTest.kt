@@ -202,6 +202,27 @@ class LiveCheckpointTest {
         return first to second
     }
 
+    private fun openFrontierEdge(inlet: FanInlet<*>): Link =
+        fakeLink(PortRef.generate(), inlet.ref).also { link ->
+            ProtocolSupport.of(inlet).deliver(Protocols.TopologyOrder, link, EdgeOpen)
+        }
+
+    private fun frontierInvocation(
+        sourcePort: PortRef,
+        sourceId: UUID,
+        counter: Long,
+        value: String,
+    ): Invocation = Invocation.of(
+        consumerString.getMethod("provide", Any::class.java),
+        arrayOf(value),
+        MessageContext(Timestamp(sourceId, counter), sourcePort),
+    )
+
+    private fun checkpointAcceptanceCount(inlet: FanInlet<*>): Int {
+        val field = FanInlet::class.java.getDeclaredField("checkpointOrder").apply { isAccessible = true }
+        return (field.get(inlet) as Map<*, *>).size
+    }
+
     private fun frontierFrame(
         ref: CellRef,
         sourcePort: PortRef,
@@ -716,5 +737,81 @@ class LiveCheckpointTest {
         recovered.received shouldBe emptyList()
         recovered.activate()
         recovered.received shouldBe accepted
+    }
+
+    @Test
+    fun `(n) resetting every arm of a shared ALIGN frontier releases every checkpoint acceptance`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val first = FanInlet.create<Consumer<String>>()
+        val second = FanInlet.create<Consumer<String>>()
+        first.install(frontier.arm())
+        second.install(frontier.arm())
+        val firstEdge = openFrontierEdge(first)
+        val secondEdge = openFrontierEdge(second)
+        openFrontierEdge(second)
+        val sourceId = UUID.randomUUID()
+
+        first.offerHosted(frontierInvocation(firstEdge.from, sourceId, 1, "first-arm"), 1)
+        second.offerHosted(frontierInvocation(secondEdge.from, sourceId, 1, "second-arm"), 2)
+        first.checkpointParked().size shouldBe 1
+        second.checkpointParked().size shouldBe 1
+
+        first.resetPolicies()
+        second.resetPolicies()
+
+        first.checkpointParked() shouldBe emptyList()
+        second.checkpointParked() shouldBe emptyList()
+        withClue("reset must release acceptance records for every arm, including the sibling cleared by the first reset") {
+            checkpointAcceptanceCount(first) shouldBe 0
+            checkpointAcceptanceCount(second) shouldBe 0
+        }
+    }
+
+    @Test
+    fun `(o) replacing the same wave edge releases the replaced checkpoint acceptance`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet = FanInlet.create<Consumer<String>>()
+        inlet.install(frontier)
+        val edge = openFrontierEdge(inlet)
+        openFrontierEdge(inlet)
+        val sourceId = UUID.randomUUID()
+
+        inlet.offerHosted(frontierInvocation(edge.from, sourceId, 1, "replaced"), 1)
+        inlet.offerHosted(frontierInvocation(edge.from, sourceId, 1, "replacement"), 2)
+
+        inlet.checkpointParked().map { (sequence, invocation) -> sequence to invocation.args.single() } shouldBe
+            listOf(2L to "replacement")
+        withClue("only the replacement may remain strongly referenced by checkpoint bookkeeping") {
+            checkpointAcceptanceCount(inlet) shouldBe 1
+        }
+
+        inlet.resetPolicies()
+        checkpointAcceptanceCount(inlet) shouldBe 0
+    }
+
+    @Test
+    fun `(p) a handler failure releases checkpoint acceptances abandoned with the removed wave`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet = FanInlet.create<Consumer<String>>()
+        inlet.install(frontier)
+        inlet.serve(object : Consumer<String> {
+            override fun provide(input: String) = throw IllegalStateException("handler failed")
+        })
+        val firstEdge = openFrontierEdge(inlet)
+        val secondEdge = openFrontierEdge(inlet)
+        val thirdEdge = openFrontierEdge(inlet)
+        val sourceId = UUID.randomUUID()
+
+        inlet.offerHosted(frontierInvocation(firstEdge.from, sourceId, 1, "throws"), 1)
+        inlet.offerHosted(frontierInvocation(secondEdge.from, sourceId, 1, "abandoned"), 2)
+        val failure = shouldThrow<IllegalStateException> {
+            inlet.offerHosted(frontierInvocation(thirdEdge.from, sourceId, 1, "trigger"), 3)
+        }
+
+        failure.message shouldBe "handler failed"
+        inlet.checkpointParked() shouldBe emptyList()
+        withClue("a removed wave must not leave an unserved sibling retained only by checkpoint bookkeeping") {
+            checkpointAcceptanceCount(inlet) shouldBe 0
+        }
     }
 }

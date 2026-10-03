@@ -252,6 +252,16 @@ class FanInlet<Api : Any>(
     private fun checkpointHeld(invocation: Invocation): Boolean =
         parked.snapshot().any { it === invocation } || checkpointPolicyPending().any { it === invocation }
 
+    /**
+     * Forget the host acceptance position after a retaining policy removes an
+     * invocation without releasing it downstream. This only releases checkpoint
+     * bookkeeping; ownership and failure accounting stay with the policy path
+     * that removed the invocation.
+     */
+    internal fun forgetCheckpointAcceptance(invocation: Invocation) {
+        checkpointOrder.remove(invocation)
+    }
+
     /** Journaled policy-held and cold-tail entries with their original host acceptance positions. */
     internal fun checkpointParked(): List<Pair<Long, Invocation>> =
         (checkpointPolicyPending() + parked.snapshot()).mapNotNull { invocation ->
