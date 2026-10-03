@@ -3,6 +3,7 @@ package civictech.cell.durability
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
@@ -28,6 +29,7 @@ import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Link
+import civictech.cell.port.Admit
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -871,5 +873,35 @@ class LiveCheckpointTest {
         }
         inlet.resetPolicies()
         checkpointAcceptanceCount(inlet) shouldBe 0
+    }
+
+    @Test
+    fun `(s) hosted checkpoint tracking preserves each policy offer context`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = FrontierFoldCell(ref, active = true)
+        val policyContexts = mutableListOf<MessageContext?>()
+        cell.inlet.install(Admit(admits = {
+            policyContexts += CurrentContext.get()
+            true
+        }))
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        val edge = openFrontierEdge(cell.inlet)
+        val sourceId = UUID.randomUUID()
+        val frames = listOf(
+            frontierFrame(ref, edge.from, sourceId, 1, "first-context"),
+            frontierFrame(ref, edge.from, sourceId, 2, "second-context"),
+        )
+        frames.forEach(host::enqueueHostedInvocation)
+        controller.runToIdle()
+
+        withClue("the hosted policy path must run under each input's own context, like ordinary invocation delivery") {
+            policyContexts shouldBe frames.map { it.invocation.context }
+        }
+        cell.received shouldBe listOf("first-context", "second-context")
+        CurrentContext.get() shouldBe null
     }
 }

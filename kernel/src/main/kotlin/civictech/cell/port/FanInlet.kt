@@ -234,7 +234,7 @@ class FanInlet<Api : Any>(
         if (activeImplementation != null && entry == null) return false
         checkpointOrder[invocation] = hostSequence
         try {
-            (entry ?: terminal).invoke(invocation)
+            CurrentContext.with(invocation.context) { (entry ?: terminal).invoke(invocation) }
         } catch (failure: Throwable) {
             if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)
             throw failure
