@@ -116,6 +116,33 @@ class RebaselineTest {
     }
 
     @Test
+    fun `readers keep the complete pre-gap fold until the swapped baseline has landed`() {
+        val rig = rig()
+        rig.initial.apply(createRecord(11, "B", "status", "open"))
+        rig.graph.host.quiescence().await(30_000, "pre-gap records")
+        val preGap = rig.state.current.view()
+        var seenAtCommit: Map<String, Map<String, String>>? = null
+
+        Rebaseline(
+            export = { listOf(row("B", "status" to "closed")) },
+            feed = DoltCommitFeed(fakeLog(listOf("flat0", "flat1"))),
+            graph = rig.graph,
+            state = rig.state,
+            input = {
+                seenAtCommit = rig.state.current.view()
+                rig.graph.input()
+            },
+            workspaceIdentity = IDENTITY,
+            onEvent = events::add,
+        ).run(RebaselineReason.CheckpointGone("pre-gap"))
+
+        seenAtCommit shouldBe preGap
+        rig.state.current.view() shouldBe mapOf(
+            "B" to mapOf("id" to "\"B\"", "status" to "\"closed\""),
+        )
+    }
+
+    @Test
     fun `a throwing durable-input drive leaves the swapped projector empty and cursor unchanged`() {
         val rig = rig()
         rig.input.commit { "old-head" }

@@ -213,13 +213,14 @@ class Rebaseline(
                     ) + graph.spec().steps,
                 ),
             )
-            graph.projector(DotMinter(workspaceIdentity), applied).also(state::swap)
+            graph.projector(DotMinter(workspaceIdentity), applied)
         }
         input().commit {
             target.applyAll(records)
             headCommit
         }
         graph.host.quiescence().await(30_000, "beadsmirror $workspaceIdentity rebaseline")
+        if (target !== state.current) state.swap(target)
         onEvent(MirrorEvent.Rebaselined(reason, headCommit, rows.size, workspaceIdentity))
     }
 }
