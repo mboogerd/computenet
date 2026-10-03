@@ -31,7 +31,12 @@ import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
 import civictech.testkit.dst.JournalMutation
 import civictech.testkit.dst.MutatingJournal
+import civictech.timetravel.cli.RecordDto
+import civictech.timetravel.diff.AlignmentMode
+import civictech.timetravel.diff.RecordAlignment
+import civictech.timetravel.diff.RecordKey
 import civictech.timetravel.fidelity.Reason
+import civictech.timetravel.timeline.RunTimeline
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -265,6 +270,37 @@ class JournalReaderTest {
         }
         // non-vacuity: at least one outlet had emitted by the checkpoint
         waves.any { it.highWater > 0 } shouldBe true
+    }
+
+    @Test
+    fun `a durable-input record exposes its cell name and atomic frame count`() {
+        val journal = InMemoryJournal()
+        val controller = SimulationController(seed = 12)
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val ref = CellRef(UUID(12, 7))
+        host.managementInlet.call.spawn(SetCell<String>(ref))
+        val api = (HostedCellProxy.create(ref, host, SetInletProxy::class.java) as SetInletProxy).inlet.call
+
+        host.durableInput(ref, "source").commit {
+            api.add("a")
+            api.add("b")
+            2
+        }
+
+        val input = read(journal).single().shouldBeInstanceOf<InputRecord>()
+        input.cellRef shouldBe ref
+        input.name shouldBe "source"
+        input.frameCount shouldBe 2
+        input.reasons.shouldBeEmpty()
+
+        val timeline = RunTimeline("j", listOf(input))
+        timeline.positions.single().touches shouldBe setOf(ref)
+        timeline.labels(0) shouldBe "#0 input source (2 frames)"
+        val report = RecordDto.of(input, timeline)
+        report.cellRef shouldBe ref.id.toString()
+        report.portName shouldBe null
+        RecordAlignment.keys(timeline, AlignmentMode.ORDINAL) shouldBe
+            listOf(RecordKey.Ordinal("InputRecord", ref, null, 0))
     }
 
     /** An `Effectful` sink: the only kind of cell whose deliveries journal frontier / baseline records. */

@@ -1,5 +1,7 @@
 package civictech.demo.allocatorobserve
 
+import java.io.Serializable
+
 /**
  * The v1 socaity spend-log record schema, pinned by `doc/allocator-mvp.md`
  * R3 (Metering) and bead `socaity-fqf` — verified 2026-08-23 in the epic
@@ -18,4 +20,4 @@ data class SpendRecord(
     val workItem: String,
     val started: String,
     val ended: String,
-)
+) : Serializable

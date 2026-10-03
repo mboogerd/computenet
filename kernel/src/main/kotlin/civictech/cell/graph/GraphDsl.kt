@@ -8,6 +8,7 @@ import civictech.cell.evolve.Shadow
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.KeyedCells
+import civictech.cell.host.DurableInput
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
@@ -125,12 +126,20 @@ data class SpawnStep(
     val shadow: Boolean = false,
     /** Lazily-spawned keyed family parameters; a family handle has no single cell ref. */
     val family: KeyedFamily? = null,
+    /** Named durable inputs exposed for this journaled cell after application. */
+    val inputs: Set<String> = emptySet(),
 ) : GraphStep {
     init {
         if (family != null) {
             require(factory is KeyedCellFactory) {
                 "spawn step '$handle': parameter 'family' requires a KeyedCellFactory"
             }
+        }
+        require(inputs.isEmpty() || journalId != null) {
+            "spawn step '$handle': parameter 'inputs' requires 'journalId'"
+        }
+        require(inputs.isEmpty() || family == null) {
+            "spawn step '$handle': a keyed family cannot declare inputs"
         }
     }
 }
@@ -425,10 +434,20 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 
         val refs = mutableMapOf<String, CellRef>()
         val families = mutableMapOf<String, KeyedCells<*>>()
+        val inputs = mutableMapOf<String, Map<String, DurableInput>>()
         val deltaLinks = linkedMapOf<String, TopologyLinkKey>()
         events.forEachIndexed { index, event ->
             when (event) {
-                is TopoEvent.Spawn -> refs[event.handle] = context.applySpawn(event, preparedReplicas[index])
+                is TopoEvent.Spawn -> {
+                    val ref = context.applySpawn(event, preparedReplicas[index])
+                    refs[event.handle] = ref
+                    val step = lowered[index] as SpawnStep
+                    if (step.inputs.isNotEmpty()) {
+                        inputs[event.handle] = step.inputs.associateWith { name ->
+                            context.host.durableInput(ref, name)
+                        }
+                    }
+                }
                 is TopoEvent.Family -> {
                     context.apply(event)
                     families[event.handle] = checkNotNull(context.familyFor(event.handle))
@@ -452,7 +471,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val links = deltaLinks.mapNotNull { (key, topologyKey) ->
             context.linkFor(topologyKey)?.let { key to it }
         }.toMap()
-        return AppliedGraph(refs.toMap(), families.toMap(), links)
+        return AppliedGraph(refs.toMap(), families.toMap(), links, inputs.toMap())
     }
 
     /**
@@ -467,6 +486,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val lowered = lowered()
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.family != null }?.let { step ->
             throw unsupportedFamily(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.inputs.isNotEmpty() }?.let { step ->
+            throw unsupportedInputs(step.handle, "applyTo(Use<HostManagementApi>)")
         }
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
             throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
@@ -566,6 +588,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     if (step.family != null) {
                         results[step.handle] = StepResult.Rejected(
                             "spawn step '${step.handle}': parameter 'family' is not supported by applyRemote",
+                        )
+                    } else if (step.inputs.isNotEmpty()) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'inputs' is not supported by applyRemote",
                         )
                     } else if (step.replicated) {
                         results[step.handle] = StepResult.Rejected(
@@ -700,6 +726,10 @@ private fun unsupportedJournal(handle: String, path: String): IllegalStateExcept
     "spawn step '$handle': parameter 'journalId' cannot be applied by $path; use apply(ApplyContext)",
 )
 
+private fun unsupportedInputs(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'inputs' cannot be applied by $path; use apply(ApplyContext)",
+)
+
 private fun unsupportedShadow(handle: String, path: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'shadow' cannot be applied by $path; use apply(ApplyContext)",
 )
@@ -777,11 +807,13 @@ class GraphBuilder private constructor(
         replicated: Boolean = false,
         journalId: String? = null,
         shadow: Boolean = false,
+        inputs: Set<String> = emptySet(),
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
         require(context?.hasHandle(name) != true) { "duplicate handle '$name'" }
         if (context == null) {
+            if (inputs.isNotEmpty()) throw unsupportedInputs(name, "graph(Use<HostManagementApi>)")
             if (journalId != null) throw unsupportedJournal(name, "graph(Use<HostManagementApi>)")
             if (shadow) throw unsupportedShadow(name, "graph(Use<HostManagementApi>)")
         } else {
@@ -797,6 +829,7 @@ class GraphBuilder private constructor(
             replicated = replicated,
             journalId = journalId,
             shadow = shadow,
+            inputs = inputs,
         )
         val event = TopoEvent.Spawn(name, ref, factory, parent?.ref, replicated, journalId, shadow)
         context?.journalTopology(listOf(event))

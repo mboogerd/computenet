@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.Serializable
 import java.util.UUID
 
 /**
@@ -159,6 +160,9 @@ class JournalCompatibilityTest {
          * (same file, `:22-24`).
          */
         const val RECORD_OUTLET_WAVE: Byte = 4
+
+        /** `RECORD_INPUT`, likewise repeated only for the absent-toleration compatibility arm. */
+        const val RECORD_INPUT: Byte = 7
     }
 
     /** The effect boundary: every delta acts on [world], which outlives any instance. */
@@ -342,6 +346,40 @@ class JournalCompatibilityTest {
         withRecord.source.outlet.waveState().sourceId shouldBe withRecord.derivedEpoch()
         (withRecord.source.outlet.waveState().highWater >
             withoutRecord.source.outlet.waveState().highWater).shouldBeTrue()
+    }
+
+    @Test
+    fun `a journal stripped of every RECORD_INPUT still replays with no committed cursor`() {
+        JOURNAL_FORMAT_VERSION shouldBe 1
+        val written = InMemoryJournal()
+        val liveController = SimulationController(seed = 46)
+        val live = World(liveController, written, mutableListOf())
+        liveController.runToIdle()
+        live.host.durableInput(SOURCE_REF, "source").commit {
+            live.ops().add("durable")
+            9
+        }
+        liveController.runToIdle()
+
+        val all = written.replay()
+        all.count { it[0] == RECORD_INPUT } shouldBe 1
+        val unstripped = InMemoryJournal().also { it.reset(all) }
+        val stripped = InMemoryJournal().also { journal ->
+            journal.reset(all.filter { it[0] != RECORD_INPUT })
+        }
+
+        fun recover(journal: Journal): Pair<Set<String>, Serializable?> {
+            val controller = SimulationController(seed = 47)
+            val world = World(controller, journal, mutableListOf())
+            controller.runToIdle()
+            val input = world.host.durableInput(SOURCE_REF, "source")
+            world.host.recoverFrom(journal)
+            controller.runToIdle()
+            return world.source.membership() to input.committed()
+        }
+
+        recover(unstripped) shouldBe (setOf("durable") to 9)
+        recover(stripped) shouldBe (emptySet<String>() to null)
     }
 
     /**

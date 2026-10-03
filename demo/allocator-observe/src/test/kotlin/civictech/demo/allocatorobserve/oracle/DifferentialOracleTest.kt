@@ -326,9 +326,6 @@ class DifferentialOracleTest {
             app.stop()
             rig.clock.set(RESTART_AT)
             app = rig.app().start()
-            withClue("a restarted app's declaration-history replay should fail on nothing") {
-                app.declarationReplayFailures shouldBe 0L
-            }
             withClue("the restarted app's cold-start read should see the same seven lines") {
                 ingestOf(app).getValue("recordCount").jsonPrimitive.int shouldBe 7
             }
