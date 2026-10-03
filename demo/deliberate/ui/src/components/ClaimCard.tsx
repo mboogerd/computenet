@@ -60,6 +60,20 @@ const FOCUS_MS = 1600;
  */
 const collapseSetters = new Map<string, (collapsed: boolean) => void>();
 
+/**
+ * A collapsed/expanded state for the children of [ref] — a claim card, or a
+ * framed question's reading (computenet-urmh0) — registered so
+ * {@link focusInTree} can expand it before scrolling to something under it.
+ */
+export function useCollapse(ref: string) {
+  const [collapsed, setCollapsed] = createSignal(false);
+  onMount(() => collapseSetters.set(ref, setCollapsed));
+  onCleanup(() => {
+    if (collapseSetters.get(ref) === setCollapsed) collapseSetters.delete(ref);
+  });
+  return [collapsed, setCollapsed] as const;
+}
+
 let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** The rendered element for a claim or link ref: a ClaimCard's `.card`, the
@@ -179,15 +193,11 @@ function CredenceBar(props: { node: NodeDto; leaf: boolean; research?: boolean }
 
 export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel: Selection }) {
   const entry = () => props.index().get(props.claimRef);
-  const [collapsed, setCollapsed] = createSignal(false);
-  const [linkOpen, setLinkOpen] = createSignal(false);
-  const childRefs = useChildRefs(entry);
   // computenet-lmfg8: let a cruxes/disagreement entry elsewhere on the page
   // expand this card open before it scrolls to something inside it.
-  onMount(() => collapseSetters.set(props.claimRef, setCollapsed));
-  onCleanup(() => {
-    if (collapseSetters.get(props.claimRef) === setCollapsed) collapseSetters.delete(props.claimRef);
-  });
+  const [collapsed, setCollapsed] = useCollapse(props.claimRef);
+  const [linkOpen, setLinkOpen] = createSignal(false);
+  const childRefs = useChildRefs(entry);
 
   return (
     <Show when={entry()}>
