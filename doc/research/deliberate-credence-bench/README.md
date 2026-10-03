@@ -8,10 +8,41 @@ relations. Each tier has its own source of truth (design discussion, 2026-10-03)
 | **1. Synthetic trees** (`tier1.py`) | Exact, by construction | Tune the rule; separate rule error from judge error |
 | **2. Real-knowledge trees, Jev-judged** (`tier2.py`) | Wikidata label at every claim | Rule plus real judgements, with doubted arguments |
 | 3. Graded or resolved empirical claims (fact-check verdicts, post-cutoff forecasts) | Graded / eventual | Calibration where truth has degrees |
-| 4. Wicked problems | None: property tests | Must-pass constraints (responsiveness, invariance, manipulation resistance), agreement with human argument-impact ratings (Kialo) |
+| **4. Wicked problems** (`tier4.py`) | None: property tests | Must-pass constraints (responsiveness, invariance, side-neutrality) and manipulation resistance; agreement with human argument-impact ratings (Kialo) still to do |
 
 Why tiers: the earlier multiple-choice study (`../deliberate-multiclass/TUNING.md`) could not tell judge error from
 rule error. Its arguments were also almost never doubted, so it could not test doubt propagation.
+
+## Recommendation (Tiers 1, 2 and 4 together)
+
+**One candidate rule passes every property check and beats the shipped consensus on both scored tiers:**
+
+```
+credence = sigmoid( logit(base) + ‖ supports ‖₂ − ‖ attacks ‖₂ )
+each argument:  2·atanh( s · max(0, 2·sigmoid(5·logit c) − 1) )        s = relation strength, c = argument credence
+‖·‖₂ = square root of the sum of squares over that side's arguments
+```
+
+- **It has no fitted weights.** k = 5 comes from the range every fit chose. Support and attack get one shared weight,
+  w = 1 (chosen from {1, 1.5, 2, 3} on Tier 2), and the p-norm is the one wlo/woe already use.
+- **It is incremental:** a parent keeps two running sums of squares, one per side.
+- **On the scored tiers:**
+
+| | This rule | Consensus | dfquad |
+|---|---|---|---|
+| Tier 2 log loss | .230 | .252 | .226 |
+| Tier 1 argument-style, captured | .34 | .28 | −.20 |
+| … at the root | .47 | .33 | −.29 |
+
+- **On the property checks:** it is the only candidate passing all six must-have properties *and* all five recommended
+  ones:
+  - doubted and unknown arguments are inert;
+  - duplicates are damped (√2, not 2);
+  - more than 50 weak arguments are needed to overturn one strong one;
+  - evidence reaches the root undiminished at depth 4.
+- **The fitted rules are slightly more accurate on Tier 2** (.213) but fail side-neutrality: attacks weigh 2.5× supports.
+  For a method meant to win collective commitment, a rule that privileges one side by construction is disqualifying
+  unless the asymmetry is shown to hold across many kinds of question. Tier 2 has two.
 
 ## Headline (Tiers 1 and 2 together)
 
@@ -144,6 +175,56 @@ Tier-1-only observations that survive:
   - Strength: decisive links rated .92 on average (80% "decisive"); partial links .46; distractors .10 (69%
     "irrelevant").
 
+## Tier 4: properties for wicked problems
+
+`uv run --with numpy --with scipy python tier4.py` (offline, seconds; the Tier 2 log-loss column needs tier2's Jev
+cache). Output: `tier4_results.txt`, `tier4_results.json`. Every property is a check on small hand-built trees.
+
+**MUST:**
+
+| Id | Property |
+|---|---|
+| M1 | No arguments: the claim stays at its base |
+| M2 | Bounded; one decisive, certainly-true argument does not create certainty |
+| M3 | Monotone in strength, credence and count |
+| M4 | Order-free (incremental) |
+| M5 | Responsive (computenet-nxege): one strong, believed, unrebutted argument moves its parent across .5 from a prior of .25 / .75 |
+| M6 | Side-neutral: equal support and attack move a .5 prior equally |
+
+**SHOULD (measured):**
+
+| Id | Property |
+|---|---|
+| S1 | A refuted argument is inert |
+| S2 | An argument nobody has evidence about is inert |
+| S3 | Duplicate amplification |
+| S4 | How many weak arguments overturn one strong one |
+| S5 | Root move through a chain of 1–4 strong, believed supports |
+
+| Rule | Fails MUST | S1 doubt | S2 unknown | S3 dup | S4 flood | S5 depth 4 | Tier 2 |
+|---|---|---|---|---|---|---|---|
+| dfquad | M2 (one decisive argument → certainty) | .03 | **.32** | 1.76 | 12 | +.41 | .226 |
+| wlo / woe | none | .01 | .20 / .17 | 1.41 | >50 | +.34 / +.31 | .246 / .257 |
+| jnb | none | .04 | .25 | 1.41 | 50 | +.30 | .254 |
+| consensus(wlo, jnb, woe) | none | .02 | .21 | 1.41 | >50 | +.32 | .252 |
+| euler | M5, M6 | .01 | .08 | 2.13 | 6 | +.10 | .318 |
+| qe | none | .00 | .12 | 2.58 | 6 | +.12 | .277 |
+| mlp | M5 | .01 | .11 | 2.00 | 6 | +.14 | .293 |
+| New, Tier 2 fit | M2, **M6** (attack 2.5×) | .01 | .01 | 2.00 | 22 | +.40 | **.213** |
+| New, Tier 1 argument fit | M6 | .00 | .00 | 2.00 | 3 | +.39 | .265 |
+| New, side-neutral, p = 1 | none | .00 | .00 | 2.00 | 8 | +.45 | .236 |
+| **New, side-neutral, p = 2** | **none** | **.00** | **.00** | **1.41** | **>50** | **+.45** | **.230** |
+
+Notes:
+- **S3 is about damage limitation.** A rule sees only numbers, so true duplicate immunity belongs at intake: the
+  engine's triage already has a DUPLICATE action.
+- **The p-norm is what buys flood and duplicate resistance.** That is why wlo and woe have it, and why the candidate
+  adopts it.
+- **Not yet done:** agreement with human argument-impact ratings (Kialo debates). It needs a dataset download, so it
+  is held for an explicit go-ahead.
+- **Also not covered:** how participants' stances are aggregated into a claim's base. Today that is a mean, which
+  bounds any one participant's pull. These checks cover propagation only.
+
 ## Caveats
 
 - **Tier 2 is narrow:** two templates of factual comparison. Its arguments are conjunctive (a threshold claim needs its
@@ -153,8 +234,9 @@ Tier-1-only observations that survive:
 
 ## Next
 
-- **Engine candidate:** the η = 0 family as an *additional* layer (`Semantics` with its own energy), beside the
-  existing ones, with k, w and γ at the Tier 2 / Tier 1 consensus values. It changes no existing layer.
+- **Engine candidate:** the side-neutral p = 2 rule above, as an *additional* layer (`Semantics` with its own energy
+  and combine) beside the existing ones. It changes no existing layer. The Tier 4 checks become its acceptance tests.
+- **Kialo agreement:** does propagating children predict how people rated the parent's impact? (Needs a download.)
 - **Tier 3:** graded fact-check verdicts and resolved forecasts, for claims whose truth has degrees, and to test across
   templates.
 - **Tier 4:** the property tests (responsiveness, invariance, duplicate and flood resistance) as must-pass checks for
