@@ -1,5 +1,10 @@
 package civictech.demo.beadsmirror.feed
 
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
+import civictech.cell.host.KeyedCells
+import civictech.demo.beadsmirror.MirrorGraph
+import civictech.demo.beadsmirror.projector.DotMinter
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonElement
@@ -18,6 +23,67 @@ import java.util.concurrent.atomic.AtomicInteger
  * `dolt_log` answers are newest-first, as the real table's are.
  */
 class RecordlessCommitCheckpointTest {
+
+    @Test
+    fun `changed polls append one durable input record while idle polls append none`(@TempDir runDir: Path) {
+        var log = listOf("c1")
+        val feed = DoltCommitFeed(
+            DiffQuery { sql ->
+                when {
+                    sql == DoltCommitFeed.LOG_QUERY ->
+                        log.map { mapOf("commit_hash" to JsonPrimitive(it)) }
+                    sql == DoltCommitFeed.ISSUE_QUERY ||
+                        (sql.startsWith(DoltCommitFeed.ISSUE_QUERY) && "'c1'" in sql) ->
+                        listOf(
+                            row(
+                                "diff_type" to "added",
+                                "to_commit" to "c1",
+                                "to_id" to "a",
+                                "to_title" to "A",
+                            ),
+                        )
+                    sql.startsWith(DoltCommitFeed.ISSUE_QUERY) -> emptyList()
+                    sql.startsWith(DoltCommitFeed.EDGE_QUERY) -> emptyList()
+                    else -> error("unexpected query: $sql")
+                }
+            },
+        )
+        val graph = MirrorGraph.solo(runDir, "durable-feed-cursor")
+        val projector = graph.projector(DotMinter("durable-feed-cursor"))
+        val cursor = DurableFeedCursor(graph.input(), graph.host, "durable feed cursor test")
+        val poller = DoltFeedPoller(
+            feed = feed,
+            cursor = cursor,
+            interval = Duration.ZERO,
+            onBatch = projector::applyAll,
+        )
+        val journal = checkNotNull(
+            KeyedCells.hostJournal(runDir.resolve(MirrorGraph.JOURNAL_ID).toFile()),
+        )
+        fun inputRecords(): List<DecodedJournalRecord.Input> =
+            journal.replay().map(JournalRecords::decode).filterIsInstance<DecodedJournalRecord.Input>()
+
+        poller.pollOnce()
+        inputRecords().single().let { input ->
+            input.cursor shouldBe "c1"
+            input.frames.size shouldBe 1
+        }
+
+        poller.pollOnce()
+        inputRecords().size shouldBe 1
+
+        log = listOf("c2", "c1")
+        poller.pollOnce()
+        inputRecords().let { inputs ->
+            inputs.size shouldBe 2
+            inputs.last().cursor shouldBe "c2"
+            inputs.last().frames shouldBe emptyList()
+        }
+
+        poller.pollOnce()
+        inputRecords().size shouldBe 2
+        graph.close()
+    }
 
     @Test
     fun `an empty read advances the checkpoint to the observed head`(@TempDir runDir: Path) {
