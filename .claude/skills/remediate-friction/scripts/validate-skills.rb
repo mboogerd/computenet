@@ -163,5 +163,30 @@ if agents_checked
   end
 end
 
+# Pinned traps (computenet-r7vr1). A distillation condensed the `echo '==='`
+# rule away after it had held a fortnight (computenet-wfgba): nothing noticed a
+# hard-won trap leaving. Each row of remediate-friction/pinned-traps.tsv is
+# `<glob>\t<fixed string>\t<bead>`; the string must survive in SOME file the
+# glob matches (repo-root-relative, ** allowed), so text may move but not
+# vanish. Removing a trap deliberately means removing its row in the same diff.
+PINNED = File.join(root, 'remediate-friction', 'pinned-traps.tsv')
+if File.exist?(PINNED)
+  pins = File.readlines(PINNED, encoding: 'UTF-8').map(&:chomp)
+             .reject { |l| l.strip.empty? || l.start_with?('#') }
+  bad = 0
+  pins.each do |l|
+    glob, str, bead = l.split("\t", 3)
+    hit = !str.to_s.empty? &&
+          Dir.glob(File.join(repo_root, glob.to_s), File::FNM_DOTMATCH)
+             .any? { |p| File.file?(p) && File.read(p, encoding: 'UTF-8').include?(str) }
+    next if hit
+
+    bad += 1
+    puts "pinned-traps.tsv: FAIL pinned trap #{bead}: \"#{str}\" no longer in #{glob}"
+  end
+  failures += 1 unless bad.zero?
+  puts "pinned-traps.tsv: OK (#{pins.length} trap(s) present)" if bad.zero?
+end
+
 puts "#{files.length + missing.length} skill(s) checked#{agents_checked ? ' (plus AGENTS.md)' : ''}, #{failures} failing"
 exit(failures.zero? ? 0 : 1)

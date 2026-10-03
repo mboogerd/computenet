@@ -80,7 +80,8 @@ For a flake filed on CI evidence, choose the instrument before you spend the
 slot ([evidence.md](evidence.md#flakes-and-contention)). Check the CI failure
 archive before running a statistical loop. "Already fixed by `<commit>`, no
 longer reproducible" is a successful outcome: comment it with the commit and
-report it.
+report it. Never imitate load host-wide
+([evidence.md](evidence.md#flakes-and-contention)).
 
 Size a prescribed measurement first (runs times per-run cost against your
 slot). If it does not fit, say so on the bead; never present a cheaper sample's

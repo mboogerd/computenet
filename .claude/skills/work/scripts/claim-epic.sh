@@ -49,7 +49,14 @@
 # been measured over 120s.
 #
 # Usage: claim-epic.sh <epic-id>
-#        claim-epic.sh --release <epic-id>
+#        claim-epic.sh --release <epic-id> [--observed <holder> <answer>]
+#
+# SCRATCH=<scratch-dir> (env) puts the claim behind the slot clock: when
+# slot-elapsed.sh reads EXPIRED for that scratch dir, the claim is refused with
+# `EXPIRED: not claimed` (exit 1) BEFORE any bd call. A startup pull stuck for
+# hours behind a hung Dolt process, or a host frozen in DarkWake, otherwise
+# reaches the claim with the slot long gone and claims an epic it can only
+# release (computenet-dfsgn, computenet-fqvhz). Unset → not checked, said so.
 # Exit 0: claimed and pushed (took over or fresh — output says which).
 # Exit 1: not claimed (reason on stderr) — select another epic, or stop.
 #         Includes NOT CHECKED: the epic or its descendants could not be read,
@@ -58,7 +65,12 @@
 #         an unpushed epic claim is exactly the race this script closes.
 #
 # --release reopens a dead run's epic (status open, no assignee, no holder;
-# local, not pushed) — step 3's startup release. It applies the live-descendant
+# local, not pushed) — step 3's startup release. Before the clearing write it
+# comments on the epic "released by <this session's holder token>: observed
+# holder <h>, classified <answer>" — the clearing destroys the only evidence of
+# whose claim it was, so the comment keeps it (computenet-60f8). <h> defaults
+# to the epic's current metadata.holder; --observed supplies what step 3 saw.
+# A failed comment is a warning, never a reason to keep a dead claim. It applies the live-descendant
 # test first. Exit 0 released; exit 1 KEPT, a LIVE or FOREIGN session works
 # beneath it (named on stderr) — leave it claimed and do not select it; exit 3
 # NOT CHECKED, the descendants could not be listed, nothing written; exit 4
@@ -72,7 +84,11 @@ set -uo pipefail
 : "${BEADS_ACTOR:?BEADS_ACTOR must be set, uniquely, per machine}"
 mode=claim
 if [ "${1:-}" = --release ]; then mode=release; shift; fi
-id=${1:?usage: claim-epic.sh [--release] <epic-id>}
+id=${1:?usage: claim-epic.sh [--release] <epic-id> [--observed <holder> <answer>]}
+obs_holder=; obs_answer=
+if [ "$mode" = release ] && [ "${2:-}" = --observed ]; then
+  obs_holder=${3:-}; obs_answer=${4:-}
+fi
 STALE_MIN=${CLAIM_STALE_MIN:-15}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -121,6 +137,13 @@ if [ "$mode" = release ]; then
     printf '  %s\n' "$live" >&2
     exit 1
   fi
+  if [ -z "$obs_holder" ]; then
+    obs_holder=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
+                 | jq -r '.[0].metadata.holder // "none"' 2>/dev/null)
+  fi
+  me=$("$SCRIPT_DIR/session-holder.sh" 2>/dev/null) || me="$BEADS_ACTOR (no holder token)"
+  bd comment "$id" "released by $me: observed holder ${obs_holder:-none}, classified ${obs_answer:-unstated}" >/dev/null 2>&1 \
+    || echo "note: could not comment the release evidence on $id — releasing anyway" >&2
   bd update "$id" --status=open --assignee="" --unset-metadata holder >/dev/null \
     || { echo "release write failed on $id" >&2; exit 4; }
   echo "released $id"
@@ -130,6 +153,19 @@ fi
 if [ "$id" = computenet-wpvy ]; then
   echo "REFUSED: $id is the SDLC epic and never /work's to claim" >&2
   exit 1
+fi
+
+# dfsgn/fqvhz: the slot clock, read by the clock itself, before any bd call.
+if [ -n "${SCRATCH:-}" ]; then
+  reading=$("$SCRIPT_DIR/slot-elapsed.sh" "$SCRATCH" 2>&1); src=$?
+  if [ "$src" = 0 ] && grep -q 'rung: EXPIRED' <<<"$reading"; then
+    printf '%s\n' "$reading" | head -1 >&2
+    echo "EXPIRED: not claimed" >&2
+    exit 1
+  fi
+  [ "$src" = 0 ] || echo "note: slot-elapsed.sh could not read $SCRATCH (rc=$src) — budget not checked" >&2
+else
+  echo "note: SCRATCH unset — slot budget not checked" >&2
 fi
 
 show_json=$(bd show "$id" --json 2>/dev/null); show_rc=$?

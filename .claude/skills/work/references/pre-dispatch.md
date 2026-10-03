@@ -37,6 +37,21 @@ implementer builds on it literally.
   comment why, then amend any acceptance clause the widening contradicts (old
   wording in a comment). An unexplained empty claim gets fixed now. Tasks whose
   acceptance reaches into another's claim go in separate batches.
+- Disjoint claims are not independence. When one task in a batch removes or
+  changes a symbol, placeholder or response string, grep the sibling's claimed
+  tests for it; on a hit, sequence them with a dep edge or name the symbol in
+  the sibling bead as one it must not assert on.
+- Decision ids the task cites (`<feature>-D<n>`) are present in
+  `.claude/skills/work/scripts/bead.sh <feature> -r .design`; a missing one is
+  written to the feature's design (breakdown.md, "Feature breakdown") or the
+  citation removed before dispatch.
+- An anchor in code a blocker had not landed when the task was filed is
+  re-verified by whether the merged API can express the consumer's decided
+  direction, not by whether the member exists.
+- A stale acceptance criterion: rewrite it when the intent of the bead and its
+  parents fixes the correct form, commenting the before, the after and why;
+  otherwise park it for a human ([recovery.md](recovery.md#parks)). No
+  acceptance edit is silent.
 - A disproved prediction, or an obligation a review added to a later task, is
   written on each affected unstarted bead as an `AMENDS <id>` comment before it
   is dispatched; `propagate-correction.py` finds the siblings repeating a claim.

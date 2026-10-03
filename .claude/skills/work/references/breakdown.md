@@ -35,7 +35,10 @@ standard its reviewer judges against. Every child carries:
 - The exact verification command, able to fail if the acceptance is false. A
   task that changes the shape of a type constructed outside its module names a
   repo-wide compile (`./gradlew testClasses`), proven by each module's
-  `compileTestKotlin` task line ([evidence.md](evidence.md#did-the-tests-run)).
+  `compileTestKotlin` task line ([evidence.md](evidence.md#did-the-tests-run)),
+  and the test task (not only the compile) of every module whose guard a
+  claimed file feeds (`:oracle:test` for an inventory, not
+  `:oracle:compileTestKotlin`).
 
 Phrase acceptance in EARS form (`WHEN <trigger>, the X SHALL…`; all five
 templates in `concord/schema/provenance.md`). **Cite requirement ids such as
@@ -51,7 +54,8 @@ expected result) is either `observed:` with the command, run or sha, or
 `unverified:` so the implementer checks it first. A negative assertion over
 values you chose ("not any member's row") can be false by coincidence; do the
 arithmetic before writing it. A bug reproduction you did not watch fail on the
-unfixed code is `unverified:`.
+unfixed code is `unverified:`. A universal over code paths ("X never charges
+Y") is `observed:` only with the call path you traced.
 
 Keep the prose consistent with the acceptance and with time:
 
@@ -61,7 +65,10 @@ Keep the prose consistent with the acceptance and with time:
   one sentence ("walk to classify, measure to size").
 - Pin state that moves: name the commit you inspected, prefer symbol anchors to
   line numbers, name the branch a "landed" constraint depends on, and write
-  "the next free F-number" rather than a literal allocated later.
+  "the next free F-number" (or "the next free UI-NN id in §7") rather than a
+  literal a sibling may allocate first. A criterion resting on a sibling's
+  unlanded output or measurement is written conditional or `unverified:`, with
+  a dep edge on that sibling.
 - Write a do-not-edit constraint as a condition ("an open sibling claims it"),
   not a roster of ids. Never write a worktree, branch or base sha into a child;
   dispatch assigns them.
@@ -102,22 +109,29 @@ a task unsatisfiable; an over-broad one costs a sibling a batch slot, which is
 cheaper.
 
 **A claim covers every file that must change for the acceptance to hold, and no
-file the task only reads.** Claim what the design forces, not what the prose
-names, including:
+file the task only reads.** Derive it by closure, not from the prose. For each
+thing the task adds, changes, removes or moves, grep main AND test sources in
+every module and `.github/`, read each hit, and claim the ones that must
+change. Record each grep in the description as `observed:`.
 
-- the test that pins the acceptance, where the property lives, and any existing
-  test that stops compiling or turns vacuous (an exhaustive `when` over a
-  sealed hierarchy you extend);
-- registries, enumerators and completeness gates over a set you add to — grep
-  the set's identifier (package path, hierarchy root, catalog), not the new
-  entry's, in the own module, other modules and `.github/`;
-- call sites of changed public surface — grep each public member name, not only
-  the declaring type — and the type that holds the state a fix must write;
-- build and architecture inventories: a new Gradle module claims
-  `doc/ARCHITECTURE.md`; a new cross-package kernel reference claims
-  `kernel/src/test/resources/architecture/package-edges.txt`;
-- comments and KDoc that narrate a rule you change (grep its distinctive
-  phrases and requirement id); no test fails on a stale explanation.
+- Removed or changed (member, constructor, type, file or side store, route or
+  response string): its callers, its readers, and tests asserting the old value
+  or a placeholder.
+- Added to a set (sealed type, enum, package, corpus directory): grep an
+  existing sibling (`is <SiblingVariant>`, the package path), not the new
+  entry. That finds exhaustive `when`s, inventories
+  (`oracle/src/test/resources/*-inventory.txt` for a top-level type in
+  `civictech.cell.data` or `.op`; `CorpusCrossCheckTest` for a `24-data-cells`
+  scenario) and completeness gates. A new module claims `doc/ARCHITECTURE.md`;
+  a new cross-package kernel edge claims
+  `kernel/src/test/resources/architecture/package-edges.txt`.
+- Mirrored: the mirror and the test that pins it (`ui/src/api/types.ts` with
+  `ui/test/types.test.ts`), and the value types a new journal or checkpoint
+  path serializes.
+- Always: the test pinning the acceptance; every file the bead's own
+  prescribed mutation or reproduction edits (or a statement that the reviewer
+  runs it); and KDoc or comments narrating a changed rule (grep its distinctive
+  phrases and requirement id) — no test fails on a stale explanation.
 
 Read the hits rather than claiming them all; an import is not an enumeration. A
 sibling's claim is a lower bound. When unsure, claim wider and say in the
@@ -196,7 +210,9 @@ Your children are features, each independently reviewable. Read the epic with
   current work, comment the superseded wording, and report the repair.
 - Existing children may be consumers, not parts: if none is a feature, or each
   names the epic as a prerequisite, the epic's own deliverable still needs
-  features and the consumers wait on them. If the listing shows near-identical
+  features and the consumers wait on them. Features already stamped with your
+  own breakdown token are an earlier run of this breakdown: create only the
+  outcomes none of them covers, and report which existed. If the listing shows near-identical
   pairs, run `.claude/skills/work/scripts/twin-scan.py <id>`, treat a flag as a
   question, and report it rather than create more.
 - Give each feature EARS rules true once the whole feature works, examples in
@@ -222,9 +238,11 @@ feature and its epic with `bead.sh`, and every spec section cited.
   `--design`, and each question is resolved or parked. A rule with no example
   is not understood yet. More than about six rules usually means two features:
   report that.
-- Fix a short-falling feature before splitting it. `--design` replaces the
-  whole field: read it to a file, stop unless the read exits 0, append, and
-  write the file back.
+- Fix a short-falling feature before splitting it. Write every decision a task
+  will cite to the feature's `--design` before the first create; a task cites
+  `<id>-D<n>` only once it is on the field. `--design` replaces the whole
+  field: read it to a file, stop unless the read exits 0, append, and write the
+  file back.
 
 ```bash
 BEAD_SPILL_BYTES=100000000 .claude/skills/work/scripts/bead.sh <feature-id> -r '.design // ""' > <scratch>/<feature-id>-design.md
@@ -239,10 +257,20 @@ bd update <feature-id> --design-file <scratch>/<feature-id>-design.md
   verification command.
 - Size by read-surface (what a fresh agent must read and hold), so a task
   fits one implementer session ([implement.md](implement.md#hand-off)).
-- A prescribed or reserved mutation names the assertion it must redden
-  ([evidence.md](evidence.md#mutation-checks)); a test-only task also says
-  how its implementer shows the tests are not vacuous without leaving its claim.
-- Anchors in code a blocker has not landed yet are `unverified:`.
+- Check every prescribed mutation, fixture and worked example before filing.
+  A prescribed or reserved mutation names the assertion it must redden
+  ([evidence.md](evidence.md#mutation-checks)); trace the mutant past the
+  fixture's setup to that assertion. A pattern edit that still matches, an
+  order swap the scheduler absorbs, and a mutant that removes the fixture's
+  precondition all fail this. Run each example and fixture against every
+  acceptance clause and catalog or arity rule it touches. What you cannot trace
+  is `unverified:`, written as "a mutation of your choosing that reddens
+  <assertion>". A test-only task also says how its implementer shows
+  non-vacuity without leaving its claim.
+- Anchors in code a blocker has not landed yet are `unverified:`. A producer
+  task's acceptance names every capability its sibling consumers' decided
+  directions use (an instance override, a naming hook), not only the members
+  they call.
 - If the feature's `metadata.files` omits a file a task must edit, widen it
   with `bd update <feature-id> --set-metadata files=<list>`, since the feature
   review scopes to it, and claim the file on the task too.
@@ -258,7 +286,11 @@ bd lint <child-ids>
    documents the output); it sees only files the text names, so clean does not
    replace [the walk](#the-files-claim).
 2. Check the trace both ways: every parent criterion is owned by a child (else
-   you are not done), and every child serves one (else it is out of scope).
+   you are not done), and every child serves one (else it is out of scope). A
+   decision that narrows or reinterprets a cited requirement is checked against
+   the epic scenarios covering that id. One you would call "reviewable" is
+   settled or parked, never reported open. A literal-string clause is checked
+   against the identifiers siblings define.
 3. Comment the created ids on the parent (`bd comment <id> --file <path>`),
    unless it is a sub-epic. Leave the parent's status as you found it, and do
    not sync.

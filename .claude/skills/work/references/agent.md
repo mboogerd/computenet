@@ -140,6 +140,9 @@ approval.
   report to your scratch directory.
 - Friction: one line per thing that cost real time, was not obvious, and is
   likely to recur. Report it; do not file it. "None" is a fine answer.
+- Bugs you found outside your item: search first (create-ticket.sh prints
+  POSSIBLE-DUPLICATE; recovery.md step 3 for flakes); a hit gets a comment,
+  not a bead. Report the hit's id beside the bug.
 
 ## Under Codex
 
