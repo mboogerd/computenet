@@ -2,7 +2,11 @@ package civictech.demo.beadsmirror
 
 import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.TopoEvent
+import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.DurableInput
+import civictech.cell.host.JournalRecords
+import civictech.cell.host.KeyedCells
 import civictech.demo.beadsmirror.baseline.BaselineBuilder
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.EmptyExportRefused
@@ -79,6 +83,12 @@ class RebaselineTest {
         rig.initial.apply(createRecord(11, "ZOMBIE", "title", "old", ordinal = 1))
         rig.graph.host.quiescence().await(30_000, "pre-gap records")
         val incumbent = rig.initial
+        val journal = checkNotNull(
+            KeyedCells.hostJournal(runDir.resolve(MirrorGraph.JOURNAL_ID).toFile()),
+        )
+        fun topologyRecords(): List<DecodedJournalRecord.Topology> =
+            journal.replay().map(JournalRecords::decode).filterIsInstance<DecodedJournalRecord.Topology>()
+        val topologyCountBefore = topologyRecords().size
 
         rig.rebaseline(
             rows = listOf(row("B", "status" to "closed")),
@@ -91,6 +101,16 @@ class RebaselineTest {
         rig.state.current.view() shouldBe mapOf(
             "B" to mapOf("id" to "\"B\"", "status" to "\"closed\""),
         )
+        topologyRecords().let { topologies ->
+            topologies.size shouldBe topologyCountBefore + 1
+            val swap = topologies.last().events
+            swap.filterIsInstance<TopoEvent.Despawn>().map { it.ref }.toSet() shouldBe
+                setOf(incumbent.cell.ref, incumbent.edges.ref)
+            swap.filterIsInstance<TopoEvent.Spawn>().associate { it.handle to it.ref } shouldBe mapOf(
+                MirrorGraph.MAP_HANDLE to incumbent.cell.ref,
+                MirrorGraph.EDGES_HANDLE to incumbent.edges.ref,
+            )
+        }
         rig.state.rebaselineCount shouldBe 1
         rig.input.committed() shouldBe "flat1"
     }
@@ -322,9 +342,8 @@ class RebaselineTest {
     private fun rig(): Rig {
         val graph = MirrorGraph.solo(runDir, IDENTITY)
         check(!graph.recovered)
-        val applied = graph.apply(graph.spec())
-        val initial = graph.projector(DotMinter(IDENTITY), applied)
-        return Rig(graph, initial, MirrorState(initial), graph.input(applied))
+        val initial = graph.projector(DotMinter(IDENTITY))
+        return Rig(graph, initial, MirrorState(initial), graph.input())
     }
 
     private fun createRecord(

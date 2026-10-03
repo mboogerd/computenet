@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.net.URI
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -35,13 +36,10 @@ import java.nio.file.Path
  * JUnit assumption — so it is a real CI gate rather than a
  * green-but-skipped one, exactly like [BeadsMirrorAppTest.Refusal].
  *
- * **Why [RebaselineSwap] is not vacuous.** `Replication.rebind` refuses a
- * candidate whose `CellRef` differs from the incumbent's, so
- * [RebaselineSwap]'s "different refs is refused by Replication" case fails
- * loudly *only* when the swap really travels through
- * `Replication.rebind`. Delete [MirrorPeering.rebind]'s body, or the
- * `onSwap` hook that calls it, and that test goes green-by-silence — which
- * is what makes it a check on the wiring rather than on the kernel.
+ * [RebaselineSwap] pins the replacement path that superseded the old
+ * application-level rebind: one journaled topology delta respawns both hosted
+ * cells under the same refs, and the runtime registry retains exactly one
+ * local replica for each logical id.
  */
 class MirrorPeeringTest {
 
@@ -240,6 +238,7 @@ class MirrorPeeringTest {
         fun `one topology delta respawns fresh cells under the same refs and one local replica remains`() {
             MirrorPeering(settings, runDir).use { peering ->
                 val graph = peering.graph
+                Files.exists(runDir.resolve("main/host.journal")) shouldBe true
                 val incumbent = graph.projector(DotMinter("beads-scratch-solo"))
                 incumbent.apply(createRecord(1, "ZOMBIE"))
                 graph.host.quiescence().await(30_000, "incumbent write")
