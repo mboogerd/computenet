@@ -20,6 +20,7 @@ import {
   verdict,
 } from '../util/format';
 import { OverrideControl } from './OverrideControl';
+import { sameRefs } from '../util/byRef';
 import { TweenPct } from './Tween';
 
 /** Every claim of the rendered tree, by ref, with the edge (= link) that
@@ -131,8 +132,6 @@ export interface Selection {
    */
   research?: Accessor<boolean>;
 }
-
-const sameRefs = (a: string[], b: string[]) => a.length === b.length && a.every((r, i) => r === b[i]);
 
 /** Stable child refs of a tree entry, so a new frame with the same children keeps their DOM. */
 export function useChildRefs(entry: Accessor<{ node: TreeNode } | undefined>) {
