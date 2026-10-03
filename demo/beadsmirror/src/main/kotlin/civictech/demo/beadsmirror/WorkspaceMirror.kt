@@ -305,8 +305,7 @@ class WorkspaceMirror private constructor(
             val graph = peering?.graph ?: MirrorGraph.solo(runDir, identity)
 
             val minter = DotMinter(identity)
-            val applied = if (graph.recovered) null else graph.apply(graph.spec())
-            val initial = graph.projector(minter, applied)
+            val initial = graph.projector(minter)
             val state = MirrorState(initial)
 
             // One gate for the life of this mirror — NOT one per projector:
@@ -360,7 +359,7 @@ class WorkspaceMirror private constructor(
             // journal starts from one baseline committed through the live input.
             if (!graph.recovered) rebaseline.run(RebaselineReason.FirstStart)
             val cursor = DurableFeedCursor(
-                input = graph.input(applied),
+                input = graph.input(),
                 host = graph.host,
                 label = "beadsmirror $identity poll",
             )

@@ -202,7 +202,7 @@ class DoltFeedPoller(
      * or more than once.
      */
     /**
-     * The persisted checkpoint, or `null` when there is none — or when
+     * The committed cursor, or `null` when there is none — or when
      * reading it is itself what has just gone wrong. The loop is already
      * failing when this is called; a second failure here must not replace the
      * first, so it degrades to "unknown position" rather than propagating.

@@ -106,6 +106,8 @@ class MirrorGraph internal constructor(
                 context.recover(journal).awaitApplied(30_000)
                 requireRecoveredHandles(context.handles, refs, runDir.resolve(JOURNAL_ID))
                 host.checkpoint(journal)
+            } else {
+                spec(refs, replicated = false).apply(context)
             }
             return MirrorGraph(
                 host = host,

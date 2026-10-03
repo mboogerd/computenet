@@ -133,7 +133,7 @@ class CheckpointResumeTest {
 
             failure.condition shouldBe FeedCondition.CheckpointGone(goneHash)
             batches shouldBe emptyList()
-            // The gap is never silently bridged: the checkpoint file is untouched.
+            // The gap is never silently bridged: the committed cursor is untouched.
             checkpoint.committed() shouldBe goneHash
         }
 
@@ -170,7 +170,7 @@ class CheckpointResumeTest {
             val failure = shouldThrow<FeedConditionException> { poller.pollOnce() }
 
             failure.condition shouldBe FeedCondition.CheckpointGone(persistedCheckpoint)
-            // Nothing was emitted for this tick, and the checkpoint file is untouched —
+            // Nothing was emitted for this tick, and the committed cursor is untouched —
             // the gap is never silently bridged.
             batches.size shouldBe 1
             checkpoint.committed() shouldBe persistedCheckpoint
@@ -267,7 +267,7 @@ class CheckpointResumeTest {
         }
 
         @Test
-        fun `the checkpoint is persisted only after the batch has been handed to the consumer`() {
+        fun `the cursor advances only after onBatch returned`() {
             val feed = DoltCommitFeed(
                 DiffQuery { sql ->
                     when (sql) {
