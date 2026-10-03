@@ -32,12 +32,14 @@ import kotlin.test.fail
  *
  * ## Order independence is the point, not a bonus
  *
- * The scenario is played in four relay orders — A's dial connected first, B's
- * first, A's hello pumped before B's link exists, and B's link admitted at A
- * before A's link exists with B's close of it overtaking B's hello to A. A real LAN picks one of
- * those and a test over real sidecars would sample it; here the test picks
- * each, and asserts the same end state from each. Nothing sleeps: frames move
- * only when [TwoNodeFakeRig.pump] moves them ([DSC2-DIAL-08], [DSC2-DIAL-09]).
+ * The end state is played in four relay orders — A's dial connected first,
+ * B's first, A's hello pumped before B's link exists, and B's link admitted at
+ * A before A's link exists with B's close of it overtaking B's hello to A. A
+ * fifth focused ordering isolates that close reaching A before A's own dial
+ * reports `LINK_UP`, where the observable assertion is the count at that
+ * instant. A real LAN picks one of those and a test over real sidecars would
+ * sample it; here the test picks each. Nothing sleeps: frames move only when
+ * [TwoNodeFakeRig.pump] moves them ([DSC2-DIAL-08], [DSC2-DIAL-09]).
  */
 class MutualDialTest {
 
@@ -234,6 +236,98 @@ class MutualDialTest {
             await("A's policy to have processed the down") { a.peering.counters.selfDropped.count == 1L }
 
             heldForA.forEach { a.fake.send(SidecarMessage.Data(dialFromA.link, it)) }
+        }
+    }
+
+    /**
+     * computenet-axifn: the peer's tie-break close reaches A before A's sidecar
+     * reports the `LINK_UP` for A's own dial. A has therefore never locally
+     * held both directions: its peered INBOUND loser is its only visible link.
+     *
+     * B can still reach the verdict because its sidecar reports the INBOUND
+     * end of A's dial first (`PROTOCOL.md` section 3), then B's own OUTBOUND
+     * dial is brought up normally. B's hello crosses that outbound link, A
+     * admits it and answers, and B sees both directions and closes its
+     * OUTBOUND loser — A's only, INBOUND link. The down is the only place A
+     * can count the loss, while its reciprocal dial is still in flight.
+     *
+     * On the pre-fix code A's `oppositeLinkUp` is false, so the count assertion
+     * reads 0.
+     */
+    @Test
+    fun `the peer's tie-break close before this node's own LINK_UP is counted once`() {
+        TwoNodeFakeRig.startSorted().use { rig ->
+            val a = rig.a
+            val b = rig.b
+            a.discover(b.own)
+            b.discover(a.own)
+            val dialFromA = rig.dialFrom(a)
+            val dialFromB = rig.dialFrom(b)
+
+            // B sees the accepting end of A's dial. A's dial remains pending:
+            // no OUTBOUND LINK_UP has reached A.
+            rig.reportInboundLinkUp(dialFromA, from = a, to = b)
+            await("A's dial to be up only at B") {
+                b.links(a.own).singleOrNull()?.direction == LinkDirection.INBOUND && a.links(b.own).isEmpty()
+            }
+
+            // B's own dial comes up at both ends. Its hello is admitted at A,
+            // whose answer lets B close that physical link as B's loser.
+            rig.connect(dialFromB, from = b, to = a)
+            await("B to close its outbound loser") {
+                rig.pump()
+                rig.written.any { (who, message) ->
+                    who == b.label && message is HostMessage.CloseLink && message.link == dialFromB.link
+                }
+            }
+            await("A's only link to B to go down") { a.links(b.own).isEmpty() }
+
+            // A's self-sighting is queued behind the down, making the count
+            // below a read of the processed outcome rather than a race.
+            a.discover(a.own)
+            await("A's policy to process the peer's close") { a.peering.counters.selfDropped.count == 1L }
+            assertTrue(a.links(b.own).isEmpty(), "A still has not received its own outbound LINK_UP")
+            assertEquals(
+                1L,
+                a.peering.counters.tieBreakClosed.count,
+                "A counted the peer's tie-break close while its reciprocal dial was still in flight",
+            )
+        }
+    }
+
+    /**
+     * The other edge of computenet-axifn's window: once A's own dial has been
+     * reported done, it is no longer in flight, so a losing-direction accepted
+     * link that drops with no opposite link up is a plain drop, not a
+     * tie-break close.
+     *
+     * Mutation: never remove a key from `inFlightDials` in `onDialDone` — the
+     * finished dial still reads as in flight and the drop is counted.
+     */
+    @Test
+    fun `a losing-direction drop after this node's own dial finished is not a tie-break close`() {
+        TwoNodeFakeRig.startSorted().use { rig ->
+            val a = rig.a
+            val b = rig.b
+            a.discover(b.own)
+            val dialFromA = rig.dialFrom(a)
+            a.fake.send(SidecarMessage.Failure(dialFromA.link, "unreachable"))
+            await("A's dial to be reported done") { a.peering.counters.dialsFailed.count == 1L }
+
+            b.discover(a.own)
+            val dialFromB = rig.dialFrom(b)
+            rig.reportInboundLinkUp(dialFromB, from = b, to = a)
+            await("B's dial to be up at A") { a.links(b.own).singleOrNull()?.direction == LinkDirection.INBOUND }
+            // A's retry is armed on a clock that never moves: no second dial
+            // is in flight when the drop is classified. (The drop itself
+            // re-dials, [DSC2-DIAL-06] — but only after it has been counted.)
+            assertEquals(1L, rig.dialsFrom(a), "A has no second dial in flight before the drop")
+            rig.deliverDown(a, a.links(b.own).single().linkId, "dropped before its hello")
+            await("A's only link to B to go down") { a.links(b.own).isEmpty() }
+
+            a.discover(a.own)
+            await("A's policy to process the drop") { a.peering.counters.selfDropped.count == 1L }
+            assertEquals(0L, a.peering.counters.tieBreakClosed.count, "a drop after A's dial finished is not a tie-break close")
         }
     }
 
