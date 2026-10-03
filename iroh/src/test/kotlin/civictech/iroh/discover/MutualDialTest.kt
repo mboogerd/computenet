@@ -32,12 +32,14 @@ import kotlin.test.fail
  *
  * ## Order independence is the point, not a bonus
  *
- * The scenario is played in four relay orders — A's dial connected first, B's
- * first, A's hello pumped before B's link exists, and B's link admitted at A
- * before A's link exists with B's close of it overtaking B's hello to A. A real LAN picks one of
- * those and a test over real sidecars would sample it; here the test picks
- * each, and asserts the same end state from each. Nothing sleeps: frames move
- * only when [TwoNodeFakeRig.pump] moves them ([DSC2-DIAL-08], [DSC2-DIAL-09]).
+ * The scenario is played in five relay orders — A's dial connected first, B's
+ * first, A's hello pumped before B's link exists, B's link admitted at A
+ * before A's link exists with B's close of it overtaking B's hello to A, and
+ * that same close reaching A before A's own dial reports `LINK_UP`. A real LAN
+ * picks one of those and a test over real sidecars would sample it; here the
+ * test picks each, and asserts the same end state from each. Nothing sleeps:
+ * frames move only when [TwoNodeFakeRig.pump] moves them
+ * ([DSC2-DIAL-08], [DSC2-DIAL-09]).
  */
 class MutualDialTest {
 
@@ -234,6 +236,66 @@ class MutualDialTest {
             await("A's policy to have processed the down") { a.peering.counters.selfDropped.count == 1L }
 
             heldForA.forEach { a.fake.send(SidecarMessage.Data(dialFromA.link, it)) }
+        }
+    }
+
+    /**
+     * computenet-axifn: the peer's tie-break close reaches A before A's sidecar
+     * reports the `LINK_UP` for A's own dial. A has therefore never locally
+     * held both directions: its peered INBOUND loser is its only visible link.
+     *
+     * B can still reach the verdict because its sidecar reports the INBOUND
+     * end of A's dial first (`PROTOCOL.md` section 3), then B's own OUTBOUND
+     * dial is brought up normally. B's hello crosses that outbound link, A
+     * admits it and answers, and B sees both directions and closes its
+     * OUTBOUND loser — A's only, INBOUND link. The down is the only place A
+     * can count the loss, while its reciprocal dial is still in flight.
+     *
+     * On the pre-fix code A's `oppositeLinkUp` is false, so the count assertion
+     * reads 0 and the policy also starts a duplicate dial before the first one
+     * has settled.
+     */
+    @Test
+    fun `the peer's tie-break close before this node's own LINK_UP is counted once`() {
+        runScenario("the peer's close before A's own LINK_UP") { rig ->
+            val a = rig.a
+            val b = rig.b
+            val dialFromA = rig.dialFrom(a)
+            val dialFromB = rig.dialFrom(b)
+
+            // B sees the accepting end of A's dial. A's dial remains pending:
+            // no OUTBOUND LINK_UP has reached A.
+            rig.reportInboundLinkUp(dialFromA, from = a, to = b)
+            await("A's dial to be up only at B") {
+                b.links(a.own).singleOrNull()?.direction == LinkDirection.INBOUND && a.links(b.own).isEmpty()
+            }
+
+            // B's own dial comes up at both ends. Its hello is admitted at A,
+            // whose answer lets B close that physical link as B's loser.
+            rig.connect(dialFromB, from = b, to = a)
+            await("B to close its outbound loser") {
+                rig.pump()
+                rig.written.any { (who, message) ->
+                    who == b.label && message is HostMessage.CloseLink && message.link == dialFromB.link
+                }
+            }
+            await("A's only link to B to go down") { a.links(b.own).isEmpty() }
+
+            // A's self-sighting is queued behind the down, making the count
+            // below a read of the processed outcome rather than a race.
+            a.discover(a.own)
+            await("A's policy to process the peer's close") { a.peering.counters.selfDropped.count == 1L }
+            assertTrue(a.links(b.own).isEmpty(), "A still has not received its own outbound LINK_UP")
+            assertEquals(
+                1L,
+                a.peering.counters.tieBreakClosed.count,
+                "A counted the peer's tie-break close while its reciprocal dial was still in flight",
+            )
+            assertEquals(1L, rig.dialsFrom(a), "A did not duplicate its still-in-flight dial after the loser went down")
+
+            // Complete the delayed half. The survivor is A's OUTBOUND / B's
+            // INBOUND physical link, exactly as in every other ordering.
+            rig.reportOutboundLinkUp(dialFromA, from = a, to = b)
         }
     }
 
