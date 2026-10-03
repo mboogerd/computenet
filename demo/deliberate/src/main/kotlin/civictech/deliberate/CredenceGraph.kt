@@ -201,6 +201,8 @@ class CredenceGraph(
     private val exactLock = Any()
     private val exactCache = HashMap<ExactKey, ExactValueOfInformation>()
     private var exactCacheVersion = -1L
+    private var evaluator: ExactValueEvaluator? = null
+    private var evaluatorVersion = -1L
 
     /** Serializes graph mutations, including direct callers outside the engine. */
     private val mutationLock = Any()
@@ -492,12 +494,38 @@ class CredenceGraph(
      */
     internal fun exactValueOf(id: CellRef, roots: Collection<CellRef>): ExactValueOfInformation? {
         val orderedRoots = roots.distinct().sortedWith(ClaimNode.REF_ORDER)
+        val (version, evaluator) = currentEvaluator()
+        val key = ExactKey(version, id, orderedRoots)
+        synchronized(exactLock) {
+            if (exactCacheVersion == version) exactCache[key]?.let { return it }
+        }
+        val result = evaluator.valueOf(id, orderedRoots) ?: return null
+        synchronized(exactLock) {
+            if (exactCacheVersion < version) {
+                exactCache.clear()
+                exactCacheVersion = version
+            }
+            if (exactCacheVersion == version) exactCache[key] = result
+        }
+        // A change that landed meanwhile only makes this a read of the snapshot
+        // just before it: the next read sees the new version. No retry, so a
+        // burst of credence emissions cannot keep a caller (who holds the
+        // engine lock) re-evaluating.
+        return result
+    }
+
+    /**
+     * One evaluator per snapshot version, shared by every subject read at that
+     * version, so its re-evaluated baseline is computed once per change rather
+     * than once per node read.
+     */
+    private fun currentEvaluator(): Pair<Long, ExactValueEvaluator> {
         while (true) {
             val version = evaluationVersion.get()
-            val key = ExactKey(version, id, orderedRoots)
             synchronized(exactLock) {
-                if (exactCacheVersion == version) exactCache[key]?.let { return it }
+                if (evaluatorVersion == version) return version to evaluator!!
             }
+            // Retried only while the capture itself straddles a change; no evaluation runs here.
             val (nodeSnapshot, afterSnapshot) = synchronized(mutationLock) {
                 val (infos, stanceValues) = synchronized(nodesLock) {
                     nodes.toMap() to held.mapValues { it.value.values.toList() }
@@ -513,16 +541,14 @@ class CredenceGraph(
                 exact to evaluationVersion.get()
             }
             if (version != afterSnapshot) continue
-            val result = ExactValueEvaluator(layers, nodeSnapshot, quiescence).valueOf(id, orderedRoots) ?: return null
-            if (version != evaluationVersion.get()) continue
+            val built = ExactValueEvaluator(layers, nodeSnapshot, quiescence)
             synchronized(exactLock) {
-                if (exactCacheVersion != version) {
-                    exactCache.clear()
-                    exactCacheVersion = version
+                if (version > evaluatorVersion) {
+                    evaluator = built
+                    evaluatorVersion = version
                 }
-                exactCache[key] = result
             }
-            return result
+            return version to built
         }
     }
 

@@ -363,11 +363,6 @@ internal class ExactValueEvaluator(
 
     fun valueOf(subject: CellRef, roots: Collection<CellRef>): ExactValueOfInformation? {
         if (subject !in nodes) return null
-        // Do not use the live hub values as the mathematical baseline. A stance
-        // is recorded before its asynchronous cell propagation reaches the hub,
-        // and exploration asks for VoI at exactly that boundary. Re-evaluating
-        // the captured inputs makes R, q, R0 and R1 one coherent snapshot.
-        val baseline = settle()
         val probability = headline(baseline.getValue(subject))
         val low = settle(subject, 0.0, baseline)
         val high = settle(subject, 1.0, baseline)
@@ -383,6 +378,17 @@ internal class ExactValueEvaluator(
         return ExactValueOfInformation(probability, changes)
     }
 
+    /**
+     * The re-evaluated snapshot, shared by every [valueOf] on this evaluator.
+     * Do not use the live hub values as the mathematical baseline. A stance
+     * is recorded before its asynchronous cell propagation reaches the hub,
+     * and exploration asks for VoI at exactly that boundary. Re-evaluating
+     * the captured inputs makes R, q, R0 and R1 one coherent snapshot.
+     * Computing it once per snapshot, not once per subject, keeps a read of
+     * every node O(graph) rather than O(graph²).
+     */
+    private val baseline: Map<CellRef, List<Double>> by lazy { settle() }
+
     private fun headline(values: List<Double>): Double = layers.headlineOf(values, layers.consensus(values))
 
     private fun settle(
@@ -390,7 +396,8 @@ internal class ExactValueEvaluator(
         resolution: Double = 0.0,
         seed: Map<CellRef, List<Double>> = nodes.mapValues { it.value.current },
     ): Map<CellRef, List<Double>> {
-        val values = seed.toMutableMap()
+        // Copy-free overlay over [seed]: a resolved node only touches its downstream.
+        val values = OverlayMap(seed)
         if (subject != null) values[subject] = List(layers.ids.size) { resolution }
 
         val affected = if (subject == null) {
@@ -456,6 +463,16 @@ internal class ExactValueEvaluator(
             if (edge.polarity == civictech.agora.cell.Polarity.SUPPORT) supports += args else attacks += args
         }
         return layers.evaluate(node.stances, attacks, supports)
+    }
+
+    /** A mutable view over an immutable base map that copies nothing; writes land in [changed]. */
+    private class OverlayMap(private val base: Map<CellRef, List<Double>>) : AbstractMap<CellRef, List<Double>>() {
+        private val changed = HashMap<CellRef, List<Double>>()
+        operator fun set(key: CellRef, value: List<Double>) { changed[key] = value }
+        override fun get(key: CellRef): List<Double>? = changed[key] ?: base[key]
+        override fun containsKey(key: CellRef): Boolean = key in changed || key in base
+        override val entries: Set<Map.Entry<CellRef, List<Double>>>
+            get() = (base + changed).entries
     }
 
     private companion object {
