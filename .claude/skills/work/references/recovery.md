@@ -3,7 +3,6 @@
 The orchestrator reads this when something rare interrupts SKILL.md's normal flow. Read only the section you need. `<scratch>` means your scratch directory's absolute path, spelled out, because shell variables do not survive between Bash calls.
 
 ## Contents
-
 - Resuming after the host died — clock, side effects, reboot, revoked folder access
 - Stalled agents and load — agents past their bound, watchdog stalls, the reviewer ladder, when to stop dispatching
 - Continuation across ticket boundaries — context headroom, relatedness, when to ask Jev
@@ -11,7 +10,6 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 - Dolt pull conflicts — the one resolvable shape and its exact commands
 - Parks — the bar, how to park, re-triage and unpark
 - Collisions — the signs, and why you never pick a winner
-
 ## Resuming after the host died
 
 | Situation | Do | Why |
