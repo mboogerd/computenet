@@ -333,6 +333,7 @@ export const LAYER_NAMES: Record<string, string> = {
   euler: 'Euler-based',
   qe: 'quadratic energy',
   mlp: 'MLP-based',
+  glo: 'gated log-odds',
 };
 
 /** One line per rule, e.g. "weighted log-odds · 62% · in consensus", in the backend's layer order. */
