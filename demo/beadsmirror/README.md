@@ -35,6 +35,34 @@ returns with the link already carrying, so a test's bounded wait is about
 convergence and not about the transport coming back. The binding's own KDoc
 states why that beats killing the listener.
 
+## Durability and restart
+
+Every workspace mirror uses one hosted projector graph and one kernel journal.
+The run directory contains `<runDir>/main/host.journal`: its topology records
+describe the pinned `map` and `edges` cells, and its durable-input records carry
+the feed frames together with the Dolt head that covers them. Solo mode builds
+this graph with `MirrorGraph.solo` and an `ApplyContext`; two-node mode gives
+the same `GraphSpec` to `Runtime.boot` with `NodeSpec.journalTopology = true`.
+Both modes therefore host the projector cells and use the same journal layout.
+
+When the journal is non-empty, startup replays the topology and hosted frames,
+rebuilds the projector over the recovered cells, and resumes polling from the
+durable input's committed cursor. Ordinary restart does not run `bd export` and
+does not emit `MirrorEvent.Rebaselined`. A new journal applies the graph first,
+then `FirstStart` folds the export into the live empty projector and commits the
+batch and its head through one durable-input record. During normal polling, a
+non-empty batch or a moved head likewise commits the batch and cursor together;
+an idle tick appends nothing.
+
+When the cursor is gone from history (`CheckpointGone`) or a history merge
+requires a snapshot, the poller applies one topology delta that despawns and
+respawns both cells under the same refs. It then builds the hosted projector on
+the fresh cells and commits the baseline and head through one durable-input
+record. To intentionally reset a mirror, delete `<runDir>/main/`; the next
+start is a first start and accepts an empty export. There is no journal
+compaction during a live run; the journal grows with durable-input records until
+recovery allows the host checkpoint step.
+
 ## `--write-back`: opt-in, imposes the fold's winner onto `bd`
 
 `--write-back` is a bare flag, off by default. With it set, EVERY configured
@@ -163,15 +191,17 @@ local, and the gate is a pass-through that counts.
   depends on it; a `bd` schema change can move it out from under this without
   warning. Hardening against that is explicitly out of scope.
 - **`--dolt-auto-commit` batching coalesces commits**, and `bd compact` / `gc` /
-  `flatten` squash the feed. (The checkpoint half of that is already handled by
-  the `CheckpointGone` re-baseline; the classification half is not.)
+  `flatten` squash the feed. (The cursor-invalidation half of that is handled
+  by the `CheckpointGone` re-baseline; the classification half is not.)
 - **A local `bd` edit landing inside the import window on the SAME row is
   misclassified** — the import's commit carries the token, and a concurrent
   human edit folded into that same commit rides through suppressed. A narrow
   race, documented rather than closed.
 - **A restart between an import and the poll that would have seen its commit
-  loses the pending token.** The start-time re-baseline consumes that commit
-  instead, so no phantom follows — but that corner is reasoned, not measured.
+  loses the pending token.** Journal recovery preserves the fold and cursor,
+  but echo expectations are in memory only, so the resumed poll classifies that
+  commit as local; no startup re-baseline consumes it. The fold still
+  converges, but the corner is reasoned rather than measured.
 - **An import that exits non-zero AFTER its Dolt commit already landed loses
   the pending token the same way.** `WriteBackApplier.applyOnce` calls
   `cancelEcho(issueId, token)` on any non-zero exit, withdrawing the
