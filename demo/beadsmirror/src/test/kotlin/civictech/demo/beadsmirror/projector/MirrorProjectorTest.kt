@@ -1,12 +1,17 @@
 package civictech.demo.beadsmirror.projector
 
 import civictech.cell.Propagate
+import civictech.cell.StateRead
+import civictech.cell.Timestamp
 import civictech.cell.data.OrMapCell
+import civictech.cell.data.SetCell
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
+import civictech.demo.beadsmirror.feed.EdgeDiff
 import civictech.demo.beadsmirror.feed.FeedPosition
 import civictech.demo.beadsmirror.feed.FieldDiff
 import io.kotest.matchers.nulls.shouldBeNull
@@ -49,6 +54,36 @@ class MirrorProjectorTest {
         },
         edgeDiffs = emptyList(),
     )
+
+    /** A record of one commit's change to one dependency edge, with no issue-field row. */
+    private fun edgeRecord(
+        height: Long,
+        issue: String,
+        dependsOn: String,
+        edgeType: String,
+        diffType: DiffType,
+    ) = ChangeRecord(
+        commitHash = "commit-$height",
+        position = FeedPosition(height, 0),
+        issueId = issue,
+        diffType = null,
+        fieldDiffs = emptyList(),
+        edgeDiffs = listOf(EdgeDiff(diffType, issue, dependsOn, edgeType)),
+    )
+
+    /** The live add-tags for one edge, walking every bounded-state page. */
+    private fun liveEdgeTags(edges: SetCell<MirrorEdge>, target: MirrorEdge): Set<Timestamp> {
+        val live = linkedSetOf<Timestamp>()
+        var request = StateRead()
+        while (true) {
+            val page = edges.readBounded(request)
+            page.entries.filterIsInstance<SetCell.SetStateEntry<*>>()
+                .filter { it.element == target }
+                .forEach { entry -> live += entry.addTags - entry.delTags }
+            request = request.copy(cursor = page.next ?: break)
+        }
+        return live
+    }
 
     /** Records what the cell emits — one emission per *effective* delta. */
     private fun emissions(cell: OrMapCell<MirrorKey, String>): MutableList<TaggedMapDelta<MirrorKey, String>> {
@@ -163,6 +198,60 @@ class MirrorProjectorTest {
         projector.rawValue(MirrorKey("A", "status")).shouldNotBeNull() shouldBe json("closed")
         // ... and yet the materialized view has no A at all
         projector.view() shouldBe emptyMap()
+    }
+
+    // -----------------------------------------------------------------
+    // a3v8u-D5 — rebuilt projectors recover their own observed-live dots
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `a projector rebuilt over populated cells removes its recovered issue dots`() {
+        val cell = OrMapCell<MirrorKey, String>()
+        val first = MirrorProjector(minter, cell)
+        first.apply(issueRecord(5, "A", DiffType.ADDED, "title" to "first"))
+        first.apply(issueRecord(6, "A", DiffType.MODIFIED, "status" to "open"))
+
+        val rebuilt = MirrorProjector(minter, cell)
+        rebuilt.apply(issueRecord(7, "A", DiffType.REMOVED))
+
+        rebuilt.view() shouldBe emptyMap()
+        val state = cell.state()
+        state.puts.keys.filter { it.issueId == "A" }
+            .all { state.liveDots(it).isEmpty() } shouldBe true
+    }
+
+    @Test
+    fun `a rebuilt projector leaves a foreign map dot live after local removal`() {
+        val cell = OrMapCell<MirrorKey, String>()
+        MirrorProjector(minter, cell)
+            .apply(issueRecord(5, "A", DiffType.ADDED, "status" to "local"))
+        val status = MirrorKey("A", "status")
+        val foreign = DotMinter("beads-peer-99").dot(FeedPosition(6, 0), 0)
+        cell.deltaInlet.call.propagate(
+            TaggedMapDelta(puts = mapOf(status to mapOf(foreign to json("peer"))))
+        )
+
+        val rebuilt = MirrorProjector(minter, cell)
+        rebuilt.apply(issueRecord(7, "A", DiffType.REMOVED))
+
+        rebuilt.view() shouldBe emptyMap()
+        cell.state().liveDots(status).keys shouldBe setOf(foreign)
+    }
+
+    @Test
+    fun `a rebuilt projector removes its edge tag but leaves a foreign tag live`() {
+        val edges = SetCell<MirrorEdge>()
+        val edge = MirrorEdge("B", "A", "blocks")
+        MirrorProjector(minter, edges = edges)
+            .apply(edgeRecord(5, "B", "A", "blocks", DiffType.ADDED))
+        val foreign = DotMinter("beads-peer-99").dot(FeedPosition(6, 0), 1)
+        edges.deltaInlet.call.propagate(SetDelta(adds = mapOf(edge to setOf(foreign))))
+
+        val rebuilt = MirrorProjector(minter, edges = edges)
+        rebuilt.apply(edgeRecord(7, "B", "A", "blocks", DiffType.REMOVED))
+
+        rebuilt.edgeView() shouldBe setOf(edge)
+        liveEdgeTags(edges, edge) shouldBe setOf(foreign)
     }
 
     // -----------------------------------------------------------------
