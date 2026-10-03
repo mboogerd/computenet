@@ -62,13 +62,11 @@ names that model.)
 
 - **CRED-01** Every claim receives a Jev *plausibility* judgment — a Score over
   five ordered levels (almost certainly false … almost certainly true) mapped
-  linearly to [0,1] — judged on a state holding only `root_question` and
-  `claim`: no path, parent, direction or date, and not its arguments (the
-  path biases the judgment towards the claim's role in the argument; evidence
-  in `CALIBRATION.md`). The instruction tells Jev the
-  question only names the topic, and not to reward or penalise the claim for
-  the answer it favours. It is applied as the stance of user `jev` on
-  that claim. An argument is judged the moment it is attached: plausibility
+  linearly to [0,1] — judged on a state holding only `claim`: no root question,
+  path, parent, direction or date, and not its arguments (question context
+  biases the judgment of a reusable claim; evidence in `CALIBRATION.md`). It
+  is applied as the stance of user `jev` on that claim. An argument is judged
+  the moment it is attached: plausibility
   in its own request, in parallel with one request asking its CRED-02
   strength and EXP-05 quality and relevance (independent questions over the
   argument's full state); the root, or an argument whose assessment failed, is
@@ -78,7 +76,9 @@ names that model.)
   maps the plausibility to `Judge.OUTSIDE_KNOWLEDGE` (0.5) whatever the score
   says; an unrecognised answer fails the call. No Jev request carries a
   current date, on any judgment kind: the judgment rests on Jev's own
-  knowledge (a date moved the judgment of claims about recent events).
+  knowledge (a date moved the judgment of claims about recent events). The
+  stance is journaled input (DUR-01): restoring a claim keeps the plausibility
+  recorded by an older request and does not ask Jev to reinterpret it.
 - **CRED-02** Every edge receives a Jev *relation strength* judgment — a Score:
   "if the child claim were true, how strongly would it bear on the parent in
   the stated direction" (irrelevant … decisive), mapped to [0,1]. Applied as the
@@ -447,9 +447,8 @@ open question, each explored as a root of its own.
   `parent = null` (a second root of the same tree, `proposer` = `Claim.READING`
   ("reading") or `Claim.POSITION` ("position") by mode) — so it inherits, with
   no engine change beyond creating it: its own CRED-01 first impression
-  (`Judge.plausibility`, judged with `root_question` the *original* question
-  and `claim` the item's restated text — the pilot's "restated question"
-  judged in the original's context), its own model D neutral-prior verdict
+  (`Judge.plausibility`, judged from the item's self-contained restated text
+  alone), its own model D neutral-prior verdict
   and disagreement flag, its own model C sensitivity root and value of
   information (1, like any root), and the shared budget (EXP-06), cost
   (§12) and pause (CTL-05) of the question. The question root itself takes no
@@ -700,6 +699,15 @@ review, not a calibration run.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
+
+The 2026-10-03 bounded CRED-01 recalibration paired question-context and
+claim-only requests, both with the model D `knowledge` Choice, on 24 claims
+from the existing three-question live corpus. One first impression (4.2%)
+changed side of 0.5. The mean signed shift was +0.002; 4/24 crossed the 0.8
+bearing boundary (three down, one up). This does not justify moving
+`BEARING_PLAUSIBILITY` from 0.8, and CRED-01 does not change the separate
+saturation request, so `saturation` remains 0.22. Sampling and caveats are in
+`CALIBRATION.md`.
 
 ## 11. Durability (requirements DUR-*)
 
