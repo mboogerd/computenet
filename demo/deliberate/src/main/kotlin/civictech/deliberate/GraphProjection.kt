@@ -22,6 +22,9 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
     fun project(graph: List<CredenceGraph.Node>, layers: LayerSet, state: EngineState): GraphDto {
         val neutral = List(layers.ids.size) { NEUTRAL }
         val neutralValues = neutral
+        // Model D: a root's "arguments alone" verdict before any argument. The neutral
+        // weight leaves no prior in the base (WEAK_PRIOR_WEIGHT = 0), so no stance is needed.
+        val unarguedNeutral = layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT)
         val nodes = graph.mapNotNull { n ->
             val values = n.credence?.values ?: neutral
             val named = layers.named(values)
@@ -88,8 +91,11 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
             // Model D: the verdict from Jev's first impression against what the arguments say from a neutral prior.
             fun verdicts(ref: civictech.cell.CellRef): Pair<Double?, Double?> {
                 val cr = credences[ref]
+                // An unargued root keeps its arguments-first view at its prior, but its
+                // "arguments alone" verdict stays the neutral ½ evaluation it always was.
                 return cr?.let { layers.headlineOf(it.values, it.consensus) } to
-                    cr?.neutral?.let { layers.headlineOf(it, layers.consensus(it)) }
+                    cr?.let { c -> c.neutral?.takeIf { c.argued } ?: unarguedNeutral }
+                        ?.let { layers.headlineOf(it, layers.consensus(it)) }
             }
             val framing = state.claims[root]?.framing?.takeIf { it.mode != FramingMode.NONE }?.let { f ->
                 val shares = graph.firstOrNull { it.ref == root }?.shares

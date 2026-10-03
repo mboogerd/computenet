@@ -145,7 +145,9 @@ names that model.)
   rides the node's own `Credence` emission as `neutral`, computed the moment
   its ordinary vector is, from the same stances and the same ordinary attack
   and support inputs. A node with no incoming arguments instead copies its
-  ordinary vector: no argument means no invented neutral standing. The
+  ordinary vector: no argument means no invented neutral standing. A question
+  or reading root's `neutralCredence` keeps its earlier value, the neutral ½
+  evaluation, until the root has an argument. The
   arguments-first vector never feeds an influence, sensitivity, queue, verdict
   or another layer; `priorWeight == 1.0` leaves every ordinary vector exactly
   as before. The cached prior-dominance measurement in `CALIBRATION.md` is

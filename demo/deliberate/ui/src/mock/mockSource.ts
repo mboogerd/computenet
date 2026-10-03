@@ -284,7 +284,7 @@ export function mockPrior(root: NodeDto): { firstImpression?: number; neutralCre
   const first = root.plausibility;
   if (first === undefined) return {};
   const verdict = root.consensus ?? root.credence;
-  const neutral = root.argumentsFirstConsensus ?? Math.min(0.999, Math.max(0.001, 0.5 + verdict - first));
+  const neutral = Math.min(0.999, Math.max(0.001, 0.5 + verdict - first));
   return { firstImpression: first, neutralCredence: neutral, verdictsDisagree: (verdict - 0.5) * (neutral - 0.5) < 0 };
 }
 

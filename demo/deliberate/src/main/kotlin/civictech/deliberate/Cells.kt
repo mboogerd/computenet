@@ -56,6 +56,13 @@ data class Credence(
      * additive payload compatibility; new claim and edge cells always emit it.
      */
     val neutral: List<Double>? = null,
+    /**
+     * Model D: true once the node has an incoming argument, so [neutral] is its
+     * own neutral-prior evaluation rather than a copy of [values]. A question
+     * or reading root's "arguments alone" verdict reads it to keep its
+     * unargued value at the neutral ½, exactly as before the view generalised.
+     */
+    val argued: Boolean = false,
 ) : java.io.Serializable, Magnitude {
     override fun size(): Double = size
 }
@@ -128,8 +135,8 @@ open class ClaimNode(
         credenceOutlet.catchUpOnLinked { credence.copy(size = 1.0) }
     }
 
-    private fun credenceOf(values: List<Double>, neutral: List<Double>, size: Double) =
-        Credence(ref, values, layers.consensus(values), values.min(), values.max(), size, neutral)
+    private fun credenceOf(values: List<Double>, neutral: List<Double>, size: Double, argued: Boolean = false) =
+        Credence(ref, values, layers.consensus(values), values.min(), values.max(), size, neutral, argued)
 
     private fun recompute() {
         val attacks = ArrayList<List<Arg>>()
@@ -142,11 +149,12 @@ open class ClaimNode(
         // No arguments means there is nothing to evaluate "arguments first":
         // keep the ordinary Jev prior. Once argued, change only this node's
         // base; its argument vectors are the same ordinary inputs as before.
-        val neutral = if (influences.isEmpty()) values else
+        val argued = influences.isNotEmpty()
+        val neutral = if (!argued) values else
             layers.evaluate(stances.values, attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT)
-        if (values != credence.values || neutral != credence.neutral) {
+        if (values != credence.values || neutral != credence.neutral || argued != credence.argued) {
             val size = maxOf(maxDelta(values, credence.values), maxDelta(neutral, credence.neutral ?: credence.values))
-            credence = credenceOf(values, neutral, size)
+            credence = credenceOf(values, neutral, size, argued)
             credenceOutlet.call.propagate(credence)
             onCredence()
         }
@@ -311,7 +319,7 @@ class CredenceHubView(private val onUpdate: () -> Unit = {}) : View<Credence, Ma
     private var credences: Map<CellRef, Credence> = emptyMap()
 
     override fun apply(delta: Credence): Boolean {
-        val changed = credences[delta.source].let { it?.values != delta.values || it.neutral != delta.neutral }
+        val changed = credences[delta.source].let { it?.values != delta.values || it.neutral != delta.neutral || it.argued != delta.argued }
         if (changed) {
             credences = credences + (delta.source to delta)
             onUpdate()

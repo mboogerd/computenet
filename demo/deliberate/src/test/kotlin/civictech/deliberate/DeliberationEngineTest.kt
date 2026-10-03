@@ -2214,6 +2214,27 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `model D - an unargued question keeps its arguments-alone verdict at one half while its node keeps its prior`() {
+        val e = DeliberationEngine(
+            service,
+            FakeJudge(plausibility = { 0.9 }, strength = { 0.5 }),
+            listOf(FakeProposer("claude") { _, _, _ -> emptyList() }),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+        ).also { engines += it }
+        val root = e.ask("Unargued?")
+        e.idle()
+        // The question's "arguments alone" verdict is unchanged by the arguments-first view:
+        // with no argument it weighs nothing from a neutral ½, as before.
+        val q = e.settledQuestion(0.5)
+        assertEquals(0.9, q.firstImpression)
+        assertTrue(!q.verdictsDisagree)
+        val n = e.snapshot().node(root)
+        assertTrue(e.snapshot().edges().none { it.target == n.ref }, "the root has no argument")
+        assertEquals(n.credences, n.argumentsFirstCredences, "an unargued root's arguments-first view keeps its prior")
+        assertEquals(n.consensus, n.argumentsFirstConsensus)
+    }
+
+    @Test
     fun `model D - the first impression is kept and a neutral-prior verdict that disagrees is flagged`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-model-d").toFile()
         val log = java.io.File(dir, "host.journal")
