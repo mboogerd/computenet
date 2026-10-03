@@ -214,7 +214,7 @@ class DeliberationEngineTest {
         assertEquals(setOf("claude", "codex"), g.claims().filter { it.depth == 1 }.map { it.proposer }.toSet())
         // EXP-10: root rounds are excluded from per-question yield history.
         val q = g.questions.single()
-        // Cruxes (model C) follow the sensitivity cells; they are checked on their own.
+        // Exact-VoI cruxes are checked on their own.
         // Model D: the neutral-prior verdict also follows the cells; with a first impression of ½ it never disagrees.
         assertEquals(
             QuestionDto(root.id.toString(), "Should cities ban cars?", 9, false, cost = CostDto(rounds = 1), firstImpression = 0.5),
@@ -344,20 +344,10 @@ class DeliberationEngineTest {
         assertEquals(mapOf("ADD" to 4, "DUPLICATE" to 2), g.node(root).triage)
     }
 
-    /** Model C: waits until every node's sensitivity is known and has stopped moving (the cells settled). */
-    private fun settle(graph: CredenceGraph = service) {
-        var last: List<Double?>? = null
-        awaitUntil("the sensitivity cells settle") {
-            Thread.sleep(25)
-            val now = graph.graph().map { it.sensitivity }
-            (now.none { it == null } && now == last).also { last = now }
-        }
-    }
-
     @Test
     fun `a question stops when its value of information falls below eps, with budget remaining`() {
-        // Every argument's premise is all but settled (p = 0.999): 4·p·(1 − p) ≈ 0.004, so whatever its
-        // sensitivity (at most 1 here), no argument is worth a round at ε = 0.01. The root always is.
+        // Every argument's propagated credence is clamped to q = 0.99. With all four siblings in
+        // place, each exact expected root movement is below ε = 0.01. The root always runs.
         val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
         val config = DeliberationEngine.Config(maxRounds = 1, argsPerCall = 1, exploreLinks = false)
         val e = engine(judge = judge, config = config)
@@ -384,7 +374,7 @@ class DeliberationEngineTest {
 
     @Test
     fun `the hard cost cap still stops a question whose value of information stays high`() {
-        // p = ½ everywhere: every argument keeps its whole sensitivity (≈ 0.2 at depth 1), far above ε.
+        // q = ½ everywhere: every argument's exact expected root movement stays far above ε.
         val config = DeliberationEngine.Config(maxRounds = 2, argsPerCall = 1, maxClaims = 7, exploreLinks = false)
         val e = engine(config = config)
         val root = e.ask("Q?")
@@ -398,18 +388,17 @@ class DeliberationEngineTest {
         assertTrue(capped.isNotEmpty())
         assertEquals(Status.BUDGET, g.node(root).status)
         assertNull(g.node(root).error)
-        awaitUntil("the capped arguments' sensitivities are known") {
+        awaitUntil("the capped arguments' exact sways are known") {
             e.snapshot().claims().filter { it.status == Status.BUDGET }.all { it.sensitivity != null }
         }
-        val policy = ExplorationPolicy(config)
         for (n in e.snapshot().claims().filter { it.status == Status.BUDGET }) {
-            val voi = policy.voiOf(ClaimView(sensitivity = n.sensitivity, plausibility = n.plausibility))
+            val voi = service.exactValueOf(CellRef(java.util.UUID.fromString(n.ref)), listOf(root))!!.expectedRootChange
             assertTrue(voi >= 2 * config.voiEpsilon, "a capped argument was still worth a round (VoI above ε): $voi")
         }
     }
 
     @Test
-    fun `each node carries its sensitivity and the question its top-3 cruxes`() {
+    fun `each node carries its exact signed sway and the question its top-3 exact cruxes`() {
         val plausibility = mapOf("P1" to 0.5, "P2" to 0.9, "C1" to 0.6, "C2" to 0.99)
         val p = FakeProposer("claude") { ctx, side, _ ->
             if (ctx.path.isNotEmpty()) emptyList()
@@ -419,17 +408,16 @@ class DeliberationEngineTest {
         val e = engine(judge = judge, proposers = listOf(p), config = DeliberationEngine.Config(argsPerCall = 2, maxRounds = 1, maxDepth = 1))
         val root = e.ask("Q?")
         e.idle()
-        settle()
         val g = e.snapshot()
         val q = g.questions.single()
         assertEquals(1.0, g.node(root).sensitivity!!, 1e-9)
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         assertTrue(kids.filter { it.text!!.startsWith("P") }.all { it.sensitivity!! > 0 }, kids.toString())
         assertTrue(kids.filter { it.text!!.startsWith("C") }.all { it.sensitivity!! < 0 }, kids.toString())
-        // Every link carries its edge's sensitivity too; a stronger pro edge moves the root more.
+        // Every link carries its edge's exact signed sway too.
         assertTrue(g.edges().all { it.sensitivity != null })
-        // Cruxes: the 3 highest |sensitivity| × 4·p·(1 − p) below the root (a link's p is its strength), best first.
-        fun score(n: NodeDto) = abs(n.sensitivity!!) * 4 * (n.plausibility ?: n.strength!!) * (1 - (n.plausibility ?: n.strength!!))
+        // Cruxes: the 3 highest exact q-weighted expected root movements, best first.
+        fun score(n: NodeDto) = service.exactValueOf(g.ref(n), listOf(root))!!.expectedRootChange
         val expected = (kids + g.edges()).sortedByDescending(::score).take(3).map { it.ref }
         assertEquals(expected, q.cruxes)
         assertTrue(g.node(root).ref !in q.cruxes)
@@ -956,7 +944,7 @@ class DeliberationEngineTest {
         assertEquals(2, kids.size)
         kids.forEach {
             assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.reach)
-            // relevance and quality fall back to 1: contribution = reach alone (shown; model C orders by sensitivity)
+            // relevance and quality fall back to 1: contribution = reach alone (shown; exact VoI orders work)
             assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.contribution)
             assertNull(it.relevance)
             assertNull(it.quality)
@@ -969,12 +957,19 @@ class DeliberationEngineTest {
 
     @Test
     fun `EXPAND bypasses the value-of-information gate for that claim only`() {
-        // Every argument's premise is all but settled: none is worth a round on its own.
+        // Every argument's premise is all but settled (the layer clamps 0.999 to q = 0.99):
+        // none is worth a round at this fixture's explicit threshold.
         val judge = FakeJudge(plausibility = { if (it == "Q?") 0.5 else 0.999 })
         val e = engine(
             judge = judge,
             proposers = listOf(FakeProposer("claude")),
-            config = DeliberationEngine.Config(maxRounds = 1, maxDepth = 3, argsPerCall = 1, exploreLinks = false),
+            config = DeliberationEngine.Config(
+                maxRounds = 1,
+                maxDepth = 3,
+                argsPerCall = 1,
+                voiEpsilon = 0.02,
+                exploreLinks = false,
+            ),
         )
         val root = e.ask("Q?")
         e.idle()
@@ -1063,16 +1058,11 @@ class DeliberationEngineTest {
         assertEquals(4, kids.size)
         assertTrue(kids.all { it.status == Status.BUDGET }, kids.toString())
     }
-    /**
-     * Model C rewrote this test (it was "exploration follows contribution and a strong
-     * claim's next round competes via roundDecay", ordered by reach × relevance × quality
-     * with a relevance floor): the queue now follows |d root / d c| × 4·p·(1 − p).
-     */
     @Test
-    fun `exploration follows sensitivity times the plausibility uncertainty`() {
+    fun `exploration follows exact q-weighted value of information`() {
         // Four pros of the root, all of strength 0.8. Under DF-QuAD (root base b = ½, no cons)
-        // d root / d c_i = (1 − b)·s·∏_{j≠i}(1 − s·p_j): the likelier a sibling, the less room
-        // it leaves the others. Their plausibilities make the three orders all differ.
+        // the exact secant R1-R0 = (1 − b)·s·∏_{j≠i}(1 − s·q_j): the likelier a sibling,
+        // the less room it leaves the others. Their credences make the three orders all differ.
         val p = mapOf("s1" to 0.5, "s2" to 0.7, "s3" to 0.85, "s4" to 0.95)
         val firstCalls = CopyOnWriteArrayList<String>()
         val proposer = FakeProposer("claude") { ctx, side, _ ->
@@ -1087,8 +1077,7 @@ class DeliberationEngineTest {
         val judge = FakeJudge(
             plausibility = { p[it] ?: 0.5 },
             strength = { 0.8 },
-            // The root's round ends here: let the sensitivity cells settle before the worker picks.
-            saturation = { ctx, _ -> if (ctx.path.isEmpty()) settle(); 0.0 },
+            saturation = { _, _ -> 0.0 },
         )
         val e = engine(
             judge = judge,
@@ -1100,16 +1089,16 @@ class DeliberationEngineTest {
         )
         e.ask("Q?")
         e.idle()
-        fun sensitivity(i: String) = 0.5 * 0.8 * p.filterKeys { it != i }.values.fold(1.0) { acc, pj -> acc * (1 - 0.8 * pj) }
-        fun voi(i: String) = sensitivity(i) * 4 * p.getValue(i) * (1 - p.getValue(i))
+        fun sway(i: String) = 0.5 * 0.8 * p.filterKeys { it != i }.values.fold(1.0) { acc, qj -> acc * (1 - 0.8 * qj) }
+        fun voi(i: String) = sway(i) * 4 * p.getValue(i) * (1 - p.getValue(i))
         val expected = p.keys.sortedByDescending(::voi)
         assertEquals(listOf("s2", "s1", "s3", "s4"), expected, "the fixture's own arithmetic")
         assertTrue(p.keys.sortedByDescending { 4 * p.getValue(it) * (1 - p.getValue(it)) } != expected, "not uncertainty alone")
-        assertTrue(p.keys.sortedByDescending(::sensitivity) != expected, "not sensitivity alone")
+        assertTrue(p.keys.sortedByDescending(::sway) != expected, "not sway alone")
         assertEquals(expected, firstCalls.toList())
-        // The DTO's sensitivities are those derivatives.
+        // The wire-compatible DTO field carries the exact signed secant.
         val g = e.snapshot()
-        for ((t, _) in p) assertEquals(sensitivity(t), g.text(t).sensitivity!!, 1e-4, t)
+        for ((t, _) in p) assertEquals(sway(t), g.text(t).sensitivity!!, 1e-4, t)
     }
     @Test
     fun `a strong child runs before its still-exploring parent's decayed next round`() {
@@ -1122,12 +1111,12 @@ class DeliberationEngineTest {
             }
         }
         val e = engine(
-            // Model C: root base 0.2, so d root / d child = (1 − 0.2)·0.9 = 0.72 at p = ½ — above the
-            // root's decayed second round (1 × 0.5). Settle the sensitivity cells before the worker picks.
+            // Root base 0.2, so the exact root secant is (1 − 0.2)·0.9 = 0.72 at q = ½ — above
+            // the root's decayed second round (1 × 0.5).
             judge = FakeJudge(
                 plausibility = { if (it == "Q?") 0.2 else 0.5 },
                 strength = { if (it == "strong child") 0.9 else 0.8 },
-                saturation = { ctx, _ -> if (ctx.path.isEmpty()) settle(); 0.0 },
+                saturation = { _, _ -> 0.0 },
             ),
             proposers = listOf(p),
             config = DeliberationEngine.Config(
@@ -1174,17 +1163,7 @@ class DeliberationEngineTest {
         val judge = FakeJudge(
             strength = { 0.4 },
             triage = { _, cands -> cands.map { verdicts.getValue(it.text) } },
-            // The engine judges saturation after it has assessed and queued a round's
-            // new arguments and before its worker picks the next task, whose priority
-            // reads each argument's sensitivity cell (model C). Until the host has
-            // propagated it, an argument's sensitivity is null and its priority falls
-            // back to FALLBACK_STRENGTH = 0.5 — a tie with the root's round two, which
-            // P1, queued earlier, wins; it is then explored and no longer REPLACEable
-            // (computenet-dsby8). Fence the host here so the pick reads settled values.
-            saturation = { _, _ ->
-                host.quiescence().await(20_000, "sensitivities settle before the next pick")
-                0.0
-            },
+            saturation = { _, _ -> 0.0 },
         )
         val e = engine(
             judge = judge,
@@ -1685,7 +1664,7 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `a link is queued by its edge's sensitivity times the uncertainty of its strength and explored like a claim`() {
+    fun `a link is queued by its edge's exact value and explored like a claim`() {
         val p = linkProposer(rootPros = listOf("Strong"), rootCons = listOf("Even")) { link, side, _ ->
             if (link.argument == "Even") listOf(if (side == Polarity.SUPPORT) "Even holds" else "Even fails") else emptyList()
         }
@@ -1696,9 +1675,8 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         val strong = g.linkOf(g.text("Strong"))
         val even = g.linkOf(g.text("Even"))
-        // contribution(argument) x 4 s (1 - s): a decisive link is settled, an even one is wide open.
-        // Model C: its value of information is |sensitivity of the edge| × 4·s·(1 − s), so the decisive
-        // link is not worth a round (DIMINISHING; it was PRUNED by the relevance floor before).
+        // The legacy contribution display is contribution(argument) × 4s(1-s). Exact VoI reaches
+        // the same decision here: the strength-1 link cannot move, while the even link can.
         assertEquals(0.0, strong.contribution!!, 1e-9)
         assertEquals(Status.DIMINISHING, strong.status)
         assertTrue(even.sensitivity != null && even.sensitivity!! < 0, "the con's link pulls the root down: $even")
@@ -2329,7 +2307,7 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `sensitivity is derived - a restart recomputes it and a record from before model C still restores`() {
+    fun `exact value is derived - a restart recomputes it and a record from before model C still restores`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-voi").toFile()
         val log = java.io.File(dir, "host.journal")
         val store = InMemoryMetaStore()
@@ -2342,11 +2320,10 @@ class DeliberationEngineTest {
                 .also { engines += it }
             val root = e1.ask("Q?")
             e1.idle()
-            settle(first)
             e1.close()
             val before = e1.snapshot()
             assertEquals("voi", before.questions.single().stoppedBy)
-            // Nothing of the sensitivity layer is journaled.
+            // Nothing from exact evaluation is journaled.
             assertTrue(store.load().values.none { fields -> fields.keys.any { it.contains("sensitiv") } })
             // A question record written before model C held the yield stop's flag.
             val q = EngineRecords.QUESTION_KEY + root.id
@@ -2358,12 +2335,11 @@ class DeliberationEngineTest {
             val e2 = DeliberationEngine(second, FakeJudge(), listOf(FakeProposer("claude"), FakeProposer("codex")), config, store = store)
                 .also { engines += it }
             e2.idle()
-            awaitUntil("the restarted graph recomputes every sensitivity") {
-                val after = e2.snapshot()
-                after.nodes.map { it.ref to it.sensitivity?.let { s -> Math.round(s * 1e9) } } ==
-                    before.nodes.map { it.ref to it.sensitivity?.let { s -> Math.round(s * 1e9) } }
-            }
             val after = e2.snapshot()
+            assertEquals(
+                before.nodes.map { it.ref to it.sensitivity?.let { s -> Math.round(s * 1e9) } },
+                after.nodes.map { it.ref to it.sensitivity?.let { s -> Math.round(s * 1e9) } },
+            )
             assertEquals(before.claims().map { it.ref to it.status }, after.claims().map { it.ref to it.status })
             assertEquals(before.questions.map { it.stoppedBy to it.cruxes }, after.questions.map { it.stoppedBy to it.cruxes })
             e2.persistNow()

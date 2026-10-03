@@ -50,10 +50,9 @@ data class QuestionDto(
     /** SPEC §12: what the figure is made of, per backend. */
     val cost: CostDto = CostDto(),
     /**
-     * Model C, "what would change the answer": up to 3 refs of the question's
-     * nodes (claims below the root, and links as EDGE refs) with the highest
-     * |sensitivity| × 4·p·(1 − p) — p the plausibility, a link's its strength,
-     * unjudged ½ — best first. Nodes whose sensitivity is not known yet are left out.
+     * "What would change the answer": up to 3 refs of the question's nodes
+     * (claims below the root, and links as EDGE refs) with the highest exact,
+     * q-weighted expected root movement, best first.
      */
     val cruxes: List<String> = emptyList(),
     /**
@@ -235,14 +234,17 @@ data class NodeDto(
     /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
     val quality: Double? = null,
     /**
-     * Shown only since model C (the queue follows sensitivity × 4·p·(1 − p)): reach × relevance × quality × 4·p·(1 − p),
-     * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
+     * Reference-only legacy contribution: reach × relevance × quality × 4·p·(1 − p),
+     * p its plausibility (root = 1; model B); for a link, its argument's contribution
+     * without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength. Exact VoI,
+     * not this display value, controls the queue and stop gate.
      */
     val contribution: Double? = null,
     /**
-     * Model C: d headline(root) / d this node's credence — how far the question's
-     * headline credence moves per unit move of this node's (every layer at once),
-     * from the sensitivity cells. Root ≈ 1; a link's is its edge's. Null until known.
+     * Wire-compatible "sway" for the crux panel: the exact signed secant
+     * R(node=1) − R(node=0) for the answer root to which this node has the
+     * largest q-weighted value. Positive means resolving it true raises that
+     * answer; negative lowers it. Root = 1. Null until the node is in the graph.
      */
     val sensitivity: Double? = null,
     /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */

@@ -10,6 +10,10 @@ import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.ConnectStep
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.SpawnStep
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.DecodedJournalRecord
@@ -214,6 +218,88 @@ class CredenceGraphTest {
     }
 
     @Test
+    fun `a retired sensitivity topology journal restores while exact value ignores it`() {
+        val dir = Files.createTempDirectory("deliberate-retired-sensitivity").toFile()
+        try {
+            val journalFile = java.io.File(dir, "host.journal")
+            val journal = FileJournal(journalFile)
+            val scheduler = VirtualThreadScheduler("credence-retired-writer").also { schedulers += it }
+            val registry = LocationRegistry()
+            val host = ManagedHost(
+                scheduler = scheduler,
+                registry = registry,
+                attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+            )
+            val context = ApplyContext(host, topology = journal)
+            CredenceGraph(host, registry, LayerSet.of(listOf("dfquad")), context = context)
+
+            val layers = LayerSet.of(listOf("dfquad"))
+            val root = CellRef(UUID.randomUUID())
+            val child = CellRef(UUID.randomUUID())
+            val edge = CellRef(UUID.randomUUID())
+            val rootSensitivity = CellRef(UUID.randomUUID())
+            val childSensitivity = CellRef(UUID.randomUUID())
+            val edgeSensitivity = CellRef(UUID.randomUUID())
+            val staged = LinkOptions(staged = true)
+            fun claimHandle(ref: CellRef) = "claim:${ref.id}"
+            fun edgeHandle(ref: CellRef) = "edge:${ref.id}"
+            fun sensitivityHandle(ref: CellRef) = "sens:${ref.id}"
+
+            // This is the topology shape emitted by model C: one sensitivity
+            // cell beside every claim and edge, linked to the compatibility hub.
+            GraphSpec(
+                listOf(
+                    SpawnStep(claimHandle(root), ClaimNodeFactory("R", true, layers), IdentityBinding.Exact(root)),
+                    SpawnStep(
+                        sensitivityHandle(root),
+                        SensitivityFactory(root, isEdge = false, question = true, layers, 1e-3),
+                        IdentityBinding.Exact(rootSensitivity),
+                    ),
+                    SpawnStep(claimHandle(child), ClaimNodeFactory("C", false, layers), IdentityBinding.Exact(child)),
+                    SpawnStep(
+                        sensitivityHandle(child),
+                        SensitivityFactory(child, isEdge = false, question = false, layers, 1e-3),
+                        IdentityBinding.Exact(childSensitivity),
+                    ),
+                    SpawnStep(edgeHandle(edge), EdgeNodeFactory(Polarity.SUPPORT, false, layers, 1e-3), IdentityBinding.Exact(edge)),
+                    SpawnStep(
+                        sensitivityHandle(edge),
+                        SensitivityFactory(edge, isEdge = true, question = false, layers, 1e-3),
+                        IdentityBinding.Exact(edgeSensitivity),
+                    ),
+                    ConnectStep(claimHandle(root), "credenceOutlet", "hub", "inlet", staged),
+                    ConnectStep(sensitivityHandle(root), "hubOutlet", "sensitivityHub", "inlet", staged),
+                    ConnectStep(claimHandle(child), "credenceOutlet", "hub", "inlet", staged),
+                    ConnectStep(sensitivityHandle(child), "hubOutlet", "sensitivityHub", "inlet", staged),
+                    ConnectStep(edgeHandle(edge), "credenceOutlet", "hub", "inlet", staged),
+                    ConnectStep(edgeHandle(edge), "influenceOutlet", claimHandle(root), "influenceInlet", staged),
+                    ConnectStep(claimHandle(child), "credenceOutlet", edgeHandle(edge), "sourceInlet", staged),
+                    ConnectStep(sensitivityHandle(edge), "hubOutlet", "sensitivityHub", "inlet", staged),
+                    ConnectStep(sensitivityHandle(edge), "sourceOutlet", sensitivityHandle(child), "shareInlet", staged),
+                    ConnectStep(edgeHandle(edge), "influenceOutlet", sensitivityHandle(root), "influenceInlet", staged),
+                    ConnectStep(sensitivityHandle(root), "frameOutlet", sensitivityHandle(edge), "frameInlet", staged),
+                ),
+            ).apply(context)
+
+            val restored = graph(LayerSet.of(listOf("dfquad")), journalFile)
+            restored.setStance(root, "jev", 0.5)
+            restored.setStance(child, "jev", 0.8)
+            restored.setStance(edge, "jev", 0.9)
+            awaitUntil("the retired topology's credence graph settles") {
+                restored.credenceOf(root)?.values?.single()?.let { abs(it - 0.86) < 1e-12 } == true
+            }
+            assertEquals(4, restored.sensitivityCells.size, "three restored cells plus the compatibility hub")
+            assertEquals(0.288, restored.exactValueOf(child, listOf(root))!!.expectedRootChange, 1e-12)
+
+            val oldSensitivityCells = restored.sensitivityCells
+            restored.createClaim("new")
+            assertEquals(oldSensitivityCells, restored.sensitivityCells, "new deltas add no retired sensitivity cells")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `influence folding reaches the same fixpoint in every arrival order`() {
         fun ref(name: String) = CellRef(UUID.nameUUIDFromBytes(name.toByteArray()))
         fun evaluate(reverse: Boolean): List<Double> {
@@ -352,7 +438,7 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `admitted staged wiring records head feedback ports and reaches finite sensitivity`() {
+    fun `admitted staged wiring records credence head ports and exact cycle evaluation stays finite`() {
         val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
         val g = CredenceGraph(world.host, world.registry, LayerSet.of(listOf("dfquad")), quiescence = 1e-3)
         val source = g.createClaim("source", question = true)
@@ -363,8 +449,7 @@ class CredenceGraphTest {
         assertTrue(g.nodeInfo(head)!!.head)
         assertEquals("sourceInlet", g.wiring.single { it.from == source && it.to == first && it.outlet == "credenceOutlet" }.inlet)
         assertEquals("feedbackInlet", g.wiring.single { it.from == target && it.to == head && it.outlet == "credenceOutlet" }.inlet)
-        assertEquals(1, g.wiring.count { it.inlet == "frameInlet" })
-        assertEquals(1, g.wiring.count { it.inlet == "feedbackFrameInlet" })
+        assertTrue(g.wiring.none { it.inlet == "frameInlet" || it.inlet == "feedbackFrameInlet" })
 
         val links = world.registry.localLinks()
         assertEquals(g.wiring.size, links.size, "every named wire must be an admitted local link")
@@ -374,9 +459,9 @@ class CredenceGraphTest {
         }
 
         world.runToIdle()
-        val finite = g.graph().mapNotNull { it.sensitivity }
-        assertTrue(finite.isNotEmpty())
-        assertTrue(finite.all { it.isFinite() })
+        val exact = g.exactValueOf(target, listOf(source, target))!!
+        assertTrue(exact.expectedRootChange.isFinite())
+        assertTrue(exact.dominantSway!!.isFinite())
     }
 
     @Test
@@ -409,24 +494,15 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `plain frame inlet cannot close the sensitivity cycle of a head`() {
+    fun `a new credence cycle creates no retired sensitivity frame cycle`() {
         val world = SimWorld(attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
         val g = CredenceGraph(world.host, world.registry, LayerSet.of(listOf("dfquad")), quiescence = 1e-3)
         val source = g.createClaim("source", question = true)
         val target = g.createClaim("target", question = true)
         g.createEdge(source, target, Polarity.SUPPORT)
         g.createEdge(target, source, Polarity.ATTACK)
-        val headFrame = g.wiring.single { it.inlet == "feedbackFrameInlet" }
-
-        val result = world.host.managementInlet.call.connect(
-            headFrame.from,
-            headFrame.outlet,
-            headFrame.to,
-            "frameInlet",
-            LinkOptions(staged = true),
-        )
-        assertTrue(result is LinkResult.Rejected)
-        assertTrue((result as LinkResult.Rejected).reason.startsWith("CycleWithoutHead:"))
+        assertTrue(g.wiring.none { it.inlet == "frameInlet" || it.inlet == "feedbackFrameInlet" })
+        assertEquals(1, g.sensitivityCells.size, "only the old-journal compatibility hub remains")
     }
 
     // --- Model A: framing a question root as an issue (computenet-dq2fy.29.1) ---
@@ -587,11 +663,11 @@ class CredenceGraphTest {
         assertNull(g.issueCellOf(root))
         readings.forEach { r ->
             assertEquals(root, g.nodeInfo(r)!!.positionOf)
-            awaitUntil("reading ${r.id} is a sensitivity root with a neutral verdict") {
-                g.sensitivityVectorOf(r) == listOf(1.0, 1.0) && g.sensitivityHub.current()[r]?.root == r &&
-                    g.credenceOf(r)?.neutral != null
+            awaitUntil("reading ${r.id} is an exact-VoI root with a neutral verdict") {
+                g.exactValueOf(r, listOf(r))?.dominantSway == 1.0 && g.credenceOf(r)?.neutral != null
             }
         }
+        assertEquals(1, g.sensitivityCells.size, "new framing writes no sensitivity cells")
         assertNull(g.sharesOf(root))
         assertTrue(g.wiring.none { it.to == g.sharesHub.ref || it.from == g.sharesHub.ref })
     }

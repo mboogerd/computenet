@@ -17,7 +17,12 @@ import java.util.TreeMap
 import kotlin.math.abs
 
 /**
- * Model C: the **sensitivity layer** — how much the root's credence moves per
+ * Legacy model-C sensitivity payloads and cells. New graphs do not create or
+ * consult these: [ExactValueEvaluator] replaces them. The classes remain so a
+ * topology journal written before exact VoI can deserialize its recorded
+ * [SensitivityFactory] spawns and restore the ordinary credence graph.
+ *
+ * The retired layer computed how much the root's credence moves per
  * unit change of each node's credence, d root / d node, computed top-down by
  * cells of their own beside the credence graph ([CredenceGraph]).
  *
@@ -273,5 +278,205 @@ class SensitivityHubView(private val onUpdate: () -> Unit = {}) : View<Sensitivi
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: java.io.Serializable) {
         sensitivities = HashMap(state as Map<CellRef, Sensitivity>)
+    }
+}
+
+/** One edge in the immutable snapshot used by [ExactValueEvaluator]. */
+internal data class ExactEdge(val source: CellRef, val target: CellRef, val polarity: civictech.agora.cell.Polarity)
+
+/**
+ * One node in the immutable snapshot used by [ExactValueEvaluator]. [current]
+ * is the graph's settled credence vector; [stances] are its replayable inputs.
+ */
+internal data class ExactNode(
+    val current: List<Double>,
+    val stances: List<Double>,
+    val edge: ExactEdge? = null,
+)
+
+/** The answer root under the two possible resolutions of one node. */
+internal data class ExactRootChange(
+    val root: CellRef,
+    val current: Double,
+    val whenFalse: Double,
+    val whenTrue: Double,
+) {
+    val signedSway: Double get() = whenTrue - whenFalse
+
+    /**
+     * Twice the expected absolute movement from the current answer. The factor
+     * two keeps the scale of model C: for a locally linear path this is exactly
+     * `|d root / d node| * 4q(1-q)`.
+     */
+    fun expected(probability: Double): Double = 2 * (
+        probability * abs(whenTrue - current) +
+            (1 - probability) * abs(whenFalse - current)
+        )
+}
+
+/** Exact, q-weighted value of resolving one node, summed over the requested answer roots. */
+internal data class ExactValueOfInformation(
+    val probability: Double,
+    val roots: List<ExactRootChange>,
+) {
+    val expectedRootChange: Double = roots.sumOf { it.expected(probability) }
+
+    /** The signed secant for the root to which this node has the largest exact value. */
+    val dominantSway: Double? = roots.maxByOrNull { it.expected(probability) }?.signedSway
+}
+
+/**
+ * Pure two-point re-evaluation of a credence graph snapshot. Resolving a node
+ * replaces its emitted credence vector with all-zeroes or all-ones, then every
+ * dependent node is recomputed from its original stances and the changed
+ * upstream vectors. The dependency walk includes both the source and the edge
+ * node of every influence, so converging paths are evaluated together rather
+ * than as one chosen node-to-root path.
+ *
+ * Acyclic regions settle in dependency order. A remaining cyclic region uses
+ * deterministic fixed-point relaxation to [quiescence], matching the live
+ * graph's bounded cycle semantics; deliberate's current exploration graphs
+ * are acyclic.
+ */
+internal class ExactValueEvaluator(
+    private val layers: LayerSet,
+    private val nodes: Map<CellRef, ExactNode>,
+    private val quiescence: Double,
+) {
+    private val neutral = List(layers.ids.size) { 0.5 }
+    private val incoming = nodes.entries.mapNotNull { (ref, node) -> node.edge?.let { it.target to ref } }
+        .groupBy({ it.first }, { it.second })
+        .mapValues { (_, refs) -> refs.sortedWith(ClaimNode.REF_ORDER) }
+    private val dependencies = nodes.keys.associateWith { linkedSetOf<CellRef>() }.toMutableMap()
+    private val dependents = nodes.keys.associateWith { linkedSetOf<CellRef>() }.toMutableMap()
+
+    init {
+        nodes.forEach { (edgeRef, node) ->
+            node.edge?.let { edge ->
+                dependencies.getOrPut(edge.target) { linkedSetOf() }.add(edgeRef)
+                dependencies.getOrPut(edge.target) { linkedSetOf() }.add(edge.source)
+                dependents.getOrPut(edgeRef) { linkedSetOf() }.add(edge.target)
+                dependents.getOrPut(edge.source) { linkedSetOf() }.add(edge.target)
+            }
+        }
+    }
+
+    fun valueOf(subject: CellRef, roots: Collection<CellRef>): ExactValueOfInformation? {
+        if (subject !in nodes) return null
+        val probability = headline(baseline.getValue(subject))
+        val low = settle(subject, 0.0, baseline)
+        val high = settle(subject, 1.0, baseline)
+        val changes = roots.distinct().mapNotNull { root ->
+            val current = baseline[root] ?: return@mapNotNull null
+            ExactRootChange(
+                root = root,
+                current = headline(current),
+                whenFalse = headline(low[root] ?: current),
+                whenTrue = headline(high[root] ?: current),
+            )
+        }
+        return ExactValueOfInformation(probability, changes)
+    }
+
+    /**
+     * The re-evaluated snapshot, shared by every [valueOf] on this evaluator.
+     * Do not use the live hub values as the mathematical baseline. A stance
+     * is recorded before its asynchronous cell propagation reaches the hub,
+     * and exploration asks for VoI at exactly that boundary. Re-evaluating
+     * the captured inputs makes R, q, R0 and R1 one coherent snapshot.
+     * Computing it once per snapshot, not once per subject, keeps a read of
+     * every node O(graph) rather than O(graph²).
+     */
+    private val baseline: Map<CellRef, List<Double>> by lazy { settle() }
+
+    private fun headline(values: List<Double>): Double = layers.headlineOf(values, layers.consensus(values))
+
+    private fun settle(
+        subject: CellRef? = null,
+        resolution: Double = 0.0,
+        seed: Map<CellRef, List<Double>> = nodes.mapValues { it.value.current },
+    ): Map<CellRef, List<Double>> {
+        // Copy-free overlay over [seed]: a resolved node only touches its downstream.
+        val values = OverlayMap(seed)
+        if (subject != null) values[subject] = List(layers.ids.size) { resolution }
+
+        val affected = if (subject == null) {
+            nodes.keys.toMutableSet()
+        } else {
+            linkedSetOf(subject).also { reached ->
+                val work = ArrayDeque<CellRef>().apply { add(subject) }
+                while (work.isNotEmpty()) {
+                    val next = work.removeFirst()
+                    dependents[next].orEmpty().forEach { if (reached.add(it)) work.add(it) }
+                }
+            }
+        }
+
+        // A forced node is already settled. Kahn's order evaluates every
+        // other DAG node once after all of its affected dependencies.
+        val pending = affected.filter { subject == null || it != subject }.toMutableSet()
+        val indegree = pending.associateWith { node ->
+            dependencies[node].orEmpty().count { it in pending }
+        }.toMutableMap()
+        val ready = java.util.PriorityQueue(ClaimNode.REF_ORDER)
+        indegree.filterValues { it == 0 }.keys.forEach(ready::add)
+        while (ready.isNotEmpty()) {
+            val ref = ready.remove()
+            if (!pending.remove(ref)) continue
+            values[ref] = evaluate(ref, values)
+            dependents[ref].orEmpty().forEach { downstream ->
+                if (downstream in pending) {
+                    val left = indegree.getValue(downstream) - 1
+                    indegree[downstream] = left
+                    if (left == 0) ready.add(downstream)
+                }
+            }
+        }
+
+        // Only cycles (and nodes downstream of them) remain. The iteration is
+        // deterministic, and the live graph uses the same quiescence bound.
+        if (pending.isNotEmpty()) {
+            val ordered = pending.sortedWith(ClaimNode.REF_ORDER)
+            repeat(MAX_RELAXATIONS) {
+                var largest = 0.0
+                ordered.forEach { ref ->
+                    val before = values[ref] ?: neutral
+                    val after = evaluate(ref, values)
+                    largest = maxOf(largest, before.indices.maxOfOrNull { abs(before[it] - after[it]) } ?: 0.0)
+                    values[ref] = after
+                }
+                if (largest <= maxOf(quiescence, EXACT_EPSILON)) return values
+            }
+        }
+        return values
+    }
+
+    private fun evaluate(ref: CellRef, values: Map<CellRef, List<Double>>): List<Double> {
+        val node = nodes.getValue(ref)
+        val attacks = ArrayList<List<Arg>>()
+        val supports = ArrayList<List<Arg>>()
+        incoming[ref].orEmpty().forEach { edgeRef ->
+            val edge = nodes.getValue(edgeRef).edge!!
+            val strength = values[edgeRef] ?: neutral
+            val source = values[edge.source] ?: neutral
+            val args = layers.ids.indices.map { layer -> Arg(strength[layer], source[layer]) }
+            if (edge.polarity == civictech.agora.cell.Polarity.SUPPORT) supports += args else attacks += args
+        }
+        return layers.evaluate(node.stances, attacks, supports)
+    }
+
+    /** A mutable view over an immutable base map that copies nothing; writes land in [changed]. */
+    private class OverlayMap(private val base: Map<CellRef, List<Double>>) : AbstractMap<CellRef, List<Double>>() {
+        private val changed = HashMap<CellRef, List<Double>>()
+        operator fun set(key: CellRef, value: List<Double>) { changed[key] = value }
+        override fun get(key: CellRef): List<Double>? = changed[key] ?: base[key]
+        override fun containsKey(key: CellRef): Boolean = key in changed || key in base
+        override val entries: Set<Map.Entry<CellRef, List<Double>>>
+            get() = (base + changed).entries
+    }
+
+    private companion object {
+        const val MAX_RELAXATIONS = 10_000
+        const val EXACT_EPSILON = 1e-12
     }
 }

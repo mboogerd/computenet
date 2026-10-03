@@ -18,10 +18,9 @@ import kotlin.time.Duration
  *
  * Threading: claims are expanded by `config.workers` threads pulling from one
  * priority queue (SPEC §3 "Exploration order"). One queue task runs one round:
- * a task's priority is the claim's value of information (model C:
- * |d root / d claim| × 4·p·(1 − p), the sensitivity read from the graph's
- * sensitivity cells when a worker takes its next task, so the order follows
- * the dataflow as it stands then; the root is 1) times
+ * a task's priority is the claim's exact q-weighted value of information,
+ * recomputed on demand from the graph snapshot for every active answer root
+ * when a worker takes its next task (the root is 1), times
  * `roundDecay` per round the claim already ran, so a claim with rounds left
  * re-enters the queue behind stronger fresh work. Within a round the
  * proposers take turns (EXP-02); a turn fans its per-side calls out on a
@@ -95,9 +94,9 @@ class DeliberationEngine(
         val maxClaims: Int = 180,
         val workers: Int = 8,
         /**
-         * Model C: a node whose value of information ([ExplorationPolicy.voiOf]) is
+         * A node whose exact value of information ([ExplorationPolicy.voiOf]) is
          * below this gets no further round (DIMINISHING), so a question stops once
-         * the largest value of information over its remaining nodes is below it
+         * the largest value over its remaining nodes is below it
          * (`--voi-eps`). 0 disables the stop.
          */
         val voiEpsilon: Double = DEFAULT_VOI_EPSILON,
@@ -148,7 +147,7 @@ class DeliberationEngine(
     private val policy = ExplorationPolicy(config)
     /** Guarded by [lock], like every [state] collection. */
     private val ledger = CostLedger(pricing)
-    private val projection = GraphProjection(policy, ledger)
+    private val projection = GraphProjection(service, policy, ledger)
     private val state = EngineState()
     private val claims = state.claims
     private val edges = state.edges
@@ -160,8 +159,8 @@ class DeliberationEngine(
     private val pending = AtomicInteger()
     private val idle = Object()
     /**
-     * The ready tasks. Not a priority heap: model C's priorities move with the
-     * sensitivity cells, so [take] ranks the tasks when a worker asks ([currentPriority]).
+     * The ready tasks. Not a priority heap: priorities move with the credence
+     * graph, so [take] ranks the tasks when a worker asks ([currentPriority]).
      */
     private val queue = ArrayList<Task>()
     private val seq = AtomicLong()
@@ -518,8 +517,8 @@ class DeliberationEngine(
     }
 
     /**
-     * Caller holds [lock]. A task's priority now ([ExplorationPolicy.priorityOf] at
-     * the claim's current sensitivity); a stale task ranks first, so it is discarded at once.
+     * Caller holds [lock]. A task's priority now ([ExplorationPolicy.priorityOf]
+     * over exact on-demand VoI); a stale task ranks first, so it is discarded at once.
      */
     private fun currentPriority(t: Task): Double =
         if (t.generation != t.claim.queueGeneration) Double.MAX_VALUE else policy.priorityOf(viewOf(t.claim))
@@ -527,8 +526,24 @@ class DeliberationEngine(
     /** Caller holds [lock]. What [ExplorationPolicy] sees of [c]'s question. */
     private fun questionView(c: Claim) = state.questionView(c.root)
 
-    /** Caller holds [lock]. What [ExplorationPolicy] sees of [c], with its current sensitivity (model C). */
-    private fun viewOf(c: Claim) = c.view(service.sensitivityOf(c.ref))
+    /**
+     * Caller holds [lock]. Answer roots of every question that still has work.
+     * Framed questions contribute their reading/position roots; the disconnected
+     * FRAMED question node itself is excluded. Exact evaluation gives zero to
+     * roots a node cannot reach and sums every root it can reach.
+     */
+    private fun activeAnswerRoots(): Set<CellRef> {
+        val activeQuestions = claims.values.filter { it.status in ExplorationPolicy.ACTIVE }.mapTo(HashSet()) { it.root }
+        return claims.values.asSequence()
+            .filter { it.parent == null && it.status != Status.FRAMED && it.root in activeQuestions }
+            .mapTo(linkedSetOf()) { it.ref }
+    }
+
+    /** Caller holds [lock]. What [ExplorationPolicy] sees of [c], with exact on-demand VoI. */
+    private fun viewOf(c: Claim): ClaimView {
+        val exact = service.exactValueOf(c.ref, activeAnswerRoots())?.expectedRootChange
+        return c.view(exact)
+    }
 
     /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one (CTL-02). */
     private fun held(c: Claim) = policy.held(c.view(), questionView(c))
@@ -721,7 +736,7 @@ class DeliberationEngine(
             }
             if (budgetGate != null) return finish(c, budgetGate)
         }
-        // Model C: the value of information is re-read now; it may have fallen since the claim was queued.
+        // Exact value of information is re-read now; it may have fallen since the claim was queued.
         val voiGate = synchronized(lock) { policy.startVoiGate(viewOf(c)) }
         if (voiGate != null) return finish(c, voiGate)
         update { c.status = Status.EXPLORING }

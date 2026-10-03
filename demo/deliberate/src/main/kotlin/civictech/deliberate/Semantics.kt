@@ -268,23 +268,6 @@ class LayerSet(
     /** Layer id → credence. */
     fun named(values: List<Double>): Map<String, Double> = ids.zip(values).toMap()
 
-    /**
-     * Model C: d [headlineOf] / d values\[l] for a node with these credences —
-     * one-hot for a layer headline; for [CONSENSUS], the gradient of
-     * `sigmoid(mean logit(clamp c_m))` over the members (0 for a layer outside
-     * them, or clamped at [Consensus.LOW]/[Consensus.HIGH]). Turns a per-layer
-     * sensitivity vector into d headline(root) / d node: their dot product.
-     */
-    fun headlineGradient(values: List<Double>): List<Double> {
-        if (headline != CONSENSUS) return ids.indices.map { if (it == headlineIndex) 1.0 else 0.0 }
-        val cons = consensus(values)
-        return ids.indices.map { l ->
-            val c = values[l]
-            if (l !in memberIndex || c <= Consensus.LOW || c >= Consensus.HIGH) 0.0
-            else cons * (1 - cons) / (memberIndex.size * c * (1 - c))
-        }
-    }
-
     companion object {
         /** Headline value meaning "show the consensus" rather than one layer (the default). */
         const val CONSENSUS = "consensus"

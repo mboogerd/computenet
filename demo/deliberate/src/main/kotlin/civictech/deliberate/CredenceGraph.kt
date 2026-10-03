@@ -16,6 +16,7 @@ import civictech.cell.host.inlet
 import civictech.cell.link.LinkOptions
 import civictech.cell.observe.ObserveCell
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 /** The durable construction record for one claim. */
 data class ClaimNodeFactory(
@@ -44,7 +45,10 @@ data class EdgeNodeFactory(
         EdgeNode(polarity, ref, layers, quiescence = if (head) quiescence else 0.0).also { created = it }
 }
 
-/** The durable construction record for one claim or edge's sensitivity cell. */
+/**
+ * Legacy model-C construction record. New graphs create no sensitivity cells,
+ * but old topology journals still deserialize this factory and its cell.
+ */
 data class SensitivityFactory(
     val subject: CellRef,
     val isEdge: Boolean,
@@ -93,12 +97,11 @@ data class IssueFactory(
  * their recorded refs and recomputes every credence from those inputs, with
  * late-join catch-up baselines enabled throughout.
  *
- * Model C: beside the credence cells runs the sensitivity layer
- * ([SensitivityNode], one per claim and per edge, and a [SensitivityHubView]
- * fold): d root / d node, computed top-down. It reads what the credence cells
- * emit and the stances routed to them; nothing it emits is wired into a
- * credence cell ([wiring] records every link, so a test can check that). Off
- * ([sensitivity] = false), the credence cells are wired exactly the same.
+ * Value of information is derived on demand by exact two-point re-evaluation
+ * ([exactValueOf]), over every dependency path to the requested answer roots.
+ * No sensitivity cell is added to a new topology. The legacy factory, cell and
+ * fold remain loadable solely so pre-change topology journals still restore;
+ * their derivative output is ignored.
  */
 class CredenceGraph(
     host: ManagedHost,
@@ -108,8 +111,6 @@ class CredenceGraph(
     /** Cycle-head absorb threshold (per feedback edge; heads only), agora's default. */
     private val quiescence: Double = 1e-3,
     onCredence: () -> Unit = {},
-    /** Model C: run the sensitivity layer. */
-    private val sensitivity: Boolean = true,
 ) {
     enum class Kind { CLAIM, EDGE }
 
@@ -138,14 +139,12 @@ class CredenceGraph(
         val positionOf: CellRef? = null,
     )
 
-    /**
-     * A node, its latest credence (null until its first emission reached the hub)
-     * and its sensitivity d headline(root) / d node ([sensitivityOf]; null until known).
-     */
+    /** A node and its latest credence (null until its first emission reached the hub). */
     data class Node(
         val ref: CellRef,
         val info: NodeInfo,
         val credence: Credence?,
+        /** Filled by [GraphProjection] from exact re-evaluation; kept here for the DTO's stable shape. */
         val sensitivity: Double? = null,
         /** Model A: a POSITIONS root's shares, once the shares fold has them. */
         val shares: Shares? = null,
@@ -158,15 +157,21 @@ class CredenceGraph(
     private val manage = host.managementInlet.call
     private val context = context ?: ApplyContext(host)
 
+    /** Credence, stance or topology changes invalidate the pure exact-VoI memo. */
+    private val evaluationVersion = AtomicLong()
+
     /** Volatile: its content is recomputed after every restart. */
     val hub = ObserveCell(
-        CredenceHubView(onCredence),
+        CredenceHubView {
+            invalidateExact()
+            onCredence()
+        },
         ref = hubRef("hub"),
     )
 
-    /** Model C: the sensitivity fold. Volatile, like [hub]. */
+    /** Legacy restore endpoint for sensitivity links recorded by older topology journals. */
     val sensitivityHub = ObserveCell(
-        SensitivityHubView(onCredence),
+        SensitivityHubView(),
         ref = hubRef("sensitivity-hub"),
     )
 
@@ -181,7 +186,7 @@ class CredenceGraph(
     /** Model A: each POSITIONS root's [IssueNode], by the root's ref. */
     private val issueCells = HashMap<CellRef, CellRef>()
 
-    /** Model C: each node's sensitivity cell, by the node's ref. */
+    /** Legacy restored sensitivity cells, never consulted by new value-of-information reads. */
     private val sensCells = HashMap<CellRef, CellRef>()
 
     private val wires = java.util.concurrent.CopyOnWriteArrayList<Wire>()
@@ -189,8 +194,15 @@ class CredenceGraph(
     /** Every link the graph installed, in order. */
     val wiring: List<Wire> get() = wires.toList()
 
-    /** The cells of the sensitivity layer (the hub included). */
+    /** Legacy sensitivity cells restored from old topology journals (the compatibility hub included). */
     val sensitivityCells: Set<CellRef> get() = synchronized(mutationLock) { sensCells.values.toSet() + sensitivityHub.ref }
+
+    private data class ExactKey(val version: Long, val subject: CellRef, val roots: List<CellRef>)
+    private val exactLock = Any()
+    private val exactCache = HashMap<ExactKey, ExactValueOfInformation>()
+    private var exactCacheVersion = -1L
+    private var evaluator: ExactValueEvaluator? = null
+    private var evaluatorVersion = -1L
 
     /** Serializes graph mutations, including direct callers outside the engine. */
     private val mutationLock = Any()
@@ -223,30 +235,13 @@ class CredenceGraph(
             SpawnStep(handle, factory, IdentityBinding.Exact(ref)),
             ConnectStep(handle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED),
         )
-        var sensitivityEntry: Pair<CellRef, SensitivityFactory>? = null
-        if (sensitivity) {
-            val sensitivityRef = CellRef(UUID.randomUUID())
-            val sensitivityHandle = sensitivityHandle(ref)
-            val sensitivityFactory =
-                SensitivityFactory(ref, isEdge = false, question = question, layers = layers, quiescence = quiescence)
-            sensitivityEntry = sensitivityRef to sensitivityFactory
-            steps += SpawnStep(
-                sensitivityHandle,
-                sensitivityFactory,
-                IdentityBinding.Exact(sensitivityRef),
-            )
-            steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
-        }
         GraphSpec(steps).apply(context)
         synchronized(nodesLock) {
             cells[ref] = checkNotNull(factory.created) { "claim factory did not retain $ref" }
             nodes[ref] = NodeInfo(kind = Kind.CLAIM, text = text, question = question)
         }
-        sensitivityEntry?.let { (sensitivityRef, sensitivityFactory) ->
-            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
-            sensCells[ref] = sensitivityRef
-        }
         rebuildWiring()
+        invalidateExact()
         ref
     }
 
@@ -281,31 +276,6 @@ class CredenceGraph(
                 STAGED,
             ),
         )
-        var sensitivityEntry: Pair<CellRef, SensitivityFactory>? = null
-        if (sensitivity) {
-            // Model C: the edge's sensitivity cell hears its target's frame and hands its source its share;
-            // the target's sensitivity cell folds the same influence the target's credence cell does.
-            val sensitivityHandle = sensitivityHandle(ref)
-            val sensitivityRef = CellRef(UUID.randomUUID())
-            val sensitivityFactory =
-                SensitivityFactory(ref, isEdge = true, question = false, layers = layers, quiescence = quiescence)
-            sensitivityEntry = sensitivityRef to sensitivityFactory
-            steps += SpawnStep(
-                sensitivityHandle,
-                sensitivityFactory,
-                IdentityBinding.Exact(sensitivityRef),
-            )
-            steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
-            steps += ConnectStep(sensitivityHandle, "sourceOutlet", sensitivityHandle(source), "shareInlet", STAGED)
-            steps += ConnectStep(handle, "influenceOutlet", sensitivityHandle(target), "influenceInlet", STAGED)
-            steps += ConnectStep(
-                sensitivityHandle(target),
-                "frameOutlet",
-                sensitivityHandle,
-                if (head) "feedbackFrameInlet" else "frameInlet",
-                STAGED,
-            )
-        }
         GraphSpec(steps).apply(context)
         synchronized(nodesLock) {
             cells[ref] = checkNotNull(factory.created) { "edge factory did not retain $ref" }
@@ -317,11 +287,8 @@ class CredenceGraph(
                 head = head,
             )
         }
-        sensitivityEntry?.let { (sensitivityRef, sensitivityFactory) ->
-            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
-            sensCells[ref] = sensitivityRef
-        }
         rebuildWiring()
+        invalidateExact()
         ref
     }
 
@@ -421,15 +388,17 @@ class CredenceGraph(
         sensCells.clear()
         sensCells.putAll(rebuiltSensitivity)
         rebuildWiring(topology)
+        invalidateExact()
     }
 
     /**
      * Model A: frames question root [root] as an issue over [texts] — each a
      * new question-flagged claim (so each has model D's neutral verdict and is
-     * a model C sensitivity root). The positions, framing metadata, sensitivity
-     * cells and every wire are one write-ahead topology delta, so recovery sees
-     * the whole framing or none of it. POSITIONS wire the [IssueNode] into the
-     * shares fold; READINGS keep it unlinked as the durable framing record.
+     * an answer root for exact value-of-information reads). The positions,
+     * framing metadata and every wire are one write-ahead topology delta, so
+     * recovery sees the whole framing or none of it. POSITIONS wire the
+     * [IssueNode] into the shares fold; READINGS keep it unlinked as the durable
+     * framing record.
      */
     fun frame(
         root: CellRef,
@@ -448,7 +417,6 @@ class CredenceGraph(
         }
         val steps = mutableListOf<GraphStep>()
         val claimFactories = linkedMapOf<CellRef, ClaimNodeFactory>()
-        val sensitivityFactories = linkedMapOf<CellRef, Pair<CellRef, SensitivityFactory>>()
         texts.zip(refs).forEach { (text, ref) ->
             val claimHandle = claimHandle(ref)
             val claimFactory = ClaimNodeFactory(text, question = true, layers = layers)
@@ -459,19 +427,6 @@ class CredenceGraph(
                 IdentityBinding.Exact(ref),
             )
             steps += ConnectStep(claimHandle, "credenceOutlet", HUB_HANDLE, "inlet", STAGED)
-            if (sensitivity) {
-                val sensitivityHandle = sensitivityHandle(ref)
-                val sensitivityRef = CellRef(UUID.randomUUID())
-                val sensitivityFactory =
-                    SensitivityFactory(ref, isEdge = false, question = true, layers = layers, quiescence = quiescence)
-                sensitivityFactories[ref] = sensitivityRef to sensitivityFactory
-                steps += SpawnStep(
-                    sensitivityHandle,
-                    sensitivityFactory,
-                    IdentityBinding.Exact(sensitivityRef),
-                )
-                steps += ConnectStep(sensitivityHandle, "hubOutlet", SENSITIVITY_HUB_HANDLE, "inlet", STAGED)
-            }
         }
         val issueHandle = issueHandle(root)
         val issueRef = CellRef(UUID.randomUUID())
@@ -496,13 +451,9 @@ class CredenceGraph(
             }
             nodes[root] = checkNotNull(nodes[root]).copy(issue = IssueInfo(mode, refs))
         }
-        sensitivityFactories.forEach { (subject, entry) ->
-            val (sensitivityRef, sensitivityFactory) = entry
-            checkNotNull(sensitivityFactory.created) { "sensitivity factory did not retain $sensitivityRef" }
-            sensCells[subject] = sensitivityRef
-        }
         if (mode == IssueMode.POSITIONS) issueCells[root] = issueRef
         rebuildWiring()
+        invalidateExact()
         refs
     }
 
@@ -522,37 +473,87 @@ class CredenceGraph(
             if (value == null) mine.remove(user) else mine[user] = value
         }
         registry.inlet(id, ClaimNodePorts.stanceInlet).propagate(Stance(user, value))
-        sensCells[id]?.let { registry.inlet(it, SensitivityNodePorts.stanceInlet).propagate(Stance(user, value)) }
+        invalidateExact()
     }
 
     fun graph(): List<Node> {
         val snapshot = synchronized(nodesLock) { nodes.entries.map { it.key to it.value } }
         val credences = hub.current()
-        val sensitivities = sensitivityHub.current()
         val shares = sharesHub.current()
-        return snapshot.map { (ref, info) -> Node(ref, info, credences[ref], scalar(sensitivities[ref], credences), shares[ref]) }
+        return snapshot.map { (ref, info) -> Node(ref, info, credences[ref], shares = shares[ref]) }
     }
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 
     fun credenceOf(id: CellRef): Credence? = hub.current()[id]
 
-    /** Model C: node [id]'s sensitivity vector, d root\[l] / d node\[l] per layer; null until the layer reached it. */
-    fun sensitivityVectorOf(id: CellRef): List<Double>? = sensitivityHub.current()[id]?.values
+    /**
+     * Exact q-weighted value of resolving [id] to false or true, summed over
+     * [roots]. The immutable calculation is memoised until a credence, stance
+     * or topology change invalidates its snapshot.
+     */
+    internal fun exactValueOf(id: CellRef, roots: Collection<CellRef>): ExactValueOfInformation? {
+        val orderedRoots = roots.distinct().sortedWith(ClaimNode.REF_ORDER)
+        val (version, evaluator) = currentEvaluator()
+        val key = ExactKey(version, id, orderedRoots)
+        synchronized(exactLock) {
+            if (exactCacheVersion == version) exactCache[key]?.let { return it }
+        }
+        val result = evaluator.valueOf(id, orderedRoots) ?: return null
+        synchronized(exactLock) {
+            if (exactCacheVersion < version) {
+                exactCache.clear()
+                exactCacheVersion = version
+            }
+            if (exactCacheVersion == version) exactCache[key] = result
+        }
+        // A change that landed meanwhile only makes this a read of the snapshot
+        // just before it: the next read sees the new version. No retry, so a
+        // burst of credence emissions cannot keep a caller (who holds the
+        // engine lock) re-evaluating.
+        return result
+    }
 
     /**
-     * Model C: d headline(root) / d node [id] — how far the root's headline
-     * credence moves per unit move of every layer of the node's credence
-     * ([LayerSet.headlineGradient] at the root's current credences, dotted with
-     * the node's vector). Null until the sensitivity layer reached the node.
+     * One evaluator per snapshot version, shared by every subject read at that
+     * version, so its re-evaluated baseline is computed once per change rather
+     * than once per node read.
      */
-    fun sensitivityOf(id: CellRef): Double? = scalar(sensitivityHub.current()[id], hub.current())
+    private fun currentEvaluator(): Pair<Long, ExactValueEvaluator> {
+        while (true) {
+            val version = evaluationVersion.get()
+            synchronized(exactLock) {
+                if (evaluatorVersion == version) return version to evaluator!!
+            }
+            // Retried only while the capture itself straddles a change; no evaluation runs here.
+            val (nodeSnapshot, afterSnapshot) = synchronized(mutationLock) {
+                val (infos, stanceValues) = synchronized(nodesLock) {
+                    nodes.toMap() to held.mapValues { it.value.values.toList() }
+                }
+                val current = hub.current()
+                val exact = infos.mapValues { (ref, info) ->
+                    ExactNode(
+                        current = current[ref]?.values ?: List(layers.ids.size) { 0.5 },
+                        stances = stanceValues[ref].orEmpty(),
+                        edge = info.source?.let { source -> ExactEdge(source, info.target!!, info.polarity!!) },
+                    )
+                }
+                exact to evaluationVersion.get()
+            }
+            if (version != afterSnapshot) continue
+            val built = ExactValueEvaluator(layers, nodeSnapshot, quiescence)
+            synchronized(exactLock) {
+                if (version > evaluatorVersion) {
+                    evaluator = built
+                    evaluatorVersion = version
+                }
+            }
+            return version to built
+        }
+    }
 
-    private fun scalar(s: Sensitivity?, credences: Map<CellRef, Credence>): Double? {
-        val values = s?.values ?: return null
-        val root = s.root?.let { credences[it]?.values } ?: List(layers.ids.size) { 0.5 }
-        val g = layers.headlineGradient(root)
-        return values.indices.sumOf { g[it] * values[it] }
+    private fun invalidateExact() {
+        evaluationVersion.incrementAndGet()
     }
 
     /** Caller holds [nodesLock]. DFS along the influence flow: node → edges sourced at it → their targets. */
@@ -590,7 +591,6 @@ class CredenceGraph(
 
         fun claimHandle(ref: CellRef) = "claim:${ref.id}"
         fun edgeHandle(ref: CellRef) = "edge:${ref.id}"
-        fun sensitivityHandle(ref: CellRef) = "sens:${ref.id}"
         fun issueHandle(root: CellRef) = "issue:${root.id}"
     }
 }
