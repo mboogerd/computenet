@@ -1558,6 +1558,14 @@ class DeliberationEngineTest {
         assertEquals(0.0, even.conSaturation)
         assertEquals(0, even.duplicatesDropped)
         assertNull(even.error)
+        val arguedRefs = g.edges().mapNotNull { it.target }.toSet()
+        val argued = g.nodes.filter { it.ref in arguedRefs }
+        assertTrue(argued.any { it.kind == "CLAIM" } && argued.any { it.kind == "EDGE" })
+        argued.forEach { n ->
+            assertEquals(n.credences.keys, n.argumentsFirstCredences.keys, "${n.kind} ${n.ref} arguments-first layers")
+            assertTrue(n.argumentsFirstCredences.values.all { it in 0.0..1.0 })
+            assertTrue(n.argumentsFirstConsensus in 0.0..1.0)
+        }
         // Link rounds are non-root work and therefore participate in the
         // question's diminishing-return yield series (EXP-10).
         assertEquals(3, g.questions.single().yieldRounds)
@@ -2218,18 +2226,44 @@ class DeliberationEngineTest {
             e.idle()
             val q = e.settledQuestion(0.3)
             awaitUntil("the root settles on 0.54") { abs(e.snapshot().node(root).credence - 0.54) < 1e-9 }
+            val before = e.snapshot()
+            val rootNode = before.node(root)
             assertEquals(0.9, q.firstImpression)
-            assertEquals(0.9, e.snapshot().node(root).plausibility, "the first impression stays the root's prior")
-            assertTrue(e.snapshot().questions.single().verdictsDisagree)
+            assertEquals(0.9, rootNode.plausibility, "the first impression stays the root's prior")
+            assertEquals(q.neutralCredence!!, rootNode.argumentsFirstConsensus, 1e-12)
+            assertEquals(rootNode.credences.keys, rootNode.argumentsFirstCredences.keys)
+            assertTrue(rootNode.argumentsFirstCredences.values.all { it in 0.0..1.0 })
+            before.nodes.filter { n -> before.edges().none { it.target == n.ref } }.forEach { unargued ->
+                assertEquals(unargued.credences, unargued.argumentsFirstCredences, "unargued ${unargued.ref}")
+                assertEquals(unargued.consensus, unargued.argumentsFirstConsensus, "unargued ${unargued.ref}")
+            }
+            assertTrue(before.questions.single().verdictsDisagree)
             e.close()
+            val journalBytes = log.length()
 
             // Nothing of it is journaled: a restart recomputes both verdicts and the flag from the stances.
-            assertTrue(store.load().values.none { f -> f.keys.any { it.contains("neutral") || it.contains("impression") } })
-            val e2 = restart(log, store, DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false))
+            assertTrue(store.load().values.none { f -> f.keys.any { it.contains("neutral") || it.contains("impression") || it.contains("argumentsFirst") } })
+            val restartJudge = FakeJudge()
+            val restartProposer = FakeProposer("claude") { _, _, _ -> emptyList() }
+            val e2 = restart(
+                log,
+                store,
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+                restartJudge,
+                listOf(restartProposer),
+            )
             e2.idle()
             val after = e2.settledQuestion(0.3)
             assertEquals(0.9, after.firstImpression)
+            val restored = e2.snapshot()
             awaitUntil("the restarted root flags the disagreement") { e2.snapshot().questions.single().verdictsDisagree }
+            assertEquals(rootNode.argumentsFirstCredences, restored.node(root).argumentsFirstCredences)
+            assertEquals(rootNode.argumentsFirstConsensus, restored.node(root).argumentsFirstConsensus)
+            assertEquals(before.questions.single().cost, restored.questions.single().cost)
+            assertEquals(journalBytes, log.length(), "recomputing arguments-first must add no topology journal record")
+            assertTrue(restartJudge.plausibilityCalls.isEmpty() && restartJudge.relationCalls.isEmpty() && restartJudge.triageCalls.isEmpty())
+            assertEquals(0, restartJudge.saturationCalls.get())
+            assertTrue(restartProposer.contexts.isEmpty(), "restart recomputation must not ask a proposer")
         } finally {
             dir.deleteRecursively()
         }

@@ -4,9 +4,10 @@ import civictech.agora.cell.Polarity
 import civictech.deliberate.CostLedger.Companion.withCost
 
 /**
- * The UI's view (SPEC §6): the graph's nodes — every credence, the consensus
- * and the spread from the hub fold, where the cells put them (CRED-06) —
- * joined with the engine's exploration metadata. It only reads.
+ * The UI's view (SPEC §6): the graph's nodes — every ordinary and
+ * arguments-first credence, the consensuses and the ordinary spread from the
+ * hub fold, where the cells put them (CRED-06) — joined with the engine's
+ * exploration metadata. It only reads.
  */
 internal class GraphProjection(private val policy: ExplorationPolicy, private val ledger: CostLedger) {
 
@@ -28,12 +29,16 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
             val credence = layers.headlineOf(values, consensus)
             val low = n.credence?.spreadLow ?: NEUTRAL
             val high = n.credence?.spreadHigh ?: NEUTRAL
+            val argumentsFirstValues = n.credence?.neutral ?: values
+            val argumentsFirstNamed = layers.named(argumentsFirstValues)
+            val argumentsFirstConsensus = layers.consensus(argumentsFirstValues)
             state.edges[n.ref]?.let { e ->
                 // SPEC §3 "Links as claims": an edge carries its link's exploration state.
                 val l = state.claims[n.ref]
                 NodeDto(
                     ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    argumentsFirstCredences = argumentsFirstNamed, argumentsFirstConsensus = argumentsFirstConsensus,
                     polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
                     strength = e.strength,
                     text = l?.text, depth = l?.depth, status = l?.status, override = l?.override,
@@ -48,6 +53,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 NodeDto(
                     ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    argumentsFirstCredences = argumentsFirstNamed, argumentsFirstConsensus = argumentsFirstConsensus,
                     text = c.text, depth = c.depth, status = c.status, override = c.override,
                     proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
                     quality = c.quality, contribution = c.contribution, sensitivity = n.sensitivity,

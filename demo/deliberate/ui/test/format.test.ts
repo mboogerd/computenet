@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { FramingDto, NodeDto } from '../src/api/types';
 import {
   agreementText,
+  argumentsFirstLayerLines,
+  argumentsFirstText,
   framingText,
   readingsLine,
   layerLines,
@@ -195,6 +197,21 @@ describe('credence layers', () => {
       'weighted log-odds · 62% · in consensus',
       'MLP-based · 70%',
     ]);
+  });
+
+  it('words the first-impression comparison and lists every arguments-first rule', () => {
+    const n = node({
+      plausibility: 0.8,
+      argumentsFirstCredences: { dfquad: 0.61, wlo: 0.72, glo: 0.67 },
+      argumentsFirstConsensus: 0.7,
+    });
+    expect(argumentsFirstText(n)).toBe('first impression 80% · arguments first 70%');
+    expect(argumentsFirstLayerLines(n, ['wlo', 'jnb', 'woe'])).toEqual([
+      'DF-QuAD · 61%',
+      'weighted log-odds · 72% · in consensus',
+      'gated log-odds · 67%',
+    ]);
+    expect(argumentsFirstText(node({ argumentsFirstConsensus: 0.55 }))).toBe('arguments first 55%');
   });
 
   it('names the UNDERCUT triage action', () => {

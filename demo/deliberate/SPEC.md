@@ -136,18 +136,21 @@ names that model.)
   consensus is a pure function of the vector, so computing it where the
   vector is computed is the simplest derived form — no second cell per node,
   no second hop, no second fold. The snapshot only reads the hub.
-- **Model D — the neutral-prior vector.** A question root's `ClaimNode` also
-  evaluates every layer with its base shrunk towards a neutral prior before
-  the arguments are weighed: `base' = LayerSet.NEUTRAL_PRIOR +
+- **Model D — the arguments-first neutral-prior vector.** Every claim and edge
+  cell also evaluates every layer with its local base shrunk towards a neutral
+  prior before its direct arguments are weighed: `base' = LayerSet.NEUTRAL_PRIOR +
   LayerSet.WEAK_PRIOR_WEIGHT * (base - LayerSet.NEUTRAL_PRIOR)`, with
   `NEUTRAL_PRIOR = 0.5` and `WEAK_PRIOR_WEIGHT = 0.0` — a fully neutral base,
   the smallest choice (a weak, non-zero prior would be `0 < w < 1`). This
-  rides the root's own `Credence` emission as an optional `neutral` vector,
-  computed the moment the root's ordinary vector is (same stances, same
-  attacks and supports); every other node's `Credence.neutral` is null. The
-  root's ordinary credence is unaffected — `priorWeight == 1.0` leaves the
-  base untouched — so Jev's plausibility stays the root's stance and prior as
-  before.
+  rides the node's own `Credence` emission as `neutral`, computed the moment
+  its ordinary vector is, from the same stances and the same ordinary attack
+  and support inputs. A node with no incoming arguments instead copies its
+  ordinary vector: no argument means no invented neutral standing. The
+  arguments-first vector never feeds an influence, sensitivity, queue, verdict
+  or another layer; `priorWeight == 1.0` leaves every ordinary vector exactly
+  as before. The cached prior-dominance measurement in `CALIBRATION.md` is
+  design evidence for exposing this diagnostic view, not evidence that it
+  improves answer accuracy.
 
 ## 3. Exploration (requirements EXP-*)
 
@@ -531,7 +534,10 @@ Every status change is broadcast.
   (CTL-05); 400 on a malformed ref or flag, 404 on a ref that is not a question
 - `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
   `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`, and its
-  `sensitivity` (model C, §3, null until the sensitivity layer reaches it); an
+  model D `argumentsFirstCredences` per layer and
+  `argumentsFirstConsensus` (equal to the ordinary vector/consensus when the
+  node has no incoming arguments), and its `sensitivity` (model C, §3, null
+  until the sensitivity layer reaches it); an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
   its edge's `target`) and every argument about a link carries `onLink` (that
   edge); a claim carries `evidence` (model B REFINE outcomes) when it has any;
@@ -598,8 +604,11 @@ Every status change is broadcast.
   the *research view* on for the session; `?research` in the URL starts it on
   (like `?debug`), and it is not otherwise persisted. In the research view the
   spread band, the "rules: a–b%" caption and each rule's own credence (facts
-  panel "By rule") reappear exactly as before model D. The question's hero
-  caption reads "first impression F% · arguments alone N%" (`firstImpression`,
+  panel "By rule") reappear exactly as before model D. Every claim and link's
+  facts also compare "first impression" with its `argumentsFirstConsensus`
+  and list `argumentsFirstCredences` under "Arguments first by rule"; this is
+  the local diagnostic view and does not replace its ordinary credence. The
+  question's hero caption reads "first impression F% · arguments alone N%" (`firstImpression`,
   `neutralCredence`; either half is left out until known), with " · rules
   a–b%" appended in the research view; when `verdictsDisagree` is true a note
   (`role="note"`) says the first impression decides the side, naming which way
@@ -679,14 +688,16 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   by topology records in the one write-ahead host journal (`host.journal`),
   together with the engine's metadata, which includes the `jev` stances.
   Nothing derived —
-  no credence vector, influence, hub update, or sensitivity vector or frame
+  no ordinary or arguments-first credence vector, influence, hub update, or
+  sensitivity vector or frame
   (model C, §3 "Sensitivity and value of information") — is ever written: the
   metadata cell is the only journaled cell on the host (a per-cell journal
   selector), every credence and sensitivity cell is volatile, and on boot the
   graph recomputes every credence and every sensitivity from the structure and
   the re-applied stances, with catch-up baselines enabled. A restart
-  reproduces every layer's credence and every consensus (within 1e-9), restart
-  after restart.
+  reproduces every layer's ordinary and arguments-first credence and every
+  consensus (within 1e-9), restart after restart. Arguments-first evaluation
+  makes no model call and therefore adds no cost record.
 - **DUR-02** The engine's per-claim metadata (question membership, status,
   override, proposer, rewritten text, Jev judgments — plausibility and edge
   strength are the `jev` stances —, saturation, triage counts, rounds,

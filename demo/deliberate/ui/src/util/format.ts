@@ -358,6 +358,22 @@ export function layerLines(n: NodeDto, members: readonly string[]): string[] {
   );
 }
 
+/** Model D: one line per rule in the local arguments-first view. */
+export function argumentsFirstLayerLines(n: NodeDto, members: readonly string[]): string[] {
+  return Object.entries(n.argumentsFirstCredences ?? {}).map(
+    ([id, c]) => `${LAYER_NAMES[id] ?? id} · ${pct(c)}${members.includes(id) ? ' · in consensus' : ''}`,
+  );
+}
+
+/** Model D: compare Jev's first impression with the node's arguments-first consensus. */
+export function argumentsFirstText(n: NodeDto): string | undefined {
+  if (n.argumentsFirstConsensus === undefined) return undefined;
+  const first = n.kind === 'EDGE' ? n.strength : n.plausibility;
+  return first === undefined
+    ? `arguments first ${pct(n.argumentsFirstConsensus)}`
+    : `first impression ${pct(first)} · arguments first ${pct(n.argumentsFirstConsensus)}`;
+}
+
 // ---------- SPEC §12 cost ----------
 
 /**

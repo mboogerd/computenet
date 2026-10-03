@@ -1,5 +1,6 @@
 package civictech.deliberate
 
+import civictech.agora.cell.Polarity
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
@@ -221,6 +222,39 @@ class SemanticsTest {
         assertTrue(LayerSet.oppositeSides(0.54, 0.3))
         assertTrue(!LayerSet.oppositeSides(0.94, 0.7))
         assertTrue(!LayerSet.oppositeSides(0.5, 0.2), "½ is on neither side")
+    }
+
+    @Test
+    fun `arguments first outweighs the retained prior for a strong unrebutted support and attack in every active layer`() {
+        val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
+        val argument = List(all.ids.size) { Arg(strength = 0.8, credence = 0.8) }
+
+        for ((side, prior) in listOf(Polarity.SUPPORT to 0.2, Polarity.ATTACK to 0.8)) {
+            val attacks = if (side == Polarity.ATTACK) listOf(argument) else emptyList()
+            val supports = if (side == Polarity.SUPPORT) listOf(argument) else emptyList()
+            val priorValues = all.evaluate(listOf(prior), emptyList(), emptyList())
+            val retainedPrior = all.evaluate(listOf(prior), attacks, supports)
+            val argumentsFirst = all.evaluate(listOf(prior), attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT)
+
+            argumentsFirst.forEachIndexed { i, standing ->
+                val argumentDriven = abs(standing - priorValues[i])
+                val retainedPriorMovement = abs(retainedPrior[i] - standing)
+                assertTrue(
+                    argumentDriven > retainedPriorMovement,
+                    "${all.ids[i]} $side: argument movement $argumentDriven did not exceed retained-prior movement $retainedPriorMovement",
+                )
+                assertTrue(standing in 0.0..1.0, "${all.ids[i]} $side left [0,1]: $standing")
+            }
+
+            val priorConsensus = all.consensus(priorValues)
+            val retainedConsensus = all.consensus(retainedPrior)
+            val argumentsFirstConsensus = all.consensus(argumentsFirst)
+            assertTrue(
+                abs(argumentsFirstConsensus - priorConsensus) > abs(retainedConsensus - argumentsFirstConsensus),
+                "consensus $side did not move more with the argument than with the retained prior",
+            )
+            assertTrue(argumentsFirstConsensus in 0.0..1.0)
+        }
     }
 
     @Test

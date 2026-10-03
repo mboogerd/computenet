@@ -352,6 +352,30 @@ describe('SPEC UI contract', () => {
     expect(facts).not.toContain('Plausible on its own');
   });
 
+  it('model D: the research facts expose first impression versus arguments first for claims and links', () => {
+    const claim = {
+      ...graph.nodes[1],
+      plausibility: 0.8,
+      argumentsFirstCredences: { dfquad: 0.61, wlo: 0.72, jnb: 0.69, woe: 0.7, glo: 0.67 },
+      argumentsFirstConsensus: 0.7,
+    };
+    const claimFacts = renderToString(() => <Facts id="claim-facts" claim={claim} research />).replace(/<!--[^>]*-->/g, '');
+    expect(claimFacts).toContain('First impression vs arguments');
+    expect(claimFacts).toContain('first impression 80% · arguments first 70%');
+    expect(claimFacts).toContain('Arguments first by rule');
+    expect(claimFacts).toContain('gated log-odds · 67%');
+
+    const link = {
+      ...layered.nodes.find((n) => n.kind === 'EDGE')!,
+      strength: 0.85,
+      argumentsFirstCredences: { dfquad: 0.58, wlo: 0.62, jnb: 0.6, woe: 0.61, glo: 0.57 },
+      argumentsFirstConsensus: 0.61,
+    };
+    const linkFacts = renderToString(() => <Facts id="link-facts" claim={link} link research />).replace(/<!--[^>]*-->/g, '');
+    expect(linkFacts).toContain('first impression 85% · arguments first 61%');
+    expect(linkFacts).toContain('Arguments first by rule');
+  });
+
   it('shows what the deliberation is doing now, links included', () => {
     const busy: GraphDto = {
       ...layered,

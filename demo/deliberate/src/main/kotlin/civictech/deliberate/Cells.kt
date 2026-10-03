@@ -49,9 +49,11 @@ data class Credence(
     val spreadHigh: Double,
     val size: Double,
     /**
-     * Model D, a question root only: the same arguments weighed from a neutral
-     * prior ([LayerSet.WEAK_PRIOR_WEIGHT]) instead of Jev's first impression —
-     * "what the arguments say". Null for every other node.
+     * Model D's arguments-first view: the same direct argument inputs weighed
+     * from a neutral prior ([LayerSet.WEAK_PRIOR_WEIGHT]) instead of this
+     * node's Jev prior. An unargued node keeps [values], so the view never
+     * invents a neutral standing where no argument exists. Nullable only for
+     * additive payload compatibility; new claim and edge cells always emit it.
      */
     val neutral: List<Double>? = null,
 ) : java.io.Serializable, Magnitude {
@@ -93,8 +95,6 @@ private fun maxDelta(a: List<Double>, b: List<Double>): Double =
 open class ClaimNode(
     override val ref: CellRef,
     protected val layers: LayerSet,
-    /** Model D: a question root, which also emits [Credence.neutral]. */
-    private val neutralPrior: Boolean = false,
 ) : Cell {
     val stanceInlet = registerPort("stanceInlet", FanInlet.create<Propagate<Stance>>())
     val influenceInlet = registerPort("influenceInlet", FanInlet.create<Propagate<Influence>>())
@@ -105,12 +105,10 @@ open class ClaimNode(
     /** Ref-sorted so every layer folds its arguments in one fixed order (FP determinism). */
     private val influences = TreeMap<CellRef, Influence>(REF_ORDER)
 
+    private val initial = layers.evaluate(emptyList(), emptyList(), emptyList())
+
     @Volatile
-    var credence: Credence = credenceOf(
-        layers.evaluate(emptyList(), emptyList(), emptyList()),
-        if (neutralPrior) layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT) else null,
-        size = 0.0,
-    )
+    var credence: Credence = credenceOf(initial, initial, size = 0.0)
         private set
 
     init {
@@ -130,7 +128,7 @@ open class ClaimNode(
         credenceOutlet.catchUpOnLinked { credence.copy(size = 1.0) }
     }
 
-    private fun credenceOf(values: List<Double>, neutral: List<Double>?, size: Double) =
+    private fun credenceOf(values: List<Double>, neutral: List<Double>, size: Double) =
         Credence(ref, values, layers.consensus(values), values.min(), values.max(), size, neutral)
 
     private fun recompute() {
@@ -141,9 +139,13 @@ open class ClaimNode(
             if (i.polarity == Polarity.SUPPORT) supports += args else attacks += args
         }
         val values = layers.evaluate(stances.values, attacks, supports)
-        val neutral = if (neutralPrior) layers.evaluate(stances.values, attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT) else null
+        // No arguments means there is nothing to evaluate "arguments first":
+        // keep the ordinary Jev prior. Once argued, change only this node's
+        // base; its argument vectors are the same ordinary inputs as before.
+        val neutral = if (influences.isEmpty()) values else
+            layers.evaluate(stances.values, attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT)
         if (values != credence.values || neutral != credence.neutral) {
-            val size = maxOf(maxDelta(values, credence.values), neutral?.let { maxDelta(it, credence.neutral!!) } ?: 0.0)
+            val size = maxOf(maxDelta(values, credence.values), maxDelta(neutral, credence.neutral ?: credence.values))
             credence = credenceOf(values, neutral, size)
             credenceOutlet.call.propagate(credence)
             onCredence()

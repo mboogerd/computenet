@@ -27,7 +27,7 @@ data class ClaimNodeFactory(
     internal var created: ClaimNode? = null
 
     override fun create(ref: CellRef): ClaimNode =
-        ClaimNode(ref, layers, neutralPrior = question).also { created = it }
+        ClaimNode(ref, layers).also { created = it }
 }
 
 /** The durable construction record for one argument edge. */
