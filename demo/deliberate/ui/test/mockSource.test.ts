@@ -125,11 +125,19 @@ describe('MockSource', () => {
     expect(g.consensusMembers).toEqual(['wlo', 'jnb', 'woe']);
     for (const n of g.nodes) {
       expect(Object.keys(n.credences!)).toHaveLength(8);
+      expect(Object.keys(n.argumentsFirstCredences!)).toHaveLength(8);
       const values = Object.values(n.credences!);
       expect(n.spreadLow).toBe(Math.min(...values));
       expect(n.spreadHigh).toBe(Math.max(...values));
       expect(n.consensus!).toBeGreaterThanOrEqual(n.spreadLow!);
       expect(n.consensus!).toBeLessThanOrEqual(n.spreadHigh!);
+      expect(n.argumentsFirstConsensus).toBeGreaterThanOrEqual(0);
+      expect(n.argumentsFirstConsensus).toBeLessThanOrEqual(1);
+    }
+    const targets = new Set(g.nodes.filter((n) => n.kind === 'EDGE').map((n) => n.target));
+    for (const n of g.nodes.filter((n) => !targets.has(n.ref))) {
+      expect(n.argumentsFirstCredences).toEqual(n.credences);
+      expect(n.argumentsFirstConsensus).toBe(n.consensus);
     }
     const u = g.nodes.find((n) => n.undercuts !== undefined)!;
     expect(g.nodes.find((n) => n.ref === u.undercuts)?.kind).toBe('EDGE');

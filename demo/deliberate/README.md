@@ -20,7 +20,7 @@ flight finish); Auto on it restarts it. The goal specification is [`SPEC.md`](SP
 4. One cell graph propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **eight semantics at once** — every claim and edge cell computes a credence *vector*, one value per layer: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy), `mlp` and `glo` (gated log-odds: a doubted argument is inert, support and attack weighed alike). An edge tells its target both its own credence vector (the strength) and its source's, so every semantics computes its own energy from the two — `jnb` conditions on the source's credence exactly as its definition says.
 5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it — visible only in the *research view* (below). Each claim cell derives both from its vector and emits them with it; they only summarise and never feed back into a layer. The deliberation code never propagates credence itself.
 6. The plausibility judgment also asks a **knowledge** question: does judging this claim need knowledge Jev doesn't have? "Outside my knowledge" maps the plausibility to 0.5 — neither believed nor doubted — whatever the five-level score would have said, rather than the low score a model gives what it hasn't heard of. No Jev request carries a current date; that pulled the judgment of claims about recent events.
-7. The question's root also gets a second verdict: the same arguments weighed from a **neutral prior** (½) instead of Jev's own first impression of the question — "what the arguments say" alongside "what Jev thought going in". See *First impression vs. arguments alone* below.
+7. Every argued claim and link also gets an **arguments-first** vector: the same direct inputs weighed with that node starting from a neutral prior (½) instead of its Jev first impression. A node with no incoming arguments keeps its ordinary prior in this view. The view is local, derived and diagnostic — it never feeds the graph — while question and reading roots keep their existing "arguments alone" presentation. See *First impression vs. arguments first* below.
 
 ## Exploration
 
@@ -128,10 +128,21 @@ its top-3 cruxes — the claims and links with the highest value of information
 settled it is (plausible/strong, as a percentage) and, when known, which way
 it would pull the answer. Nothing is shown until the backend names a crux.
 
-### First impression vs. arguments alone
+### First impression vs. arguments first
 
-Every question carries two verdicts. **First impression** is Jev's own
-plausibility of the question, judged before any argument exists — the prior
+Every claim and link carries an arguments-first research view. **First
+impression** is Jev's plausibility (or a link's relation strength) before an
+argument about that node exists. **Arguments first** weighs the node's same
+direct argument inputs from ½; an unargued node simply keeps its first
+impression. The ordinary credence, consensus, sensitivity and exploration
+inputs stay unchanged, and this local view never feeds a parent. In the
+research facts, "First impression vs arguments" shows the two consensus
+figures and "Arguments first by rule" lists all eight layer values. The
+cached prior-dominance measurement motivates this diagnostic view; it does
+not show that arguments-first values improve answer accuracy.
+
+Every question also carries the two established hero verdicts. **First
+impression** is Jev's own plausibility of the question, judged before any argument exists — the prior
 the ordinary credence graph starts from and never stops reflecting. **Arguments
 alone** re-weighs the very same arguments, but starting the root from a neutral
 ½ instead of that first impression. The gauge caption reads "first impression
@@ -256,7 +267,7 @@ chance to stop a side before the cap supplies the dependable stop.
 - `POST /question` with form field `text=…` returns `{"root":"<ref>"}`.
 - `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. The ref is a claim's, or an edge's to steer its link. Bad input returns 400, and an unknown ref returns 404.
 - `POST /question/pause` with form fields `root=<question ref>&paused=true|false` returns `ok` (SPEC CTL-05). A paused question finishes its rounds in flight and starts no new one; `EXPAND` on one of its claims or links still runs that one. The UI's **Pause/Resume** button sits next to the question's cost figure.
-- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh` and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer") and, model D, `firstImpression` (Jev's plausibility of the question before any argument), `neutralCredence` (the root's headline credence from the same arguments weighed from a neutral prior) and `verdictsDisagree` (the two fall on strictly opposite sides of 50%).
+- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh`, model D `argumentsFirstCredences` and `argumentsFirstConsensus`, and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer") and, model D, `firstImpression` (Jev's plausibility of the question before any argument), `neutralCredence` (the root's headline credence from the same arguments weighed from a neutral prior) and `verdictsDisagree` (the two fall on strictly opposite sides of 50%).
 - `GET /events` is an SSE stream. Every message is a full `GraphDto`, and messages are coalesced to at most about 10 per second.
 
 ## Cost and time
@@ -357,8 +368,10 @@ records capture every claim, edge, sensitivity cell and issue framing in
 creation order, while the journal's metadata fold holds per-claim status,
 override, proposer, rewritten text, the Jev judgments (which are the `jev`
 stances), triage counts, rounds and errors. Nothing derived is written: every
-credence, influence, consensus and sensitivity (model C) is recomputed from
-those inputs on boot. Each framing is one topology delta, so it is either
+ordinary and arguments-first credence, influence, consensus and sensitivity
+(model C) is recomputed from those inputs on boot, with no model call or cost
+record for the arguments-first view. Each framing is one topology delta, so it
+is either
 present as a complete graph construction or absent. The journal compacts
 itself to one checkpoint at boot, at shutdown, and whenever it has grown by
 more than 64 KB and its own last checkpoint size. On restart the topology is

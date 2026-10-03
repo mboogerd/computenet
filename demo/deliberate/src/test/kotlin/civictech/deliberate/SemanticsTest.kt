@@ -1,5 +1,6 @@
 package civictech.deliberate
 
+import civictech.agora.cell.Polarity
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
@@ -221,6 +222,43 @@ class SemanticsTest {
         assertTrue(LayerSet.oppositeSides(0.54, 0.3))
         assertTrue(!LayerSet.oppositeSides(0.94, 0.7))
         assertTrue(!LayerSet.oppositeSides(0.5, 0.2), "½ is on neither side")
+    }
+
+    @Test
+    fun `arguments first outweighs the retained prior for a strong unrebutted support and attack in every active layer`() {
+        // CALIBRATION.md "Prior dominance": for a standing v, prior share is
+        // |v - local-neutral-prior| against argument share |v - arguments-removed|.
+        // Every parent prior on both sides of ½, so a prior that already agrees
+        // with the argument cannot hide a view that still carries it.
+        val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
+        val argument = List(all.ids.size) { Arg(strength = 0.8, credence = 0.8) }
+
+        for (side in listOf(Polarity.SUPPORT, Polarity.ATTACK)) {
+            val attacks = if (side == Polarity.ATTACK) listOf(argument) else emptyList()
+            val supports = if (side == Polarity.SUPPORT) listOf(argument) else emptyList()
+            for (prior in (1..19).map { it * 0.05 }) {
+                val argumentsRemoved = all.evaluate(listOf(prior), emptyList(), emptyList())
+                val localNeutralPrior = all.evaluate(listOf(prior), attacks, supports, 0.0)
+                val argumentsFirst = all.evaluate(listOf(prior), attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT)
+
+                argumentsFirst.forEachIndexed { i, standing ->
+                    val argumentDriven = abs(standing - argumentsRemoved[i])
+                    val retainedPrior = abs(standing - localNeutralPrior[i])
+                    assertTrue(
+                        argumentDriven > retainedPrior,
+                        "${all.ids[i]} $side prior $prior: argument movement $argumentDriven did not exceed retained-prior movement $retainedPrior",
+                    )
+                    assertTrue(standing in 0.0..1.0, "${all.ids[i]} $side prior $prior left [0,1]: $standing")
+                }
+
+                val consensus = all.consensus(argumentsFirst)
+                assertTrue(
+                    abs(consensus - all.consensus(argumentsRemoved)) > abs(consensus - all.consensus(localNeutralPrior)),
+                    "consensus $side prior $prior did not move more with the argument than with the retained prior",
+                )
+                assertTrue(consensus in 0.0..1.0)
+            }
+        }
     }
 
     @Test

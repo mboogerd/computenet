@@ -199,6 +199,7 @@ class DtoGoldenTest {
         private val nQ2 = NodeDto(
             ref = "q2", kind = "CLAIM", credence = 0.52, root = "q2",
             credences = mapOf("wlo" to 0.5, "jnb" to 0.55, "woe" to 0.51), consensus = 0.517, spreadLow = 0.5, spreadHigh = 0.55,
+            argumentsFirstCredences = mapOf("wlo" to 0.58, "jnb" to 0.63, "woe" to 0.59), argumentsFirstConsensus = 0.6,
             text = "Should the city adopt X?", depth = 0, status = Status.EXPLORING, proposer = "question",
         )
         private val nA1 = NodeDto(

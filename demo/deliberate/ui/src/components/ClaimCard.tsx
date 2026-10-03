@@ -3,6 +3,8 @@ import type { NodeDto } from '../api/types';
 import type { ArgumentNode, TreeNode } from '../tree/buildTree';
 import {
   agreementText,
+  argumentsFirstLayerLines,
+  argumentsFirstText,
   isDebug,
   layerLines,
   LEAF_AGREEMENT,
@@ -580,6 +582,11 @@ export function Facts(props: {
           : 'The consensus of the credence rules: how likely this is true, after weighing its arguments',
       )}
       {row(
+        'First impression vs arguments',
+        props.research ? argumentsFirstText(c()) : undefined,
+        'The same direct arguments weighed with this node starting from a neutral ½ instead of Jev\'s first impression',
+      )}
+      {row(
         'Rules',
         props.research && c().credences ? agreementText(c(), props.leaf) : undefined,
         props.leaf ? `How far the credence rules agree — ${LEAF_AGREEMENT}` : 'How far the credence rules (ways of weighing arguments) agree on this claim',
@@ -589,6 +596,14 @@ export function Facts(props: {
         <dd>
           <ul class="facts__layers">
             <For each={layerLines(c(), props.members ?? [])}>{(line) => <li>{line}</li>}</For>
+          </ul>
+        </dd>
+      </Show>
+      <Show when={props.research && c().argumentsFirstCredences}>
+        <dt title="Each rule weighs the same direct arguments with this node starting from a neutral ½">Arguments first by rule</dt>
+        <dd>
+          <ul class="facts__layers">
+            <For each={argumentsFirstLayerLines(c(), props.members ?? [])}>{(line) => <li>{line}</li>}</For>
           </ul>
         </dd>
       </Show>

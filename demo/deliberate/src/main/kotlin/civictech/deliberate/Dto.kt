@@ -180,6 +180,14 @@ data class NodeDto(
     /** Lowest and highest credence over all layers. */
     val spreadLow: Double = credence,
     val spreadHigh: Double = credence,
+    /**
+     * Model D's local arguments-first view per layer: the same direct argument
+     * inputs with this node's prior set to ½. An unargued node keeps
+     * [credences], because there is no argument-driven standing yet.
+     */
+    val argumentsFirstCredences: Map<String, Double> = credences,
+    /** Geometric-odds consensus of [argumentsFirstCredences]. */
+    val argumentsFirstConsensus: Double = consensus,
     // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth, status,
     // override, reach, contribution, saturation, rounds, duplicatesDropped, triage,
     // error, activity) ---

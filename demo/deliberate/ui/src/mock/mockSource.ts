@@ -237,7 +237,19 @@ export class MockSource implements GraphSource {
     const targeted = new Set(nodes.filter((n) => n.kind === 'EDGE').map((e) => e.target));
     for (const n of nodes) {
       // Without arguments every rule keeps the first impression: no spread, by construction.
-      Object.assign(n, targeted.has(n.ref) ? mockLayers(n) : flatLayers(n));
+      const argued = targeted.has(n.ref);
+      Object.assign(n, argued ? mockLayers(n) : flatLayers(n));
+      if (!argued) {
+        n.argumentsFirstCredences = { ...n.credences };
+        n.argumentsFirstConsensus = n.consensus;
+      } else {
+        const first = n.kind === 'EDGE' ? n.strength : n.plausibility;
+        const ordinary = n.consensus ?? n.credence;
+        const standing = first === undefined ? ordinary : clampP(0.5 + ordinary - first);
+        const view = mockLayers({ ...n, credence: standing });
+        n.argumentsFirstCredences = view.credences;
+        n.argumentsFirstConsensus = view.consensus;
+      }
       if (n.status === 'JUDGING') n.activity = 'judging';
       else if (n.status === 'EXPLORING') n.activity = 'exploring';
     }

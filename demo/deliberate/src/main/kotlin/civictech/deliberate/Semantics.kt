@@ -249,8 +249,8 @@ class LayerSet(
     /**
      * One credence per layer for a node with these [stances] and arguments.
      * [priorWeight] < 1 shrinks each layer's base towards [NEUTRAL_PRIOR] —
-     * `½ + w·(base − ½)` — before the arguments are weighed (model D's second
-     * root verdict); 1 (the default) is the ordinary credence.
+     * `½ + w·(base − ½)` — before the arguments are weighed (model D's local
+     * arguments-first view); 1 (the default) is the ordinary credence.
      */
     fun evaluate(
         stances: Collection<Double>,
@@ -289,12 +289,12 @@ class LayerSet(
         /** Headline value meaning "show the consensus" rather than one layer (the default). */
         const val CONSENSUS = "consensus"
 
-        /** Model D: the prior the second root verdict shrinks Jev's first impression towards. */
+        /** Model D: the prior the arguments-first view shrinks Jev's first impression towards. */
         const val NEUTRAL_PRIOR = 0.5
 
         /**
-         * Model D: the weight Jev's first impression keeps in the second root
-         * verdict ("what the arguments say"), `½ + w·(p − ½)`. 0 — a neutral
+         * Model D: the weight Jev's first impression keeps in the local
+         * arguments-first view, `½ + w·(p − ½)`. 0 — a neutral
          * prior — is the smallest choice; a weak prior would be 0 < w < 1.
          */
         const val WEAK_PRIOR_WEIGHT = 0.0

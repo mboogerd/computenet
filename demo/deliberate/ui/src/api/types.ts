@@ -165,7 +165,7 @@ export interface NodeDto {
   credence: number;
   /** The question tree this node belongs to (its root claim ref). */
   root: string;
-  // The four fields below have Kotlin defaults and the backend always sends
+  // The six fields below have Kotlin defaults and the backend always sends
   // them (encodeDefaults); they are optional here only so hand-written
   // fixtures without them stay valid. Read them through `shown()`/`spreadOf()`.
   /** SPEC §2 "Credence layers and consensus": propagated credence per semantics layer id. */
@@ -175,6 +175,10 @@ export interface NodeDto {
   /** Lowest and highest credence over all layers. */
   spreadLow?: number;
   spreadHigh?: number;
+  /** Model D: local arguments-first credence per layer; equal to `credences` without incoming arguments. */
+  argumentsFirstCredences?: Record<string, number>;
+  /** Geometric-odds consensus of `argumentsFirstCredences`. */
+  argumentsFirstConsensus?: number;
   // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth,
   // status, override, reach, contribution, saturation, rounds,
   // duplicatesDropped, triage, error, activity) ---
