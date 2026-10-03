@@ -88,7 +88,9 @@ class RebaselineTest {
         (rig.state.current === incumbent) shouldBe false
         rig.state.current.cell.ref shouldBe incumbent.cell.ref
         rig.state.current.edges.ref shouldBe incumbent.edges.ref
-        rig.state.current.view() shouldBe mapOf("B" to mapOf("status" to "\"closed\""))
+        rig.state.current.view() shouldBe mapOf(
+            "B" to mapOf("id" to "\"B\"", "status" to "\"closed\""),
+        )
         rig.state.rebaselineCount shouldBe 1
         rig.input.committed() shouldBe "flat1"
     }
