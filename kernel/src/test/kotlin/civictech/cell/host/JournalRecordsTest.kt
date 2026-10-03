@@ -6,6 +6,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.graph.TopoEvent
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
 import civictech.cell.proxy.HostedPortInvocation
@@ -39,6 +40,17 @@ class JournalRecordsTest {
     private val src = UUID.randomUUID()
 
     @Test
+    fun `a topology record decodes to Topology carrying its resolved events`() {
+        val events = listOf<TopoEvent>(TopoEvent.Despawn(ref))
+
+        durability.journalTopology(journal, events)
+
+        val decoded = JournalRecords.decode(journal.replay().single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Topology>()
+        decoded.events shouldBe events
+    }
+
+    @Test
     fun `a frame record decodes to Frame carrying the WireCodec payload`() {
         val invocation = HostedPortInvocation(
             ref, "deltaInlet", HostedPortInvocation.Type.PORT_API,
@@ -52,6 +64,25 @@ class JournalRecordsTest {
             it.cellRef shouldBe ref
             it.invocation.args shouldBe listOf("x")
         }
+    }
+
+    @Test
+    fun `an input record decodes to Input carrying its cursor and complete frame records`() {
+        val invocation = HostedPortInvocation(
+            ref, "deltaInlet", HostedPortInvocation.Type.PORT_API,
+            Invocation.of(SetOps::class.java.getMethod("add", Any::class.java), arrayOf("x"), null),
+        )
+
+        durability.journalInput(journal, ref, "source", 17, listOf(invocation))
+
+        val decoded = JournalRecords.decode(journal.replay().single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Input>()
+        decoded.cellRef shouldBe ref
+        decoded.name shouldBe "source"
+        decoded.cursor shouldBe 17
+        val frame = JournalRecords.decode(decoded.frames.single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Frame>()
+        WireCodec.decode(frame.payload).invocation.args shouldBe listOf("x")
     }
 
     @Test

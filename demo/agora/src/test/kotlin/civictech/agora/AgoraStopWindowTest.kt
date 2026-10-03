@@ -1,5 +1,9 @@
 package civictech.agora
 
+import civictech.cell.durability.FileJournal
+import civictech.cell.graph.TopoEvent
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.respond
 import civictech.testkit.HttpProbe
@@ -21,8 +25,8 @@ import kotlin.test.assertTrue
  * `DialogueApp.stop()` had to grow a bounded drain because its mutation
  * thread is an `ExecutorService` it **interrupts**: `driver.shutdownNow()`
  * can land inside `AgoraService.createEdge`, between the moment the edge is
- * published into `nodes` (so `/graph` serves it) and the moment it reaches
- * `graph.jsonl`. `AgoraApp` has no such thread. Its mutation thread is the
+ * published into `nodes` (so `/graph` serves it) and the moment its durable
+ * structure record is written. `AgoraApp` has no such thread. Its mutation thread is the
  * JDK HttpServer's dispatcher: `DemoShell` sets `server.executor = null`
  * (DemoShell.kt:47), so `sun.net.httpserver.ServerImpl`'s `DefaultExecutor`
  * runs each exchange **inline** on `HTTP-Dispatcher`, and `stop(delay)`
@@ -134,12 +138,12 @@ class AgoraStopWindowTest {
 
     /**
      * End to end, through `AgoraApp` itself: every ref `/graph` served before
-     * `stop()` is in `graph.jsonl` afterwards, so a reboot rebuilds all of it.
+     * `stop()` is in the journal's topology records afterwards, so a reboot rebuilds all of it.
      * This is the property computenet-t3sp's lost-EDGE failure violated on the
      * dialogue side.
      */
     @Test
-    fun `every ref graph served before stop survives into the structure log`() {
+    fun `every ref graph served before stop survives into the topology journal`() {
         val dir = kotlin.io.path.createTempDirectory("agora-stop-window").toFile()
         val app = AgoraApp(port = 0, journalDir = dir).start()
         val served: Set<String>
@@ -154,14 +158,18 @@ class AgoraStopWindowTest {
             app.stop()
         }
 
-        val logged = java.io.File(dir, "graph.jsonl").readLines()
-            .filter { it.isNotBlank() }
-            .mapNotNull { Regex("\"ref\":\"([^\"]+)\"").find(it)?.groupValues?.get(1) }
+        val logged = FileJournal(java.io.File(dir, "host.journal")).replay()
+            .map(JournalRecords::decode)
+            .filterIsInstance<DecodedJournalRecord.Topology>()
+            .flatMap { it.events }
+            .filterIsInstance<TopoEvent.Spawn>()
+            .map { it.ref.id.toString() }
             .toSet()
         assertTrue(
             logged.containsAll(served),
-            "served by /graph but absent from graph.jsonl (unrecoverable): ${served - logged}",
+            "served by /graph but absent from journal topology (unrecoverable): ${served - logged}",
         )
+        assertEquals(setOf("host.journal"), dir.listFiles().orEmpty().map { it.name }.toSet())
     }
 
     private fun HttpProbe.postRef(body: String): String {

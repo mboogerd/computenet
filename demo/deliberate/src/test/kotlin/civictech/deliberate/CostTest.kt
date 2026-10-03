@@ -2,6 +2,8 @@ package civictech.deliberate
 
 import civictech.agora.AgoraService
 import civictech.cell.control.AttentionPolicy
+import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
@@ -108,11 +110,19 @@ class CostTest {
         schedulers.forEach { it.shutdown() }
     }
 
-    private fun graph(log: java.io.File? = null): CredenceGraph {
+    private fun graph(journalFile: java.io.File? = null): CredenceGraph {
+        val recover = journalFile?.let { it.exists() && it.length() > 0L } == true
         val s = VirtualThreadScheduler("deliberate-cost-${schedulers.size}").also { schedulers += it }
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = s, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
-        return CredenceGraph(host, registry, LayerSet.of(listOf("dfquad")), structureLog = log)
+        val journal = journalFile?.let(::FileJournal)
+        val context = ApplyContext(host, topology = journal)
+        return CredenceGraph(host, registry, LayerSet.of(listOf("dfquad")), context = context).also { graph ->
+            if (journal != null && recover) {
+                context.recover(journal).awaitApplied(60_000)
+                graph.rebuildIndex()
+            }
+        }
     }
 
     /** A proposer that reports a Claude call of [usd] (by question) and `id-side-n` arguments. */
@@ -264,10 +274,10 @@ class CostTest {
     fun `cost survives a restart as per-backend field deltas`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-cost").toFile()
         try {
-            val log = java.io.File(dir, "graph.jsonl")
+            val journal = java.io.File(dir, "host.journal")
             val store = InMemoryMetaStore()
             val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 10)
-            val e1 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
+            val e1 = DeliberationEngine(graph(journal), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
                 .also { engines += it }
             val root = e1.ask("Durable?")
             e1.idle()
@@ -323,7 +333,7 @@ class CostTest {
             val record = store.load().getValue("q:${root.id}")
             assertTrue("cost.claude" in record && "cost.jev" in record, record.keys.toString())
 
-            val e2 = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
+            val e2 = DeliberationEngine(graph(journal), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
                 .also { engines += it }
             e2.idle()
             // A restart recomputes the neutral-prior verdict from the replayed inputs: it must converge
@@ -339,10 +349,10 @@ class CostTest {
     fun `a restored question with no cost fields reports zero recorded cost`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-costless-record").toFile()
         try {
-            val log = java.io.File(dir, "graph.jsonl")
+            val journal = java.io.File(dir, "host.journal")
             val firstStore = InMemoryMetaStore()
             val config = DeliberationEngine.Config(argsPerCall = 1, maxRounds = 3, maxDepth = 0, maxArgsPerSide = 10)
-            val first = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = firstStore)
+            val first = DeliberationEngine(graph(journal), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = firstStore)
                 .also { engines += it }
             first.ask("Recorded cost only?")
             first.idle()
@@ -357,7 +367,7 @@ class CostTest {
                     )
                 }
             }
-            val restored = DeliberationEngine(graph(log), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
+            val restored = DeliberationEngine(graph(journal), PricedJudge(), listOf(PricedProposer({ 0.01 })), config, store = store)
                 .also { engines += it }
             restored.idle()
 

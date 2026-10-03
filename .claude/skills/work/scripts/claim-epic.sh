@@ -7,6 +7,14 @@
 #
 # Encodes step 3's rules:
 #   - refuses computenet-wpvy: the SDLC epic is never /work's to claim;
+#   - refuses an epic labelled `tracking-umbrella`: it carries intent above
+#     sub-epics that are claimed independently, so a claim on it would
+#     serialize them all behind one session;
+#   - refuses an epic with an in_progress descendant (any depth) whose
+#     metadata.holder checks LIVE or FOREIGN: a session is working beneath it
+#     without holding the epic, and a claim would put two sessions in one
+#     subtree. The hot-subtree guard below only sees writes in the last
+#     STALE_MIN; this sees a live session however quiet it has been;
 #   - refuses an epic whose BODY states a sequencing constraint its dependency
 #     edges may not express — the names there are often milestone codenames no
 #     query resolves. CLAIM_BLOCKERS_CHECKED=1 once each named predecessor is
@@ -41,19 +49,110 @@
 # been measured over 120s.
 #
 # Usage: claim-epic.sh <epic-id>
+#        claim-epic.sh --release <epic-id>
 # Exit 0: claimed and pushed (took over or fresh — output says which).
 # Exit 1: not claimed (reason on stderr) — select another epic, or stop.
+#         Includes NOT CHECKED: the epic or its descendants could not be read,
+#         so the refusals below could not run — the claim fails closed.
 # Exit 2: claimed LOCALLY but not published — stop the session and report;
 #         an unpushed epic claim is exactly the race this script closes.
+#
+# --release reopens a dead run's epic (status open, no assignee, no holder;
+# local, not pushed) — step 3's startup release. It applies the live-descendant
+# test first. Exit 0 released; exit 1 KEPT, a LIVE or FOREIGN session works
+# beneath it (named on stderr) — leave it claimed and do not select it; exit 3
+# NOT CHECKED, the descendants could not be listed, nothing written; exit 4
+# the release write itself failed.
+#
+# A FOREIGN descendant holder cannot be pid-tested from here, so it blocks
+# only while its bead was written within HOLDER_MAX_AGE_S (session-holder.sh's
+# slot bound, default 21600s): older than any slot, it is residue.
 set -uo pipefail
 
 : "${BEADS_ACTOR:?BEADS_ACTOR must be set, uniquely, per machine}"
-id=${1:?usage: claim-epic.sh <epic-id>}
+mode=claim
+if [ "${1:-}" = --release ]; then mode=release; shift; fi
+id=${1:?usage: claim-epic.sh [--release] <epic-id>}
 STALE_MIN=${CLAIM_STALE_MIN:-15}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# Every bead beneath the epic, at any depth: by explicit parent, or by dotted
+# id prefix. Reads a bd list --all array on stdin and emits the descendant rows.
+DESC_JQ='(if type=="array" then . else (.issues // []) end) as $all
+  | reduce range(0;6) as $_ ([$e]; . as $set | $set + [$all[] | select((.parent // "") as $p
+      | ($set | index($p)) != null or (.id | startswith($e + "."))) | .id] | unique)
+  | (. - [$e]) as $kids | $all[] | select(.id as $i | $kids | index($i))'
+
+load_rows() {
+  all_rows=$(bd list --all --limit 0 --json 2>/dev/null); list_rc=$?
+  all_rows=$(printf '%s\n' "$all_rows" | sed -n '/^[[{]/,/^[]}]/p')
+}
+
+# Prints "<id> held by <holder> (<verdict>)" per in_progress descendant whose
+# holder is someone else's live session.
+live_descendants() {
+  jq -r --arg e "$id" "$DESC_JQ"' | select(.status == "in_progress")
+      | select((.metadata.holder // "") != "")
+      | "\(.id)\t\(.metadata.holder)\t\(.updated_at // "")"' <<<"$all_rows" 2>/dev/null \
+  | while IFS=$'\t' read -r d h u; do
+      v=$("$SCRIPT_DIR/session-holder.sh" --check "$h" "$u" 2>/dev/null)
+      case "$v" in
+        LIVE) echo "$d held by $h (LIVE)" ;;
+        FOREIGN)
+          ue=$(jq -rn --arg u "$u" '$u | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch empty')
+          if [ -z "$ue" ] || [ $(( $(date +%s) - ue )) -le "${HOLDER_MAX_AGE_S:-21600}" ]; then
+            echo "$d held by $h (FOREIGN, written $u)"
+          fi ;;
+      esac
+    done
+}
+
+rows_ok() { [ "$list_rc" = 0 ] && jq -e 'type == "array" or type == "object"' >/dev/null 2>&1 <<<"$all_rows"; }
+
+if [ "$mode" = release ]; then
+  load_rows
+  if ! rows_ok; then
+    echo "NOT CHECKED: could not list $id's descendants — nothing released" >&2
+    exit 3
+  fi
+  live=$(live_descendants)
+  if [ -n "$live" ]; then
+    echo "KEPT: $id — a live session works beneath it; leave it claimed and do not select it:" >&2
+    printf '  %s\n' "$live" >&2
+    exit 1
+  fi
+  bd update "$id" --status=open --assignee="" --unset-metadata holder >/dev/null \
+    || { echo "release write failed on $id" >&2; exit 4; }
+  echo "released $id"
+  exit 0
+fi
+
 if [ "$id" = computenet-wpvy ]; then
   echo "REFUSED: $id is the SDLC epic and never /work's to claim" >&2
+  exit 1
+fi
+
+show_json=$(bd show "$id" --json 2>/dev/null); show_rc=$?
+show_json=$(printf '%s\n' "$show_json" | sed -n '/^[[{]/,/^[]}]/p')
+if [ "$show_rc" != 0 ] || ! jq -e '.[0].id' >/dev/null 2>&1 <<<"$show_json"; then
+  echo "NOT CHECKED: could not read $id — not claimed; select another epic" >&2
+  exit 1
+fi
+if jq -e '(.[0].labels // []) | index("tracking-umbrella")' >/dev/null 2>&1 <<<"$show_json"; then
+  echo "REFUSED: $id is a tracking umbrella — never claimed or broken down; its sub-epics are candidates in their own right" >&2
+  exit 1
+fi
+
+load_rows
+if ! rows_ok; then
+  echo "NOT CHECKED: could not list $id's descendants — not claimed; select another epic" >&2
+  exit 1
+fi
+
+live=$(live_descendants)
+if [ -n "$live" ]; then
+  echo "REFUSED: a live session works beneath $id without holding it:" >&2
+  printf '  %s\n' "$live" >&2
   exit 1
 fi
 
@@ -77,8 +176,7 @@ fi
 # Narrow means it misses phrasings, which is the right failure: this is a
 # backstop, not the only reading of the body.
 if [ "${CLAIM_BLOCKERS_CHECKED:-}" != 1 ]; then
-  stated=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
-    | jq -r '.[0].description // ""' \
+  stated=$(jq -r '.[0].description // ""' <<<"$show_json" 2>/dev/null \
     | grep -inE 'queues behind|cannot be worked|in parallel with|sequenced after|must land after|must be admitted alone|blocked by ' \
     | cut -c1-200 | head -5)
   if [ -n "$stated" ]; then
@@ -115,18 +213,10 @@ if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
   swept=$(awk -v c="$cutoff" '$1 >= c {print $2}' "$SWEPT_FILE" 2>/dev/null \
     | jq -Rn '[inputs | select(length > 0)]')
   [ -n "$swept" ] || swept='[]'
-  hot=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
-    | jq -r --arg e "$id" --argjson c "$cutoff" --argjson swept "$swept" '
-        (if type=="array" then . else (.issues // []) end) as $all
-        | [$e] as $seed
-        | reduce range(0;6) as $_ ($seed;
-            . as $set | $set + [$all[] | select((.parent // "") as $p
-                | ($set | index($p)) != null or (.id | startswith($e + "."))) | .id] | unique)
-        | (. - [$e]) as $kids
-        | $all[] | select(.id as $i | $kids | index($i))
+  hot=$(jq -r --arg e "$id" --argjson c "$cutoff" --argjson swept "$swept" "$DESC_JQ"'
         | select(.id as $i | ($swept | index($i)) == null)
         | select(((.updated_at // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) >= $c)
-        | "\(.id) updated \(.updated_at)"' 2>/dev/null | head -3)
+        | "\(.id) updated \(.updated_at)"' <<<"$all_rows" 2>/dev/null | head -3)
   if [ -n "$hot" ]; then
     echo "SKIP: $id's subtree is hot — a child was touched within ${STALE_MIN}m (the other machine may be in it):" >&2
     printf '  %s\n' $hot >&2 2>/dev/null || printf '%s\n' "$hot" >&2
@@ -170,8 +260,14 @@ if [ -n "$held" ]; then
     DEAD) echo "note: $id's previous holder ($held) is dead — taking it over" ;;
     STALE) echo "note: $id's holder ($held) is a host process older than any slot — residue, taking over" ;;
     FOREIGN)
+      if [ "$(jq -r '.[0].status // ""' <<<"$recheck")" = open ] \
+         && [ -z "$(jq -r '.[0].assignee // ""' <<<"$recheck")" ]; then
+        # Same residue test as the LIVE arm: a released epic's stale holder.
+        echo "note: $id's foreign holder ($held) is residue on a released epic — proceeding"
+      else
       echo "REFUSED: $id is held by a session on ANOTHER machine ($held) — liveness cannot be tested here; it is not this box's leftover (computenet-bz5c)" >&2
-      exit 1 ;;
+      exit 1
+      fi ;;
     *)    echo "note: $id's holder ($held) could not be evaluated (rc=$hrc) — proceeding on the recency test above" ;;
   esac
 fi

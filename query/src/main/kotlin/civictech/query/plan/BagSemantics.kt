@@ -51,6 +51,13 @@ import civictech.query.parse.SpanTable
  * input's `keyPreserving` is `false`, naming "no declared row key"), chosen over a structural
  * exception that would be a second key analysis; it narrows the language (`[QRY1-API-05]`) and
  * never admits an approximation. A caller who needs such an aggregate declares the row key.
+ * **Owner decision (computenet-afnwl, option (a), 2026-09-20): stays this way.** Compiling the
+ * keyless-direct case was considered and rejected — a wrong refusal costs a clear error plus a
+ * one-line catalog annotation; a wrong compile would be a silently wrong aggregate, which a
+ * query engine may not produce. [PlanNode.keyPreserving] (read from the Catalog row keys, per
+ * `[QRY1-PLAN-06]`) remains the sole decision procedure; no second analysis distinguishes "never
+ * had a key" from "key destroyed by projection". cab.5-D8's "with e's row key {X, Y} … or none,
+ * then Compiled" example is superseded by this decision.
  */
 object BagSemantics {
 

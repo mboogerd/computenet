@@ -9,6 +9,7 @@ import civictech.timetravel.fidelity.Reason
 import civictech.timetravel.journal.BaselineDischargeRecord
 import civictech.timetravel.journal.FrameRecord
 import civictech.timetravel.journal.FrontierRecord
+import civictech.timetravel.journal.InputRecord
 import civictech.timetravel.journal.JournalReading
 import civictech.timetravel.journal.JournalRecord
 import civictech.timetravel.journal.JournalSummary
@@ -70,6 +71,7 @@ data class RecordDto(
                 is FrontierRecord -> record.cellRef to record.portName
                 is OutletWaveRecord -> record.cellRef to record.portName
                 is BaselineDischargeRecord -> record.cellRef to record.portName
+                is InputRecord -> record.cellRef to null
                 else -> null to null
             }
             return RecordDto(

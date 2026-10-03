@@ -8,6 +8,7 @@ import civictech.cell.evolve.Shadow
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.KeyedCells
+import civictech.cell.host.DurableInput
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
@@ -35,8 +36,9 @@ fun interface CellFactory : Serializable {
 }
 
 /**
- * The key encoding and decoding used by a [KeyedFamily]'s durable key log.
- * A [GraphSpec] is serialized whole, so a custom codec's lambdas must be
+ * The key encoding and decoding used when a [KeyedFamily] renders and parses
+ * its `TopoEvent.FamilyKey` topology record in the selected journal. A
+ * [GraphSpec] is serialized whole, so a custom codec's lambdas must be
  * `@JvmSerializableLambda` (as the built-in codecs' are).
  */
 class KeyCodec(
@@ -124,12 +126,20 @@ data class SpawnStep(
     val shadow: Boolean = false,
     /** Lazily-spawned keyed family parameters; a family handle has no single cell ref. */
     val family: KeyedFamily? = null,
+    /** Named durable inputs exposed for this journaled cell after application. */
+    val inputs: Set<String> = emptySet(),
 ) : GraphStep {
     init {
         if (family != null) {
             require(factory is KeyedCellFactory) {
                 "spawn step '$handle': parameter 'family' requires a KeyedCellFactory"
             }
+        }
+        require(inputs.isEmpty() || journalId != null) {
+            "spawn step '$handle': parameter 'inputs' requires 'journalId'"
+        }
+        require(inputs.isEmpty() || family == null) {
+            "spawn step '$handle': a keyed family cannot declare inputs"
         }
     }
 }
@@ -144,6 +154,9 @@ data class ConnectStep(
 
 /** Detaches the link admitted by an earlier [ConnectStep] with the same edge key. */
 data class UnlinkStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
+
+/** Unlinks every live edge touching [handle], then removes that cell and frees its handle. */
+data class DespawnStep(val handle: String) : GraphStep
 
 /**
  * PN-13 — one instance's declared slot in a heterogeneous instance set (spec
@@ -309,10 +322,11 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         steps.flatMap { if (it is InstanceSetStep) it.lower() else listOf(it) }
 
     /**
-     * Local parameter-aware application. The complete lowered spawn set is
-     * prepared before the first host operation, so a missing replication
-     * service or a non-[Replicable] cell cannot leave a partially-applied
-     * prefix behind.
+     * Local parameter-aware application. The complete lowered delta is resolved
+     * before the first host operation and journaled write-ahead when the context
+     * owns a topology journal. Replicated factories are prepared before the
+     * append so their type can be validated; ordinary factories run after it,
+     * making a construction failure recoverably loud rather than unrecorded.
      */
     fun apply(context: ApplyContext): AppliedGraph {
         val lowered = lowered()
@@ -335,86 +349,129 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 throw missingFamilyJournal(step.handle, step.family!!.journalId!!)
             }
 
-        val prepared = mutableMapOf<Int, Cell>()
-        lowered.forEachIndexed { index, step ->
-            if (step !is SpawnStep) return@forEachIndexed
-            if (step.family != null) return@forEachIndexed
-            val ref = step.identity.resolve()
-            val cell = step.factory.create(ref)
-            requireBoundRef(step.handle, step.identity, ref, cell.ref)
-            if (step.replicated && cell !is Replicable<*>) {
-                throw IllegalStateException(
-                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
-                        "(built ${cell.javaClass.name})",
-                )
-            }
-            prepared[index] = cell
-        }
-
-        val refs = mutableMapOf<String, CellRef>()
-        val families = mutableMapOf<String, KeyedCells<*>>()
-        val links = mutableMapOf<String, Link>()
-        val familyHandles = lowered.filterIsInstance<SpawnStep>()
-            .filter { it.family != null }
-            .mapTo(mutableSetOf()) { it.handle }
+        // Resolve the complete delta to concrete refs before the first host operation. This
+        // validates every duplicate/unknown handle before journaling, while factories remain
+        // on the apply side of the write-ahead append (a throwing factory still leaves the
+        // delta durable for loud recovery).
+        val active = context.handles.toMutableMap()
+        val occupied = (context.handles.keys + context.live().families.keys).toMutableSet()
+        val familyHandles = context.live().families.keys.toMutableSet()
+        val events = ArrayList<TopoEvent>(lowered.size)
+        val preparedReplicas = mutableMapOf<Int, Cell>()
+        val displayKeys = mutableMapOf<Int, String>()
+        fun resolve(handle: String): CellRef = active[handle]
+            ?: throw IllegalStateException("unknown handle '$handle'")
         lowered.forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
+                    check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
                     if (step.family != null) {
-                        families[step.handle] = context.buildFamily(step)
+                        familyHandles += step.handle
+                        events += TopoEvent.Family(
+                            step.handle,
+                            step.family,
+                            step.factory as KeyedCellFactory,
+                        )
                     } else {
-                        val cell = prepared.getValue(index)
-                        step.journalId?.let { journalId ->
-                            context.bind(cell.ref, context.journals.getValue(journalId))
-                        }
-                        refs[step.handle] = if (step.replicated) {
-                            @Suppress("UNCHECKED_CAST")
-                            context.replication!!.replicate(cell as Replicable<*>, context.host)
-                            if (step.shadow) suppressShadow(cell)
-                            cell.ref
-                        } else {
-                            if (step.shadow) {
-                                Shadow.spawn(context.host, cell)
-                            } else {
-                                context.host.managementInlet.call.spawn(cell)
+                        val ref = step.identity.resolve()
+                        val event = TopoEvent.Spawn(
+                            step.handle,
+                            ref,
+                            step.factory,
+                            step.parent?.let(::resolve),
+                            step.replicated,
+                            step.journalId,
+                            step.shadow,
+                        )
+                        active[step.handle] = ref
+                        events += event
+                        if (step.replicated) {
+                            val cell = step.factory.create(ref)
+                            requireBoundRef(step.handle, step.identity, ref, cell.ref)
+                            if (cell !is Replicable<*>) {
+                                throw IllegalStateException(
+                                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                                        "(built ${cell.javaClass.name})",
+                                )
                             }
+                            preparedReplicas[index] = cell
                         }
                     }
                 }
 
                 is ConnectStep -> {
                     val key = stepKey(step)
-                    if (step.from in familyHandles) {
-                        throw familyLinkRefusal(step.from, key)
-                    }
-                    if (step.to in familyHandles) {
-                        throw familyLinkRefusal(step.to, key)
-                    }
-                    when (
-                        val result = context.host.managementInlet.call.connectStep(
-                            refs.getValue(step.from), step.outlet,
-                            refs.getValue(step.to), step.inlet,
-                            step.options,
-                        )
-                    ) {
-                        is LinkResult.Connected -> links[key] = result.link
-                        is LinkResult.Rejected -> error(
-                            "link ${step.from}.${step.outlet} → ${step.to}.${step.inlet} rejected: ${result.reason}",
-                        )
-                        LinkResult.Deferred -> Unit
-                    }
+                    if (step.from in familyHandles) throw familyLinkRefusal(step.from, key)
+                    if (step.to in familyHandles) throw familyLinkRefusal(step.to, key)
+                    displayKeys[index] = key
+                    events += TopoEvent.Connect(
+                        resolve(step.from), step.outlet, resolve(step.to), step.inlet, step.options,
+                    )
                 }
 
                 is UnlinkStep -> {
                     val key = stepKey(step)
-                    val link = links.remove(key) ?: throw unresolvedUnlink(key)
-                    link.unlink()
+                    if (step.from in familyHandles) throw familyLinkRefusal(step.from, key)
+                    if (step.to in familyHandles) throw familyLinkRefusal(step.to, key)
+                    displayKeys[index] = key
+                    events += TopoEvent.Unlink(
+                        resolve(step.from), step.outlet, resolve(step.to), step.inlet,
+                    )
+                }
+
+                is DespawnStep -> {
+                    val ref = active.remove(step.handle)
+                        ?: throw IllegalStateException("unknown handle '${step.handle}'")
+                    occupied.remove(step.handle)
+                    events += TopoEvent.Despawn(ref)
                 }
 
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
         }
-        return AppliedGraph(refs.toMap(), families.toMap(), links.toMap())
+
+        context.journalTopology(events)
+
+        val refs = mutableMapOf<String, CellRef>()
+        val families = mutableMapOf<String, KeyedCells<*>>()
+        val inputs = mutableMapOf<String, Map<String, DurableInput>>()
+        val deltaLinks = linkedMapOf<String, TopologyLinkKey>()
+        events.forEachIndexed { index, event ->
+            when (event) {
+                is TopoEvent.Spawn -> {
+                    val ref = context.applySpawn(event, preparedReplicas[index])
+                    refs[event.handle] = ref
+                    val step = lowered[index] as SpawnStep
+                    if (step.inputs.isNotEmpty()) {
+                        inputs[event.handle] = step.inputs.associateWith { name ->
+                            context.host.durableInput(ref, name)
+                        }
+                    }
+                }
+                is TopoEvent.Family -> {
+                    context.apply(event)
+                    families[event.handle] = checkNotNull(context.familyFor(event.handle))
+                }
+                is TopoEvent.Connect -> {
+                    context.applyConnect(event)
+                    deltaLinks[displayKeys[index] ?: stepKey(event)] = TopologyLinkKey.of(event)
+                }
+                is TopoEvent.Unlink -> {
+                    context.applyUnlink(event)
+                    deltaLinks.remove(displayKeys[index] ?: stepKey(event))
+                }
+                is TopoEvent.Despawn -> {
+                    context.applyDespawn(event)
+                    refs.entries.removeIf { it.value == event.ref }
+                    deltaLinks.entries.removeIf { (_, key) -> key.from == event.ref || key.to == event.ref }
+                }
+                is TopoEvent.FamilyKey -> error("GraphSpec does not emit FamilyKey directly")
+            }
+        }
+        val links = deltaLinks.mapNotNull { (key, topologyKey) ->
+            context.linkFor(topologyKey)?.let { key to it }
+        }.toMap()
+        return AppliedGraph(refs.toMap(), families.toMap(), links, inputs.toMap())
     }
 
     /**
@@ -430,6 +487,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.family != null }?.let { step ->
             throw unsupportedFamily(step.handle, "applyTo(Use<HostManagementApi>)")
         }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.inputs.isNotEmpty() }?.let { step ->
+            throw unsupportedInputs(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
             throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
         }
@@ -441,6 +501,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         }
         val refs = mutableMapOf<String, CellRef>()
         val links = mutableMapOf<String, Link>()
+        val endpoints = mutableMapOf<String, Pair<CellRef, CellRef>>()
         lowered.forEach { step ->
             when (step) {
                 is SpawnStep -> {
@@ -461,13 +522,27 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         "link ${step.from}.${step.outlet} → ${step.to}.${step.inlet} rejected: " +
                             (result as LinkResult.Rejected).reason
                     }
-                    if (result is LinkResult.Connected) links[key] = result.link
+                    if (result is LinkResult.Connected) {
+                        links[key] = result.link
+                        endpoints[key] = refs.getValue(step.from) to refs.getValue(step.to)
+                    }
                 }
 
                 is UnlinkStep -> {
                     val key = stepKey(step)
                     val link = links.remove(key) ?: throw unresolvedUnlink(key)
+                    endpoints.remove(key)
                     link.unlink()
+                }
+
+                is DespawnStep -> {
+                    val ref = refs.remove(step.handle)
+                        ?: throw IllegalStateException("unknown handle '${step.handle}'")
+                    endpoints.filterValues { (from, to) -> from == ref || to == ref }.keys.toList().forEach { key ->
+                        links.remove(key)?.unlink()
+                        endpoints.remove(key)
+                    }
+                    host.call.despawn(ref)
                 }
 
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
@@ -513,6 +588,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     if (step.family != null) {
                         results[step.handle] = StepResult.Rejected(
                             "spawn step '${step.handle}': parameter 'family' is not supported by applyRemote",
+                        )
+                    } else if (step.inputs.isNotEmpty()) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'inputs' is not supported by applyRemote",
                         )
                     } else if (step.replicated) {
                         results[step.handle] = StepResult.Rejected(
@@ -578,6 +657,14 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     progress.onStep(StepEvent(index, key, results.getValue(key)))
                 }
 
+                is DespawnStep -> {
+                    val key = despawnStepKey(step)
+                    results[key] = StepResult.Rejected(
+                        "despawn step '${step.handle}' is not supported by applyRemote",
+                    )
+                    progress.onStep(StepEvent(index, key, results.getValue(key)))
+                }
+
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
@@ -592,7 +679,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
  * intercepts only that overload (inspect's `StagedApplier` recorder, which
  * records the links its UNWIND retracts) still sees every parameter-free edge.
  */
-private fun HostManagementApi.connectStep(
+internal fun HostManagementApi.connectStep(
     from: CellRef,
     outletName: String,
     to: CellRef,
@@ -609,13 +696,21 @@ private fun stepKey(step: ConnectStep): String = "${step.from}.${step.outlet}->$
 
 private fun stepKey(step: UnlinkStep): String = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
 
+private fun stepKey(event: TopoEvent.Connect): String =
+    "${event.from}.${event.outlet}->${event.to}.${event.inlet}"
+
+private fun stepKey(event: TopoEvent.Unlink): String =
+    "${event.from}.${event.outlet}->${event.to}.${event.inlet}"
+
 private fun unlinkStepKey(step: UnlinkStep): String = "unlink ${stepKey(step)}"
+
+private fun despawnStepKey(step: DespawnStep): String = "despawn ${step.handle}"
 
 private fun unresolvedUnlink(key: String): IllegalStateException = IllegalStateException(
     "unlink step '$key': no earlier connected edge in this apply",
 )
 
-private fun missingReplication(handle: String): IllegalStateException = IllegalStateException(
+internal fun missingReplication(handle: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'replicated' requires ApplyContext.replication",
 )
 
@@ -623,7 +718,7 @@ private fun unsupportedReplication(handle: String, path: String): IllegalStateEx
     "spawn step '$handle': parameter 'replicated' cannot be applied by $path; use apply(ApplyContext)",
 )
 
-private fun missingJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
+internal fun missingJournal(handle: String, journalId: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'journalId' names '$journalId', but ApplyContext.journals has no such journal",
 )
 
@@ -631,11 +726,15 @@ private fun unsupportedJournal(handle: String, path: String): IllegalStateExcept
     "spawn step '$handle': parameter 'journalId' cannot be applied by $path; use apply(ApplyContext)",
 )
 
+private fun unsupportedInputs(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'inputs' cannot be applied by $path; use apply(ApplyContext)",
+)
+
 private fun unsupportedShadow(handle: String, path: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'shadow' cannot be applied by $path; use apply(ApplyContext)",
 )
 
-private fun suppressShadow(cell: Cell) {
+internal fun suppressShadow(cell: Cell) {
     if (cell is Effectful) Shadow.suppress(cell) else Shadow.suppressEffectContracts(cell)
 }
 
@@ -690,6 +789,7 @@ class GraphBuilder private constructor(
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
     private val links = mutableMapOf<String, Link>()
+    private val linkSteps = mutableMapOf<String, ConnectStep>()
 
     /** Spec-local handle by resolved [CellRef] — lets typed [link] recover the
      * handle name a port's owner was spawned under (typed-port-links). */
@@ -707,16 +807,20 @@ class GraphBuilder private constructor(
         replicated: Boolean = false,
         journalId: String? = null,
         shadow: Boolean = false,
+        inputs: Set<String> = emptySet(),
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
+        require(context?.hasHandle(name) != true) { "duplicate handle '$name'" }
         if (context == null) {
+            if (inputs.isNotEmpty()) throw unsupportedInputs(name, "graph(Use<HostManagementApi>)")
             if (journalId != null) throw unsupportedJournal(name, "graph(Use<HostManagementApi>)")
             if (shadow) throw unsupportedShadow(name, "graph(Use<HostManagementApi>)")
+        } else {
+            if (replicated && context.replication == null) throw missingReplication(name)
+            if (journalId != null && journalId !in context.journals) throw missingJournal(name, journalId)
         }
         val ref = identity.resolve()
-        val cell = factory.create(ref)
-        requireBoundRef(name, identity, ref, cell.ref)
         val step = SpawnStep(
             handle = name,
             factory = factory,
@@ -725,8 +829,13 @@ class GraphBuilder private constructor(
             replicated = replicated,
             journalId = journalId,
             shadow = shadow,
+            inputs = inputs,
         )
-        val spawnedRef = spawn(step, cell)
+        val event = TopoEvent.Spawn(name, ref, factory, parent?.ref, replicated, journalId, shadow)
+        context?.journalTopology(listOf(event))
+        val cell = factory.create(ref)
+        requireBoundRef(name, identity, ref, cell.ref)
+        val spawnedRef = context?.applySpawn(event, cell) ?: spawn(step, cell)
         steps += step
         return TypedCellHandle(name, spawnedRef, this, cell)
             .also { handlesByRef[it.ref] = it }
@@ -743,12 +852,20 @@ class GraphBuilder private constructor(
         val applyContext = context
             ?: throw unsupportedFamily(name, "graph(Use<HostManagementApi>)")
         require(names.add(name)) { "duplicate handle '$name'" }
+        require(!applyContext.hasHandle(name) && name !in applyContext.live().families) { "duplicate handle '$name'" }
+        if (journalId != null && journalId !in applyContext.journalDirs) {
+            throw missingFamilyJournal(name, journalId)
+        }
         val step = SpawnStep(
             handle = name,
             factory = factory,
             family = KeyedFamily(namespace, keys, journalId),
         )
-        val family = applyContext.buildFamily(step)
+        val event = TopoEvent.Family(name, step.family!!, factory)
+        applyContext.journalTopology(listOf(event))
+        applyContext.apply(event)
+        @Suppress("UNCHECKED_CAST")
+        val family = checkNotNull(applyContext.familyFor(name)) as KeyedCells<Any>
         steps += step
         return family
     }
@@ -762,26 +879,8 @@ class GraphBuilder private constructor(
     ): TypedCellHandle<C> = spawn(name, identity, parent, replicated = false, factory = factory)
 
     private fun spawn(step: SpawnStep, cell: Cell): CellRef {
-        val applyContext = context
-        if (applyContext == null) {
-            if (step.replicated) throw unsupportedReplication(step.handle, "graph(Use<HostManagementApi>)")
-            return host.call.spawn(cell)
-        }
-        step.journalId?.let { journalId ->
-            applyContext.bind(cell.ref, applyContext.journals[journalId] ?: throw missingJournal(step.handle, journalId))
-        }
-        if (step.replicated) {
-            val replication = applyContext.replication ?: throw missingReplication(step.handle)
-            val replicable = cell as? Replicable<*>
-                ?: throw IllegalStateException(
-                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
-                        "(built ${cell.javaClass.name})",
-                )
-            replication.replicate(replicable, applyContext.host)
-            if (step.shadow) suppressShadow(cell)
-            return cell.ref
-        }
-        return if (step.shadow) Shadow.spawn(applyContext.host, cell) else host.call.spawn(cell)
+        if (step.replicated) throw unsupportedReplication(step.handle, "graph(Use<HostManagementApi>)")
+        return host.call.spawn(cell)
     }
 
     /**
@@ -840,6 +939,7 @@ class GraphBuilder private constructor(
     fun adopt(cell: Cell): CellHandle {
         val name = "adopted-${cell.ref.id}"
         require(names.add(name)) { "cell ${cell.ref} already adopted" }
+        context?.adopt(name, cell.ref)
         return CellHandle(name, cell.ref, this).also { handlesByRef[it.ref] = it }
     }
 
@@ -850,12 +950,22 @@ class GraphBuilder private constructor(
         inlet: String,
         options: LinkOptions = LinkOptions.DEFAULT,
     ) {
-        val result = host.call.connectStep(from.ref, outlet, to.ref, inlet, options)
-        check(result !is LinkResult.Rejected) {
-            "link ${from.name}.$outlet → ${to.name}.$inlet rejected: ${(result as LinkResult.Rejected).reason}"
-        }
         val step = ConnectStep(from.name, outlet, to.name, inlet, options)
-        if (result is LinkResult.Connected) links[stepKey(step)] = result.link
+        val event = TopoEvent.Connect(from.ref, outlet, to.ref, inlet, options)
+        context?.journalTopology(listOf(event))
+        val link = if (context != null) {
+            context.applyConnect(event)
+        } else {
+            val result = host.call.connectStep(from.ref, outlet, to.ref, inlet, options)
+            check(result !is LinkResult.Rejected) {
+                "link ${from.name}.$outlet → ${to.name}.$inlet rejected: ${(result as LinkResult.Rejected).reason}"
+            }
+            (result as? LinkResult.Connected)?.link
+        }
+        if (link != null) {
+            links[stepKey(step)] = link
+            linkSteps[stepKey(step)] = step
+        }
         steps += step
     }
 
@@ -863,8 +973,36 @@ class GraphBuilder private constructor(
     fun unlink(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
         val step = UnlinkStep(from.name, outlet, to.name, inlet)
         val key = stepKey(step)
-        val link = links.remove(key) ?: throw unresolvedUnlink(key)
-        link.unlink()
+        val event = TopoEvent.Unlink(from.ref, outlet, to.ref, inlet)
+        context?.journalTopology(listOf(event))
+        if (context != null) {
+            context.applyUnlink(event)
+        } else {
+            val link = links[key] ?: throw unresolvedUnlink(key)
+            link.unlink()
+        }
+        links.remove(key)
+        linkSteps.remove(key)
+        steps += step
+    }
+
+    /** Unlinks every live edge touching [handle], despawns it, and records one inverse step. */
+    fun despawn(handle: CellHandle) {
+        require(handle.name in names) { "unknown handle '${handle.name}'" }
+        val step = DespawnStep(handle.name)
+        val event = TopoEvent.Despawn(handle.ref)
+        context?.journalTopology(listOf(event))
+        if (context != null) {
+            context.applyDespawn(event)
+        } else {
+            linkSteps.filterValues { it.from == handle.name || it.to == handle.name }.keys.toList().forEach { key ->
+                links.remove(key)?.unlink()
+                linkSteps.remove(key)
+            }
+            host.call.despawn(handle.ref)
+        }
+        handlesByRef.remove(handle.ref)
+        names.remove(handle.name)
         steps += step
     }
 

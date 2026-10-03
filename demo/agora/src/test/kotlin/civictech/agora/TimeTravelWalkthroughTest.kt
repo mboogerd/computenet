@@ -4,6 +4,7 @@ import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -34,8 +35,8 @@ import java.util.UUID
 
 /**
  * The agora time-travel walkthrough (TTD1 F7, computenet-3qkx1.3; epic computenet-ocv §7 item 6,
- * design 3qkx1-D6/D7/D12): a real agora run is recorded to a `FileJournal` plus its `graph.jsonl`
- * structure log, then `inspect`, `reconstruct` and `diff` are driven through the CLI entry point
+ * design 3qkx1-D6/D7/D12): a real agora run is recorded to one `FileJournal`, then `inspect`,
+ * `reconstruct` and `diff` are driven through the CLI entry point
  * [Main.run] exactly as a user would run them, with `--graph-provider civictech.agora.AgoraGraphSource`
  * supplying the topology.
  *
@@ -66,32 +67,32 @@ class TimeTravelWalkthroughTest {
     private val d = CellRef(UUID(4, 4))
 
     /**
-     * Runs the D12 script into [dir] (`host.journal` + `graph.jsonl`) on the deterministic
-     * scheduler and returns the service plus every held cell's live snapshot, captured at rest.
+     * Runs the D12 script into [dir] (`host.journal`) on the deterministic scheduler and returns
+     * the service plus every held cell's live snapshot, captured at rest.
      */
     private fun record(dir: File, seed: Long = 11, extraClaim: Boolean = false): Pair<AgoraService, Map<CellRef, Serializable>> {
         dir.mkdirs()
         val controller = SimulationController(seed)
         val registry = LocationRegistry()
+        val journal = FileJournal(File(dir, "host.journal"))
         val host = ManagedHost(
             scheduler = controller.scheduler(),
             registry = registry,
-            journal = FileJournal(File(dir, "host.journal")),
+            journal = journal,
         )
-        val service = AgoraService(host, registry, structureLog = File(dir, "graph.jsonl"))
+        val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
+        val service = AgoraService(host, registry, context = context)
         service.createClaim("A", a)
         service.createClaim("B", b)
         service.createClaim("C", c)
         service.createEdge(a, b, Polarity.ATTACK, CellRef(UUID(11, 11)))
         service.createEdge(c, b, Polarity.SUPPORT, CellRef(UUID(12, 12)))
+        controller.runToIdle()
         service.setStance(a, "u1", 0.9)
         service.setStance(c, "u2", 0.8)
         service.setStance(b, "u3", 0.6)
+        if (extraClaim) service.createClaim("D", d)
         controller.runToIdle()
-        if (extraClaim) {
-            service.createClaim("D", d)
-            controller.runToIdle()
-        }
         return service to service.cells().associate { it.ref to (it as Stateful).snapshot() }
     }
 
@@ -122,11 +123,17 @@ class TimeTravelWalkthroughTest {
     @Test
     fun `reconstruct through AgoraGraphSource equals the live run, every cell degraded by the allow-list`(@TempDir root: File) {
         val dir = File(root, "a")
-        val (_, live) = record(dir)
+        val (_, live) = record(dir, extraClaim = true)
         val journalPath = File(dir, "host.journal").path
 
         val inspected = cli("inspect", journalPath, "--json")
-        val last = json.decodeFromString<InspectReport>(inspected.out.trim()).journals.single().recordCount - 1
+        val journal = json.decodeFromString<InspectReport>(inspected.out.trim()).journals.single()
+        journal.records.none { it.kind == "CheckpointRecord" } shouldBe true
+        (
+            journal.records.last { it.kind == "TopologyRecord" }.index >
+                journal.records.first { it.kind == "FrameRecord" }.index
+        ) shouldBe true
+        val last = journal.recordCount - 1
         val args = arrayOf(
             "reconstruct", journalPath, "--at", last.toString(),
             "--graph-provider", "civictech.agora.AgoraGraphSource", "--graph-arg", dir.path,
@@ -152,6 +159,45 @@ class TimeTravelWalkthroughTest {
         val lines = text.out.lines()
         lines.count { "UNKNOWN_DETERMINISM" in it && "allow-list" in it } shouldBe 1
         Regex("allow-list").findAll(text.out).count() shouldBe 1
+    }
+
+    @Test
+    fun `reconstruct before later spawn and despawn reports the topology mismatch`(@TempDir root: File) {
+        fun journalRecordCount(dir: File): Int {
+            val result = cli("inspect", File(dir, "host.journal").path, "--json")
+            withClue(result.err) { result.code shouldBe 0 }
+            return json.decodeFromString<InspectReport>(result.out.trim()).journals.single().recordCount
+        }
+
+        fun reconstructAt(dir: File, index: Int): ReconstructReport {
+            val result = cli(
+                "reconstruct", File(dir, "host.journal").path, "--at", index.toString(),
+                "--graph-provider", "civictech.agora.AgoraGraphSource", "--graph-arg", dir.path,
+                "--json",
+            )
+            withClue(result.err) { result.code shouldBe 0 }
+            return json.decodeFromString(result.out.trim())
+        }
+
+        val beforeSpawnDir = File(root, "before-spawn")
+        val (spawnService, _) = record(beforeSpawnDir)
+        val beforeSpawn = journalRecordCount(beforeSpawnDir) - 1
+        spawnService.createClaim("D", d)
+
+        val futureSpawn = reconstructAt(beforeSpawnDir, beforeSpawn)
+        val futureCell = futureSpawn.cells.single { it.cellRef == d.id.toString() }
+        (Reason.GRAPH_MISMATCH in futureCell.fidelity.reasons) shouldBe true
+        futureSpawn.details.any { d.id.toString() in it } shouldBe true
+
+        val beforeDespawnDir = File(root, "before-despawn")
+        val (despawnService, _) = record(beforeDespawnDir, extraClaim = true)
+        val beforeDespawn = journalRecordCount(beforeDespawnDir) - 1
+        despawnService.remove(d)
+
+        val futureDespawn = reconstructAt(beforeDespawnDir, beforeDespawn)
+        futureDespawn.cells.any { it.cellRef == d.id.toString() } shouldBe false
+        (Reason.GRAPH_MISMATCH in futureDespawn.run.reasons) shouldBe true
+        futureDespawn.details.any { d.id.toString() in it } shouldBe true
     }
 
     @Test

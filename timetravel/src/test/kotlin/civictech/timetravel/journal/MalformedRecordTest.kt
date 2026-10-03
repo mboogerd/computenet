@@ -5,6 +5,8 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.TopoEvent
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -51,6 +53,33 @@ class MalformedRecordTest {
         is FrontierRecord -> "Frontier"
         is OutletWaveRecord -> "OutletWave"
         is BaselineDischargeRecord -> "BaselineDischarge"
+        is TopologyRecord -> "Topology"
+        is InputRecord -> "Input"
+    }
+
+    @Test
+    fun `a topology record is classified without interpreting its factories`() {
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        ManagedHost().journalTopology(
+            journal,
+            listOf(
+                TopoEvent.Spawn(
+                    handle = "source",
+                    ref = ref,
+                    factory = CellFactory { SetCell<String>(it) },
+                    parent = null,
+                    replicated = false,
+                    journalId = null,
+                    shadow = false,
+                ),
+                TopoEvent.Despawn(ref),
+            ),
+        )
+
+        val topology = JournalReader.open(JournalSource.InMemory(journal, "topology"))
+            .records.single().shouldBeInstanceOf<TopologyRecord>()
+        topology.events shouldBe listOf("Spawn", "Despawn")
     }
 
     @Test

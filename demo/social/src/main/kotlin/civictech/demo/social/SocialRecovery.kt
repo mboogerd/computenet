@@ -12,23 +12,23 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Two-phase crash recovery of a `--journal` [SocialApp] (SOC1 F7, feature
  * `computenet-v10ou`, design v10ou-D1/D2; [SOC1-DUR-01], [SOC1-DUR-03]).
  *
- * **[stage]** restores the graph in the one order that keeps replay
- * convergent (`KeyedCells.kt` recover contract): first
- * [SocialGraph.spawnKnown] — every durably-known key of all four families,
- * spawned through [SocialGraph] so each cell's observe sink exists — then
- * [ManagedHost.recoverFrom] over the shared root WAL, exactly once. Never
- * `family.recover()`: its replay half resolves `<root>/<family>/host.journal`,
- * which this pipeline never writes, so it would replay nothing (see
- * [SnbPipeline]'s KDoc). Replay in the other order would dead-letter every
- * frame (`unknown cell <ref>`) and the recovered graph would read empty.
+ * **[stage]** restores the graph in journal order: first
+ * [ManagedHost.recoverFrom] replays the shared root WAL exactly once. Each
+ * journaled `FamilyKey` synchronously populates its family and spawns the cell
+ * before any later frame for that key is submitted. Then
+ * [SocialGraph.spawnKnown] attaches this graph's observe sink to every key the
+ * replay discovered. Never call `family.recover()`: its replay half resolves
+ * `<root>/<family>/host.journal`, which this pipeline never writes (see
+ * [SnbPipeline]'s KDoc).
  *
- * **Staged is not delivered.** [ManagedHost.recoverFrom] only *submits* each
- * journaled frame to the host scheduler; delivery into the cells — and any
- * dead letter for a frame whose cell is not live — happens in later scheduler
- * tasks. Nothing about the recovered graph can be judged inside [stage]. That
- * is what [complete] is for, and **[complete] is only valid once the host has
- * drained**: on a `SimulationController` after `runToIdle()`, in production
- * behind [SocialApp.start]'s quiescence fence.
+ * [ManagedHost.recoverFrom] only *submits* each journaled frame to the host
+ * scheduler. A live scheduler may deliver some of them before replay returns;
+ * that is safe because a sink attached afterward receives the producer's
+ * current state through ordinary on-link catch-up, while subsequent frames
+ * flow through the installed link. Nothing about the recovered graph can be
+ * judged inside [stage]. That is what [complete] is for, and **[complete] is
+ * only valid once the host has drained**: on a `SimulationController` after
+ * `runToIdle()`, in production behind [SocialApp.start]'s quiescence fence.
  */
 class SocialRecovery(
     private val host: ManagedHost,
@@ -58,7 +58,7 @@ class SocialRecovery(
      */
     private val collectedDeadLetters = CopyOnWriteArrayList<DeadLetter>()
 
-    /** Pre-spawn every known key through [SocialGraph], then replay the WAL once. Callable once. */
+    /** Replay the WAL once, then attach [SocialGraph]'s sinks to its recovered keys. Callable once. */
     fun stage() {
         check(!staged) { "SocialRecovery.stage() already ran" }
         // v10ou-D5: the counter and the collector are both armed before
@@ -75,8 +75,8 @@ class SocialRecovery(
             ),
         )
         staged = true
-        graph.spawnKnown()
         host.recoverFrom(journal)
+        graph.spawnKnown()
     }
 
     /**

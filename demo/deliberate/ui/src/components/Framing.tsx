@@ -1,18 +1,18 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createMemo, createSignal, For, Index, Show } from 'solid-js';
 import type { FramingDto, PositionDto } from '../api/types';
 import type { TreeNode } from '../tree/buildTree';
 import {
   bandCaption,
-  framingText,
   pct,
   phaseOf,
   priorDecidesText,
   priorText,
+  readingsLine,
   shown,
   STATUS_LABEL,
   statusHint,
 } from '../util/format';
-import { ClaimCard, Facts, indexTree, SpreadBand, useChildRefs, type Selection, type TreeIndex } from './ClaimCard';
+import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, useCollapse, type Selection, type TreeIndex } from './ClaimCard';
 import { OverrideControl } from './OverrideControl';
 
 /**
@@ -23,9 +23,44 @@ import { OverrideControl } from './OverrideControl';
  * proportional bar. Replaces the question's yes/no gauge.
  */
 export function FramingSummary(props: { framing: FramingDto }) {
+  const readings = () => (props.framing.mode === 'READINGS' ? props.framing.positions : []);
+  const credences = () => readings().map((p) => p.credence ?? 0.5);
+  const lo = () => Math.min(...credences());
+  const hi = () => Math.max(...credences());
   return (
     <div class="framing" aria-label="Framing">
-      <p class="framing__line">{framingText(props.framing)}</p>
+      <p class="framing__line">{readingsLine(props.framing)}</p>
+      {/* computenet-3z7w5: every reading on one no–yes track — a neutral band
+          over their spread and a numbered marker each; the legend carries the
+          full text. <Index> keeps each marker and row in place across frames. */}
+      <Show when={readings().length > 0}>
+        <div class="gauge spread" aria-hidden="true">
+          <span class="gauge__con">no</span>
+          <span class="spread__track">
+            <span class="spread__band" style={{ left: `${lo() * 100}%`, width: `${(hi() - lo()) * 100}%` }} />
+            <span class="gauge__mid" />
+            <Index each={readings()}>
+              {(p, i) => (
+                <span class="spread__mark" style={{ left: `${(p().credence ?? 0.5) * 100}%` }} title={`${p().text} · ${pct(p().credence)}`}>
+                  {i + 1}
+                </span>
+              )}
+            </Index>
+          </span>
+          <span class="gauge__pro">yes</span>
+        </div>
+        <ol class="spread__legend">
+          <Index each={readings()}>
+            {(p, i) => (
+              <li class="spread__row">
+                <span class="spread__n" aria-hidden="true">{i + 1}</span>
+                <span class="spread__text">{p().text}</span>
+                <span class="spread__pct">{pct(p().credence)}</span>
+              </li>
+            )}
+          </Index>
+        </ol>
+      </Show>
       <Show when={props.framing.mode === 'POSITIONS'}>
         <ul class="framing__list">
           <For each={props.framing.positions}>
@@ -58,6 +93,8 @@ export function Reading(props: { position: PositionDto; tree: TreeNode; sel: Sel
   const entry = () => index().get(props.position.ref);
   const childRefs = useChildRefs(entry);
   const [open, setOpen] = createSignal(false);
+  // computenet-urmh0: collapse one reading's arguments to zoom in on another.
+  const [collapsed, setCollapsed] = useCollapse(props.position.ref);
 
   return (
     <Show when={entry()}>
@@ -67,6 +104,8 @@ export function Reading(props: { position: PositionDto; tree: TreeNode; sel: Sel
         const phase = () => phaseOf(claim().status);
         const override = () => claim().override ?? 'AUTO';
         const panelId = () => `facts-${claim().ref}`;
+        const treeId = () => `reading-args-${claim().ref}`;
+        const counts = () => sideCounts(e().node);
 
         return (
           <section class="reading" aria-label="Reading">
@@ -122,6 +161,19 @@ export function Reading(props: { position: PositionDto; tree: TreeNode; sel: Sel
               >
                 {open() ? 'Less' : 'Details'}
               </button>
+              <Show when={childRefs().length > 0}>
+                <button
+                  type="button"
+                  class="linkish"
+                  aria-expanded={!collapsed()}
+                  aria-controls={treeId()}
+                  aria-label={`${collapsed() ? 'Show' : 'Hide'} arguments for ${props.position.text}`}
+                  onClick={() => setCollapsed(!collapsed())}
+                >
+                  <span class="chevron" classList={{ 'is-collapsed': collapsed() }} aria-hidden="true" />
+                  {counts().pro} pro · {counts().con} con
+                </button>
+              </Show>
               <span class="card__spacer" />
               <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
                 <OverrideControl id={props.position.ref} value={override()} />
@@ -142,9 +194,11 @@ export function Reading(props: { position: PositionDto; tree: TreeNode; sel: Sel
               when={childRefs().length > 0}
               fallback={<p class="empty empty--quiet">Proposers are drafting the first arguments…</p>}
             >
-              <ul class="tree" aria-label="Reading arguments">
-                <For each={childRefs()}>{(ref) => <ClaimCard claimRef={ref} index={index} sel={props.sel} />}</For>
-              </ul>
+              <Show when={!collapsed()}>
+                <ul class="tree" id={treeId()} aria-label="Reading arguments">
+                  <For each={childRefs()}>{(ref) => <ClaimCard claimRef={ref} index={index} sel={props.sel} />}</For>
+                </ul>
+              </Show>
             </Show>
           </section>
         );

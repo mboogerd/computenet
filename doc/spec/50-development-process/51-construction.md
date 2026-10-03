@@ -2,9 +2,10 @@
 
 > **Status**: Partial (cell authoring + graph DSL exist; `SpawnStep`
 > identity/parent/factory and `spawnBound` remote application built (W3.6,
-> G-51 core); `UnlinkStep(from, outlet, to, inlet)` built; placement/membrane
-> extensions decided in [93](../90-roadmap/93-feature-interactions.md), unimplemented;
-> codegen/tooling exploratory)
+> G-51 core); `UnlinkStep(from, outlet, to, inlet)` and `DespawnStep(handle)`
+> built; applied topology records and preserve-refs recovery built; placement/
+> membrane extensions decided in [93](../90-roadmap/93-feature-interactions.md),
+> unimplemented; codegen/tooling exploratory)
 > **Sources**: ADR — Cellular Software Development Process, ADR — Task Definitions, ADR 3 (codegen)
 > **Implementation**: hand-written cells + host API; `cell.graph` DSL (`graph`/`GraphSpec`, `IdentityBinding`, `HostManagementApi.spawnBound`, `GraphSpec.applyRemote`/`ApplyReport`); KSP seed (`gen`); no scaffolding
 
@@ -64,9 +65,13 @@ cold/hot operators) stay unbuilt until a caller needs more than
 spawn-and-link.
 
 The step vocabulary's decided extension (decided in 93 I-21; `SpawnStep`'s
-identity/parent/factory parameters and `UnlinkStep` built):
-steps are `SpawnStep(handle, factory, identity, parent)`, `ConnectStep`,
-and `UnlinkStep(from, outlet, to, inlet)` (`Link.unlink()` as a recorded step). `identity` is
+identity/parent/factory parameters and `UnlinkStep`/`DespawnStep` built):
+steps are `SpawnStep(handle, factory, identity, parent, ...)`, `ConnectStep`,
+`UnlinkStep(from, outlet, to, inlet)`, and `DespawnStep(handle)` (`Link.unlink()`
+as a recorded step). Separately, `SpawnStep` has `journalId` and `inputs`
+parameters; `inputs` alone lowers named durable inputs to
+`ManagedHost.durableInput` after the spawn (computenet-12qyp, design
+12qyp-D5). `identity` is
 an `IdentityBinding` choosing which ref the host mints — `FreshLogical`
 (default: the shipped replay-as-new-graph behavior, so "replay mints fresh
 cells and refs" stays true by default), `NewInstanceOf(logicalId)` (fresh
@@ -164,15 +169,14 @@ driver unbuilt).
 Distinct from construction mode (mint fresh), a **preserve-refs replay
 mode** — `applyTo` rebinding existing `(logicalId, instanceId)`, i.e.
 every spawn step carrying an `Exact` ref pinned in journaled topology
-entries — is the decided future home of journaled topology recovery
-(decided in 93 I-7, unbuilt): recovery re-spawns under pinned refs so
-links survive without re-handshaking; one flag on one replay machine.
-Recorded divergence: the landed M10 recovery does not use it — the durable
-host journals every intake frame (management included) but not topology,
-the graph is rebuilt out-of-band before `recoverFrom` (30/31), and replay
-re-emits un-suppressed (made safe by replay-stable identity + idempotent
-merges + catch-up dedup) rather than by the decided NoOp-served
-suppression (93 I-7 R4).
+entries — is the journaled topology recovery path (decided in 93 I-7):
+recovery re-applies those spawns under their pinned refs, then restores the
+links and other topology events in journal order before replaying frames.
+Checkpoint compaction carries the live topology fold, so the graph remains
+self-describing after compaction. The remaining recorded divergence is that
+replay re-emits frames without the decided NoOp-served suppression (93 I-7
+R4); replay-stable identity, idempotent merges, and catch-up dedup make that
+safe for the current vocabulary.
 
 ## Code generation (direction fixed by ADR 3)
 

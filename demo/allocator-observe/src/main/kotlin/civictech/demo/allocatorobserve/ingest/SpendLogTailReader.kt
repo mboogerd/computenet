@@ -1,12 +1,43 @@
 package civictech.demo.allocatorobserve.ingest
 
 import java.io.ByteArrayOutputStream
+import java.io.Serializable
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+
+/** Number of leading bytes used to distinguish append from replacement. */
+const val FINGERPRINT_WINDOW_BYTES: Int = 4096
+
+/** The kernel durable-input cursor for the spend-log reader. */
+data class CheckpointState(val offset: Long, val fingerprint: String) : Serializable
+
+/** SHA-256 of the first `min(upTo, FINGERPRINT_WINDOW_BYTES)` bytes of [path]. */
+internal fun fingerprintHead(path: Path, upTo: Long): String {
+    val window = minOf(upTo, FINGERPRINT_WINDOW_BYTES.toLong()).toInt().coerceAtLeast(0)
+    val bytes =
+        if (window == 0) {
+            ByteArray(0)
+        } else {
+            try {
+                FileChannel.open(path, StandardOpenOption.READ).use { channel ->
+                    val buffer = ByteBuffer.allocate(window)
+                    while (buffer.hasRemaining() && channel.read(buffer) >= 0) {
+                        // Fill the fingerprint window or stop at EOF.
+                    }
+                    buffer.flip()
+                    ByteArray(buffer.remaining()).also { buffer.get(it) }
+                }
+            } catch (_: NoSuchFileException) {
+                ByteArray(0)
+            }
+        }
+    return MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+}
 
 /**
  * Why the spend log had to be re-read from offset 0 rather than resumed.
@@ -119,6 +150,8 @@ data class TailSummary(
     val lineCount: Long,
     val offset: Long,
     val handOffs: Int,
+    /** Cursor the caller commits atomically with the batches it just consumed. */
+    val next: CheckpointState,
 )
 
 /**
@@ -246,9 +279,9 @@ data class TailSummary(
  */
 class SpendLogTailReader(
     private val logPath: Path,
-    private val checkpoint: SpendOffsetStore,
-    private val chunkSize: Int = DEFAULT_CHUNK_SIZE,
+    private val committed: () -> CheckpointState?,
     private val maxLinesPerBatch: Int = DEFAULT_MAX_LINES_PER_BATCH,
+    private val chunkSize: Int = DEFAULT_CHUNK_SIZE,
 ) {
 
     init {
@@ -268,7 +301,7 @@ class SpendLogTailReader(
      * the batching exists to remove (`computenet-xs5u`).
      */
     fun poll(consume: (TailBatch) -> Unit): TailSummary {
-        val persisted = checkpoint.read()
+        val persisted = committed()
 
         if (!Files.isRegularFile(logPath)) {
             return absent(persisted, consume)
@@ -321,21 +354,18 @@ class SpendLogTailReader(
             consume(TailBatch(reason, lines, at, last))
         }
 
-        // Only now — after the LAST hand-off has RETURNED — and only if the
-        // position actually moved: an unchanged state would rewrite the same two
-        // values on every idle poll. A consumer that throws on any hand-off,
-        // first or last, never reaches this line, so the range is retried.
+        // Only now — after the LAST hand-off has RETURNED — expose the cursor.
+        // A consumer that throws never returns a cursor the caller could commit.
         val next = CheckpointState(offset, fingerprintHead(logPath, offset))
-        if (next != persisted) checkpoint.write(next)
-
-        return TailSummary(reason, lineCount, offset, handOffs)
+        return TailSummary(reason, lineCount, offset, handOffs, next)
     }
 
     /** The one empty hand-off an absent log gets, plus its summary. */
     private fun absent(persisted: CheckpointState?, consume: (TailBatch) -> Unit): TailSummary {
         val offset = persisted?.offset ?: 0L
         consume(TailBatch(TailReason.LogAbsent, emptyList(), offset, last = true))
-        return TailSummary(TailReason.LogAbsent, 0L, offset, handOffs = 1)
+        val next = persisted ?: CheckpointState(offset, fingerprintHead(logPath, offset))
+        return TailSummary(TailReason.LogAbsent, 0L, offset, handOffs = 1, next)
     }
 
     /**

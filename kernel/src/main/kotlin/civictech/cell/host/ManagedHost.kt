@@ -42,7 +42,9 @@ import civictech.cell.durability.DurabilityClass
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.graph.CellFactory
+import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.TopoEvent
 import civictech.cell.graph.requireBoundRef
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
@@ -217,6 +219,9 @@ open class ManagedHost(
      * for the same concurrent-reader reason [cells] uses one.
      */
     private val cellJournals = ConcurrentHashMap<CellRef, Journal>()
+
+    /** Namespace registry used by journaled [TopoEvent.FamilyKey] recovery. */
+    private val topologyFamilies = ConcurrentHashMap<String, KeyedCells<*>>()
 
     /**
      * The effective per-cell journal selector (CP-C1), now DERIVED from
@@ -733,10 +738,24 @@ open class ManagedHost(
     private val dataLock = Any()
 
     /**
+     * Per-thread durable-input capture for this host. A per-host field is the host-instance
+     * key: sends to another host see that host's distinct thread-local and proceed normally.
+     */
+    private data class DurableInputCapture(
+        val cellRef: CellRef,
+        val name: String,
+        val journal: Journal,
+        val frames: MutableList<HostedPortInvocation> = ArrayList(),
+    )
+
+    private val durableInputCapture = ThreadLocal<DurableInputCapture?>()
+
+    /**
      * Host-wide acceptance positions retained until delivery, including after
      * a frame leaves [AttentionScheduler] for supervision parking. Identity
      * keys keep repeated byte-identical invocations distinct. Guarded by
-     * [dataLock]; cold-inlet tails transfer the position into [FanInlet].
+     * [dataLock]; inlet policy buffers and cold tails transfer the position
+     * into [FanInlet].
      */
     private val checkpointSequences = IdentityHashMap<HostedPortInvocation, Long>()
     private var nextCheckpointSequence = 0L
@@ -818,9 +837,9 @@ open class ManagedHost(
      * unable to interleave with a dispatching cell; its pending-set read and
      * journal reset run under [dataLock] (computenet-xy7w4 D3,
      * computenet-hknt0) so compaction carries scheduler-staged,
-     * supervision-parked and cold-tail frames together in acceptance order,
-     * atomically with respect to the intake — lock order `dataLock` -> journal
-     * monitor, as on the intake path.
+     * supervision-parked, inlet-policy-held and cold-tail frames together in
+     * acceptance order, atomically with respect to the intake — lock order
+     * `dataLock` -> journal monitor, as on the intake path.
      */
     private val hostDurability = HostDurability(
         journalSelector = portJournalSelector,
@@ -1038,7 +1057,14 @@ open class ManagedHost(
         // this thread is derived from it — it inherits that replay's provenance, so a
         // cascade of any depth carries it (see [civictech.cell.ReplayProvenance]).
         val ambient = civictech.cell.ReplayProvenance.get()
-        accept(if (ambient == null || hostedInvocation.replayOf != null) hostedInvocation else hostedInvocation.copy(replayOf = ambient))
+        val contextual =
+            if (ambient == null || hostedInvocation.replayOf != null) hostedInvocation
+            else hostedInvocation.copy(replayOf = ambient)
+        durableInputCapture.get()?.let { capture ->
+            capture.frames += contextual
+            return
+        }
+        accept(contextual)
     }
 
     /**
@@ -1291,6 +1317,105 @@ open class ManagedHost(
     }
 
     /**
+     * Obtain a named durable-input handle for [cellRef]. A volatile cell is refused up front:
+     * without a cell journal there is nowhere to atomically commit either its cursor or batch.
+     */
+    fun durableInput(cellRef: CellRef, name: String): DurableInput {
+        val selected = journalSelector(cellRef)
+            ?: throw IllegalStateException(
+                "durable input '$name' for cell $cellRef requires a cell journal, but the cell is volatile"
+            )
+        return DurableInput(
+            readCommitted = { hostDurability.committedInput(cellRef, name) },
+            commitBatch = { drive -> commitDurableInput(cellRef, name, selected, drive) },
+        )
+    }
+
+    /** Capture one external-source batch, validate its one-journal boundary, then commit and stage it. */
+    private fun commitDurableInput(
+        cellRef: CellRef,
+        name: String,
+        journal: Journal,
+        drive: () -> Serializable,
+    ): Serializable {
+        check(durableInputCapture.get() == null) {
+            "re-entrant durable-input commit on host $ref is not allowed (input '$name' for cell $cellRef)"
+        }
+        val capture = DurableInputCapture(cellRef, name, journal)
+        durableInputCapture.set(capture)
+        val cursor = try {
+            drive()
+        } catch (failure: Throwable) {
+            // Remove capture before reporting: refusal reporting must never be mistaken for
+            // another member of the batch it is refusing.
+            durableInputCapture.remove()
+            refuseDurableInput(
+                capture.frames,
+                failure,
+                "durable input '$name' for cell $cellRef refused because its drive threw: $failure",
+            )
+            throw failure
+        } finally {
+            durableInputCapture.remove()
+        }
+
+        val mismatched = capture.frames.firstOrNull { frame ->
+            portJournalSelector(frame.cellRef, frame.portName) !== journal
+        }
+        if (mismatched != null) {
+            val actual = portJournalSelector(mismatched.cellRef, mismatched.portName)
+            val refusal = IllegalArgumentException(
+                "durable input '$name' for cell $cellRef uses ${journal.identity()} but captured " +
+                    "${mismatched.cellRef}.${mismatched.portName}, which uses ${actual.identity()} — " +
+                    "every frame sent to this host by one commit must target the input cell's same Journal instance"
+            )
+            refuseDurableInput(capture.frames, refusal, refusal.message.orEmpty())
+            throw refusal
+        }
+
+        var appended = false
+        try {
+            // One critical section makes append-before-stage atomic with checkpoint's pending
+            // read/reset and with ordinary intake acceptance. `accept` re-enters this JVM monitor.
+            synchronized(dataLock) {
+                hostDurability.journalInput(journal, cellRef, name, cursor, capture.frames)
+                appended = true
+                capture.frames.forEach { frame -> accept(frame.copy(replayOf = journal)) }
+            }
+        } catch (failure: Throwable) {
+            if (!appended) {
+                refuseDurableInput(
+                    capture.frames,
+                    failure,
+                    "durable input '$name' for cell $cellRef failed before its commit record completed: $failure",
+                )
+            }
+            throw failure
+        }
+        return cursor
+    }
+
+    /** Every captured drop is discharged and observable; dead-letter capture then sees no live exclusive. */
+    private fun refuseDurableInput(
+        frames: List<HostedPortInvocation>,
+        cause: Throwable,
+        description: String,
+    ) {
+        if (frames.isEmpty()) {
+            deadLetter(cause, description)
+            return
+        }
+        frames.forEach { frame ->
+            frame.invocation.args.forEach(Proxy::discharge)
+            deadLetter(cause, description, frame)
+        }
+    }
+
+    private fun Journal?.identity(): String = this?.let {
+        "${it.javaClass.name}@${Integer.toHexString(System.identityHashCode(it))}"
+    } ?: "no journal"
+
+    /**
      * Replay this host's [journal] (M10.1). See [HostDurability.recoverFrom]
      * for the full behavior; delegates there (RS-8.2).
      *
@@ -1300,9 +1425,67 @@ open class ManagedHost(
      * taken AFTER the replay's last submit — the order is what makes it sound.
      * A failed replay throws [RecoveryIncomplete] and returns no handle.
      */
-    fun recoverFrom(journal: Journal): Recovery {
-        val frames = hostDurability.recoverFrom(journal)
+    fun recoverFrom(journal: Journal): Recovery = recoverFrom(journal, ApplyContext(this))
+
+    /** Recover with the services and cumulative topology fold supplied by [context]. */
+    fun recoverFrom(journal: Journal, context: ApplyContext): Recovery {
+        require(context.host === this) { "recovery ApplyContext belongs to a different ManagedHost" }
+        val frames = context.replaying { hostDurability.recoverFrom(journal, context) }
         return Recovery(frames, scheduler.quiescence())
+    }
+
+    /** Append one write-ahead topology delta to [journal]. */
+    fun journalTopology(journal: Journal, events: List<TopoEvent>) =
+        hostDurability.journalTopology(journal, events)
+
+    /** Register a fold provider whose compact form leads [journal]'s next checkpoint. */
+    fun registerTopology(journal: Journal, provider: () -> List<TopoEvent>) =
+        hostDurability.registerTopology(journal, provider)
+
+    /** Task 8xstm.2's per-key entry point: record against the journal selected for [ref]. */
+    fun recordTopology(ref: CellRef, event: TopoEvent) {
+        topologyJournal(ref, cells[ref])?.let { hostDurability.journalTopology(it, listOf(event)) }
+    }
+
+    /**
+     * Write-ahead variant used before [cell] is admitted. [beforeAppend] lets a family
+     * register its checkpoint provider on the exact selected journal before the record
+     * becomes visible.
+     */
+    internal fun recordTopology(
+        ref: CellRef,
+        event: TopoEvent,
+        cell: Cell,
+        beforeAppend: (Journal) -> Unit,
+    ): Journal? {
+        val selected = topologyJournal(ref, cell) ?: return null
+        beforeAppend(selected)
+        hostDurability.journalTopology(selected, listOf(event))
+        return selected
+    }
+
+    /** Resolve the same per-cell selector spawn will cache, including explicit per-port selectors. */
+    internal fun topologyJournal(ref: CellRef, cell: Cell?): Journal? =
+        journalSelector(ref) ?: when {
+            cell != null -> cellJournal(ref, cell)
+            journalForPort != null -> null // a cell is required to validate its per-port selection
+            journalFor != null -> journalFor.invoke(ref)
+            else -> journal
+        }
+
+    /** Register one live keyed family for [TopoEvent.FamilyKey] recovery. */
+    fun registerFamily(namespace: String, family: KeyedCells<*>) {
+        val existing = topologyFamilies.putIfAbsent(namespace, family)
+        check(existing == null || existing === family) {
+            "family namespace '$namespace' is already registered on host $ref"
+        }
+    }
+
+    /** Apply a rendered family key, failing loudly when no family owns its namespace. */
+    internal fun recoverFamilyKey(namespace: String, key: String) {
+        val family = topologyFamilies[namespace]
+            ?: error("topology FamilyKey names unregistered namespace '$namespace'")
+        family.recoverKey(key)
     }
 
     /**
@@ -1620,15 +1803,15 @@ open class ManagedHost(
                             // computenet-xy7w4 D1: likewise re-install the frame's replay
                             // provenance, so every frame this handler emits into an intake
                             // inherits it (and is not re-journaled into the replayed journal).
-                            val coldOffer = (port as? FanInlet<*>)?.let { inlet ->
-                                synchronized(dataLock) { checkpointSequences[hostedInvocation] }
-                                    ?.let { sequence ->
-                                        inlet.offerHostedWhileCold(hostedInvocation.invocation, sequence)
-                                    }
-                            }
-                            if (coldOffer == null) {
-                                civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                    civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                            civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
+                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                    val inletOffer = (port as? FanInlet<*>)?.let { inlet ->
+                                        synchronized(dataLock) { checkpointSequences[hostedInvocation] }
+                                            ?.let { sequence ->
+                                                inlet.offerHosted(hostedInvocation.invocation, sequence)
+                                            }
+                                    } ?: false
+                                    if (!inletOffer) {
                                         hostedInvocation.invocation.invokeSuspending(port.call)
                                     }
                                 }

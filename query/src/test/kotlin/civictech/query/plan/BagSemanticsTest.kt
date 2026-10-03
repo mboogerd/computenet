@@ -241,7 +241,8 @@ class BagSemanticsTest {
     @Test
     fun `a COUNT directly over a relation with no declared row key is refused - the annotation's conservative limit`() {
         // BagSemantics' KDoc: keyPreserving false means "not established", so the keyless form
-        // of cab.4.7's rule is refused even though its set and bag answers agree.
+        // of cab.4.7's rule is refused even though its set and bag answers agree. Pinned as
+        // owner decision computenet-afnwl, option (a) (2026-09-20): stays refused.
         bagRejections("@count c(X) :- e(X, Y).", catalog("e" to 2)).single().specId shouldContain "no declared row key on e"
     }
 

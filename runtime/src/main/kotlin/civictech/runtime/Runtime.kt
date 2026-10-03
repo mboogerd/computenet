@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.durability.Journal
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.GraphSpec
+import civictech.cell.host.DurableInput
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -93,6 +94,7 @@ object Runtime {
             mainHost = mainHost,
             refs = applied.refs,
             families = applied.families,
+            inputs = applied.inputs,
             replication = replication,
             replica = nodeSpec.replica,
             budget = budget,
@@ -128,6 +130,7 @@ object Runtime {
         val mainHost: ManagedHost,
         val refs: Map<String, CellRef>,
         val families: Map<String, KeyedCells<*>>,
+        val inputs: Map<String, Map<String, DurableInput>>,
         val replication: Replication,
         val replica: Long?,
         val budget: BudgetLedger,

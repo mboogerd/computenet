@@ -7,6 +7,9 @@ import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContextTopologyProvider
+import civictech.cell.graph.TopoEvent
+import civictech.cell.graph.TopologyApplier
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRegistry
@@ -18,12 +21,15 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 private const val RECORD_FRAME: Byte = 1
 private const val RECORD_CHECKPOINT: Byte = 2
 private const val RECORD_FRONTIER: Byte = 3
 private const val RECORD_OUTLET_WAVE: Byte = 4
 private const val RECORD_BASELINE: Byte = 5
+private const val RECORD_TOPOLOGY: Byte = 6
+private const val RECORD_INPUT: Byte = 7
 
 /** One accepted-but-undelivered frame and its host-wide acceptance position. */
 internal data class CheckpointFrame(
@@ -174,7 +180,32 @@ private data class CheckpointRecord(
 ) : Serializable
 
 /**
- * One journal record, decoded by [JournalRecords.decode] — the read-side view of the five
+ * Additive topology payload. `JOURNAL_FORMAT_VERSION` stays 1: `Journal.kt` requires a
+ * generation bump for an incompatible record/encoding change, while an older journal simply
+ * contains no type-6 record and replays byte-for-byte as before.
+ */
+private data class TopologyRecord(val events: List<TopoEvent>) : Serializable
+
+/**
+ * One durable-input commit: the opaque source [cursor] and every invocation captured from the
+ * batch, each stored as the complete [HostDurability.journalFrame] bytes (type byte included).
+ *
+ * A **separate additive record type** rather than a field on [CheckpointRecord] on purpose: a
+ * journal written before this change contains no `RECORD_INPUT` and replays byte-for-byte as it
+ * always did, whereas widening [CheckpointRecord] would change its computed `serialVersionUID`
+ * and make every pre-existing checkpoint blob undecodable. `JOURNAL_FORMAT_VERSION` therefore
+ * remains 1, by the same absent-tolerant argument as [BaselineDischargeRecord] and
+ * [OutletWaveRecord].
+ */
+private data class InputRecord(
+    val cellRef: CellRef,
+    val name: String,
+    val cursor: Serializable,
+    val frames: List<ByteArray>,
+) : Serializable
+
+/**
+ * One journal record, decoded by [JournalRecords.decode] — the read-side view of the seven
  * record types [HostDurability] writes (computenet-wzbww D2, `[TTD1-02]`). The variants
  * carry the payload classes' fields copied out, never the payload classes themselves: those
  * stay `private` because widening their visibility changes their JVM access flags and
@@ -208,6 +239,17 @@ sealed interface DecodedJournalRecord {
     data class BaselineDischarge(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) :
         DecodedJournalRecord
 
+    /** A `RECORD_TOPOLOGY`: one write-ahead graph delta, already resolved to concrete refs. */
+    data class Topology(val events: List<TopoEvent>) : DecodedJournalRecord
+
+    /** A `RECORD_INPUT`: one named source cursor and its atomically committed frame batch. */
+    data class Input(
+        val cellRef: CellRef,
+        val name: String,
+        val cursor: Serializable,
+        val frames: List<ByteArray>,
+    ) : DecodedJournalRecord
+
     /** A leading byte that is none of the landed record types. */
     data class Unknown(val typeByte: Byte) : DecodedJournalRecord
 }
@@ -219,7 +261,7 @@ sealed interface DecodedJournalRecord {
  */
 object JournalRecords {
     /**
-     * Decode one record as [Journal.replay] returned it. Types 2..5 are deserialized with
+     * Decode one record as [Journal.replay] returned it. Types 2..7 are deserialized with
      * exactly the `ObjectInputStream.readObject` + cast recovery always used; whatever that
      * throws propagates **unwrapped**, so [RecoveryIncomplete.cause] keeps its class.
      *
@@ -238,6 +280,10 @@ object JournalRecords {
                 .let { DecodedJournalRecord.OutletWave(it.cellRef, it.portName, it.sourceId, it.highWater) }
             RECORD_BASELINE -> (readPayload(record) as BaselineDischargeRecord)
                 .let { DecodedJournalRecord.BaselineDischarge(it.cellRef, it.portName, it.timestamp) }
+            RECORD_TOPOLOGY -> (readPayload(record) as TopologyRecord)
+                .let { DecodedJournalRecord.Topology(it.events) }
+            RECORD_INPUT -> (readPayload(record) as InputRecord)
+                .let { DecodedJournalRecord.Input(it.cellRef, it.name, it.cursor, it.frames) }
             else -> DecodedJournalRecord.Unknown(type)
         }
     }
@@ -371,6 +417,12 @@ internal class HostDurability(
      */
     private val dischargedBaselines = mutableMapOf<Pair<CellRef, String>, MutableSet<Timestamp>>()
 
+    /** Last committed cursor per durable input, restored by `RECORD_INPUT` replay. */
+    private val cursors = ConcurrentHashMap<Pair<CellRef, String>, Serializable>()
+
+    /** Fold providers registered by topology owners; at most one is an [ApplyContextTopologyProvider]. */
+    private val topologyProviders = java.util.IdentityHashMap<Journal, MutableList<() -> List<TopoEvent>>>()
+
     /**
      * Replay this host's [journal] (M10.1): checkpoint records restore
      * `Stateful` state directly; invocation frames re-enter through the
@@ -395,8 +447,9 @@ internal class HostDurability(
      * [ManagedHost.recoverFrom] wraps this count in a [Recovery] whose
      * `awaitApplied` fences on that delivery.
      */
-    fun recoverFrom(journal: Journal): Int {
+    fun recoverFrom(journal: Journal, applier: TopologyApplier? = null): Int {
         var frames = 0
+        var checkpointCatchUpPendingAt: Int? = null
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -417,6 +470,19 @@ internal class HostDurability(
         val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
         ReplayScope.with(scope) {
             val records = journal.replay()
+            fun submitFrame(payload: ByteArray) {
+                if (checkpointCatchUpPendingAt != null) {
+                    applier?.checkpointRestored()
+                    checkpointCatchUpPendingAt = null
+                }
+                submit(
+                    WireCodec.decode(payload).let { frame ->
+                        (if (scope == null) frame else frame.baselined(scope))
+                            .copy(replayFrontier = scope, replayOf = journal)
+                    }
+                )
+                frames++
+            }
             records.forEachIndexed { index, record ->
                 // T05 finding 4: a bare forEach with no per-record handling
                 // meant any decode/readObject throw (or the else -> error
@@ -428,26 +494,46 @@ internal class HostDurability(
                 try {
                     when (val decoded = JournalRecords.decode(record)) {
                         is DecodedJournalRecord.Frame -> {
-                            submit(
-                                WireCodec.decode(decoded.payload).let { frame ->
-                                    (if (scope == null) frame else frame.baselined(scope))
-                                        .copy(replayFrontier = scope, replayOf = journal)
-                                }
-                            )
-                            frames++
+                            submitFrame(decoded.payload)
                         }
 
-                        is DecodedJournalRecord.Checkpoint -> restoreCheckpoint(decoded)
+                        is DecodedJournalRecord.Checkpoint -> {
+                            restoreCheckpoint(decoded)
+                            checkpointCatchUpPendingAt = index
+                        }
                         is DecodedJournalRecord.Frontier ->
                             advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
                         is DecodedJournalRecord.BaselineDischarge ->
                             recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
                         is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
+                        is DecodedJournalRecord.Topology -> {
+                            val topologyApplier = applier
+                                ?: error("topology record requires a TopologyApplier")
+                            decoded.events.forEach(topologyApplier::apply)
+                        }
+                        is DecodedJournalRecord.Input -> {
+                            cursors[decoded.cellRef to decoded.name] = decoded.cursor
+                            decoded.frames.forEach { carried ->
+                                val frame = JournalRecords.decode(carried)
+                                require(frame is DecodedJournalRecord.Frame) {
+                                    "durable input '${decoded.name}' for ${decoded.cellRef} carries a non-frame record"
+                                }
+                                submitFrame(frame.payload)
+                            }
+                        }
                         is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
                     }
                 } catch (e: Exception) {
                     deadLetter("journal replay: record $index of ${records.size} failed: $e")
                     throw RecoveryIncomplete(index, records.size, e)
+                }
+            }
+            checkpointCatchUpPendingAt?.let { checkpointIndex ->
+                try {
+                    applier?.checkpointRestored()
+                } catch (e: Exception) {
+                    deadLetter("journal replay: record $checkpointIndex of ${records.size} failed: $e")
+                    throw RecoveryIncomplete(checkpointIndex, records.size, e)
                 }
             }
         }
@@ -469,6 +555,52 @@ internal class HostDurability(
 
     fun journalFrame(hostedInvocation: HostedPortInvocation): ByteArray =
         byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)
+
+    /** The current in-memory cursor for one named durable input. */
+    fun committedInput(cellRef: CellRef, name: String): Serializable? = cursors[cellRef to name]
+
+    /**
+     * Serialize the complete batch before touching [journal], append it as one record, then make
+     * its cursor visible in memory. If serialization or append fails, the cursor is unchanged.
+     */
+    fun journalInput(
+        journal: Journal,
+        cellRef: CellRef,
+        name: String,
+        cursor: Serializable,
+        frames: List<HostedPortInvocation>,
+    ) {
+        val record = journalRecord(
+            RECORD_INPUT,
+            InputRecord(cellRef, name, cursor, frames.map(::journalFrame)),
+        )
+        journal.append(record)
+        cursors[cellRef to name] = cursor
+    }
+
+    /** Append one resolved graph delta before its first host operation. */
+    fun journalTopology(journal: Journal, events: List<TopoEvent>) {
+        journal.append(journalRecord(RECORD_TOPOLOGY, TopologyRecord(events)))
+    }
+
+    /** Register a live fold provider whose compact form must lead [journal]'s checkpoint. */
+    fun registerTopology(journal: Journal, provider: () -> List<TopoEvent>) {
+        synchronized(topologyProviders) {
+            val providers = topologyProviders.getOrPut(journal) { mutableListOf() }
+            if (provider is ApplyContextTopologyProvider) {
+                check(providers.none { it is ApplyContextTopologyProvider }) {
+                    "topology provider already registered for journal ${journal.javaClass.name}@" +
+                        Integer.toHexString(System.identityHashCode(journal))
+                }
+            }
+            providers += provider
+        }
+    }
+
+    private fun topologyFor(journal: Journal): Pair<Boolean, List<TopoEvent>> {
+        val providers = synchronized(topologyProviders) { topologyProviders[journal]?.toList().orEmpty() }
+        return (providers.isNotEmpty()) to providers.flatMap { it() }.distinct()
+    }
 
     private fun journalRecord(type: Byte, record: Serializable): ByteArray {
         val blob = ByteArrayOutputStream()
@@ -521,10 +653,11 @@ internal class HostDurability(
      * single-consumer host, so at that point every frame accepted for [journal] is either
      * DELIVERED — its effect is in the snapshot — or pending and not yet delivered:
      * live/recovery staging, a coalesced entry, attention parking, supervision-SUSPEND
-     * parking, or a cold inlet's pre-activation tail. The compacted journal is the
-     * checkpoint records followed by every pending frame whose target port tees to
-     * [journal] — or whose target cell's snapshot it holds, a per-port selector's volatile
-     * inlet included — re-encoded by [journalFrame] in host sequence order.
+     * parking, an inlet policy's transient holding tier, or a cold inlet's
+     * pre-activation tail. The compacted journal is the checkpoint records followed by
+     * every pending frame whose target port tees to [journal] — or whose target cell's
+     * snapshot it holds, a per-port selector's volatile inlet included — re-encoded by
+     * [journalFrame] in host sequence order.
      *
      * That cell-level carry is deliberately conservative. A cross-journal volatile-port
      * frame can be delivered twice after both journals recover: once from this carry and
@@ -572,6 +705,12 @@ internal class HostDurability(
     fun checkpoint(journal: Journal) {
         awaitOnManagementBand {
             val cells = cellsView()
+            val (hasTopologyProvider, topologyEvents) = topologyFor(journal)
+            val topology = if (hasTopologyProvider) {
+                listOf(journalRecord(RECORD_TOPOLOGY, TopologyRecord(topologyEvents)))
+            } else {
+                emptyList()
+            }
             val state = HashMap<CellRef, Serializable>()
             cells.forEach { (cellRef, cell) ->
                 if (cell is Stateful && cellJournalSelector(cellRef) === journal) state[cellRef] = cell.snapshot()
@@ -636,7 +775,9 @@ internal class HostDurability(
             // journal no cell or port selector resolves to `===` is a caller/selector
             // mismatch, never a legitimate empty checkpoint, so refuse before touching the
             // journal at all.
-            val boundToJournal = cells.keys.any { cellJournalSelector(it) === journal } ||
+            val boundToJournal = hasTopologyProvider ||
+                cursors.keys.any { key -> cellJournalSelector(key.first) === journal } ||
+                cells.keys.any { cellJournalSelector(it) === journal } ||
                 cells.any { (cellRef, cell) ->
                     PortRegistry.of(cell).names().any { portName -> journalSelector(cellRef, portName) === journal }
                 }
@@ -663,24 +804,9 @@ internal class HostDurability(
                 }
                 return@awaitOnManagementBand
             }
-            // PN-0b: reset() truncates the WAL down to this checkpoint blob. If
-            // the journal serves cells (frames on disk) but the blob captures
-            // NOTHING recoverable — no `Stateful` snapshot, no `Effectful`
-            // processed-frontier and no discharged baseline — those frames are the
-            // cells' only recovery, and the reset would silently destroy them.
-            // Refuse instead. A discharged-baseline position counts as recoverable
-            // content on the same footing as a frontier entry (`[24-DUR-08]`): for a
-            // sink whose whole durable contribution is "this catch-up already fired",
-            // it is exactly what the truncated frames would otherwise be replayed for.
-            require(state.isNotEmpty() || frontier.isNotEmpty() || baselines.isNotEmpty()) {
-                "checkpoint would truncate a journal whose selected cells contribute " +
-                    "no snapshot, no processed-frontier and no discharged baseline — frame " +
-                    "replay is their only recovery, so resetting the WAL would destroy their state"
-            }
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
-            val compacted = listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + baselines
             // computenet-xy7w4 D3: carry every accepted-but-undelivered frame of this
             // journal, read and reset under the intake's own lock. Encoded before the
             // reset, so an unencodable frame fails the checkpoint and truncates nothing.
@@ -693,6 +819,36 @@ internal class HostDurability(
             // and re-derive the frame; the deliberate carry here then delivers it twice
             // (computenet-4fpyy).
             underIntakeLock { pending ->
+                // Durable-input cursors are recoverable state too. Read them under the same
+                // intake lock `commit` holds across its one append and all staging: a commit
+                // cannot land between this cursor snapshot and the pending-frame snapshot.
+                // The records carry no frames at a checkpoint — the cell snapshot already
+                // contains delivered batches, while `pending` below carries the accepted tail.
+                val inputs = cursors.entries
+                    .asSequence()
+                    .filter { (key, _) -> cellJournalSelector(key.first) === journal }
+                    .sortedWith(compareBy({ it.key.first.toString() }, { it.key.second }))
+                    .map { (key, cursor) ->
+                        journalRecord(RECORD_INPUT, InputRecord(key.first, key.second, cursor, emptyList()))
+                    }
+                    .toList()
+                // PN-0b: reset() truncates the WAL down to this checkpoint blob. If
+                // the journal serves cells (frames on disk) but the blob captures NOTHING
+                // recoverable — no snapshot, frontier, cursor or discharged baseline — those
+                // frames are the cells' only recovery, and reset would silently destroy them.
+                val topologyOnly = hasTopologyProvider && state.isEmpty() && frontier.isEmpty() &&
+                    inputs.isEmpty() && baselines.isEmpty() &&
+                    journal.replay().all { JournalRecords.decode(it) is DecodedJournalRecord.Topology }
+                require(
+                    state.isNotEmpty() || frontier.isNotEmpty() || inputs.isNotEmpty() ||
+                        baselines.isNotEmpty() || topologyOnly
+                ) {
+                    "checkpoint would truncate a journal whose selected cells contribute " +
+                        "no snapshot, no processed-frontier, no durable-input cursor and no discharged baseline — " +
+                        "frame replay is their only recovery, so resetting the WAL would destroy their state"
+                }
+                val compacted =
+                    topology + listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + inputs + baselines
                 val carried = pending
                     .filter {
                         journalSelector(it.invocation.cellRef, it.invocation.portName) === journal ||

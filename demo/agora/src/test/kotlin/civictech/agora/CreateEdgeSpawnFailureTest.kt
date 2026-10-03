@@ -2,6 +2,11 @@ package civictech.agora
 
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.TopoEvent
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
@@ -39,16 +44,15 @@ import kotlin.test.assertTrue
 class CreateEdgeSpawnFailureTest {
 
     @Test
-    fun `a spawn that throws leaves the edge served by graph and still recorded in the structure log`() {
-        val dir = kotlin.io.path.createTempDirectory("create-edge-spawn-failure").toFile()
-        val structureLog = java.io.File(dir, "graph.jsonl")
-
+    fun `a spawn that throws leaves the edge served by graph and still recorded as topology`() {
         val registry = LocationRegistry()
         val scheduler = VirtualThreadScheduler("create-edge-spawn-failure-test")
+        val topology = InMemoryJournal()
         // Budget: 1 (hub, spawned in AgoraService's init) + 2 (the claims
         // below) = 3. The edge's manage.spawn is the 4th call and exceeds it.
         val host = ManagedHost(scheduler = scheduler, registry = registry, quota = 3)
-        val service = AgoraService(host, registry, structureLog = structureLog)
+        val context = ApplyContext(host, topology = topology)
+        val service = AgoraService(host, registry, context = context)
         try {
             val a = service.createClaim("a")
             val b = service.createClaim("b")
@@ -71,19 +75,14 @@ class CreateEdgeSpawnFailureTest {
                 "graph() should already serve the edge the failed spawn left published",
             )
 
-            // The property this test exists to pin: a ref graph served must
-            // not be absent from the structure log, even when the spawn that
-            // would have wired it up failed.
-            val logged = structureLog.takeIf { it.exists() }
-                ?.readLines()
-                ?.filter { it.isNotBlank() }
-                ?.mapNotNull { Regex("\"ref\":\"([^\"]+)\"").find(it)?.groupValues?.get(1) }
-                ?.toSet()
-                ?: emptySet()
-            assertTrue(
-                edgeRef.id.toString() in logged,
-                "served by /graph but absent from graph.jsonl (unrecoverable): $edgeRef",
-            )
+            // One complete GraphSpec delta is write-ahead of the throwing
+            // spawn, so recovery can finish all three links next boot.
+            val edgeDeltas = topology.replay()
+                .map(JournalRecords::decode)
+                .filterIsInstance<DecodedJournalRecord.Topology>()
+                .filter { delta -> delta.events.any { it is TopoEvent.Spawn && it.ref == edgeRef } }
+            assertEquals(1, edgeDeltas.size, "edge creation must write exactly one topology delta")
+            assertEquals(4, edgeDeltas.single().events.size, "edge delta must contain spawn plus three links")
         } finally {
             scheduler.shutdown()
         }

@@ -155,7 +155,7 @@ class DurabilityBackdoorFenceTest {
      * code (verified: a companion helper function with a local `var`
      * accumulator does not trip this test). A `val`/`const val` companion
      * property — the existing, legitimate use in `Journal.kt` (`MAGIC`,
-     * `HEADER_BYTES`) and `KeyedCells.kt` (`KEYS_FILE`, `HOST_JOURNAL`) — is
+     * `HEADER_BYTES`) and `KeyedCells.kt` (`HOST_JOURNAL`) — is
      * unaffected either way.
      */
     @Test

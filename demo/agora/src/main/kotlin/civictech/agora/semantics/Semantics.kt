@@ -7,7 +7,7 @@ package civictech.agora.semantics
  * in the exit test, so incremental == batch is a property of the propagation
  * machinery, never of divergent math.
  */
-interface GradualSemantics {
+interface GradualSemantics : java.io.Serializable {
     /**
      * Base score from raw per-user stances; empty → neutral 0.5. MUST clamp
      * away from 0 and 1: the clamp is what keeps a single cycle's loop gain

@@ -1,6 +1,7 @@
 package civictech.agora
 
 import civictech.agora.cell.CredenceUpdate
+import civictech.agora.cell.ClaimApi
 import civictech.agora.cell.InfluenceDelta
 import civictech.agora.cell.Polarity
 import civictech.agora.cell.StanceDelta
@@ -8,6 +9,10 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
+import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.UnlinkStep
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -17,13 +22,199 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
 import civictech.testkit.awaitDrained
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.util.*
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class DurabilityTest {
+
+    private val removalQ = 1e-3
+    private val removalA = CellRef(UUID.nameUUIDFromBytes("torn-removal:a".toByteArray()))
+    private val removalB = CellRef(UUID.nameUUIDFromBytes("torn-removal:b".toByteArray()))
+    private val removalC = CellRef(UUID.nameUUIDFromBytes("torn-removal:c".toByteArray()))
+    private val removalEdge = CellRef(UUID.nameUUIDFromBytes("torn-removal:edge".toByteArray()))
+    private val removalCascaded = CellRef(UUID.nameUUIDFromBytes("torn-removal:cascaded".toByteArray()))
+
+    private data class RemovalWorld(
+        val controller: SimulationController,
+        val host: ManagedHost,
+        val context: ApplyContext,
+        val service: AgoraService,
+    )
+
+    private class SimulatedCrash : RuntimeException()
+
+    /** Persists one acknowledged append, then stops the caller before it can apply that record. */
+    private class CrashAfterNextAppendJournal(private val delegate: Journal) : Journal {
+        override val formatVersion: Int get() = delegate.formatVersion
+        override val durability get() = delegate.durability
+        private var armed = false
+
+        fun arm() {
+            check(!armed)
+            armed = true
+        }
+
+        override fun append(record: ByteArray) {
+            delegate.append(record)
+            if (armed) {
+                armed = false
+                throw SimulatedCrash()
+            }
+        }
+
+        override fun replay(): List<ByteArray> = delegate.replay()
+
+        override fun reset(records: List<ByteArray>) = delegate.reset(records)
+    }
+
+    private fun removalWorld(journal: Journal): RemovalWorld {
+        val controller = SimulationController(23L)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+            journal = journal,
+        )
+        val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
+        return RemovalWorld(
+            controller,
+            host,
+            context,
+            AgoraService(host, registry, quiescence = removalQ, context = context),
+        )
+    }
+
+    private fun buildRemovalGraph(journal: Journal): RemovalWorld = removalWorld(journal).also { built ->
+        built.service.createClaim("A", removalA)
+        built.service.createClaim("B", removalB)
+        built.service.createClaim("C", removalC)
+        built.service.createEdge(removalA, removalB, Polarity.ATTACK, removalEdge)
+        built.service.createEdge(removalEdge, removalC, Polarity.SUPPORT, removalCascaded)
+        built.service.setStance(removalA, "author", 0.9)
+        built.service.setStance(removalEdge, "author", 0.8)
+        built.service.setStance(removalCascaded, "author", 0.7)
+        built.controller.runToIdle()
+    }
+
+    /** The first write-ahead delta of removing either B or its incoming edge. */
+    private fun tearRemovalAfterSourceUnlinks(world: RemovalWorld) {
+        GraphSpec(
+            listOf(
+                UnlinkStep(
+                    "claim:${removalA.id}",
+                    "credenceOutlet",
+                    "edge:${removalEdge.id}",
+                    "sourceInlet",
+                ),
+                UnlinkStep(
+                    "edge:${removalEdge.id}",
+                    "credenceOutlet",
+                    "edge:${removalCascaded.id}",
+                    "sourceInlet",
+                ),
+            ),
+        ).apply(world.context)
+    }
+
+    @Test
+    fun `a torn edge removal is completed during recovery`() {
+        val completed = buildRemovalGraph(InMemoryJournal())
+        completed.service.remove(removalEdge)
+        completed.controller.runToIdle()
+        val expected = completed.service.graph().associateBy { it.ref }
+
+        val tornJournal = InMemoryJournal()
+        val torn = buildRemovalGraph(tornJournal)
+        tearRemovalAfterSourceUnlinks(torn)
+
+        val recovered = removalWorld(tornJournal)
+        recovered.context.recover(tornJournal)
+        recovered.controller.runToIdle()
+        recovered.service.repairTornRemovals()
+        recovered.controller.runToIdle()
+        recovered.service.rebuildIndex()
+        val actual = recovered.service.graph().associateBy { it.ref }
+
+        assertEquals(expected.keys, actual.keys, "recovered topology differs from a completed removal")
+        assertEquals(
+            expected.mapValues { it.value.info },
+            actual.mapValues { it.value.info },
+            "recovered node infos differ from a completed removal",
+        )
+        expected.forEach { (ref, node) ->
+            assertTrue(
+                abs(node.credence - actual.getValue(ref).credence) <= 25 * removalQ,
+                "node $ref: completed removal ${node.credence} vs recovered ${actual.getValue(ref).credence}",
+            )
+        }
+        val removed = setOf(removalEdge, removalCascaded)
+        assertTrue(recovered.context.live().spawns.keys.none { it in removed }, "torn edge spawns survived recovery")
+        removed.forEach { ref ->
+            assertEquals(null, recovered.host.lookup(ref, ClaimApi::class.java), "recovered host retained $ref")
+        }
+    }
+
+    @Test
+    fun `a torn claim removal is completed by the live recovery path`(@TempDir dir: File) {
+        val completed = buildRemovalGraph(InMemoryJournal())
+        completed.service.remove(removalB)
+        completed.controller.runToIdle()
+        val expected = completed.service.graph().associateBy { it.ref }
+
+        val journalFile = File(dir, "host.journal")
+        val crashJournal = CrashAfterNextAppendJournal(FileJournal(journalFile))
+        val torn = buildRemovalGraph(crashJournal)
+        crashJournal.arm()
+        assertFailsWith<SimulatedCrash> { torn.service.remove(removalB) }
+
+        val restarted = AgoraApp(port = 0, journalDir = dir).start()
+        try {
+            val actual = restarted.service.graph().associateBy { it.ref }
+            assertEquals(expected.keys, actual.keys, "recovered topology differs from a completed claim removal")
+            assertEquals(
+                expected.mapValues { it.value.info },
+                actual.mapValues { it.value.info },
+                "recovered node infos differ from a completed claim removal",
+            )
+            expected.forEach { (ref, node) ->
+                assertTrue(
+                    abs(node.credence - actual.getValue(ref).credence) <= 25 * removalQ,
+                    "node $ref: completed removal ${node.credence} vs recovered ${actual.getValue(ref).credence}",
+                )
+            }
+        } finally {
+            restarted.stop()
+        }
+    }
+
+    @Test
+    fun `offline graph build reports a torn edge without changing its journal`(@TempDir dir: File) {
+        val journalFile = File(dir, "host.journal")
+        val journal = FileJournal(journalFile)
+        val torn = buildRemovalGraph(journal)
+        tearRemovalAfterSourceUnlinks(torn)
+        val before = journal.replay().size
+
+        val controller = SimulationController(29L)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val result = runCatching { AgoraGraphSource(dir.path).build(host, registry) }
+        val after = FileJournal(journalFile).replay().size
+
+        assertEquals(before, after, "offline graph build appended repair records to its input journal")
+        assertTrue(result.isFailure, "offline graph build should report the torn topology")
+        assertTrue(
+            result.exceptionOrNull()?.message?.contains("no unique source link") == true,
+            "offline graph build reported an unexpected failure: ${result.exceptionOrNull()}",
+        )
+    }
 
     /** The K2 seam: agora deltas cross the codec via the ServiceLoader contribution. */
     @Test
@@ -47,15 +238,12 @@ class DurabilityTest {
     }
 
     /**
-     * kill -9 durability (the demo CrashRestart idiom, in-process): structure
-     * log rebuilds the graph under recorded refs, journal replay restores the
-     * data, and the recovered credences match the pre-crash ones.
+     * kill -9 durability (the demo CrashRestart idiom, in-process): the journaled
+     * topology rebuilds the graph under recorded refs before frame replay.
      */
     @Test
-    fun `structure log + journal rebuild the same credences after a crash`() {
+    fun `topology journal rebuilds the same graph after a crash`() {
         val q = 1e-3
-        val dir = kotlin.io.path.createTempDirectory("agora-durability").toFile()
-        val structure = java.io.File(dir, "graph.jsonl")
         // One in-memory journal shared across all three worlds plays "the disk"
         // (the kernel durability idiom: no filesystem in the deterministic sim).
         // The cyclic graph converges by ~5k journaled propagate rounds, and a
@@ -64,7 +252,13 @@ class DurabilityTest {
         // twin below and by JournalCompatibilityTest (on-disk format).
         val journal = InMemoryJournal()
 
-        fun world(): Triple<SimulationController, ManagedHost, AgoraService> {
+        data class World(
+            val controller: SimulationController,
+            val host: ManagedHost,
+            val context: ApplyContext,
+            val service: AgoraService,
+        )
+        fun world(): World {
             val controller = SimulationController(11L)
             val registry = LocationRegistry()
             val host = ManagedHost(
@@ -73,12 +267,13 @@ class DurabilityTest {
                 attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = journal,
             )
-            val service = AgoraService(host, registry, quiescence = q, structureLog = structure)
-            return Triple(controller, host, service)
+            val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
+            val service = AgoraService(host, registry, quiescence = q, context = context)
+            return World(controller, host, context, service)
         }
 
         // phase 1: build, churn, quiesce — then vanish without a shutdown
-        val (c1, _, s1) = world()
+        val (c1, _, _, s1) = world()
         val a = s1.createClaim("A")
         val b = s1.createClaim("B")
         val e1 = s1.createEdge(a, b, Polarity.ATTACK)
@@ -87,21 +282,40 @@ class DurabilityTest {
         s1.setStance(b, "u2", 0.8)
         s1.setStance(e1, "u1", 0.7) // edges are claims: stance on the relation
         val doomed = s1.createClaim("doomed")
-        s1.createEdge(doomed, a, Polarity.SUPPORT)
+        val doomedEdge = s1.createEdge(doomed, a, Polarity.SUPPORT)
         c1.runToIdle()
         s1.remove(doomed) // retraction must survive the crash too
         c1.runToIdle()
         val before = s1.graph().associate { it.ref to it.credence }
+        val beforeInfos = s1.graph().associate { it.ref to it.info }
 
         // phases 2 and 3: recovery must be stable across REPEATED restarts —
         // a rebuild that appends to (or a checkpoint that races) the journal
         // shows up as second-restart drift
         repeat(2) { phase ->
-            val (controller, host, service) = world()
-            host.recoverFrom(journal)
+            val (controller, host, context, service) = world()
+            context.recover(journal)
             controller.runToIdle()
+            service.repairTornRemovals()
+            controller.runToIdle()
+            service.rebuildIndex()
             val after = service.graph().associate { it.ref to it.credence }
+            val afterInfos = service.graph().associate { it.ref to it.info }
             assertEquals(before.keys, after.keys, "restart ${phase + 2}: recovered topology differs")
+            assertEquals(beforeInfos, afterInfos, "restart ${phase + 2}: recovered node infos differ")
+            val removed = setOf(doomed, doomedEdge)
+            val live = context.live()
+            assertTrue(
+                live.spawns.keys.none { it in removed },
+                "restart ${phase + 2}: removed cells survived in the topology fold",
+            )
+            assertTrue(
+                live.links.values.none { it.from in removed || it.to in removed },
+                "restart ${phase + 2}: links touching removed cells survived in the topology fold",
+            )
+            removed.forEach { ref ->
+                assertEquals(null, host.lookup(ref, ClaimApi::class.java), "restart ${phase + 2}: host retained $ref")
+            }
             before.forEach { (ref, credence) ->
                 assertTrue(
                     abs(credence - after.getValue(ref)) <= 25 * q,
@@ -122,7 +336,6 @@ class DurabilityTest {
     fun `crash recovery converges on the live scheduler too`() {
         val q = 1e-3
         val dir = kotlin.io.path.createTempDirectory("agora-live-durability").toFile()
-        val structure = java.io.File(dir, "graph.jsonl")
         val journalFile = java.io.File(dir, "host.journal")
 
         // Held per world: `ManagedHost.checkpoint` keys a cell's state to the
@@ -130,7 +343,13 @@ class DurabilityTest {
         // (`journalSelector(cellRef) === journal`, HostDurability.checkpoint),
         // so checkpointing this host must reuse this instance rather than a
         // fresh `FileJournal(journalFile)` on the same path.
-        data class World(val scheduler: HostScheduler, val host: ManagedHost, val service: AgoraService, val journal: FileJournal)
+        data class World(
+            val scheduler: HostScheduler,
+            val host: ManagedHost,
+            val context: ApplyContext,
+            val service: AgoraService,
+            val journal: FileJournal,
+        )
         fun world(name: String): World {
             val registry = LocationRegistry()
             // the production scheduler, held explicitly: `awaitSettled` needs a
@@ -143,7 +362,14 @@ class DurabilityTest {
                 attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = journal,
             )
-            return World(scheduler, host, AgoraService(host, registry, quiescence = q, structureLog = structure), journal)
+            val context = ApplyContext(host, journals = mapOf("host" to journal), topology = journal)
+            return World(
+                scheduler,
+                host,
+                context,
+                AgoraService(host, registry, quiescence = q, context = context),
+                journal,
+            )
         }
 
         /**
@@ -169,7 +395,7 @@ class DurabilityTest {
             return service.graph().associate { it.ref to it.credence }
         }
 
-        val (s1Scheduler, _, s1, _) = world("pre-crash")
+        val (s1Scheduler, _, _, s1, _) = world("pre-crash")
         val a = s1.createClaim("A")
         val b = s1.createClaim("B")
         val e1 = s1.createEdge(b, a, Polarity.ATTACK)
@@ -178,6 +404,7 @@ class DurabilityTest {
         s1.createEdge(c, e1, Polarity.ATTACK)
         s1.setStance(c, "a", 0.9)
         val before = awaitSettled(s1Scheduler, s1, "pre-crash graph settles")
+        val beforeInfos = s1.graph().associate { it.ref to it.info }
         // kill -9: the crashed host stops running. Only legal now that the
         // baseline is a proven-quiescent read — a live predecessor sharing the
         // journal file with the recovering host is exactly the interference the
@@ -185,10 +412,19 @@ class DurabilityTest {
         s1Scheduler.shutdown()
 
         repeat(2) { phase ->
-            val (scheduler, host, service, journal) = world("restart-${phase + 2}")
-            host.recoverFrom(journal).awaitApplied(30_000)
+            val (scheduler, host, context, service, journal) = world("restart-${phase + 2}")
+            context.recover(journal).awaitApplied(30_000)
+            if (service.repairTornRemovals()) {
+                scheduler.awaitDrained("torn-removal repair")
+            }
+            // Keep link catch-up suppressed through both frame replay and the
+            // compacting checkpoint; rebuildIndex flips it only afterwards.
+            if (phase == 0) host.checkpoint(journal)
+            service.rebuildIndex()
             val after = service.graph().associate { it.ref to it.credence }
+            val afterInfos = service.graph().associate { it.ref to it.info }
             assertEquals(before.keys, after.keys, "restart ${phase + 2}: recovered topology differs")
+            assertEquals(beforeInfos, afterInfos, "restart ${phase + 2}: recovered node infos differ")
             before.forEach { (ref, credence) ->
                 assertTrue(
                     abs(credence - after.getValue(ref)) <= 25 * q,
@@ -198,7 +434,6 @@ class DurabilityTest {
             // Q4: a checkpoint taken right after the fence must be safe — the
             // next restart still recovers the pre-checkpoint credences, proving
             // the compacted journal did not race the still-staged replay.
-            if (phase == 0) host.checkpoint(journal)
             // this restart is done and proven quiescent; the next one replays the
             // same journal file, so leave nothing behind that could still write
             scheduler.shutdown()

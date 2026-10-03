@@ -67,15 +67,23 @@ under an existing key retracts the previous element) or `GroupByCell` over map s
 > aligned through one `observeAligned` sink; `votes`, `wanted` and `shared`
 > stay on point-consistent `host.observe` hubs because not every view shares a
 > single source root — see F-27 for why a sink spanning all four views is not
-> a KE2 deliverable. `:demo:skillmatch` and `:demo:tiering` adoption remain
-> open follow-ups, not part of this finding's gap.
+> a KE2 deliverable. `:demo:skillmatch` and `:demo:tiering` now adopt the same
+> idiom. Skillmatch aligns `{matches, gap, qualification, market}`, whose views
+> all descend from the candidate-skill and job-skill roots; its raw
+> `{candSkills}` and `{jobSkills}` views remain independent point-consistent
+> sinks. Tiering aligns `{valuations, tierAvg}` on the valuation root and
+> `{prefs, prefAvg}` on the preference root. Its `{items}`, `{fused}`,
+> `{manual}` and `{board}` views have distinct root sets and remain
+> point-consistent. This grouping follows F-27: views with different root sets
+> cannot safely share an aligned sink.
 
-**Observation**: `:demo:skillmatch`'s UI folds four independent outlets (matches,
-match-counts, required-counts, gap) into one state snapshot. The views update
-asynchronously, so a snapshot can be momentarily inconsistent — the server test
-first observed a state where a match was counted (`matched: 1`) while the gap view
-still listed that same skill as uncovered. Tests must await joint conditions, and
-the UI can flash contradictory panels.
+**Observation**: `:demo:skillmatch`'s UI folds four derived outlets (matches,
+qualification, gap, market) into one state snapshot. Before the adoption above,
+independent observation hubs updated asynchronously, so a snapshot could be
+momentarily inconsistent — the server test first observed a state where a match
+was counted (`matched: 1`) while the gap view still listed that same skill as
+uncovered. Tests had to await joint conditions, and the UI could flash
+contradictory panels.
 **Why it's a gap**: not a kernel bug — this is exactly what `GlitchFreeCell` exists
 for — but there is no ergonomic way to apply glitch-freedom at the *observation
 edge* (a hub folding N outlets). Each demo hand-rolls per-view folds with no wave
@@ -1533,7 +1541,8 @@ So SOC1 joins the two halves at the demo layer
 (`demo/social/src/main/kotlin/civictech/demo/social/InterestDrivenFamily.kt`):
 `admit(scope: Interest)` walks every key a `Ranges` scope names and calls
 `KeyedCells.getOrSpawn` for any the family does not already know, durably
-(`authored/keys`); `FeedSession` (`Feed.kt`) takes an optional
+through the kernel journal's family-membership record. `FeedSession` (`Feed.kt`)
+takes an optional
 `spawner: InterestDrivenFamily?` and calls `admit` after deriving a pull's
 scope and before enumerating legs, so an admitted-but-absent friend gets a
 leg from that pull on (`[SOC1-INT-04]`, pinned by `SocialInterestTest`).
@@ -1612,47 +1621,48 @@ existing instances, per `[42-INT-01]`'s own text — "each instance carries an
 conjure a new instance purely from another instance's stated demand. Neither
 question is resolved here.
 
-## F-25 — The journal carries no topology and per-cell journals have no manifest, so offline reconstruction needs a caller-supplied graph
+## F-25 — topology journaling removes the application structure-log dependency; time-travel still needs an app graph source and per-cell journals have no manifest
 
 **Observation**: TTD1's `timetravel` CLI (`inspect`/`reconstruct`/`diff`,
-epic `computenet-ocv`) cannot reconstruct a crash artifact from the journal
-alone. `reconstruct` refuses with `NO_GRAPH_SOURCE` unless given `--graph
-<serialized GraphSpec>` or `--graph-provider <fqcn> [--graph-arg <s>]`
-(`Reconstructor.NO_GRAPH_SOURCE_MESSAGE`, `timetravel/src/main/kotlin/civictech/timetravel/reconstruct/Reconstructor.kt`)
-— `inspect` and record-level `diff` still succeed with no graph source,
-but a reconstruction never does. `:demo:agora`'s own TTD1 walkthrough needs a
-test-side adapter, `AgoraGraphSource(journalDir)`, that rebuilds the graph by
-replaying agora's own `graph.jsonl` structure log rather than reading it out
-of the journal (computenet-3qkx1 D2/D12); `:timetravel` was deliberately kept
-agnostic of that convention (epic §9.1). Separately, a `journalFor` selector
-(CP-C1, `[24-DUR-03]`) can give a run many per-cell journal files with no
-manifest naming them or mapping them to cells — the CLI reads a directory and
-learns the cell↔journal mapping only from the records themselves (epic §9.6).
+epic `computenet-ocv`) still cannot materialize a crash artifact into live
+cell instances without `--graph <serialized GraphSpec>` or
+`--graph-provider <fqcn> [--graph-arg <s>]`
+(`Reconstructor.NO_GRAPH_SOURCE_MESSAGE`,
+`timetravel/src/main/kotlin/civictech/timetravel/reconstruct/Reconstructor.kt`).
+`inspect` and record-level `diff` succeed without a graph source, but
+reconstruction still needs one. This is now an application-construction
+boundary, not missing topology: the kernel journal carries additive
+`RECORD_TOPOLOGY` records, `JournalReader` classifies them, and
+`ApplyContext.replayTopology` exposes the folded topology to an offline
+consumer. Agora's `AgoraGraphSource` uses that seam against `host.journal`,
+then rebuilds its application index; it no longer rebuilds topology from an
+application-owned structure log. `KeyedCells` likewise persists family
+membership as `FamilyKey` events in the selected journal, so membership does
+not require a separate membership file (`computenet-8xstm`).
+The per-cell journal half of the original finding is **not** resolved: a
+`journalFor` selector (CP-C1, `[24-DUR-03]`) can still give a run many
+per-cell journal files with no manifest naming them or mapping them to cells.
+`TopoEvent.Spawn` now records each durable cell's logical `journalId`, but the
+id-to-file binding is the application's `ApplyContext(journals = …)` map, so
+the CLI reading a directory still learns the cell↔journal mapping only from
+the records themselves (epic §9.6).
 
-**Why it's a gap**: `doc/spec/90-roadmap/93-feature-interactions.md` I-7 is
-the decided classification that a journal should carry `PORT_API` data plus
-topology events — decided but still unlanded (I-7's own landed-state note:
-"Topology journaling … (recovery currently depends on out-of-band graph
-rebuild)"). The shipped tee journals invocations only:
-`doc/spec/20-dataflow-semantics/24-data-cells.md` §Durability spectrum states
-the tee "does not journal topology at all — the graph is rebuilt out-of-band
-before `recoverFrom`" (G-25). Until I-7 lands, every offline reconstruction
-— the CLI's, and any future consumer of the same `GraphSource` seam — pays
-for that gap with a caller-supplied graph or an application-specific adapter,
-and a directory of per-cell journals carries no map of its own contents.
+**Why the remaining boundary matters**: `:timetravel` can decode and classify
+topology without knowing how to construct an application's concrete cells,
+registries, or service indexes. `TopoEvent.Spawn` carries a runtime
+`CellFactory`, but a generic journal reader is not the application's factory
+and registry wiring. The explicit `GraphSource` therefore remains the honest
+materialization seam; topology recovery itself is now kernel-owned and
+journal-native.
 
-**Proposed shape**: land I-7's topology-events classification in the kernel
-lane — its own spec argument, out of TTD1's scope by epic §4 ("Journaling
-topology … is precisely why it is out of scope here: it is a kernel-lane
-durability change with its own spec argument. TTD1 takes the graph from the
-caller and files the pain as a finding") — and, as its companion, a
-per-journal-directory manifest naming each file's cell(s) so a `journalFor`
-split needs no record-level discovery. `:timetravel` should keep declining to
-standardise agora's `graph.jsonl` as its own convention (epic §9.1): the
-`GraphSource` seam already lets an application supply one adapter, and
-generalising it is I-7's job, not this CLI's. This is a finding, not a spec
-or gap-table edit; it implements no part of I-7 and edits no file under
-`doc/spec/`.
+**Current shape**: application adapters should consume
+`ApplyContext.replayTopology` and rebuild their own indexes from the resulting
+fold. A future generic reconstruction facility would need a safe application
+factory/registry contract, not another application structure log. This finding
+no longer proposes topology journaling; it records the remaining
+app-specific construction requirement after `computenet-8xstm`, and keeps
+open the per-journal-directory manifest naming each file's cell(s), so a
+`journalFor` split needs no record-level discovery.
 
 ## F-26 — G-24 trigger: placement pressure measured on the SOC1 per-person families
 

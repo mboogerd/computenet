@@ -191,7 +191,7 @@ check)
   ;;
 
 acquire)
-  # The bracket claim-epic.sh:194-216 established: pull -> verify -> write ->
+  # The bracket claim-epic.sh's push-recovery block established: pull -> verify -> write ->
   # push, reading push OUTPUT rather than exit codes.
   bd dolt pull >/dev/null 2>&1 \
     || echo "note: bd dolt pull failed; the check below reads possibly stale local state" >&2

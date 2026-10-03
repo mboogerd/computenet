@@ -27,8 +27,9 @@ import civictech.query.schema.RelationSchema
  * - Folding `prefs` into one `prefAvg` the way `contribs` does — winner gets `+1`, loser
  *   gets `-1`, then one GroupBy — would need a two-rule UNION (`wins ∪ losses` with opposite
  *   signs), and `PlanAnalyses.unionKey` is never key-preserving (PlanAnalyses.kt:166): an
- *   `@avg`/`@sum` over it is `BAG_SEMANTICS_REQUIRED` (computenet-afnwl; that relaxation is
- *   parked, not worked around here — see this task's bead for the decision).
+ *   `@avg`/`@sum` over it is `BAG_SEMANTICS_REQUIRED` regardless of computenet-afnwl (decided,
+ *   option (a): refuse) — a union is never key-preserving either way, so this shape is not
+ *   worked around here.
  * - `Tiering.fuse` (the 0.7/0.3 weighted blend, normalization, fixed thresholds) is ordinary
  *   arithmetic over two doubles, not a relational operator.
  *
@@ -46,7 +47,7 @@ import civictech.query.schema.RelationSchema
  * keyed on all three attributes — a preference is already unique per triple in the demo (no
  * cell dedupes it further). Both aggregates apply directly to a keyed `Scan`, with no
  * projection in front of it (Planner.kt's aggregate-lowering KDoc), so both compile
- * independently of computenet-afnwl's parked relaxation.
+ * independently of computenet-afnwl's (decided) keyless-scan question.
  */
 object TieringQuery {
 

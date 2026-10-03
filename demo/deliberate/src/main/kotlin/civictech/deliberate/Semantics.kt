@@ -4,6 +4,7 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.sqrt
 import kotlin.math.pow
 
 /**
@@ -23,7 +24,7 @@ data class Arg(val strength: Double, val credence: Double)
  * supports. The default energy is DF-QuAD's product `s·c`; the default base
  * is agora's, the clamped mean of the stances.
  */
-interface Semantics {
+interface Semantics : java.io.Serializable {
     fun base(stances: Collection<Double>): Double = DfQuad.base(stances)
 
     fun energy(arg: Arg): Double = arg.strength.coerceIn(0.0, 1.0) * arg.credence.coerceIn(0.0, 1.0)
@@ -36,10 +37,13 @@ interface Semantics {
 }
 
 /** An agora [GradualSemantics] as a layer: product energies, agora's own base. */
-class EnergySemantics(private val g: GradualSemantics) : Semantics {
+class EnergySemantics(@Transient private val g: GradualSemantics) : Semantics {
     override fun base(stances: Collection<Double>) = g.base(stances)
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>) = g.combine(base, attacks, supports)
     override fun toString() = g.toString()
+
+    /** The only energy semantics in the catalog is DF-QuAD; do not serialize its non-serializable strategy object. */
+    private fun readResolve(): Any = EnergySemantics(DfQuad)
 }
 
 /**
@@ -51,7 +55,7 @@ class EnergySemantics(private val g: GradualSemantics) : Semantics {
  */
 object SemanticsCatalog {
     /** Every semantics the app can run, in display order. `dfquad` always runs. */
-    val IDS = listOf("dfquad", "wlo", "jnb", "woe", "euler", "qe", "mlp")
+    val IDS = listOf("dfquad", "wlo", "jnb", "woe", "euler", "qe", "mlp", "glo")
     const val DEFAULT_PRIMARY = "dfquad"
 
     fun of(id: String, wlo: WeightedLogOdds = WeightedLogOdds()): Semantics = when (id) {
@@ -62,6 +66,7 @@ object SemanticsCatalog {
         "euler" -> EulerBased
         "qe" -> QuadraticEnergy
         "mlp" -> MlpBased
+        "glo" -> GatedLogOdds()
         else -> throw IllegalArgumentException("unknown semantics '$id' (${IDS.joinToString()})")
     }
 }
@@ -224,7 +229,7 @@ class LayerSet(
     val semantics: List<Semantics>,
     consensusMembers: List<String> = Consensus.DEFAULT_MEMBERS,
     val headline: String = ids.first(),
-) {
+) : java.io.Serializable {
     init {
         require(ids.isNotEmpty()) { "at least one credence layer must run" }
         require(ids.size == semantics.size) { "one semantics per layer id" }
@@ -330,4 +335,41 @@ object QuadraticEnergy : Semantics {
 object MlpBased : Semantics {
     override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double =
         sigmoid(logit(clampBase(base)) + net(attacks, supports))
+}
+
+/**
+ * Gated log-odds: the rule the deliberate credence benchmark selected
+ * (doc/research/deliberate-credence-bench, Tiers 1, 2 and 4). An argument's
+ * energy is `2·atanh(min(s·u(c), [cap]))`, where the gate
+ * `u(c) = max(0, 2·sigmoid(k·logit c) − 1)` keeps a doubted source (c ≤ ½)
+ * inert and lets a believed one count nearly in full, and the strength s caps
+ * what it can contribute. Each side aggregates by a 2-norm, so a duplicate
+ * counts √2 rather than 2 times and a flood of weak arguments grows like √n:
+ * `sigmoid(logit(base) + ‖S‖₂ − ‖A‖₂)`. Support and attack are weighted
+ * alike. Strength and credence arrive separately, as for [JeffreyNaiveBayes].
+ * Defaults k = 5, cap = 0.999; no fitted weights.
+ */
+class GatedLogOdds(val k: Double = 5.0, val cap: Double = 0.999) : Semantics {
+    init {
+        require(k > 0 && cap > 0 && cap < 1) { "glo needs k > 0 and 0 < cap < 1" }
+    }
+
+    /** `2·sigmoid(k·logit c) − 1` written without the logit, floored at 0: exact at c = 0 and c = 1. */
+    private fun gate(c: Double): Double {
+        val a = c.coerceIn(0.0, 1.0).pow(k)
+        val b = (1 - c.coerceIn(0.0, 1.0)).pow(k)
+        return maxOf(0.0, (a - b) / (a + b))
+    }
+
+    override fun energy(arg: Arg): Double {
+        val x = minOf(arg.strength.coerceIn(0.0, 1.0) * gate(arg.credence), cap)
+        return ln((1 + x) / (1 - x))
+    }
+
+    override fun combine(base: Double, attacks: List<Double>, supports: List<Double>): Double =
+        sigmoid(logit(clampBase(base)) + norm2(supports) - norm2(attacks))
+
+    private fun norm2(xs: List<Double>) = sqrt(xs.sumOf { it * it })
+
+    override fun toString() = "glo(k=$k, cap=$cap)"
 }

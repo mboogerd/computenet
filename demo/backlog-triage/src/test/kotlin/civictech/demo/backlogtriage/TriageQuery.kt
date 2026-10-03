@@ -30,8 +30,9 @@ import civictech.query.schema.RelationSchema
  * - Folding `prefs` into `score`/`votes` the way `contribs` does — winner `+1`, loser `-1`, one
  *   GroupBy avg / GroupBy count — would need a two-rule UNION (`wins ∪ losses`), and
  *   `PlanAnalyses.unionKey` is never key-preserving (PlanAnalyses.kt:166): an `@avg`/`@count`
- *   over it is `BAG_SEMANTICS_REQUIRED` (computenet-afnwl; that relaxation is parked, not worked
- *   around here).
+ *   over it is `BAG_SEMANTICS_REQUIRED` regardless of computenet-afnwl (decided, option (a):
+ *   refuse) — a union is never key-preserving either way, so this shape is not worked around
+ *   here.
  *
  * So the query below states the two one-sided tallies the language CAN express — `wins`
  * (grouped by winner) and `losses` (grouped by loser) — and [TriageQueryAgreementTest] applies
@@ -43,7 +44,7 @@ import civictech.query.schema.RelationSchema
  * retraction is app logic layered on top, not a pipeline invariant — see [TriageQuery]'s test
  * for why the churn generator doesn't emulate it). Both aggregates apply directly to a keyed
  * `Scan`, with no projection in front of it, so both compile independently of
- * computenet-afnwl's parked relaxation.
+ * computenet-afnwl's (decided) keyless-scan question.
  */
 object TriageQuery {
 
