@@ -3,12 +3,17 @@ package civictech.iroh.discover
 import civictech.cell.link.PeerId
 import civictech.iroh.IrohNode
 import civictech.iroh.IrohTransport
+import civictech.iroh.FakeSidecar
+import civictech.iroh.HelloGate
+import civictech.iroh.HostMessage
 import civictech.iroh.LinkDirection
 import civictech.iroh.MulticastGate
 import civictech.iroh.SidecarBinary
 import civictech.iroh.SidecarClient
+import civictech.iroh.SidecarMessage
 import civictech.iroh.SidecarProcess
 import civictech.iroh.SidecarProtocol
+import civictech.iroh.Verdict
 import civictech.iroh.await
 import civictech.iroh.quiesced
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -106,6 +111,43 @@ import kotlin.time.Duration.Companion.seconds
  * between two real endpoints on ONE host, nothing about a real LAN.
  */
 class MutualDialSidecarTest {
+
+    @Test
+    fun `a no-such-link ERROR answering CLOSE_LINK after a quiet close is not a link error`() {
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                val sidecar = object : IrohTransport.Sidecar {
+                    override val nodeId: ByteArray = ByteArray(SidecarProtocol.NODE_ID_LEN)
+                    override fun close() = Unit
+                }
+                val node = IrohNode(sidecar, client, sideWith(peer = PeerId("local")))
+                node.gate = HelloGate { _, _, _, _, _ -> Verdict.CloseQuietly("the mutual-dial tie-break loser") }
+                node.accept()
+                val remote = ByteArray(SidecarProtocol.NODE_ID_LEN) { (it + 1).toByte() }
+
+                fake.presentInbound(2, remote)
+                fake.hello1From(2)
+                assertEquals(
+                    HostMessage.CloseLink(2),
+                    fake.nextHostMessage(),
+                    "CloseQuietly writes CLOSE_LINK and no DATA; this is the host write that can race the peer's LINK_DOWN",
+                )
+
+                // The peer already closed the QUIC connection and the sidecar
+                // removed link 2, but its LINK_DOWN is still queued behind the
+                // reply to our CLOSE_LINK (computenet-amf8l's CI ordering).
+                fake.send(SidecarMessage.Failure(2, "no such link: 2"))
+                fake.send(SidecarMessage.LinkDown(2, "closed by peer"))
+                await("the accepted loser to go down") { node.links(remote).isEmpty() }
+
+                assertTrue(
+                    node.linkErrors.isEmpty(),
+                    "an ERROR answering our already-terminal CLOSE_LINK is the close/LINK_DOWN race, not a new link error: ${node.linkErrors}",
+                )
+                assertEquals(null, fake.pollHostMessage(500), "the close-race ERROR must not provoke another CLOSE_LINK")
+            }
+        }
+    }
 
     /**
      * Two parties, one release. [arrive] blocks until both have arrived (or
