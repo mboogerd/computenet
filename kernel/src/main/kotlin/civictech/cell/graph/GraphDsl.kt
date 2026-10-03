@@ -128,6 +128,12 @@ data class SpawnStep(
     val family: KeyedFamily? = null,
     /** Named durable inputs exposed for this journaled cell after application. */
     val inputs: Set<String> = emptySet(),
+    /**
+     * Placement selector resolved by the runtime placement driver against
+     * `Manifest.placements` (computenet-8k723); null reads as `default`. Not
+     * journaled: a node journals only the steps it applied.
+     */
+    val placement: String? = null,
 ) : GraphStep {
     init {
         if (family != null) {
@@ -171,8 +177,8 @@ data class DespawnStep(val handle: String) : GraphStep
  *   partition function; the actual `(logicalId, instanceId)` ref is minted fresh
  *   by [IdentityBinding.NewInstanceOf] on each replay (memberships/links are
  *   interest-determined, invariant to the minted ids).
- * - [placement] host-selector hint (recorded, routed by the multi-host replay
- *   driver — 93 I-15, driver unbuilt).
+ * - [placement] host-selector hint, threaded into the lowered [SpawnStep.placement]
+ *   and resolved by the runtime placement driver against the manifest (computenet-8k723).
  * - [journalId] the journal a `DURABLE` instance binds to; `null` ⇒ a
  *   journal-less host, refused for a durable cell at declaration ([InstanceSetStep.validate]).
  * - [frontierPolicy] the frontier-policy hint for this instance.
@@ -237,6 +243,7 @@ data class InstanceSetStep(
                 identity = IdentityBinding.NewInstanceOf(logicalId),
                 replicated = spec.replicated,
                 journalId = spec.journalId,
+                placement = spec.placement,
             )
         }
     }
@@ -808,6 +815,7 @@ class GraphBuilder private constructor(
         journalId: String? = null,
         shadow: Boolean = false,
         inputs: Set<String> = emptySet(),
+        placement: String? = null,
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
@@ -830,6 +838,7 @@ class GraphBuilder private constructor(
             journalId = journalId,
             shadow = shadow,
             inputs = inputs,
+            placement = placement,
         )
         val event = TopoEvent.Spawn(name, ref, factory, parent?.ref, replicated, journalId, shadow)
         context?.journalTopology(listOf(event))
