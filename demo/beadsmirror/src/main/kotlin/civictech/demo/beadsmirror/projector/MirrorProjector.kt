@@ -1,6 +1,8 @@
 package civictech.demo.beadsmirror.projector
 
 import civictech.cell.Timestamp
+import civictech.cell.Propagate
+import civictech.cell.StateRead
 import civictech.cell.data.OrMapCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
@@ -72,6 +74,10 @@ class MirrorProjector(
     val cell: OrMapCell<MirrorKey, String> = OrMapCell(),
     /** The projected dependency-edge set. Exposed so tests and later features can read/subscribe. */
     val edges: SetCell<MirrorEdge> = SetCell(),
+    /** Map-delta intake; a hosted proxy here keeps writes on the host's durable intake path. */
+    private val mapInlet: Propagate<TaggedMapDelta<MirrorKey, String>> = cell.deltaInlet.call,
+    /** Edge-delta intake; a hosted proxy here keeps writes on the host's durable intake path. */
+    private val edgeInlet: Propagate<SetDelta<MirrorEdge>> = edges.deltaInlet.call,
 ) {
 
     /**
@@ -100,7 +106,9 @@ class MirrorProjector(
         defects: SeededDefects,
         cell: OrMapCell<MirrorKey, String> = OrMapCell(),
         edges: SetCell<MirrorEdge> = SetCell(),
-    ) : this(minter, cell, edges) {
+        mapInlet: Propagate<TaggedMapDelta<MirrorKey, String>> = cell.deltaInlet.call,
+        edgeInlet: Propagate<SetDelta<MirrorEdge>> = edges.deltaInlet.call,
+    ) : this(minter, cell, edges, mapInlet, edgeInlet) {
         this.defects = defects
     }
 
@@ -143,6 +151,43 @@ class MirrorProjector(
      */
     private val mintedLiveEdges = mutableMapOf<MirrorEdge, MutableSet<Timestamp>>()
 
+    init {
+        reseedMintedLive()
+    }
+
+    /**
+     * Rebuild the projector's observed-live bookkeeping from recovered cell state.
+     *
+     * Only dots minted under this projector's stable [DotMinter.sourceId] belong
+     * here. Peer dots remain deliberately unobserved, so a local reset-remove
+     * leaves them live as `[24-TMAP-04]` requires. [OrMapCell.state] includes
+     * tombstoned puts, hence the explicit live-dot subtraction; [SetCell]'s
+     * bounded state is paged, so the edge walk follows every opaque cursor.
+     */
+    private fun reseedMintedLive() {
+        val mapState = cell.state()
+        mapState.puts.forEach { (key, dots) ->
+            val covered = mapState.dels[key].orEmpty()
+            val owned = dots.keys.filterTo(LinkedHashSet()) { dot ->
+                dot !in covered && dot.sourceId == minter.sourceId
+            }
+            if (owned.isNotEmpty()) mintedLive[key] = owned
+        }
+
+        var request = StateRead()
+        while (true) {
+            val page = edges.readBounded(request)
+            page.entries.filterIsInstance<SetCell.SetStateEntry<*>>().forEach { entry ->
+                val edge = entry.element as? MirrorEdge ?: return@forEach
+                val owned = entry.addTags.filterTo(LinkedHashSet()) { tag ->
+                    tag !in entry.delTags && tag.sourceId == minter.sourceId
+                }
+                if (owned.isNotEmpty()) mintedLiveEdges[edge] = owned
+            }
+            request = request.copy(cursor = page.next ?: break)
+        }
+    }
+
     /**
      * Apply one record. Returns the delta injected, or `null` when the record
      * was effective-nothing (an edge-only record, or a replay that re-minted
@@ -150,10 +195,10 @@ class MirrorProjector(
      */
     fun apply(record: ChangeRecord): TaggedMapDelta<MirrorKey, String>? {
         val delta = fieldDelta(record)
-        if (delta != null) cell.deltaInlet.call.propagate(delta)
+        if (delta != null) mapInlet.propagate(delta)
 
         val edgeChange = edgeDelta(record)
-        if (edgeChange != null) edges.deltaInlet.call.propagate(edgeChange)
+        if (edgeChange != null) edgeInlet.propagate(edgeChange)
 
         return delta
     }
