@@ -1,0 +1,2098 @@
+{
+    "version": 1,
+    "priors": [
+        {
+            "nodeId": "q0/d0",
+            "input": "818c95279f1b97f55477b44d",
+            "value": 0.49
+        },
+        {
+            "nodeId": "q0/d1",
+            "input": "770dc6837b6d71c43d4c8810",
+            "value": 0.8725
+        },
+        {
+            "nodeId": "q0/d1/support-0",
+            "input": "aa0ba4b5139574580f6a814f",
+            "value": 0.7275
+        },
+        {
+            "nodeId": "q0/d1/support-1",
+            "input": "986571f70cf9904c98aa2a73",
+            "value": 0.825
+        },
+        {
+            "nodeId": "q0/d1/support-2",
+            "input": "3af56a4f7b5fec19ae287e99",
+            "value": 0.7625
+        },
+        {
+            "nodeId": "q0/d1/support-3",
+            "input": "bee3d5e2821b9c70a62b6a4f",
+            "value": 0.8125
+        },
+        {
+            "nodeId": "q0/d1/support-4",
+            "input": "8cc5aa8211d7401b648afb25",
+            "value": 0.7675
+        },
+        {
+            "nodeId": "q0/d1/support-5",
+            "input": "1276d51f18860edece00fee4",
+            "value": 0.735
+        },
+        {
+            "nodeId": "q0/d2",
+            "input": "247415c1bcdfd7d34288ea6e",
+            "value": 0.695
+        },
+        {
+            "nodeId": "q0/d3",
+            "input": "1532b46a279212f354bb4158",
+            "value": 0.6775
+        },
+        {
+            "nodeId": "q0/d3/support-0",
+            "input": "1cb6feeb250402d26c62a6b0",
+            "value": 0.6775
+        },
+        {
+            "nodeId": "q0/d3/support-1",
+            "input": "118740aa7f464d9911421081",
+            "value": 0.765
+        },
+        {
+            "nodeId": "q0/d3/support-2",
+            "input": "07bcedbe78f622950028f298",
+            "value": 0.76
+        },
+        {
+            "nodeId": "q0/d3/support-3",
+            "input": "ddbe84c3340dfbec340147d8",
+            "value": 0.9175
+        },
+        {
+            "nodeId": "q0/d3/support-4",
+            "input": "e25b96c802d3bb89b3aaa24d",
+            "value": 0.7325
+        },
+        {
+            "nodeId": "q0/d3/support-5",
+            "input": "67179150c8e0ef73d4f1c54b",
+            "value": 0.705
+        },
+        {
+            "nodeId": "q0/d3/attack-0",
+            "input": "21674208bb081065a60a29ee",
+            "value": 0.68
+        },
+        {
+            "nodeId": "q0/d3/attack-1",
+            "input": "9e08160645bd1b84244a6d77",
+            "value": 0.89
+        },
+        {
+            "nodeId": "q0/d3/attack-2",
+            "input": "9d4b92ca89d8838a5ea60cd4",
+            "value": 0.7425
+        },
+        {
+            "nodeId": "q0/d3/attack-3",
+            "input": "2ff0cd65c59130eb49b85220",
+            "value": 0.5
+        },
+        {
+            "nodeId": "q0/d3/attack-4",
+            "input": "5d1cda24e1d8ad50ac75e16c",
+            "value": 0.725
+        },
+        {
+            "nodeId": "q0/d3/attack-5",
+            "input": "d69c60054dfcc211474838e9",
+            "value": 0.84
+        },
+        {
+            "nodeId": "q0/d3/attack-6",
+            "input": "981fabdd74065789634ebd69",
+            "value": 0.6875
+        },
+        {
+            "nodeId": "q0/d2/support-1",
+            "input": "05327217f57609cb8e0512eb",
+            "value": 0.805
+        },
+        {
+            "nodeId": "q0/d2/support-2",
+            "input": "2b728656b8deccc63d12681f",
+            "value": 0.68
+        },
+        {
+            "nodeId": "q0/d2/support-3",
+            "input": "b7c3ba25a68416af49d40bb3",
+            "value": 0.745
+        },
+        {
+            "nodeId": "q0/d2/support-4",
+            "input": "fca508d8c277145903a4647a",
+            "value": 0.805
+        },
+        {
+            "nodeId": "q0/d2/support-5",
+            "input": "c0d93d43e04cf39f97b3411b",
+            "value": 0.7
+        },
+        {
+            "nodeId": "q0/d2/support-6",
+            "input": "c5584d17a5ddcdbc762ab4e6",
+            "value": 0.805
+        },
+        {
+            "nodeId": "q0/d2/attack-0",
+            "input": "b93f51fff6f2d3a87c193ed6",
+            "value": 0.69
+        },
+        {
+            "nodeId": "q0/d2/attack-1",
+            "input": "01e7691f285b340d21686ec6",
+            "value": 0.72
+        },
+        {
+            "nodeId": "q0/d2/attack-2",
+            "input": "afb969b02770493cf2ae8a0c",
+            "value": 0.735
+        },
+        {
+            "nodeId": "q0/d2/attack-3",
+            "input": "21889df193a6bc82692cf15c",
+            "value": 0.3725
+        },
+        {
+            "nodeId": "q0/d2/attack-4",
+            "input": "58c52379a721da716f98f296",
+            "value": 0.725
+        },
+        {
+            "nodeId": "q0/d2/attack-5",
+            "input": "b7e6c23289c53c838acf09c5",
+            "value": 0.61
+        },
+        {
+            "nodeId": "q0/d2/attack-6",
+            "input": "e9a59d5fa9ab91fbc5861f25",
+            "value": 0.8225
+        },
+        {
+            "nodeId": "q0/d1/attack-1",
+            "input": "732a2f96c8b66ae9411771fc",
+            "value": 0.6525
+        },
+        {
+            "nodeId": "q0/d1/attack-2",
+            "input": "ef637f9b95d0637a2bed1584",
+            "value": 0.8975
+        },
+        {
+            "nodeId": "q0/d1/attack-3",
+            "input": "f99ed88cf1da36f55b350db9",
+            "value": 0.7025
+        },
+        {
+            "nodeId": "q0/d1/attack-4",
+            "input": "8f65a9655ba6b1bcb0e60f23",
+            "value": 0.8275
+        },
+        {
+            "nodeId": "q0/d1/attack-5",
+            "input": "04b5c259410168f003a9a6a9",
+            "value": 0.7525
+        },
+        {
+            "nodeId": "q0/d0/support-1",
+            "input": "d316f8a23bbcdc33503335cc",
+            "value": 0.72
+        },
+        {
+            "nodeId": "q0/d0/support-2",
+            "input": "d4500e64ac0ee6df0d5833ea",
+            "value": 0.7325
+        },
+        {
+            "nodeId": "q0/d0/support-3",
+            "input": "28ae2d6f503c6233132660b2",
+            "value": 0.7375
+        },
+        {
+            "nodeId": "q0/d0/support-4",
+            "input": "a2d76bef23a1de0b384acd6a",
+            "value": 0.8025
+        },
+        {
+            "nodeId": "q0/d0/support-5",
+            "input": "31e725017499520f41081429",
+            "value": 0.7
+        },
+        {
+            "nodeId": "q0/d0/support-6",
+            "input": "2154bc4969464c113dcd69ea",
+            "value": 0.8075
+        },
+        {
+            "nodeId": "q0/d0/attack-0",
+            "input": "8676d6a22804c81c1ec1f969",
+            "value": 0.81
+        },
+        {
+            "nodeId": "q0/d0/attack-1",
+            "input": "1c875147bf1ddb8ab52c2ec1",
+            "value": 0.5125
+        },
+        {
+            "nodeId": "q0/d0/attack-2",
+            "input": "498aa8c9fb40d9ae1265ffc0",
+            "value": 0.74
+        },
+        {
+            "nodeId": "q0/d0/attack-3",
+            "input": "70dfc6a9d6f66076d2d9053a",
+            "value": 0.765
+        },
+        {
+            "nodeId": "q0/d0/attack-4",
+            "input": "ab1aff16d1416f876ebd98a5",
+            "value": 0.88
+        },
+        {
+            "nodeId": "q0/d0/attack-5",
+            "input": "e413d3501c8caed18a321a42",
+            "value": 0.5575
+        },
+        {
+            "nodeId": "q0/d0/attack-6",
+            "input": "19634be378bbc7f0117e8788",
+            "value": 0.9525
+        },
+        {
+            "nodeId": "q0/d0/attack-7",
+            "input": "b952abb0dc5c9d5acb21ef95",
+            "value": 0.735
+        },
+        {
+            "nodeId": "q1/d0",
+            "input": "9a66bab8ea45272f5adc5a0c",
+            "value": 0.7625
+        },
+        {
+            "nodeId": "q1/d1",
+            "input": "44fc19645e0522b652a6f6ff",
+            "value": 0.825
+        },
+        {
+            "nodeId": "q1/d1/support-0",
+            "input": "1a9c15626c86c3ab73d2be51",
+            "value": 0.81
+        },
+        {
+            "nodeId": "q1/d1/support-1",
+            "input": "3481b7bc03754d0f6b44f3c4",
+            "value": 0.7525
+        },
+        {
+            "nodeId": "q1/d1/support-2",
+            "input": "52ec426439598a4ef7d7414f",
+            "value": 0.845
+        },
+        {
+            "nodeId": "q1/d1/support-3",
+            "input": "4afc5d20bd77a1106359a7d1",
+            "value": 0.75
+        },
+        {
+            "nodeId": "q1/d1/support-4",
+            "input": "8b0cfd9d7cdaeb70d210b262",
+            "value": 0.7125
+        },
+        {
+            "nodeId": "q1/d1/support-5",
+            "input": "23b82a1ed589cc1246af3f85",
+            "value": 0.7925
+        },
+        {
+            "nodeId": "q1/d1/support-6",
+            "input": "f1cf01a4e1e224072e023075",
+            "value": 0.805
+        },
+        {
+            "nodeId": "q1/d2",
+            "input": "db050a7208f9a3e927783154",
+            "value": 0.855
+        },
+        {
+            "nodeId": "q1/d3",
+            "input": "5ce88f922b06c9069c378401",
+            "value": 0.82
+        },
+        {
+            "nodeId": "q1/d3/support-0",
+            "input": "73515db5027defd94d1651ec",
+            "value": 0.77
+        },
+        {
+            "nodeId": "q1/d3/support-1",
+            "input": "071d86596abc08015fd53333",
+            "value": 0.91
+        },
+        {
+            "nodeId": "q1/d3/support-2",
+            "input": "20b2e9d380ef345e77ef444b",
+            "value": 0.8825
+        },
+        {
+            "nodeId": "q1/d3/support-3",
+            "input": "e2474a24bcb2cc0dd47b1699",
+            "value": 0.895
+        },
+        {
+            "nodeId": "q1/d3/support-4",
+            "input": "93c52364ffc1540b9b25486a",
+            "value": 0.75
+        },
+        {
+            "nodeId": "q1/d3/support-5",
+            "input": "19b82eca19550a2a8fe3e12f",
+            "value": 0.8275
+        },
+        {
+            "nodeId": "q1/d3/support-6",
+            "input": "485224dd6738746e3f8b32f5",
+            "value": 0.705
+        },
+        {
+            "nodeId": "q1/d3/support-7",
+            "input": "9751b14178686adbc5a82de1",
+            "value": 0.945
+        },
+        {
+            "nodeId": "q1/d3/attack-0",
+            "input": "d955e99a99fa0a13f637cdb1",
+            "value": 0.8025
+        },
+        {
+            "nodeId": "q1/d3/attack-1",
+            "input": "dd32c7c2a4a714199efe2d94",
+            "value": 0.8725
+        },
+        {
+            "nodeId": "q1/d3/attack-2",
+            "input": "0c6bc7306d56decfd31d36c0",
+            "value": 0.6775
+        },
+        {
+            "nodeId": "q1/d3/attack-3",
+            "input": "90d869b9a26239e06bd7bedf",
+            "value": 0.635
+        },
+        {
+            "nodeId": "q1/d3/attack-4",
+            "input": "1d803e5c35a6471bc077195b",
+            "value": 0.6775
+        },
+        {
+            "nodeId": "q1/d3/attack-5",
+            "input": "bbc9273867241f23a43b37e0",
+            "value": 0.54
+        },
+        {
+            "nodeId": "q1/d3/attack-6",
+            "input": "e356e0b3f6c249671344207c",
+            "value": 0.7475
+        },
+        {
+            "nodeId": "q1/d3/attack-7",
+            "input": "02b091d95c9a5e8cc4c615c5",
+            "value": 0.6625
+        },
+        {
+            "nodeId": "q1/d2/support-1",
+            "input": "eb03f04e1937078e256dd0bf",
+            "value": 0.87
+        },
+        {
+            "nodeId": "q1/d2/support-2",
+            "input": "269cffcfc52db72a6bf16d0e",
+            "value": 0.755
+        },
+        {
+            "nodeId": "q1/d2/support-3",
+            "input": "c5b33e5a9e61db6ad36332db",
+            "value": 0.8
+        },
+        {
+            "nodeId": "q1/d2/support-4",
+            "input": "cac605751c82765d514e0dda",
+            "value": 0.7025
+        },
+        {
+            "nodeId": "q1/d2/support-5",
+            "input": "857ef43541ea7a863ba3cb60",
+            "value": 0.85
+        },
+        {
+            "nodeId": "q1/d2/attack-0",
+            "input": "e53fa5472c7d6707008cb065",
+            "value": 0.72
+        },
+        {
+            "nodeId": "q1/d2/attack-1",
+            "input": "09606540befa70d3b8282d2e",
+            "value": 0.8275
+        },
+        {
+            "nodeId": "q1/d2/attack-2",
+            "input": "5a13bc115af8f654e49a762a",
+            "value": 0.86
+        },
+        {
+            "nodeId": "q1/d2/attack-3",
+            "input": "8d86d07028ac82cc0f6d9e6e",
+            "value": 0.875
+        },
+        {
+            "nodeId": "q1/d2/attack-4",
+            "input": "3674f1fe6667c8d3963a9da5",
+            "value": 0.745
+        },
+        {
+            "nodeId": "q1/d2/attack-5",
+            "input": "4bd37a752606e81a58910344",
+            "value": 0.8025
+        },
+        {
+            "nodeId": "q1/d1/attack-1",
+            "input": "1b4bd13a5d8a1f7e31774c61",
+            "value": 0.7575
+        },
+        {
+            "nodeId": "q1/d1/attack-2",
+            "input": "2c8a76a582e43b9a19bb8742",
+            "value": 0.6475
+        },
+        {
+            "nodeId": "q1/d1/attack-3",
+            "input": "b49ab7a2734c01faf172d357",
+            "value": 0.7975
+        },
+        {
+            "nodeId": "q1/d1/attack-4",
+            "input": "e43acb8bcf93f77522b85559",
+            "value": 0.6825
+        },
+        {
+            "nodeId": "q1/d1/attack-5",
+            "input": "cd81345ab3b77ab7fb8f2520",
+            "value": 0.755
+        },
+        {
+            "nodeId": "q1/d1/attack-6",
+            "input": "c937519542650d5ba2e7609a",
+            "value": 0.7975
+        },
+        {
+            "nodeId": "q1/d1/attack-7",
+            "input": "090456d5d40817d4a507283e",
+            "value": 0.6275
+        },
+        {
+            "nodeId": "q1/d0/support-1",
+            "input": "81adb9022a3f65d2356ed9b8",
+            "value": 0.7775
+        },
+        {
+            "nodeId": "q1/d0/support-2",
+            "input": "7170a092fb9c17e9765b3ffd",
+            "value": 0.7925
+        },
+        {
+            "nodeId": "q1/d0/support-3",
+            "input": "6e19744d4d2c67608deb5f94",
+            "value": 0.8225
+        },
+        {
+            "nodeId": "q1/d0/support-4",
+            "input": "c45d0d11404bccd4ce5e8b15",
+            "value": 0.715
+        },
+        {
+            "nodeId": "q1/d0/support-5",
+            "input": "fe98a111ff0a6fc8411efb9b",
+            "value": 0.75
+        },
+        {
+            "nodeId": "q1/d0/support-6",
+            "input": "4894cd8dcd0e96e97c7cc357",
+            "value": 0.7025
+        },
+        {
+            "nodeId": "q1/d0/attack-0",
+            "input": "1de47c4de79abd19ecffa347",
+            "value": 0.93
+        },
+        {
+            "nodeId": "q1/d0/attack-1",
+            "input": "7be7d02a4979c67db5b8ca88",
+            "value": 0.7025
+        },
+        {
+            "nodeId": "q1/d0/attack-2",
+            "input": "9e1bae68436dd665fb032106",
+            "value": 0.855
+        },
+        {
+            "nodeId": "q1/d0/attack-3",
+            "input": "7b58e84a2d3e37d5075807d9",
+            "value": 0.8525
+        },
+        {
+            "nodeId": "q1/d0/attack-4",
+            "input": "58a60ee58e288a99e8587178",
+            "value": 0.72
+        },
+        {
+            "nodeId": "q1/d0/attack-5",
+            "input": "e3fc7a1db4ca05a0e8db0664",
+            "value": 0.6225
+        },
+        {
+            "nodeId": "q1/d0/attack-6",
+            "input": "dead4f6d7189e8a51ef1555f",
+            "value": 0.89
+        },
+        {
+            "nodeId": "q2/d0",
+            "input": "9409ca14943bf9135f03f69a",
+            "value": 0.73
+        },
+        {
+            "nodeId": "q2/d1",
+            "input": "9f339fbfaefeb9ddfcfbf095",
+            "value": 0.6375
+        },
+        {
+            "nodeId": "q2/d1/support-0",
+            "input": "41b09bdff55a710deba2f845",
+            "value": 0.895
+        },
+        {
+            "nodeId": "q2/d1/support-1",
+            "input": "6fda1003fb67d0d16f555d3e",
+            "value": 0.82
+        },
+        {
+            "nodeId": "q2/d1/support-2",
+            "input": "aaeb823797daa25de90b5fce",
+            "value": 0.705
+        },
+        {
+            "nodeId": "q2/d1/support-3",
+            "input": "30ac3b25e7d5b99127508902",
+            "value": 0.7325
+        },
+        {
+            "nodeId": "q2/d1/support-4",
+            "input": "3f2e5dedf59546de33690347",
+            "value": 0.8775
+        },
+        {
+            "nodeId": "q2/d1/support-5",
+            "input": "cd411d1754dd68ea5bce80bf",
+            "value": 0.8175
+        },
+        {
+            "nodeId": "q2/d1/support-6",
+            "input": "d1ac4717f57fa5f72996154c",
+            "value": 0.655
+        },
+        {
+            "nodeId": "q2/d2",
+            "input": "ea1493fd59f7ae2ad9df9830",
+            "value": 0.6625
+        },
+        {
+            "nodeId": "q2/d3",
+            "input": "c0b7fdb46958b40e209945e2",
+            "value": 0.525
+        },
+        {
+            "nodeId": "q2/d3/support-0",
+            "input": "d464f877edb48a5f15bf9512",
+            "value": 0.62
+        },
+        {
+            "nodeId": "q2/d3/support-1",
+            "input": "922d6a88bc28ef2136165b1b",
+            "value": 0.5
+        },
+        {
+            "nodeId": "q2/d3/support-2",
+            "input": "02b29342b6544eb1fd46b25e",
+            "value": 0.845
+        },
+        {
+            "nodeId": "q2/d3/support-3",
+            "input": "8ca50ba819e9cf405cd48101",
+            "value": 0.81
+        },
+        {
+            "nodeId": "q2/d3/support-4",
+            "input": "16475b343ca4ebca493c67cd",
+            "value": 0.4075
+        },
+        {
+            "nodeId": "q2/d3/support-5",
+            "input": "e6fc3102ffc964c98736a089",
+            "value": 0.6525
+        },
+        {
+            "nodeId": "q2/d3/support-6",
+            "input": "50a0441adeade62752ad7576",
+            "value": 0.6725
+        },
+        {
+            "nodeId": "q2/d3/support-7",
+            "input": "a5a1f6addb45068013f2a4c2",
+            "value": 0.8525
+        },
+        {
+            "nodeId": "q2/d3/attack-0",
+            "input": "784a6ddb4f44729f8826e9cc",
+            "value": 0.775
+        },
+        {
+            "nodeId": "q2/d3/attack-1",
+            "input": "39fed1125383e2ac45ae1628",
+            "value": 0.605
+        },
+        {
+            "nodeId": "q2/d3/attack-2",
+            "input": "5cdb8cca61f48223ba2deed2",
+            "value": 0.9275
+        },
+        {
+            "nodeId": "q2/d3/attack-3",
+            "input": "0022071bd4dfdb2364170b53",
+            "value": 0.805
+        },
+        {
+            "nodeId": "q2/d3/attack-4",
+            "input": "07f032d9f0329aa24ffa2951",
+            "value": 0.5825
+        },
+        {
+            "nodeId": "q2/d3/attack-5",
+            "input": "c02f81f1a9441c36905a5015",
+            "value": 0.91
+        },
+        {
+            "nodeId": "q2/d3/attack-6",
+            "input": "2046e81448604cf77ea8ea8a",
+            "value": 0.8925
+        },
+        {
+            "nodeId": "q2/d2/support-1",
+            "input": "4dbf272248f35527d2948f6b",
+            "value": 0.8775
+        },
+        {
+            "nodeId": "q2/d2/support-2",
+            "input": "cc280654989ae682b95a392d",
+            "value": 0.765
+        },
+        {
+            "nodeId": "q2/d2/support-3",
+            "input": "339e0433f076d236845f63b0",
+            "value": 0.7725
+        },
+        {
+            "nodeId": "q2/d2/support-4",
+            "input": "611c2f52be72112f016e79a8",
+            "value": 0.56
+        },
+        {
+            "nodeId": "q2/d2/support-5",
+            "input": "584c533184626dea11f7518a",
+            "value": 0.7
+        },
+        {
+            "nodeId": "q2/d2/support-6",
+            "input": "00f8e24c6b2b4a10ad7c8aef",
+            "value": 0.875
+        },
+        {
+            "nodeId": "q2/d2/attack-0",
+            "input": "f9b4cca0e3f1eae80cac1dec",
+            "value": 0.885
+        },
+        {
+            "nodeId": "q2/d2/attack-1",
+            "input": "6f2ac46a8b370d8ad41285da",
+            "value": 0.7925
+        },
+        {
+            "nodeId": "q2/d2/attack-2",
+            "input": "1cb7323b076296ecd4b1aab1",
+            "value": 0.8025
+        },
+        {
+            "nodeId": "q2/d2/attack-3",
+            "input": "4d9578a4bc7668bea0909c3c",
+            "value": 0.705
+        },
+        {
+            "nodeId": "q2/d2/attack-4",
+            "input": "973416f90586c5af107cb386",
+            "value": 0.7425
+        },
+        {
+            "nodeId": "q2/d2/attack-5",
+            "input": "24a555697a08da890f5fb539",
+            "value": 0.625
+        },
+        {
+            "nodeId": "q2/d2/attack-6",
+            "input": "10c23aa8021a5def3e2234b1",
+            "value": 0.7575
+        },
+        {
+            "nodeId": "q2/d1/attack-1",
+            "input": "700c107bbf9542d73cd223b5",
+            "value": 0.945
+        },
+        {
+            "nodeId": "q2/d1/attack-2",
+            "input": "9328b576f90456537e1126fa",
+            "value": 0.7525
+        },
+        {
+            "nodeId": "q2/d1/attack-3",
+            "input": "dd5b5630913008ffac0e26a2",
+            "value": 0.9025
+        },
+        {
+            "nodeId": "q2/d1/attack-4",
+            "input": "6b82de9c2f584689fc4ace6a",
+            "value": 0.6675
+        },
+        {
+            "nodeId": "q2/d1/attack-5",
+            "input": "4480c6022bb6cac062bf4a84",
+            "value": 0.7075
+        },
+        {
+            "nodeId": "q2/d1/attack-6",
+            "input": "66f640e9b1fa10519de59c84",
+            "value": 0.65
+        },
+        {
+            "nodeId": "q2/d1/attack-7",
+            "input": "31c51878d304836863efb63b",
+            "value": 0.5825
+        },
+        {
+            "nodeId": "q2/d0/support-1",
+            "input": "d20022852179a06f01364bab",
+            "value": 0.88
+        },
+        {
+            "nodeId": "q2/d0/support-2",
+            "input": "b07bb7bbf04413828c489431",
+            "value": 0.9325
+        },
+        {
+            "nodeId": "q2/d0/support-3",
+            "input": "5e91de628e8e01bdfe8557ec",
+            "value": 0.75
+        },
+        {
+            "nodeId": "q2/d0/support-4",
+            "input": "83604ba6f4ca5e6d6d7a63f2",
+            "value": 0.8575
+        },
+        {
+            "nodeId": "q2/d0/support-5",
+            "input": "e74dd34195acaeac1a4cc1c7",
+            "value": 0.9
+        },
+        {
+            "nodeId": "q2/d0/attack-0",
+            "input": "2d7094cdd5e5565c399ff2b6",
+            "value": 0.71
+        },
+        {
+            "nodeId": "q2/d0/attack-1",
+            "input": "66d8afd5db255be38e53ae00",
+            "value": 0.71
+        },
+        {
+            "nodeId": "q2/d0/attack-2",
+            "input": "87470bcc4ff08a83abf58b1b",
+            "value": 0.7825
+        },
+        {
+            "nodeId": "q2/d0/attack-3",
+            "input": "e139d52b72565a0c60bf860e",
+            "value": 0.865
+        },
+        {
+            "nodeId": "q2/d0/attack-4",
+            "input": "5b4d94644d1b9434e62c5ee8",
+            "value": 0.4675
+        },
+        {
+            "nodeId": "q2/d0/attack-5",
+            "input": "f9a7bfdeab93abbf141cbfcf",
+            "value": 0.52
+        },
+        {
+            "nodeId": "q2/d0/attack-6",
+            "input": "589d7d477bffe98abaac73c3",
+            "value": 0.8725
+        },
+        {
+            "nodeId": "q2/d0/attack-7",
+            "input": "49ba42758f6164da77a3a118",
+            "value": 0.7825
+        }
+    ],
+    "strengths": [
+        {
+            "edgeId": "q0/d0/support-0",
+            "input": "b77c59c39ac2090f48e22417",
+            "value": 0.7425
+        },
+        {
+            "edgeId": "q0/d0/support-1",
+            "input": "c75bd3fb02ca57ff2bb8353f",
+            "value": 0.735
+        },
+        {
+            "edgeId": "q0/d0/support-2",
+            "input": "35c9ba69e9901ed13a1a4f80",
+            "value": 0.575
+        },
+        {
+            "edgeId": "q0/d0/support-3",
+            "input": "47b23e7078bf58ece4fddc33",
+            "value": 0.57
+        },
+        {
+            "edgeId": "q0/d0/support-4",
+            "input": "81fc89fd22307fd784e4fd61",
+            "value": 0.5075
+        },
+        {
+            "edgeId": "q0/d0/support-5",
+            "input": "b29dae6fa194ba74e1973474",
+            "value": 0.6025
+        },
+        {
+            "edgeId": "q0/d0/support-6",
+            "input": "b62ccc44706f5fd07855d378",
+            "value": 0.67
+        },
+        {
+            "edgeId": "q0/d0/attack-0",
+            "input": "f372b08ad8dacf3bfb615a50",
+            "value": 0.73
+        },
+        {
+            "edgeId": "q0/d0/attack-1",
+            "input": "b2f18cf1f5d3d401b13bf5e4",
+            "value": 0.6525
+        },
+        {
+            "edgeId": "q0/d0/attack-2",
+            "input": "9158455611e02a6cdfdac3ed",
+            "value": 0.6175
+        },
+        {
+            "edgeId": "q0/d0/attack-3",
+            "input": "d00ddeb0083bb1daff4d1c54",
+            "value": 0.69
+        },
+        {
+            "edgeId": "q0/d0/attack-4",
+            "input": "8ba4459e07de46a373c7e402",
+            "value": 0.7
+        },
+        {
+            "edgeId": "q0/d0/attack-5",
+            "input": "ffde3632f9320e42e7551121",
+            "value": 0.645
+        },
+        {
+            "edgeId": "q0/d0/attack-6",
+            "input": "4c61a4e97bfd2edf7652d415",
+            "value": 0.5875
+        },
+        {
+            "edgeId": "q0/d0/attack-7",
+            "input": "5e79973d6ba9fefc7100bdbe",
+            "value": 0.5025
+        },
+        {
+            "edgeId": "q0/d1/support-0",
+            "input": "ddfbc118e178634d2f57f5b5",
+            "value": 0.635
+        },
+        {
+            "edgeId": "q0/d1/support-1",
+            "input": "e148e0fa2c4250a7b326d2e6",
+            "value": 0.755
+        },
+        {
+            "edgeId": "q0/d1/support-2",
+            "input": "44b4fcbc5b724b4f6258d126",
+            "value": 0.6975
+        },
+        {
+            "edgeId": "q0/d1/support-3",
+            "input": "6b79d5a758d8cd29dc846d59",
+            "value": 0.7475
+        },
+        {
+            "edgeId": "q0/d1/support-4",
+            "input": "14365db434532133e691c169",
+            "value": 0.6625
+        },
+        {
+            "edgeId": "q0/d1/support-5",
+            "input": "c8104162cc2b617d5c551df9",
+            "value": 0.725
+        },
+        {
+            "edgeId": "q0/d1/attack-0",
+            "input": "204b4028f135495a4a427722",
+            "value": 0.6975
+        },
+        {
+            "edgeId": "q0/d1/attack-1",
+            "input": "40d3082142253c56730ac801",
+            "value": 0.7075
+        },
+        {
+            "edgeId": "q0/d1/attack-2",
+            "input": "1b8592500514be030d7df643",
+            "value": 0.36
+        },
+        {
+            "edgeId": "q0/d1/attack-3",
+            "input": "27deab53e79a1ea611e61a53",
+            "value": 0.7
+        },
+        {
+            "edgeId": "q0/d1/attack-4",
+            "input": "1008eee0168cdc02ec284a4d",
+            "value": 0.585
+        },
+        {
+            "edgeId": "q0/d1/attack-5",
+            "input": "142326dac0a59a3bebce3c43",
+            "value": 0.5675
+        },
+        {
+            "edgeId": "q0/d2/support-0",
+            "input": "2e8b30656fe2fb3f46cc0daa",
+            "value": 0.7575
+        },
+        {
+            "edgeId": "q0/d2/support-1",
+            "input": "6e8716f62804e8883dc8e244",
+            "value": 0.7125
+        },
+        {
+            "edgeId": "q0/d2/support-2",
+            "input": "33097ae72c7ae62c83eda857",
+            "value": 0.7
+        },
+        {
+            "edgeId": "q0/d2/support-3",
+            "input": "76f426be6c609f224696f6d9",
+            "value": 0.6625
+        },
+        {
+            "edgeId": "q0/d2/support-4",
+            "input": "8c3ba964dc4f335f802a558a",
+            "value": 0.735
+        },
+        {
+            "edgeId": "q0/d2/support-5",
+            "input": "fd9e4c38e7bc58ec71ee40d8",
+            "value": 0.7
+        },
+        {
+            "edgeId": "q0/d2/support-6",
+            "input": "a286d266c67b0b0e33ebc254",
+            "value": 0.7275
+        },
+        {
+            "edgeId": "q0/d2/attack-0",
+            "input": "c1e6968eea194f6ac6ba9611",
+            "value": 0.685
+        },
+        {
+            "edgeId": "q0/d2/attack-1",
+            "input": "5a0fe313ec270e34eaddc1c0",
+            "value": 0.2775
+        },
+        {
+            "edgeId": "q0/d2/attack-2",
+            "input": "e12b3a5e412b9c66a69b615a",
+            "value": 0.525
+        },
+        {
+            "edgeId": "q0/d2/attack-3",
+            "input": "ed62dd2744c77241f2908369",
+            "value": 0.5875
+        },
+        {
+            "edgeId": "q0/d2/attack-4",
+            "input": "f732691d076e3203a0a63894",
+            "value": 0.6125
+        },
+        {
+            "edgeId": "q0/d2/attack-5",
+            "input": "b0fd8990e58ec1f1342c5d34",
+            "value": 0.575
+        },
+        {
+            "edgeId": "q0/d2/attack-6",
+            "input": "e2ae434485c38dfcfd3a7fec",
+            "value": 0.615
+        },
+        {
+            "edgeId": "q0/d3/support-0",
+            "input": "79e67f11f71039874756e115",
+            "value": 0.7225
+        },
+        {
+            "edgeId": "q0/d3/support-1",
+            "input": "b9ecdb219e75208273044b85",
+            "value": 0.6475
+        },
+        {
+            "edgeId": "q0/d3/support-2",
+            "input": "effa2dfde9263a854ec6fd06",
+            "value": 0.6975
+        },
+        {
+            "edgeId": "q0/d3/support-3",
+            "input": "edbea489cd6dbc8bd9ec10d6",
+            "value": 0.67
+        },
+        {
+            "edgeId": "q0/d3/support-4",
+            "input": "9a3f3425923c6d175a989477",
+            "value": 0.6725
+        },
+        {
+            "edgeId": "q0/d3/support-5",
+            "input": "a66f1589294c227372620eab",
+            "value": 0.6225
+        },
+        {
+            "edgeId": "q0/d3/attack-0",
+            "input": "9cc6e638965b1b0946f9a912",
+            "value": 0.615
+        },
+        {
+            "edgeId": "q0/d3/attack-1",
+            "input": "d03351c8a5d2d21c501c6bdb",
+            "value": 0.6425
+        },
+        {
+            "edgeId": "q0/d3/attack-2",
+            "input": "3f1031f6dc39f485ce301003",
+            "value": 0.475
+        },
+        {
+            "edgeId": "q0/d3/attack-3",
+            "input": "454931e12982e9c2e2427508",
+            "value": 0.605
+        },
+        {
+            "edgeId": "q0/d3/attack-4",
+            "input": "f721e93db23f98e0cd73c8a8",
+            "value": 0.5725
+        },
+        {
+            "edgeId": "q0/d3/attack-5",
+            "input": "4249b1c2516fa06ec997b79a",
+            "value": 0.5775
+        },
+        {
+            "edgeId": "q0/d3/attack-6",
+            "input": "6e369154b57ba38f432bebac",
+            "value": 0.4675
+        },
+        {
+            "edgeId": "q1/d0/support-0",
+            "input": "ba81488390d27fb6ae5cc8e0",
+            "value": 0.7975
+        },
+        {
+            "edgeId": "q1/d0/support-1",
+            "input": "39e616271de06828925f313b",
+            "value": 0.705
+        },
+        {
+            "edgeId": "q1/d0/support-2",
+            "input": "fad11ab30eccd8aacbacc575",
+            "value": 0.5225
+        },
+        {
+            "edgeId": "q1/d0/support-3",
+            "input": "b6af56b548b2569621fe186f",
+            "value": 0.7775
+        },
+        {
+            "edgeId": "q1/d0/support-4",
+            "input": "a87dd45db5d1c10255446ef3",
+            "value": 0.6425
+        },
+        {
+            "edgeId": "q1/d0/support-5",
+            "input": "d22c9ff468965242a51f54ee",
+            "value": 0.5425
+        },
+        {
+            "edgeId": "q1/d0/support-6",
+            "input": "8f17f7b455693cc6f67c26b5",
+            "value": 0.7675
+        },
+        {
+            "edgeId": "q1/d0/attack-0",
+            "input": "7b2b6256ffe7be07530fda42",
+            "value": 0.65
+        },
+        {
+            "edgeId": "q1/d0/attack-1",
+            "input": "6104821fbdcd98829cda9009",
+            "value": 0.5575
+        },
+        {
+            "edgeId": "q1/d0/attack-2",
+            "input": "5766d1141dc260eb405e850b",
+            "value": 0.605
+        },
+        {
+            "edgeId": "q1/d0/attack-3",
+            "input": "5d4bf8f537468c80be8c2eee",
+            "value": 0.4575
+        },
+        {
+            "edgeId": "q1/d0/attack-4",
+            "input": "e3b8435a7d9315234c581b7b",
+            "value": 0.61
+        },
+        {
+            "edgeId": "q1/d0/attack-5",
+            "input": "e536e430899197a8cdec52db",
+            "value": 0.6475
+        },
+        {
+            "edgeId": "q1/d0/attack-6",
+            "input": "7ab75341e49cddc68787eb26",
+            "value": 0.45
+        },
+        {
+            "edgeId": "q1/d1/support-0",
+            "input": "5f9488120c8e73350cf37cb6",
+            "value": 0.785
+        },
+        {
+            "edgeId": "q1/d1/support-1",
+            "input": "07e0c4cd54c8c6cfd10e0100",
+            "value": 0.6475
+        },
+        {
+            "edgeId": "q1/d1/support-2",
+            "input": "217e708ac868ba86df9941af",
+            "value": 0.695
+        },
+        {
+            "edgeId": "q1/d1/support-3",
+            "input": "db1fe28165d677dfa9416d78",
+            "value": 0.5175
+        },
+        {
+            "edgeId": "q1/d1/support-4",
+            "input": "6574450adcb30a7f23c34872",
+            "value": 0.6675
+        },
+        {
+            "edgeId": "q1/d1/support-5",
+            "input": "3e3413f164e2ee789aabf8c9",
+            "value": 0.735
+        },
+        {
+            "edgeId": "q1/d1/support-6",
+            "input": "1db91c30a552d723526a2d89",
+            "value": 0.6575
+        },
+        {
+            "edgeId": "q1/d1/attack-0",
+            "input": "171857e2169aa2b50b604d39",
+            "value": 0.6275
+        },
+        {
+            "edgeId": "q1/d1/attack-1",
+            "input": "a6065540cac886c272360400",
+            "value": 0.6775
+        },
+        {
+            "edgeId": "q1/d1/attack-2",
+            "input": "100d8c582136d325ad7850ce",
+            "value": 0.685
+        },
+        {
+            "edgeId": "q1/d1/attack-3",
+            "input": "21d5e2f47e940c8c9cf1f256",
+            "value": 0.6475
+        },
+        {
+            "edgeId": "q1/d1/attack-4",
+            "input": "b6e1e6579b9ab49e3610d8e5",
+            "value": 0.6475
+        },
+        {
+            "edgeId": "q1/d1/attack-5",
+            "input": "70128076f9c9c3ae2668bc88",
+            "value": 0.665
+        },
+        {
+            "edgeId": "q1/d1/attack-6",
+            "input": "895fccf72cd7457fdd698527",
+            "value": 0.6925
+        },
+        {
+            "edgeId": "q1/d1/attack-7",
+            "input": "acdd3bdfa051b219ad1ee627",
+            "value": 0.655
+        },
+        {
+            "edgeId": "q1/d2/support-0",
+            "input": "e7ffe16518b681b15a28025d",
+            "value": 0.7575
+        },
+        {
+            "edgeId": "q1/d2/support-1",
+            "input": "e2def96c3dc945bcd7b8a71a",
+            "value": 0.76
+        },
+        {
+            "edgeId": "q1/d2/support-2",
+            "input": "f117abaa787c70e90627b11c",
+            "value": 0.6875
+        },
+        {
+            "edgeId": "q1/d2/support-3",
+            "input": "2cc165a88cb561d95f384b67",
+            "value": 0.64
+        },
+        {
+            "edgeId": "q1/d2/support-4",
+            "input": "9fabd1ce2717496007657f16",
+            "value": 0.675
+        },
+        {
+            "edgeId": "q1/d2/support-5",
+            "input": "bf4a2316fbb638d478da0d3b",
+            "value": 0.69
+        },
+        {
+            "edgeId": "q1/d2/attack-0",
+            "input": "ac265d989f5051f64753261f",
+            "value": 0.665
+        },
+        {
+            "edgeId": "q1/d2/attack-1",
+            "input": "59fd05e70381dc1821caf1cb",
+            "value": 0.5825
+        },
+        {
+            "edgeId": "q1/d2/attack-2",
+            "input": "62b254c77077b3f666a8da1b",
+            "value": 0.5675
+        },
+        {
+            "edgeId": "q1/d2/attack-3",
+            "input": "e020da4ca8d17828680adf61",
+            "value": 0.3675
+        },
+        {
+            "edgeId": "q1/d2/attack-4",
+            "input": "e555635a9240124af154b1ac",
+            "value": 0.6075
+        },
+        {
+            "edgeId": "q1/d2/attack-5",
+            "input": "ec87898b91e0c7028520a24f",
+            "value": 0.54
+        },
+        {
+            "edgeId": "q1/d3/support-0",
+            "input": "2fd49864fb75d3bcf1298a1b",
+            "value": 0.6875
+        },
+        {
+            "edgeId": "q1/d3/support-1",
+            "input": "463429fb5519776868481abb",
+            "value": 0.605
+        },
+        {
+            "edgeId": "q1/d3/support-2",
+            "input": "135f45f6ea496e2644784d93",
+            "value": 0.6425
+        },
+        {
+            "edgeId": "q1/d3/support-3",
+            "input": "58f73e1c8ee582bedf82a1e5",
+            "value": 0.6325
+        },
+        {
+            "edgeId": "q1/d3/support-4",
+            "input": "9a592a45ca10f77318c7dcde",
+            "value": 0.76
+        },
+        {
+            "edgeId": "q1/d3/support-5",
+            "input": "4a28dfaae9c5e1468083e2b8",
+            "value": 0.6025
+        },
+        {
+            "edgeId": "q1/d3/support-6",
+            "input": "f4f2aff5408cfa31336631c6",
+            "value": 0.64
+        },
+        {
+            "edgeId": "q1/d3/support-7",
+            "input": "b4840ee1d734009b16e6b659",
+            "value": 0.6525
+        },
+        {
+            "edgeId": "q1/d3/attack-0",
+            "input": "dcee1c0117deda5abd8e3785",
+            "value": 0.435
+        },
+        {
+            "edgeId": "q1/d3/attack-1",
+            "input": "f690463390ddcf4d06c6ad18",
+            "value": 0.3425
+        },
+        {
+            "edgeId": "q1/d3/attack-2",
+            "input": "36a76a6b11d4075630339544",
+            "value": 0.3325
+        },
+        {
+            "edgeId": "q1/d3/attack-3",
+            "input": "a193aefb00879bb6d79690eb",
+            "value": 0.3025
+        },
+        {
+            "edgeId": "q1/d3/attack-4",
+            "input": "23aa8848b762a5f61f19cbe9",
+            "value": 0.4175
+        },
+        {
+            "edgeId": "q1/d3/attack-5",
+            "input": "b2db8bb32646221010161865",
+            "value": 0.3525
+        },
+        {
+            "edgeId": "q1/d3/attack-6",
+            "input": "581b611d9a0515cec5611d93",
+            "value": 0.5725
+        },
+        {
+            "edgeId": "q1/d3/attack-7",
+            "input": "a6801ee005895576b4dcfed4",
+            "value": 0.1425
+        },
+        {
+            "edgeId": "q2/d0/support-0",
+            "input": "cb7a1e647f2a804413e8b17a",
+            "value": 0.77
+        },
+        {
+            "edgeId": "q2/d0/support-1",
+            "input": "3bd7ac24f12e534157d8e916",
+            "value": 0.72
+        },
+        {
+            "edgeId": "q2/d0/support-2",
+            "input": "c0313a492abd1a1e572a28de",
+            "value": 0.7375
+        },
+        {
+            "edgeId": "q2/d0/support-3",
+            "input": "b73d7bb5c544e93c14a59288",
+            "value": 0.7175
+        },
+        {
+            "edgeId": "q2/d0/support-4",
+            "input": "37c0982b434032fda628d96f",
+            "value": 0.6575
+        },
+        {
+            "edgeId": "q2/d0/support-5",
+            "input": "56e3bccafa3d9cda21752aed",
+            "value": 0.685
+        },
+        {
+            "edgeId": "q2/d0/attack-0",
+            "input": "d125259531599994b905772e",
+            "value": 0.31
+        },
+        {
+            "edgeId": "q2/d0/attack-1",
+            "input": "852d6d1ca47ed55fef1a821c",
+            "value": 0.3875
+        },
+        {
+            "edgeId": "q2/d0/attack-2",
+            "input": "2ea2a5b418153a060603535d",
+            "value": 0.285
+        },
+        {
+            "edgeId": "q2/d0/attack-3",
+            "input": "af6117c2138477105493cb93",
+            "value": 0.385
+        },
+        {
+            "edgeId": "q2/d0/attack-4",
+            "input": "b4c3f0a30d6a518ef9e7dfba",
+            "value": 0.175
+        },
+        {
+            "edgeId": "q2/d0/attack-5",
+            "input": "58bfadbf8c2965972506911f",
+            "value": 0.475
+        },
+        {
+            "edgeId": "q2/d0/attack-6",
+            "input": "363bd290f96ad4d81fb4528c",
+            "value": 0.3425
+        },
+        {
+            "edgeId": "q2/d0/attack-7",
+            "input": "e013d428bbd25313aaba59f9",
+            "value": 0.2825
+        },
+        {
+            "edgeId": "q2/d1/support-0",
+            "input": "769153437965be2b0ce8afba",
+            "value": 0.695
+        },
+        {
+            "edgeId": "q2/d1/support-1",
+            "input": "d5b7456ffaa6b2ec49dbb17b",
+            "value": 0.7325
+        },
+        {
+            "edgeId": "q2/d1/support-2",
+            "input": "28f6de4a5c30c991f057bd46",
+            "value": 0.615
+        },
+        {
+            "edgeId": "q2/d1/support-3",
+            "input": "3a1c7112293f62ba192e11c5",
+            "value": 0.54
+        },
+        {
+            "edgeId": "q2/d1/support-4",
+            "input": "07c9fcbcfbe9cc2e03bf3ab5",
+            "value": 0.5125
+        },
+        {
+            "edgeId": "q2/d1/support-5",
+            "input": "5c7bf2a66a349acb6e705bd3",
+            "value": 0.54
+        },
+        {
+            "edgeId": "q2/d1/support-6",
+            "input": "39a5b6cebe2349c4ebb1f2fe",
+            "value": 0.5925
+        },
+        {
+            "edgeId": "q2/d1/attack-0",
+            "input": "c538f128417b0234f4e0a258",
+            "value": 0.6825
+        },
+        {
+            "edgeId": "q2/d1/attack-1",
+            "input": "12d05a6bc47d4214ccca59b0",
+            "value": 0.785
+        },
+        {
+            "edgeId": "q2/d1/attack-2",
+            "input": "8bc7e59f95b0ed6fe8c3d390",
+            "value": 0.655
+        },
+        {
+            "edgeId": "q2/d1/attack-3",
+            "input": "c8c54075583ab15dda8d4700",
+            "value": 0.3875
+        },
+        {
+            "edgeId": "q2/d1/attack-4",
+            "input": "102cf860bd5dc8ffb29fbd95",
+            "value": 0.425
+        },
+        {
+            "edgeId": "q2/d1/attack-5",
+            "input": "5e08f537483f2c666dd632f1",
+            "value": 0.6275
+        },
+        {
+            "edgeId": "q2/d1/attack-6",
+            "input": "01ac71cae0c5b8a645ff4091",
+            "value": 0.73
+        },
+        {
+            "edgeId": "q2/d1/attack-7",
+            "input": "dd8bfbcc9b7ab3a5b7b61205",
+            "value": 0.49
+        },
+        {
+            "edgeId": "q2/d2/support-0",
+            "input": "e1e4344de7e87386c1eacce0",
+            "value": 0.74
+        },
+        {
+            "edgeId": "q2/d2/support-1",
+            "input": "46b3c9e155bee78dfa913339",
+            "value": 0.3125
+        },
+        {
+            "edgeId": "q2/d2/support-2",
+            "input": "ba85dce0dc47c017b4f041e8",
+            "value": 0.5825
+        },
+        {
+            "edgeId": "q2/d2/support-3",
+            "input": "3d739cd34a7c08989d985286",
+            "value": 0.6
+        },
+        {
+            "edgeId": "q2/d2/support-4",
+            "input": "881e1789ad97a1a88e9a605b",
+            "value": 0.51
+        },
+        {
+            "edgeId": "q2/d2/support-5",
+            "input": "e32c77512dc7fb6785e825f3",
+            "value": 0.5625
+        },
+        {
+            "edgeId": "q2/d2/support-6",
+            "input": "cf4b4c0f87c1b7e7931787e9",
+            "value": 0.5075
+        },
+        {
+            "edgeId": "q2/d2/attack-0",
+            "input": "129babf94bd57a33e1adaab9",
+            "value": 0.74
+        },
+        {
+            "edgeId": "q2/d2/attack-1",
+            "input": "b1ac60487879df81ade9d7b4",
+            "value": 0.69
+        },
+        {
+            "edgeId": "q2/d2/attack-2",
+            "input": "f3a571ebf321dab8428e825e",
+            "value": 0.685
+        },
+        {
+            "edgeId": "q2/d2/attack-3",
+            "input": "0256d1ce59d1da3e1677ac8e",
+            "value": 0.605
+        },
+        {
+            "edgeId": "q2/d2/attack-4",
+            "input": "2fc4a03bfd6862efdaa16c39",
+            "value": 0.6675
+        },
+        {
+            "edgeId": "q2/d2/attack-5",
+            "input": "c9cdb700b2f5d3edaf81eecf",
+            "value": 0.5675
+        },
+        {
+            "edgeId": "q2/d2/attack-6",
+            "input": "bc6c059b8bd98333dbef9f4a",
+            "value": 0.6975
+        },
+        {
+            "edgeId": "q2/d3/support-0",
+            "input": "da54cfd6589fedac794b2a08",
+            "value": 0.555
+        },
+        {
+            "edgeId": "q2/d3/support-1",
+            "input": "909153636662f23a3cfab3ad",
+            "value": 0.4875
+        },
+        {
+            "edgeId": "q2/d3/support-2",
+            "input": "c3a4b98d5dc89ec595ecf099",
+            "value": 0.6775
+        },
+        {
+            "edgeId": "q2/d3/support-3",
+            "input": "f99d860e3aa8fb48c75f45b8",
+            "value": 0.72
+        },
+        {
+            "edgeId": "q2/d3/support-4",
+            "input": "6fe68c794a2e04fefd8b6dff",
+            "value": 0.4325
+        },
+        {
+            "edgeId": "q2/d3/support-5",
+            "input": "ed85043bfba86dbaeea91e0a",
+            "value": 0.5625
+        },
+        {
+            "edgeId": "q2/d3/support-6",
+            "input": "bde0d25a00ddc8d37fde15ff",
+            "value": 0.58
+        },
+        {
+            "edgeId": "q2/d3/support-7",
+            "input": "cce80561569d71c3271a7d84",
+            "value": 0.5175
+        },
+        {
+            "edgeId": "q2/d3/attack-0",
+            "input": "d4b9a837b63cf7d6e64a808f",
+            "value": 0.755
+        },
+        {
+            "edgeId": "q2/d3/attack-1",
+            "input": "eb548aab65029cc0a7479805",
+            "value": 0.65
+        },
+        {
+            "edgeId": "q2/d3/attack-2",
+            "input": "318c619bc1beb8cf2c96cfbe",
+            "value": 0.6975
+        },
+        {
+            "edgeId": "q2/d3/attack-3",
+            "input": "b1fd97c8b57a741535a8d7af",
+            "value": 0.7375
+        },
+        {
+            "edgeId": "q2/d3/attack-4",
+            "input": "f6bd8aa6dfb3e2bdf6267aa1",
+            "value": 0.5825
+        },
+        {
+            "edgeId": "q2/d3/attack-5",
+            "input": "fbf206073398335b3103904b",
+            "value": 0.7275
+        },
+        {
+            "edgeId": "q2/d3/attack-6",
+            "input": "0bf43a4eee8ca76092e38139",
+            "value": 0.5625
+        }
+    ],
+    "reassessments": [
+        {
+            "scenario": "actual",
+            "nodeId": "q0/d3",
+            "input": "de10fe45f392d7f05ef12863",
+            "considered": 0.5925,
+            "argumentsOnly": 0.6075,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1601,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q0/d2",
+            "input": "e64f7b11bc1f8eb33863b86e",
+            "considered": 0.6925,
+            "argumentsOnly": 0.7125,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1614,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q0/d1",
+            "input": "3815fdf94232902635018a58",
+            "considered": 0.7375,
+            "argumentsOnly": 0.705,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1466,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q0/d0",
+            "input": "86c801beef081f02fa6e9f17",
+            "considered": 0.42,
+            "argumentsOnly": 0.445,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1537,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q1/d3",
+            "input": "66ff3692aef81cf74139035a",
+            "considered": 0.74,
+            "argumentsOnly": 0.74,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1846,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q1/d2",
+            "input": "17b3825030c7115d00d58719",
+            "considered": 0.6625,
+            "argumentsOnly": 0.6425,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1537,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q1/d1",
+            "input": "0a10bdb7116a127787a630a3",
+            "considered": 0.7175,
+            "argumentsOnly": 0.69,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1741,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q1/d0",
+            "input": "d872664415b5688c1c740740",
+            "considered": 0.735,
+            "argumentsOnly": 0.705,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1549,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q2/d3",
+            "input": "c6da3cd80335120041305436",
+            "considered": 0.4925,
+            "argumentsOnly": 0.4975,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1858,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q2/d2",
+            "input": "4d73ce8b4721547b1abd4f54",
+            "considered": 0.395,
+            "argumentsOnly": 0.3975,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1683,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q2/d1",
+            "input": "5052e51e78de8c4241948e4e",
+            "considered": 0.635,
+            "argumentsOnly": 0.6175,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1744,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "actual",
+            "nodeId": "q2/d0",
+            "input": "24972b016290d6e772cfeda6",
+            "considered": 0.7525,
+            "argumentsOnly": 0.7525,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1583,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-1",
+            "nodeId": "q0/d0",
+            "input": "292e0c0bbe1a4026bcb8a219",
+            "considered": 0.4775,
+            "argumentsOnly": 0.47,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1537,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-1",
+            "nodeId": "q1/d0",
+            "input": "b0c2d093e690b62baf8ce38c",
+            "considered": 0.7375,
+            "argumentsOnly": 0.7225,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1548,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-1",
+            "nodeId": "q2/d0",
+            "input": "85929dc59a46cc95663097c1",
+            "considered": 0.7525,
+            "argumentsOnly": 0.75,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1584,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-2",
+            "nodeId": "q0/d1",
+            "input": "b3009cf4a85d51e48989fd0e",
+            "considered": 0.7325,
+            "argumentsOnly": 0.705,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1465,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-2",
+            "nodeId": "q0/d0",
+            "input": "15862e28654a8f5fbc8fb2d8",
+            "considered": 0.43,
+            "argumentsOnly": 0.44,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1537,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-2",
+            "nodeId": "q1/d1",
+            "input": "bde693a75b98b882d2122794",
+            "considered": 0.7175,
+            "argumentsOnly": 0.6925,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1740,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-2",
+            "nodeId": "q1/d0",
+            "input": "d872664415b5688c1c740740",
+            "considered": 0.735,
+            "argumentsOnly": 0.715,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1549,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-2",
+            "nodeId": "q2/d1",
+            "input": "de551ee7ad1f9d8d7cac628a",
+            "considered": 0.62,
+            "argumentsOnly": 0.6175,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1745,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-2",
+            "nodeId": "q2/d0",
+            "input": "58359cf1aa1d084af1b4ac46",
+            "considered": 0.7525,
+            "argumentsOnly": 0.75,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1582,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q0/d2",
+            "input": "d878e880c798b62789a59105",
+            "considered": 0.7075,
+            "argumentsOnly": 0.7125,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1614,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q0/d1",
+            "input": "1b723cbc41db99f1236a74a2",
+            "considered": 0.7375,
+            "argumentsOnly": 0.7025,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1466,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q0/d0",
+            "input": "86c801beef081f02fa6e9f17",
+            "considered": 0.4325,
+            "argumentsOnly": 0.435,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1537,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q1/d2",
+            "input": "c8fdcb8e0e6c88336c622379",
+            "considered": 0.665,
+            "argumentsOnly": 0.665,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1537,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q1/d1",
+            "input": "326062898cee7c156dae7a47",
+            "considered": 0.7225,
+            "argumentsOnly": 0.6925,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1740,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q1/d0",
+            "input": "b740ff8412c21b407902ed11",
+            "considered": 0.735,
+            "argumentsOnly": 0.71,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1549,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q2/d2",
+            "input": "ae1fd7cbc05718546f6cf701",
+            "considered": 0.4075,
+            "argumentsOnly": 0.38,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1682,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q2/d1",
+            "input": "1ebfa6351346d1f3b47d8f43",
+            "considered": 0.6425,
+            "argumentsOnly": 0.63,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1745,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "freeze-depth-3",
+            "nodeId": "q2/d0",
+            "input": "bfda7436c832fb5eb8676a67",
+            "considered": 0.7525,
+            "argumentsOnly": 0.7525,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 1584,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "target-support",
+            "nodeId": "q1/d0",
+            "input": "e9873d8b473bde99743833b7",
+            "considered": 0.8175,
+            "argumentsOnly": 0.84,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 702,
+                "outputTokens": 32
+            }
+        },
+        {
+            "scenario": "target-attack",
+            "nodeId": "q2/d1",
+            "input": "f49ecdef038ae1cb833c6a21",
+            "considered": 0.2025,
+            "argumentsOnly": 0.1325,
+            "usage": {
+                "model": "jev-1.13.0",
+                "inputTokens": 724,
+                "outputTokens": 32
+            }
+        }
+    ]
+}
