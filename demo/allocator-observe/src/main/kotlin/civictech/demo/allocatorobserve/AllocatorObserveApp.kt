@@ -206,7 +206,8 @@ private data class AllocatorRuntime(
  *   empty one. Kernel recovery restores the non-empty fold before the first
  *   poll, so both an uninterrupted process and one restarted during the gap
  *   observe the records go, count one re-baseline, and serve the same empty
- *   report until the log comes back. A log that has not arrived yet in this
+ *   report until the log comes back with a changed head (computenet-k2cif).
+ *   A log that has not arrived yet in this
  *   process is still left alone, as `SpendLogIngester` does for
  *   `TailReason.LogAbsent`.
  *
@@ -394,12 +395,13 @@ class AllocatorObserveApp(
      * changes the fold but does not invent a new source cursor. The deletion is
      * counted once in `reBaselineCount`.
      *
-     * The cost, stated where it is paid: a log that is only transiently absent
-     * (a sync that unlinks and recreates the file) empties the served report
-     * for the ticks that observe the gap and is then re-read whole. That is the
-     * same flicker a sync that truncates and rewrites the file in place already
-     * produces through the re-baseline path, and it is what a process
-     * restarted during the gap would serve anyway.
+     * The cost, stated where it is paid: because the committed cursor is left
+     * in place, a log that is only transiently absent and comes back with its
+     * old content (a sync that unlinks and recreates the file) still matches
+     * that cursor's length and head fingerprint, so it is NOT re-read: the
+     * served report stays empty (or holds only lines appended after the old
+     * cursor) until the log's head changes. A recreated log with a different
+     * head is re-baselined as usual. Tracked as computenet-k2cif.
      *
      * This makes the app a second writer of the records cell besides the
      * ingester, in this one case only; it writes through the same `SetOps`
