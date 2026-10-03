@@ -1,16 +1,14 @@
 package civictech.demo.beadsmirror
 
-import civictech.cell.graph.GraphSpec
-import civictech.cell.replication.Replication
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerTransport
 import civictech.cell.wire.PeerTransports
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
-import civictech.demo.beadsmirror.projector.MirrorProjector
 import civictech.runtime.Manifest
 import civictech.runtime.NodeSpec
 import civictech.runtime.Runtime
+import java.nio.file.Path
 
 /**
  * Which end of the peering this node is. The endpoint flag implies the role;
@@ -63,8 +61,8 @@ data class MirrorPeeringSettings(val rigName: String, val wire: MirrorWire) {
  * The order is load-bearing:
  *
  * 1. boot the runtime node;
- * 2. construct [Replication], installing its registry hooks;
- * 3. [attach] the projector replicas to [Runtime.Node.mainHost];
+ * 2. apply or recover [MirrorGraph.spec] through that runtime;
+ * 3. attach the application projector to the hosted cells;
  * 4. [connect], opening transport endpoints only after the replicas exist.
  *
  * A rig passes one exact [PeerTransport] instance to both nodes. This matters
@@ -73,6 +71,7 @@ data class MirrorPeeringSettings(val rigName: String, val wire: MirrorWire) {
  */
 class MirrorPeering(
     val settings: MirrorPeeringSettings,
+    private val runDir: Path,
     private val transport: PeerTransport = PeerTransports.forScheme(WS_SCHEME),
 ) : AutoCloseable {
 
@@ -82,77 +81,23 @@ class MirrorPeering(
     private val runtime: Runtime.Node = Runtime.boot(
         manifest(),
         LOCAL_NODE,
-        GraphSpec(emptyList()),
+        MirrorGraph.spec(refs, replicated = true),
         transport,
     )
 
-    /** Installs the registry hooks before [attach] publishes either replica. */
-    private val replication = Replication(runtime.registry)
+    /** The same hosted graph seam solo mode exposes. */
+    val graph: MirrorGraph = MirrorGraph.runtime(runtime, refs).also {
+        if (it.recovered) it.checkpoint()
+    }
 
-    /** The projector whose cells are currently replicated, or `null` before [attach]. */
-    private var attached: MirrorProjector? = null
-
-    /** Test seam: which projector's cells the mesh currently gossips. */
-    internal val attachedProjector: MirrorProjector? get() = attached
+    /** Test seam for the one local replica per logical id invariant after a respawn. */
+    internal val registry get() = runtime.registry
 
     /** The listener's granted address, or `null` in dial mode / before [connect]. */
     val boundAddress: PeerAddress? get() = runtime.boundAddress
 
     /** The dialled endpoint, or `null` on a listener / before [connect]. */
     val connection: PeerConnection? get() = runtime.connections.singleOrNull()
-
-    /** Spawns [projector]'s two cells as replicas on this node's runtime host. */
-    fun attach(projector: MirrorProjector) {
-        check(attached == null) { "MirrorPeering.attach is a one-shot; use rebind for a re-baseline swap" }
-        replication.replicate(projector.cell, runtime.mainHost)
-        replication.replicate(projector.edges, runtime.mainHost)
-        attached = projector
-    }
-
-    /**
-     * Re-points the replica mesh from the currently attached projector's cells
-     * at [next]'s — the re-baseline swap seam. A no-op before [attach], so an
-     * app that swaps before it has peered (it does not, but the ordering is not
-     * this class's to enforce) is not broken by it.
-     *
-     * Throws (out of [MirrorState.swap], and so out of the re-baseline that
-     * triggered it) when [next]'s cells do not carry the incumbent's
-     * `CellRef`s — `Replication.rebind`'s own precondition. That is the right
-     * failure: a projector rebuilt under different refs is a *different*
-     * logical cell, and continuing would leave this node silently gossiping
-     * nothing while still serving a fold. Task computenet-7em.1.1 is what
-     * makes it not fire, by threading [refs] through every rebuild site.
-     *
-     * **`carryTagState = false`, deliberately, against the parameter's own
-     * default.** `Replication.rebind` defaults to restoring the incumbent's
-     * [civictech.cell.Stateful] snapshot into the candidate, because its
-     * original use — crash-recovery promotion — wants the incumbent's state and its
-     * tag counter continued. A re-baseline wants the exact opposite: the
-     * discard *is* the operation ([MirrorState]). Carrying the snapshot would
-     * restore every key of the projector the rebuild just replaced, so an
-     * issue absent from the fresh `bd export` would come back as a zombie,
-     * and — after a history compaction, where commit heights restart *lower*
-     * than the pre-gap ones — the carried dots would outrank the baseline's
-     * and win last-writer-wins outright. That is precisely the hazard
-     * [MirrorState]'s class doc says the swap exists to avoid.
-     *
-     * Turning it off is safe here for the reason it is normally unsafe
-     * elsewhere: the default exists to continue a cell's *internal* tag
-     * counter, and this mirror never drives one. Every delta is minted
-     * outside the cell by
-     * [civictech.demo.beadsmirror.projector.DotMinter] from the record's feed
-     * position and injected through the `Replicable` delta seam — the cells'
-     * own `MapOps`/`SetOps` inlets are deliberately never used (see
-     * [MirrorProjector]) — so there is no counter to restart and no fresh-epoch
-     * collision to reproduce.
-     */
-    fun rebind(next: MirrorProjector) {
-        val incumbent = attached ?: return
-        if (incumbent === next) return
-        replication.rebind(incumbent.cell, next.cell, runtime.mainHost, carryTagState = false)
-        replication.rebind(incumbent.edges, next.edges, runtime.mainHost, carryTagState = false)
-        attached = next
-    }
 
     /**
      * Open this node's manifest endpoints after application wiring is installed.
@@ -185,7 +130,7 @@ class MirrorPeering(
     fun connect() = runtime.open()
 
     /** Close transport endpoints and drain the runtime-owned bridge and application host. */
-    override fun close() = runtime.close()
+    override fun close() = graph.close()
 
     private fun manifest(): Manifest {
         val local = NodeSpec(
@@ -194,6 +139,8 @@ class MirrorPeering(
             dial = if (settings.wire is MirrorWire.Dial) listOf(REMOTE_NODE) else emptyList(),
             replica = refs.instanceId,
             peerName = settings.role,
+            journalDir = runDir.toString(),
+            journalTopology = true,
         )
         val nodes = when (val wire = settings.wire) {
             is MirrorWire.Listen -> mapOf(LOCAL_NODE to local)

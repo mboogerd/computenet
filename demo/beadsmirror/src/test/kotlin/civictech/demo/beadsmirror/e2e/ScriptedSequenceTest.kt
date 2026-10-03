@@ -159,10 +159,13 @@ class ScriptedSequenceTest {
 
         script.beforeRestart()
         restarted.quiesce()
+        val checkpointBeforeStop = restarted.checkpoint()
+        val eventCountBeforeRestart = restarted.events.filterIsInstance<MirrorEvent.Rebaselined>().size
         restarted.stop()
 
         script.afterRestart()
         restarted.start()
+        restarted.checkpoint() shouldBe checkpointBeforeStop
 
         restarted.quiesce()
         uninterrupted.quiesce()
@@ -174,10 +177,8 @@ class ScriptedSequenceTest {
         MirrorExportEquality.compare(restartedFold.view, restartedFold.edges, export) shouldBe emptyList()
         MirrorExportEquality.compare(uninterruptedFold.view, uninterruptedFold.edges, export) shouldBe emptyList()
 
-        // The restart really was a restart: a Restart-reason rebuild off the
-        // checkpoint the first run persisted, not a FirstStart one.
-        val restartEvent = restarted.events.filterIsInstance<MirrorEvent.Rebaselined>().last()
-        (restartEvent.reason is RebaselineReason.Restart) shouldBe true
+        // Recovery is the restart path: no export baseline is emitted.
+        restarted.events.filterIsInstance<MirrorEvent.Rebaselined>().size shouldBe eventCountBeforeRestart
 
         restartedFold.view.keys shouldBe setOf(script.idA, script.idB)
         restartedFold.edges shouldBe uninterruptedFold.edges
@@ -396,8 +397,7 @@ class ScriptedSequenceTest {
                 "checkpoint=${checkpoint()}, doltLogHead=$head"
         }
 
-        private fun checkpoint(): String? =
-            runDir.resolve("checkpoint").takeIf { Files.exists(it) }?.let { Files.readString(it).trim() }
+        fun checkpoint(): String? = running?.mirrors?.single()?.committedCheckpoint()
 
         /** The fold as the projector holds it. */
         fun stateFold(): Fold = Fold(app.state.current.view(), app.state.current.edgeView())

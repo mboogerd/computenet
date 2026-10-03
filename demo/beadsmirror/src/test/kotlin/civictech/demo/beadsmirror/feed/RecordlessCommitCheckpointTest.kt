@@ -22,13 +22,13 @@ class RecordlessCommitCheckpointTest {
     @Test
     fun `an empty read advances the checkpoint to the observed head`(@TempDir runDir: Path) {
         val feed = feed(log = { listOf("c2", "c1") }, issueRows = emptyList())
-        val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
+        val checkpoint = MemoryFeedCursor("c1")
         val batches = mutableListOf<List<ChangeRecord>>()
 
         DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it }).pollOnce()
 
         batches shouldBe emptyList()
-        checkpoint.read() shouldBe "c2"
+        checkpoint.committed() shouldBe "c2"
     }
 
     @Test
@@ -37,13 +37,13 @@ class RecordlessCommitCheckpointTest {
             log = { listOf("c3", "c2", "c1") },
             issueRows = listOf(row("diff_type" to "added", "to_commit" to "c2", "to_id" to "a")),
         )
-        val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
+        val checkpoint = MemoryFeedCursor("c1")
         val batches = mutableListOf<ChangeRecord>()
 
         DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it }).pollOnce()
 
         batches.map { it.issueId } shouldContainExactly listOf("a")
-        checkpoint.read() shouldBe "c3"
+        checkpoint.committed() shouldBe "c3"
     }
 
     @Test
@@ -62,12 +62,12 @@ class RecordlessCommitCheckpointTest {
                 }
             },
         )
-        val checkpoint = FeedCheckpoint(runDir).apply { write("c2") }
+        val checkpoint = MemoryFeedCursor("c2")
 
         DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { error("must not be called") }).pollOnce()
 
         logQueries.get() shouldBe 1
-        checkpoint.read() shouldBe "c2"
+        checkpoint.committed() shouldBe "c2"
     }
 
     /**
@@ -83,17 +83,17 @@ class RecordlessCommitCheckpointTest {
             log = { if (logReads.incrementAndGet() <= 1) listOf("c2", "c1") else listOf("c3", "c2", "c1") },
             issueRows = listOf(row("diff_type" to "added", "to_commit" to "c3", "to_id" to "late")),
         )
-        val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
+        val checkpoint = MemoryFeedCursor("c1")
         val batches = mutableListOf<ChangeRecord>()
         val poller = DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it })
 
         poller.pollOnce()
         batches shouldBe emptyList()
-        checkpoint.read() shouldBe "c2"
+        checkpoint.committed() shouldBe "c2"
 
         poller.pollOnce()
         batches.map { it.issueId } shouldContainExactly listOf("late")
-        checkpoint.read() shouldBe "c3"
+        checkpoint.committed() shouldBe "c3"
     }
 
     /**
@@ -126,14 +126,14 @@ class RecordlessCommitCheckpointTest {
                 }
             },
         )
-        val checkpoint = FeedCheckpoint(runDir).apply { write("c1") }
+        val checkpoint = MemoryFeedCursor("c1")
         val batches = mutableListOf<ChangeRecord>()
 
         DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it }).pollOnce()
 
         logQueries.get() shouldBe 1
         batches.map { it.issueId } shouldContainExactly listOf("a")
-        checkpoint.read() shouldBe "c2"
+        checkpoint.committed() shouldBe "c2"
     }
 
     private fun feed(log: () -> List<String>, issueRows: List<Map<String, JsonElement>>) = DoltCommitFeed(

@@ -8,7 +8,6 @@ import civictech.demo.beadsmirror.baseline.Rebaseline
 import civictech.demo.beadsmirror.baseline.RebaselineReason
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.feed.DoltFeedPoller
-import civictech.demo.beadsmirror.feed.FeedCheckpoint
 import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.http.MirrorRoutes
 import civictech.demo.beadsmirror.projector.DotMinter
@@ -57,7 +56,7 @@ class BeadsMirrorApp private constructor(
     private val shell: DemoShell,
     /**
      * One [WorkspaceMirror] per configured workspace, in configuration order,
-     * each with its own feed, checkpoint, baseline, projector, dot identity
+     * each with its own feed, durable journal, projector, dot identity
      * and poller thread (task computenet-3bso.1.1). Never empty:
      * [BeadsMirrorConfig] refuses a configuration naming no workspace.
      *
@@ -142,7 +141,7 @@ class BeadsMirrorApp private constructor(
         /**
          * Builds and starts one [WorkspaceMirror] per
          * [BeadsMirrorConfig.workspaces] entry — each its own [DoltCommitFeed],
-         * [FeedCheckpoint], [MirrorState] over a [MirrorProjector],
+         * hosted graph, [MirrorState] over a [MirrorProjector],
          * [Rebaseline] and [DoltFeedPoller] — registers [MirrorRoutes] on one
          * shared started [DemoShell], starts every poll loop, and returns the
          * running app.
@@ -159,9 +158,8 @@ class BeadsMirrorApp private constructor(
          * - [MultiWorkspacePeeringException] (decision 3bso.1-D3) when a
          *   configuration names N > 1 workspaces and two-node peering.
          *
-         * **Three paths reach [Rebaseline], and none is the genesis walk**
-         * (feature computenet-dqj.3 rules 1 and 3; the restart path is
-         * feature computenet-dqj.5's design amendment 2):
+         * **Three paths establish or replace the baseline, and none is the
+         * genesis walk**:
          *
          * - **First start** — no persisted checkpoint. The baseline runs
          *   *before* [DoltFeedPoller.start], so the poller's first tick already
@@ -169,16 +167,9 @@ class BeadsMirrorApp private constructor(
          *   commit graph from genesis. (`DoltCommitFeed.readFrom(null)` still
          *   walks from genesis; it just is not this app's first-run path any
          *   more, and remains available to tests and library callers.)
-         * - **[RebaselineReason.Restart]** — a checkpoint *is* persisted, and
-         *   the baseline runs anyway, at the same point in `start`. Nothing
-         *   persists the projector across processes, so this start begins with
-         *   an empty one; resuming the feed strictly after the checkpoint
-         *   would replay only the commits made while the mirror was down and
-         *   drop every pre-checkpoint issue permanently (measured during
-         *   computenet-dqj.5's breakdown, when this branch read
-         *   `if (checkpoint.read() == null)`). The checkpoint keeps its job
-         *   *while running* — incremental resume and truncation detection —
-         *   and is simply not a substitute for state no one kept.
+         * - **Restart** — the host recovers both folds and the durable input
+         *   cursor from `<runDir>/main/host.journal`. No rebaseline event is
+         *   emitted and no already committed batch is replayed.
          * - **[FeedCondition.CheckpointGone]** — the checkpoint fell out of
          *   `dolt_log`. The baseline runs synchronously inside
          *   `DoltFeedPoller.pollOnce`'s `onCondition` call, on the poller
@@ -211,10 +202,9 @@ class BeadsMirrorApp private constructor(
             }
 
             // The socket opens after every workspace's start-time baseline has
-            // swapped its projector in and `rebind` has re-pointed the mesh —
+            // installed its hosted projector —
             // so a peer's first announcement lands on cells that are already
-            // the live ones. (`rebind` is correct under concurrent gossip; this
-            // simply means the start-time swap never has to rely on that.)
+            // the live ones.
             //
             // Routes are addressed per workspace (task computenet-3bso.1.2):
             // `GET /workspaces` lists every configured identity, and
@@ -311,13 +301,13 @@ class BeadsMirrorApp private constructor(
  *   loopback port, matching every other demo's ephemeral-port convention.
  * @param pollInterval [DoltFeedPoller]'s poll cadence, per workspace; defaults
  *   to 1 second.
- * @param runDir [FeedCheckpoint]'s persistence directory; defaults to
+ * @param runDir the hosted journal's persistence directory; defaults to
  *   `<workspace>/.beadsmirror` per workspace when `null`. When given
  *   explicitly it is used **verbatim for a single workspace** — which is what
  *   `--run-dir` has always meant — and as a *parent* for N > 1, each workspace
- *   getting `<runDir>/<identity>`. Sharing one directory between N checkpoints
- *   is not an option: [FeedCheckpoint] writes a fixed `checkpoint` filename, so
- *   N mirrors would overwrite each other's feed position. See [runDirFor].
+ *   getting `<runDir>/<identity>`. Each mirror writes
+ *   `<its-run-dir>/main/host.journal`; segmentation keeps their hosted state
+ *   and durable input cursors independent. See [runDirFor].
  * @param repoSearchRoot where [refuseIfLiveBeads] starts walking upward to
  *   find the repository's own `.beads` directory; defaults to the process's
  *   working directory. Overridable so a test can point the search at a
@@ -328,17 +318,16 @@ class BeadsMirrorApp private constructor(
  *   supplies a collector and asserts the typed value rather than parsing that
  *   line. Called on whichever thread produced the event (the poller thread for
  *   a [RebaselineReason.CheckpointGone] rebuild, the caller of
- *   [BeadsMirrorApp.Companion.start] for a start-time [RebaselineReason.FirstStart]
- *   or [RebaselineReason.Restart] one),
+ *   [BeadsMirrorApp.Companion.start] for a start-time
+ *   [RebaselineReason.FirstStart] one),
  *   synchronously, so an implementation that blocks stalls polling.
  * @param peering opt-in two-node mode (task computenet-7em.1.2), **single
  *   workspace only** — a configuration naming N > 1 workspaces and peering is
  *   refused by [MultiWorkspacePeeringException] (decision 3bso.1-D3): the mirror's
  *   two cells become replicas of one logical cell and gossip their deltas to
  *   one peer over `:wire`. **`null` — the default — is solo mode, and solo
- *   mode is exactly the app that existed before this parameter did**: no
- *   registry, no host, no [MirrorPeering], no `:wire` class loaded, and the
- *   projector keeps its random-`CellRef` default.
+ *   mode still uses the same hosted graph and journal as peered mode, but no
+ *   [MirrorPeering] or `:wire` transport is constructed.
  * @param peeringTransport the kernel transport binding [peering] establishes
  *   its end through; `null` resolves the production `ws` provider lazily in
  *   the peering-only branch. A rig supplies one exact instance to both nodes.
@@ -420,17 +409,14 @@ data class BeadsMirrorConfig(
     val workspace: Path get() = workspaces.single()
 
     /**
-     * [FeedCheckpoint]'s directory for [workspace]: the configured [runDir]
+     * The hosted journal directory for [workspace]: the configured [runDir]
      * verbatim when this configuration names one workspace, `<runDir>/<its
      * sanitized identity>` when it names several, and
      * `<workspace>/.beadsmirror` when no [runDir] was configured at all.
      *
-     * The single-workspace case is verbatim on purpose: `--run-dir` has always
-     * meant "put the checkpoint here", and a test that reads
-     * `runDir/checkpoint` is reading the documented contract, not an
-     * implementation detail. The N > 1 case cannot honour that reading for
-     * every workspace at once — one `checkpoint` filename, N feed positions —
-     * so it segments by the identity that is already unique by
+     * The single-workspace case is verbatim on purpose: `--run-dir` remains
+     * the parent of `main/host.journal`. The N > 1 case segments by the
+     * identity that is already unique by
      * [BeadsMirrorApp.Companion.start]'s own refusal.
      */
     fun runDirFor(workspace: Path): Path = when {

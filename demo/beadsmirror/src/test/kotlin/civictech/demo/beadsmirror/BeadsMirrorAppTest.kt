@@ -433,7 +433,7 @@ class BeadsMirrorAppTest {
             app!!.state.rebaselineCount shouldBe 1
             app!!.state.current.view().keys shouldBe ids.toSet()
             app!!.state.current.edgeView() shouldBe setOf(MirrorEdge(ids[1], ids[0], "blocks"))
-            Files.readString(runDir.resolve("checkpoint")).trim() shouldBe head
+            app!!.mirrors.single().committedCheckpoint() shouldBe head
         }
 
         /**
@@ -468,7 +468,7 @@ class BeadsMirrorAppTest {
             val rebuild = events.filterIsInstance<MirrorEvent.Rebaselined>()[1]
             (rebuild.reason is RebaselineReason.CheckpointGone) shouldBe true
             rebuild.headCommit shouldBe flattenedHead
-            Files.readString(runDir.resolve("checkpoint")).trim() shouldBe flattenedHead
+            app!!.mirrors.single().committedCheckpoint() shouldBe flattenedHead
 
             // A's post-gap status and the post-gap issue C are both there.
             val a = Json.parseToJsonElement(probe!!.get("/beads/issues/$idA").body()).jsonObject
@@ -560,7 +560,7 @@ class BeadsMirrorAppTest {
             awaitUntil("issue $idA appears on the route") {
                 probe!!.get("/beads/issues/$idA").statusCode() == 200
             }
-            val frozenCheckpoint = Files.readString(runDir.resolve("checkpoint")).trim()
+            val frozenCheckpoint = app!!.mirrors.single().committedCheckpoint()
 
             val doltDir = workspace.doltRoot.resolve(".dolt")
             val parked = workspace.doltRoot.resolve(".dolt-parked")
@@ -764,11 +764,9 @@ class BeadsMirrorAppTest {
     }
 
     /**
-     * Per-workspace checkpoint placement. [FeedCheckpoint][civictech.demo.beadsmirror.feed.FeedCheckpoint]
-     * writes a fixed `checkpoint` filename, so N mirrors sharing one run
-     * directory would overwrite each other's feed position — which is why the
-     * N > 1 case segments by identity, and why the N == 1 case must NOT, since
-     * `--run-dir` has always meant "the checkpoint goes here".
+     * Per-workspace journal placement. Each mirror owns a `main/host.journal`
+     * beneath its run directory, so the N > 1 case segments by identity while
+     * the N == 1 case keeps the configured run directory verbatim.
      */
     @Nested
     inner class RunDirectoryPerWorkspace {
@@ -951,11 +949,11 @@ class BeadsMirrorAppTest {
             a.state.rebaselineCount shouldBe 1
             b.state.rebaselineCount shouldBe 1
 
-            // --- one checkpoint each, at its own workspace's head ----------
+            // --- one durable input cursor each, at its workspace's head ----
             a.runDir shouldBe runDir.resolve(identityA)
             b.runDir shouldBe runDir.resolve(identityB)
-            Files.readString(a.runDir.resolve("checkpoint")).trim() shouldBe headA
-            Files.readString(b.runDir.resolve("checkpoint")).trim() shouldBe headB
+            a.committedCheckpoint() shouldBe headA
+            b.committedCheckpoint() shouldBe headB
             (headA == headB) shouldBe false
 
             // --- one dot identity each ------------------------------------
