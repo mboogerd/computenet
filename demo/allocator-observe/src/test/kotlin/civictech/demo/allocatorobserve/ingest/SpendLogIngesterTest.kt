@@ -50,11 +50,12 @@ class SpendLogIngesterTest {
         val controller = SimulationController()
         val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
         val cell = SetCell<SpendRecord>()
-        val input = host.durableInput(cell.ref, "spend")
+        val input: civictech.cell.host.DurableInput
         val ingester: SpendLogIngester
 
         init {
             host.managementInlet.call.spawn(cell)
+            input = host.durableInput(cell.ref, "spend")
             val ops = checkNotNull(host.lookup(TypedRef<SetApi<SpendRecord>>(cell.ref))).inlet.call
             ingester = SpendLogIngester(log, ops, input, cell::membership, maxLinesPerBatch)
         }
