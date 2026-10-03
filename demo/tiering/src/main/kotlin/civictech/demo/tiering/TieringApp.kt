@@ -405,6 +405,14 @@ class TieringApp(
     internal val alignedBufferedWaves: Int
         get() = valuationAligned.bufferedWaves + preferenceAligned.bufferedWaves
 
+    // Expose the published snapshots to frame-contract tests: reading current()
+    // from an asynchronous callback can hide intermediate publications.
+    internal fun onValuationSnapshot(listener: (Map<String, Any?>) -> Unit) =
+        valuationAligned.onChange(listener)
+
+    internal fun onPreferenceSnapshot(listener: (Map<String, Any?>) -> Unit) =
+        preferenceAligned.onChange(listener)
+
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
     // keeps a Valuation-valued shadow index. This lightweight KEY set exists only
     // so `unitem` can enumerate an item's valuation keys to cascade — the F-3

@@ -4,6 +4,7 @@ import civictech.testkit.HttpProbe
 import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -18,12 +19,21 @@ class TieringAlignedFrameTest {
             probe.post("action=item&name=pizza")
             probe.await { "\"unrated\":[\"pizza\"]" in it }
 
+            val publications = CopyOnWriteArrayList<Map<String, Any?>>()
+            app.onValuationSnapshot { publications += it }
+            awaitUntil("initial valuation snapshot", timeoutMs = 5_000) { publications.isNotEmpty() }
+
             val frames = collectTieringFrames(
                 "$base/events",
                 onSubscribed = { probe.post("action=tier&agent=ada&item=pizza&tier=S") },
             ) { "\"tierAvg\":6.0000" in it && "\"agent\":\"ada\"" in it }
 
             assertOneJointTransition(frames, ::valuations, ::tierAverage)
+            val expected = mapOf(
+                "valuations" to setOf(Valuation("ada", "pizza", 6L)),
+                "tierAvg" to mapOf("pizza" to 6.0),
+            )
+            assertOnePublication(publications, expected)
             awaitUntil("tiering aligned sinks idle", timeoutMs = 5_000) { app.alignedBufferedWaves == 0 }
         } finally {
             app.stop()
@@ -40,15 +50,37 @@ class TieringAlignedFrameTest {
             probe.post("action=item&name=sushi")
             probe.await { "\"unrated\":[\"pizza\",\"sushi\"]" in it }
 
+            val publications = CopyOnWriteArrayList<Map<String, Any?>>()
+            app.onPreferenceSnapshot { publications += it }
+            awaitUntil("initial preference snapshot", timeoutMs = 5_000) { publications.isNotEmpty() }
+
             val frames = collectTieringFrames(
                 "$base/events",
                 onSubscribed = { probe.post("action=pref&agent=ada&winner=sushi&loser=pizza") },
             ) { "\"prefAvg\":1.0000" in it && "\"winner\":\"sushi\"" in it }
 
             assertOneJointTransition(frames, ::preferences, ::preferenceAverages)
+            val expected = mapOf(
+                "prefs" to setOf(Pref("ada", "sushi", "pizza")),
+                "prefAvg" to mapOf("pizza" to -1.0, "sushi" to 1.0),
+            )
+            assertOnePublication(publications, expected)
             awaitUntil("tiering aligned sinks idle", timeoutMs = 5_000) { app.alignedBufferedWaves == 0 }
         } finally {
             app.stop()
+        }
+    }
+
+    private fun assertOnePublication(
+        publications: List<Map<String, Any?>>,
+        expected: Map<String, Any?>,
+    ) {
+        awaitUntil("complete group publication", timeoutMs = 5_000) { publications.lastOrNull() == expected }
+        val transitions = publications.toList().zipWithNext().filter { (before, after) -> before != after }
+        assertEquals(1, transitions.size, "expected one atomic group publication: $publications")
+        val (before, after) = transitions.single()
+        expected.keys.forEach { name ->
+            assertTrue(before[name] != after[name], "$name did not change in the sole publication: $publications")
         }
     }
 

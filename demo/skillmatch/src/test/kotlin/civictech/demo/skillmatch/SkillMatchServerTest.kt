@@ -18,9 +18,6 @@ class SkillMatchServerTest {
             probe.post("action=jskill&job=backend&skill=sql")
             probe.post("action=cskill&candidate=ada&skill=kotlin")
 
-            // each derived view updates asynchronously (separate outlets, no
-            // glitch-free join at the edge — see F-5 in doc/demo-findings.md),
-            // so await the JOINT condition, not the first view to move
             var json = probe.await {
                 """"matched":1,"required":2,"qualified":false""" in it &&
                         """"gap":[{"job":"backend","skill":"sql"}]""" in it
