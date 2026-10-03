@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from 'solid-js';
 import type { GraphDto, NodeDto } from '../api/types';
 import { num, pct } from '../util/format';
+import { useByRef } from '../util/byRef';
 
 /** One crux as the panel shows it. */
 export interface Crux {
@@ -57,36 +58,41 @@ export function onActivateKey(fn: () => void): (ev: KeyboardEvent) => void {
  */
 export function CruxesPanel(props: { graph: GraphDto; root: string; onFocus?: (ref: string) => void }) {
   const cruxes = createMemo(() => cruxesOf(props.graph, props.root));
+  const { refs, byRef } = useByRef(cruxes);
   return (
     <Show when={cruxes().length > 0}>
       <section class="cruxes" aria-label="What would change the answer">
         <h2 class="cruxes__title">What would change the answer</h2>
         <ol class="cruxes__list">
-          <For each={cruxes()}>
-            {(c) => (
-              <li class="crux">
-                <button
-                  type="button"
-                  class="crux__btn"
-                  data-ref={c.ref}
-                  onClick={() => props.onFocus?.(c.ref)}
-                  onKeyDown={onActivateKey(() => props.onFocus?.(c.ref))}
-                >
-                  <span class="crux__text">
-                    <Show when={c.link}>
-                      <span class="crux__kind">link</span>
-                    </Show>
-                    {c.text}
-                  </span>
-                  <span
-                    class="crux__meta"
-                    title="Sway: how far the answer moves per unit change in this claim (d answer / d claim); certainty: how settled it is now"
-                  >
-                    sway {num(c.sensitivity === undefined ? undefined : Math.abs(c.sensitivity))} · {pct(c.p)} {c.link ? 'strong' : 'plausible'}
-                    <Show when={pullOf(c.sensitivity)}>{(w) => <> · {w()}</>}</Show>
-                  </span>
-                </button>
-              </li>
+          <For each={refs()}>
+            {(ref) => (
+              <Show when={byRef(ref)}>
+                {(c) => (
+                  <li class="crux">
+                    <button
+                      type="button"
+                      class="crux__btn"
+                      data-ref={c().ref}
+                      onClick={() => props.onFocus?.(c().ref)}
+                      onKeyDown={onActivateKey(() => props.onFocus?.(c().ref))}
+                    >
+                      <span class="crux__text">
+                        <Show when={c().link}>
+                          <span class="crux__kind">link</span>
+                        </Show>
+                        {c().text}
+                      </span>
+                      <span
+                        class="crux__meta"
+                        title="Sway: how far the answer moves per unit change in this claim (d answer / d claim); certainty: how settled it is now"
+                      >
+                        sway {num(c().sensitivity === undefined ? undefined : Math.abs(c().sensitivity as number))} · {pct(c().p)} {c().link ? 'strong' : 'plausible'}
+                        <Show when={pullOf(c().sensitivity)}>{(w) => <> · {w()}</>}</Show>
+                      </span>
+                    </button>
+                  </li>
+                )}
+              </Show>
             )}
           </For>
         </ol>

@@ -3,13 +3,17 @@ package civictech.cell.durability
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
 import civictech.cell.Timestamp
+import civictech.cell.consistency.GlitchFreeCell
+import civictech.cell.consistency.WaveFrontier
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionSupport
+import civictech.cell.control.Progress
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
@@ -24,10 +28,15 @@ import civictech.cell.host.SaturationPolicy
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.link.Link
+import civictech.cell.port.Admit
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.EdgeOpen
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.assertions.withClue
@@ -58,6 +67,9 @@ import java.util.concurrent.TimeoutException
  * No test here fences on quiescence before checkpointing — that is the point.
  */
 class LiveCheckpointTest {
+
+    private val consumerString =
+        @Suppress("UNCHECKED_CAST") (Consumer::class.java as Class<Consumer<String>>)
 
     interface SetInletProxy {
         val inlet: Use<SetOps<String>>
@@ -118,6 +130,35 @@ class LiveCheckpointTest {
         }
     }
 
+    private class FrontierFoldCell(
+        override val ref: CellRef,
+        active: Boolean,
+    ) : Cell, Stateful {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
+        val received = mutableListOf<String>()
+
+        init {
+            inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
+            if (active) activate()
+        }
+
+        fun activate() {
+            inlet.serve(object : Consumer<String> {
+                override fun provide(input: String) {
+                    received += input
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = ArrayList(received)
+
+        @Suppress("UNCHECKED_CAST")
+        override fun restore(state: Serializable) {
+            received.clear()
+            received += state as List<String>
+        }
+    }
+
     private class SuspendingFoldCell(
         override val ref: CellRef,
         private val entered: CountDownLatch,
@@ -147,6 +188,59 @@ class LiveCheckpointTest {
         (HostedCellProxy.create(ref, host, SetInletProxy::class.java) as SetInletProxy).inlet.call
 
     private fun records(journal: Journal): List<DecodedJournalRecord> = journal.replay().map(JournalRecords::decode)
+
+    private fun fakeLink(from: PortRef, to: PortRef): Link = object : Link {
+        override val id: UUID = UUID.randomUUID()
+        override val from: PortRef = from
+        override val to: PortRef = to
+        override fun unlink() {}
+    }
+
+    private fun openFrontierEdges(cell: FrontierFoldCell): Pair<Link, Link> {
+        val first = fakeLink(PortRef.generate(), cell.inlet.ref)
+        val second = fakeLink(PortRef.generate(), cell.inlet.ref)
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.TopologyOrder, first, EdgeOpen)
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.TopologyOrder, second, EdgeOpen)
+        return first to second
+    }
+
+    private fun openFrontierEdge(inlet: FanInlet<*>): Link =
+        fakeLink(PortRef.generate(), inlet.ref).also { link ->
+            ProtocolSupport.of(inlet).deliver(Protocols.TopologyOrder, link, EdgeOpen)
+        }
+
+    private fun frontierInvocation(
+        sourcePort: PortRef,
+        sourceId: UUID,
+        counter: Long,
+        value: String,
+    ): Invocation = Invocation.of(
+        consumerString.getMethod("provide", Any::class.java),
+        arrayOf(value),
+        MessageContext(Timestamp(sourceId, counter), sourcePort),
+    )
+
+    private fun checkpointAcceptanceCount(inlet: FanInlet<*>): Int {
+        val field = FanInlet::class.java.getDeclaredField("checkpointOrder").apply { isAccessible = true }
+        return (field.get(inlet) as Map<*, *>).size
+    }
+
+    private fun frontierFrame(
+        ref: CellRef,
+        sourcePort: PortRef,
+        sourceId: UUID,
+        counter: Long,
+        value: String,
+    ) = HostedPortInvocation(
+        ref,
+        "inlet",
+        HostedPortInvocation.Type.PORT_API,
+        Invocation.of(
+            consumerString.getMethod("provide", Any::class.java),
+            arrayOf(value),
+            MessageContext(Timestamp(sourceId, counter), sourcePort),
+        ),
+    )
 
     /** Crash: only [journal] survives. A fresh host + cell recover from it and run to idle. */
     private fun recover(controller: SimulationController, journal: Journal, ref: CellRef): SetCell<String> {
@@ -569,5 +663,245 @@ class LiveCheckpointTest {
         withClue("no checkpoint: intake copy only") {
             resumedThenRecovered(checkpointWhileParked = false) shouldBe listOf(1, 2)
         }
+    }
+
+    @Test
+    fun `(l) a checkpoint carries a frame buffered in an active inlet ALIGN policy`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = FrontierFoldCell(ref, active = true)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        val firstEdge = openFrontierEdges(cell).first
+        val sourceId = UUID.randomUUID()
+
+        host.enqueueHostedInvocation(frontierFrame(ref, firstEdge.from, sourceId, 1, "held-active"))
+        controller.runToIdle()
+        withClue("the incomplete wave is retained by ALIGN, not reflected in the cell snapshot") {
+            cell.received shouldBe emptyList()
+            host.stagedWorkTotal() shouldBe 0
+        }
+
+        host.checkpoint(journal)
+        withClue("the compacted journal must carry the host-accepted frame held in ALIGN") {
+            records(journal).filterIsInstance<DecodedJournalRecord.Frame>().map {
+                civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single()
+            } shouldBe listOf("held-active")
+        }
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = FrontierFoldCell(ref, active = true)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        recovered.received shouldBe listOf("held-active")
+    }
+
+    @Test
+    fun `(m) a checkpoint carries an ALIGN frame released cold by a later progress event`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = FrontierFoldCell(ref, active = false)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        val (firstEdge, secondEdge) = openFrontierEdges(cell)
+        val sourceId = UUID.randomUUID()
+
+        val accepted = listOf("held-then-cold-1", "held-then-cold-2")
+        accepted.forEachIndexed { index, value ->
+            host.enqueueHostedInvocation(frontierFrame(ref, firstEdge.from, sourceId, index + 1L, value))
+        }
+        controller.runToIdle()
+        cell.received shouldBe emptyList()
+
+        // This completes both waves outside any hosted offer. ALIGN releases the earlier
+        // frames into the still-cold ACTIVATE tail on this protocol-event stack.
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.Progress, secondEdge, Progress(sourceId, 2))
+
+        host.checkpoint(journal)
+        withClue("the cold tail must retain the frame's original host acceptance position") {
+            records(journal).filterIsInstance<DecodedJournalRecord.Frame>().map {
+                civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single()
+            } shouldBe accepted
+        }
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = FrontierFoldCell(ref, active = false)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        recovered.received shouldBe emptyList()
+        recovered.activate()
+        recovered.received shouldBe accepted
+    }
+
+    @Test
+    fun `(n) resetting every arm of a shared ALIGN frontier releases every checkpoint acceptance`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val first = FanInlet.create<Consumer<String>>()
+        val second = FanInlet.create<Consumer<String>>()
+        first.install(frontier.arm())
+        second.install(frontier.arm())
+        val firstEdge = openFrontierEdge(first)
+        val secondEdge = openFrontierEdge(second)
+        openFrontierEdge(second)
+        val sourceId = UUID.randomUUID()
+
+        first.offerHosted(frontierInvocation(firstEdge.from, sourceId, 1, "first-arm"), 1)
+        second.offerHosted(frontierInvocation(secondEdge.from, sourceId, 1, "second-arm"), 2)
+        first.checkpointParked().size shouldBe 1
+        second.checkpointParked().size shouldBe 1
+
+        first.resetPolicies()
+        second.resetPolicies()
+
+        first.checkpointParked() shouldBe emptyList()
+        second.checkpointParked() shouldBe emptyList()
+        withClue("reset must release acceptance records for every arm, including the sibling cleared by the first reset") {
+            checkpointAcceptanceCount(first) shouldBe 0
+            checkpointAcceptanceCount(second) shouldBe 0
+        }
+    }
+
+    @Test
+    fun `(o) replacing the same wave edge releases the replaced checkpoint acceptance`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet = FanInlet.create<Consumer<String>>()
+        inlet.install(frontier)
+        val edge = openFrontierEdge(inlet)
+        openFrontierEdge(inlet)
+        val sourceId = UUID.randomUUID()
+
+        inlet.offerHosted(frontierInvocation(edge.from, sourceId, 1, "replaced"), 1)
+        inlet.offerHosted(frontierInvocation(edge.from, sourceId, 1, "replacement"), 2)
+
+        inlet.checkpointParked().map { (sequence, invocation) -> sequence to invocation.args.single() } shouldBe
+            listOf(2L to "replacement")
+        withClue("only the replacement may remain strongly referenced by checkpoint bookkeeping") {
+            checkpointAcceptanceCount(inlet) shouldBe 1
+        }
+
+        inlet.resetPolicies()
+        checkpointAcceptanceCount(inlet) shouldBe 0
+    }
+
+    @Test
+    fun `(p) a handler failure releases checkpoint acceptances abandoned with the removed wave`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet = FanInlet.create<Consumer<String>>()
+        inlet.install(frontier)
+        inlet.serve(object : Consumer<String> {
+            override fun provide(input: String) = throw IllegalStateException("handler failed")
+        })
+        val firstEdge = openFrontierEdge(inlet)
+        val secondEdge = openFrontierEdge(inlet)
+        val thirdEdge = openFrontierEdge(inlet)
+        val sourceId = UUID.randomUUID()
+
+        inlet.offerHosted(frontierInvocation(firstEdge.from, sourceId, 1, "throws"), 1)
+        inlet.offerHosted(frontierInvocation(secondEdge.from, sourceId, 1, "abandoned"), 2)
+        val failure = shouldThrow<IllegalStateException> {
+            inlet.offerHosted(frontierInvocation(thirdEdge.from, sourceId, 1, "trigger"), 3)
+        }
+
+        failure.message shouldBe "handler failed"
+        inlet.checkpointParked() shouldBe emptyList()
+        withClue("a removed wave must not leave an unserved sibling retained only by checkpoint bookkeeping") {
+            checkpointAcceptanceCount(inlet) shouldBe 0
+        }
+    }
+
+    @Test
+    fun `(q) a throwing sibling preserves the completing offer already released into a cold tail`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val cold = FanInlet.create<Consumer<String>>()
+        val hot = FanInlet.create<Consumer<String>>()
+        cold.install(frontier.arm())
+        hot.install(frontier.arm())
+        val coldEdge = openFrontierEdge(cold)
+        val hotEdge = openFrontierEdge(hot)
+        val sourceId = UUID.randomUUID()
+        val originalFailure = IllegalStateException("sibling failed")
+        hot.serve(object : Consumer<String> {
+            override fun provide(input: String) = throw originalFailure
+        })
+
+        hot.offerHosted(frontierInvocation(hotEdge.from, sourceId, 1, "throws"), 1)
+        val survivor = frontierInvocation(coldEdge.from, sourceId, 1, "cold-survivor")
+        val failure = shouldThrow<IllegalStateException> { cold.offerHosted(survivor, 2) }
+
+        (failure === originalFailure) shouldBe true
+        withClue("successful cold prefix keeps its acceptance position when a later arm throws") {
+            cold.checkpointParked() shouldBe listOf(2L to survivor)
+            checkpointAcceptanceCount(cold) shouldBe 1
+            checkpointAcceptanceCount(hot) shouldBe 0
+        }
+        cold.resetPolicies()
+        hot.resetPolicies()
+        cold.checkpointParked() shouldBe listOf(2L to survivor)
+
+        val delivered = mutableListOf<String>()
+        cold.serve(object : Consumer<String> {
+            override fun provide(input: String) { delivered += input }
+        })
+        delivered shouldBe listOf("cold-survivor")
+        cold.checkpointParked() shouldBe emptyList()
+        checkpointAcceptanceCount(cold) shouldBe 0
+    }
+
+    @Test
+    fun `(r) reoffering the same invocation to ALIGN preserves its original acceptance`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet = FanInlet.create<Consumer<String>>()
+        inlet.install(frontier)
+        val edge = openFrontierEdge(inlet)
+        openFrontierEdge(inlet)
+        val invocation = frontierInvocation(edge.from, UUID.randomUUID(), 1, "same-object")
+        inlet.offerHosted(invocation, 7)
+
+        frontier.offer(invocation)
+
+        withClue("reoffering the identical object is not a discarded replacement") {
+            inlet.checkpointParked() shouldBe listOf(7L to invocation)
+            checkpointAcceptanceCount(inlet) shouldBe 1
+        }
+        inlet.resetPolicies()
+        checkpointAcceptanceCount(inlet) shouldBe 0
+    }
+
+    @Test
+    fun `(s) hosted checkpoint tracking preserves each policy offer context`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = FrontierFoldCell(ref, active = true)
+        val policyContexts = mutableListOf<MessageContext?>()
+        cell.inlet.install(Admit(admits = {
+            policyContexts += CurrentContext.get()
+            true
+        }))
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        val edge = openFrontierEdge(cell.inlet)
+        val sourceId = UUID.randomUUID()
+        val frames = listOf(
+            frontierFrame(ref, edge.from, sourceId, 1, "first-context"),
+            frontierFrame(ref, edge.from, sourceId, 2, "second-context"),
+        )
+        frames.forEach(host::enqueueHostedInvocation)
+        controller.runToIdle()
+
+        withClue("the hosted policy path must run under each input's own context, like ordinary invocation delivery") {
+            policyContexts shouldBe frames.map { it.invocation.context }
+        }
+        cell.received shouldBe listOf("first-context", "second-context")
+        CurrentContext.get() shouldBe null
     }
 }

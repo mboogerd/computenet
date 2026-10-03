@@ -104,6 +104,8 @@ class CredenceGraphTest {
         "euler" to listOf(0.76008123726605459, 0.89387169876513017),
         "qe" to listOf(0.75390794847182951, 0.88504277706755830),
         "mlp" to listOf(0.78875532139705162, 0.88767653023916870),
+        // glo is not in the prototype: an independent Python port of its formula on the same tree.
+        "glo" to listOf(0.9529820851773328, 0.7504871711594674),
     )
 
     @Test
@@ -123,24 +125,41 @@ class CredenceGraphTest {
     }
 
     @Test
-    fun `model D - only a question root carries the neutral-prior verdict, which follows its arguments`() {
+    fun `model D - every claim and edge carries an arguments-first verdict while an unargued node keeps its prior`() {
         val g = graph(LayerSet.of(listOf("dfquad")))
         val r = g.createClaim("R", question = true)
         g.setStance(r, "jev", 0.9)
-        awaitUntil("the root starts at its first impression, the neutral verdict at one half") {
-            g.credenceOf(r)?.let { abs(it.values.single() - 0.9) < 1e-12 && it.neutral == listOf(0.5) } == true
+        awaitUntil("an unargued root's arguments-first verdict is its first impression") {
+            g.credenceOf(r)?.let { abs(it.values.single() - 0.9) < 1e-12 && it.neutral == it.values } == true
         }
         val a = g.createClaim("A")
         val e = g.createEdge(a, r, Polarity.SUPPORT)
         g.setStance(a, "jev", 0.8)
-        g.setStance(e, "jev", 0.5)
-        // DF-QuAD, one support of energy 0.5 x 0.8 = 0.4: 0.9 + 0.1 x 0.4 = 0.94 from 0.9, 0.5 + 0.5 x 0.4 = 0.7 from one half.
+        g.setStance(e, "jev", 0.8)
+        // DF-QuAD, one support of energy 0.8 x 0.8 = 0.64: 0.9 + 0.1 x 0.64 = 0.964 from 0.9,
+        // 0.5 + 0.5 x 0.64 = 0.82 from one half.
         awaitUntil("both root verdicts follow the support") {
-            g.credenceOf(r)?.let { abs(it.values.single() - 0.94) < 1e-12 && abs(it.neutral!!.single() - 0.7) < 1e-12 } == true
+            g.credenceOf(r)?.let { abs(it.values.single() - 0.964) < 1e-12 && abs(it.neutral!!.single() - 0.82) < 1e-12 } == true
         }
         awaitUntil("the argument's credence reaches the hub") { g.credenceOf(a)?.values?.single() == 0.8 && g.credenceOf(e) != null }
-        assertEquals(null, g.credenceOf(a)!!.neutral, "a claim that is not a question root carries no neutral-prior vector")
-        assertEquals(null, g.credenceOf(e)!!.neutral, "an edge carries no neutral-prior vector")
+        assertEquals(g.credenceOf(a)!!.values, g.credenceOf(a)!!.neutral, "an unargued claim keeps its prior")
+        assertEquals(g.credenceOf(e)!!.values, g.credenceOf(e)!!.neutral, "an unargued edge keeps its prior")
+
+        val b = g.createClaim("B")
+        val eb = g.createEdge(b, a, Polarity.SUPPORT)
+        g.setStance(b, "jev", 0.8)
+        g.setStance(eb, "jev", 0.8)
+        awaitUntil("the argued claim evaluates the same support from its prior and from one half") {
+            g.credenceOf(a)?.let { abs(it.values.single() - 0.928) < 1e-12 && abs(it.neutral!!.single() - 0.82) < 1e-12 } == true
+        }
+
+        val u = g.createClaim("U")
+        val eu = g.createEdge(u, e, Polarity.SUPPORT)
+        g.setStance(u, "jev", 0.8)
+        g.setStance(eu, "jev", 0.8)
+        awaitUntil("the argued edge evaluates the same support from its prior and from one half") {
+            g.credenceOf(e)?.let { abs(it.values.single() - 0.928) < 1e-12 && abs(it.neutral!!.single() - 0.82) < 1e-12 } == true
+        }
     }
 
     @Test

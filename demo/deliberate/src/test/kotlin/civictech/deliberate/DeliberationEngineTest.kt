@@ -608,16 +608,20 @@ class DeliberationEngineTest {
         assertEquals(Override.STOP, r.override)
         assertEquals(1, r.rounds)
         assertEquals(4, g.childrenOf(root).size) // the in-flight round's arguments were attached
-        // descendants are unaffected: they were still processed
-        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.DEPTH_LIMIT })
+        // CTL-03 on a question root: the whole question stopped, so the arguments the
+        // in-flight round attached were assessed but queue no round of their own.
+        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.STOPPED && it.plausibility != null })
+        assertEquals("human", g.questions.single().stoppedBy)
 
-        // CTL-04: AUTO on a STOPPED claim re-queues it through the normal gates
+        // CTL-04: AUTO on the stopped root restarts the question through the normal gates
         e.setOverride(root, Override.AUTO)
         e.idle()
         val g2 = e.snapshot()
         assertEquals(Status.ROUND_LIMIT, g2.node(root).status)
         assertEquals(3, g2.node(root).rounds)
         assertEquals(12, g2.childrenOf(root).size)
+        assertTrue(g2.claims().filter { it.depth == 1 }.all { it.status == Status.DEPTH_LIMIT })
+        assertNull(g2.questions.single().stoppedBy)
     }
 
     @Test
@@ -698,6 +702,170 @@ class DeliberationEngineTest {
         assertEquals(Override.AUTO, node.override)
         assertEquals(Status.ROUND_LIMIT, node.status)
         assertEquals(children, e.snapshot().childrenOf(root).size)
+    }
+
+    /** Proposes `claude-<side>-<n>`; a call matching [hold] blocks until [release] (re-armable). */
+    private class HoldingProposer : Proposer {
+        override val id = "claude"
+        val asked = CopyOnWriteArrayList<String>()
+        @Volatile var hold: (ClaimContext) -> Boolean = { false }
+        @Volatile var entered = CountDownLatch(1)
+        @Volatile var release = CountDownLatch(1)
+        private val n = AtomicInteger()
+        override fun propose(ctx: ClaimContext, side: Side, max: Int): List<String> {
+            asked += ctx.claim
+            if (hold(ctx)) {
+                entered.countDown()
+                release.await(20, TimeUnit.SECONDS)
+            }
+            return List(max) { "claude-${side.name.lowercase()}-${n.incrementAndGet()}" }
+        }
+
+        fun rearm(hold: (ClaimContext) -> Boolean) {
+            entered = CountDownLatch(1)
+            release = CountDownLatch(1)
+            this.hold = hold
+        }
+    }
+
+    /** One worker, two rounds per claim, depth 1: after the root's first round there is always queued work. */
+    private val stopConfig = DeliberationEngine.Config(
+        argsPerCall = 1, maxRounds = 2, maxDepth = 1, voiEpsilon = 0.0, exploreLinks = false,
+        maxArgsPerSide = 10, maxArgsPerSideChild = 10, workers = 1,
+    )
+
+    /** Anything but the root's first round. */
+    private val afterRootRound1: (ClaimContext) -> Boolean = { !(it.claim == "Q?" && it.pros.isEmpty() && it.cons.isEmpty()) }
+
+    private val activeStatuses = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
+
+    @Test
+    fun `STOP on a question root ends the whole question and AUTO restarts it`() {
+        val p = HoldingProposer().apply { rearm(afterRootRound1) }
+        val e = engine(proposers = listOf(p), config = stopConfig)
+        val root = e.ask("Q?")
+        assertTrue(p.entered.await(20, TimeUnit.SECONDS))
+        val running = e.snapshot()
+        val inFlight = running.claims().single { it.activity == "exploring" }
+        val childrenBefore = running.childrenOf(running.ref(inFlight)).size
+        val waiting = running.claims().filter { it.ref != inFlight.ref && it.status in activeStatuses }
+        assertTrue(waiting.any { it.status == Status.QUEUED }, "queued work exists: ${running.claims()}")
+
+        e.setOverride(root, Override.STOP)
+        val stopping = e.snapshot()
+        // Queued work is cancelled at once; only the round in flight is still active.
+        waiting.forEach { assertEquals(Status.STOPPED, stopping.claim(it.ref).status, it.text) }
+        assertEquals(listOf(inFlight.ref), stopping.claims().filter { it.status in activeStatuses }.map { it.ref })
+        assertEquals("human", stopping.questions.single().stoppedBy)
+        p.release.countDown()
+        e.idle()
+
+        val g = e.snapshot()
+        // The in-flight round finished: its arguments are attached and assessed …
+        val done = g.claim(inFlight.ref)
+        assertEquals(inFlight.rounds!! + 1, done.rounds)
+        val attached = g.childrenOf(g.ref(done)).map { g.claim(it.source!!) }
+        assertEquals(childrenBefore + 2, attached.size)
+        assertTrue(attached.all { it.plausibility != null }, "assessed: $attached")
+        // … but no further round started for any claim of the question.
+        assertEquals(4, p.asked.size, "the root's first round and the round in flight only: ${p.asked}")
+        // Nothing is left QUEUED or EXPLORING-waiting: every claim of the question ended STOPPED.
+        assertTrue(g.claims().all { it.status == Status.STOPPED }, "${g.claims().map { it.text to it.status }}")
+        val q = g.questions.single()
+        assertTrue(!q.active)
+        assertEquals("human", q.stoppedBy)
+
+        // AUTO on the root restarts the question: everything the stop cancelled re-enters the normal gates.
+        p.rearm { true }
+        e.setOverride(root, Override.AUTO)
+        assertTrue(p.entered.await(20, TimeUnit.SECONDS))
+        val restarted = e.snapshot().questions.single()
+        assertTrue(restarted.active)
+        assertNull(restarted.stoppedBy)
+        p.release.countDown()
+        e.idle()
+        val g2 = e.snapshot()
+        assertTrue(!g2.questions.single().active)
+        assertNull(g2.questions.single().stoppedBy)
+        assertEquals(Override.AUTO, g2.node(root).override)
+        assertEquals(Status.ROUND_LIMIT, g2.node(root).status)
+        assertEquals(2, g2.node(root).rounds)
+        assertTrue(g2.claims().none { it.status == Status.STOPPED }, "${g2.claims().map { it.text to it.status }}")
+        assertTrue(g2.claims().filter { it.depth == 1 }.all { it.status == Status.ROUND_LIMIT && it.rounds == 2 })
+        assertTrue(g2.claims().filter { it.depth == 2 }.all { it.status == Status.DEPTH_LIMIT })
+    }
+
+    @Test
+    fun `STOP on a non-root claim stops only that claim`() {
+        val p = HoldingProposer().apply { rearm { it.claim != "Q?" } }
+        val e = engine(proposers = listOf(p), config = stopConfig.copy(maxRounds = 1))
+        val root = e.ask("Q?")
+        assertTrue(p.entered.await(20, TimeUnit.SECONDS))
+        val running = e.snapshot()
+        val inFlight = running.claims().single { it.activity == "exploring" }
+        val other = running.claims().single { it.depth == 1 && it.ref != inFlight.ref }
+        assertEquals(Status.QUEUED, other.status)
+
+        e.setOverride(running.ref(inFlight), Override.STOP)
+        val stopping = e.snapshot()
+        assertEquals(Status.QUEUED, stopping.claim(other.ref).status, "a sibling is not cancelled")
+        assertNull(stopping.questions.single().stoppedBy)
+        p.release.countDown()
+        e.idle()
+
+        val g = e.snapshot()
+        assertEquals(Status.STOPPED, g.claim(inFlight.ref).status)
+        assertEquals(1, g.claim(inFlight.ref).rounds)
+        val kids = g.childrenOf(g.ref(inFlight)).map { g.claim(it.source!!) }
+        assertEquals(2, kids.size)
+        assertTrue(kids.all { it.status == Status.DEPTH_LIMIT }, "descendants are not affected: $kids")
+        assertEquals(Status.ROUND_LIMIT, g.claim(other.ref).status)
+        assertEquals(1, g.claim(other.ref).rounds)
+        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertNull(g.questions.single().stoppedBy)
+        assertEquals(6, p.asked.size)
+    }
+
+    @Test
+    fun `a stopped question restores stopped after a restart, nothing re-queued, and AUTO restarts it`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-question-stop").toFile()
+        val journal = java.io.File(dir, "host.journal")
+        try {
+            val store = InMemoryMetaStore()
+            val p = HoldingProposer().apply { rearm(afterRootRound1) }
+            val e1 = DeliberationEngine(durableGraph(host, registry, journal), FakeJudge(), listOf(p), stopConfig, store = store)
+                .also { engines += it }
+            val root = e1.ask("Q?")
+            assertTrue(p.entered.await(20, TimeUnit.SECONDS))
+            e1.setOverride(root, Override.STOP)
+            p.release.countDown()
+            e1.idle()
+            val before = e1.snapshot()
+            assertEquals("human", before.questions.single().stoppedBy)
+            e1.close()
+            // As if the process had been killed mid-round: one claim recorded EXPLORING.
+            val interrupted = before.claims().first { it.status == Status.STOPPED && it.ref != root.id.toString() }
+            store.put("c:${interrupted.ref}", mapOf("status" to "\"EXPLORING\""))
+
+            val counter = FakeProposer("claude")
+            val e2 = restart(journal, store, stopConfig, proposers = listOf(counter))
+            e2.idle()
+            val after = e2.snapshot()
+            assertEquals(emptyList(), counter.contexts.map { it.claim }, "a restored stopped question runs no round")
+            assertEquals(before.claims().associate { it.ref to it.status }, after.claims().associate { it.ref to it.status })
+            val q = after.questions.single()
+            assertTrue(!q.active)
+            assertEquals("human", q.stoppedBy)
+
+            e2.setOverride(root, Override.AUTO)
+            e2.idle()
+            val resumed = e2.snapshot()
+            assertTrue(counter.contexts.isNotEmpty())
+            assertNull(resumed.questions.single().stoppedBy)
+            assertTrue(resumed.claims().none { it.status == Status.STOPPED || it.status in activeStatuses })
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test
@@ -1196,7 +1364,7 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `STOP on a parent does not cancel its already queued child`() {
+    fun `STOP on a question root cancels its already queued child`() {
         val q1Entered = CountDownLatch(1)
         val allowQ1 = CountDownLatch(1)
         val q2Entered = CountDownLatch(1)
@@ -1240,13 +1408,20 @@ class DeliberationEngineTest {
         assertEquals(Status.EXPLORING, queued.node(q1).status)
 
         e.setOverride(q1, Override.STOP)
-        assertEquals(Status.STOPPED, e.snapshot().node(q1).status)
+        val stopped = e.snapshot()
+        assertEquals(Status.STOPPED, stopped.node(q1).status)
+        // CTL-03 on a question root ends the whole question: its queued child is cancelled at once.
+        assertEquals(Status.STOPPED, stopped.claim(child.ref).status)
         allowQ2.countDown()
         e.idle()
         val g = e.snapshot()
         assertEquals(1, g.node(q1).rounds)
-        assertEquals(Status.ROUND_LIMIT, g.claim(child.ref).status)
-        assertEquals(0L, childExplored.count)
+        assertEquals(Status.STOPPED, g.claim(child.ref).status)
+        assertEquals(1L, childExplored.count, "the cancelled child ran no round")
+        val q = g.questions.single { it.root == q1.id.toString() }
+        assertTrue(!q.active)
+        assertEquals("human", q.stoppedBy)
+        assertNull(g.questions.single { it.root != q1.id.toString() }.stoppedBy, "the other question is unaffected")
     }
 
     // ------------------------------------------------------------ iteration 4
@@ -1558,6 +1733,14 @@ class DeliberationEngineTest {
         assertEquals(0.0, even.conSaturation)
         assertEquals(0, even.duplicatesDropped)
         assertNull(even.error)
+        val arguedRefs = g.edges().mapNotNull { it.target }.toSet()
+        val argued = g.nodes.filter { it.ref in arguedRefs }
+        assertTrue(argued.any { it.kind == "CLAIM" } && argued.any { it.kind == "EDGE" })
+        argued.forEach { n ->
+            assertEquals(n.credences.keys, n.argumentsFirstCredences.keys, "${n.kind} ${n.ref} arguments-first layers")
+            assertTrue(n.argumentsFirstCredences.values.all { it in 0.0..1.0 })
+            assertTrue(n.argumentsFirstConsensus in 0.0..1.0)
+        }
         // Link rounds are non-root work and therefore participate in the
         // question's diminishing-return yield series (EXP-10).
         assertEquals(3, g.questions.single().yieldRounds)
@@ -2013,15 +2196,20 @@ class DeliberationEngineTest {
 
         engine.setOverride(root, Override.STOP)
         engine.persistNow()
-        assertEquals(setOf("status", "override"), store.deltas.single().second.keys)
+        assertEquals(setOf("status", "override"), store.deltas.single { it.first == key }.second.keys)
+        // CTL-03 on a question root: the question record carries the stop.
+        assertEquals(mapOf("stopped" to "true"), store.deltas.single { it.first == "q:${root.id}" }.second)
+        assertEquals(2, store.deltas.size)
 
         store.deltas.clear()
         engine.setOverride(root, Override.AUTO)
         engine.idle()
         engine.persistNow()
-        val reset = store.deltas.single().second
+        val reset = store.deltas.single { it.first == key }.second
         assertEquals(setOf("status", "override"), reset.keys)
         assertNull(reset.getValue("override"), "AUTO is the default and must be persisted as a field removal")
+        assertEquals(mapOf("stopped" to null), store.deltas.single { it.first == "q:${root.id}" }.second)
+        assertEquals(2, store.deltas.size)
     }
 
     @Test
@@ -2206,6 +2394,27 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `model D - an unargued question keeps its arguments-alone verdict at one half while its node keeps its prior`() {
+        val e = DeliberationEngine(
+            service,
+            FakeJudge(plausibility = { 0.9 }, strength = { 0.5 }),
+            listOf(FakeProposer("claude") { _, _, _ -> emptyList() }),
+            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+        ).also { engines += it }
+        val root = e.ask("Unargued?")
+        e.idle()
+        // The question's "arguments alone" verdict is unchanged by the arguments-first view:
+        // with no argument it weighs nothing from a neutral ½, as before.
+        val q = e.settledQuestion(0.5)
+        assertEquals(0.9, q.firstImpression)
+        assertTrue(!q.verdictsDisagree)
+        val n = e.snapshot().node(root)
+        assertTrue(e.snapshot().edges().none { it.target == n.ref }, "the root has no argument")
+        assertEquals(n.credences, n.argumentsFirstCredences, "an unargued root's arguments-first view keeps its prior")
+        assertEquals(n.consensus, n.argumentsFirstConsensus)
+    }
+
+    @Test
     fun `model D - the first impression is kept and a neutral-prior verdict that disagrees is flagged`() {
         val dir = java.nio.file.Files.createTempDirectory("deliberate-model-d").toFile()
         val log = java.io.File(dir, "host.journal")
@@ -2218,18 +2427,44 @@ class DeliberationEngineTest {
             e.idle()
             val q = e.settledQuestion(0.3)
             awaitUntil("the root settles on 0.54") { abs(e.snapshot().node(root).credence - 0.54) < 1e-9 }
+            val before = e.snapshot()
+            val rootNode = before.node(root)
             assertEquals(0.9, q.firstImpression)
-            assertEquals(0.9, e.snapshot().node(root).plausibility, "the first impression stays the root's prior")
-            assertTrue(e.snapshot().questions.single().verdictsDisagree)
+            assertEquals(0.9, rootNode.plausibility, "the first impression stays the root's prior")
+            assertEquals(q.neutralCredence!!, rootNode.argumentsFirstConsensus, 1e-12)
+            assertEquals(rootNode.credences.keys, rootNode.argumentsFirstCredences.keys)
+            assertTrue(rootNode.argumentsFirstCredences.values.all { it in 0.0..1.0 })
+            before.nodes.filter { n -> before.edges().none { it.target == n.ref } }.forEach { unargued ->
+                assertEquals(unargued.credences, unargued.argumentsFirstCredences, "unargued ${unargued.ref}")
+                assertEquals(unargued.consensus, unargued.argumentsFirstConsensus, "unargued ${unargued.ref}")
+            }
+            assertTrue(before.questions.single().verdictsDisagree)
             e.close()
+            val journalBytes = log.length()
 
             // Nothing of it is journaled: a restart recomputes both verdicts and the flag from the stances.
-            assertTrue(store.load().values.none { f -> f.keys.any { it.contains("neutral") || it.contains("impression") } })
-            val e2 = restart(log, store, DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false))
+            assertTrue(store.load().values.none { f -> f.keys.any { it.contains("neutral") || it.contains("impression") || it.contains("argumentsFirst") } })
+            val restartJudge = FakeJudge()
+            val restartProposer = FakeProposer("claude") { _, _, _ -> emptyList() }
+            val e2 = restart(
+                log,
+                store,
+                DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 0, exploreLinks = false),
+                restartJudge,
+                listOf(restartProposer),
+            )
             e2.idle()
             val after = e2.settledQuestion(0.3)
             assertEquals(0.9, after.firstImpression)
+            val restored = e2.snapshot()
             awaitUntil("the restarted root flags the disagreement") { e2.snapshot().questions.single().verdictsDisagree }
+            assertEquals(rootNode.argumentsFirstCredences, restored.node(root).argumentsFirstCredences)
+            assertEquals(rootNode.argumentsFirstConsensus, restored.node(root).argumentsFirstConsensus)
+            assertEquals(before.questions.single().cost, restored.questions.single().cost)
+            assertEquals(journalBytes, log.length(), "recomputing arguments-first must add no topology journal record")
+            assertTrue(restartJudge.plausibilityCalls.isEmpty() && restartJudge.relationCalls.isEmpty() && restartJudge.triageCalls.isEmpty())
+            assertEquals(0, restartJudge.saturationCalls.get())
+            assertTrue(restartProposer.contexts.isEmpty(), "restart recomputation must not ask a proposer")
         } finally {
             dir.deleteRecursively()
         }

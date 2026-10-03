@@ -4,9 +4,10 @@ import civictech.agora.cell.Polarity
 import civictech.deliberate.CostLedger.Companion.withCost
 
 /**
- * The UI's view (SPEC §6): the graph's nodes — every credence, the consensus
- * and the spread from the hub fold, where the cells put them (CRED-06) —
- * joined with the engine's exploration metadata. It only reads.
+ * The UI's view (SPEC §6): the graph's nodes — every ordinary and
+ * arguments-first credence, the consensuses and the ordinary spread from the
+ * hub fold, where the cells put them (CRED-06) — joined with the engine's
+ * exploration metadata. It only reads.
  */
 internal class GraphProjection(private val policy: ExplorationPolicy, private val ledger: CostLedger) {
 
@@ -21,6 +22,9 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
     fun project(graph: List<CredenceGraph.Node>, layers: LayerSet, state: EngineState): GraphDto {
         val neutral = List(layers.ids.size) { NEUTRAL }
         val neutralValues = neutral
+        // Model D: a root's "arguments alone" verdict before any argument. The neutral
+        // weight leaves no prior in the base (WEAK_PRIOR_WEIGHT = 0), so no stance is needed.
+        val unarguedNeutral = layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT)
         val nodes = graph.mapNotNull { n ->
             val values = n.credence?.values ?: neutral
             val named = layers.named(values)
@@ -28,12 +32,16 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
             val credence = layers.headlineOf(values, consensus)
             val low = n.credence?.spreadLow ?: NEUTRAL
             val high = n.credence?.spreadHigh ?: NEUTRAL
+            val argumentsFirstValues = n.credence?.neutral ?: values
+            val argumentsFirstNamed = layers.named(argumentsFirstValues)
+            val argumentsFirstConsensus = layers.consensus(argumentsFirstValues)
             state.edges[n.ref]?.let { e ->
                 // SPEC §3 "Links as claims": an edge carries its link's exploration state.
                 val l = state.claims[n.ref]
                 NodeDto(
                     ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    argumentsFirstCredences = argumentsFirstNamed, argumentsFirstConsensus = argumentsFirstConsensus,
                     polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
                     strength = e.strength,
                     text = l?.text, depth = l?.depth, status = l?.status, override = l?.override,
@@ -48,6 +56,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 NodeDto(
                     ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    argumentsFirstCredences = argumentsFirstNamed, argumentsFirstConsensus = argumentsFirstConsensus,
                     text = c.text, depth = c.depth, status = c.status, override = c.override,
                     proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
                     quality = c.quality, contribution = c.contribution, sensitivity = n.sensitivity,
@@ -82,8 +91,11 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
             // Model D: the verdict from Jev's first impression against what the arguments say from a neutral prior.
             fun verdicts(ref: civictech.cell.CellRef): Pair<Double?, Double?> {
                 val cr = credences[ref]
+                // An unargued root keeps its arguments-first view at its prior, but its
+                // "arguments alone" verdict stays the neutral ½ evaluation it always was.
                 return cr?.let { layers.headlineOf(it.values, it.consensus) } to
-                    cr?.neutral?.let { layers.headlineOf(it, layers.consensus(it)) }
+                    cr?.let { c -> c.neutral?.takeIf { c.argued } ?: unarguedNeutral }
+                        ?.let { layers.headlineOf(it, layers.consensus(it)) }
             }
             val framing = state.claims[root]?.framing?.takeIf { it.mode != FramingMode.NONE }?.let { f ->
                 val shares = graph.firstOrNull { it.ref == root }?.shares

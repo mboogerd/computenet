@@ -38,7 +38,52 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
+
+/** The terminal result of waiting for an aligned sink's listener queue. */
+sealed interface AlignedDrainResult {
+    /** Every observation callback accepted before the barrier has returned. */
+    data object Drained : AlignedDrainResult
+
+    /** The sink had been closed directly before the barrier could be accepted. */
+    data object Closed : AlignedDrainResult
+
+    /** The sink had been deactivated before the barrier could be accepted. */
+    data object Deactivated : AlignedDrainResult
+
+    /** The open sink's dispatcher did not reach the accepted barrier within the caller's bound. */
+    data object TimedOut : AlignedDrainResult
+}
+
+/**
+ * A one-shot fence on an [AlignedCompositeCell]'s observation dispatcher.
+ *
+ * The outcome is fixed when the fence is registered, except that an accepted
+ * open-sink fence becomes [AlignedDrainResult.Drained] when its FIFO marker
+ * runs. A timeout does not cancel the marker or change sink state; the caller
+ * may await the same fence again.
+ */
+class AlignedDrainBarrier internal constructor(
+    private val outcome: CompletableFuture<AlignedDrainResult>?,
+    private val predecessor: ExecutorService? = null,
+) {
+    fun await(timeoutMillis: Long): AlignedDrainResult {
+        require(timeoutMillis >= 0) { "timeoutMillis must not be negative (was $timeoutMillis)" }
+        predecessor?.let {
+            return if (it.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)) {
+                AlignedDrainResult.Drained
+            } else {
+                AlignedDrainResult.TimedOut
+            }
+        }
+        return try {
+            checkNotNull(outcome).get(timeoutMillis, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            AlignedDrainResult.TimedOut
+        }
+    }
+}
 
 /**
  * The **wave-aligned** multi-view observation sink (spec 20/22 §The observation
@@ -370,8 +415,10 @@ class AlignedCompositeCell(
      */
     private var draining: ExecutorService? = null
 
-    @Volatile
-    private var closed = false
+    private enum class Lifecycle { OPEN, CLOSED, DEACTIVATED }
+
+    /** Read and written only under [lock], alongside dispatcher submission and lifecycle changes. */
+    private var lifecycle = Lifecycle.OPEN
 
     // ---- write-visibility handles (FrontierWitness, KE2 §5.5) ----
 
@@ -470,6 +517,45 @@ class AlignedCompositeCell(
     }
 
     /**
+     * Registers a FIFO fence after every observation callback accepted so far.
+     *
+     * Registration and lifecycle inspection share [lock] with callback
+     * submission, [close], and [onDeactivate]. Therefore a racing lifecycle
+     * change has exactly two outcomes: it wins and this barrier immediately
+     * reports [AlignedDrainResult.Closed] or [AlignedDrainResult.Deactivated],
+     * or this fence is accepted before shutdown and the executor's graceful
+     * drain preserves it behind all earlier callbacks.
+     *
+     * A sink with no dispatcher has accepted no callback work, so its barrier
+     * is already drained and does not mint a thread. This operation does not
+     * add a listener, visibility handle, wave, or observation snapshot.
+     */
+    fun drainBarrier(): AlignedDrainBarrier = synchronized(lock) {
+        val outcome = CompletableFuture<AlignedDrainResult>()
+        when (lifecycle) {
+            Lifecycle.CLOSED -> outcome.complete(AlignedDrainResult.Closed)
+            Lifecycle.DEACTIVATED -> outcome.complete(AlignedDrainResult.Deactivated)
+            Lifecycle.OPEN -> {
+                val target = dispatcher
+                val predecessor = draining
+                if (target != null) {
+                    // Shutdown happens only after a lifecycle changer acquires
+                    // this same lock, so this accepted execute cannot race it.
+                    target.execute { outcome.complete(AlignedDrainResult.Drained) }
+                } else if (predecessor != null && !predecessor.isTerminated) {
+                    // Reopen stays lazy: the handle retains the predecessor
+                    // and its caller performs the bounded wait. No replacement
+                    // dispatcher or unbounded common-pool waiter is created.
+                    return@synchronized AlignedDrainBarrier(null, predecessor)
+                } else {
+                    outcome.complete(AlignedDrainResult.Drained)
+                }
+            }
+        }
+        AlignedDrainBarrier(outcome)
+    }
+
+    /**
      * T08 finding 2: checked accessor over the named composite — mirrors
      * [CompositeSink.get], including its erasure-level caveat (it confirms the
      * *shape*, not the element/key/value type argument).
@@ -493,7 +579,7 @@ class AlignedCompositeCell(
      */
     override fun visibilityOf(wave: Timestamp): CompletableFuture<Visibility> {
         synchronized(lock) {
-            if (closed) {
+            if (lifecycle != Lifecycle.OPEN) {
                 return CompletableFuture.failedFuture(VisibilityAbandoned(VisibilityAbandoned.Reason.SINK_CLOSED, wave))
             }
             val flushed = flushedHighWater[wave.sourceId]
@@ -795,7 +881,7 @@ class AlignedCompositeCell(
      */
     private fun dispatchIfOpen(block: () -> Unit) {
         check(Thread.holdsLock(lock)) { "dispatchIfOpen must be called under the sink lock" }
-        if (closed) return
+        if (lifecycle != Lifecycle.OPEN) return
         val target = dispatcher ?: newDispatcher().also { fresh ->
             dispatcher = fresh
             // First act of a post-[reopen] dispatcher: wait out the superseded
@@ -827,13 +913,18 @@ class AlignedCompositeCell(
      * abandons them first with `HOST_SHUTDOWN`, so this finds none on that path.
      */
     fun close() {
-        val (doomed, abandoned) = synchronized(lock) {
-            if (closed) return
-            closed = true
+        close(Lifecycle.CLOSED, VisibilityAbandoned.Reason.SINK_CLOSED)
+    }
+
+    private fun close(state: Lifecycle, handleReason: VisibilityAbandoned.Reason) {
+        val closed = synchronized(lock) {
+            if (lifecycle != Lifecycle.OPEN) return
+            lifecycle = state
             dispatcher to drainHandles()
         }
+        val (doomed, abandoned) = closed
         doomed?.shutdown()
-        abandon(abandoned, VisibilityAbandoned.Reason.SINK_CLOSED)
+        abandon(abandoned, handleReason)
     }
 
     /**
@@ -854,14 +945,14 @@ class AlignedCompositeCell(
      */
     private fun reopen() {
         synchronized(lock) {
-            if (!closed) return
+            if (lifecycle == Lifecycle.OPEN) return
             // Whatever close() shut down becomes the next mint's predecessor.
             // Only overwrite when there is something to hand off, so a
             // close/reopen cycle that dispatches nothing in between cannot lose
             // an earlier still-draining executor.
             dispatcher?.let { draining = it }
             dispatcher = null
-            closed = false
+            lifecycle = Lifecycle.OPEN
         }
     }
 
@@ -878,12 +969,18 @@ class AlignedCompositeCell(
      * [close] runs, and [snapshot]/[restore] never carry them.
      */
     override fun onDeactivate(ctx: CellContext) {
-        val abandoned = synchronized(lock) {
+        val (doomed, abandoned) = synchronized(lock) {
             pending.clear()
-            drainHandles()
+            if (lifecycle == Lifecycle.OPEN) {
+                lifecycle = Lifecycle.DEACTIVATED
+                dispatcher to drainHandles()
+            } else {
+                lifecycle = Lifecycle.DEACTIVATED
+                null to emptyList()
+            }
         }
+        doomed?.shutdown()
         abandon(abandoned, VisibilityAbandoned.Reason.HOST_SHUTDOWN)
-        close()
     }
 
     override fun snapshot(): Serializable = synchronized(lock) {

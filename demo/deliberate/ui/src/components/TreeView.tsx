@@ -3,6 +3,7 @@ import { DEFAULT_CONSENSUS, type GraphDto } from '../api/types';
 import { buildForest } from '../tree/buildTree';
 import type { TreeNode } from '../tree/buildTree';
 import { FramingSummary, Reading } from './Framing';
+import { useByRef } from '../util/byRef';
 import {
   ACTIVITY_VERB,
   activityOf,
@@ -108,6 +109,7 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
   const question = () => props.graph().questions.find((q) => q.root === props.root);
   // Model A: set only when the question was framed; the positions built by buildForest, by ref.
   const framing = () => question()?.framing;
+  const positions = useByRef(() => framing()?.positions ?? []);
   const positionTrees = createMemo(() => {
     const map = new Map<string, TreeNode>();
     for (const t of props.tree()?.positions ?? []) map.set(t.claim.ref, t);
@@ -243,7 +245,8 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                     </span>
                   )}
                 </Show>
-                <Show when={claim().status && (claim().status === 'STOPPED' || claim().status === 'FAILED')}>
+                {/* CTL-03: a question the human stopped already reads "stopped by you" above. */}
+                <Show when={claim().status && ((claim().status === 'STOPPED' && question()?.stoppedBy !== 'human') || claim().status === 'FAILED')}>
                   <span class="status status--halted" title={STATUS_HINT[claim().status!]}>
                     question {STATUS_LABEL[claim().status!]}
                   </span>
@@ -254,7 +257,7 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                 {/* UI-09: a framed root's EXPAND/STOP would run no round (FRA-02) — no question-level override for it. */}
                 <Show when={!framing()}>
                   <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
-                    <OverrideControl id={claim().ref} value={override()} />
+                    <OverrideControl id={claim().ref} value={override()} what="question" />
                   </span>
                 </Show>
               </p>
@@ -284,10 +287,14 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
               when={!framing()}
               fallback={
                 <div class="readings">
-                  <For each={framing()?.positions ?? []}>
-                    {(p) => (
-                      <Show when={positionTrees().get(p.ref)}>
-                        {(t) => <Reading position={p} tree={t()} sel={props.sel} />}
+                  <For each={positions.refs()}>
+                    {(ref) => (
+                      <Show when={positions.byRef(ref)}>
+                        {(p) => (
+                          <Show when={positionTrees().get(ref)}>
+                            {(t) => <Reading position={p()} tree={t()} sel={props.sel} />}
+                          </Show>
+                        )}
                       </Show>
                     )}
                   </For>

@@ -34,7 +34,8 @@ data class QuestionDto(
     /** EXP-10: mean yield of every recorded round before those; null until there are more than `yieldWindow`. */
     val yieldEarlier: Double? = null,
     /**
-     * Why the tree stopped growing early: "budget" (the hard cap, EXP-06), "voi"
+     * Why the tree stopped growing early: "human" (the human stopped the question:
+     * STOP on its root, CTL-03), "budget" (the hard cap, EXP-06), "voi"
      * (model C: no work left, and at least one node ended DIMINISHING because its
      * value of information fell below ε), or null. ("diminishing", the removed
      * yield stop, is no longer sent.)
@@ -179,6 +180,14 @@ data class NodeDto(
     /** Lowest and highest credence over all layers. */
     val spreadLow: Double = credence,
     val spreadHigh: Double = credence,
+    /**
+     * Model D's local arguments-first view per layer: the same direct argument
+     * inputs with this node's prior set to ½. An unargued node keeps
+     * [credences], because there is no argument-driven standing yet.
+     */
+    val argumentsFirstCredences: Map<String, Double> = credences,
+    /** Geometric-odds consensus of [argumentsFirstCredences]. */
+    val argumentsFirstConsensus: Double = consensus,
     // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth, status,
     // override, reach, contribution, saturation, rounds, duplicatesDropped, triage,
     // error, activity) ---

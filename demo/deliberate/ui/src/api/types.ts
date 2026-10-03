@@ -25,8 +25,9 @@ export interface QuestionDto {
   /** Mean yield of every recorded round before those; absent until there are more than `yieldWindow`. */
   yieldEarlier?: number;
   /**
-   * Why the tree stopped growing early: the claim budget (the hard cap), or — no
-   * work left — model C's value-of-information stop, when it left a node DIMINISHING.
+   * Why the tree stopped growing early: the human stopped the question (STOP on
+   * its root, CTL-03), the claim budget (the hard cap), or — no work left — model
+   * C's value-of-information stop, when it left a node DIMINISHING.
    */
   stoppedBy?: StoppedBy;
   /**
@@ -135,7 +136,7 @@ export interface BackendCostDto {
   note?: string;
 }
 
-export type StoppedBy = 'budget' | 'voi';
+export type StoppedBy = 'human' | 'budget' | 'voi';
 
 export type Status =
   | 'QUEUED'
@@ -164,7 +165,7 @@ export interface NodeDto {
   credence: number;
   /** The question tree this node belongs to (its root claim ref). */
   root: string;
-  // The four fields below have Kotlin defaults and the backend always sends
+  // The six fields below have Kotlin defaults and the backend always sends
   // them (encodeDefaults); they are optional here only so hand-written
   // fixtures without them stay valid. Read them through `shown()`/`spreadOf()`.
   /** SPEC §2 "Credence layers and consensus": propagated credence per semantics layer id. */
@@ -174,6 +175,10 @@ export interface NodeDto {
   /** Lowest and highest credence over all layers. */
   spreadLow?: number;
   spreadHigh?: number;
+  /** Model D: local arguments-first credence per layer; equal to `credences` without incoming arguments. */
+  argumentsFirstCredences?: Record<string, number>;
+  /** Geometric-odds consensus of `argumentsFirstCredences`. */
+  argumentsFirstConsensus?: number;
   // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth,
   // status, override, reach, contribution, saturation, rounds,
   // duplicatesDropped, triage, error, activity) ---

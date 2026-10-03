@@ -11,8 +11,8 @@ import {
 } from '../api/types';
 
 /** The backend's credence layers, and per-layer log-odds shifts that make the mock's rules disagree plausibly. */
-const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp'] as const;
-const LAYER_SHIFT = [0, 0.18, -0.12, 0.08, 0.5, -0.4, 0.3];
+const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp', 'glo'] as const;
+const LAYER_SHIFT = [0, 0.18, -0.12, 0.08, 0.5, -0.4, 0.3, 0.12];
 const logit = (p: number) => Math.log(p / (1 - p));
 const sigmoid = (z: number) => 1 / (1 + Math.exp(-z));
 const clampP = (p: number) => Math.min(0.999, Math.max(0.001, p));
@@ -237,7 +237,19 @@ export class MockSource implements GraphSource {
     const targeted = new Set(nodes.filter((n) => n.kind === 'EDGE').map((e) => e.target));
     for (const n of nodes) {
       // Without arguments every rule keeps the first impression: no spread, by construction.
-      Object.assign(n, targeted.has(n.ref) ? mockLayers(n) : flatLayers(n));
+      const argued = targeted.has(n.ref);
+      Object.assign(n, argued ? mockLayers(n) : flatLayers(n));
+      if (!argued) {
+        n.argumentsFirstCredences = { ...n.credences };
+        n.argumentsFirstConsensus = n.consensus;
+      } else {
+        const first = n.kind === 'EDGE' ? n.strength : n.plausibility;
+        const ordinary = n.consensus ?? n.credence;
+        const standing = first === undefined ? ordinary : clampP(0.5 + ordinary - first);
+        const view = mockLayers({ ...n, credence: standing });
+        n.argumentsFirstCredences = view.credences;
+        n.argumentsFirstConsensus = view.consensus;
+      }
       if (n.status === 'JUDGING') n.activity = 'judging';
       else if (n.status === 'EXPLORING') n.activity = 'exploring';
     }

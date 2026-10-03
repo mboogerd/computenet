@@ -19,6 +19,7 @@ import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.Propagate
 import civictech.cell.observe.AlignedCompositeCell
+import civictech.cell.observe.AlignedDrainResult
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
@@ -41,8 +42,6 @@ import civictech.nature.PortDescriptor
 import civictech.nature.PortDirection
 import java.io.Serializable
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 
 /**
@@ -203,15 +202,16 @@ internal class RecordedView<D : Any, S>(
  * single-consumer executor, so submission order is delivery order. The kernel
  * work that publishes runs on the thread stepping the
  * [civictech.cell.host.SimulationController], which is the runner's thread, so
- * by the time [drain] registers its one-shot barrier listener every composite
- * of the quiesced run has already been submitted ahead of the barrier's
- * catch-up. When the barrier fires, every earlier composite is in [log]. The
- * wait is bounded and a timeout throws — never a partial log.
+ * by the time [drain] registers [AlignedCompositeCell.drainBarrier], every
+ * composite of the quiesced run has already been submitted ahead of its FIFO
+ * marker. A drained barrier means every earlier composite is in [log]. A
+ * closed or deactivated sink fails immediately; a bounded timeout throws
+ * rather than returning a partial log. The barrier adds no permanent listener.
  *
  * **Thread-safety of [log].** It is appended on the dispatcher thread and read
- * on the runner thread after [drain]; the latch's `countDown`/`await` pair is
- * the happens-before edge, and the caller passes a synchronized list as belt
- * and braces.
+ * on the runner thread after [drain]; the kernel barrier's successful wait
+ * supplies the happens-before edge, and the caller passes a synchronized list
+ * as belt and braces.
  *
  * **The first entry** is the composite as constructed (every member empty),
  * appended synchronously here so it is present the moment the catalog returns —
@@ -259,12 +259,15 @@ internal class RecordedComposite(
      */
     fun drain(timeout: Duration) {
         check(!closed) { "aligned view ${cell.ref} was closed; its observation log can no longer be drained" }
-        val barrier = CountDownLatch(1)
-        // A listener is never removed (the sink has no unregister), so later
-        // publishes call this again; counting down a released latch is a no-op.
-        cell.onChange { barrier.countDown() }
-        if (!barrier.await(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)) {
-            throw IllegalStateException(
+        when (val result = cell.drainBarrier().await(timeout.inWholeMilliseconds)) {
+            AlignedDrainResult.Drained -> Unit
+            AlignedDrainResult.Closed, AlignedDrainResult.Deactivated ->
+                throw IllegalStateException(
+                    "aligned view ${cell.ref} was closed or deactivated " +
+                        "(lifecycle: ${result::class.simpleName?.lowercase()}); " +
+                        "its observation log cannot be drained",
+                )
+            AlignedDrainResult.TimedOut -> throw IllegalStateException(
                 "aligned view ${cell.ref}: its listener dispatcher did not reach the drain barrier within " +
                     "$timeout, so its observation log may be missing composites — refusing to report " +
                     "quiescence over a truncated log",

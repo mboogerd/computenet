@@ -129,6 +129,20 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('not worth exploring');
   });
 
+  it('CTL-03 on the root: a question the human stopped reads "stopped by you", once, and its Stop says it stops the question', () => {
+    const running = renderToString(() => <TreeView graph={graph} root="q" />);
+    expect(running).not.toContain('stopped by you');
+    expect(running).toContain('Stop the whole question');
+    const stopped: GraphDto = {
+      ...graph,
+      questions: [{ ...graph.questions[0], active: false, stoppedBy: 'human' }],
+      nodes: graph.nodes.map((n) => (n.ref === 'q' ? { ...n, status: 'STOPPED', override: 'STOP' } : n)),
+    };
+    const html = renderToString(() => <TreeView graph={stopped} root="q" />).replace(/<!--[^>]*-->/g, '');
+    expect(html.match(/stopped by you/g)).toHaveLength(1);
+    expect(html).not.toContain('question stopped');
+  });
+
   it('model C lists the question\'s cruxes under "what would change the answer", best first', () => {
     expect(renderToString(() => <CruxesPanel graph={graph} root="q" />)).not.toContain('What would change the answer');
     const withCruxes: GraphDto = {
@@ -352,6 +366,30 @@ describe('SPEC UI contract', () => {
     expect(facts).not.toContain('Plausible on its own');
   });
 
+  it('model D: the research facts expose first impression versus arguments first for claims and links', () => {
+    const claim = {
+      ...graph.nodes[1],
+      plausibility: 0.8,
+      argumentsFirstCredences: { dfquad: 0.61, wlo: 0.72, jnb: 0.69, woe: 0.7, glo: 0.67 },
+      argumentsFirstConsensus: 0.7,
+    };
+    const claimFacts = renderToString(() => <Facts id="claim-facts" claim={claim} research />).replace(/<!--[^>]*-->/g, '');
+    expect(claimFacts).toContain('First impression vs arguments');
+    expect(claimFacts).toContain('first impression 80% · arguments first 70%');
+    expect(claimFacts).toContain('Arguments first by rule');
+    expect(claimFacts).toContain('gated log-odds · 67%');
+
+    const link = {
+      ...layered.nodes.find((n) => n.kind === 'EDGE')!,
+      strength: 0.85,
+      argumentsFirstCredences: { dfquad: 0.58, wlo: 0.62, jnb: 0.6, woe: 0.61, glo: 0.57 },
+      argumentsFirstConsensus: 0.61,
+    };
+    const linkFacts = renderToString(() => <Facts id="link-facts" claim={link} link research />).replace(/<!--[^>]*-->/g, '');
+    expect(linkFacts).toContain('first impression 85% · arguments first 61%');
+    expect(linkFacts).toContain('Arguments first by rule');
+  });
+
   it('shows what the deliberation is doing now, links included', () => {
     const busy: GraphDto = {
       ...layered,
@@ -490,7 +528,7 @@ describe('UI-09 model A: framing', () => {
     const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
 
     expect(text).toContain('Do fish sleep?');
-    expect(hero).toContain('depends on what you mean by sleep');
+    expect(hero).toContain('between 40% and 55%, depending on what you mean by sleep');
     expect(hero).not.toContain('gauge__track');
     expect(hero).not.toContain('gauge__fill');
 
@@ -514,13 +552,13 @@ describe('UI-09 model A: framing', () => {
     expect((p2Section.match(/aria-label="Exploration override"/g) ?? []).length).toBe(1);
   });
 
-  it('A-8 READINGS without a term: the heading reads "depends on the reading"', () => {
+  it('A-8 READINGS without a term: the heading reads "…, depending on the reading"', () => {
     const noTerm: GraphDto = {
       ...readingsGraph,
       questions: [{ ...readingsGraph.questions[0], framing: { mode: 'READINGS', positions: readingsGraph.questions[0].framing!.positions } }],
     };
     const html = renderToString(() => <TreeView graph={noTerm} root="q" />);
-    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depends on the reading');
+    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depending on the reading');
   });
 
   it('A-8 POSITIONS: lists a distribution in order with proportional bars and percentages', () => {

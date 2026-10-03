@@ -18,7 +18,7 @@ type ExpectedQuestionDto = {
   yieldRounds?: number;
   yieldRecent?: number;
   yieldEarlier?: number;
-  stoppedBy?: 'budget' | 'voi';
+  stoppedBy?: 'human' | 'budget' | 'voi';
   paused?: boolean;
   costUsd?: number;
   projectedUsd?: number;
@@ -70,6 +70,8 @@ type ExpectedNodeDto = {
   consensus?: number;
   spreadLow?: number;
   spreadHigh?: number;
+  argumentsFirstCredences?: Record<string, number>;
+  argumentsFirstConsensus?: number;
   text?: string;
   depth?: number;
   status?: Status;
