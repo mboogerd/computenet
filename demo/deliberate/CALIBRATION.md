@@ -56,6 +56,19 @@ In the "cross estimate" column, each depth-1 strength (36 claims) is paired with
 
 With the defaults of two proposers × `argsPerCall` 1, each round offers up to two new arguments per side. Jev's saturation judgment is therefore consulted at 2 and 4 arguments per side, before the dependable `maxArgsPerSide` cap of 6 ends a side that Jev has not already saturated.
 
+## Exact value of information (2026-10-03)
+
+VoI now uses the propagated credence `q` and exact two-point re-evaluation of
+every path to each active answer root; the retired local derivative and its
+`4p(1-p)` plausibility factor no longer schedule or stop work. The existing
+`--voi-eps` default 0.01 remains a starting value, not a calibration result,
+and must be recalibrated separately after this change. The shipping regression
+fixture puts a depth-1 support beyond the weight-of-evidence energy clamp: the
+old linear value is 0 while the exact expected root movement is 0.061838. The
+test suite also checks deterministic random trees against an independent
+recursive two-point evaluator; the unavailable scratchpad population figures
+are not treated as reproduced evidence.
+
 ## Questionless CRED-01 recalibration (2026-10-03)
 
 The CRED-01 request now holds the claim only; it no longer sends the root

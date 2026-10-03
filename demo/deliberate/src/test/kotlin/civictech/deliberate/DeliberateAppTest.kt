@@ -122,7 +122,7 @@ class DeliberateAppTest {
         assertEquals(setOf("SUPPORT", "ATTACK"), edges.map { it.polarity }.toSet())
         assertTrue(edges.all { it.strength == 0.7 })
         assertTrue(claims.all { it.credence in 0.0..1.0 })
-        // Model C: over HTTP every node carries its sensitivity, and the question its top-3 cruxes.
+        // The wire-compatible field carries exact sway, and the question carries its top-3 exact-VoI cruxes.
         val settled = probe.awaitGraph { gr -> gr.nodes.all { it.sensitivity != null } && gr.questions.single().cruxes.size == 3 }
         assertTrue(settled.questions.single().cruxes.all { c -> c != root && settled.nodes.any { it.ref == c } })
         assertTrue(settled.nodes.single { it.ref == root }.sensitivity!! > 0)

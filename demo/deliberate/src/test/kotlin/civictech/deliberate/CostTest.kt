@@ -281,7 +281,7 @@ class CostTest {
                 .also { engines += it }
             val root = e1.ask("Durable?")
             e1.idle()
-            // Cruxes (model C) come from sensitivity cells a restart rebuilds from scratch; they are not compared.
+            // Exact-VoI cruxes are recomputed on demand after restart; they are not compared here.
             fun durable(q: QuestionDto) = q.copy(cruxes = emptyList())
             // Idle means no claim is pending, not that credence propagation has settled: the model D
             // neutral-prior verdict (derived from the root cell) keeps moving briefly after idle(), and

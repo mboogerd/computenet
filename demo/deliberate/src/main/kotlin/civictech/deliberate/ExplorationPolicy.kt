@@ -1,7 +1,6 @@
 package civictech.deliberate
 
 import civictech.agora.cell.Polarity
-import kotlin.math.abs
 import kotlin.math.pow
 
 /**
@@ -20,12 +19,9 @@ internal data class ClaimView(
     val roundLimit: Int = 3,
     val reach: Double? = null,
     val contribution: Double? = null,
-    /**
-     * Model C: d headline(root) / d this node ([CredenceGraph.sensitivityOf]),
-     * null until the sensitivity layer reached it.
-     */
-    val sensitivity: Double? = null,
-    /** Model C: its plausibility; for a link, its argument's edge strength. Null while unjudged. */
+    /** Exact q-weighted root movement from resolving this node, summed over active answer roots. */
+    val valueOfInformation: Double? = null,
+    /** Its plausibility; for a link, its argument's edge strength. Null while unjudged. */
     val plausibility: Double? = null,
     /** How many pro (SUPPORT) and con (ATTACK) arguments it holds. */
     val pros: Int = 0,
@@ -57,17 +53,12 @@ internal data class Finish(val status: Status, val error: String? = null)
  * pure functions over [ClaimView] and [QuestionView]: no locks, no threads,
  * no I/O. The engine takes the views under its lock and applies the answers.
  *
- * Model C: the queue order and the stop read the dataflow. A node's value of
- * information is |d root / d node| × 4·p·(1 − p) ([valueOf]; its sensitivity
- * from the sensitivity cells, p its plausibility), decayed per round it ran
- * ([voiOf]). It orders the queue ([priorityOf]), and a node whose value of
- * information is below `voiEpsilon` gets no (further) round: it ends
- * DIMINISHING. A question therefore stops once the largest value of
- * information over its remaining nodes falls below ε — with its hard cost cap
- * (`maxClaims`, EXP-06 BUDGET) still standing. This replaced reach × relevance
- * as the order, the relevance floor, `maxDepth` and the yield stop as stop
- * rules (`maxDepth` survives only as an engine bound the tests use; the app
- * sets no depth).
+ * The queue order and stop use exact, q-weighted two-point re-evaluation from
+ * [CredenceGraph.exactValueOf], decayed per round ([voiOf]). It orders the
+ * queue ([priorityOf]), and a node below `voiEpsilon` gets no (further) round:
+ * it ends DIMINISHING. A question therefore stops once the largest exact value
+ * over its remaining nodes falls below ε — with its hard cost cap (`maxClaims`,
+ * EXP-06 BUDGET) still standing.
  */
 internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
 
@@ -212,35 +203,24 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     // ---------------------------------------------------------------- SPEC §3 "Exploration order", EXP-05
 
     /**
-     * Model C: [c]'s value of information before round decay —
-     * |d root / d c| × 4·p·(1 − p) ([uncertainty]). The root is 1: the question
-     * itself is always worth its rounds. An unjudged p counts as ½ (factor 1);
-     * a sensitivity the sensitivity layer has not delivered yet counts as
-     * [DeliberationEngine.Config.FALLBACK_STRENGTH], middling, as a failed
-     * strength judgment does for reach.
+     * [c]'s exact value of information before round decay. The root is 1: the
+     * question itself is always worth its rounds. A value not available from
+     * the graph snapshot yet uses [DeliberationEngine.Config.FALLBACK_STRENGTH].
      */
     fun valueOf(c: ClaimView): Double =
         if (c.isRoot) 1.0
-        else abs(c.sensitivity ?: DeliberationEngine.Config.FALLBACK_STRENGTH) * uncertainty(c.plausibility)
+        else c.valueOfInformation ?: DeliberationEngine.Config.FALLBACK_STRENGTH
 
-    /** Model C: the value of information of [c]'s next round: [valueOf] × roundDecay^(rounds run). */
+    /** The value of information of [c]'s next round: [valueOf] × roundDecay^(rounds run). */
     fun voiOf(c: ClaimView): Double = valueOf(c) * config.roundDecay.pow(c.rounds)
 
-    /** Model C: [c]'s next round is worth less than `voiEpsilon`. */
+    /** [c]'s next round is worth less than `voiEpsilon`. */
     fun belowEpsilon(c: ClaimView): Boolean = voiOf(c) < config.voiEpsilon
 
     /** The queue priority of [c]'s next round: its value of information ([voiOf]); forced first (CTL-02). */
     fun priorityOf(c: ClaimView): Double =
         if (c.override == Override.EXPAND) DeliberationEngine.Config.FORCED_PRIORITY
         else voiOf(c)
-
-    /**
-     * Model C: how much settling a node could still move the answer —
-     * |[sensitivity]| × 4·p·(1 − p) (the crux score, [valueOf] without the
-     * fallbacks), or null when its sensitivity is not known yet.
-     */
-    fun cruxScore(sensitivity: Double?, plausibility: Double?): Double? =
-        sensitivity?.let { abs(it) * uncertainty(plausibility) }
 
     /** An edge's strength for reach, [DeliberationEngine.Config.FALLBACK_STRENGTH] when unjudged, clamped to [0,1]. */
     fun strengthOf(strength: Double?): Double =

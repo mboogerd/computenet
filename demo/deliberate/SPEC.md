@@ -41,13 +41,13 @@ names that model.)
 - **Contribution** — reach × relevance × quality (EXP-05); 1 for the root.
   Shown for reference only: since model C it no longer orders exploration or
   gates a claim (see **Value of information**).
-- **Sensitivity** — d root / d claim (or, for a link, d root / d its edge),
-  computed top-down by cells of their own, separate from the credence graph
-  (model C, §3 "Sensitivity and value of information"): how much settling
-  this node could still move the root's answer.
-- **Value of information (VoI)** — |sensitivity| × 4·p·(1 − p), `p` the
-  claim's plausibility (a link's its own edge strength; model C). It is a
-  claim's priority in the exploration queue and, once it falls below
+- **Sway** — the signed exact secant `R(node=1) − R(node=0)` shown through the
+  wire-compatible `NodeDto.sensitivity` field: which way, and by how much, an
+  answer root can move when the node resolves.
+- **Value of information (VoI)** — the exact, propagated-credence-weighted
+  expected root movement from resolving a claim or link (§3 "Exact value of
+  information"). It is a claim's priority in the exploration queue and, once
+  it falls below
   `--voi-eps` for every remaining node in a question, the question's stop
   condition — replacing contribution-based ordering, `minInfluence`,
   `maxDepth` as a stop rule and the yield stop (below).
@@ -148,7 +148,7 @@ names that model.)
   ordinary vector: no argument means no invented neutral standing. A question
   or reading root's `neutralCredence` keeps its earlier value, the neutral ½
   evaluation, until the root has an argument. The
-  arguments-first vector never feeds an influence, sensitivity, queue, verdict
+  arguments-first vector never feeds an influence, queue, verdict
   or another layer; `priorWeight == 1.0` leaves every ordinary vector exactly
   as before. The cached prior-dominance measurement in `CALIBRATION.md` is
   design evidence for exposing this diagnostic view, not evidence that it
@@ -252,7 +252,7 @@ names that model.)
   bears on its parent in the stated direction, not a restatement, off-topic or
   a rhetorical question?"). Its **contribution** is
   `reach × relevance × quality`, shown for reference only — since model C
-  (§3 "Sensitivity and value of information") it does not gate or order
+  (§3 "Exact value of information") it does not gate or order
   exploration; there is no contribution floor and no `PRUNED`-by-contribution
   outcome (the `minInfluence` flag is removed). An undercutter's reach is
   `reach(parent) × strength(its edge) × strength(the undercut edge)`. Quality
@@ -298,31 +298,28 @@ names that model.)
   `--yield-stop` flag (removed); the yields remain durable (DUR-02) purely as
   a diagnostic.
 
-### Sensitivity and value of information (model C)
+### Exact value of information
 
-Alongside the credence graph (§2), a second, one-way graph of cells computes
-**sensitivity**: how much the root's answer would move per unit change of
-each node's credence, `d root / d node`, per layer. The root's cell emits 1
-(per layer); every other node's cell folds the same stances and incoming
-influences its credence cell folds, and for each incoming edge sends (its own
-sensitivity × the local partial derivative of its credence with respect to
-that edge's strength or its source's credence) to that edge's cell, which
-sums what arrives from every path back to the source claim (the chain rule;
-a deliberation tree has exactly one path per node). The local partials are
-central finite differences of the layer's own semantics at the node's current
-inputs. No sensitivity cell feeds a credence cell: the credence graph gains no
-new input and no cycle, and sensitivity is a pure function of the replayed
-structure and stances — like credence, it is **derived, never journaled**
-(DUR-01); a restart recomputes it from scratch. A node's scalar sensitivity
-(used below) is `d headline(root) / d node`, via the same per-layer weights
-`headlineOf` (CRED-05) uses.
+Value of information is a pure, on-demand two-point re-evaluation of the
+credence graph snapshot. For candidate node `n`, let `q` be its propagated
+headline credence, `R` an active answer root's current headline, and `R₀` and
+`R₁` that root after replacing every layer of `n` by 0 or 1 and recomputing
+every dependent node from its replayed stances and influences. Every path to
+the root participates; converging paths are evaluated together. The root's
+exact value is:
 
-A claim's (or link's) **value of information** is
-`|sensitivity| × 4·p·(1 − p)`, `p` its plausibility (a link's is its own edge
-strength) — the same uncertainty factor as `uncertainty(p)` above, unjudged
-`p` counting ½ (factor 1). A sensitivity the layer has not yet delivered
-counts `FALLBACK_STRENGTH` (0.5), as a failed strength judgment does for
-reach. This value, decayed by `roundDecay^(rounds already run)`, **is the
+`VoI(n, R) = 2 · (q·|R₁−R| + (1−q)·|R₀−R|)`.
+
+The factor 2 preserves model C's scale: on a locally linear path this equals
+`|dR/dn|·4q(1−q)`. A claim reachable from several active answer roots uses the
+sum of `VoI(n, R)` over those roots. Results are memoised per credence/topology
+version. `NodeDto.sensitivity` keeps its wire shape but carries the signed exact
+secant `R₁−R₀` for the root to which the node has the largest VoI; no derivative
+or sensitivity cell feeds display, scheduling or stopping. Exact VoI is derived,
+never journaled (DUR-01), and a restart recomputes it from the restored structure
+and stances.
+
+This value, decayed by `roundDecay^(rounds already run)`, **is the
 claim's priority in the exploration queue** (below), replacing the earlier
 reach × relevance ordering; and once it falls below `--voi-eps`
 (`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
@@ -339,10 +336,8 @@ only as an unbounded-by-default internal bound, EXP-05) and the yield stop
 above (`--yield-stop`, removed) as a question's stop rule.**
 
 **Cruxes.** `QuestionDto.cruxes` lists up to 3 refs of the question's nodes
-(claims below the root, and links as `EDGE` refs) by `|sensitivity| ×
-4·p·(1 − p)` — the same value-of-information score, without the round-decay
-and `FALLBACK_STRENGTH` fallbacks a node without a sensitivity yet is simply
-left out — best first, ties in creation order. The UI's "what would change
+(claims below the root, and links as `EDGE` refs) by that exact VoI without
+round decay — best first, ties in creation order. The UI's "what would change
 the answer" panel (§7) lists them.
 
 ### Exploration order
@@ -356,8 +351,9 @@ sibling's first. Ties go first-in, first-out. An argument is queued, at its
 value-of-information priority, as soon as its attach-time assessment
 completes — at the end of the round that attached it, since a later turn may
 still reword it; it does not wait for its parent to finish later rounds.
-Because the sensitivity cells settle asynchronously, priorities are ranked
-when a worker takes the next task, not fixed when a claim is enqueued. A claim
+Because credences change as arguments settle, exact priorities are recomputed
+from the current snapshot when a worker takes the next task, not fixed when a
+claim is enqueued. A claim
 the human forces with `EXPAND` is queued ahead of everything else
 (`FORCED_PRIORITY`). Links (below) share this one queue.
 
@@ -385,12 +381,11 @@ child rewords its link), and explores the link exactly like a claim:
   strength (0.5 when that judgment failed: factor 1) — shown for reference
   only, like a claim's contribution (EXP-05). `reach(link) = reach(argument)`.
   A link's **value of information** follows the same formula as a claim's
-  (§3 "Sensitivity and value of information"), reading the link's own edge
-  strength as its plausibility and the *edge's* sensitivity cell as its
-  sensitivity: `|sensitivity(edge)| × 4·s·(1 − s)` — 1 at s = ½, 0 for a link
-  judged irrelevant or decisive — so a clear-cut link is left alone unless the
-  human expands it, and an open link under a claim the answer is sensitive to
-  is explored early. An argument about a link then has
+  (§3 "Exact value of information"): `q` is the edge node's propagated
+  credence, and resolving it to 0 or 1 re-evaluates every path from that edge
+  to each active answer root. A clear-cut link therefore has little or no
+  expected value, while an open link that can move an answer is explored early.
+  An argument about a link then has
   `reach = reach(argument) × strength(its own edge)` — for an undercutter,
   exactly EXP-05's formula.
 - **LINK-04 Scheduling.** A link joins the queue with its argument, once the
@@ -449,8 +444,8 @@ open question, each explored as a root of its own.
   no engine change beyond creating it: its own CRED-01 first impression
   (`Judge.plausibility`, judged from the item's self-contained restated text
   alone), its own model D neutral-prior verdict
-  and disagreement flag, its own model C sensitivity root and value of
-  information (1, like any root), and the shared budget (EXP-06), cost
+  and disagreement flag, its own exact-VoI answer root (value 1, like any
+  root), and the shared budget (EXP-06), cost
   (§12) and pause (CTL-05) of the question. The question root itself takes no
   round: it finishes `Status.FRAMED` (§5) the moment framing succeeds, and an
   `EXPAND` on it runs no round either.
@@ -458,7 +453,7 @@ open question, each explored as a root of its own.
   one `IssueNode` cell, fed by every position's credence outlet, emitting
   `Shares` (per layer, and the consensus) to a `sharesHub` — derived and
   volatile like credence (DUR-01), never journaled, and wired **one-way**:
-  nothing flows from it back into any credence or sensitivity cell (CRED-03).
+  nothing flows from it back into any credence cell (CRED-03).
   `Softmax.shares` computes it: `score = logit(clamped credence) / T`,
   `Softmax.TEMPERATURE` (`T`) 1 → normalised odds — monotone in every
   credence, sums to 1; e.g. credences (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
@@ -466,8 +461,8 @@ open question, each explored as a root of its own.
   is 1/n. `READINGS` spawns no `IssueNode`: each reading's verdict is its own
   credence, with no shares to fold.
 - **FRA-04 Durability.** `CredenceGraph` applies one `GraphSpec` delta for an
-  issue framing — the position claims, their sensitivity cells, the `IssueNode`
-  when present and every wire — as one write-ahead topology record, with the
+  issue framing — the position claims, the `IssueNode` when present and every
+  wire — as one write-ahead topology record, with the
   refs pre-allocated. The delta is atomic at journal admission: if its record
   is absent on restart, none of that framing's topology is rebuilt; if it is
   present, the whole framing is restored under its recorded refs before
@@ -538,7 +533,7 @@ open question, each explored as a root of its own.
 `QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
 alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
 `DIMINISHING` (its value of information fell below `--voi-eps`; model C, §3
-"Sensitivity and value of information"), `STOPPED`, `FAILED`, and — a
+"Exact value of information"), `STOPPED`, `FAILED`, and — a
 question root only, reached from `QUEUED` in place of `JUDGING` — `FRAMED`
 (model A, §3 "Framing"): the root was split into readings or positions, each
 explored as a root of its own; the root itself never runs a round.
@@ -555,8 +550,8 @@ Every status change is broadcast.
   `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`, and its
   model D `argumentsFirstCredences` per layer and
   `argumentsFirstConsensus` (equal to the ordinary vector/consensus when the
-  node has no incoming arguments), and its `sensitivity` (model C, §3, null
-  until the sensitivity layer reaches it); an
+  node has no incoming arguments), and its wire-compatible `sensitivity`
+  (the exact signed sway `R(node=1)−R(node=0)`, §3); an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
   its edge's `target`) and every argument about a link carries `onLink` (that
   edge); a claim carries `evidence` (model B REFINE outcomes) when it has any;
@@ -612,10 +607,10 @@ Every status change is broadcast.
 - **UI-06** Under each question a "now" line names what the deliberation is
   doing this moment: which claims and links are being explored or judged.
 - **UI-07** Under each question's tree, a "what would change the answer"
-  panel (model C, §3 "Sensitivity and value of information") lists its
+  panel (§3 "Exact value of information") lists its
   `cruxes` — the claims and links whose settling could move the answer most —
-  each with its sway (`|sensitivity|`), how settled it is (its plausibility or,
-  for a link, its strength) and, when its sensitivity is signed, which way it
+  each with its exact secant sway (`|sensitivity|`), how settled it is (its
+  plausibility or, for a link, its strength) and which way resolving it true
   would pull the answer. Nothing is shown until the backend names a crux.
 - **UI-08 (model D).** All eight layers are still computed for every node, but
   only the consensus is shown by default: no spread band on a claim's or the
@@ -693,7 +688,7 @@ real claims at depths 0–3 with 0–6 arguments per side, recorded in
 `demo/deliberate/CALIBRATION.md`, must show that with the defaults a side
 typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
 parameters and `maxDepth` as a stop rule are removed by model C — §3
-"Sensitivity and value of information" — and appear only as history.
+"Exact value of information" — and appear only as history.
 `--voi-eps`'s default is a starting value from a one-off scratch model
 review, not a calibration run.)
 
@@ -718,12 +713,14 @@ saturation request, so `saturation` remains 0.22. Sampling and caveats are in
   together with the engine's metadata, which includes the `jev` stances.
   Nothing derived —
   no ordinary or arguments-first credence vector, influence, hub update, or
-  sensitivity vector or frame
-  (model C, §3 "Sensitivity and value of information") — is ever written: the
-  metadata cell is the only journaled cell on the host (a per-cell journal
-  selector), every credence and sensitivity cell is volatile, and on boot the
-  graph recomputes every credence and every sensitivity from the structure and
-  the re-applied stances, with catch-up baselines enabled. A restart
+  exact-VoI evaluation (§3 "Exact value of information") — is ever written:
+  the metadata cell is the only journaled cell on the host (a per-cell journal
+  selector), every credence cell is volatile, and on boot the graph recomputes
+  every credence from the structure and re-applied stances; exact VoI is then
+  evaluated on demand. Topology journals written by the retired model-C build
+  may contain `SensitivityFactory` spawns and links: their legacy types and hub
+  endpoint remain loadable, but their derivative output is ignored, while new
+  topology deltas create no sensitivity cells. A restart
   reproduces every layer's ordinary and arguments-first credence and every
   consensus (within 1e-9), restart after restart. Arguments-first evaluation
   makes no model call and therefore adds no cost record.

@@ -243,8 +243,8 @@ data class Shares(
  * Model A: the "softmax cell" of a POSITIONS issue. Hears every position's
  * [Credence] (keyed by [Credence.source]) and emits their [Shares]; a
  * position not heard from yet counts ½ in every layer and in the consensus.
- * Nothing it emits is wired into a credence or sensitivity cell (CRED-03):
- * shares are a read of the positions' credences, never an input to them.
+ * Nothing it emits is wired into a credence cell (CRED-03): shares are a read
+ * of the positions' credences, never an input to them.
  */
 class IssueNode(
     override val ref: CellRef,
