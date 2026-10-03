@@ -198,6 +198,10 @@ class WaveFrontier(
     /** A buffered wave invocation and the arm (inlet) it arrived on. */
     private class Buffered(val arm: Arm, val invocation: Invocation)
 
+    private fun Buffered.forgetCheckpointAcceptance() {
+        arm.inlet?.forgetCheckpointAcceptance(invocation)
+    }
+
     private val pending = LinkedHashMap<Timestamp, LinkedHashMap<UUID, Buffered>>()
 
     private class EdgeState(
@@ -355,7 +359,11 @@ class WaveFrontier(
             release(invocation)
         } else {
             advanceWatermark(edge.link.id, ctx.timestamp.sourceId, ctx.timestamp.counter)
-            pending.getOrPut(ctx.timestamp) { LinkedHashMap() }[edge.link.id] = Buffered(arm, invocation)
+            val replacement = pending.getOrPut(ctx.timestamp) { LinkedHashMap() }
+                .put(edge.link.id, Buffered(arm, invocation))
+            if (replacement != null && replacement.invocation !== invocation) {
+                replacement.forgetCheckpointAcceptance()
+            }
             flushReady()
         }
     }
@@ -368,7 +376,9 @@ class WaveFrontier(
      * so accounting for waves arriving after restart is unaffected.
      */
     override fun reset() {
+        val discarded = pending.values.flatMap { it.values }
         pending.clear()
+        discarded.forEach { it.forgetCheckpointAcceptance() }
     }
 
     /**
@@ -504,7 +514,15 @@ class WaveFrontier(
             flushedHighWater.merge(timestamp.sourceId, timestamp.counter, ::maxOf)
             // each under its own context, to its own inlet; the arm attached
             // first releases first (stable: arrival order within an arm)
-            wave.values.sortedBy { it.arm.attachIndex }.forEach { it.arm.release(it.invocation) }
+            val releases = wave.values.sortedBy { it.arm.attachIndex }
+            releases.forEachIndexed { index, buffered ->
+                try {
+                    buffered.arm.release(buffered.invocation)
+                } catch (failure: Throwable) {
+                    releases.drop(index).forEach { it.forgetCheckpointAcceptance() }
+                    throw failure
+                }
+            }
         }
     }
 }
