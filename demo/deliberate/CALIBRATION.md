@@ -302,9 +302,9 @@ columns average the headline member layers (`wlo`, `jnb`, `woe`) at d0–d3.
 
 | candidate | max freeze d1 / d2 / d3 | prior share d0 / d1 / d2 / d3 | exact-threshold target probes |
 |---|---|---|---:|
-| current full prior | 0.011 / 0.003 / 0.000 | 0.424 / 0.921 / 0.545 / 0.422 | 10/14 layers |
-| weak prior, weight 0.25 | 0.035 / 0.002 / 0.000 | 0.200 / 0.293 / 0.322 / 0.328 | 13/14 layers |
-| arguments-first neutral base | **0.048** / 0.002 / 0.000 | 0 / 0 / 0 / 0 | **14/14 layers** |
+| current full prior | 0.011 / 0.003 / 0.000 | 0.424 / 0.921 / 0.545 / 0.422 | 12/16 layers |
+| weak prior, weight 0.25 | 0.035 / 0.002 / 0.000 | 0.200 / 0.293 / 0.322 / 0.328 | 15/16 layers |
+| arguments-first neutral base | **0.048** / 0.002 / 0.000 | 0 / 0 / 0 / 0 | **16/16 layers** |
 | bottom-up Jev reassessment | **0.057** / 0.010 / 0.013 | 0.262 / 0.424 / 0.331 / 0.094 | 2/2 judgments |
 
 The weak and neutral formal views make depth-1 work more visible, but the
