@@ -250,6 +250,7 @@ class RuntimeBootTest {
             assertTrue("survives-reboot" in capturedSets.getValue(itemsCapture).membership())
         } finally {
             first.close()
+            capturedSets.remove(itemsCapture)
         }
 
         val second = Runtime.boot(manifest, "durable", spec)
@@ -302,7 +303,7 @@ class RuntimeBootTest {
             )
         }
 
-        assertTrue(failure.message!!.contains("missing"), failure.message)
+        assertTrue(failure.message!!.contains("'missing'"), failure.message)
         assertTrue(failure.message!!.contains(journalRoot.resolve("main").toString()), failure.message)
     }
 
