@@ -113,6 +113,8 @@ class WaveFrontier(
 
         override fun offer(invocation: Invocation) = this@WaveFrontier.offer(this, invocation)
 
+        override fun checkpointPending(): List<Invocation> = this@WaveFrontier.checkpointPending(this)
+
         override fun reset() = this@WaveFrontier.reset()
     }
 
@@ -302,6 +304,17 @@ class WaveFrontier(
      * load-bearing catch-up path, not an incidental default.
      */
     override fun offer(invocation: Invocation) = offer(implicitArm(), invocation)
+
+    /** Host-accepted invocations still held by this single implicit arm. */
+    override fun checkpointPending(): List<Invocation> = implicitArm?.let(::checkpointPending).orEmpty()
+
+    /** Host-accepted invocations still held on one inlet of a shared multi-arm fold. */
+    private fun checkpointPending(arm: Arm): List<Invocation> = pending.values.flatMap { wave ->
+        wave.values.asSequence()
+            .filter { it.arm === arm }
+            .map { it.invocation }
+            .toList()
+    }
 
     /** The shared fold's entry: [invocation] arrived on [arm]'s inlet. */
     private fun offer(arm: Arm, invocation: Invocation) {

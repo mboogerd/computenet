@@ -8,8 +8,11 @@ import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
 import civictech.cell.Timestamp
+import civictech.cell.consistency.GlitchFreeCell
+import civictech.cell.consistency.WaveFrontier
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionSupport
+import civictech.cell.control.Progress
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
@@ -24,10 +27,14 @@ import civictech.cell.host.SaturationPolicy
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.link.Link
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.EdgeOpen
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.assertions.withClue
@@ -58,6 +65,9 @@ import java.util.concurrent.TimeoutException
  * No test here fences on quiescence before checkpointing — that is the point.
  */
 class LiveCheckpointTest {
+
+    private val consumerString =
+        @Suppress("UNCHECKED_CAST") (Consumer::class.java as Class<Consumer<String>>)
 
     interface SetInletProxy {
         val inlet: Use<SetOps<String>>
@@ -118,6 +128,35 @@ class LiveCheckpointTest {
         }
     }
 
+    private class FrontierFoldCell(
+        override val ref: CellRef,
+        active: Boolean,
+    ) : Cell, Stateful {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
+        val received = mutableListOf<String>()
+
+        init {
+            inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
+            if (active) activate()
+        }
+
+        fun activate() {
+            inlet.serve(object : Consumer<String> {
+                override fun provide(input: String) {
+                    received += input
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = ArrayList(received)
+
+        @Suppress("UNCHECKED_CAST")
+        override fun restore(state: Serializable) {
+            received.clear()
+            received += state as List<String>
+        }
+    }
+
     private class SuspendingFoldCell(
         override val ref: CellRef,
         private val entered: CountDownLatch,
@@ -147,6 +186,38 @@ class LiveCheckpointTest {
         (HostedCellProxy.create(ref, host, SetInletProxy::class.java) as SetInletProxy).inlet.call
 
     private fun records(journal: Journal): List<DecodedJournalRecord> = journal.replay().map(JournalRecords::decode)
+
+    private fun fakeLink(from: PortRef, to: PortRef): Link = object : Link {
+        override val id: UUID = UUID.randomUUID()
+        override val from: PortRef = from
+        override val to: PortRef = to
+        override fun unlink() {}
+    }
+
+    private fun openFrontierEdges(cell: FrontierFoldCell): Pair<Link, Link> {
+        val first = fakeLink(PortRef.generate(), cell.inlet.ref)
+        val second = fakeLink(PortRef.generate(), cell.inlet.ref)
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.TopologyOrder, first, EdgeOpen)
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.TopologyOrder, second, EdgeOpen)
+        return first to second
+    }
+
+    private fun frontierFrame(
+        ref: CellRef,
+        sourcePort: PortRef,
+        sourceId: UUID,
+        counter: Long,
+        value: String,
+    ) = HostedPortInvocation(
+        ref,
+        "inlet",
+        HostedPortInvocation.Type.PORT_API,
+        Invocation.of(
+            consumerString.getMethod("provide", Any::class.java),
+            arrayOf(value),
+            MessageContext(Timestamp(sourceId, counter), sourcePort),
+        ),
+    )
 
     /** Crash: only [journal] survives. A fresh host + cell recover from it and run to idle. */
     private fun recover(controller: SimulationController, journal: Journal, ref: CellRef): SetCell<String> {
@@ -569,5 +640,81 @@ class LiveCheckpointTest {
         withClue("no checkpoint: intake copy only") {
             resumedThenRecovered(checkpointWhileParked = false) shouldBe listOf(1, 2)
         }
+    }
+
+    @Test
+    fun `(l) a checkpoint carries a frame buffered in an active inlet ALIGN policy`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = FrontierFoldCell(ref, active = true)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        val firstEdge = openFrontierEdges(cell).first
+        val sourceId = UUID.randomUUID()
+
+        host.enqueueHostedInvocation(frontierFrame(ref, firstEdge.from, sourceId, 1, "held-active"))
+        controller.runToIdle()
+        withClue("the incomplete wave is retained by ALIGN, not reflected in the cell snapshot") {
+            cell.received shouldBe emptyList()
+            host.stagedWorkTotal() shouldBe 0
+        }
+
+        host.checkpoint(journal)
+        withClue("the compacted journal must carry the host-accepted frame held in ALIGN") {
+            records(journal).filterIsInstance<DecodedJournalRecord.Frame>().map {
+                civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single()
+            } shouldBe listOf("held-active")
+        }
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = FrontierFoldCell(ref, active = true)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        recovered.received shouldBe listOf("held-active")
+    }
+
+    @Test
+    fun `(m) a checkpoint carries an ALIGN frame released cold by a later progress event`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID())
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val cell = FrontierFoldCell(ref, active = false)
+        host.managementInlet.call.spawn(cell)
+        controller.runToIdle()
+        val (firstEdge, secondEdge) = openFrontierEdges(cell)
+        val sourceId = UUID.randomUUID()
+
+        val accepted = listOf("held-then-cold-1", "held-then-cold-2")
+        accepted.forEachIndexed { index, value ->
+            host.enqueueHostedInvocation(frontierFrame(ref, firstEdge.from, sourceId, index + 1L, value))
+        }
+        controller.runToIdle()
+        cell.received shouldBe emptyList()
+
+        // This completes both waves outside any hosted offer. ALIGN releases the earlier
+        // frames into the still-cold ACTIVATE tail on this protocol-event stack.
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.Progress, secondEdge, Progress(sourceId, 2))
+
+        host.checkpoint(journal)
+        withClue("the cold tail must retain the frame's original host acceptance position") {
+            records(journal).filterIsInstance<DecodedJournalRecord.Frame>().map {
+                civictech.cell.wire.WireCodec.decode(it.payload).invocation.args.single()
+            } shouldBe accepted
+        }
+
+        val recoveredHost = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = FrontierFoldCell(ref, active = false)
+        recoveredHost.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+        recovered.received shouldBe emptyList()
+        recovered.activate()
+        recovered.received shouldBe accepted
     }
 }
